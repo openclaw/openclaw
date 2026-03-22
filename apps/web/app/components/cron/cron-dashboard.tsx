@@ -297,11 +297,56 @@ function OverviewTab({
 /* ─── Calendar tab ─── */
 
 type DayEvent =
-  | { kind: "run"; run: CronRunLogEntry; job?: CronJob }
+  | { kind: "run"; run: CronRunLogEntry; job?: CronJob; at: number }
   | { kind: "scheduled"; job: CronJob; at: number };
 
+function startOfLocalDay(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function startOfLocalWeek(date: Date): Date {
+  const start = startOfLocalDay(date);
+  start.setDate(start.getDate() - start.getDay());
+  return start;
+}
+
+function addLocalDays(date: Date, days: number): Date {
+  const next = startOfLocalDay(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function addLocalMonths(date: Date, months: number): Date {
+  const next = new Date(date.getFullYear(), date.getMonth(), 1);
+  next.setMonth(next.getMonth() + months);
+  const maxDay = new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate();
+  next.setDate(Math.min(date.getDate(), maxDay));
+  return next;
+}
+
+function addLocalYears(date: Date, years: number): Date {
+  const next = new Date(date.getFullYear() + years, date.getMonth(), 1);
+  const maxDay = new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate();
+  next.setDate(Math.min(date.getDate(), maxDay));
+  return next;
+}
+
+function formatLocalDate(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function parseLocalDate(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (match) {
+    return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : startOfLocalDay(parsed);
+}
+
 function dayKey(d: Date) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return formatLocalDate(d);
 }
 
 /* ─── Schedule occurrence projection ─── */
@@ -344,7 +389,7 @@ function projectCronExpr(expr: string, from: number, to: number, _tz?: string): 
   const MAX_ITERATIONS = 50_000;
   let iter = 0;
 
-  while (cursor.getTime() <= to && iter++ < MAX_ITERATIONS) {
+  while (cursor.getTime() < to && iter++ < MAX_ITERATIONS) {
     if (!months.includes(cursor.getMonth() + 1)) {
       cursor.setMonth(cursor.getMonth() + 1, 1);
       cursor.setHours(0, 0, 0, 0);
@@ -364,7 +409,7 @@ function projectCronExpr(expr: string, from: number, to: number, _tz?: string): 
     for (const h of hours) {
       for (const m of minutes) {
         const ts = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate(), h, m, 0, 0).getTime();
-        if (ts >= from && ts <= to) results.push(ts);
+        if (ts >= from && ts < to) results.push(ts);
       }
     }
 
@@ -382,7 +427,7 @@ function projectSchedule(job: CronJob, from: number, to: number): number[] {
   switch (schedule.kind) {
     case "at": {
       const ts = new Date(schedule.at).getTime();
-      return (ts >= from && ts <= to) ? [ts] : [];
+      return (ts >= from && ts < to) ? [ts] : [];
     }
     case "every": {
       const interval = schedule.everyMs;
@@ -394,7 +439,7 @@ function projectSchedule(job: CronJob, from: number, to: number): number[] {
         const skip = Math.floor((from - t) / interval);
         t += skip * interval;
       }
-      while (t <= to && results.length < 5000) {
+      while (t < to && results.length < 5000) {
         if (t >= from) results.push(t);
         t += interval;
       }
@@ -415,11 +460,14 @@ function buildEventsByDay(
   rangeTo: number,
 ) {
   const map = new Map<string, DayEvent[]>();
+  const now = Date.now();
 
   for (const run of allRuns) {
-    const k = dayKey(new Date(run.ts));
+    const at = run.runAtMs ?? run.ts;
+    if (at < rangeFrom || at >= rangeTo) continue;
+    const k = dayKey(new Date(at));
     const arr = map.get(k) ?? [];
-    arr.push({ kind: "run", run, job: jobMap.get(run.jobId) });
+    arr.push({ kind: "run", run, job: jobMap.get(run.jobId), at });
     map.set(k, arr);
   }
 
@@ -427,6 +475,9 @@ function buildEventsByDay(
     if (!job.enabled) continue;
     const occurrences = projectSchedule(job, rangeFrom, rangeTo);
     for (const ts of occurrences) {
+      // Historical slots should be represented by real runs, not duplicated
+      // by a projected schedule entry layered on top.
+      if (ts < now) continue;
       const k = dayKey(new Date(ts));
       const arr = map.get(k) ?? [];
       arr.push({ kind: "scheduled", job, at: ts });
@@ -434,12 +485,21 @@ function buildEventsByDay(
     }
   }
 
+  for (const events of map.values()) {
+    events.sort((a, b) => {
+      if (a.at !== b.at) return a.at - b.at;
+      const aLabel = a.kind === "run" ? (a.job?.name ?? a.run.jobId) : a.job.name;
+      const bLabel = b.kind === "run" ? (b.job?.name ?? b.run.jobId) : b.job.name;
+      return aLabel.localeCompare(bLabel);
+    });
+  }
+
   return map;
 }
 
 function EventChip({ ev, onSelectJob }: { ev: DayEvent; onSelectJob: (id: string) => void }) {
+  const time = new Date(ev.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   if (ev.kind === "scheduled") {
-    const time = new Date(ev.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     return (
       <button type="button" onClick={() => onSelectJob(ev.job.id)}
         className="w-full text-left text-[10px] px-1.5 py-0.5 rounded truncate cursor-pointer"
@@ -453,10 +513,10 @@ function EventChip({ ev, onSelectJob }: { ev: DayEvent; onSelectJob: (id: string
     <button type="button" onClick={() => ev.job && onSelectJob(ev.job.id)}
       className="w-full text-left text-[10px] px-1.5 py-0.5 rounded truncate flex items-center gap-1 cursor-pointer"
       style={{ background: `color-mix(in srgb, ${c} 10%, transparent)`, color: c }}
-      title={`${ev.run.status}: ${ev.job?.name ?? ev.run.jobId}`}
+      title={`${ev.run.status ?? "finished"}: ${ev.job?.name ?? ev.run.jobId} at ${time}`}
     >
       <span className="w-1 h-1 rounded-full flex-shrink-0" style={{ background: c }} />
-      {ev.job?.name ?? ev.run.jobId.slice(0, 8)}
+      <span className="truncate">{time} {ev.job?.name ?? ev.run.jobId.slice(0, 8)}</span>
     </button>
   );
 }
@@ -478,15 +538,17 @@ function CalendarTab({
   onDateChange?: (date: string | null) => void;
   onSelectJob: (jobId: string) => void;
 }) {
-  const anchor = dateAnchor ? new Date(dateAnchor) : new Date();
+  const anchor = parseLocalDate(dateAnchor) ?? startOfLocalDay(new Date());
 
   const navigate = (delta: number) => {
-    const d = new Date(anchor);
-    if (mode === "month") d.setMonth(d.getMonth() + delta);
-    else if (mode === "week") d.setDate(d.getDate() + delta * 7);
-    else if (mode === "day") d.setDate(d.getDate() + delta);
-    else d.setFullYear(d.getFullYear() + delta);
-    onDateChange?.(d.toISOString().split("T")[0]);
+    const d = mode === "month"
+      ? addLocalMonths(anchor, delta)
+      : mode === "week"
+        ? addLocalDays(anchor, delta * 7)
+        : mode === "day"
+          ? addLocalDays(anchor, delta)
+          : addLocalYears(anchor, delta);
+    onDateChange?.(formatLocalDate(d));
   };
 
   const jobMap = useMemo(() => {
@@ -499,20 +561,20 @@ function CalendarTab({
     const y = anchor.getFullYear();
     const m = anchor.getMonth();
     if (mode === "day") {
-      return { rangeFrom: new Date(y, m, anchor.getDate()).getTime(), rangeTo: new Date(y, m, anchor.getDate() + 1).getTime() };
+      const start = new Date(y, m, anchor.getDate());
+      return { rangeFrom: start.getTime(), rangeTo: addLocalDays(start, 1).getTime() };
     }
     if (mode === "week") {
-      const start = new Date(anchor);
-      start.setDate(start.getDate() - start.getDay());
-      return { rangeFrom: start.getTime(), rangeTo: start.getTime() + 7 * 86_400_000 };
+      const start = startOfLocalWeek(anchor);
+      return { rangeFrom: start.getTime(), rangeTo: addLocalDays(start, 7).getTime() };
     }
     if (mode === "year") {
       return { rangeFrom: new Date(y, 0, 1).getTime(), rangeTo: new Date(y + 1, 0, 1).getTime() };
     }
     // month: include overflow days (6 weeks)
     const first = new Date(y, m, 1);
-    const start = new Date(y, m, 1 - first.getDay());
-    return { rangeFrom: start.getTime(), rangeTo: start.getTime() + 42 * 86_400_000 };
+    const start = startOfLocalWeek(first);
+    return { rangeFrom: start.getTime(), rangeTo: addLocalDays(start, 42).getTime() };
   }, [anchor, mode]);
 
   const eventsByDay = useMemo(
@@ -523,8 +585,7 @@ function CalendarTab({
   const headerTitle = useMemo(() => {
     if (mode === "day") return anchor.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" });
     if (mode === "week") {
-      const start = new Date(anchor);
-      start.setDate(start.getDate() - start.getDay());
+      const start = startOfLocalWeek(anchor);
       const end = new Date(start);
       end.setDate(end.getDate() + 6);
       const sameMonth = start.getMonth() === end.getMonth();
@@ -549,7 +610,7 @@ function CalendarTab({
           <button type="button" onClick={() => navigate(1)} className="p-1.5 rounded-lg cursor-pointer" style={{ color: "var(--color-text-muted)" }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6" /></svg>
           </button>
-          <button type="button" onClick={() => onDateChange?.(new Date().toISOString().split("T")[0])}
+          <button type="button" onClick={() => onDateChange?.(formatLocalDate(new Date()))}
             className="text-xs px-2.5 py-1 rounded-lg ml-2 cursor-pointer"
             style={{ background: "var(--color-surface-hover)", color: "var(--color-text-muted)" }}
           >Today</button>
@@ -585,7 +646,7 @@ function DayView({ anchor, eventsByDay, todayStr, onSelectJob }: {
   const eventsByHour = useMemo(() => {
     const map = new Map<number, DayEvent[]>();
     for (const ev of events) {
-      const h = ev.kind === "run" ? new Date(ev.run.ts).getHours() : ev.job.state.nextRunAtMs ? new Date(ev.job.state.nextRunAtMs).getHours() : 0;
+      const h = new Date(ev.at).getHours();
       const arr = map.get(h) ?? [];
       arr.push(ev);
       map.set(h, arr);
@@ -620,8 +681,7 @@ function WeekView({ anchor, eventsByDay, todayStr, onSelectJob, onDateChange, on
   anchor: Date; eventsByDay: Map<string, DayEvent[]>; todayStr: string; onSelectJob: (id: string) => void;
   onDateChange?: (d: string | null) => void; onModeChange?: (m: CalendarMode) => void;
 }) {
-  const weekStart = new Date(anchor);
-  weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+  const weekStart = startOfLocalWeek(anchor);
   const days = Array.from({ length: 7 }, (_, i) => {
     const d = new Date(weekStart);
     d.setDate(d.getDate() + i);
@@ -680,7 +740,7 @@ function MonthView({ anchor, eventsByDay, todayStr, onSelectJob }: {
     const year = anchor.getFullYear();
     const month = anchor.getMonth();
     const firstOfMonth = new Date(year, month, 1);
-    const start = new Date(year, month, 1 - firstOfMonth.getDay());
+    const start = startOfLocalWeek(firstOfMonth);
     const weeksArr: Date[][] = [];
     for (let w = 0; w < 6; w++) {
       const week: Date[] = [];
@@ -749,7 +809,7 @@ function YearView({ anchor, eventsByDay, todayStr, onDateChange, onModeChange }:
 
         return (
           <button key={month} type="button"
-            onClick={() => { onDateChange?.(`${year}-${String(month + 1).padStart(2, "0")}-01`); onModeChange?.("month"); }}
+            onClick={() => { onDateChange?.(formatLocalDate(firstOfMonth)); onModeChange?.("month"); }}
             className="rounded-xl p-3 text-left cursor-pointer transition-colors"
             style={{ background: "var(--color-surface)", border: "1px solid var(--color-border)" }}
             onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--color-surface-hover)"; }}
