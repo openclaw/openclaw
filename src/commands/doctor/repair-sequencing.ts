@@ -25,22 +25,15 @@ export async function runDoctorRepairSequence(params: {
   let state = params.state;
   const changeNotes: string[] = [];
   const warningNotes: string[] = [];
+  const sanitizeLines = (lines: string[]) => lines.map((line) => sanitizeForLog(line)).join("\n");
 
-  const applyMutation = (
-    mutation: {
-      config: DoctorConfigMutationState["candidate"];
-      changes: string[];
-      warnings?: string[];
-    },
-    options?: { sanitizeChanges?: boolean },
-  ) => {
+  const applyMutation = (mutation: {
+    config: DoctorConfigMutationState["candidate"];
+    changes: string[];
+    warnings?: string[];
+  }) => {
     if (mutation.changes.length > 0) {
-      changeNotes.push(
-        (options?.sanitizeChanges
-          ? mutation.changes.map((line) => sanitizeForLog(line))
-          : mutation.changes
-        ).join("\n"),
-      );
+      changeNotes.push(sanitizeLines(mutation.changes));
       state = applyDoctorConfigMutation({
         state,
         mutation,
@@ -48,13 +41,13 @@ export async function runDoctorRepairSequence(params: {
       });
     }
     if (mutation.warnings && mutation.warnings.length > 0) {
-      warningNotes.push(mutation.warnings.join("\n"));
+      warningNotes.push(sanitizeLines(mutation.warnings));
     }
   };
 
   applyMutation(await maybeRepairTelegramAllowFromUsernames(state.candidate));
   applyMutation(maybeRepairDiscordNumericIds(state.candidate));
-  applyMutation(maybeRepairOpenPolicyAllowFrom(state.candidate), { sanitizeChanges: true });
+  applyMutation(maybeRepairOpenPolicyAllowFrom(state.candidate));
   applyMutation(await maybeRepairAllowlistPolicyAllowFrom(state.candidate));
 
   const emptyAllowlistWarnings = scanEmptyAllowlistPolicyWarnings(state.candidate, {
@@ -62,7 +55,7 @@ export async function runDoctorRepairSequence(params: {
     extraWarningsForAccount: collectTelegramEmptyAllowlistExtraWarnings,
   });
   if (emptyAllowlistWarnings.length > 0) {
-    warningNotes.push(emptyAllowlistWarnings.map((line) => sanitizeForLog(line)).join("\n"));
+    warningNotes.push(sanitizeLines(emptyAllowlistWarnings));
   }
 
   applyMutation(maybeRepairLegacyToolsBySenderKeys(state.candidate));

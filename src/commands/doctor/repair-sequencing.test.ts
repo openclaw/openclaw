@@ -11,6 +11,13 @@ describe("doctor repair sequencing", () => {
             discord: {
               allowFrom: [123],
             },
+            tools: {
+              exec: {
+                toolsBySender: {
+                  "bad\u001B[31m-key\u001B[0m\r\nnext": { enabled: true },
+                },
+              },
+            },
             signal: {
               accounts: {
                 "ops\u001B[31m-team\u001B[0m\r\nnext": {
@@ -24,6 +31,13 @@ describe("doctor repair sequencing", () => {
           channels: {
             discord: {
               allowFrom: [123],
+            },
+            tools: {
+              exec: {
+                toolsBySender: {
+                  "bad\u001B[31m-key\u001B[0m\r\nnext": { enabled: true },
+                },
+              },
             },
             signal: {
               accounts: {
@@ -44,7 +58,13 @@ describe("doctor repair sequencing", () => {
     expect(result.state.candidate.channels?.discord?.allowFrom).toEqual(["123"]);
     expect(result.changeNotes).toEqual([
       expect.stringContaining("channels.discord.allowFrom: converted 1 numeric entry to strings"),
+      expect.stringContaining(
+        "tools.exec.toolsBySender: migrated 1 legacy key to typed id: entries",
+      ),
     ]);
+    expect(result.changeNotes[1]).toContain("bad-keynext -> id:bad-keynext");
+    expect(result.changeNotes[1]).not.toContain("\u001B");
+    expect(result.changeNotes[1]).not.toContain("\r");
     expect(result.warningNotes).toEqual([
       expect.stringContaining("channels.signal.accounts.ops-teamnext.dmPolicy"),
     ]);
