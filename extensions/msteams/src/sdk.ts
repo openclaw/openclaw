@@ -204,8 +204,10 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
         status: (code: number) => { send: (body?: unknown) => void };
       };
 
+      const activity = request.body;
+      const isInvoke = (activity as Record<string, unknown>)?.type === "invoke";
+
       try {
-        const activity = request.body;
         const serviceUrl = activity?.serviceUrl as string | undefined;
 
         // Token factory — fetches a fresh token for each API call.
@@ -300,10 +302,22 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
           },
         };
 
+        // For invoke activities, send HTTP 200 immediately before running
+        // handler logic so slow operations (file uploads, reflections) don't
+        // hit Teams invoke timeouts ("unable to reach app").
+        if (isInvoke) {
+          response.status(200).send();
+        }
+
         await logic(context);
-        response.status(200).send();
+
+        if (!isInvoke) {
+          response.status(200).send();
+        }
       } catch (err) {
-        response.status(500).send({ error: String(err) });
+        if (!isInvoke) {
+          response.status(500).send({ error: String(err) });
+        }
       }
     },
 

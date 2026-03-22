@@ -250,6 +250,10 @@ importers:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/brave: {}
 
@@ -326,6 +330,10 @@ importers:
       opusscript:
         specifier: ^0.1.1
         version: 0.1.1
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/elevenlabs: {}
 
@@ -345,6 +353,10 @@ importers:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/firecrawl: {}
 
@@ -357,9 +369,10 @@ importers:
       google-auth-library:
         specifier: ^10.6.2
         version: 10.6.2
+    devDependencies:
       openclaw:
-        specifier: '>=2026.3.11'
-        version: 2026.3.13(@napi-rs/canvas@0.1.94)(@types/express@5.0.6)(audio-decode@2.2.3)(node-llama-cpp@3.16.2(typescript@5.9.3))
+        specifier: workspace:*
+        version: link:../..
 
   extensions/huggingface: {}
 
@@ -375,7 +388,11 @@ importers:
 
   extensions/kimi-coding: {}
 
-  extensions/line: {}
+  extensions/line:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/llm-task:
     dependencies:
@@ -425,12 +442,16 @@ importers:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/memory-core:
     dependencies:
       openclaw:
         specifier: '>=2026.3.11'
-        version: 2026.3.13(@napi-rs/canvas@0.1.94)(@types/express@5.0.6)(audio-decode@2.2.3)(node-llama-cpp@3.16.2(typescript@5.9.3))
+        version: 2026.3.13(@discordjs/opus@0.10.0)(@napi-rs/canvas@0.1.97)(@types/express@5.0.6)(audio-decode@2.2.3)(node-llama-cpp@3.16.2(typescript@5.9.3))
 
   extensions/memory-lancedb:
     dependencies:
@@ -465,12 +486,20 @@ importers:
       express:
         specifier: ^5.2.1
         version: 5.2.1
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/nextcloud-talk:
     dependencies:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/nostr:
     dependencies:
@@ -480,6 +509,10 @@ importers:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/nvidia: {}
 
@@ -553,6 +586,10 @@ importers:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/together: {}
 
@@ -591,6 +628,10 @@ importers:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/volcengine: {}
 
@@ -599,6 +640,10 @@ importers:
       '@whiskeysockets/baileys':
         specifier: 7.0.0-rc.9
         version: 7.0.0-rc.9(audio-decode@2.2.3)(sharp@0.34.5)
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/xai: {}
 
@@ -614,6 +659,10 @@ importers:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/zalouser:
     dependencies:
@@ -626,6 +675,10 @@ importers:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   packages/clawdbot:
     dependencies:
@@ -1842,12 +1895,6 @@ packages:
     cpu: [arm64]
     os: [android]
 
-  '@napi-rs/canvas-android-arm64@0.1.94':
-    resolution: {integrity: sha512-YQ6K83RWNMQOtgpk1aIML97QTE3zxPmVCHTi5eA8Nss4+B9JZi5J7LHQr7B5oD7VwSfWd++xsPdUiJ1+frqsMg==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [android]
-
   '@napi-rs/canvas-android-arm64@0.1.97':
     resolution: {integrity: sha512-V1c/WVw+NzH8vk7ZK/O8/nyBSCQimU8sfMsB/9qeSvdkGKNU7+mxy/bIF0gTgeBFmHpj30S4E9WHMSrxXGQuVQ==}
     engines: {node: '>= 10'}
@@ -1856,12 +1903,6 @@ packages:
 
   '@napi-rs/canvas-darwin-arm64@0.1.92':
     resolution: {integrity: sha512-4PT6GRGCr7yMRehp42x0LJb1V0IEy1cDZDDayv7eKbFUIGbPFkV7CRC9Bee5MPkjg1EB4ZPXXUyy3gjQm7mR8Q==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [darwin]
-
-  '@napi-rs/canvas-darwin-arm64@0.1.94':
-    resolution: {integrity: sha512-h1yl9XjqSrYZAbBUHCVLAhwd2knM8D8xt081Pv40KqNJXfeMmBrhG1SfroRymG2ak+pl42iQlWjFZ2Z8AWFdSw==}
     engines: {node: '>= 10'}
     cpu: [arm64]
     os: [darwin]
@@ -1878,12 +1919,6 @@ packages:
     cpu: [x64]
     os: [darwin]
 
-  '@napi-rs/canvas-darwin-x64@0.1.94':
-    resolution: {integrity: sha512-rkr/lrafbU0IIHebst+sQJf1HjdHvTMN0GGqWvw5OfaVS0K/sVxhNHtxi8oCfaRSvRE62aJZjWTcdc2ue/o6yw==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [darwin]
-
   '@napi-rs/canvas-darwin-x64@0.1.97':
     resolution: {integrity: sha512-PUP6e6/UGlclUvAQNnuXCcnkpdUou6VYZfQOQxExLp86epOylmiwLkqXIvpFmjoTEDmPmXrI+coL/9EFU1gKPA==}
     engines: {node: '>= 10'}
@@ -1892,12 +1927,6 @@ packages:
 
   '@napi-rs/canvas-linux-arm-gnueabihf@0.1.92':
     resolution: {integrity: sha512-j6KaLL9iir68lwpzzY+aBGag1PZp3+gJE2mQ3ar4VJVmyLRVOh+1qsdNK1gfWoAVy5w6U7OEYFrLzN2vOFUSng==}
-    engines: {node: '>= 10'}
-    cpu: [arm]
-    os: [linux]
-
-  '@napi-rs/canvas-linux-arm-gnueabihf@0.1.94':
-    resolution: {integrity: sha512-q95TDo32YkTKdi+Sp2yQ2Npm7pmfKEruNoJ3RUIw1KvQQ9EHKL3fii/iuU60tnzP0W+c8BKN7BFstNFcm2KXCQ==}
     engines: {node: '>= 10'}
     cpu: [arm]
     os: [linux]
@@ -1914,12 +1943,6 @@ packages:
     cpu: [arm64]
     os: [linux]
 
-  '@napi-rs/canvas-linux-arm64-gnu@0.1.94':
-    resolution: {integrity: sha512-Je5/gKVybWAoIGyDOcJF1zYgBTKWkPIkfOgvCzrQcl8h7DiDvRvEY70EapA+NicGe4X3DW9VsCT34KZJnerShA==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [linux]
-
   '@napi-rs/canvas-linux-arm64-gnu@0.1.97':
     resolution: {integrity: sha512-Kuq/M3djq0K8ktgz6nPlK7Ne5d4uWeDxPpyKWOjWDK2RIOhHVtLtyLiJw2fuldw7Vn4mhw05EZXCEr4Q76rs9w==}
     engines: {node: '>= 10'}
@@ -1928,12 +1951,6 @@ packages:
 
   '@napi-rs/canvas-linux-arm64-musl@0.1.92':
     resolution: {integrity: sha512-xV0GQnukYq5qY+ebkAwHjnP2OrSGBxS3vSi1zQNQj0bkXU6Ou+Tw7JjCM7pZcQ28MUyEBS1yKfo7rc7ip2IPFQ==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [linux]
-
-  '@napi-rs/canvas-linux-arm64-musl@0.1.94':
-    resolution: {integrity: sha512-9YleDDauDEZNsFnfz3HyZvp1LK1ECu8N2gDUg1wtL7uWLQv8dUbfVeFtp5HOdxht1o7LsWRmQeqeIbnD4EqE2A==}
     engines: {node: '>= 10'}
     cpu: [arm64]
     os: [linux]
@@ -1950,12 +1967,6 @@ packages:
     cpu: [riscv64]
     os: [linux]
 
-  '@napi-rs/canvas-linux-riscv64-gnu@0.1.94':
-    resolution: {integrity: sha512-lQUy9Xvz7ch8+0AXq8RkioLD41iQ6EqdKFu5uV40BxkBDijB2SCm1jna/BRhqitQRSjwAk2KlLUxTjHChyfNGg==}
-    engines: {node: '>= 10'}
-    cpu: [riscv64]
-    os: [linux]
-
   '@napi-rs/canvas-linux-riscv64-gnu@0.1.97':
     resolution: {integrity: sha512-Jc7I3A51jnEOIAXeLsN/M/+Z28LUeakcsXs07FLq9prXc0eYOtVwsDEv913Gr+06IRo34gJJVgT0TXvmz+N2VA==}
     engines: {node: '>= 10'}
@@ -1964,12 +1975,6 @@ packages:
 
   '@napi-rs/canvas-linux-x64-gnu@0.1.92':
     resolution: {integrity: sha512-tFd6MwbEhZ1g64iVY2asV+dOJC+GT3Yd6UH4G3Hp0/VHQ6qikB+nvXEULskFYZ0+wFqlGPtXjG1Jmv7sJy+3Ww==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [linux]
-
-  '@napi-rs/canvas-linux-x64-gnu@0.1.94':
-    resolution: {integrity: sha512-0IYgyuUaugHdWxXRhDQUCMxTou8kAHHmpIBFtbmdRlciPlfK7AYQW5agvUU1PghPc5Ja3Zzp5qZfiiLu36vIWQ==}
     engines: {node: '>= 10'}
     cpu: [x64]
     os: [linux]
@@ -1986,12 +1991,6 @@ packages:
     cpu: [x64]
     os: [linux]
 
-  '@napi-rs/canvas-linux-x64-musl@0.1.94':
-    resolution: {integrity: sha512-xuetfzzcflCIiBw2HJlOU4/+zTqhdxoe1BEcwdBsHAd/5wAQ4Pp+FGPi5g74gDvtcXQmTdEU3fLQvHc/j3wbxQ==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [linux]
-
   '@napi-rs/canvas-linux-x64-musl@0.1.97':
     resolution: {integrity: sha512-AKLFd/v0Z5fvgqBDqhvqtAdx+fHMJ5t9JcUNKq4FIZ5WH+iegGm8HPdj00NFlCSnm83Fp3Ln8I2f7uq1aIiWaA==}
     engines: {node: '>= 10'}
@@ -2000,12 +1999,6 @@ packages:
 
   '@napi-rs/canvas-win32-arm64-msvc@0.1.92':
     resolution: {integrity: sha512-20SK5AU/OUNz9ZuoAPj5ekWai45EIBDh/XsdrVZ8le/pJVlhjFU3olbumSQUXRFn7lBRS+qwM8kA//uLaDx6iQ==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [win32]
-
-  '@napi-rs/canvas-win32-arm64-msvc@0.1.94':
-    resolution: {integrity: sha512-2F3p8wci4Q4vjbENlQtSibqFWxBdpzYk1c8Jh1mqqLE92rBKElG018dBJ6C8Dp49vE350Hmy5LrfdLgFKMG8sg==}
     engines: {node: '>= 10'}
     cpu: [arm64]
     os: [win32]
@@ -2022,12 +2015,6 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@napi-rs/canvas-win32-x64-msvc@0.1.94':
-    resolution: {integrity: sha512-hjwaIKMrQLoNiu3724octSGhDVKkBwJtMeQ3qUXOi+y60h2q6Sxq3+MM2za3V88+XQzzwn0DgG0Xo6v6gzV8kQ==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [win32]
-
   '@napi-rs/canvas-win32-x64-msvc@0.1.97':
     resolution: {integrity: sha512-sWtD2EE3fV0IzN+iiQUqr/Q1SwqWhs2O1FKItFlxtdDkikpEj5g7DKQpY3x55H/MAOnL8iomnlk3mcEeGiUMoQ==}
     engines: {node: '>= 10'}
@@ -2036,10 +2023,6 @@ packages:
 
   '@napi-rs/canvas@0.1.92':
     resolution: {integrity: sha512-q7ZaUCJkEU5BeOdE7fBx1XWRd2T5Ady65nxq4brMf5L4cE1VV/ACq5w9Z5b/IVJs8CwSSIwc30nlthH0gFo4Ig==}
-    engines: {node: '>= 10'}
-
-  '@napi-rs/canvas@0.1.94':
-    resolution: {integrity: sha512-8jBkvqynXNdQPNZjLJxB/Rp9PdnnMSHFBLzPmMc615nlt/O6w0ergBbkEDEOr8EbjL8nRQDpEklPx4pzD7zrbg==}
     engines: {node: '>= 10'}
 
   '@napi-rs/canvas@0.1.97':
@@ -7782,7 +7765,7 @@ snapshots:
     dependencies:
       css-tree: 3.2.1
 
-  '@buape/carbon@0.0.0-beta-20260216184201(hono@4.12.8)(opusscript@0.1.1)':
+  '@buape/carbon@0.0.0-beta-20260216184201(@discordjs/opus@0.10.0)(hono@4.12.8)(opusscript@0.1.1)':
     dependencies:
       '@types/node': 25.5.0
       discord-api-types: 0.38.37
@@ -8696,16 +8679,10 @@ snapshots:
   '@napi-rs/canvas-android-arm64@0.1.92':
     optional: true
 
-  '@napi-rs/canvas-android-arm64@0.1.94':
-    optional: true
-
   '@napi-rs/canvas-android-arm64@0.1.97':
     optional: true
 
   '@napi-rs/canvas-darwin-arm64@0.1.92':
-    optional: true
-
-  '@napi-rs/canvas-darwin-arm64@0.1.94':
     optional: true
 
   '@napi-rs/canvas-darwin-arm64@0.1.97':
@@ -8714,16 +8691,10 @@ snapshots:
   '@napi-rs/canvas-darwin-x64@0.1.92':
     optional: true
 
-  '@napi-rs/canvas-darwin-x64@0.1.94':
-    optional: true
-
   '@napi-rs/canvas-darwin-x64@0.1.97':
     optional: true
 
   '@napi-rs/canvas-linux-arm-gnueabihf@0.1.92':
-    optional: true
-
-  '@napi-rs/canvas-linux-arm-gnueabihf@0.1.94':
     optional: true
 
   '@napi-rs/canvas-linux-arm-gnueabihf@0.1.97':
@@ -8732,16 +8703,10 @@ snapshots:
   '@napi-rs/canvas-linux-arm64-gnu@0.1.92':
     optional: true
 
-  '@napi-rs/canvas-linux-arm64-gnu@0.1.94':
-    optional: true
-
   '@napi-rs/canvas-linux-arm64-gnu@0.1.97':
     optional: true
 
   '@napi-rs/canvas-linux-arm64-musl@0.1.92':
-    optional: true
-
-  '@napi-rs/canvas-linux-arm64-musl@0.1.94':
     optional: true
 
   '@napi-rs/canvas-linux-arm64-musl@0.1.97':
@@ -8750,16 +8715,10 @@ snapshots:
   '@napi-rs/canvas-linux-riscv64-gnu@0.1.92':
     optional: true
 
-  '@napi-rs/canvas-linux-riscv64-gnu@0.1.94':
-    optional: true
-
   '@napi-rs/canvas-linux-riscv64-gnu@0.1.97':
     optional: true
 
   '@napi-rs/canvas-linux-x64-gnu@0.1.92':
-    optional: true
-
-  '@napi-rs/canvas-linux-x64-gnu@0.1.94':
     optional: true
 
   '@napi-rs/canvas-linux-x64-gnu@0.1.97':
@@ -8768,25 +8727,16 @@ snapshots:
   '@napi-rs/canvas-linux-x64-musl@0.1.92':
     optional: true
 
-  '@napi-rs/canvas-linux-x64-musl@0.1.94':
-    optional: true
-
   '@napi-rs/canvas-linux-x64-musl@0.1.97':
     optional: true
 
   '@napi-rs/canvas-win32-arm64-msvc@0.1.92':
     optional: true
 
-  '@napi-rs/canvas-win32-arm64-msvc@0.1.94':
-    optional: true
-
   '@napi-rs/canvas-win32-arm64-msvc@0.1.97':
     optional: true
 
   '@napi-rs/canvas-win32-x64-msvc@0.1.92':
-    optional: true
-
-  '@napi-rs/canvas-win32-x64-msvc@0.1.94':
     optional: true
 
   '@napi-rs/canvas-win32-x64-msvc@0.1.97':
@@ -8806,20 +8756,6 @@ snapshots:
       '@napi-rs/canvas-win32-arm64-msvc': 0.1.92
       '@napi-rs/canvas-win32-x64-msvc': 0.1.92
 
-  '@napi-rs/canvas@0.1.94':
-    optionalDependencies:
-      '@napi-rs/canvas-android-arm64': 0.1.94
-      '@napi-rs/canvas-darwin-arm64': 0.1.94
-      '@napi-rs/canvas-darwin-x64': 0.1.94
-      '@napi-rs/canvas-linux-arm-gnueabihf': 0.1.94
-      '@napi-rs/canvas-linux-arm64-gnu': 0.1.94
-      '@napi-rs/canvas-linux-arm64-musl': 0.1.94
-      '@napi-rs/canvas-linux-riscv64-gnu': 0.1.94
-      '@napi-rs/canvas-linux-x64-gnu': 0.1.94
-      '@napi-rs/canvas-linux-x64-musl': 0.1.94
-      '@napi-rs/canvas-win32-arm64-msvc': 0.1.94
-      '@napi-rs/canvas-win32-x64-msvc': 0.1.94
-
   '@napi-rs/canvas@0.1.97':
     optionalDependencies:
       '@napi-rs/canvas-android-arm64': 0.1.97
@@ -8833,7 +8769,6 @@ snapshots:
       '@napi-rs/canvas-linux-x64-musl': 0.1.97
       '@napi-rs/canvas-win32-arm64-msvc': 0.1.97
       '@napi-rs/canvas-win32-x64-msvc': 0.1.97
-    optional: true
 
   '@napi-rs/wasm-runtime@1.1.1':
     dependencies:
@@ -12736,11 +12671,11 @@ snapshots:
       ws: 8.19.0
       zod: 4.3.6
 
-  openclaw@2026.3.13(@napi-rs/canvas@0.1.94)(@types/express@5.0.6)(audio-decode@2.2.3)(node-llama-cpp@3.16.2(typescript@5.9.3)):
+  openclaw@2026.3.13(@discordjs/opus@0.10.0)(@napi-rs/canvas@0.1.97)(@types/express@5.0.6)(audio-decode@2.2.3)(node-llama-cpp@3.16.2(typescript@5.9.3)):
     dependencies:
       '@agentclientprotocol/sdk': 0.16.1(zod@4.3.6)
       '@aws-sdk/client-bedrock': 3.1014.0
-      '@buape/carbon': 0.0.0-beta-20260216184201(hono@4.12.8)(opusscript@0.1.1)
+      '@buape/carbon': 0.0.0-beta-20260216184201(@discordjs/opus@0.10.0)(hono@4.12.8)(opusscript@0.1.1)
       '@clack/prompts': 1.1.0
       '@discordjs/voice': 0.19.2(@discordjs/opus@0.10.0)(opusscript@0.1.1)
       '@grammyjs/runner': 2.0.3(grammy@1.41.1)
@@ -12755,7 +12690,7 @@ snapshots:
       '@mariozechner/pi-tui': 0.58.0
       '@modelcontextprotocol/sdk': 1.27.1(zod@4.3.6)
       '@mozilla/readability': 0.6.0
-      '@napi-rs/canvas': 0.1.94
+      '@napi-rs/canvas': 0.1.97
       '@sinclair/typebox': 0.34.48
       '@slack/bolt': 4.6.0(@types/express@5.0.6)
       '@slack/web-api': 7.15.0

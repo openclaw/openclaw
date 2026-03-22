@@ -173,6 +173,12 @@ export class TeamsHttpStream {
       return;
     }
 
+    // If streaming failed and fell back to normal delivery, don't send
+    // a final stream message — the fallback already delivered the content.
+    if (this.streamFailed) {
+      return;
+    }
+
     // Send final message activity.
     // Per the spec: type=message, streamType=final, NO streamSequence.
     try {

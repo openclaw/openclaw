@@ -146,7 +146,8 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
     return;
   }
 
-  recordReflectionTime(sessionKey);
+  // Record cooldown after successful dispatch (not before) so transient
+  // failures don't suppress future reflection attempts.
 
   const core = getMSTeamsRuntime();
   const reflectionPrompt = buildReflectionPrompt({
@@ -220,6 +221,7 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
     });
   } catch (err) {
     log.error("reflection dispatch failed", { error: String(err) });
+    // Don't record cooldown — allow retry on next feedback
     return;
   }
 
@@ -227,6 +229,9 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
     log.debug?.("reflection produced no output");
     return;
   }
+
+  // Reflection succeeded — record cooldown now
+  recordReflectionTime(sessionKey);
 
   log.info("reflection complete", {
     sessionKey,
