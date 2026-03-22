@@ -7,6 +7,7 @@ import {
 } from "../../../test/helpers/extensions/setup-wizard.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { nostrPlugin } from "./channel.js";
+import { TEST_HEX_PRIVATE_KEY, TEST_SETUP_RELAY_URLS } from "./test-fixtures.js";
 
 const nostrConfigure = createPluginSetupWizardConfigure(nostrPlugin);
 
@@ -15,10 +16,10 @@ describe("nostr setup wizard", () => {
     const prompter = createTestWizardPrompter({
       text: vi.fn(async ({ message }: { message: string }) => {
         if (message === "Nostr private key (nsec... or hex)") {
-          return "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+          return TEST_HEX_PRIVATE_KEY;
         }
         if (message === "Relay URLs (comma-separated, optional)") {
-          return "wss://relay.damus.io, wss://relay.primal.net";
+          return TEST_SETUP_RELAY_URLS.join(", ");
         }
         throw new Error(`Unexpected prompt: ${message}`);
       }) as WizardPrompter["text"],
@@ -33,12 +34,7 @@ describe("nostr setup wizard", () => {
 
     expect(result.accountId).toBe("default");
     expect(result.cfg.channels?.nostr?.enabled).toBe(true);
-    expect(result.cfg.channels?.nostr?.privateKey).toBe(
-      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    );
-    expect(result.cfg.channels?.nostr?.relays).toEqual([
-      "wss://relay.damus.io",
-      "wss://relay.primal.net",
-    ]);
+    expect(result.cfg.channels?.nostr?.privateKey).toBe(TEST_HEX_PRIVATE_KEY);
+    expect(result.cfg.channels?.nostr?.relays).toEqual(TEST_SETUP_RELAY_URLS);
   });
 });
