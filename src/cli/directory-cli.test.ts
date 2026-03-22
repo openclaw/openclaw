@@ -39,6 +39,8 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime: {
     log: (...args: unknown[]) => mocks.log(...args),
     error: (...args: unknown[]) => mocks.error(...args),
+    writeJson: (value: unknown, space = 2) =>
+      mocks.log(JSON.stringify(value, null, space > 0 ? space : undefined)),
     exit: (...args: unknown[]) => mocks.exit(...args),
   },
 }));
