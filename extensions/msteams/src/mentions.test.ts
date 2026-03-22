@@ -9,13 +9,17 @@ function requireFirstEntity(result: ReturnType<typeof parseMentions>) {
   return entity;
 }
 
+function requireOnlyEntity(result: ReturnType<typeof parseMentions>) {
+  expect(result.entities).toHaveLength(1);
+  return requireFirstEntity(result);
+}
+
 describe("parseMentions", () => {
   it("parses single mention", () => {
     const result = parseMentions("Hello @[John Doe](28:a1b2c3-d4e5f6)!");
 
     expect(result.text).toBe("Hello <at>John Doe</at>!");
-    expect(result.entities).toHaveLength(1);
-    expect(result.entities[0]).toEqual({
+    expect(requireOnlyEntity(result)).toEqual({
       type: "mention",
       text: "<at>John Doe</at>",
       mentioned: {
@@ -72,7 +76,7 @@ describe("parseMentions", () => {
   it("trims whitespace from id and name", () => {
     const result = parseMentions("@[ John Doe ]( 28:a1b2c3 )");
 
-    expect(result.entities[0]).toEqual({
+    expect(requireOnlyEntity(result)).toEqual({
       type: "mention",
       text: "<at>John Doe</at>",
       mentioned: {
@@ -87,8 +91,7 @@ describe("parseMentions", () => {
     const result = parseMentions(input);
 
     expect(result.text).toBe("<at>タナカ タロウ</at> スキル化完了しました！");
-    expect(result.entities).toHaveLength(1);
-    expect(result.entities[0]).toEqual({
+    expect(requireOnlyEntity(result)).toEqual({
       type: "mention",
       text: "<at>タナカ タロウ</at>",
       mentioned: {
@@ -115,8 +118,7 @@ describe("parseMentions", () => {
     const result = parseMentions(input);
 
     // Only the real mention should be parsed; the documentation example should be left as-is
-    expect(result.entities).toHaveLength(1);
-    const firstEntity = requireFirstEntity(result);
+    const firstEntity = requireOnlyEntity(result);
     expect(firstEntity.mentioned.id).toBe("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
     expect(firstEntity.mentioned.name).toBe("タナカ タロウ");
 
@@ -126,28 +128,24 @@ describe("parseMentions", () => {
 
   it("accepts Bot Framework IDs (28:xxx)", () => {
     const result = parseMentions("@[Bot](28:abc-123)");
-    expect(result.entities).toHaveLength(1);
-    expect(requireFirstEntity(result).mentioned.id).toBe("28:abc-123");
+    expect(requireOnlyEntity(result).mentioned.id).toBe("28:abc-123");
   });
 
   it("accepts Bot Framework IDs with non-hex payloads (29:xxx)", () => {
     const result = parseMentions("@[Bot](29:08q2j2o3jc09au90eucae)");
-    expect(result.entities).toHaveLength(1);
-    expect(requireFirstEntity(result).mentioned.id).toBe("29:08q2j2o3jc09au90eucae");
+    expect(requireOnlyEntity(result).mentioned.id).toBe("29:08q2j2o3jc09au90eucae");
   });
 
   it("accepts org-scoped IDs with extra segments (8:orgid:...)", () => {
     const result = parseMentions("@[User](8:orgid:2d8c2d2c-1111-2222-3333-444444444444)");
-    expect(result.entities).toHaveLength(1);
-    expect(requireFirstEntity(result).mentioned.id).toBe(
+    expect(requireOnlyEntity(result).mentioned.id).toBe(
       "8:orgid:2d8c2d2c-1111-2222-3333-444444444444",
     );
   });
 
   it("accepts AAD object IDs (UUIDs)", () => {
     const result = parseMentions("@[User](a1b2c3d4-e5f6-7890-abcd-ef1234567890)");
-    expect(result.entities).toHaveLength(1);
-    expect(requireFirstEntity(result).mentioned.id).toBe("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+    expect(requireOnlyEntity(result).mentioned.id).toBe("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
   });
 
   it("rejects non-ID strings as mention targets", () => {
