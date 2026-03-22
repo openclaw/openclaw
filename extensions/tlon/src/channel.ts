@@ -1,11 +1,9 @@
 import { createHybridChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
-import {
-  createRuntimeOutboundDelegates,
-  type ChannelAccountSnapshot,
-  type ChannelPlugin,
-} from "openclaw/plugin-sdk/channel-runtime";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import { tlonChannelConfigSchema } from "./config-schema.js";
 import { resolveTlonOutboundSessionRoute } from "./session-route.js";
 import {

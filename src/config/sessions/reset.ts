@@ -17,7 +17,7 @@ export type SessionFreshness = {
   idleExpiresAt?: number;
 };
 
-export const DEFAULT_RESET_MODE: SessionResetMode = "idle";
+export const DEFAULT_RESET_MODE: SessionResetMode = "daily";
 export const DEFAULT_RESET_AT_HOUR = 4;
 
 const THREAD_SESSION_MARKERS = [":thread:", ":topic:"];

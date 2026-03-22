@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { LookupFn } from "../../runtime-api.js";
 import type { CoreConfig } from "../types.js";
 import {
   getMatrixScopedEnvVarNames,
@@ -7,10 +8,20 @@ import {
   resolveMatrixConfigForAccount,
   resolveMatrixAuth,
   resolveMatrixAuthContext,
+  resolveValidatedMatrixHomeserverUrl,
   validateMatrixHomeserverUrl,
 } from "./client/config.js";
 import * as credentialsReadModule from "./credentials-read.js";
 import * as sdkModule from "./sdk.js";
+
+function createLookupFn(addresses: Array<{ address: string; family: number }>): LookupFn {
+  return vi.fn(async (_hostname: string, options?: unknown) => {
+    if (typeof options === "number" || !options || !(options as { all?: boolean }).all) {
+      return addresses[0]!;
+    }
+    return addresses;
+  }) as unknown as LookupFn;
+}
 
 const saveMatrixCredentialsMock = vi.hoisted(() => vi.fn());
 const touchMatrixCredentialsMock = vi.hoisted(() => vi.fn());
@@ -325,6 +336,28 @@ describe("resolveMatrixConfig", () => {
     );
     expect(validateMatrixHomeserverUrl("http://127.0.0.1:8008")).toBe("http://127.0.0.1:8008");
   });
+
+  it("accepts internal http homeservers only when private-network access is enabled", () => {
+    expect(() => validateMatrixHomeserverUrl("http://matrix-synapse:8008")).toThrow(
+      "Matrix homeserver must use https:// unless it targets a private or loopback host",
+    );
+    expect(
+      validateMatrixHomeserverUrl("http://matrix-synapse:8008", {
+        allowPrivateNetwork: true,
+      }),
+    ).toBe("http://matrix-synapse:8008");
+  });
+
+  it("rejects public http homeservers even when private-network access is enabled", async () => {
+    await expect(
+      resolveValidatedMatrixHomeserverUrl("http://matrix.example.org:8008", {
+        allowPrivateNetwork: true,
+        lookupFn: createLookupFn([{ address: "93.184.216.34", family: 4 }]),
+      }),
+    ).rejects.toThrow(
+      "Matrix homeserver must use https:// unless it targets a private or loopback host",
+    );
+  });
 });
 
 describe("resolveMatrixAuth", () => {
@@ -502,6 +535,28 @@ describe("resolveMatrixAuth", () => {
       expect.any(Object),
       "default",
     );
+  });
+
+  it("carries the private-network opt-in through Matrix auth resolution", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "http://127.0.0.1:8008",
+          allowPrivateNetwork: true,
+          userId: "@bot:example.org",
+          accessToken: "tok-123",
+          deviceId: "DEVICE123",
+        },
+      },
+    } as CoreConfig;
+
+    const auth = await resolveMatrixAuth({ cfg, env: {} as NodeJS.ProcessEnv });
+
+    expect(auth).toMatchObject({
+      homeserver: "http://127.0.0.1:8008",
+      allowPrivateNetwork: true,
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
   });
 
   it("resolves token-only non-default account userId from whoami instead of inheriting the base user", async () => {

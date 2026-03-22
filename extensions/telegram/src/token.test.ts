@@ -188,6 +188,24 @@ describe("resolveTelegramToken", () => {
     expect(res.source).toBe("none");
   });
 
+  it("does not fall through to channel-level token when non-default accountId is not in config", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "wrong-bot-token",
+          accounts: {
+            knownBot: { botToken: "known-bot-token" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const res = resolveTelegramToken(cfg, { accountId: "unknownBot" });
+    expect(res.token).toBe("");
+    expect(res.source).toBe("none");
+  });
+
   it("throws when botToken is an unresolved SecretRef object", () => {
     const cfg = {
       channels: {

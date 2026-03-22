@@ -77,6 +77,14 @@
       "types": "./dist/plugin-sdk/setup.d.ts",
       "default": "./dist/plugin-sdk/setup.js"
     },
+    "./plugin-sdk/setup-adapter-runtime": {
+      "types": "./dist/plugin-sdk/setup-adapter-runtime.d.ts",
+      "default": "./dist/plugin-sdk/setup-adapter-runtime.js"
+    },
+    "./plugin-sdk/setup-runtime": {
+      "types": "./dist/plugin-sdk/setup-runtime.d.ts",
+      "default": "./dist/plugin-sdk/setup-runtime.js"
+    },
     "./plugin-sdk/channel-setup": {
       "types": "./dist/plugin-sdk/channel-setup.d.ts",
       "default": "./dist/plugin-sdk/channel-setup.js"
@@ -109,9 +117,17 @@
       "types": "./dist/plugin-sdk/interactive-runtime.d.ts",
       "default": "./dist/plugin-sdk/interactive-runtime.js"
     },
+    "./plugin-sdk/outbound-runtime": {
+      "types": "./dist/plugin-sdk/outbound-runtime.d.ts",
+      "default": "./dist/plugin-sdk/outbound-runtime.js"
+    },
     "./plugin-sdk/infra-runtime": {
       "types": "./dist/plugin-sdk/infra-runtime.d.ts",
       "default": "./dist/plugin-sdk/infra-runtime.js"
+    },
+    "./plugin-sdk/ssrf-runtime": {
+      "types": "./dist/plugin-sdk/ssrf-runtime.d.ts",
+      "default": "./dist/plugin-sdk/ssrf-runtime.js"
     },
     "./plugin-sdk/media-runtime": {
       "types": "./dist/plugin-sdk/media-runtime.d.ts",
@@ -124,6 +140,18 @@
     "./plugin-sdk/conversation-runtime": {
       "types": "./dist/plugin-sdk/conversation-runtime.d.ts",
       "default": "./dist/plugin-sdk/conversation-runtime.js"
+    },
+    "./plugin-sdk/matrix-runtime-heavy": {
+      "types": "./dist/plugin-sdk/matrix-runtime-heavy.d.ts",
+      "default": "./dist/plugin-sdk/matrix-runtime-heavy.js"
+    },
+    "./plugin-sdk/matrix-runtime-shared": {
+      "types": "./dist/plugin-sdk/matrix-runtime-shared.d.ts",
+      "default": "./dist/plugin-sdk/matrix-runtime-shared.js"
+    },
+    "./plugin-sdk/thread-bindings-runtime": {
+      "types": "./dist/plugin-sdk/thread-bindings-runtime.d.ts",
+      "default": "./dist/plugin-sdk/thread-bindings-runtime.js"
     },
     "./plugin-sdk/text-runtime": {
       "types": "./dist/plugin-sdk/text-runtime.d.ts",
@@ -161,113 +189,13 @@
       "types": "./dist/plugin-sdk/process-runtime.d.ts",
       "default": "./dist/plugin-sdk/process-runtime.js"
     },
+    "./plugin-sdk/windows-spawn": {
+      "types": "./dist/plugin-sdk/windows-spawn.d.ts",
+      "default": "./dist/plugin-sdk/windows-spawn.js"
+    },
     "./plugin-sdk/acp-runtime": {
       "types": "./dist/plugin-sdk/acp-runtime.d.ts",
       "default": "./dist/plugin-sdk/acp-runtime.js"
-    },
-    "./plugin-sdk/acpx": {
-      "types": "./dist/plugin-sdk/acpx.d.ts",
-      "default": "./dist/plugin-sdk/acpx.js"
-    },
-    "./plugin-sdk/telegram": {
-      "types": "./dist/plugin-sdk/telegram.d.ts",
-      "default": "./dist/plugin-sdk/telegram.js"
-    },
-    "./plugin-sdk/telegram-core": {
-      "types": "./dist/plugin-sdk/telegram-core.d.ts",
-      "default": "./dist/plugin-sdk/telegram-core.js"
-    },
-    "./plugin-sdk/discord": {
-      "types": "./dist/plugin-sdk/discord.d.ts",
-      "default": "./dist/plugin-sdk/discord.js"
-    },
-    "./plugin-sdk/discord-core": {
-      "types": "./dist/plugin-sdk/discord-core.d.ts",
-      "default": "./dist/plugin-sdk/discord-core.js"
-    },
-    "./plugin-sdk/feishu": {
-      "types": "./dist/plugin-sdk/feishu.d.ts",
-      "default": "./dist/plugin-sdk/feishu.js"
-    },
-    "./plugin-sdk/google": {
-      "types": "./dist/plugin-sdk/google.d.ts",
-      "default": "./dist/plugin-sdk/google.js"
-    },
-    "./plugin-sdk/googlechat": {
-      "types": "./dist/plugin-sdk/googlechat.d.ts",
-      "default": "./dist/plugin-sdk/googlechat.js"
-    },
-    "./plugin-sdk/irc": {
-      "types": "./dist/plugin-sdk/irc.d.ts",
-      "default": "./dist/plugin-sdk/irc.js"
-    },
-    "./plugin-sdk/line-core": {
-      "types": "./dist/plugin-sdk/line-core.d.ts",
-      "default": "./dist/plugin-sdk/line-core.js"
-    },
-    "./plugin-sdk/lobster": {
-      "types": "./dist/plugin-sdk/lobster.d.ts",
-      "default": "./dist/plugin-sdk/lobster.js"
-    },
-    "./plugin-sdk/matrix": {
-      "types": "./dist/plugin-sdk/matrix.d.ts",
-      "default": "./dist/plugin-sdk/matrix.js"
-    },
-    "./plugin-sdk/mattermost": {
-      "types": "./dist/plugin-sdk/mattermost.d.ts",
-      "default": "./dist/plugin-sdk/mattermost.js"
-    },
-    "./plugin-sdk/msteams": {
-      "types": "./dist/plugin-sdk/msteams.d.ts",
-      "default": "./dist/plugin-sdk/msteams.js"
-    },
-    "./plugin-sdk/nextcloud-talk": {
-      "types": "./dist/plugin-sdk/nextcloud-talk.d.ts",
-      "default": "./dist/plugin-sdk/nextcloud-talk.js"
-    },
-    "./plugin-sdk/slack": {
-      "types": "./dist/plugin-sdk/slack.d.ts",
-      "default": "./dist/plugin-sdk/slack.js"
-    },
-    "./plugin-sdk/slack-core": {
-      "types": "./dist/plugin-sdk/slack-core.d.ts",
-      "default": "./dist/plugin-sdk/slack-core.js"
-    },
-    "./plugin-sdk/imessage": {
-      "types": "./dist/plugin-sdk/imessage.d.ts",
-      "default": "./dist/plugin-sdk/imessage.js"
-    },
-    "./plugin-sdk/imessage-core": {
-      "types": "./dist/plugin-sdk/imessage-core.d.ts",
-      "default": "./dist/plugin-sdk/imessage-core.js"
-    },
-    "./plugin-sdk/signal": {
-      "types": "./dist/plugin-sdk/signal.d.ts",
-      "default": "./dist/plugin-sdk/signal.js"
-    },
-    "./plugin-sdk/whatsapp": {
-      "types": "./dist/plugin-sdk/whatsapp.d.ts",
-      "default": "./dist/plugin-sdk/whatsapp.js"
-    },
-    "./plugin-sdk/whatsapp-shared": {
-      "types": "./dist/plugin-sdk/whatsapp-shared.d.ts",
-      "default": "./dist/plugin-sdk/whatsapp-shared.js"
-    },
-    "./plugin-sdk/whatsapp-action-runtime": {
-      "types": "./dist/plugin-sdk/whatsapp-action-runtime.d.ts",
-      "default": "./dist/plugin-sdk/whatsapp-action-runtime.js"
-    },
-    "./plugin-sdk/whatsapp-login-qr": {
-      "types": "./dist/plugin-sdk/whatsapp-login-qr.d.ts",
-      "default": "./dist/plugin-sdk/whatsapp-login-qr.js"
-    },
-    "./plugin-sdk/whatsapp-core": {
-      "types": "./dist/plugin-sdk/whatsapp-core.d.ts",
-      "default": "./dist/plugin-sdk/whatsapp-core.js"
-    },
-    "./plugin-sdk/bluebubbles": {
-      "types": "./dist/plugin-sdk/bluebubbles.d.ts",
-      "default": "./dist/plugin-sdk/bluebubbles.js"
     },
     "./plugin-sdk/lazy-runtime": {
       "types": "./dist/plugin-sdk/lazy-runtime.d.ts",
@@ -293,21 +221,25 @@
       "types": "./dist/plugin-sdk/allow-from.d.ts",
       "default": "./dist/plugin-sdk/allow-from.js"
     },
-    "./plugin-sdk/allowlist-resolution": {
-      "types": "./dist/plugin-sdk/allowlist-resolution.d.ts",
-      "default": "./dist/plugin-sdk/allowlist-resolution.js"
-    },
     "./plugin-sdk/allowlist-config-edit": {
       "types": "./dist/plugin-sdk/allowlist-config-edit.d.ts",
       "default": "./dist/plugin-sdk/allowlist-config-edit.js"
+    },
+    "./plugin-sdk/bluebubbles": {
+      "types": "./dist/plugin-sdk/bluebubbles.d.ts",
+      "default": "./dist/plugin-sdk/bluebubbles.js"
     },
     "./plugin-sdk/boolean-param": {
       "types": "./dist/plugin-sdk/boolean-param.d.ts",
       "default": "./dist/plugin-sdk/boolean-param.js"
     },
-    "./plugin-sdk/device-pair": {
-      "types": "./dist/plugin-sdk/device-pair.d.ts",
-      "default": "./dist/plugin-sdk/device-pair.js"
+    "./plugin-sdk/command-auth": {
+      "types": "./dist/plugin-sdk/command-auth.d.ts",
+      "default": "./dist/plugin-sdk/command-auth.js"
+    },
+    "./plugin-sdk/device-bootstrap": {
+      "types": "./dist/plugin-sdk/device-bootstrap.d.ts",
+      "default": "./dist/plugin-sdk/device-bootstrap.js"
     },
     "./plugin-sdk/diagnostics-otel": {
       "types": "./dist/plugin-sdk/diagnostics-otel.d.ts",
@@ -316,6 +248,14 @@
     "./plugin-sdk/diffs": {
       "types": "./dist/plugin-sdk/diffs.d.ts",
       "default": "./dist/plugin-sdk/diffs.js"
+    },
+    "./plugin-sdk/discord": {
+      "types": "./dist/plugin-sdk/discord.d.ts",
+      "default": "./dist/plugin-sdk/discord.js"
+    },
+    "./plugin-sdk/discord-core": {
+      "types": "./dist/plugin-sdk/discord-core.d.ts",
+      "default": "./dist/plugin-sdk/discord-core.js"
     },
     "./plugin-sdk/extension-shared": {
       "types": "./dist/plugin-sdk/extension-shared.d.ts",
@@ -328,6 +268,22 @@
     "./plugin-sdk/channel-config-schema": {
       "types": "./dist/plugin-sdk/channel-config-schema.d.ts",
       "default": "./dist/plugin-sdk/channel-config-schema.js"
+    },
+    "./plugin-sdk/channel-actions": {
+      "types": "./dist/plugin-sdk/channel-actions.d.ts",
+      "default": "./dist/plugin-sdk/channel-actions.js"
+    },
+    "./plugin-sdk/channel-contract": {
+      "types": "./dist/plugin-sdk/channel-contract.d.ts",
+      "default": "./dist/plugin-sdk/channel-contract.js"
+    },
+    "./plugin-sdk/channel-feedback": {
+      "types": "./dist/plugin-sdk/channel-feedback.d.ts",
+      "default": "./dist/plugin-sdk/channel-feedback.js"
+    },
+    "./plugin-sdk/channel-inbound": {
+      "types": "./dist/plugin-sdk/channel-inbound.d.ts",
+      "default": "./dist/plugin-sdk/channel-inbound.js"
     },
     "./plugin-sdk/channel-lifecycle": {
       "types": "./dist/plugin-sdk/channel-lifecycle.d.ts",
@@ -345,6 +301,14 @@
       "types": "./dist/plugin-sdk/channel-send-result.d.ts",
       "default": "./dist/plugin-sdk/channel-send-result.js"
     },
+    "./plugin-sdk/channel-targets": {
+      "types": "./dist/plugin-sdk/channel-targets.d.ts",
+      "default": "./dist/plugin-sdk/channel-targets.js"
+    },
+    "./plugin-sdk/feishu": {
+      "types": "./dist/plugin-sdk/feishu.d.ts",
+      "default": "./dist/plugin-sdk/feishu.js"
+    },
     "./plugin-sdk/group-access": {
       "types": "./dist/plugin-sdk/group-access.d.ts",
       "default": "./dist/plugin-sdk/group-access.js"
@@ -352,6 +316,42 @@
     "./plugin-sdk/directory-runtime": {
       "types": "./dist/plugin-sdk/directory-runtime.d.ts",
       "default": "./dist/plugin-sdk/directory-runtime.js"
+    },
+    "./plugin-sdk/googlechat": {
+      "types": "./dist/plugin-sdk/googlechat.d.ts",
+      "default": "./dist/plugin-sdk/googlechat.js"
+    },
+    "./plugin-sdk/image-generation": {
+      "types": "./dist/plugin-sdk/image-generation.d.ts",
+      "default": "./dist/plugin-sdk/image-generation.js"
+    },
+    "./plugin-sdk/imessage": {
+      "types": "./dist/plugin-sdk/imessage.d.ts",
+      "default": "./dist/plugin-sdk/imessage.js"
+    },
+    "./plugin-sdk/imessage-core": {
+      "types": "./dist/plugin-sdk/imessage-core.d.ts",
+      "default": "./dist/plugin-sdk/imessage-core.js"
+    },
+    "./plugin-sdk/irc": {
+      "types": "./dist/plugin-sdk/irc.d.ts",
+      "default": "./dist/plugin-sdk/irc.js"
+    },
+    "./plugin-sdk/reply-history": {
+      "types": "./dist/plugin-sdk/reply-history.d.ts",
+      "default": "./dist/plugin-sdk/reply-history.js"
+    },
+    "./plugin-sdk/media-understanding": {
+      "types": "./dist/plugin-sdk/media-understanding.d.ts",
+      "default": "./dist/plugin-sdk/media-understanding.js"
+    },
+    "./plugin-sdk/request-url": {
+      "types": "./dist/plugin-sdk/request-url.d.ts",
+      "default": "./dist/plugin-sdk/request-url.js"
+    },
+    "./plugin-sdk/runtime-store": {
+      "types": "./dist/plugin-sdk/runtime-store.d.ts",
+      "default": "./dist/plugin-sdk/runtime-store.js"
     },
     "./plugin-sdk/json-store": {
       "types": "./dist/plugin-sdk/json-store.d.ts",
@@ -365,17 +365,41 @@
       "types": "./dist/plugin-sdk/line.d.ts",
       "default": "./dist/plugin-sdk/line.js"
     },
+    "./plugin-sdk/line-core": {
+      "types": "./dist/plugin-sdk/line-core.d.ts",
+      "default": "./dist/plugin-sdk/line-core.js"
+    },
     "./plugin-sdk/llm-task": {
       "types": "./dist/plugin-sdk/llm-task.d.ts",
       "default": "./dist/plugin-sdk/llm-task.js"
+    },
+    "./plugin-sdk/matrix": {
+      "types": "./dist/plugin-sdk/matrix.d.ts",
+      "default": "./dist/plugin-sdk/matrix.js"
+    },
+    "./plugin-sdk/mattermost": {
+      "types": "./dist/plugin-sdk/mattermost.d.ts",
+      "default": "./dist/plugin-sdk/mattermost.js"
+    },
+    "./plugin-sdk/memory-core": {
+      "types": "./dist/plugin-sdk/memory-core.d.ts",
+      "default": "./dist/plugin-sdk/memory-core.js"
     },
     "./plugin-sdk/memory-lancedb": {
       "types": "./dist/plugin-sdk/memory-lancedb.d.ts",
       "default": "./dist/plugin-sdk/memory-lancedb.js"
     },
-    "./plugin-sdk/minimax-portal-auth": {
-      "types": "./dist/plugin-sdk/minimax-portal-auth.d.ts",
-      "default": "./dist/plugin-sdk/minimax-portal-auth.js"
+    "./plugin-sdk/msteams": {
+      "types": "./dist/plugin-sdk/msteams.d.ts",
+      "default": "./dist/plugin-sdk/msteams.js"
+    },
+    "./plugin-sdk/nextcloud-talk": {
+      "types": "./dist/plugin-sdk/nextcloud-talk.d.ts",
+      "default": "./dist/plugin-sdk/nextcloud-talk.js"
+    },
+    "./plugin-sdk/nostr": {
+      "types": "./dist/plugin-sdk/nostr.d.ts",
+      "default": "./dist/plugin-sdk/nostr.js"
     },
     "./plugin-sdk/provider-auth": {
       "types": "./dist/plugin-sdk/provider-auth.d.ts",
@@ -397,6 +421,14 @@
       "types": "./dist/plugin-sdk/provider-catalog.d.ts",
       "default": "./dist/plugin-sdk/provider-catalog.js"
     },
+    "./plugin-sdk/provider-env-vars": {
+      "types": "./dist/plugin-sdk/provider-env-vars.d.ts",
+      "default": "./dist/plugin-sdk/provider-env-vars.js"
+    },
+    "./plugin-sdk/provider-google": {
+      "types": "./dist/plugin-sdk/provider-google.d.ts",
+      "default": "./dist/plugin-sdk/provider-google.js"
+    },
     "./plugin-sdk/provider-models": {
       "types": "./dist/plugin-sdk/provider-models.d.ts",
       "default": "./dist/plugin-sdk/provider-models.js"
@@ -417,93 +449,29 @@
       "types": "./dist/plugin-sdk/provider-web-search.d.ts",
       "default": "./dist/plugin-sdk/provider-web-search.js"
     },
-    "./plugin-sdk/image-generation": {
-      "types": "./dist/plugin-sdk/image-generation.d.ts",
-      "default": "./dist/plugin-sdk/image-generation.js"
-    },
-    "./plugin-sdk/nostr": {
-      "types": "./dist/plugin-sdk/nostr.d.ts",
-      "default": "./dist/plugin-sdk/nostr.js"
-    },
-    "./plugin-sdk/reply-history": {
-      "types": "./dist/plugin-sdk/reply-history.d.ts",
-      "default": "./dist/plugin-sdk/reply-history.js"
-    },
-    "./plugin-sdk/media-understanding": {
-      "types": "./dist/plugin-sdk/media-understanding.d.ts",
-      "default": "./dist/plugin-sdk/media-understanding.js"
-    },
-    "./plugin-sdk/secret-input-runtime": {
-      "types": "./dist/plugin-sdk/secret-input-runtime.d.ts",
-      "default": "./dist/plugin-sdk/secret-input-runtime.js"
-    },
-    "./plugin-sdk/secret-input-schema": {
-      "types": "./dist/plugin-sdk/secret-input-schema.d.ts",
-      "default": "./dist/plugin-sdk/secret-input-schema.js"
-    },
-    "./plugin-sdk/request-url": {
-      "types": "./dist/plugin-sdk/request-url.d.ts",
-      "default": "./dist/plugin-sdk/request-url.js"
-    },
-    "./plugin-sdk/qwen-portal-auth": {
-      "types": "./dist/plugin-sdk/qwen-portal-auth.d.ts",
-      "default": "./dist/plugin-sdk/qwen-portal-auth.js"
-    },
-    "./plugin-sdk/webhook-ingress": {
-      "types": "./dist/plugin-sdk/webhook-ingress.d.ts",
-      "default": "./dist/plugin-sdk/webhook-ingress.js"
-    },
-    "./plugin-sdk/webhook-path": {
-      "types": "./dist/plugin-sdk/webhook-path.d.ts",
-      "default": "./dist/plugin-sdk/webhook-path.js"
-    },
-    "./plugin-sdk/runtime-store": {
-      "types": "./dist/plugin-sdk/runtime-store.d.ts",
-      "default": "./dist/plugin-sdk/runtime-store.js"
+    "./plugin-sdk/provider-zai-endpoint": {
+      "types": "./dist/plugin-sdk/provider-zai-endpoint.d.ts",
+      "default": "./dist/plugin-sdk/provider-zai-endpoint.js"
     },
     "./plugin-sdk/secret-input": {
       "types": "./dist/plugin-sdk/secret-input.d.ts",
       "default": "./dist/plugin-sdk/secret-input.js"
     },
-    "./plugin-sdk/signal-core": {
-      "types": "./dist/plugin-sdk/signal-core.d.ts",
-      "default": "./dist/plugin-sdk/signal-core.js"
+    "./plugin-sdk/signal": {
+      "types": "./dist/plugin-sdk/signal.d.ts",
+      "default": "./dist/plugin-sdk/signal.js"
     },
-    "./plugin-sdk/synology-chat": {
-      "types": "./dist/plugin-sdk/synology-chat.d.ts",
-      "default": "./dist/plugin-sdk/synology-chat.js"
+    "./plugin-sdk/slack": {
+      "types": "./dist/plugin-sdk/slack.d.ts",
+      "default": "./dist/plugin-sdk/slack.js"
     },
-    "./plugin-sdk/thread-ownership": {
-      "types": "./dist/plugin-sdk/thread-ownership.d.ts",
-      "default": "./dist/plugin-sdk/thread-ownership.js"
+    "./plugin-sdk/slack-core": {
+      "types": "./dist/plugin-sdk/slack-core.d.ts",
+      "default": "./dist/plugin-sdk/slack-core.js"
     },
-    "./plugin-sdk/tlon": {
-      "types": "./dist/plugin-sdk/tlon.d.ts",
-      "default": "./dist/plugin-sdk/tlon.js"
-    },
-    "./plugin-sdk/twitch": {
-      "types": "./dist/plugin-sdk/twitch.d.ts",
-      "default": "./dist/plugin-sdk/twitch.js"
-    },
-    "./plugin-sdk/voice-call": {
-      "types": "./dist/plugin-sdk/voice-call.d.ts",
-      "default": "./dist/plugin-sdk/voice-call.js"
-    },
-    "./plugin-sdk/web-media": {
-      "types": "./dist/plugin-sdk/web-media.d.ts",
-      "default": "./dist/plugin-sdk/web-media.js"
-    },
-    "./plugin-sdk/zai": {
-      "types": "./dist/plugin-sdk/zai.d.ts",
-      "default": "./dist/plugin-sdk/zai.js"
-    },
-    "./plugin-sdk/zalo": {
-      "types": "./dist/plugin-sdk/zalo.d.ts",
-      "default": "./dist/plugin-sdk/zalo.js"
-    },
-    "./plugin-sdk/zalouser": {
-      "types": "./dist/plugin-sdk/zalouser.d.ts",
-      "default": "./dist/plugin-sdk/zalouser.js"
+    "./plugin-sdk/status-helpers": {
+      "types": "./dist/plugin-sdk/status-helpers.d.ts",
+      "default": "./dist/plugin-sdk/status-helpers.js"
     },
     "./plugin-sdk/speech": {
       "types": "./dist/plugin-sdk/speech.d.ts",
@@ -513,22 +481,79 @@
       "types": "./dist/plugin-sdk/state-paths.d.ts",
       "default": "./dist/plugin-sdk/state-paths.js"
     },
+    "./plugin-sdk/telegram": {
+      "types": "./dist/plugin-sdk/telegram.d.ts",
+      "default": "./dist/plugin-sdk/telegram.js"
+    },
+    "./plugin-sdk/telegram-core": {
+      "types": "./dist/plugin-sdk/telegram-core.d.ts",
+      "default": "./dist/plugin-sdk/telegram-core.js"
+    },
+    "./plugin-sdk/thread-ownership": {
+      "types": "./dist/plugin-sdk/thread-ownership.d.ts",
+      "default": "./dist/plugin-sdk/thread-ownership.js"
+    },
+    "./plugin-sdk/tlon": {
+      "types": "./dist/plugin-sdk/tlon.d.ts",
+      "default": "./dist/plugin-sdk/tlon.js"
+    },
     "./plugin-sdk/tool-send": {
       "types": "./dist/plugin-sdk/tool-send.d.ts",
       "default": "./dist/plugin-sdk/tool-send.js"
     },
+    "./plugin-sdk/twitch": {
+      "types": "./dist/plugin-sdk/twitch.d.ts",
+      "default": "./dist/plugin-sdk/twitch.js"
+    },
+    "./plugin-sdk/webhook-ingress": {
+      "types": "./dist/plugin-sdk/webhook-ingress.d.ts",
+      "default": "./dist/plugin-sdk/webhook-ingress.js"
+    },
+    "./plugin-sdk/webhook-path": {
+      "types": "./dist/plugin-sdk/webhook-path.d.ts",
+      "default": "./dist/plugin-sdk/webhook-path.js"
+    },
+    "./plugin-sdk/web-media": {
+      "types": "./dist/plugin-sdk/web-media.d.ts",
+      "default": "./dist/plugin-sdk/web-media.js"
+    },
+    "./plugin-sdk/voice-call": {
+      "types": "./dist/plugin-sdk/voice-call.d.ts",
+      "default": "./dist/plugin-sdk/voice-call.js"
+    },
+    "./plugin-sdk/whatsapp-core": {
+      "types": "./dist/plugin-sdk/whatsapp-core.d.ts",
+      "default": "./dist/plugin-sdk/whatsapp-core.js"
+    },
+    "./plugin-sdk/whatsapp-shared": {
+      "types": "./dist/plugin-sdk/whatsapp-shared.d.ts",
+      "default": "./dist/plugin-sdk/whatsapp-shared.js"
+    },
+    "./plugin-sdk/zalo": {
+      "types": "./dist/plugin-sdk/zalo.d.ts",
+      "default": "./dist/plugin-sdk/zalo.js"
+    },
+    "./plugin-sdk/zalouser": {
+      "types": "./dist/plugin-sdk/zalouser.d.ts",
+      "default": "./dist/plugin-sdk/zalouser.js"
+    },
+    "./extension-api": "./dist/extensionAPI.js",
     "./cli-entry": "./openclaw.mjs"
   },
   "scripts": {
-    "android:assemble": "cd apps/android && ./gradlew :app:assembleDebug",
+    "android:assemble": "cd apps/android && ./gradlew :app:assemblePlayDebug",
+    "android:assemble:third-party": "cd apps/android && ./gradlew :app:assembleThirdPartyDebug",
     "android:bundle:release": "bun apps/android/scripts/build-release-aab.ts",
     "android:format": "cd apps/android && ./gradlew :app:ktlintFormat :benchmark:ktlintFormat",
-    "android:install": "cd apps/android && ./gradlew :app:installDebug",
+    "android:install": "cd apps/android && ./gradlew :app:installPlayDebug",
+    "android:install:third-party": "cd apps/android && ./gradlew :app:installThirdPartyDebug",
     "android:lint": "cd apps/android && ./gradlew :app:ktlintCheck :benchmark:ktlintCheck",
     "android:lint:android": "cd apps/android && ./gradlew :app:lintDebug",
-    "android:run": "cd apps/android && ./gradlew :app:installDebug && adb shell am start -n ai.openclaw.app/.MainActivity",
-    "android:test": "cd apps/android && ./gradlew :app:testDebugUnitTest",
+    "android:run": "cd apps/android && ./gradlew :app:installPlayDebug && adb shell am start -n ai.openclaw.app/.MainActivity",
+    "android:run:third-party": "cd apps/android && ./gradlew :app:installThirdPartyDebug && adb shell am start -n ai.openclaw.app/.MainActivity",
+    "android:test": "cd apps/android && ./gradlew :app:testPlayDebugUnitTest",
     "android:test:integration": "OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_ANDROID_NODE=1 vitest run --config vitest.live.config.ts src/gateway/android-node.capabilities.live.test.ts",
+    "android:test:third-party": "cd apps/android && ./gradlew :app:testThirdPartyDebugUnitTest",
     "build": "pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts",
     "build:docker": "node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts",
     "build:plugin-sdk:dts": "tsc -p tsconfig.plugin-sdk.dts.json",
@@ -661,6 +686,7 @@
     "test:parallels:windows": "bash scripts/e2e/parallels-windows-smoke.sh",
     "test:perf:budget": "node scripts/test-perf-budget.mjs",
     "test:perf:hotspots": "node scripts/test-hotspots.mjs",
+    "test:perf:update-memory-hotspots": "node scripts/test-update-memory-hotspots.mjs",
     "test:perf:update-timings": "node scripts/test-update-timings.mjs",
     "test:sectriage": "pnpm exec vitest run --config vitest.gateway.config.ts && vitest run --config vitest.unit.config.ts --exclude src/daemon/launchd.integration.test.ts --exclude src/process/exec.test.ts",
     "test:startup:memory": "node scripts/check-cli-startup-memory.mjs",
@@ -675,6 +701,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.16.1",
+    "@anthropic-ai/vertex-sdk": "^0.14.4",
     "@aws-sdk/client-bedrock": "^3.1011.0",
     "@clack/prompts": "^1.1.0",
     "@homebridge/ciao": "^1.3.5",
@@ -775,14 +802,15 @@
       "yauzl": "3.2.1"
     },
     "onlyBuiltDependencies": [
+      "@discordjs/opus",
       "@lydell/node-pty",
       "@matrix-org/matrix-sdk-crypto-nodejs",
       "@napi-rs/canvas",
       "@tloncorp/api",
+      "@tloncorp/tlon-skill",
       "@whiskeysockets/baileys",
       "authenticate-pam",
       "esbuild",
-      "koffi",
       "node-llama-cpp",
       "protobufjs",
       "sharp"

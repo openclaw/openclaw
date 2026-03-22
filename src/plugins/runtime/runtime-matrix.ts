@@ -1,7 +1,7 @@
 import {
   setMatrixThreadBindingIdleTimeoutBySessionKey,
   setMatrixThreadBindingMaxAgeBySessionKey,
-} from "openclaw/plugin-sdk/matrix";
+} from "./runtime-matrix-boundary.js";
 import type { PluginRuntimeChannel } from "./types-channel.js";
 
 export function createRuntimeMatrix(): PluginRuntimeChannel["matrix"] {

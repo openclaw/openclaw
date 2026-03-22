@@ -22,13 +22,14 @@ describe("performMatrixRequest", () => {
 
     await expect(
       performMatrixRequest({
-        homeserver: "https://matrix.example.org",
+        homeserver: "http://127.0.0.1:8008",
         accessToken: "token",
         method: "GET",
         endpoint: "/_matrix/media/v3/download/example/id",
         timeoutMs: 5000,
         raw: true,
         maxBytes: 1024,
+        ssrfPolicy: { allowPrivateNetwork: true },
       }),
     ).rejects.toThrow("Matrix media exceeds configured size limit");
   });
@@ -54,13 +55,14 @@ describe("performMatrixRequest", () => {
 
     await expect(
       performMatrixRequest({
-        homeserver: "https://matrix.example.org",
+        homeserver: "http://127.0.0.1:8008",
         accessToken: "token",
         method: "GET",
         endpoint: "/_matrix/media/v3/download/example/id",
         timeoutMs: 5000,
         raw: true,
         maxBytes: 1024,
+        ssrfPolicy: { allowPrivateNetwork: true },
       }),
     ).rejects.toThrow("Matrix media exceeds configured size limit");
   });

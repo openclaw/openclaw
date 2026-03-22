@@ -1,5 +1,5 @@
 import path from "node:path";
-import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
+import { type Api, type Model } from "@mariozechner/pi-ai";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
@@ -18,14 +18,14 @@ import {
   resolveAuthProfileOrder,
   resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
-import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
+import { resolveEnvApiKey, type EnvApiKeyResult } from "./model-auth-env.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
   OLLAMA_LOCAL_AUTH_MARKER,
 } from "./model-auth-markers.js";
-import { normalizeProviderId, normalizeProviderIdForAuth } from "./model-selection.js";
+import { normalizeProviderId } from "./model-selection.js";
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
 
@@ -393,43 +393,10 @@ export async function resolveApiKeyForProvider(params: {
   );
 }
 
-export type EnvApiKeyResult = { apiKey: string; source: string };
 export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "aws-sdk" | "unknown";
 
-export function resolveEnvApiKey(
-  provider: string,
-  env: NodeJS.ProcessEnv = process.env,
-): EnvApiKeyResult | null {
-  const normalized = normalizeProviderIdForAuth(provider);
-  const applied = new Set(getShellEnvAppliedKeys());
-  const pick = (envVar: string): EnvApiKeyResult | null => {
-    const value = normalizeOptionalSecretInput(env[envVar]);
-    if (!value) {
-      return null;
-    }
-    const source = applied.has(envVar) ? `shell env: ${envVar}` : `env: ${envVar}`;
-    return { apiKey: value, source };
-  };
-
-  const candidates = PROVIDER_ENV_API_KEY_CANDIDATES[normalized];
-  if (candidates) {
-    for (const envVar of candidates) {
-      const resolved = pick(envVar);
-      if (resolved) {
-        return resolved;
-      }
-    }
-  }
-
-  if (normalized === "google-vertex") {
-    const envKey = getEnvApiKey(normalized);
-    if (!envKey) {
-      return null;
-    }
-    return { apiKey: envKey, source: "gcloud adc" };
-  }
-  return null;
-}
+export { resolveEnvApiKey } from "./model-auth-env.js";
+export type { EnvApiKeyResult } from "./model-auth-env.js";
 
 export function resolveModelAuthMode(
   provider?: string,

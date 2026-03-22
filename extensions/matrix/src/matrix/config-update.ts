@@ -7,6 +7,7 @@ export type MatrixAccountPatch = {
   name?: string | null;
   enabled?: boolean;
   homeserver?: string | null;
+  allowPrivateNetwork?: boolean | null;
   userId?: string | null;
   accessToken?: string | null;
   password?: string | null;
@@ -15,6 +16,7 @@ export type MatrixAccountPatch = {
   avatarUrl?: string | null;
   encryption?: boolean | null;
   initialSyncLimit?: number | null;
+  allowBots?: MatrixConfig["allowBots"] | null;
   dm?: MatrixConfig["dm"] | null;
   groupPolicy?: MatrixConfig["groupPolicy"] | null;
   groupAllowFrom?: MatrixConfig["groupAllowFrom"] | null;
@@ -144,6 +146,14 @@ export function updateMatrixAccountConfig(
   applyNullableStringField(nextAccount, "deviceName", patch.deviceName);
   applyNullableStringField(nextAccount, "avatarUrl", patch.avatarUrl);
 
+  if (patch.allowPrivateNetwork !== undefined) {
+    if (patch.allowPrivateNetwork === null) {
+      delete nextAccount.allowPrivateNetwork;
+    } else {
+      nextAccount.allowPrivateNetwork = patch.allowPrivateNetwork;
+    }
+  }
+
   if (patch.initialSyncLimit !== undefined) {
     if (patch.initialSyncLimit === null) {
       delete nextAccount.initialSyncLimit;
@@ -157,6 +167,13 @@ export function updateMatrixAccountConfig(
       delete nextAccount.encryption;
     } else {
       nextAccount.encryption = patch.encryption;
+    }
+  }
+  if (patch.allowBots !== undefined) {
+    if (patch.allowBots === null) {
+      delete nextAccount.allowBots;
+    } else {
+      nextAccount.allowBots = patch.allowBots;
     }
   }
   if (patch.dm !== undefined) {
