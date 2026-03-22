@@ -56,13 +56,13 @@ describe("sessions_yield orchestration", () => {
     expect(queueEmbeddedPiMessage(sessionId, "subagent result")).toBe(false);
   });
 
-  it("clientToolCall takes precedence over yieldDetected", async () => {
-    // Edge case: both flags set (shouldn't happen, but clientToolCall wins)
+  it("clientToolCalls takes precedence over yieldDetected", async () => {
+    // Edge case: both flags set (shouldn't happen, but clientToolCalls wins)
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         promptError: null,
         yieldDetected: true,
-        clientToolCall: { name: "hosted_tool", params: { arg: "value" } },
+        clientToolCalls: [{ name: "hosted_tool", params: { arg: "value" } }],
       }),
     );
 
@@ -71,7 +71,7 @@ describe("sessions_yield orchestration", () => {
       runId: "run-yield-vs-client-tool",
     });
 
-    // clientToolCall wins — tool_calls stopReason, pendingToolCalls populated
+    // clientToolCalls wins — tool_calls stopReason, pendingToolCalls populated
     expect(result.meta.stopReason).toBe("tool_calls");
     expect(result.meta.pendingToolCalls).toHaveLength(1);
     expect(result.meta.pendingToolCalls![0].name).toBe("hosted_tool");
@@ -85,7 +85,7 @@ describe("sessions_yield orchestration", () => {
       runId: "run-no-yield",
     });
 
-    // Neither clientToolCall nor yieldDetected → stopReason is undefined
+    // Neither clientToolCalls nor yieldDetected → stopReason is undefined
     expect(result.meta.stopReason).toBeUndefined();
     expect(result.meta.pendingToolCalls).toBeUndefined();
   });

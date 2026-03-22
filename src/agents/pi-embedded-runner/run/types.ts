@@ -62,8 +62,8 @@ export type EmbeddedRunAttemptResult = {
   cloudCodeAssistFormatError: boolean;
   attemptUsage?: NormalizedUsage;
   compactionCount?: number;
-  /** Client tool call detected (OpenResponses hosted tools). */
-  clientToolCall?: { name: string; params: Record<string, unknown> };
+  /** Client tool calls detected (OpenResponses hosted tools). */
+  clientToolCalls?: Array<{ name: string; params: Record<string, unknown> }>;
   /** True when sessions_yield tool was called during this attempt. */
   yieldDetected?: boolean;
 };

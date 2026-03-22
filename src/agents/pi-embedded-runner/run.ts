@@ -1687,20 +1687,20 @@ export async function runEmbeddedPiAgent(
               // Handle client tool calls (OpenResponses hosted tools)
               // Propagate the LLM stop reason so callers (lifecycle events,
               // ACP bridge) can distinguish end_turn from max_tokens.
-              stopReason: attempt.clientToolCall
-                ? "tool_calls"
-                : attempt.yieldDetected
-                  ? "end_turn"
-                  : (lastAssistant?.stopReason as string | undefined),
-              pendingToolCalls: attempt.clientToolCall
-                ? [
-                    {
+              stopReason:
+                attempt.clientToolCalls && attempt.clientToolCalls.length > 0
+                  ? "tool_calls"
+                  : attempt.yieldDetected
+                    ? "end_turn"
+                    : (lastAssistant?.stopReason as string | undefined),
+              pendingToolCalls:
+                attempt.clientToolCalls && attempt.clientToolCalls.length > 0
+                  ? attempt.clientToolCalls.map((call) => ({
                       id: randomBytes(5).toString("hex").slice(0, 9),
-                      name: attempt.clientToolCall.name,
-                      arguments: JSON.stringify(attempt.clientToolCall.params),
-                    },
-                  ]
-                : undefined,
+                      name: call.name,
+                      arguments: JSON.stringify(call.params),
+                    }))
+                  : undefined,
             },
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,

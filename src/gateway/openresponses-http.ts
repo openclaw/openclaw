@@ -664,11 +664,8 @@ export async function handleOpenResponsesHttpRequest(
       const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
-      // If agent called a client tool, return function_call (and any assistant text) to caller
+      // If agent called client tools, return all function_call items (and any assistant text)
       if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
-        const functionCall = pendingToolCalls[0];
-        const functionCallItemId = `call_${randomUUID()}`;
-
         const assistantText =
           Array.isArray(payloads) && payloads.length > 0
             ? payloads
@@ -687,14 +684,16 @@ export async function handleOpenResponsesHttpRequest(
             }),
           );
         }
-        output.push(
-          createFunctionCallOutputItem({
-            id: functionCallItemId,
-            callId: functionCall.id,
-            name: functionCall.name,
-            arguments: functionCall.arguments,
-          }),
-        );
+        for (const functionCall of pendingToolCalls) {
+          output.push(
+            createFunctionCallOutputItem({
+              id: `call_${randomUUID()}`,
+              callId: functionCall.id,
+              name: functionCall.name,
+              arguments: functionCall.arguments,
+            }),
+          );
+        }
 
         const response = createResponseResource({
           id: responseId,
@@ -924,7 +923,6 @@ export async function handleOpenResponsesHttpRequest(
         pendingToolCalls &&
         pendingToolCalls.length > 0
       ) {
-        const functionCall = pendingToolCalls[0];
         const usage = finalUsage ?? createEmptyUsage();
         const finalText =
           accumulatedText ||
@@ -961,36 +959,43 @@ export async function handleOpenResponsesHttpRequest(
           item: completedItem,
         });
 
-        const functionCallItemId = `call_${randomUUID()}`;
-        const functionCallItem = createFunctionCallOutputItem({
-          id: functionCallItemId,
-          callId: functionCall.id,
-          name: functionCall.name,
-          arguments: functionCall.arguments,
-        });
-        writeSseEvent(res, {
-          type: "response.output_item.added",
-          output_index: 1,
-          item: functionCallItem,
-        });
-        const completedFunctionCallItem = createFunctionCallOutputItem({
-          id: functionCallItemId,
-          callId: functionCall.id,
-          name: functionCall.name,
-          arguments: functionCall.arguments,
-          status: "completed",
-        });
-        writeSseEvent(res, {
-          type: "response.output_item.done",
-          output_index: 1,
-          item: completedFunctionCallItem,
-        });
+        // Emit all pending function_call items
+        const outputItems: OutputItem[] = [completedItem];
+        let outputIndex = 1;
+        for (const functionCall of pendingToolCalls) {
+          const functionCallItemId = `call_${randomUUID()}`;
+          const functionCallItem = createFunctionCallOutputItem({
+            id: functionCallItemId,
+            callId: functionCall.id,
+            name: functionCall.name,
+            arguments: functionCall.arguments,
+          });
+          writeSseEvent(res, {
+            type: "response.output_item.added",
+            output_index: outputIndex,
+            item: functionCallItem,
+          });
+          const completedFunctionCallItem = createFunctionCallOutputItem({
+            id: functionCallItemId,
+            callId: functionCall.id,
+            name: functionCall.name,
+            arguments: functionCall.arguments,
+            status: "completed",
+          });
+          writeSseEvent(res, {
+            type: "response.output_item.done",
+            output_index: outputIndex,
+            item: completedFunctionCallItem,
+          });
+          outputItems.push(functionCallItem);
+          outputIndex += 1;
+        }
 
         const incompleteResponse = createResponseResource({
           id: responseId,
           model,
           status: "incomplete",
-          output: [completedItem, functionCallItem],
+          output: outputItems,
           usage,
         });
         closed = true;
