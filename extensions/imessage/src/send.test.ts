@@ -96,6 +96,7 @@ describe("sendMessageIMessage", () => {
     });
     const params = getSentParams();
     expect(params.text).toBe("[[reply_to:abc-123]] hello\nworld");
+    expect(params.reply_to_guid).toBe("abc-123");
   });
 
   it("rewrites an existing leading reply tag to keep the requested id first", async () => {
@@ -120,6 +121,7 @@ describe("sendMessageIMessage", () => {
     });
     const params = getSentParams();
     expect(params.text).toBe("hello");
+    expect(params.reply_to_guid).toBeUndefined();
   });
 
   it("normalizes string message_id values from rpc result", async () => {

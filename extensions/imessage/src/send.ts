@@ -168,6 +168,11 @@ export async function sendMessageIMessage(
     params.to = target.to;
   }
 
+  const replyGuid = sanitizeReplyToId(opts.replyToId);
+  if (replyGuid) {
+    params.reply_to_guid = replyGuid;
+  }
+
   const client =
     opts.client ??
     (opts.createClient
