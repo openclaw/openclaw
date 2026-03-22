@@ -271,7 +271,7 @@ jobs:
           path: dist/
 
       - name: Build dist
-        if: github.event_name != 'push' && matrix.task == 'test'
+        if: github.event_name != 'push' && matrix.task == 'test' && matrix.runtime == 'node'
         run: pnpm build
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
