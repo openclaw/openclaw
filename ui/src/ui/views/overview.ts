@@ -222,11 +222,17 @@ export function renderOverview(props: OverviewProps) {
       ? codexStatus.accountLabel
         ? `Connected as ${codexStatus.accountLabel}`
         : "Connected"
-      : codexStatus?.state === "pending"
-        ? "Authorization pending"
-        : codexStatus?.state === "expired"
-          ? "Token expired"
-          : "Not connected";
+      : codexStatus?.state === "browser_flow_started"
+        ? "Waiting for browser authorization"
+        : codexStatus?.state === "callback_received"
+          ? "Callback received"
+          : codexStatus?.state === "failed_before_callback"
+            ? "Authorization failed before callback"
+            : codexStatus?.state === "failed_token_exchange"
+              ? "Token exchange failed"
+              : codexStatus?.state === "expired"
+                ? "Token expired"
+                : "Not connected";
   const codexCanManage = Boolean(codexStatus?.canManage);
 
   return html`
@@ -524,15 +530,21 @@ export function renderOverview(props: OverviewProps) {
         ${
           props.codexConnectError
             ? html`<div class="callout danger" style="margin-top: 14px;">${props.codexConnectError}</div>`
-            : html`<div class="callout" style="margin-top: 14px;">
-                ${
-                  codexCanManage
-                    ? codexStatus?.state === "connected"
-                      ? "Credentials are stored in service state and survive pod restarts."
-                      : "Owner can connect OpenAI Codex once in the browser. Credentials persist in service state."
-                    : "Owner access required to connect or disconnect OpenAI Codex for this service."
-                }
-              </div>`
+            : codexStatus?.lastError
+              ? html`<div class="callout danger" style="margin-top: 14px;">${codexStatus.lastError}</div>`
+              : html`<div class="callout" style="margin-top: 14px;">
+                  ${
+                    codexCanManage
+                      ? codexStatus?.state === "connected"
+                        ? "Credentials are stored in service state and survive pod restarts."
+                        : codexStatus?.state === "callback_received"
+                          ? "OpenClaw received the browser callback and is finalizing token exchange."
+                          : codexStatus?.state === "browser_flow_started"
+                            ? "Browser auth has started. If OpenAI never returns here, this request will expire and show a failure."
+                            : "Owner can connect OpenAI Codex once in the browser. Credentials persist in service state."
+                      : "Owner access required to connect or disconnect OpenAI Codex for this service."
+                  }
+                </div>`
         }
       </div>
     </section>

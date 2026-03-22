@@ -141,6 +141,7 @@ export async function maybeCompleteCodexConnect(state: CodexConnectState) {
     state.codexConnectError = null;
   } catch (err) {
     state.codexConnectError = String(err);
+    await loadCodexConnectStatus(state);
   } finally {
     state.codexCallbackCode = null;
     state.codexCallbackState = null;
