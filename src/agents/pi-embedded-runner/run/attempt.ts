@@ -1246,7 +1246,10 @@ export async function runEmbeddedAttempt(
         const ollamaStreamFn = createConfiguredOllamaStreamFn({
           model: params.model,
           providerBaseUrl,
-          contextTokensOverride: ctxInfo.source !== "model" ? ctxInfo.tokens : undefined,
+          contextTokensOverride:
+            ctxInfo.source === "modelsConfig" || ctxInfo.source === "agentContextTokens"
+              ? ctxInfo.tokens
+              : undefined,
         });
         activeSession.agent.streamFn = ollamaStreamFn;
         ensureCustomApiRegistered(params.model.api, ollamaStreamFn);
