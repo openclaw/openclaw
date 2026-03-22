@@ -2,6 +2,8 @@
 
 FROM ubuntu:24.04@sha256:cd1dba651b3080c3686ecf4e3c4220f026b521fb76978881737d24f200828b2b
 
+# Smoke images are pinned and short-lived, so skip distro upgrades here and
+# spend the time budget on installer coverage instead.
 RUN --mount=type=cache,id=openclaw-install-sh-nonroot-apt-cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,id=openclaw-install-sh-nonroot-apt-lists,target=/var/lib/apt,sharing=locked \
   set -eux; \
@@ -11,7 +13,6 @@ RUN --mount=type=cache,id=openclaw-install-sh-nonroot-apt-cache,target=/var/cach
     if [ "${attempt}" -eq 3 ]; then exit 1; fi; \
     sleep 3; \
   done; \
-  DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 upgrade -y --no-install-recommends; \
   apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
     bash \
     ca-certificates \
