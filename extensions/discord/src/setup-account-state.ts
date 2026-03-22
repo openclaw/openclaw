@@ -4,6 +4,7 @@ import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
+import { mergeDiscordAccountConfig, resolveDiscordAccountConfig } from "./accounts.js";
 import type { DiscordAccountConfig } from "./runtime-api.js";
 import { resolveDiscordToken } from "./token.js";
 
@@ -16,23 +17,6 @@ export type InspectedDiscordSetupAccount = {
   configured: boolean;
   config: DiscordAccountConfig;
 };
-
-function resolveDiscordAccountEntry(
-  cfg: OpenClawConfig,
-  accountId: string,
-): DiscordAccountConfig | undefined {
-  const accounts = cfg.channels?.discord?.accounts;
-  if (!accounts || typeof accounts !== "object" || Array.isArray(accounts)) {
-    return undefined;
-  }
-  const normalized = normalizeAccountId(accountId);
-  const direct = accounts[normalized];
-  if (direct) {
-    return direct;
-  }
-  const matchKey = Object.keys(accounts).find((key) => normalizeAccountId(key) === normalized);
-  return matchKey ? accounts[matchKey] : undefined;
-}
 
 function inspectConfiguredToken(value: unknown): {
   token: string;
@@ -77,16 +61,9 @@ export function resolveDiscordSetupAccountConfig(params: {
   accountId?: string | null;
 }): { accountId: string; config: DiscordAccountConfig } {
   const accountId = normalizeAccountId(params.accountId ?? DEFAULT_ACCOUNT_ID);
-  const { accounts: _ignored, ...base } = (params.cfg.channels?.discord ??
-    {}) as DiscordAccountConfig & {
-    accounts?: unknown;
-  };
   return {
     accountId,
-    config: {
-      ...base,
-      ...(resolveDiscordAccountEntry(params.cfg, accountId) ?? {}),
-    },
+    config: mergeDiscordAccountConfig(params.cfg, accountId),
   };
 }
 
@@ -96,7 +73,7 @@ export function inspectDiscordSetupAccount(params: {
 }): InspectedDiscordSetupAccount {
   const { accountId, config } = resolveDiscordSetupAccountConfig(params);
   const enabled = params.cfg.channels?.discord?.enabled !== false && config.enabled !== false;
-  const accountConfig = resolveDiscordAccountEntry(params.cfg, accountId);
+  const accountConfig = resolveDiscordAccountConfig(params.cfg, accountId);
   const hasAccountToken = Boolean(
     accountConfig &&
     Object.prototype.hasOwnProperty.call(accountConfig as Record<string, unknown>, "token"),
