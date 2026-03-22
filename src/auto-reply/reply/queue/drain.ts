@@ -41,14 +41,27 @@ type OriginRoutingMetadata = Pick<
 >;
 
 function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetadata {
+  // Resolve all routing fields from a single source item. Picking each field
+  // independently with separate .find() calls can combine originatingChannel
+  // from one item with originatingTo from another when items carry partial
+  // metadata — silently routing a collect-batch reply to the wrong channel.
+  // Using one consistent source prevents cross-item field mixing. Fixes #45514.
+  const source = items.find(
+    (item) =>
+      item.originatingChannel ||
+      item.originatingTo ||
+      item.originatingAccountId ||
+      // Support both number (Telegram topic) and string (Slack thread_ts) thread IDs.
+      (item.originatingThreadId != null && item.originatingThreadId !== ""),
+  );
+  if (!source) {
+    return {};
+  }
   return {
-    originatingChannel: items.find((item) => item.originatingChannel)?.originatingChannel,
-    originatingTo: items.find((item) => item.originatingTo)?.originatingTo,
-    originatingAccountId: items.find((item) => item.originatingAccountId)?.originatingAccountId,
-    // Support both number (Telegram topic) and string (Slack thread_ts) thread IDs.
-    originatingThreadId: items.find(
-      (item) => item.originatingThreadId != null && item.originatingThreadId !== "",
-    )?.originatingThreadId,
+    originatingChannel: source.originatingChannel,
+    originatingTo: source.originatingTo,
+    originatingAccountId: source.originatingAccountId,
+    originatingThreadId: source.originatingThreadId,
   };
 }
 
