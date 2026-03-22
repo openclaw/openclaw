@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getAccountConfig } from "./config.js";
+import { getAccountConfig, listAccountIds } from "./config.js";
 
 describe("getAccountConfig", () => {
   const mockMultiAccountConfig = {
@@ -83,5 +83,36 @@ describe("getAccountConfig", () => {
     const result = getAccountConfig({ channels: { twitch: {} } }, "default");
 
     expect(result).toBeNull();
+  });
+});
+
+describe("listAccountIds", () => {
+  it("includes the implicit default account from simplified config", () => {
+    expect(
+      listAccountIds({
+        channels: {
+          twitch: {
+            username: "testbot",
+            accessToken: "oauth:test123",
+          },
+        },
+      } as Parameters<typeof listAccountIds>[0]),
+    ).toEqual(["default"]);
+  });
+
+  it("combines explicit accounts with the implicit default account once", () => {
+    expect(
+      listAccountIds({
+        channels: {
+          twitch: {
+            username: "testbot",
+            accounts: {
+              default: { username: "testbot" },
+              secondary: { username: "secondbot" },
+            },
+          },
+        },
+      } as Parameters<typeof listAccountIds>[0]),
+    ).toEqual(["default", "secondary"]);
   });
 });
