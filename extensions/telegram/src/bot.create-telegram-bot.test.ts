@@ -12,6 +12,7 @@ const {
   botCtorSpy,
   commandSpy,
   dispatchReplyWithBufferedBlockDispatcher,
+  getLoadWebMediaMock,
   getLoadConfigMock,
   getOnHandler,
   getReadChannelAllowFromStoreMock,
@@ -1258,44 +1259,39 @@ describe("createTelegramBot", () => {
   });
 
   it("sends GIF replies as animations", async () => {
+    const loadWebMedia = getLoadWebMediaMock();
     replySpy.mockResolvedValueOnce({
       text: "caption",
       mediaUrl: "https://example.com/fun",
     });
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(Buffer.from("GIF89a"), {
-        status: 200,
-        headers: {
-          "content-type": "image/gif",
-        },
-      }),
-    );
-    try {
-      createTelegramBot({ token: "tok" });
-      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("GIF89a"),
+      contentType: "image/gif",
+      fileName: "fun.gif",
+    });
 
-      await handler({
-        message: {
-          chat: { id: 1234, type: "private" },
-          text: "hello world",
-          date: 1736380800,
-          message_id: 5,
-          from: { first_name: "Ada" },
-        },
-        me: { username: "openclaw_bot" },
-        getFile: async () => ({ download: async () => new Uint8Array() }),
-      });
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
 
-      expect(sendAnimationSpy).toHaveBeenCalledTimes(1);
-      expect(sendAnimationSpy).toHaveBeenCalledWith("1234", expect.anything(), {
-        caption: "caption",
-        parse_mode: "HTML",
-        reply_to_message_id: undefined,
-      });
-      expect(sendPhotoSpy).not.toHaveBeenCalled();
-    } finally {
-      fetchSpy.mockRestore();
-    }
+    await handler({
+      message: {
+        chat: { id: 1234, type: "private" },
+        text: "hello world",
+        date: 1736380800,
+        message_id: 5,
+        from: { first_name: "Ada" },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(sendAnimationSpy).toHaveBeenCalledTimes(1);
+    expect(sendAnimationSpy).toHaveBeenCalledWith("1234", expect.anything(), {
+      caption: "caption",
+      parse_mode: "HTML",
+      reply_to_message_id: undefined,
+    });
+    expect(sendPhotoSpy).not.toHaveBeenCalled();
   });
 
   function resetHarnessSpies() {
