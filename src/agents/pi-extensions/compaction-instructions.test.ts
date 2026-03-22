@@ -19,6 +19,10 @@ describe("DEFAULT_COMPACTION_INSTRUCTIONS", () => {
     expect(DEFAULT_COMPACTION_INSTRUCTIONS).toContain("factual content");
   });
 
+  it("contains standing instructions preservation directive", () => {
+    expect(DEFAULT_COMPACTION_INSTRUCTIONS).toContain("standing user instructions");
+  });
+
   it("does not exceed MAX_INSTRUCTION_LENGTH (800 chars)", () => {
     expect(DEFAULT_COMPACTION_INSTRUCTIONS.length).toBeLessThanOrEqual(800);
   });

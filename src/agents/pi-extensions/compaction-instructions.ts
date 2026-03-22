@@ -13,6 +13,8 @@
 export const DEFAULT_COMPACTION_INSTRUCTIONS =
   "Write the summary body in the primary language used in the conversation.\n" +
   "Focus on factual content: what was discussed, decisions made, and current state.\n" +
+  "Preserve any standing user instructions or recurring directives verbatim\n" +
+  '(e.g., "always audit for security", "commit after every change").\n' +
   "Keep the required summary structure and section headers unchanged.\n" +
   "Do not translate or alter code, file paths, identifiers, or error messages.";
 

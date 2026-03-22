@@ -24,6 +24,8 @@ const MERGE_SUMMARIES_INSTRUCTIONS = [
   "- Decisions made and their rationale",
   "- TODOs, open questions, and constraints",
   "- Any commitments or follow-ups promised",
+  "- Standing user instructions, recurring directives, and persistent requirements",
+  '  (e.g., "always do X", "never do Y", "before every commit, do Z")',
   "",
   "PRIORITIZE recent context over older history. The agent needs to know",
   "what it was doing, not just what was discussed.",
