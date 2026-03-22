@@ -47,42 +47,45 @@ export function createMSTeamsReplyDispatcher(params: {
   const core = getMSTeamsRuntime();
 
   // Determine conversation type to decide typing vs streaming behavior:
-  // - personal (1:1): streaming only, no typing bubble (streaming uses its own typing activities)
+  // - personal (1:1): typing bubble + streaming (typing shows immediately,
+  //   streaming takes over once tokens arrive)
   // - groupChat: typing bubble only, no streaming
   // - channel: neither (Teams doesn't support typing or streaming in channels)
   const conversationType = params.conversationRef.conversation?.conversationType?.toLowerCase();
   const isPersonal = conversationType === "personal";
   const isGroupChat = conversationType === "groupchat";
+  const isChannel = conversationType === "channel";
 
   /**
    * Send a typing indicator.
-   * Only sends the visible "..." bubble for group chats.
-   * Personal chats use streaming instead; channels don't support typing.
+   * Sent for personal and group chats so users see immediate feedback.
+   * Channels don't support typing indicators.
    */
-  const sendTypingIndicator = isGroupChat
-    ? async () => {
-        await withRevokedProxyFallback({
-          run: async () => {
-            await params.context.sendActivity({ type: "typing" });
-          },
-          onRevoked: async () => {
-            const baseRef = buildConversationReference(params.conversationRef);
-            await params.adapter.continueConversation(
-              params.appId,
-              { ...baseRef, activityId: undefined },
-              async (ctx) => {
-                await ctx.sendActivity({ type: "typing" });
-              },
-            );
-          },
-          onRevokedLog: () => {
-            params.log.debug?.("turn context revoked, sending typing via proactive messaging");
-          },
-        });
-      }
-    : async () => {
-        // No-op for personal (streaming handles UX) and channels (not supported)
-      };
+  const sendTypingIndicator =
+    isPersonal || isGroupChat
+      ? async () => {
+          await withRevokedProxyFallback({
+            run: async () => {
+              await params.context.sendActivity({ type: "typing" });
+            },
+            onRevoked: async () => {
+              const baseRef = buildConversationReference(params.conversationRef);
+              await params.adapter.continueConversation(
+                params.appId,
+                { ...baseRef, activityId: undefined },
+                async (ctx) => {
+                  await ctx.sendActivity({ type: "typing" });
+                },
+              );
+            },
+            onRevokedLog: () => {
+              params.log.debug?.("turn context revoked, sending typing via proactive messaging");
+            },
+          });
+        }
+      : async () => {
+          // No-op for channels (not supported)
+        };
 
   const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
     cfg: params.cfg,
@@ -197,9 +200,9 @@ export function createMSTeamsReplyDispatcher(params: {
     typingCallbacks,
     deliver: async (payload) => {
       // When streaming received tokens AND hasn't failed, skip text delivery —
-      // the stream's finalize() handles the final text message.
-      // If streaming failed (>4000 chars, POST errors), fall through to normal delivery.
-      // For payloads with media, strip the text (already streamed) and send media only.
+      // finalize() handles the final message. If streaming failed (>4000 chars),
+      // fall through so deliver sends the complete response.
+      // For payloads with media, strip the text and send media only.
       if (stream && streamReceivedTokens && stream.hasContent) {
         const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
         if (!hasMedia) {

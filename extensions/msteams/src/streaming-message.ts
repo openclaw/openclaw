@@ -133,10 +133,11 @@ export class TeamsHttpStream {
       return;
     }
 
-    // Don't stream if text is too long (Teams limit).
-    // Mark as failed so deliver callback falls through to chunked delivery.
+    // Text exceeded Teams limit — finalize immediately with what we have
+    // so the user isn't left waiting while the LLM keeps generating.
     if (this.accumulatedText.length > TEAMS_MAX_CHARS) {
       this.streamFailed = true;
+      void this.finalize();
       return;
     }
 
@@ -165,15 +166,17 @@ export class TeamsHttpStream {
       return;
     }
 
-    // If streaming failed, close the stream so Teams removes the "Stop" button.
-    // Send the last successfully streamed text as the final message.
-    // The fallback path in deliver() handles delivering the complete response.
+    // If streaming failed (>4000 chars or POST errors), close the stream
+    // with the last successfully streamed text so Teams removes the "Stop"
+    // button and replaces the partial chunks. deliver() handles the complete
+    // response since hasContent returns false when streamFailed is true.
     if (this.streamFailed) {
       if (this.streamId) {
         try {
           await this.sendActivity({
             type: "message",
-            text: this.lastStreamedText || this.accumulatedText,
+            text: this.lastStreamedText || "",
+            channelData: { feedbackLoopEnabled: this.feedbackLoopEnabled },
             entities: [AI_GENERATED_ENTITY, buildStreamInfoEntity(this.streamId, "final")],
           });
         } catch {
