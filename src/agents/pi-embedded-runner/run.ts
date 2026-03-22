@@ -892,6 +892,14 @@ export async function runEmbeddedPiAgent(
       let currentAbortController = new AbortController();
       // Tracks the current attempt's queueHandle so outer handle methods can delegate.
       // Updated after each attempt returns with that attempt's real handle.
+      //
+      // KNOWN LIMITATION: During the FIRST attempt's in-flight execution (before the
+      // await returns), currentAttemptHandle is still undefined. Outer queueMessage
+      // and isStreaming() are no-op / false during this window. This is acceptable
+      // because the first attempt's own queueHandle is created at the start of
+      // runEmbeddedAttempt() and is live during execution (steering works internally).
+      // For all subsequent retry attempts, currentAttemptHandle is set before the
+      // next attempt starts, so forwarding works correctly from iteration N+1 onward.
       let currentAttemptHandle: EmbeddedPiQueueHandle | undefined;
       const queueHandle: EmbeddedPiQueueHandle = {
         queueMessage: async (text: string) => {
@@ -1026,7 +1034,9 @@ export async function runEmbeddedPiAgent(
             // Retry/failover classification happens after the attempt returns.
             // Keep the run registered until this outer loop decides whether
             // to continue, so transient retry windows do not look idle.
-            queueHandle,
+            // NOTE: queueHandle is NOT passed here. The attempt always creates its own
+            // local queueHandle. We retrieve it via attempt.queueHandle after the await
+            // returns, so the outer wrapper can forward to the current in-flight attempt.
             deferActiveRunCleanup: true,
             abortSignal: currentAbortController.signal,
             shouldEmitToolResult: params.shouldEmitToolResult,
