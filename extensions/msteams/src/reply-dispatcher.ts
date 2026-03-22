@@ -26,18 +26,6 @@ import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 import { TeamsHttpStream } from "./streaming-message.js";
 
-/** Informative status messages shown while the LLM is processing. */
-const THINKING_MESSAGES = [
-  "Scuttling through ideas...",
-  "Clawing through the details...",
-  "Diving deep...",
-  "Snapping neurons together...",
-  "Mulling it over in my shell...",
-  "Surfacing an answer...",
-  "Pinching together some thoughts...",
-  "Crawling through possibilities...",
-];
-
 export function createMSTeamsReplyDispatcher(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -126,11 +114,9 @@ export function createMSTeamsReplyDispatcher(params: {
 
   // Streaming for personal (1:1) chats using the Teams streaminfo protocol.
   let stream: TeamsHttpStream | undefined;
-  // Pick a thinking message now (before streaming starts) so it's ready
-  // to send on the first token.
-  const thinkingMsg =
-    THINKING_MESSAGES[Math.floor(Math.random() * THINKING_MESSAGES.length)] ?? "Thinking...";
-  let sentInformativeUpdate = false;
+  // Track whether onPartialReply was ever called — if so, the stream
+  // owns the text delivery and deliver should skip text payloads.
+  let streamReceivedTokens = false;
 
   if (isPersonal) {
     stream = new TeamsHttpStream({
@@ -210,10 +196,10 @@ export function createMSTeamsReplyDispatcher(params: {
     humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
     typingCallbacks,
     deliver: async (payload) => {
-      // When streaming is active and has sent content, skip text delivery —
+      // When streaming received tokens (via onPartialReply), skip text delivery —
       // the stream's finalize() handles the final text message.
       // For payloads with media, strip the text (already streamed) and send media only.
-      if (stream?.hasContent) {
+      if (stream && streamReceivedTokens) {
         const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
         if (!hasMedia) {
           return;
@@ -284,10 +270,7 @@ export function createMSTeamsReplyDispatcher(params: {
     ? {
         onPartialReply: (payload: { text?: string }) => {
           if (payload.text) {
-            if (!sentInformativeUpdate) {
-              sentInformativeUpdate = true;
-              stream!.sendInformativeUpdate(thinkingMsg).catch(() => {});
-            }
+            streamReceivedTokens = true;
             stream!.update(payload.text);
           }
         },
