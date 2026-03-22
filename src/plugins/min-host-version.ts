@@ -20,10 +20,11 @@ export type MinHostVersionCheckResult =
       currentVersion: string;
     };
 
-export function parseMinHostVersionRequirement(
-  raw: string | undefined,
-): MinHostVersionRequirement | null {
-  const trimmed = raw?.trim();
+export function parseMinHostVersionRequirement(raw: unknown): MinHostVersionRequirement | null {
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const trimmed = raw.trim();
   if (!trimmed) {
     return null;
   }
@@ -41,23 +42,21 @@ export function parseMinHostVersionRequirement(
   };
 }
 
-export function validateMinHostVersion(raw: string | undefined): string | null {
-  const trimmed = raw?.trim();
-  if (!trimmed) {
+export function validateMinHostVersion(raw: unknown): string | null {
+  if (raw === undefined) {
     return null;
   }
-  return parseMinHostVersionRequirement(trimmed) ? null : MIN_HOST_VERSION_FORMAT;
+  return parseMinHostVersionRequirement(raw) ? null : MIN_HOST_VERSION_FORMAT;
 }
 
 export function checkMinHostVersion(params: {
   currentVersion: string | undefined;
-  minHostVersion: string | undefined;
+  minHostVersion: unknown;
 }): MinHostVersionCheckResult {
-  const trimmedMinHostVersion = params.minHostVersion?.trim();
-  if (!trimmedMinHostVersion) {
+  if (params.minHostVersion === undefined) {
     return { ok: true, requirement: null };
   }
-  const requirement = parseMinHostVersionRequirement(trimmedMinHostVersion);
+  const requirement = parseMinHostVersionRequirement(params.minHostVersion);
   if (!requirement) {
     return { ok: false, kind: "invalid", error: MIN_HOST_VERSION_FORMAT };
   }

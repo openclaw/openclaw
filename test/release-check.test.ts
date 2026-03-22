@@ -85,6 +85,21 @@ describe("collectBundledExtensionManifestErrors", () => {
       ]),
     ).toEqual([]);
   });
+
+  it("flags non-object install metadata instead of throwing", () => {
+    expect(
+      collectBundledExtensionManifestErrors([
+        {
+          id: "broken",
+          packageJson: {
+            openclaw: {
+              install: 123,
+            },
+          },
+        },
+      ]),
+    ).toEqual(["bundled extension 'broken' manifest invalid | openclaw.install must be an object"]);
+  });
 });
 
 describe("collectForbiddenPackPaths", () => {
