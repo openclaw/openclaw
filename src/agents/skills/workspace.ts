@@ -270,13 +270,6 @@ function loadSkillEntries(
         maxCandidatesPerRoot: limits.maxCandidatesPerRoot,
         maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource,
       });
-    } else if (childDirs.length > maxCandidates) {
-      skillsLogger.warn("Skills root has many entries, truncating discovery.", {
-        dir: params.dir,
-        baseDir,
-        childDirCount: childDirs.length,
-        maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource,
-      });
     }
 
     const loadedSkills: Skill[] = [];
