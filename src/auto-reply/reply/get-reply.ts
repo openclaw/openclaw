@@ -400,6 +400,28 @@ export async function getReplyFromConfig(
   provider = resolvedProvider;
   model = resolvedModel;
 
+  // Re-check if the final model matches the image model override.
+  // If directives/stored override picked a different model, reset the flags
+  // to avoid passing wrong auth profile and fallbacks.
+  let finalHasAppliedImageModelOverride = hasAppliedImageModelOverride;
+  let finalModelOverrideFallbacks = opts?.modelOverrideFallbacks;
+  if (hasAppliedImageModelOverride && opts?.modelOverride) {
+    const finalModelKey = modelKey(provider, model);
+    const overrideRef = resolveModelRefFromString({
+      raw: opts.modelOverride.trim(),
+      defaultProvider,
+      aliasIndex,
+    });
+    if (overrideRef) {
+      const overrideKey = modelKey(overrideRef.ref.provider, overrideRef.ref.model);
+      if (finalModelKey !== overrideKey) {
+        // Final model differs from image model override, reset the flags
+        finalHasAppliedImageModelOverride = false;
+        finalModelOverrideFallbacks = undefined;
+      }
+    }
+  }
+
   const maybeEmitMissingResetHooks = async () => {
     if (!resetTriggered || !command.isAuthorizedSender || command.resetHookTriggered) {
       return;
@@ -479,6 +501,12 @@ export async function getReplyFromConfig(
   });
   logIngressStage("sandbox-media");
 
+  // Create final opts with potentially cleared modelOverrideFallbacks
+  const finalOpts =
+    finalModelOverrideFallbacks !== opts?.modelOverrideFallbacks
+      ? { ...resolvedOpts, modelOverrideFallbacks: finalModelOverrideFallbacks }
+      : resolvedOpts;
+
   return runPreparedReply({
     ctx,
     sessionCtx,
@@ -509,7 +537,7 @@ export async function getReplyFromConfig(
     perMessageQueueMode,
     perMessageQueueOptions,
     typing,
-    opts: resolvedOpts,
+    opts: finalOpts,
     defaultProvider,
     defaultModel,
     timeoutMs,
@@ -523,6 +551,6 @@ export async function getReplyFromConfig(
     storePath,
     workspaceDir,
     abortedLastRun,
-    hasAppliedImageModelOverride,
+    hasAppliedImageModelOverride: finalHasAppliedImageModelOverride,
   });
 }
