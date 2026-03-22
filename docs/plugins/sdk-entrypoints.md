@@ -14,8 +14,9 @@ Every plugin exports a default entry object. The SDK provides three helpers for
 creating them.
 
 <Tip>
-  **Looking for a walkthrough?** See [Channel Plugins](/plugins/sdk-channel-plugins)
-  or [Provider Plugins](/plugins/sdk-provider-plugins) for step-by-step guides.
+  **Looking for a walkthrough?** See [Tool Plugins](/plugins/sdk-tool-plugins),
+  [Channel Plugins](/plugins/sdk-channel-plugins), or
+  [Provider Plugins](/plugins/sdk-provider-plugins) for step-by-step guides.
 </Tip>
 
 ## `definePluginEntry`
@@ -155,7 +156,9 @@ Use `openclaw plugins inspect <id>` to see a plugin's shape.
 ## Related
 
 - [SDK Overview](/plugins/sdk-overview) — registration API and subpath reference
+- [SDK Subpaths](/plugins/sdk-subpaths) — supported import paths
 - [Runtime Helpers](/plugins/sdk-runtime) — `api.runtime` and `createPluginRuntimeStore`
 - [Setup and Config](/plugins/sdk-setup) — manifest, setup entry, deferred loading
+- [Tool Plugins](/plugins/sdk-tool-plugins) — building tool, hook, and command plugins
 - [Channel Plugins](/plugins/sdk-channel-plugins) — building the `ChannelPlugin` object
 - [Provider Plugins](/plugins/sdk-provider-plugins) — provider registration and hooks

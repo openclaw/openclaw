@@ -258,6 +258,8 @@ OPENCLAW_TEST_PROFILE=low OPENCLAW_TEST_SERIAL_GATEWAY=1 pnpm test
 ## Related
 
 - [SDK Overview](/plugins/sdk-overview) -- import conventions
+- [SDK Subpaths](/plugins/sdk-subpaths) -- supported public import paths
+- [Tool Plugins](/plugins/sdk-tool-plugins) -- tool, hook, and command plugin guide
 - [SDK Channel Plugins](/plugins/sdk-channel-plugins) -- channel plugin interface
 - [SDK Provider Plugins](/plugins/sdk-provider-plugins) -- provider plugin hooks
 - [Building Plugins](/plugins/building-plugins) -- getting started guide

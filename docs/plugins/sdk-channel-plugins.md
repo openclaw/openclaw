@@ -365,6 +365,6 @@ extensions/acme-chat/
 ## Next steps
 
 - [Provider Plugins](/plugins/sdk-provider-plugins) — if your plugin also provides models
-- [SDK Overview](/plugins/sdk-overview) — full subpath import reference
+- [SDK Subpaths](/plugins/sdk-subpaths) — supported subpath import reference
 - [SDK Testing](/plugins/sdk-testing) — test utilities and contract tests
 - [Plugin Manifest](/plugins/manifest) — full manifest schema

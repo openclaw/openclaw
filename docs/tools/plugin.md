@@ -248,8 +248,10 @@ Common registration methods:
 ## Related
 
 - [Building Plugins](/plugins/building-plugins) — create your own plugin
+- [Tool Plugins](/plugins/sdk-tool-plugins) — build a tool, hook, or command plugin
 - [Plugin Bundles](/plugins/bundles) — Codex/Claude/Cursor bundle compatibility
 - [Plugin Manifest](/plugins/manifest) — manifest schema
-- [Registering Tools](/plugins/building-plugins#registering-agent-tools) — add agent tools in a plugin
+- [SDK Subpaths](/plugins/sdk-subpaths) — supported public import paths
+- [Plugin Troubleshooting](/plugins/sdk-troubleshooting) — debug load and config issues
 - [Plugin Internals](/plugins/architecture) — capability model and load pipeline
 - [Community Plugins](/plugins/community) — third-party listings

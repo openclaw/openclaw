@@ -1,7 +1,7 @@
 ---
 title: "Plugin SDK Overview"
 sidebarTitle: "SDK Overview"
-summary: "Import map, registration API reference, and SDK architecture"
+summary: "Registration API reference, import guidance, and SDK architecture"
 read_when:
   - You need to know which SDK subpath to import from
   - You want a reference for all registration methods on OpenClawPluginApi
@@ -16,6 +16,7 @@ reference for **what to import** and **what you can register**.
 <Tip>
   **Looking for a how-to guide?**
   - First plugin? Start with [Getting Started](/plugins/building-plugins)
+  - Tool plugin? See [Tool Plugins](/plugins/sdk-tool-plugins)
   - Channel plugin? See [Channel Plugins](/plugins/sdk-channel-plugins)
   - Provider plugin? See [Provider Plugins](/plugins/sdk-provider-plugins)
 </Tip>
@@ -35,10 +36,11 @@ import { definePluginEntry } from "openclaw/plugin-sdk";
 Each subpath is a small, self-contained module. This keeps startup fast and
 prevents circular dependency issues.
 
-## Subpath reference
+For the public import-path index, see [SDK Subpaths](/plugins/sdk-subpaths).
 
-The most commonly used subpaths, grouped by purpose. The full list of 100+
-subpaths is in `scripts/lib/plugin-sdk-entrypoints.json`.
+## Common subpaths
+
+The most commonly used subpaths, grouped by purpose:
 
 ### Plugin entry
 
@@ -188,9 +190,11 @@ my-plugin/
 
 ## Related
 
+- [SDK Subpaths](/plugins/sdk-subpaths) — supported public import paths
 - [Entry Points](/plugins/sdk-entrypoints) — `definePluginEntry` and `defineChannelPluginEntry` options
 - [Runtime Helpers](/plugins/sdk-runtime) — full `api.runtime` namespace reference
 - [Setup and Config](/plugins/sdk-setup) — packaging, manifests, config schemas
 - [Testing](/plugins/sdk-testing) — test utilities and lint rules
+- [Tool Plugins](/plugins/sdk-tool-plugins) — build tool, hook, and command plugins
 - [SDK Migration](/plugins/sdk-migration) — migrating from deprecated surfaces
 - [Plugin Internals](/plugins/architecture) — deep architecture and capability model

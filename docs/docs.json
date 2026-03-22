@@ -1043,15 +1043,18 @@
                     "group": "Building Plugins",
                     "pages": [
                       "plugins/building-plugins",
+                      "plugins/sdk-tool-plugins",
                       "plugins/sdk-channel-plugins",
                       "plugins/sdk-provider-plugins",
-                      "plugins/sdk-migration"
+                      "plugins/sdk-migration",
+                      "plugins/sdk-troubleshooting"
                     ]
                   },
                   {
                     "group": "SDK Reference",
                     "pages": [
                       "plugins/sdk-overview",
+                      "plugins/sdk-subpaths",
                       "plugins/sdk-entrypoints",
                       "plugins/sdk-runtime",
                       "plugins/sdk-setup",

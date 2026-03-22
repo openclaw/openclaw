@@ -15,6 +15,7 @@ sidebarTitle: "Internals"
   This is the **deep architecture reference**. For practical guides, see:
   - [Install and use plugins](/tools/plugin) — user guide
   - [Getting Started](/plugins/building-plugins) — first plugin tutorial
+  - [Tool Plugins](/plugins/sdk-tool-plugins) — build tools, hooks, and commands
   - [Channel Plugins](/plugins/sdk-channel-plugins) — build a messaging channel
   - [Provider Plugins](/plugins/sdk-provider-plugins) — build a model provider
   - [SDK Overview](/plugins/sdk-overview) — import map and registration API

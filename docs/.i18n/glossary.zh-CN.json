@@ -252,6 +252,10 @@
     "target": "SDK 概览"
   },
   {
+    "source": "Install and use plugins",
+    "target": "安装和使用插件"
+  },
+  {
     "source": "Plugin Entry Points",
     "target": "插件入口点"
   },
@@ -260,12 +264,28 @@
     "target": "入口点"
   },
   {
+    "source": "SDK Entry Points",
+    "target": "SDK 入口点"
+  },
+  {
     "source": "Plugin Runtime",
     "target": "插件运行时"
   },
   {
+    "source": "Plugin SDK Runtime",
+    "target": "插件 SDK 运行时"
+  },
+  {
     "source": "Runtime",
     "target": "运行时"
+  },
+  {
+    "source": "SDK Runtime",
+    "target": "SDK 运行时"
+  },
+  {
+    "source": "Runtime Helpers",
+    "target": "运行时辅助工具"
   },
   {
     "source": "Plugin Setup",
@@ -276,12 +296,36 @@
     "target": "设置"
   },
   {
+    "source": "Plugin SDK Setup",
+    "target": "插件 SDK 设置"
+  },
+  {
+    "source": "Setup and Config",
+    "target": "设置和配置"
+  },
+  {
+    "source": "Building Plugins",
+    "target": "构建插件"
+  },
+  {
+    "source": "Building Channel Plugins",
+    "target": "构建渠道插件"
+  },
+  {
     "source": "Channel Plugin SDK",
     "target": "渠道插件 SDK"
   },
   {
     "source": "Channel Plugins",
     "target": "渠道插件"
+  },
+  {
+    "source": "SDK Channel Plugins",
+    "target": "SDK 渠道插件"
+  },
+  {
+    "source": "Building Provider Plugins",
+    "target": "构建提供商插件"
   },
   {
     "source": "Provider Plugin SDK",
@@ -292,11 +336,55 @@
     "target": "提供商插件"
   },
   {
+    "source": "SDK Provider Plugins",
+    "target": "SDK 提供商插件"
+  },
+  {
+    "source": "Building Tool Plugins",
+    "target": "构建工具插件"
+  },
+  {
+    "source": "Tool Plugins",
+    "target": "工具插件"
+  },
+  {
+    "source": "Plugin Troubleshooting",
+    "target": "插件故障排除"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "故障排除"
+  },
+  {
+    "source": "Plugin SDK Subpaths",
+    "target": "插件 SDK 子路径"
+  },
+  {
+    "source": "SDK Subpaths",
+    "target": "SDK 子路径"
+  },
+  {
     "source": "Plugin SDK Testing",
     "target": "插件 SDK 测试"
   },
   {
+    "source": "SDK Testing",
+    "target": "SDK 测试"
+  },
+  {
     "source": "Testing",
     "target": "测试"
+  },
+  {
+    "source": "Plugin Manifest",
+    "target": "插件清单"
+  },
+  {
+    "source": "Plugin Internals",
+    "target": "插件内部机制"
+  },
+  {
+    "source": "SDK Migration",
+    "target": "SDK 迁移"
   }
 ]

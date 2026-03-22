@@ -33,7 +33,7 @@ falls back to npm automatically.
   <Card title="Provider plugin" icon="cpu" href="/plugins/sdk-provider-plugins">
     Add a model provider (LLM, proxy, or custom endpoint)
   </Card>
-  <Card title="Tool / hook plugin" icon="wrench">
+  <Card title="Tool / hook plugin" icon="wrench" href="/plugins/sdk-tool-plugins">
     Register agent tools, event hooks, or services — continue below
   </Card>
 </CardGroup>
@@ -200,7 +200,7 @@ import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { ... } from "openclaw/plugin-sdk";
 ```
 
-For the full subpath reference, see [SDK Overview](/plugins/sdk-overview).
+For the full subpath reference, see [SDK Subpaths](/plugins/sdk-subpaths).
 
 Within your plugin, use local barrel files (`api.ts`, `runtime-api.ts`) for
 internal imports — never import your own plugin through its SDK path.
@@ -218,6 +218,9 @@ internal imports — never import your own plugin through its SDK path.
 ## Next steps
 
 <CardGroup cols={2}>
+  <Card title="Tool Plugins" icon="wrench" href="/plugins/sdk-tool-plugins">
+    Build a tool, hook, or command plugin
+  </Card>
   <Card title="Channel Plugins" icon="messages-square" href="/plugins/sdk-channel-plugins">
     Build a messaging channel plugin
   </Card>
@@ -227,11 +230,17 @@ internal imports — never import your own plugin through its SDK path.
   <Card title="SDK Overview" icon="book-open" href="/plugins/sdk-overview">
     Import map and registration API reference
   </Card>
+  <Card title="SDK Subpaths" icon="list" href="/plugins/sdk-subpaths">
+    Supported `openclaw/plugin-sdk/*` imports
+  </Card>
   <Card title="Runtime Helpers" icon="settings" href="/plugins/sdk-runtime">
     TTS, search, subagent via api.runtime
   </Card>
   <Card title="Testing" icon="test-tubes" href="/plugins/sdk-testing">
     Test utilities and patterns
+  </Card>
+  <Card title="Troubleshooting" icon="triangle-alert" href="/plugins/sdk-troubleshooting">
+    Debug load, manifest, and config issues
   </Card>
   <Card title="Plugin Manifest" icon="file-json" href="/plugins/manifest">
     Full manifest schema reference
