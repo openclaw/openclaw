@@ -56,6 +56,9 @@ OpenClaw recognizes two plugin formats:
 
 Both show up under `openclaw plugins list`. See [Plugin Bundles](/plugins/bundles) for bundle details.
 
+If you are writing a native plugin, start with [Building Plugins](/plugins/building-plugins)
+and the [Plugin SDK Overview](/plugins/sdk-overview).
+
 ## Official plugins
 
 ### Installable (npm)

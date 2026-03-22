@@ -1,4 +1,4 @@
-// Shared setup wizard/types/helpers for extension setup surfaces and adapters.
+// Shared setup wizard/types/helpers for plugin and channel setup surfaces.
 
 export type { OpenClawConfig } from "../config/config.js";
 export type { DmPolicy, GroupPolicy } from "../config/types.js";
