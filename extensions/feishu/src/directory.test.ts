@@ -48,6 +48,26 @@ describe("feishu directory (config-backed)", () => {
     ]);
   });
 
+  it("normalizes spaced provider-prefixed peer entries", async () => {
+    resolveFeishuAccountMock.mockReturnValueOnce({
+      configured: false,
+      config: {
+        allowFrom: [" feishu:user:ou_alice "],
+        dms: {
+          " lark:dm:ou_carla ": {},
+        },
+        groups: {},
+        groupAllowFrom: [],
+      },
+    });
+
+    const peers = await listFeishuDirectoryPeers({ cfg });
+    expect(peers).toEqual([
+      { kind: "user", id: "ou_alice" },
+      { kind: "user", id: "ou_carla" },
+    ]);
+  });
+
   it("merges groups map + groupAllowFrom into group entries", async () => {
     const groups = await listFeishuDirectoryGroups({ cfg });
     expect(groups).toEqual([

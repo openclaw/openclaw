@@ -78,7 +78,9 @@ describe("irc setup wizard", () => {
     });
 
     const promptAllowFrom = ircConfigureAdapter.dmPolicy?.promptAllowFrom;
-    expect(promptAllowFrom).toBeTypeOf("function");
+    if (!promptAllowFrom) {
+      throw new Error("promptAllowFrom unavailable");
+    }
 
     const cfg: CoreConfig = {
       channels: {

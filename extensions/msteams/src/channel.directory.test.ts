@@ -82,4 +82,33 @@ describe("msteams directory", () => {
       ]),
     );
   });
+
+  it("normalizes spaced allowlist and dm entries", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          allowFrom: ["  user:Bob  ", "  Alice  "],
+          dms: { "  Carol  ": {}, "user:Dave": {} },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const directory = expectDirectorySurface(msteamsPlugin.directory);
+
+    await expect(
+      directory.listPeers({
+        cfg,
+        query: undefined,
+        limit: undefined,
+        runtime: runtimeEnv,
+      }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        { kind: "user", id: "user:Bob" },
+        { kind: "user", id: "user:Alice" },
+        { kind: "user", id: "user:Carol" },
+        { kind: "user", id: "user:Dave" },
+      ]),
+    );
+  });
 });
