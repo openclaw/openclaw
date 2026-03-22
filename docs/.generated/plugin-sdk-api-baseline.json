@@ -1269,7 +1269,7 @@
           }
         },
         {
-          "declaration": "export type ReplyPrefixContext = import(\"/Users/vincentkoc/GIT/_Perso/openclaw-fix-main-rc-types/src/auto-reply/reply/response-prefix-template\").ResponsePrefixContext;",
+          "declaration": "export type ReplyPrefixContext = import(\"src/auto-reply/reply/response-prefix-template\").ResponsePrefixContext;",
           "exportName": "ReplyPrefixContext",
           "kind": "type",
           "source": {
@@ -3338,7 +3338,7 @@
           }
         },
         {
-          "declaration": "export type ChannelOutboundSessionRouteParams = {    cfg: OpenClawConfig;    agentId: string;    accountId?: string | null;    target: string;    resolvedTarget?: {        to: string;        kind: import(\"/Users/vincentkoc/GIT/_Perso/openclaw-fix-main-rc-types/src/channels/plugins/types.core\").ChannelDirectoryEntryKind | \"channel\";        display?: string;        source: \"normalized\" | \"directory\";    };    replyToId?: string | null;    threadId?: string | number | null;};",
+          "declaration": "export type ChannelOutboundSessionRouteParams = {    cfg: OpenClawConfig;    agentId: string;    accountId?: string | null;    target: string;    resolvedTarget?: {        to: string;        kind: import(\"src/channels/plugins/types.core\").ChannelDirectoryEntryKind | \"channel\";        display?: string;        source: \"normalized\" | \"directory\";    };    replyToId?: string | null;    threadId?: string | number | null;};",
           "exportName": "ChannelOutboundSessionRouteParams",
           "kind": "type",
           "source": {
@@ -4345,7 +4345,7 @@
           "exportName": "ModelDefinitionConfig",
           "kind": "type",
           "source": {
-            "line": 46,
+            "line": 47,
             "path": "src/config/types.models.ts"
           }
         },
@@ -4354,7 +4354,7 @@
           "exportName": "ModelProviderConfig",
           "kind": "type",
           "source": {
-            "line": 64,
+            "line": 65,
             "path": "src/config/types.models.ts"
           }
         },
@@ -4886,7 +4886,7 @@
           "exportName": "isRequestBodyLimitError",
           "kind": "function",
           "source": {
-            "line": 46,
+            "line": 47,
             "path": "src/infra/http-body.ts"
           }
         },
@@ -4913,7 +4913,7 @@
           "exportName": "readRequestBodyWithLimit",
           "kind": "function",
           "source": {
-            "line": 121,
+            "line": 122,
             "path": "src/infra/http-body.ts"
           }
         },
@@ -4958,7 +4958,7 @@
           "exportName": "requestBodyErrorToText",
           "kind": "function",
           "source": {
-            "line": 59,
+            "line": 60,
             "path": "src/infra/http-body.ts"
           }
         },

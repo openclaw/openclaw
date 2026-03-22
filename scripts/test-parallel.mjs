@@ -54,6 +54,9 @@ const unitBehaviorIsolatedFiles = existingUnitConfigFiles(behaviorManifest.unit.
 const unitSingletonIsolatedFiles = existingUnitConfigFiles(behaviorManifest.unit.singletonIsolated);
 const unitThreadSingletonFiles = existingUnitConfigFiles(behaviorManifest.unit.threadSingleton);
 const unitVmForkSingletonFiles = existingUnitConfigFiles(behaviorManifest.unit.vmForkSingleton);
+const extensionSingletonIsolatedFiles = existingFiles(
+  behaviorManifest.extensions.singletonIsolated,
+);
 const unitBehaviorOverrideSet = new Set([
   ...unitBehaviorIsolatedFiles,
   ...unitSingletonIsolatedFiles,
@@ -85,14 +88,13 @@ const testProfile =
 const isMacMiniProfile = testProfile === "macmini";
 // Vitest executes Node tests through Vite's SSR/module-runner pipeline, so the
 // shared unit lane still retains transformed ESM/module state even when the
-// tests themselves are not "server rendering" a website. vmForks can win in
-// ideal transform-heavy cases, but for this repo we measured higher aggregate
-// CPU load and fatal heap OOMs on memory-constrained dev machines and CI when
-// unit-fast stayed on vmForks. Keep forks as the default unless that evidence
-// is re-run and replaced:
-// PR: https://github.com/openclaw/openclaw/pull/51145
-// OOM evidence: https://github.com/openclaw/openclaw/pull/51145#issuecomment-4099663958
-// Preserve OPENCLAW_TEST_VM_FORKS=1 as the explicit override/debug escape hatch.
+// tests themselves are not "server rendering" a website. We previously kept
+// forks as the default after vmFork OOM regressions on constrained hosts. On
+// 2026-03-22, a direct full-unit threads run finished 1109/1110 green; the sole
+// correctness exception stayed on the manifest fork lane, so the wrapper now
+// defaults unit runs to threads while preserving explicit fork/vmFork escapes.
+// Preserve OPENCLAW_TEST_UNIT_DEFAULT_POOL=forks or OPENCLAW_TEST_VM_FORKS=1 as
+// explicit debug escape hatches.
 const supportsVmForks = Number.isFinite(nodeMajor) ? nodeMajor <= 24 : true;
 const useVmForks = process.env.OPENCLAW_TEST_VM_FORKS === "1" && supportsVmForks;
 const forceIsolation =
@@ -103,6 +105,15 @@ const disableIsolation =
   process.env.OPENCLAW_TEST_NO_ISOLATE !== "false";
 const includeGatewaySuite = process.env.OPENCLAW_TEST_INCLUDE_GATEWAY === "1";
 const includeExtensionsSuite = process.env.OPENCLAW_TEST_INCLUDE_EXTENSIONS === "1";
+const parsePoolOverride = (value, fallback) => {
+  if (value === "threads" || value === "forks") {
+    return value;
+  }
+  if (value === "vmForks") {
+    return supportsVmForks ? value : "forks";
+  }
+  return fallback;
+};
 // Even on low-memory hosts, keep the isolated lane split so files like
 // git-commit.test.ts still get the worker/process isolation they require.
 const shouldSplitUnitRuns = testProfile !== "serial";
@@ -263,8 +274,16 @@ const allKnownTestFiles = [
     ...walkTestFiles(path.join("ui", "src", "ui")),
   ]),
 ];
+const defaultUnitPool = parsePoolOverride(process.env.OPENCLAW_TEST_UNIT_DEFAULT_POOL, "threads");
+const isTargetedIsolatedUnitFile = (fileFilter) =>
+  unitBehaviorIsolatedFiles.includes(fileFilter) ||
+  unitSingletonBatchFiles.includes(fileFilter) ||
+  unitMemorySingletonFiles.includes(fileFilter);
 const inferTarget = (fileFilter) => {
-  const isolated = unitBehaviorIsolatedFiles.includes(fileFilter);
+  const isolated = isTargetedIsolatedUnitFile(fileFilter);
+  if (isUnitConfigTestFile(fileFilter)) {
+    return { owner: "unit", isolated };
+  }
   if (fileFilter.endsWith(".live.test.ts")) {
     return { owner: "live", isolated };
   }
@@ -424,6 +443,10 @@ const unitFastExcludedFileSet = new Set(unitFastExcludedFiles);
 const unitFastCandidateFiles = allKnownUnitFiles.filter(
   (file) => !unitFastExcludedFileSet.has(file),
 );
+const extensionSingletonExcludedFileSet = new Set(extensionSingletonIsolatedFiles);
+const extensionSharedCandidateFiles = allKnownTestFiles.filter(
+  (file) => file.startsWith("extensions/") && !extensionSingletonExcludedFileSet.has(file),
+);
 const defaultUnitFastLaneCount = isCI && !isWindows ? 3 : 1;
 const unitFastLaneCount = Math.max(
   1,
@@ -465,7 +488,7 @@ const unitFastEntries = unitFastBuckets.flatMap((files, index) => {
         "run",
         "--config",
         "vitest.unit.config.ts",
-        `--pool=${useVmForks ? "vmForks" : "forks"}`,
+        `--pool=${defaultUnitPool}`,
         ...(disableIsolation ? ["--isolate=false"] : []),
       ],
     }));
@@ -500,6 +523,10 @@ const unitThreadEntries =
         },
       ]
     : [];
+const extensionSingletonEntries = extensionSingletonIsolatedFiles.map((file) => ({
+  name: `${path.basename(file, ".test.ts")}-extensions-isolated`,
+  args: ["vitest", "run", "--config", "vitest.extensions.config.ts", "--pool=forks", file],
+}));
 const baseRuns = [
   ...(shouldSplitUnitRuns
     ? [
@@ -567,6 +594,15 @@ const baseRuns = [
     ? [
         {
           name: "extensions",
+          env:
+            extensionSharedCandidateFiles.length > 0
+              ? {
+                  OPENCLAW_VITEST_INCLUDE_FILE: writeTempJsonArtifact(
+                    "vitest-extensions-include",
+                    extensionSharedCandidateFiles,
+                  ),
+                }
+              : undefined,
           args: [
             "vitest",
             "run",
@@ -575,6 +611,7 @@ const baseRuns = [
             ...(useVmForks ? ["--pool=vmForks"] : []),
           ],
         },
+        ...extensionSingletonEntries,
       ]
     : []),
   ...(includeGatewaySuite
@@ -638,7 +675,7 @@ const createTargetedEntry = (owner, isolated, filters) => {
         "run",
         "--config",
         "vitest.unit.config.ts",
-        `--pool=${forceForks ? "forks" : useVmForks ? "vmForks" : "forks"}`,
+        `--pool=${forceForks ? "forks" : defaultUnitPool}`,
         ...(disableIsolation ? ["--isolate=false"] : []),
         ...filters,
       ],
