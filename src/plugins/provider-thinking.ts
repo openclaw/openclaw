@@ -1,5 +1,4 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { getActivePluginRegistry } from "./runtime.js";
 import type {
   ProviderDefaultThinkingPolicyContext,
@@ -26,9 +25,6 @@ function resolveActiveThinkingProvider(providerId: string): ProviderPlugin | und
 
 type ThinkingHookParams<TContext> = {
   provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
   context: TContext;
 };
 
