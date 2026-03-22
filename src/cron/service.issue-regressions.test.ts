@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import { clearCommandLane, setCommandLaneConcurrency } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
@@ -38,16 +38,6 @@ const FAST_TIMEOUT_SECONDS = 0.0025;
 
 describe("Cron issue regressions", () => {
   const { makeStorePath } = setupCronIssueRegressionFixtures();
-
-  afterEach(() => {
-    // Shared-state runs can begin collecting the next file before runner-level
-    // cleanup unwinds this suite's fake timers or command-lane mutations.
-    vi.clearAllTimers();
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    clearCommandLane(CommandLane.Cron);
-    setCommandLaneConcurrency(CommandLane.Cron, 1);
-  });
 
   it("covers schedule updates and payload patching", async () => {
     const store = makeStorePath();
