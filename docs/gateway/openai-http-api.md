@@ -41,6 +41,14 @@ Treat this endpoint as a **full operator-access** surface for the gateway instan
 
 See [Security](/gateway/security) and [Remote access](/gateway/remote).
 
+## When to use this endpoint
+
+Use `/v1/chat/completions` when you are building your own private chat UI on top of an existing gateway, such as a Flutter, React Native, iOS, or Android app.
+
+- Prefer this over adding a new built-in channel when your app is just another operator/client surface for the same gateway.
+- Use [WebChat](/web/webchat) or the [Gateway Protocol](/gateway/protocol) instead if you need the native Gateway WebSocket path.
+- Build a channel plugin instead when you are integrating an external messaging network with its own users, rooms, webhook delivery, or outbound transport. See [Building Plugins](/plugins/building-plugins).
+
 ## Choosing an agent
 
 No custom headers required: encode the agent id in the OpenAI `model` field:
@@ -94,6 +102,8 @@ By default the endpoint is **stateless per request** (a new session key is gener
 
 If the request includes an OpenAI `user` string, the Gateway derives a stable session key from it, so repeated calls can share an agent session.
 
+For custom apps, the simplest pattern is to reuse the same `user` value per installed app, signed-in account, or conversation thread. Use `x-openclaw-session-key` only when you need explicit routing control across multiple clients or threads.
+
 ## Streaming (SSE)
 
 Set `stream: true` to receive Server-Sent Events (SSE):
@@ -103,6 +113,21 @@ Set `stream: true` to receive Server-Sent Events (SSE):
 - Stream ends with `data: [DONE]`
 
 ## Examples
+
+Stable session for a private app:
+
+```bash
+curl -sS http://127.0.0.1:18789/v1/chat/completions \
+  -H 'Authorization: Bearer YOUR_TOKEN' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "openclaw:main",
+    "user": "device:ios-sim-001",
+    "messages": [{"role":"user","content":"Summarize my tasks for today"}]
+  }'
+```
+
+Reuse the same `user` value on later calls to continue the same agent session.
 
 Non-streaming:
 
