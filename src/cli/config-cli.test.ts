@@ -34,13 +34,19 @@ const mockExit = vi.fn((code: number) => {
   throw new Error(`__exit__:${code} - ${errorMessages}`);
 });
 
-vi.mock("../runtime.js", () => ({
-  defaultRuntime: {
-    log: (...args: unknown[]) => mockLog(...args),
-    error: (...args: unknown[]) => mockError(...args),
-    exit: (code: number) => mockExit(code),
-  },
-}));
+vi.mock("../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime.js")>();
+  return {
+    ...actual,
+    defaultRuntime: {
+      log: (...args: unknown[]) => mockLog(...args),
+      error: (...args: unknown[]) => mockError(...args),
+      writeJson: (value: unknown, space = 2) =>
+        mockLog(JSON.stringify(value, null, space > 0 ? space : undefined)),
+      exit: (code: number) => mockExit(code),
+    },
+  };
+});
 
 function buildSnapshot(params: {
   resolved: OpenClawConfig;
