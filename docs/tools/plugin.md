@@ -318,8 +318,6 @@ Common lifecycle hooks:
 - `before_compaction` / `after_compaction` — memory compaction
 - `gateway_start` / `gateway_stop` — gateway startup and shutdown
 
-See [Plugin Internals](/plugins/architecture#provider-runtime-hooks) for the complete hook list.
-
 ### Common mistake
 
 ```typescript
