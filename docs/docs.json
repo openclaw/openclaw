@@ -863,7 +863,11 @@
             "groups": [
               {
                 "group": "Overview",
-                "pages": ["index", "start/showcase", "concepts/features"]
+                "pages": [
+                  "index",
+                  "start/showcase",
+                  "concepts/features"
+                ]
               },
               {
                 "group": "First steps",
@@ -889,7 +893,11 @@
             "groups": [
               {
                 "group": "Install overview",
-                "pages": ["install/index", "install/installer", "install/node"]
+                "pages": [
+                  "install/index",
+                  "install/installer",
+                  "install/node"
+                ]
               },
               {
                 "group": "Containers",
@@ -937,7 +945,9 @@
             "groups": [
               {
                 "group": "Overview",
-                "pages": ["channels/index"]
+                "pages": [
+                  "channels/index"
+                ]
               },
               {
                 "group": "Messaging platforms",
@@ -1031,7 +1041,9 @@
             "groups": [
               {
                 "group": "Overview",
-                "pages": ["tools/index"]
+                "pages": [
+                  "tools/index"
+                ]
               },
               {
                 "group": "Plugins",
@@ -1122,11 +1134,18 @@
             "groups": [
               {
                 "group": "Overview",
-                "pages": ["providers/index", "providers/models"]
+                "pages": [
+                  "providers/index",
+                  "providers/models"
+                ]
               },
               {
                 "group": "Concepts and configuration",
-                "pages": ["concepts/models", "concepts/model-providers", "concepts/model-failover"]
+                "pages": [
+                  "concepts/models",
+                  "concepts/model-providers",
+                  "concepts/model-failover"
+                ]
               },
               {
                 "group": "Providers",
@@ -1272,7 +1291,11 @@
               },
               {
                 "group": "Remote access",
-                "pages": ["gateway/remote", "gateway/remote-gateway-readme", "gateway/tailscale"]
+                "pages": [
+                  "gateway/remote",
+                  "gateway/remote-gateway-readme",
+                  "gateway/tailscale"
+                ]
               },
               {
                 "group": "Security",
@@ -1299,7 +1322,13 @@
               },
               {
                 "group": "Web interfaces",
-                "pages": ["web/index", "web/control-ui", "web/dashboard", "web/webchat", "web/tui"]
+                "pages": [
+                  "web/index",
+                  "web/control-ui",
+                  "web/dashboard",
+                  "web/webchat",
+                  "web/tui"
+                ]
               }
             ]
           },
@@ -1366,25 +1395,44 @@
                   },
                   {
                     "group": "Configuration",
-                    "pages": ["cli/config", "cli/configure", "cli/webhooks"]
+                    "pages": [
+                      "cli/config",
+                      "cli/configure",
+                      "cli/webhooks"
+                    ]
                   },
                   {
                     "group": "Plugins and skills",
-                    "pages": ["cli/plugins", "cli/skills"]
+                    "pages": [
+                      "cli/plugins",
+                      "cli/skills"
+                    ]
                   },
                   {
                     "group": "Interfaces",
-                    "pages": ["cli/dashboard", "cli/tui"]
+                    "pages": [
+                      "cli/dashboard",
+                      "cli/tui"
+                    ]
                   },
                   {
                     "group": "Utility",
-                    "pages": ["cli/acp", "cli/clawbot", "cli/completion", "cli/dns", "cli/docs"]
+                    "pages": [
+                      "cli/acp",
+                      "cli/clawbot",
+                      "cli/completion",
+                      "cli/dns",
+                      "cli/docs"
+                    ]
                   }
                 ]
               },
               {
                 "group": "RPC and API",
-                "pages": ["reference/rpc", "reference/device-models"]
+                "pages": [
+                  "reference/rpc",
+                  "reference/device-models"
+                ]
               },
               {
                 "group": "Templates",
@@ -1426,11 +1474,16 @@
               },
               {
                 "group": "Project",
-                "pages": ["reference/credits"]
+                "pages": [
+                  "reference/credits"
+                ]
               },
               {
                 "group": "Release policy",
-                "pages": ["reference/RELEASING", "reference/test"]
+                "pages": [
+                  "reference/RELEASING",
+                  "reference/test"
+                ]
               }
             ]
           },
@@ -1439,11 +1492,17 @@
             "groups": [
               {
                 "group": "Help",
-                "pages": ["help/index", "help/troubleshooting", "help/faq"]
+                "pages": [
+                  "help/index",
+                  "help/troubleshooting",
+                  "help/faq"
+                ]
               },
               {
                 "group": "Community",
-                "pages": ["start/lore"]
+                "pages": [
+                  "start/lore"
+                ]
               },
               {
                 "group": "Environment and debugging",
@@ -1458,19 +1517,29 @@
               },
               {
                 "group": "Compaction internals",
-                "pages": ["reference/session-management-compaction"]
+                "pages": [
+                  "reference/session-management-compaction"
+                ]
               },
               {
                 "group": "Developer setup",
-                "pages": ["start/setup", "pi-dev"]
+                "pages": [
+                  "start/setup",
+                  "pi-dev"
+                ]
               },
               {
                 "group": "Contributing",
-                "pages": ["ci"]
+                "pages": [
+                  "ci"
+                ]
               },
               {
                 "group": "Docs meta",
-                "pages": ["start/hubs", "start/docs-directory"]
+                "pages": [
+                  "start/hubs",
+                  "start/docs-directory"
+                ]
               }
             ]
           }
@@ -1484,15 +1553,21 @@
             "groups": [
               {
                 "group": "首页",
-                "pages": ["zh-CN/index"]
+                "pages": [
+                  "zh-CN/index"
+                ]
               },
               {
                 "group": "概览",
-                "pages": ["zh-CN/start/showcase"]
+                "pages": [
+                  "zh-CN/start/showcase"
+                ]
               },
               {
                 "group": "核心概念",
-                "pages": ["zh-CN/concepts/features"]
+                "pages": [
+                  "zh-CN/concepts/features"
+                ]
               },
               {
                 "group": "第一步",
@@ -1504,7 +1579,9 @@
               },
               {
                 "group": "指南",
-                "pages": ["zh-CN/start/openclaw"]
+                "pages": [
+                  "zh-CN/start/openclaw"
+                ]
               }
             ]
           },
@@ -1513,7 +1590,10 @@
             "groups": [
               {
                 "group": "安装概览",
-                "pages": ["zh-CN/install/index", "zh-CN/install/installer"]
+                "pages": [
+                  "zh-CN/install/index",
+                  "zh-CN/install/installer"
+                ]
               },
               {
                 "group": "安装方式",
@@ -1548,7 +1628,9 @@
               },
               {
                 "group": "高级",
-                "pages": ["zh-CN/install/development-channels"]
+                "pages": [
+                  "zh-CN/install/development-channels"
+                ]
               }
             ]
           },
@@ -1557,7 +1639,9 @@
             "groups": [
               {
                 "group": "概览",
-                "pages": ["zh-CN/channels/index"]
+                "pages": [
+                  "zh-CN/channels/index"
+                ]
               },
               {
                 "group": "消息平台",
@@ -1616,7 +1700,9 @@
               },
               {
                 "group": "引导",
-                "pages": ["zh-CN/start/bootstrapping"]
+                "pages": [
+                  "zh-CN/start/bootstrapping"
+                ]
               },
               {
                 "group": "会话与记忆",
@@ -1630,7 +1716,10 @@
               },
               {
                 "group": "多代理",
-                "pages": ["zh-CN/concepts/multi-agent", "zh-CN/concepts/presence"]
+                "pages": [
+                  "zh-CN/concepts/multi-agent",
+                  "zh-CN/concepts/presence"
+                ]
               },
               {
                 "group": "消息与投递",
@@ -1648,7 +1737,9 @@
             "groups": [
               {
                 "group": "概览",
-                "pages": ["zh-CN/tools/index"]
+                "pages": [
+                  "zh-CN/tools/index"
+                ]
               },
               {
                 "group": "内置工具",
@@ -1740,15 +1831,23 @@
             "groups": [
               {
                 "group": "概览",
-                "pages": ["zh-CN/providers/index", "zh-CN/providers/models"]
+                "pages": [
+                  "zh-CN/providers/index",
+                  "zh-CN/providers/models"
+                ]
               },
               {
                 "group": "模型概念",
-                "pages": ["zh-CN/concepts/models"]
+                "pages": [
+                  "zh-CN/concepts/models"
+                ]
               },
               {
                 "group": "配置",
-                "pages": ["zh-CN/concepts/model-providers", "zh-CN/concepts/model-failover"]
+                "pages": [
+                  "zh-CN/concepts/model-providers",
+                  "zh-CN/concepts/model-failover"
+                ]
               },
               {
                 "group": "提供商",
@@ -1881,11 +1980,16 @@
               },
               {
                 "group": "运维专题",
-                "pages": ["zh-CN/network", "zh-CN/logging"]
+                "pages": [
+                  "zh-CN/network",
+                  "zh-CN/logging"
+                ]
               },
               {
                 "group": "安全",
-                "pages": ["zh-CN/security/formal-verification"]
+                "pages": [
+                  "zh-CN/security/formal-verification"
+                ]
               },
               {
                 "group": "Web 界面",
@@ -1950,7 +2054,10 @@
               },
               {
                 "group": "RPC 与 API",
-                "pages": ["zh-CN/reference/rpc", "zh-CN/reference/device-models"]
+                "pages": [
+                  "zh-CN/reference/rpc",
+                  "zh-CN/reference/device-models"
+                ]
               },
               {
                 "group": "模板",
@@ -1988,11 +2095,16 @@
               },
               {
                 "group": "项目",
-                "pages": ["zh-CN/reference/credits"]
+                "pages": [
+                  "zh-CN/reference/credits"
+                ]
               },
               {
                 "group": "发布策略",
-                "pages": ["zh-CN/reference/RELEASING", "zh-CN/reference/test"]
+                "pages": [
+                  "zh-CN/reference/RELEASING",
+                  "zh-CN/reference/test"
+                ]
               }
             ]
           },
@@ -2001,11 +2113,17 @@
             "groups": [
               {
                 "group": "帮助",
-                "pages": ["zh-CN/help/index", "zh-CN/help/troubleshooting", "zh-CN/help/faq"]
+                "pages": [
+                  "zh-CN/help/index",
+                  "zh-CN/help/troubleshooting",
+                  "zh-CN/help/faq"
+                ]
               },
               {
                 "group": "社区",
-                "pages": ["zh-CN/start/lore"]
+                "pages": [
+                  "zh-CN/start/lore"
+                ]
               },
               {
                 "group": "环境与调试",
@@ -2020,19 +2138,30 @@
               },
               {
                 "group": "Node 运行时",
-                "pages": ["zh-CN/install/node"]
+                "pages": [
+                  "zh-CN/install/node"
+                ]
               },
               {
                 "group": "压缩机制内部参考",
-                "pages": ["zh-CN/reference/session-management-compaction"]
+                "pages": [
+                  "zh-CN/reference/session-management-compaction"
+                ]
               },
               {
                 "group": "开发者设置",
-                "pages": ["zh-CN/start/setup", "zh-CN/pi-dev"]
+                "pages": [
+                  "zh-CN/start/setup",
+                  "zh-CN/pi-dev"
+                ]
               },
               {
                 "group": "文档元信息",
-                "pages": ["zh-CN/start/hubs", "zh-CN/start/docs-directory", "zh-CN/AGENTS"]
+                "pages": [
+                  "zh-CN/start/hubs",
+                  "zh-CN/start/docs-directory",
+                  "zh-CN/AGENTS"
+                ]
               }
             ]
           }
@@ -2046,15 +2175,23 @@
             "groups": [
               {
                 "group": "概要",
-                "pages": ["ja-JP/index"]
+                "pages": [
+                  "ja-JP/index"
+                ]
               },
               {
                 "group": "初回セットアップ",
-                "pages": ["ja-JP/start/getting-started", "ja-JP/start/wizard"]
+                "pages": [
+                  "ja-JP/start/getting-started",
+                  "ja-JP/start/wizard"
+                ]
               }
             ]
           }
         ]
+      },
+      {
+        "language": "vi"
       }
     ]
   }
