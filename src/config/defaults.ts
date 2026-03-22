@@ -16,21 +16,10 @@ type WarnState = { warned: boolean };
 
 let defaultWarnState: WarnState = { warned: false };
 
-type AnthropicAuthDefaultsMode = "api_key" | "oauth";
-
 const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
-  // Anthropic (pi-ai catalog uses "latest" ids without date suffix)
-  opus: "anthropic/claude-opus-4-6",
-  sonnet: "anthropic/claude-sonnet-4-6",
-
   // OpenAI
   gpt: "openai/gpt-5.4",
   "gpt-mini": "openai/gpt-5-mini",
-
-  // Google Gemini (3.x are preview ids in the catalog)
-  gemini: "google/gemini-3.1-pro-preview",
-  "gemini-flash": "google/gemini-3-flash-preview",
-  "gemini-flash-lite": "google/gemini-3.1-flash-lite-preview",
 };
 
 const DEFAULT_MODEL_COST: ModelDefinitionConfig["cost"] = {
@@ -44,16 +33,6 @@ const DEFAULT_MODEL_MAX_TOKENS = 8192;
 
 type ModelDefinitionLike = Partial<ModelDefinitionConfig> &
   Pick<ModelDefinitionConfig, "id" | "name">;
-
-function resolveDefaultProviderApi(
-  providerId: string,
-  providerApi: ModelDefinitionConfig["api"] | undefined,
-): ModelDefinitionConfig["api"] | undefined {
-  if (providerApi) {
-    return providerApi;
-  }
-  return normalizeProviderId(providerId) === "anthropic" ? "anthropic-messages" : undefined;
-}
 
 function isPositiveNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -69,46 +48,6 @@ function resolveModelCost(
     cacheWrite:
       typeof raw?.cacheWrite === "number" ? raw.cacheWrite : DEFAULT_MODEL_COST.cacheWrite,
   };
-}
-
-function resolveAnthropicDefaultAuthMode(cfg: OpenClawConfig): AnthropicAuthDefaultsMode | null {
-  const profiles = cfg.auth?.profiles ?? {};
-  const anthropicProfiles = Object.entries(profiles).filter(
-    ([, profile]) => profile?.provider === "anthropic",
-  );
-
-  const order = cfg.auth?.order?.anthropic ?? [];
-  for (const profileId of order) {
-    const entry = profiles[profileId];
-    if (!entry || entry.provider !== "anthropic") {
-      continue;
-    }
-    if (entry.mode === "api_key") {
-      return "api_key";
-    }
-    if (entry.mode === "oauth" || entry.mode === "token") {
-      return "oauth";
-    }
-  }
-
-  const hasApiKey = anthropicProfiles.some(([, profile]) => profile?.mode === "api_key");
-  const hasOauth = anthropicProfiles.some(
-    ([, profile]) => profile?.mode === "oauth" || profile?.mode === "token",
-  );
-  if (hasApiKey && !hasOauth) {
-    return "api_key";
-  }
-  if (hasOauth && !hasApiKey) {
-    return "oauth";
-  }
-
-  if (process.env.ANTHROPIC_OAUTH_TOKEN?.trim()) {
-    return "oauth";
-  }
-  if (process.env.ANTHROPIC_API_KEY?.trim()) {
-    return "api_key";
-  }
-  return null;
 }
 
 function resolvePrimaryModelRef(raw?: string): string | null {

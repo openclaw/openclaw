@@ -180,27 +180,6 @@ export const SecretsConfigSchema = z
 
 export const ModelApiSchema = z.enum(MODEL_APIS);
 
-export const ModelCompatSchema = z
-  .object({
-    supportsStore: z.boolean().optional(),
-    supportsDeveloperRole: z.boolean().optional(),
-    supportsReasoningEffort: z.boolean().optional(),
-    supportsUsageInStreaming: z.boolean().optional(),
-    supportsTools: z.boolean().optional(),
-    supportsStrictMode: z.boolean().optional(),
-    maxTokensField: z
-      .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])
-      .optional(),
-    thinkingFormat: z.union([z.literal("openai"), z.literal("zai"), z.literal("qwen")]).optional(),
-    requiresToolResultName: z.boolean().optional(),
-    requiresAssistantAfterToolResult: z.boolean().optional(),
-    requiresThinkingAsText: z.boolean().optional(),
-    requiresMistralToolIds: z.boolean().optional(),
-    requiresOpenAiAnthropicToolPayload: z.boolean().optional(),
-  })
-  .strict()
-  .optional();
-
 export const ModelDefinitionSchema = z
   .object({
     id: z.string().min(1),
@@ -220,7 +199,6 @@ export const ModelDefinitionSchema = z
     contextWindow: z.number().positive().optional(),
     maxTokens: z.number().positive().optional(),
     headers: z.record(z.string(), z.string()).optional(),
-    compat: ModelCompatSchema,
   })
   .strict();
 
@@ -228,9 +206,6 @@ export const ModelProviderSchema = z
   .object({
     baseUrl: z.string().min(1),
     apiKey: SecretInputSchema.optional().register(sensitive),
-    auth: z
-      .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
-      .optional(),
     api: ModelApiSchema.optional(),
     injectNumCtxForOpenAICompat: z.boolean().optional(),
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
@@ -239,23 +214,10 @@ export const ModelProviderSchema = z
   })
   .strict();
 
-export const BedrockDiscoverySchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    region: z.string().optional(),
-    providerFilter: z.array(z.string()).optional(),
-    refreshInterval: z.number().int().nonnegative().optional(),
-    defaultContextWindow: z.number().int().positive().optional(),
-    defaultMaxTokens: z.number().int().positive().optional(),
-  })
-  .strict()
-  .optional();
-
 export const ModelsConfigSchema = z
   .object({
     mode: z.union([z.literal("merge"), z.literal("replace")]).optional(),
     providers: z.record(z.string(), ModelProviderSchema).optional(),
-    bedrockDiscovery: BedrockDiscoverySchema,
   })
   .strict()
   .optional();
