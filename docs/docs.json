@@ -859,36 +859,6 @@
         "language": "en",
         "tabs": [
           {
-            "tab": "Get started",
-            "groups": [
-              {
-                "group": "Overview",
-                "pages": [
-                  "index",
-                  "start/showcase",
-                  "concepts/features"
-                ]
-              },
-              {
-                "group": "First steps",
-                "pages": [
-                  "start/getting-started",
-                  "start/onboarding-overview",
-                  "start/wizard",
-                  "start/onboarding"
-                ]
-              },
-              {
-                "group": "Guides",
-                "pages": [
-                  "start/openclaw",
-                  "start/wizard-cli-reference",
-                  "start/wizard-cli-automation"
-                ]
-              }
-            ]
-          },
-          {
             "tab": "Install",
             "groups": [
               {
@@ -2191,7 +2161,39 @@
         ]
       },
       {
-        "language": "vi"
+        "language": "vi",
+        "tabs": [
+          {
+            "tab": "Get started",
+            "groups": [
+              {
+                "group": "Overview",
+                "pages": [
+                  "index",
+                  "start/showcase",
+                  "concepts/features"
+                ]
+              },
+              {
+                "group": "First steps",
+                "pages": [
+                  "start/getting-started",
+                  "start/onboarding-overview",
+                  "start/wizard",
+                  "start/onboarding"
+                ]
+              },
+              {
+                "group": "Guides",
+                "pages": [
+                  "start/openclaw",
+                  "start/wizard-cli-reference",
+                  "start/wizard-cli-automation"
+                ]
+              }
+            ]
+          }
+        ]
       }
     ]
   }
