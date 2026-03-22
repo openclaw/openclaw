@@ -208,6 +208,7 @@ export const ModelCompatSchema = z
     toolCallArgumentsEncoding: z.literal("html-entities").optional(),
     requiresMistralToolIds: z.boolean().optional(),
     requiresOpenAiAnthropicToolPayload: z.boolean().optional(),
+    supportsPromptCache: z.boolean().optional(),
   })
   .strict()
   .optional();

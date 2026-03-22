@@ -158,6 +158,10 @@ function shouldStripResponsesPromptCache(model: { api?: unknown; baseUrl?: unkno
   if (typeof model.api !== "string" || !OPENAI_RESPONSES_APIS.has(model.api)) {
     return false;
   }
+  const compat = (model as { compat?: { supportsPromptCache?: boolean } }).compat;
+  if (compat?.supportsPromptCache === true) {
+    return false;
+  }
   // Missing baseUrl means pi-ai will use the default OpenAI endpoint, so keep
   // prompt cache fields for that direct path.
   if (typeof model.baseUrl !== "string" || !model.baseUrl.trim()) {
