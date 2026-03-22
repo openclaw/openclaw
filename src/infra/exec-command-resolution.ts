@@ -6,7 +6,7 @@ import { resolveDispatchWrapperExecutionPlan } from "./exec-wrapper-resolution.j
 import { resolveExecutablePath as resolveExecutableCandidatePath } from "./executable-path.js";
 import { expandHomePrefix } from "./home-dir.js";
 
-export const DEFAULT_SAFE_BINS = ["jq", "cut", "uniq", "head", "tail", "tr", "wc"];
+export const DEFAULT_SAFE_BINS = ["cut", "uniq", "head", "tail", "tr", "wc"];
 
 export type CommandResolution = {
   rawExecutable: string;
