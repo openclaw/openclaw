@@ -20,6 +20,7 @@ import type { OriginatingChannelType } from "../templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveRunAuthProfile } from "./agent-runner-utils.js";
+import { runAfterDispatchIdle, runAndWaitForDispatchIdle } from "./followup-dispatch-idle.js";
 import {
   resolveOriginAccountId,
   resolveOriginMessageProvider,
@@ -34,7 +35,6 @@ import {
 } from "./reply-payloads.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
-import { waitForSessionDispatchIdle } from "./dispatcher-registry.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
@@ -124,24 +124,20 @@ export function createFollowupRunner(params: {
             originatingChannel,
           });
           if (opts?.onBlockReply && origin && origin === provider) {
-            await opts.onBlockReply(payload);
+            await runAndWaitForDispatchIdle(
+              () => opts.onBlockReply!(payload),
+              opts.waitForDispatchIdle,
+            );
           }
         }
       } else if (opts?.onBlockReply) {
-        await opts.onBlockReply(payload);
+        await runAndWaitForDispatchIdle(() => opts.onBlockReply!(payload), opts.waitForDispatchIdle);
       }
     }
   };
 
   return async (queued: FollowupRun) => {
-    const queuedSessionKey = queued.run.sessionKey?.trim();
-    if (queuedSessionKey) {
-      // Wait for the current turn's final reply to fully leave the dispatcher
-      // before starting the queued followup. Otherwise the followup can read
-      // a session transcript that already includes the queued user turn but
-      // not yet the just-finished assistant reply.
-      await waitForSessionDispatchIdle(queuedSessionKey);
-    }
+    await runAfterDispatchIdle(opts?.waitForDispatchIdle);
 
     try {
       const runId = crypto.randomUUID();

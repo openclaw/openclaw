@@ -81,7 +81,6 @@ export type ReplyDispatcher = {
   waitForIdle: () => Promise<void>;
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
   markComplete: () => void;
-  bindSessionKey?: (sessionKey?: string | null) => void;
 };
 
 type NormalizeReplyPayloadInternalOptions = Pick<
@@ -113,7 +112,6 @@ function normalizeReplyPayloadInternal(
 
 export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDispatcher {
   let sendChain: Promise<void> = Promise.resolve();
-  let boundSessionKey: string | undefined;
   // Track in-flight deliveries so we can emit a reliable "idle" signal.
   // Start with pending=1 as a "reservation" to prevent premature gateway restart.
   // This is decremented when markComplete() is called to signal no more replies will come.
@@ -132,7 +130,6 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
   const { unregister } = registerDispatcher({
     pending: () => pending,
     waitForIdle: () => sendChain,
-    getSessionKey: () => boundSessionKey,
   });
 
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
@@ -217,10 +214,6 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),
     markComplete,
-    bindSessionKey: (sessionKey) => {
-      const trimmed = sessionKey?.trim();
-      boundSessionKey = trimmed ? trimmed : undefined;
-    },
   };
 }
 
