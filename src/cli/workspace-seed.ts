@@ -141,6 +141,7 @@ export const MANAGED_SKILLS: ReadonlyArray<{ name: string; templatePaths?: boole
   { name: "crm", templatePaths: true },
   { name: "browser" },
   { name: "app-builder", templatePaths: true },
+  { name: "gstack" },
 ];
 
 export function seedSkill(
