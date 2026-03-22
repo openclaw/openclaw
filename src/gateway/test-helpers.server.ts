@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
-import { resolveMainSessionKeyFromConfig, type SessionEntry } from "../config/sessions.js";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import {
+  clearSessionStoreCacheForTest,
+  resolveMainSessionKeyFromConfig,
+  type SessionEntry,
+} from "../config/sessions.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -63,6 +68,35 @@ let tempHome: string | undefined;
 let tempConfigRoot: string | undefined;
 let suiteConfigRootSeq = 0;
 
+async function persistTestSessionStorePath(storePath: string): Promise<void> {
+  const configPaths = new Set<string>();
+  if (process.env.OPENCLAW_CONFIG_PATH) {
+    configPaths.add(process.env.OPENCLAW_CONFIG_PATH);
+  }
+  if (process.env.OPENCLAW_STATE_DIR) {
+    configPaths.add(path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json"));
+  }
+  for (const configPath of configPaths) {
+    let config: Record<string, unknown> = {};
+    try {
+      const raw = await fs.readFile(configPath, "utf-8");
+      config = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      config = {};
+    }
+    const session =
+      config.session && typeof config.session === "object" && !Array.isArray(config.session)
+        ? { ...(config.session as Record<string, unknown>) }
+        : {};
+    session.store = storePath;
+    config.session = session;
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+  }
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+}
+
 export async function writeSessionStore(params: {
   entries: Record<string, Partial<SessionEntry>>;
   storePath?: string;
@@ -87,8 +121,13 @@ export async function writeSessionStore(params: {
           });
     store[storeKey] = entry;
   }
+  // Gateway suites often reuse the same store path across tests while writing the
+  // file directly; clear the in-process cache so handlers reload the seeded state.
+  clearSessionStoreCacheForTest();
+  await persistTestSessionStorePath(storePath);
   await fs.mkdir(path.dirname(storePath), { recursive: true });
   await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+  clearSessionStoreCacheForTest();
 }
 
 async function setupGatewayTestHome() {
@@ -133,6 +172,8 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
     await fs.mkdir(tempConfigRoot, { recursive: true });
   }
   setTestConfigRoot(tempConfigRoot);
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
   sessionStoreSaveDelayMs.value = 0;
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
@@ -197,10 +238,10 @@ export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) 
   if (scope === "suite") {
     beforeAll(async () => {
       await setupGatewayTestHome();
-      await resetGatewayTestState({ uniqueConfigRoot: true });
+      await resetGatewayTestState({ uniqueConfigRoot: false });
     });
     beforeEach(async () => {
-      await resetGatewayTestState({ uniqueConfigRoot: true });
+      await resetGatewayTestState({ uniqueConfigRoot: false });
     }, 60_000);
     afterEach(async () => {
       await cleanupGatewayTestHome({ restoreEnv: false });
