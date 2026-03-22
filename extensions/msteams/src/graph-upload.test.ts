@@ -140,9 +140,18 @@ describe("resolveGraphChatId", () => {
         headers: expect.objectContaining({ Authorization: "Bearer graph-token" }),
       }),
     );
-    // Should filter by user AAD object ID
-    const callUrl = (fetchFn.mock.calls[0] as unknown[])[0];
-    expect(callUrl).toContain("user-aad-object-id-123");
+    const firstCall = fetchFn.mock.calls[0];
+    if (!firstCall) {
+      throw new Error("expected Graph chat lookup request");
+    }
+    const [callUrlRaw] = firstCall as unknown as [string, RequestInit?];
+    const callUrl = new URL(callUrlRaw);
+    expect(callUrl.origin).toBe("https://graph.microsoft.com");
+    expect(callUrl.pathname).toBe("/v1.0/me/chats");
+    expect(callUrl.searchParams.get("$filter")).toBe(
+      "chatType eq 'oneOnOne' and members/any(m:m/microsoft.graph.aadUserConversationMember/userId eq 'user-aad-object-id-123')",
+    );
+    expect(callUrl.searchParams.get("$select")).toBe("id");
     expect(result).toBe("19:dm-chat-id@unq.gbl.spaces");
   });
 
