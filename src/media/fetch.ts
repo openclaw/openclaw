@@ -31,13 +31,8 @@ export function isMediaFetchError(err: unknown): boolean {
   if (err instanceof MediaFetchError) {
     return true;
   }
-  if (err instanceof Error) {
-    if (err.message.includes("MediaFetchError")) {
-      return true;
-    }
-    if (err.cause) {
-      return isMediaFetchError(err.cause);
-    }
+  if (err instanceof Error && err.cause !== undefined) {
+    return isMediaFetchError(err.cause);
   }
   return false;
 }
