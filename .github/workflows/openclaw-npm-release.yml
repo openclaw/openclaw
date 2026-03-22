@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to publish (for example v2026.3.14, v2026.3.14-beta.1, or fallback v2026.3.14-1)
+        description: Release tag to publish (for example v2026.3.22, v2026.3.22-beta.1, or fallback v2026.3.22-1)
         required: true
         type: string
 

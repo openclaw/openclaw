@@ -59,8 +59,8 @@ describe("clawhub helpers", () => {
   });
 
   it("checks min gateway versions with loose host labels", () => {
-    expect(satisfiesGatewayMinimum("2026.3.14", "2026.3.0")).toBe(true);
-    expect(satisfiesGatewayMinimum("OpenClaw 2026.3.14", "2026.3.0")).toBe(true);
+    expect(satisfiesGatewayMinimum("2026.3.22", "2026.3.0")).toBe(true);
+    expect(satisfiesGatewayMinimum("OpenClaw 2026.3.22", "2026.3.0")).toBe(true);
     expect(satisfiesGatewayMinimum("2026.2.9", "2026.3.0")).toBe(false);
     expect(satisfiesGatewayMinimum("unknown", "2026.3.0")).toBe(false);
   });

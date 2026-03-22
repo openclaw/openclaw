@@ -41,7 +41,7 @@ describe("buildNodeInstallPlan", () => {
     });
     mocks.renderSystemNodeWarning.mockReturnValue(undefined);
     mocks.buildNodeServiceEnvironment.mockReturnValue({
-      OPENCLAW_SERVICE_VERSION: "2026.3.14",
+      OPENCLAW_SERVICE_VERSION: "2026.3.22",
     });
 
     const plan = await buildNodeInstallPlan({
@@ -53,7 +53,7 @@ describe("buildNodeInstallPlan", () => {
     });
 
     expect(plan.environment).toEqual({
-      OPENCLAW_SERVICE_VERSION: "2026.3.14",
+      OPENCLAW_SERVICE_VERSION: "2026.3.22",
     });
     expect(mocks.resolvePreferredNodePath).not.toHaveBeenCalled();
     expect(mocks.buildNodeServiceEnvironment).toHaveBeenCalledWith({
@@ -74,7 +74,7 @@ describe("buildNodeInstallPlan", () => {
     });
     mocks.renderSystemNodeWarning.mockReturnValue(undefined);
     mocks.buildNodeServiceEnvironment.mockReturnValue({
-      OPENCLAW_SERVICE_VERSION: "2026.3.14",
+      OPENCLAW_SERVICE_VERSION: "2026.3.22",
     });
 
     await buildNodeInstallPlan({
