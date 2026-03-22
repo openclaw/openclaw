@@ -1209,6 +1209,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: rate limit, retrying with next key`);
             continue;
           }
+          if (model.provider === "anthropic" && isAnthropicRateLimitError(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (anthropic rate limit)`);
+            break;
+          }
           if (model.provider === "anthropic" && isAnthropicBillingError(message)) {
             if (attempt + 1 < attemptMax) {
               logProgress(`${progressLabel}: billing issue, retrying with next key`);

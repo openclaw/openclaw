@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { describe, expect, it } from "vitest";
+import { buildOpenAICodexProviderPlugin } from "./openai-codex-provider.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
@@ -171,6 +172,55 @@ describe("buildOpenAIProvider", () => {
       id: "gpt-5.4-nano",
       name: "gpt-5.4-nano",
     });
+  });
+
+  it("keeps modern live selection on OpenAI 5.2+ and Codex 5.2+", () => {
+    const provider = buildOpenAIProvider();
+    const codexProvider = buildOpenAICodexProviderPlugin();
+
+    expect(
+      provider.isModernModelRef?.({
+        provider: "openai",
+        modelId: "gpt-5.0",
+      } as never),
+    ).toBe(false);
+    expect(
+      provider.isModernModelRef?.({
+        provider: "openai",
+        modelId: "gpt-5.2",
+      } as never),
+    ).toBe(true);
+    expect(
+      provider.isModernModelRef?.({
+        provider: "openai",
+        modelId: "gpt-5.4",
+      } as never),
+    ).toBe(true);
+
+    expect(
+      codexProvider.isModernModelRef?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.1-codex",
+      } as never),
+    ).toBe(false);
+    expect(
+      codexProvider.isModernModelRef?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.1-codex-max",
+      } as never),
+    ).toBe(false);
+    expect(
+      codexProvider.isModernModelRef?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.2-codex",
+      } as never),
+    ).toBe(true);
+    expect(
+      codexProvider.isModernModelRef?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.4",
+      } as never),
+    ).toBe(true);
   });
 });
 
