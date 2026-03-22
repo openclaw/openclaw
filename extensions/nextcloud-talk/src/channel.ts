@@ -207,18 +207,11 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
       lastStopAt: null,
       lastError: null,
     },
-    buildChannelSummary: ({ snapshot }) => {
-      const base = buildBaseChannelStatusSummary(snapshot);
-      return {
-        configured: base.configured,
+    buildChannelSummary: ({ snapshot }) =>
+      buildBaseChannelStatusSummary(snapshot, {
         secretSource: snapshot.secretSource ?? "none",
-        running: base.running,
         mode: "webhook",
-        lastStartAt: base.lastStartAt,
-        lastStopAt: base.lastStopAt,
-        lastError: base.lastError,
-      };
-    },
+      }),
     buildAccountSnapshot: ({ account, runtime }) => {
       const configured = Boolean(account.secret?.trim() && account.baseUrl?.trim());
       return buildRuntimeAccountStatusSnapshot(
