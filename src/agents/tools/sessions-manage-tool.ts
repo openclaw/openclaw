@@ -94,6 +94,19 @@ export function createSessionsManageTool(opts?: {
         });
       }
 
+      // Reject self-session reset to avoid deadlock: the reset path aborts the
+      // current embedded run and waits for it to end, but this tool call is
+      // executing inside that run, so it can never finish — causing a 15 s
+      // timeout and an UNAVAILABLE error (or worse, a race condition).
+      if (action === "reset" && resolvedKey === effectiveRequesterKey) {
+        return jsonResult({
+          status: "error",
+          action,
+          sessionKey: displayKey,
+          error: "Cannot reset own active session — use /new or target from another session",
+        });
+      }
+
       // Execute the requested action.
       if (action === "compact") {
         try {
