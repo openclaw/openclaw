@@ -468,6 +468,7 @@ describe("readScheduledTaskCommand", () => {
       async (env) => {
         const staleEnv = {
           ...env,
+          OPENCLAW_TASK_SCRIPT: undefined,
           OPENCLAW_HOME: path.join(env.USERPROFILE!, "stale-startup-home"),
         };
         const staleScriptPath = resolveTaskScriptPath(staleEnv);
