@@ -33,10 +33,6 @@
         "reason": "Measured ~81% faster under threads than forks on base config while keeping dependency checks green."
       },
       {
-        "file": "src/cli/nodes-cli.coverage.test.ts",
-        "reason": "Measured ~12% faster under threads than forks on base config while keeping nodes CLI coverage green."
-      },
-      {
         "file": "src/cli/daemon-cli/restart-health.test.ts",
         "reason": "Measured ~35% faster under threads than forks on base config while keeping daemon restart health coverage green."
       },
@@ -51,10 +47,6 @@
       {
         "file": "src/cli/skills-cli.test.ts",
         "reason": "Measured ~27% faster under threads than forks on base config while keeping skills CLI coverage green."
-      },
-      {
-        "file": "src/cli/run-main.exit.test.ts",
-        "reason": "Measured ~12% faster under threads than forks on base config while keeping run-main exit coverage green."
       },
       {
         "file": "src/cli/completion-fish.test.ts",
@@ -165,10 +157,6 @@
         "reason": "Measured ~14% faster under threads than forks on this host while keeping the file green."
       },
       {
-        "file": "src/cli/daemon-cli/install.integration.test.ts",
-        "reason": "Measured ~12% faster under threads than forks on this host while keeping the file green."
-      },
-      {
         "file": "src/plugins/web-search-providers.runtime.test.ts",
         "reason": "Measured ~17% faster under threads than forks on this host while keeping the file green."
       },
@@ -195,42 +183,6 @@
       {
         "file": "src/media-understanding/runner.video.test.ts",
         "reason": "Measured ~25% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/secrets/audit.test.ts",
-        "reason": "Measured ~14% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/secrets/runtime-web-tools.test.ts",
-        "reason": "Measured ~13% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/security/audit.test.ts",
-        "reason": "Measured ~40% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "ui/src/ui/views/chat.test.ts",
-        "reason": "Measured ~25% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/tui/tui-session-actions.test.ts",
-        "reason": "Measured ~11% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/tui/gateway-chat.test.ts",
-        "reason": "Measured ~11% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/cli/program/preaction.test.ts",
-        "reason": "Measured ~21% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/cli/program.smoke.test.ts",
-        "reason": "Measured ~13% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/tts/tts.test.ts",
-        "reason": "Terminates cleanly under threads, but not process forks on this host."
       }
     ],
     "vmForkPinned": []
