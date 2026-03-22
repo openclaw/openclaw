@@ -114,11 +114,10 @@ openclaw gateway --tailscale funnel --auth password
   ```json5
   {
     gateway: {
-      trustedProxies: ["127.0.0.1"],
+      trustedProxies: ["127.0.0.1", "::1"],
       tailscale: { mode: "serve" },
     },
   }
-  ```
 
 ## Browser control (remote Gateway + local browser)
 
