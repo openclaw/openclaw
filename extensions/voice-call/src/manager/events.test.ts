@@ -90,6 +90,14 @@ function createRejectingInboundContext(): {
   return { ctx, hangupCalls };
 }
 
+function requireFirstActiveCall(ctx: CallManagerContext) {
+  const call = [...ctx.activeCalls.values()][0];
+  if (!call) {
+    throw new Error("expected one active call");
+  }
+  return call;
+}
+
 describe("processEvent (functional)", () => {
   it("calls provider hangup when rejecting inbound call", () => {
     const { ctx, hangupCalls } = createRejectingInboundContext();
@@ -148,8 +156,12 @@ describe("processEvent (functional)", () => {
     processEvent(ctx, event2);
 
     expect(ctx.activeCalls.size).toBe(0);
-    expect(hangupCalls).toHaveLength(1);
-    expect(hangupCalls[0]?.providerCallId).toBe("prov-dup");
+    expect(hangupCalls).toEqual([
+      expect.objectContaining({
+        providerCallId: "prov-dup",
+        reason: "hangup-bot",
+      }),
+    ]);
   });
 
   it("updates providerCallId map when provider ID changes", () => {
@@ -178,7 +190,11 @@ describe("processEvent (functional)", () => {
       timestamp: now + 1,
     });
 
-    expect(ctx.activeCalls.get("call-1")?.providerCallId).toBe("call-uuid");
+    const activeCall = ctx.activeCalls.get("call-1");
+    if (!activeCall) {
+      throw new Error("expected active call after provider id change");
+    }
+    expect(activeCall.providerCallId).toBe("call-uuid");
     expect(ctx.providerCallIdMap.get("call-uuid")).toBe("call-1");
     expect(ctx.providerCallIdMap.has("request-uuid")).toBe(false);
   });
@@ -254,12 +270,12 @@ describe("processEvent (functional)", () => {
 
     // Call should be registered in activeCalls and providerCallIdMap
     expect(ctx.activeCalls.size).toBe(1);
-    expect(ctx.providerCallIdMap.get("CA-external-123")).toBeDefined();
-    const call = [...ctx.activeCalls.values()][0];
-    expect(call?.providerCallId).toBe("CA-external-123");
-    expect(call?.direction).toBe("outbound");
-    expect(call?.from).toBe("+15550000000");
-    expect(call?.to).toBe("+15559876543");
+    const call = requireFirstActiveCall(ctx);
+    expect(ctx.providerCallIdMap.get("CA-external-123")).toBe(call.callId);
+    expect(call.providerCallId).toBe("CA-external-123");
+    expect(call.direction).toBe("outbound");
+    expect(call.from).toBe("+15550000000");
+    expect(call.to).toBe("+15559876543");
   });
 
   it("does not reject externally-initiated outbound calls even with disabled inbound policy", () => {
@@ -280,8 +296,8 @@ describe("processEvent (functional)", () => {
     // External outbound calls bypass inbound policy — they should be accepted
     expect(ctx.activeCalls.size).toBe(1);
     expect(hangupCalls).toHaveLength(0);
-    const call = [...ctx.activeCalls.values()][0];
-    expect(call?.direction).toBe("outbound");
+    const call = requireFirstActiveCall(ctx);
+    expect(call.direction).toBe("outbound");
   });
 
   it("preserves inbound direction for auto-registered inbound calls", () => {
@@ -307,8 +323,8 @@ describe("processEvent (functional)", () => {
     processEvent(ctx, event);
 
     expect(ctx.activeCalls.size).toBe(1);
-    const call = [...ctx.activeCalls.values()][0];
-    expect(call?.direction).toBe("inbound");
+    const call = requireFirstActiveCall(ctx);
+    expect(call.direction).toBe("inbound");
   });
 
   it("deduplicates by dedupeKey even when event IDs differ", () => {
@@ -352,7 +368,10 @@ describe("processEvent (functional)", () => {
     });
 
     const call = ctx.activeCalls.get("call-dedupe");
-    expect(call?.transcript).toHaveLength(1);
+    if (!call) {
+      throw new Error("expected deduped call to remain active");
+    }
+    expect(call.transcript).toHaveLength(1);
     expect(Array.from(ctx.processedEventIds)).toEqual(["stable-key-1"]);
   });
 });
