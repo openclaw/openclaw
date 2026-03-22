@@ -1,0 +1,40 @@
+import { describe, expect, it } from "vitest";
+import { __testing } from "./kimi-web-search-provider.js";
+
+describe("kimi web search provider", () => {
+  it("uses configured model and base url overrides with sane defaults", () => {
+    expect(__testing.resolveKimiModel()).toBe("moonshot-v1-128k");
+    expect(__testing.resolveKimiModel({ model: "kimi-k2" })).toBe("kimi-k2");
+    expect(__testing.resolveKimiBaseUrl()).toBe("https://api.moonshot.ai/v1");
+    expect(__testing.resolveKimiBaseUrl({ baseUrl: "https://kimi.example/v1" })).toBe(
+      "https://kimi.example/v1",
+    );
+  });
+
+  it("extracts unique citations from search results and tool call arguments", () => {
+    expect(
+      __testing.extractKimiCitations({
+        search_results: [
+          { url: "https://a.test" },
+          { url: "https://b.test" },
+        ],
+        choices: [
+          {
+            message: {
+              tool_calls: [
+                {
+                  function: {
+                    arguments: JSON.stringify({
+                      url: "https://a.test",
+                      search_results: [{ url: "https://c.test" }],
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    ).toEqual(["https://a.test", "https://b.test", "https://c.test"]);
+  });
+});
