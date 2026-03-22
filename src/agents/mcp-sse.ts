@@ -51,7 +51,9 @@ export function resolveSseMcpServerLaunchConfig(
   try {
     parsed = new URL(url);
   } catch {
-    return { ok: false, reason: `its url is not a valid URL: ${url}` };
+    // Redact potential credentials from the invalid URL before including in reason.
+    const redactedUrl = url.replace(/\/\/([^@]+)@/, "//***:***@");
+    return { ok: false, reason: `its url is not a valid URL: ${redactedUrl}` };
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     return {
