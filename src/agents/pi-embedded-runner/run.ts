@@ -1226,11 +1226,9 @@ export async function runEmbeddedPiAgent(
                     params.config,
                   );
                   if (postCompactionCtx) {
-                  if (postCompactionCtx) {
                     effectiveExtraSystemPrompt = params.extraSystemPrompt
                       ? `${params.extraSystemPrompt}\n\n${postCompactionCtx}`
                       : postCompactionCtx;
-                  }
                   }
                 } catch {
                   // Silent failure — post-compaction context is best-effort
