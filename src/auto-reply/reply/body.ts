@@ -1,8 +1,9 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { setAbortMemory } from "./abort-primitives.js";
 
-let sessionStoreRuntimePromise: Promise<typeof import("../../config/sessions/store.runtime.js")> | null =
-  null;
+let sessionStoreRuntimePromise: Promise<
+  typeof import("../../config/sessions/store.runtime.js")
+> | null = null;
 
 function loadSessionStoreRuntime() {
   sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
