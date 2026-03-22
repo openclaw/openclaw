@@ -1,9 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@mariozechner/pi-ai/oauth", () => ({
-  getOAuthApiKey: vi.fn(),
-  getOAuthProviders: vi.fn(() => []),
-}));
+vi.mock("@mariozechner/pi-ai/oauth", async () => {
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
+    "@mariozechner/pi-ai/oauth",
+  );
+  return {
+    ...actual,
+    getOAuthApiKey: vi.fn(),
+    getOAuthProviders: vi.fn(() => []),
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/provider-models", () => ({
   normalizeModelCompat: (model: Record<string, unknown>) => model,

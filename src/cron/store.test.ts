@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { setTimeout as scheduleNativeTimeout } from "node:timers";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCronStoreHarness } from "./service.test-harness.js";
 import { loadCronStore, resolveCronStorePath, saveCronStore } from "./store.js";
 import type { CronStoreFile } from "./types.js";
@@ -149,6 +150,10 @@ describe("cron store", () => {
 describe("saveCronStore", () => {
   const dummyStore: CronStoreFile = { version: 1, jobs: [] };
 
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   it("persists and round-trips a store file", async () => {
     const { storePath } = await makeStorePath();
     await saveCronStore(storePath, dummyStore);
@@ -158,11 +163,10 @@ describe("saveCronStore", () => {
 
   it("retries rename on EBUSY then succeeds", async () => {
     const { storePath } = await makeStorePath();
-    const realSetTimeout = globalThis.setTimeout;
     const setTimeoutSpy = vi
       .spyOn(globalThis, "setTimeout")
       .mockImplementation(((handler: TimerHandler, _timeout?: number, ...args: unknown[]) =>
-        realSetTimeout(handler, 0, ...args)) as typeof setTimeout);
+        scheduleNativeTimeout(handler, 0, ...args)) as typeof setTimeout);
     const origRename = fs.rename.bind(fs);
     let ebusyCount = 0;
     const spy = vi.spyOn(fs, "rename").mockImplementation(async (src, dest) => {

@@ -41,6 +41,7 @@ export default defineConfig({
   ...base,
   test: {
     ...baseTest,
+    runner: "./test/non-isolated-runner.ts",
     include: loadIncludePatternsFromEnv() ?? unitTestIncludePatterns,
     exclude: [
       ...new Set([

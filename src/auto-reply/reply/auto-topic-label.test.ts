@@ -7,9 +7,13 @@ const resolveDefaultModelForAgent = vi.hoisted(() => vi.fn());
 const resolveModelAsync = vi.hoisted(() => vi.fn());
 const prepareModelForSimpleCompletion = vi.hoisted(() => vi.fn());
 
-vi.mock("@mariozechner/pi-ai", () => ({
-  completeSimple,
-}));
+vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+  return {
+    ...original,
+    completeSimple,
+  };
+});
 
 vi.mock("../../agents/model-auth.js", () => ({
   getApiKeyForModel,

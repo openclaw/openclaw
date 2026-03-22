@@ -1,3 +1,5 @@
+import { setTimeout as scheduleNativeTimeout } from "node:timers";
+import { setTimeout as sleep } from "node:timers/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
@@ -148,6 +150,7 @@ function extractRuntimeOptionsFromUpserts(): Array<AcpSessionRuntimeOptions | un
 
 describe("AcpSessionManager", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     hoisted.listAcpSessionEntriesMock.mockReset().mockResolvedValue([]);
     hoisted.readAcpSessionEntryMock.mockReset();
     hoisted.upsertAcpSessionMetaMock.mockReset().mockResolvedValue(null);
@@ -240,7 +243,7 @@ describe("AcpSessionManager", () => {
       inFlight += 1;
       maxInFlight = Math.max(maxInFlight, inFlight);
       try {
-        await new Promise((resolve) => setTimeout(resolve, 10));
+        await sleep(10);
         yield { type: "done" };
       } finally {
         inFlight -= 1;
@@ -321,7 +324,7 @@ describe("AcpSessionManager", () => {
         (error) => ({ status: "rejected" as const, error }),
       ),
       new Promise<{ status: "pending" }>((resolve) => {
-        setTimeout(() => resolve({ status: "pending" }), 100);
+        scheduleNativeTimeout(() => resolve({ status: "pending" }), 100);
       }),
     ]);
 
@@ -538,7 +541,7 @@ describe("AcpSessionManager", () => {
       inFlight += 1;
       maxInFlight = Math.max(maxInFlight, inFlight);
       try {
-        await new Promise((resolve) => setTimeout(resolve, 15));
+        await sleep(15);
         yield { type: "done" as const };
       } finally {
         inFlight -= 1;
