@@ -133,15 +133,23 @@ git add docs/reference/templates/<changed_file>
 git commit -m "auto-improve: sync <changed_file> from workspace — <description>"
 ```
 
-### 8. Restart Gateway
+### 8. Restart Gateway (with active session check)
 
-After every workspace file change, restart the gateway so Operator1 picks up the new prompts:
+After every workspace file change, restart the gateway so Operator1 picks up the new prompts. But FIRST check for active subagent sessions — restarting while Neo/Morpheus/Trinity are running breaks their tool execution pipeline.
 
 ```bash
-openclaw gateway restart
+# Check for active subagent sessions before restarting
+ACTIVE=$(openclaw channels status --probe 2>/dev/null | grep -c "streaming\|active" || echo "0")
+if [ "$ACTIVE" -gt 0 ]; then
+  echo "WARNING: $ACTIVE active sessions detected. Skipping restart — changes will take effect on next session start."
+else
+  openclaw gateway restart
+fi
 ```
 
-MANDATORY after every edit. Uses graceful restart so WebSocket connections close cleanly and auto-reconnect.
+**NEVER restart the gateway while subagents are actively running.** A mid-conversation restart causes subagents to lose their tool execution pipeline — they can still generate text but can't invoke tools anymore (they echo tool syntax as text instead). This was confirmed on 2026-03-22 when a gateway restart during Neo's test sessions caused systematic tool execution failure across all 3 subagents.
+
+If active sessions prevent restart, the workspace file changes will still take effect when the next new session starts — workspace files are loaded at session start, not cached globally.
 
 ### 9. Log to results.tsv
 
