@@ -226,6 +226,15 @@ export function createFollowupRunner(params: {
         const runSessionId = queued.run.sessionId?.trim();
         return Boolean(latestSessionId && runSessionId && latestSessionId !== runSessionId);
       };
+      const shouldDropSupersededQueuedRun = () => {
+        if (!isQueuedRunSuperseded()) {
+          return false;
+        }
+        logVerbose(
+          `followup queue: dropping superseded reply for ${sessionKey ?? queued.run.sessionId}`,
+        );
+        return true;
+      };
 
       let activeSessionEntry = rebindQueuedRunToCurrentSession();
       const runId = crypto.randomUUID();
@@ -373,10 +382,7 @@ export function createFollowupRunner(params: {
         activeSessionEntry?.contextTokens ??
         DEFAULT_CONTEXT_TOKENS;
 
-      if (isQueuedRunSuperseded()) {
-        logVerbose(
-          `followup queue: dropping superseded reply for ${sessionKey ?? queued.run.sessionId}`,
-        );
+      if (shouldDropSupersededQueuedRun()) {
         return;
       }
 
@@ -399,6 +405,9 @@ export function createFollowupRunner(params: {
           ),
           logLabel: "followup",
         });
+      }
+      if (shouldDropSupersededQueuedRun()) {
+        return;
       }
 
       const payloadArray = runResult.payloads ?? [];
@@ -459,9 +468,15 @@ export function createFollowupRunner(params: {
         }),
       });
       const finalPayloads = suppressMessagingToolReplies ? [] : mediaFilteredPayloads;
+      if (shouldDropSupersededQueuedRun()) {
+        return;
+      }
 
       if (autoCompactionCount > 0) {
         const previousSessionId = queued.run.sessionId;
+        if (shouldDropSupersededQueuedRun()) {
+          return;
+        }
         const count = await incrementRunCompactionCount({
           sessionEntry: activeSessionEntry ?? sessionEntry,
           sessionStore,
@@ -493,11 +508,17 @@ export function createFollowupRunner(params: {
           });
         }
       }
+      if (shouldDropSupersededQueuedRun()) {
+        return;
+      }
 
       if (finalPayloads.length === 0) {
         return;
       }
 
+      if (shouldDropSupersededQueuedRun()) {
+        return;
+      }
       await sendFollowupPayloads(finalPayloads, queued);
     } finally {
       // Both signals are required for the typing controller to clean up.

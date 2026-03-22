@@ -825,6 +825,54 @@ describe("createFollowupRunner session resets", () => {
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     expect(onBlockReply).not.toHaveBeenCalled();
   });
+
+  it("drops followup output when the run is superseded during usage persistence", async () => {
+    const sessionStore: Record<string, SessionEntry> = {
+      main: {
+        sessionId: "session-old",
+        sessionFile: "/tmp/session-old.jsonl",
+        updatedAt: Date.now(),
+      },
+    };
+    const onBlockReply = vi.fn(async () => {});
+    const persistSpy = vi
+      .spyOn(sessionRunAccounting, "persistRunSessionUsage")
+      .mockImplementationOnce(async () => {
+        sessionStore.main = {
+          sessionId: "session-new",
+          sessionFile: "/tmp/session-new.jsonl",
+          updatedAt: Date.now(),
+        };
+      });
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "stale reply" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionStore,
+      sessionKey: "main",
+      storePath: "/tmp/sessions.json",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          sessionId: "session-old",
+          sessionFile: "/tmp/session-old.jsonl",
+        },
+      }),
+    );
+
+    expect(persistSpy).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).not.toHaveBeenCalled();
+    persistSpy.mockRestore();
+  });
 });
 
 describe("createFollowupRunner bootstrap warning dedupe", () => {

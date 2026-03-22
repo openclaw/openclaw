@@ -293,6 +293,16 @@ export async function performGatewaySessionReset(params: {
     target,
     sessionId: entry?.sessionId,
   });
+  let followupsResumed = false;
+  const resumePreservedFollowups = () => {
+    if (followupsResumed) {
+      return;
+    }
+    followupsResumed = true;
+    for (const queueKey of queueKeys) {
+      resumeFollowupDrain(queueKey);
+    }
+  };
   const hookEvent = createInternalHookEvent(
     "command",
     params.reason,
@@ -305,25 +315,11 @@ export async function performGatewaySessionReset(params: {
     },
   );
   await triggerInternalHook(hookEvent);
-  const mutationCleanupError = await cleanupSessionBeforeMutation({
-    cfg,
-    key: params.key,
-    target,
-    entry,
-    legacyKey,
-    canonicalKey,
-    reason: "session-reset",
-  });
-  if (mutationCleanupError) {
-    return { ok: false, error: mutationCleanupError };
-  }
-
-  let oldSessionId: string | undefined;
-  let oldSessionFile: string | undefined;
-  const next = await updateSessionStore(storePath, (store) => {
-    const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+  try {
+    const mutationCleanupError = await cleanupSessionBeforeMutation({
       cfg,
       key: params.key,
+<<<<<<< HEAD
       store,
     });
     const currentEntry = store[primaryKey];
@@ -411,8 +407,81 @@ export async function performGatewaySessionReset(params: {
   if (hadExistingEntry) {
     await emitSessionUnboundLifecycleEvent({
       targetSessionKey: target.canonicalKey ?? params.key,
+=======
+      target,
+      entry,
+      legacyKey,
+      canonicalKey,
+>>>>>>> 4a7deee8d5 (fix(reply): resume followups after failed resets)
       reason: "session-reset",
     });
+    if (mutationCleanupError) {
+      return { ok: false, error: mutationCleanupError };
+    }
+
+    let oldSessionId: string | undefined;
+    let oldSessionFile: string | undefined;
+    const next = await updateSessionStore(storePath, (store) => {
+      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+        cfg,
+        key: params.key,
+        store,
+      });
+      const currentEntry = store[primaryKey];
+      const resetEntry = stripRuntimeModelState(currentEntry);
+      const parsed = parseAgentSessionKey(primaryKey);
+      const sessionAgentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
+      const resolvedModel = resolveSessionModelRef(cfg, resetEntry, sessionAgentId);
+      oldSessionId = currentEntry?.sessionId;
+      oldSessionFile = currentEntry?.sessionFile;
+      const now = Date.now();
+      const nextEntry: SessionEntry = {
+        sessionId: randomUUID(),
+        updatedAt: now,
+        systemSent: false,
+        abortedLastRun: false,
+        thinkingLevel: currentEntry?.thinkingLevel,
+        fastMode: currentEntry?.fastMode,
+        verboseLevel: currentEntry?.verboseLevel,
+        reasoningLevel: currentEntry?.reasoningLevel,
+        responseUsage: currentEntry?.responseUsage,
+        model: resolvedModel.model,
+        modelProvider: resolvedModel.provider,
+        contextTokens: resetEntry?.contextTokens,
+        sendPolicy: currentEntry?.sendPolicy,
+        label: currentEntry?.label,
+        origin: snapshotSessionOrigin(currentEntry),
+        lastChannel: currentEntry?.lastChannel,
+        lastTo: currentEntry?.lastTo,
+        lastAccountId: currentEntry?.lastAccountId,
+        lastThreadId: currentEntry?.lastThreadId,
+        skillsSnapshot: currentEntry?.skillsSnapshot,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      };
+      store[primaryKey] = nextEntry;
+      return nextEntry;
+    });
+
+    resumePreservedFollowups();
+
+    archiveSessionTranscriptsForSession({
+      sessionId: oldSessionId,
+      storePath,
+      sessionFile: oldSessionFile,
+      agentId: target.agentId,
+      reason: "reset",
+    });
+    if (hadExistingEntry) {
+      await emitSessionUnboundLifecycleEvent({
+        targetSessionKey: target.canonicalKey ?? params.key,
+        reason: "session-reset",
+      });
+    }
+    return { ok: true, key: target.canonicalKey, entry: next };
+  } finally {
+    resumePreservedFollowups();
   }
-  return { ok: true, key: target.canonicalKey, entry: next };
 }
