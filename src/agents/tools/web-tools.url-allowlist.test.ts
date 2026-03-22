@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AllowlistBlockedError,
+  SsrFBlockedError,
   matchesHostnameAllowlist,
   normalizeHostnameAllowlist,
 } from "../../infra/net/ssrf.js";
@@ -197,7 +198,9 @@ describe("filterResultsByAllowlist", () => {
 });
 
 // ---------------------------------------------------------------------------
-// AllowlistBlockedError — smoke test that it is exported and is an Error
+// AllowlistBlockedError — verify it is exported, is an Error, and is
+// distinguishable from SsrFBlockedError (both are re-thrown past the
+// Firecrawl fallback in runWebFetch's catch block at web-fetch.ts:596).
 // ---------------------------------------------------------------------------
 describe("AllowlistBlockedError", () => {
   it("is an instance of Error", () => {
@@ -205,6 +208,22 @@ describe("AllowlistBlockedError", () => {
     expect(err).toBeInstanceOf(Error);
     expect(err.name).toBe("AllowlistBlockedError");
     expect(err.message).toBe("blocked");
+  });
+
+  it("is distinguishable from SsrFBlockedError via instanceof", () => {
+    const allowlistErr: Error = new AllowlistBlockedError("allowlist");
+    const ssrfErr: Error = new SsrFBlockedError("ssrf");
+    expect(allowlistErr).not.toBeInstanceOf(SsrFBlockedError);
+    expect(ssrfErr).not.toBeInstanceOf(AllowlistBlockedError);
+    // Both are re-thrown in the same catch guard in runWebFetch (web-fetch.ts:596):
+    //   if (error instanceof SsrFBlockedError || error instanceof AllowlistBlockedError) throw error;
+    // This ensures neither error falls through to the Firecrawl fallback path.
+    expect(
+      allowlistErr instanceof SsrFBlockedError || allowlistErr instanceof AllowlistBlockedError,
+    ).toBe(true);
+    expect(ssrfErr instanceof SsrFBlockedError || ssrfErr instanceof AllowlistBlockedError).toBe(
+      true,
+    );
   });
 });
 
