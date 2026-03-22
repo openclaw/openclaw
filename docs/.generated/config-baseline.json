@@ -46920,6 +46920,62 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.brightdata.config.webSearch.browserZone",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Bright Data Browser Zone",
+      "help": "Bright Data Browser API zone name (default: mcp_browser).",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.brightdata.config.webSearch.pollingTimeoutSeconds",
+      "kind": "plugin",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance"
+      ],
+      "label": "Bright Data Polling Timeout (sec)",
+      "help": "Default polling timeout in seconds for dataset-backed Bright Data tools.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.brightdata.config.webSearch.timeoutSeconds",
+      "kind": "plugin",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance"
+      ],
+      "label": "Bright Data Timeout (sec)",
+      "help": "Default timeout in seconds for Bright Data search, scrape, and browser credential requests.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.brightdata.config.webSearch.unlockerZone",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Bright Data Unlocker Zone",
+      "help": "Bright Data Web Unlocker zone name (default: mcp_unlocker).",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.brightdata.enabled",
       "kind": "plugin",
       "type": "boolean",
