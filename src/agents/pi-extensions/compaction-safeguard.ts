@@ -787,8 +787,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     const hasRealSummarizable = preparation.messagesToSummarize.some((message, index, messages) =>
       isRealConversationMessage(message, messages, index),
     );
-    const hasRealTurnPrefix = preparation.turnPrefixMessages.some((message, index, messages) =>
-      isRealConversationMessage(message, messages, index),
+    const hasRealTurnPrefix = (preparation.turnPrefixMessages ?? []).some(
+      (message, index, messages) => isRealConversationMessage(message, messages, index),
     );
 
     // Log when messages are present but fail the real-conversation check
@@ -810,12 +810,15 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       // (see issue #49272).
       //
       // The normal compaction flow (line 1005+) already handles empty
-      // messagesToSummarize arrays by using buildStructuredFallbackSummary
-      // (line 1005), but critically returns complete compaction metadata
-      // including tokensAfter, identifiers, and fileOps — which the SDK
-      // needs to properly prepare the next compaction. The minimal boundary
-      // below lacks this metadata, which may cause subsequent compactions
-      // to fail.
+      // messagesToSummarize arrays by using buildStructuredFallbackSummary,
+      // but critically:
+      //   1. Produces a richer summary using effectivePreviousSummary (which may
+      //      incorporate pruning context via droppedSummary) rather than the raw
+      //      preparation.previousSummary used by the minimal boundary.
+      //   2. Returns details: { readFiles, modifiedFiles } which the minimal
+      //      boundary omits — the SDK may need this for next-compaction prep.
+      // Without proceeding to the normal flow, subsequent compactions may continue
+      // to fail, creating a permanent broken state.
       if (tokensBefore >= tokenThreshold) {
         log.warn(
           `[compaction-override] No real messages detected but tokensBefore=${tokensBefore} ` +
