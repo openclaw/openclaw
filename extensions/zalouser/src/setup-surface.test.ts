@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  createPluginSetupWizardAdapter,
+  createPluginSetupWizardConfigure,
   createTestWizardPrompter,
   runSetupWizardConfigure,
 } from "../../../test/helpers/extensions/setup-wizard.js";
@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../runtime-api.js";
 import "./zalo-js.test-mocks.js";
 import { zalouserPlugin } from "./channel.js";
 
-const zalouserConfigureAdapter = createPluginSetupWizardAdapter(zalouserPlugin);
+const zalouserConfigure = createPluginSetupWizardConfigure(zalouserPlugin);
 
 async function runSetup(params: {
   cfg?: OpenClawConfig;
@@ -17,7 +17,7 @@ async function runSetup(params: {
   forceAllowFrom?: boolean;
 }) {
   return await runSetupWizardConfigure({
-    configure: zalouserConfigureAdapter.configure,
+    configure: zalouserConfigure,
     cfg: params.cfg as OpenClawConfig | undefined,
     prompter: params.prompter,
     options: params.options,
