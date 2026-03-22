@@ -20,10 +20,9 @@ import {
 import { getIMessageRuntime } from "./runtime.js";
 import { imessageSetupAdapter } from "./setup-core.js";
 import {
-  collectIMessageSecurityWarnings,
   createIMessagePluginBase,
   imessageConfigAdapter,
-  imessageResolveDmPolicy,
+  imessageSecurityAdapter,
   imessageSetupWizard,
 } from "./shared.js";
 import {
@@ -124,10 +123,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
     resolveDmPolicy: (account) => account.config.dmPolicy,
     resolveGroupPolicy: (account) => account.config.groupPolicy,
   }),
-  security: {
-    resolveDmPolicy: imessageResolveDmPolicy,
-    collectWarnings: collectIMessageSecurityWarnings,
-  },
+  security: imessageSecurityAdapter,
   groups: {
     resolveRequireMention: resolveIMessageGroupRequireMention,
     resolveToolPolicy: resolveIMessageGroupToolPolicy,
