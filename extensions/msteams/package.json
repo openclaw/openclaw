@@ -39,7 +39,8 @@
     "install": {
       "npmSpec": "@openclaw/msteams",
       "localPath": "extensions/msteams",
-      "defaultChoice": "npm"
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.3.14"
     },
     "release": {
       "publishToNpm": true

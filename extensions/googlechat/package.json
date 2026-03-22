@@ -40,7 +40,8 @@
     "install": {
       "npmSpec": "@openclaw/googlechat",
       "localPath": "extensions/googlechat",
-      "defaultChoice": "npm"
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.3.14"
     }
   }
 }

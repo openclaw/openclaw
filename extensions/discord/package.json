@@ -39,7 +39,8 @@
     "install": {
       "npmSpec": "@openclaw/discord",
       "localPath": "extensions/discord",
-      "defaultChoice": "npm"
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.3.14"
     },
     "bundle": {
       "stageRuntimeDependencies": true
