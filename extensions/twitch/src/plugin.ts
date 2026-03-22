@@ -5,19 +5,28 @@
  * This is the primary entry point for the Twitch channel integration.
  */
 
+import {
+  createLoggedPairingApprovalNotifier,
+  createPairingPrefixStripper,
+} from "openclaw/plugin-sdk/channel-pairing";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawConfig } from "../api.js";
 import { buildChannelConfigSchema } from "../api.js";
 import { twitchMessageActions } from "./actions.js";
 import { removeClientManager } from "./client-manager-registry.js";
 import { TwitchConfigSchema } from "./config-schema.js";
-import { DEFAULT_ACCOUNT_ID, getAccountConfig, listAccountIds } from "./config.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  getAccountConfig,
+  listAccountIds,
+  resolveTwitchAccountContext,
+  resolveTwitchSnapshotAccountId,
+} from "./config.js";
 import { twitchOutbound } from "./outbound.js";
 import { probeTwitch } from "./probe.js";
 import { resolveTwitchTargets } from "./resolver.js";
 import { twitchSetupAdapter, twitchSetupWizard } from "./setup-surface.js";
 import { collectTwitchStatusIssues } from "./status.js";
-import { resolveTwitchToken } from "./token.js";
 import type {
   ChannelAccountSnapshot,
   ChannelCapabilities,
@@ -58,12 +67,11 @@ export const twitchPlugin: ChannelPlugin<TwitchAccountConfig> = {
   /** Pairing configuration */
   pairing: {
     idLabel: "twitchUserId",
-    normalizeAllowEntry: (entry) => entry.trim().replace(/^(twitch:)?user:?/i, ""),
-    notifyApproval: async ({ id }) => {
-      // Note: Twitch doesn't support DMs from bots, so pairing approval is limited
-      // We'll log the approval instead
-      console.warn(`Pairing approved for user ${id} (notification sent via chat if possible)`);
-    },
+    normalizeAllowEntry: createPairingPrefixStripper(/^(twitch:)?user:?/i),
+    notifyApproval: createLoggedPairingApprovalNotifier(
+      ({ id }) => `Pairing approved for user ${id} (notification sent via chat if possible)`,
+      console.warn,
+    ),
   },
 
   /** Supported chat capabilities */
@@ -99,9 +107,7 @@ export const twitchPlugin: ChannelPlugin<TwitchAccountConfig> = {
 
     /** Check if an account is configured */
     isConfigured: (_account: unknown, cfg: OpenClawConfig): boolean => {
-      const account = getAccountConfig(cfg, DEFAULT_ACCOUNT_ID);
-      const tokenResolution = resolveTwitchToken(cfg, { accountId: DEFAULT_ACCOUNT_ID });
-      return account ? isAccountConfigured(account, tokenResolution.token) : false;
+      return resolveTwitchAccountContext(cfg, DEFAULT_ACCOUNT_ID).configured;
     },
 
     /** Check if an account is enabled */
@@ -197,19 +203,12 @@ export const twitchPlugin: ChannelPlugin<TwitchAccountConfig> = {
       runtime?: ChannelAccountSnapshot;
       probe?: unknown;
     }): ChannelAccountSnapshot => {
-      const twitch = (cfg as Record<string, unknown>).channels as
-        | Record<string, unknown>
-        | undefined;
-      const twitchCfg = twitch?.twitch as Record<string, unknown> | undefined;
-      const accountMap = (twitchCfg?.accounts as Record<string, unknown> | undefined) ?? {};
-      const resolvedAccountId =
-        Object.entries(accountMap).find(([, value]) => value === account)?.[0] ??
-        DEFAULT_ACCOUNT_ID;
-      const tokenResolution = resolveTwitchToken(cfg, { accountId: resolvedAccountId });
+      const resolvedAccountId = resolveTwitchSnapshotAccountId(cfg, account);
+      const { configured } = resolveTwitchAccountContext(cfg, resolvedAccountId);
       return {
         accountId: resolvedAccountId,
         enabled: account?.enabled !== false,
-        configured: isAccountConfigured(account, tokenResolution.token),
+        configured,
         running: runtime?.running ?? false,
         lastStartAt: runtime?.lastStartAt ?? null,
         lastStopAt: runtime?.lastStopAt ?? null,
