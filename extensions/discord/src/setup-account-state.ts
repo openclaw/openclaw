@@ -1,4 +1,5 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { listCombinedAccountIds } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   hasConfiguredSecretInput,
@@ -43,13 +44,13 @@ function inspectConfiguredToken(value: unknown): {
 
 export function listDiscordSetupAccountIds(cfg: OpenClawConfig): string[] {
   const accounts = cfg.channels?.discord?.accounts;
-  const ids =
-    accounts && typeof accounts === "object" && !Array.isArray(accounts)
-      ? Object.keys(accounts)
-          .map((accountId) => normalizeAccountId(accountId))
-          .filter(Boolean)
-      : [];
-  return [...new Set([DEFAULT_ACCOUNT_ID, ...ids])];
+  return listCombinedAccountIds({
+    configuredAccountIds:
+      accounts && typeof accounts === "object" && !Array.isArray(accounts)
+        ? Object.keys(accounts).map((accountId) => normalizeAccountId(accountId))
+        : [],
+    implicitAccountId: DEFAULT_ACCOUNT_ID,
+  });
 }
 
 export function resolveDefaultDiscordSetupAccountId(cfg: OpenClawConfig): string {
