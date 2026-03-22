@@ -239,6 +239,31 @@ describe("mergeAccountConfig", () => {
       name: "Work",
     });
   });
+
+  it("deep-merges selected nested object keys", () => {
+    const merged = mergeAccountConfig<{
+      commands?: { native?: boolean; callbackPath?: string };
+    }>({
+      channelConfig: {
+        commands: {
+          native: true,
+        },
+      },
+      accountConfig: {
+        commands: {
+          callbackPath: "/work",
+        },
+      },
+      nestedObjectKeys: ["commands"],
+    });
+
+    expect(merged).toEqual({
+      commands: {
+        native: true,
+        callbackPath: "/work",
+      },
+    });
+  });
 });
 
 describe("resolveMergedAccountConfig", () => {
@@ -284,6 +309,34 @@ describe("resolveMergedAccountConfig", () => {
     expect(merged).toEqual({
       enabled: true,
       name: "Router",
+    });
+  });
+
+  it("deep-merges selected nested object keys after resolving the account", () => {
+    const merged = resolveMergedAccountConfig<{
+      nickserv?: { service?: string; registerEmail?: string };
+    }>({
+      channelConfig: {
+        nickserv: {
+          service: "NickServ",
+        },
+      },
+      accounts: {
+        work: {
+          nickserv: {
+            registerEmail: "work@example.com",
+          },
+        },
+      },
+      accountId: "work",
+      nestedObjectKeys: ["nickserv"],
+    });
+
+    expect(merged).toEqual({
+      nickserv: {
+        service: "NickServ",
+        registerEmail: "work@example.com",
+      },
     });
   });
 });
