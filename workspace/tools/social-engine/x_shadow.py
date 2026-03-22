@@ -260,15 +260,15 @@ THEIR TWEET ({tweet_type} type):
 YOUR REPLY MODE: {mode}
 
 HARD RULES:
-- MAX 200 CHARACTERS. Not 280. 200. Count carefully.
-- Structure: Scene → Your different approach → Result. (3-part, each part one sentence max)
-- First person only: "I..." "My..." "After 90 days..."
-- NEVER start with: "Great" "I agree" "This is interesting" "True"
-- NEVER use literary quotes or philosophy
-- NEVER lecture. You are a peer sharing, not a teacher explaining.
-- Must be about THEIR specific point, not a tangent
+- MAX 200 CHARACTERS. Not 280. 200.
+- FIRST SENTENCE: Reference THEIR specific words/point. Show you read THEM. ("Your point about X..." / "The [their term] part is key..." / "Re: [their specific claim]...")
+- SECOND SENTENCE: Your contrasting or complementary experience. Scene + teeth, no chicken soup.
+- OPTIONAL THIRD: One specific result/number.
+- NEVER start with: "Great" "I agree" "This is interesting" "True" or any agreement opener
+- NEVER lecture, philosophize, or use literary quotes
+- Must have TEETH — a stance, a number, a specific outcome. Not vague wisdom.
 
-Reply (MAX 200 chars):"""
+Reply (MAX 200 chars, start by referencing THEIR point):"""
 
     reply = call_llm(prompt, system=SOUL)
 
