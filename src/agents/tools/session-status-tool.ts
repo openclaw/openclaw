@@ -57,11 +57,13 @@ function resolveSessionEntry(params: {
   alias: string;
   mainKey: string;
   requesterInternalKey?: string;
+  includeAliasFallback?: boolean;
 }): { key: string; entry: SessionEntry } | null {
   const keyRaw = params.keyRaw.trim();
   if (!keyRaw) {
     return null;
   }
+  const includeAliasFallback = params.includeAliasFallback ?? true;
   const internal = resolveInternalSessionKey({
     key: keyRaw,
     alias: params.alias,
@@ -73,17 +75,17 @@ function resolveSessionEntry(params: {
   if (!keyRaw.startsWith("agent:")) {
     candidates.push(`agent:${DEFAULT_AGENT_ID}:${keyRaw}`);
   }
-  if (internal !== keyRaw) {
+  if (includeAliasFallback && internal !== keyRaw) {
     candidates.push(internal);
   }
-  if (!keyRaw.startsWith("agent:")) {
+  if (includeAliasFallback && !keyRaw.startsWith("agent:")) {
     const agentInternal = `agent:${DEFAULT_AGENT_ID}:${internal}`;
     const agentRaw = `agent:${DEFAULT_AGENT_ID}:${keyRaw}`;
     if (agentInternal !== agentRaw) {
       candidates.push(agentInternal);
     }
   }
-  if (keyRaw === "main" || keyRaw === "current") {
+  if (includeAliasFallback && (keyRaw === "main" || keyRaw === "current")) {
     const defaultMainKey = buildAgentMainSessionKey({
       agentId: DEFAULT_AGENT_ID,
       mainKey: params.mainKey,
@@ -303,6 +305,7 @@ export function createSessionStatusTool(opts?: {
         alias,
         mainKey,
         requesterInternalKey: effectiveRequesterKey,
+        includeAliasFallback: requestedKeyRaw !== "current",
       });
 
       if (
@@ -329,6 +332,17 @@ export function createSessionStatusTool(opts?: {
             requesterInternalKey: effectiveRequesterKey,
           });
         }
+      }
+
+      if (!resolved && requestedKeyRaw === "current") {
+        resolved = resolveSessionEntry({
+          store,
+          keyRaw: requestedKeyRaw,
+          alias,
+          mainKey,
+          requesterInternalKey: effectiveRequesterKey,
+          includeAliasFallback: true,
+        });
       }
 
       if (!resolved) {
