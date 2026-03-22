@@ -183,7 +183,41 @@ describe("createOpenClawTools plugin context", () => {
     expect(executeMock).toHaveBeenCalledWith("call1", { message_thread_id: 5 });
   });
 
-  it("coerces numeric string agentThreadId into a number before injecting messageThreadId", async () => {
+  it("preserves large integer string agentThreadId as string (snowflake-safe injection)", async () => {
+    const snowflake = "1177378744822943744";
+    const executeMock = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "ok" }],
+      details: {},
+    }));
+    const threadTool: AnyAgentTool = {
+      name: "plugin-message-thread-snowflake",
+      label: "plugin-message-thread-snowflake",
+      description: "test",
+      ownerOnly: false,
+      parameters: {
+        type: "object",
+        properties: { messageThreadId: { type: "string" } },
+      },
+      execute: executeMock,
+    };
+
+    resolvePluginToolsMock.mockReturnValue([threadTool]);
+
+    const tools = createOpenClawTools({
+      config: {} as never,
+      agentThreadId: snowflake,
+    });
+    const tool = tools.find((candidate) => candidate.name === threadTool.name);
+    expect(tool).toBeDefined();
+    if (!tool) {
+      return;
+    }
+
+    await tool.execute("call1", {});
+    expect(executeMock).toHaveBeenCalledWith("call1", { messageThreadId: snowflake });
+  });
+
+  it("coerces small numeric string agentThreadId into a number before injecting messageThreadId", async () => {
     const executeMock = vi.fn(async () => ({
       content: [{ type: "text" as const, text: "ok" }],
       details: {},
