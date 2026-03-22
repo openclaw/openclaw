@@ -2,7 +2,7 @@ import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
 import { t } from "../i18n/index.ts";
-import { refreshChat } from "./app-chat.ts";
+import { refreshChat, resolveActiveChatAgentId } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { OpenClawApp } from "./app.ts";
@@ -580,9 +580,7 @@ async function createNewChatSession(state: AppViewState) {
     return;
   }
   const label = raw.trim() || undefined;
-  // Resolve the current agent ID from the active session key
-  const parsed = parseAgentSessionKey(state.sessionKey);
-  const agentId = parsed?.agentId ?? state.agentsList?.defaultId ?? "main";
+  const agentId = resolveActiveChatAgentId(state);
   const originSessionKey = state.sessionKey;
   const composerSnapshot = cloneComposerSnapshot(state);
   const activityVersionAtStart = state.chatActivityVersion;

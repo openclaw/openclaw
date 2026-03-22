@@ -33,6 +33,9 @@ function createChatHeaderState(
     createRequest?: (params: Record<string, unknown>) => Promise<{ ok: boolean; key?: string }>;
     sessionsResult?: SessionsListResult;
     sessionsListRequest?: () => Promise<SessionsListResult>;
+    sessionKey?: string;
+    hello?: AppViewState["hello"];
+    agentsList?: AppViewState["agentsList"];
   } = {},
 ): { state: AppViewState; request: ReturnType<typeof vi.fn> } {
   let currentModel = overrides.model ?? null;
@@ -113,7 +116,7 @@ function createChatHeaderState(
     throw new Error(`Unexpected request: ${method}`);
   });
   const state = {
-    sessionKey: "main",
+    sessionKey: overrides.sessionKey ?? "main",
     connected: true,
     sessionsHideCron: true,
     sessionsLoading: false,
@@ -157,8 +160,8 @@ function createChatHeaderState(
     toolStreamById: new Map(),
     toolStreamOrder: [],
     basePath: "",
-    hello: null,
-    agentsList: null,
+    hello: overrides.hello ?? null,
+    agentsList: overrides.agentsList ?? null,
     refreshSessionsAfterChat: new Set<string>(),
     updateComplete: Promise.resolve(),
     applySettings(next: AppViewState["settings"]) {
@@ -954,6 +957,98 @@ describe("chat view", () => {
         limit: 200,
       });
       expect(request.mock.calls.map(([method]) => method)).toContain("sessions.list");
+    });
+  });
+
+  it("uses the configured default agent for new sessions from an unscoped chat", async () => {
+    await withPromptStub(async () => {
+      const { state, request } = createChatHeaderState({
+        hello: {
+          snapshot: {
+            sessionDefaults: {
+              defaultAgentId: "ops",
+            },
+          },
+        } as AppViewState["hello"],
+        agentsList: {
+          defaultId: "main",
+          agents: [{ id: "main" }, { id: "ops" }],
+        } as AppViewState["agentsList"],
+      });
+      const container = document.createElement("div");
+      render(renderChatSessionSelect(state), container);
+
+      const newChatButton = container.querySelector<HTMLButtonElement>(".chat-controls__new-chat");
+      expect(newChatButton).not.toBeNull();
+
+      newChatButton!.click();
+      await flushTasks();
+
+      expect(request).toHaveBeenCalledWith("sessions.create", {
+        agentId: "ops",
+        label: "Session label",
+      });
+    });
+  });
+
+  it("keeps the explicit session agent for new sessions", async () => {
+    await withPromptStub(async () => {
+      const { state, request } = createChatHeaderState({
+        sessionKey: "agent:research:main",
+        hello: {
+          snapshot: {
+            sessionDefaults: {
+              defaultAgentId: "ops",
+            },
+          },
+        } as AppViewState["hello"],
+        agentsList: {
+          defaultId: "main",
+          agents: [{ id: "main" }, { id: "research" }, { id: "ops" }],
+        } as AppViewState["agentsList"],
+      });
+      state.settings = {
+        ...state.settings,
+        sessionKey: "agent:research:main",
+        lastActiveSessionKey: "agent:research:main",
+      };
+      const container = document.createElement("div");
+      render(renderChatSessionSelect(state), container);
+
+      const newChatButton = container.querySelector<HTMLButtonElement>(".chat-controls__new-chat");
+      expect(newChatButton).not.toBeNull();
+
+      newChatButton!.click();
+      await flushTasks();
+
+      expect(request).toHaveBeenCalledWith("sessions.create", {
+        agentId: "research",
+        label: "Session label",
+      });
+    });
+  });
+
+  it("falls back to agents.list default when session defaults are unavailable", async () => {
+    await withPromptStub(async () => {
+      const { state, request } = createChatHeaderState({
+        agentsList: {
+          defaultId: "worker",
+          agents: [{ id: "main" }, { id: "worker" }],
+        } as AppViewState["agentsList"],
+      });
+      const container = document.createElement("div");
+      render(renderChatSessionSelect(state), container);
+
+      const newChatButton = container.querySelector<HTMLButtonElement>(".chat-controls__new-chat");
+      expect(newChatButton).not.toBeNull();
+
+      newChatButton!.click();
+      await flushTasks();
+
+      expect(request).toHaveBeenCalledWith("sessions.create", {
+        agentId: "worker",
+        label: "Session label",
+      });
     });
   });
 

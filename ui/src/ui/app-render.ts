@@ -1,11 +1,8 @@
 import { html, nothing } from "lit";
-import {
-  buildAgentMainSessionKey,
-  parseAgentSessionKey,
-} from "../../../src/routing/session-key.js";
+import { buildAgentMainSessionKey } from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
-import { refreshChatAvatar } from "./app-chat.ts";
+import { refreshChatAvatar, resolveActiveChatAgentId } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
   renderChatControls,
@@ -270,8 +267,7 @@ type AiAgentsSectionKey = (typeof AI_AGENTS_SECTION_KEYS)[number];
 
 function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
   const list = state.agentsList?.agents ?? [];
-  const parsed = parseAgentSessionKey(state.sessionKey);
-  const agentId = parsed?.agentId ?? state.agentsList?.defaultId ?? "main";
+  const agentId = resolveActiveChatAgentId(state);
   const agent = list.find((entry) => entry.id === agentId);
   const identity = agent?.identity;
   const candidate = identity?.avatarUrl ?? identity?.avatar;
@@ -311,6 +307,7 @@ export function renderApp(state: AppViewState) {
   const navCollapsed = Boolean(state.settings.navCollapsed && !navDrawerOpen);
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
+  const currentChatAgentId = resolveActiveChatAgentId(state);
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
   const chatAvatarUrl = state.chatAvatarUrl ?? assistantAvatarUrl ?? null;
   const configValue =
@@ -1455,7 +1452,7 @@ export function renderApp(state: AppViewState) {
                   }
                 },
                 agentsList: state.agentsList,
-                currentAgentId: resolvedAgentId ?? "main",
+                currentAgentId: currentChatAgentId,
                 onAgentChange: (agentId: string) => {
                   state.sessionKey = buildAgentMainSessionKey({ agentId });
                   state.chatMessages = [];
@@ -1470,7 +1467,7 @@ export function renderApp(state: AppViewState) {
                   void state.loadAssistantIdentity();
                 },
                 onNavigateToAgent: () => {
-                  state.agentsSelectedId = resolvedAgentId;
+                  state.agentsSelectedId = currentChatAgentId;
                   state.setTab("agents" as import("./navigation.ts").Tab);
                 },
                 onSessionSelect: (key: string) => {

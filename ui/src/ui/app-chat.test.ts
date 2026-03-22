@@ -13,10 +13,11 @@ vi.mock("./app-settings.ts", () => ({
 
 let handleSendChat: typeof import("./app-chat.ts").handleSendChat;
 let refreshChatAvatar: typeof import("./app-chat.ts").refreshChatAvatar;
+let resolveActiveChatAgentId: typeof import("./app-chat.ts").resolveActiveChatAgentId;
 
 async function loadChatHelpers(): Promise<void> {
   vi.resetModules();
-  ({ handleSendChat, refreshChatAvatar } = await import("./app-chat.ts"));
+  ({ handleSendChat, refreshChatAvatar, resolveActiveChatAgentId } = await import("./app-chat.ts"));
 }
 
 function makeHost(overrides?: Partial<ChatHost>): ChatHost {
@@ -34,6 +35,7 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     sessionKey: "agent:main",
     basePath: "",
     hello: null,
+    agentsList: null,
     chatAvatarUrl: null,
     chatModelOverrides: {},
     chatModelsLoading: false,
@@ -86,6 +88,44 @@ describe("refreshChatAvatar", () => {
       expect.objectContaining({ method: "GET" }),
     );
     expect(host.chatAvatarUrl).toBeNull();
+  });
+});
+
+describe("resolveActiveChatAgentId", () => {
+  beforeEach(async () => {
+    await loadChatHelpers();
+  });
+
+  it("prefers the configured default agent for unscoped sessions", () => {
+    const host = makeHost({
+      sessionKey: "main",
+      hello: {
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "ops",
+          },
+        },
+      } as ChatHost["hello"],
+      agentsList: { defaultId: "fallback" },
+    });
+
+    expect(resolveActiveChatAgentId(host)).toBe("ops");
+  });
+
+  it("keeps the explicit session agent over configured defaults", () => {
+    const host = makeHost({
+      sessionKey: "agent:research:main",
+      hello: {
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "ops",
+          },
+        },
+      } as ChatHost["hello"],
+      agentsList: { defaultId: "fallback" },
+    });
+
+    expect(resolveActiveChatAgentId(host)).toBe("research");
   });
 });
 

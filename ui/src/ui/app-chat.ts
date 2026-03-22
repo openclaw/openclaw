@@ -10,7 +10,7 @@ import { loadModels } from "./controllers/models.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
-import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
+import type { AgentsListResult, ChatModelOverride, ModelCatalogEntry } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
 
@@ -28,6 +28,7 @@ export type ChatHost = {
   sessionKey: string;
   basePath: string;
   hello: GatewayHelloOk | null;
+  agentsList?: Pick<AgentsListResult, "defaultId"> | null;
   chatAvatarUrl: string | null;
   chatModelOverrides: Record<string, ChatModelOverride | null>;
   chatModelsLoading: boolean;
@@ -398,7 +399,9 @@ type SessionDefaultsSnapshot = {
   defaultAgentId?: string;
 };
 
-function resolveAgentIdForSession(host: ChatHost): string | null {
+type ActiveChatAgentState = Pick<ChatHost, "sessionKey" | "hello" | "agentsList">;
+
+export function resolveActiveChatAgentId(host: ActiveChatAgentState): string {
   const parsed = parseAgentSessionKey(host.sessionKey);
   if (parsed?.agentId) {
     return parsed.agentId;
@@ -407,7 +410,11 @@ function resolveAgentIdForSession(host: ChatHost): string | null {
     | { sessionDefaults?: SessionDefaultsSnapshot }
     | undefined;
   const fallback = snapshot?.sessionDefaults?.defaultAgentId?.trim();
-  return fallback || "main";
+  if (fallback) {
+    return fallback;
+  }
+  const listFallback = host.agentsList?.defaultId?.trim();
+  return listFallback || "main";
 }
 
 function buildAvatarMetaUrl(basePath: string, agentId: string): string {
@@ -421,11 +428,7 @@ export async function refreshChatAvatar(host: ChatHost) {
     host.chatAvatarUrl = null;
     return;
   }
-  const agentId = resolveAgentIdForSession(host);
-  if (!agentId) {
-    host.chatAvatarUrl = null;
-    return;
-  }
+  const agentId = resolveActiveChatAgentId(host);
   host.chatAvatarUrl = null;
   const url = buildAvatarMetaUrl(host.basePath, agentId);
   try {
