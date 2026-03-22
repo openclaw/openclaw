@@ -10,9 +10,18 @@ metadata:
 
 This skill defines the fixed evaluation rules for the auto-improve agent. Like `prepare.py` in AutoResearch, this file is NOT modified by the agent.
 
+## Monitored Agents
+
+| Agent                | Session Logs                               | What to Measure                                                       |
+| -------------------- | ------------------------------------------ | --------------------------------------------------------------------- |
+| **main** (Operator1) | `~/.openclaw/agents/main/sessions/*.jsonl` | Delegation, memory, conciseness, silent reply, tool errors            |
+| **neo** (Neo)        | `~/.openclaw/agents/neo/sessions/*.jsonl`  | Subagent tool execution rate — are tool calls real or echoed as text? |
+
+Score Operator1 and Neo sessions separately. Operator1 metrics drive workspace file changes. Neo metrics are diagnostic — they reveal whether delegation is actually productive (Neo completing work) or hollow (Neo echoing commands without executing).
+
 ## JSONL Session Log Schema
 
-Session files are at `~/.openclaw/agents/main/sessions/*.jsonl`. Each line is a JSON object.
+Session files are at `~/.openclaw/agents/{agentId}/sessions/*.jsonl`. Each line is a JSON object.
 
 ### Entry Types
 
@@ -137,13 +146,54 @@ Score: `1.0 - error_rate` (inverted, higher is better)
 
 If `total_tool_calls === 0`, score is 1.0.
 
-## Composite Score
+### 6. Subagent Tool Execution Rate (diagnostic — not in composite score)
+
+Measured from **Neo's sessions** (`~/.openclaw/agents/neo/sessions/*.jsonl`), not Operator1's.
+
+````
+real_tool_calls = count of content items with type === "toolCall" in Neo's assistant messages
+text_tool_echoes = count of Neo's assistant text responses containing tool-like syntax:
+  - "exec:" or '"cmd"' or "```bash" followed by a command
+  - Tool call JSON syntax in plain text (e.g., '{"tool": "exec", "args": ...}')
+
+tool_execution_rate = real_tool_calls / max(real_tool_calls + text_tool_echoes, 1)
+````
+
+Score: `tool_execution_rate` (0.0 to 1.0, higher is better)
+
+**Why this matters:** If Operator1 delegates to Neo but Neo echoes commands as text instead of executing them, delegation is hollow — tasks aren't actually completed. A low tool_execution_rate means the model (GLM-5) is failing to use the tool calling API correctly.
+
+**What to do with this metric:**
+
+- If `tool_execution_rate < 0.3`: Neo is mostly non-functional. Flag in results.tsv. Consider whether Neo's TOOLS.md or workspace instructions need simplification.
+- If `tool_execution_rate > 0.7`: Neo is executing tools properly. Delegation is productive.
+- This metric does NOT affect Operator1's composite score — it's tracked separately in the `neo_exec` column of results.tsv.
+
+**Pattern detection — text echo vs real tool call:**
+
+A real tool call appears as:
+
+```json
+{ "type": "toolCall", "name": "exec", "arguments": { "cmd": "ls -la" } }
+```
+
+A text echo appears as:
+
+```json
+{ "type": "text", "text": "exec: { \"cmd\": \"ls -la ...\" }" }
+```
+
+The model generates the second when it fails to invoke the tool API. Count these as `text_tool_echoes`.
+
+## Composite Score (Operator1 only)
 
 ```
 composite = (delegation * 0.30) + (memory * 0.20) + (conciseness * 0.15) + (silent_reply * 0.15) + (error_rate_score * 0.20)
 ```
 
 Range: 0.0 to 1.0. Higher is better.
+
+Neo's `tool_execution_rate` is tracked separately — it's diagnostic, not a target for workspace file optimization (since it's a model capability issue, not a prompt issue).
 
 ## Keep/Discard Thresholds
 
@@ -175,6 +225,7 @@ All else being equal, simpler workspace files are better:
 | `~/.openclaw/workspace/IDENTITY.md`              | READ ONLY    |
 | `~/.openclaw/workspace/auto-improve/results.tsv` | READ + WRITE |
 | `~/.openclaw/agents/main/sessions/*.jsonl`       | READ ONLY    |
+| `~/.openclaw/agents/neo/sessions/*.jsonl`        | READ ONLY    |
 | Everything else                                  | NO ACCESS    |
 
 ## Results Tracking Format
@@ -184,21 +235,25 @@ File: `~/.openclaw/workspace/auto-improve/results.tsv`
 Header row (tab-separated):
 
 ```
-commit	score	delegation	memory	conciseness	silent_reply	error_rate	status	description
+commit	score	delegation	memory	conciseness	silent_reply	error_rate	neo_exec	status	description
 ```
 
 - `commit`: git short SHA (7 chars), or "baseline" for first entry
 - `score`: composite score (e.g., 0.650)
-- `delegation` through `error_rate`: individual metric scores
+- `delegation` through `error_rate`: individual Operator1 metric scores
+- `neo_exec`: Neo's tool_execution_rate (diagnostic, not in composite)
 - `status`: `baseline`, `keep`, or `discard`
 - `description`: short text of what was changed
 
 ## Session Selection
 
-When scoring, use the N most recent sessions (default N=5). Skip:
+**Operator1 (main):** Use the N most recent sessions from `~/.openclaw/agents/main/sessions/` (default N=5). Skip:
 
 - Sessions shorter than 3 messages (too little data)
 - Sessions that are purely heartbeat (only HEARTBEAT_OK responses)
-- Sessions from other agents (only use `main` agent sessions)
+
+**Neo:** Use the N most recent sessions from `~/.openclaw/agents/neo/sessions/` (default N=5). Skip:
+
+- Sessions shorter than 2 messages
 
 Sort by modification time, newest first.

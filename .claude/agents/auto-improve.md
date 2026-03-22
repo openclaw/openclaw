@@ -44,17 +44,21 @@ LOOP FOREVER (until manually stopped):
 
 ### 1. Collect Sessions
 
-Read the most recent session JSONL files:
+Read the most recent session JSONL files from BOTH agents:
 
 ```bash
+# Operator1 sessions (for composite score)
 ls -t ~/.openclaw/agents/main/sessions/*.jsonl | head -5
+
+# Neo sessions (for subagent tool execution diagnostic)
+ls -t ~/.openclaw/agents/neo/sessions/*.jsonl | head -5
 ```
 
 For each file, parse tool calls, responses, and errors. Use the JSONL schema documented in the skill.
 
 ### 2. Score
 
-Compute these metrics for each session (formulas in skill):
+**Operator1 metrics** (formulas in skill):
 
 - **Delegation ratio** — did the agent route to Neo/Morpheus/Trinity or do work itself?
 - **Memory usage rate** — did the agent search memory when the user referenced past context?
@@ -63,6 +67,12 @@ Compute these metrics for each session (formulas in skill):
 - **Tool error rate** — how many tool calls failed?
 
 Compute the composite score: `score = del*0.3 + mem*0.2 + con*0.15 + sil*0.15 + err*0.2`
+
+**Neo diagnostic** (tracked separately, not in composite):
+
+- **Tool execution rate** — count real `toolCall` entries vs text that echoes tool syntax. If Neo has 0 real toolCalls and echoes commands as text, the rate is 0.0. This means GLM-5 is failing to use the tool API.
+
+Log as `neo_exec` in results.tsv. If `neo_exec < 0.3`, note in the description that delegation is hollow — Operator1 routes correctly but Neo can't execute.
 
 ### 3. Log Baseline (First Run Only)
 
@@ -99,16 +109,31 @@ Make exactly ONE change to ONE file. Target the weakest metric:
 | Silent reply     | AGENTS.md    | Strengthen channel rules                                                         |
 | Tool errors      | TOOLS.md     | Clarify tool usage instructions                                                  |
 
-### 7. Edit and Commit
+### 7. Edit, Commit, and Sync to Repo
 
 ```bash
 cd ~/.openclaw/workspace
-# Make the edit...
+# Make the edit to the workspace file...
 git add <file>
 git commit -m "auto-improve: <description of change>"
 ```
 
-### 8. Restart Gateway and Reset Sessions
+**MANDATORY: Sync to source repo.** Copy the changed file to the operator1 repo so improvements survive fresh installs:
+
+```bash
+# Workspace → Repo mapping:
+# ~/.openclaw/workspace/AGENTS.md    → ~/dev/operator1/docs/reference/templates/AGENTS.md
+# ~/.openclaw/workspace/SOUL.md      → ~/dev/operator1/docs/reference/templates/SOUL.md
+# ~/.openclaw/workspace/TOOLS.md     → ~/dev/operator1/docs/reference/templates/TOOLS.md
+# ~/.openclaw/workspace/HEARTBEAT.md → ~/dev/operator1/docs/reference/templates/HEARTBEAT.md
+
+cp ~/.openclaw/workspace/<changed_file> ~/dev/operator1/docs/reference/templates/<changed_file>
+cd ~/dev/operator1
+git add docs/reference/templates/<changed_file>
+git commit -m "auto-improve: sync <changed_file> from workspace — <description>"
+```
+
+### 8. Restart Gateway
 
 After every workspace file change, restart the gateway so Operator1 picks up the new prompts:
 
@@ -116,7 +141,7 @@ After every workspace file change, restart the gateway so Operator1 picks up the
 openclaw gateway restart
 ```
 
-This is MANDATORY after every edit. Uses graceful restart so WebSocket connections (ui-next, web chat) close cleanly and auto-reconnect. Do NOT use `pkill -9` — it kills connections without close frames, leaving the UI in a "Gateway Offline" state that requires manual reconnect.
+MANDATORY after every edit. Uses graceful restart so WebSocket connections close cleanly and auto-reconnect.
 
 ### 9. Log to results.tsv
 
