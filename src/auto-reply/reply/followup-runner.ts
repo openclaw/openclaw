@@ -11,9 +11,14 @@ import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import {
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+} from "../../config/sessions/paths.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
@@ -136,6 +141,36 @@ export function createFollowupRunner(params: {
 
   return async (queued: FollowupRun) => {
     try {
+      const resolveLatestSessionEntry = () =>
+        (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry;
+      const rebindQueuedRunToCurrentSession = () => {
+        const latestEntry = resolveLatestSessionEntry();
+        const latestSessionId = latestEntry?.sessionId?.trim();
+        if (!latestSessionId || latestSessionId === queued.run.sessionId) {
+          return latestEntry;
+        }
+        queued.run.sessionId = latestSessionId;
+        queued.run.sessionFile = resolveSessionFilePath(
+          latestSessionId,
+          latestEntry,
+          resolveSessionFilePathOptions({
+            agentId: resolveAgentIdFromSessionKey(sessionKey),
+            storePath,
+          }),
+        );
+        logVerbose(
+          `followup queue: rebound ${sessionKey ?? queued.run.sessionId} to session ${latestSessionId}`,
+        );
+        return latestEntry;
+      };
+      const isQueuedRunSuperseded = () => {
+        const latestEntry = resolveLatestSessionEntry();
+        const latestSessionId = latestEntry?.sessionId?.trim();
+        const runSessionId = queued.run.sessionId?.trim();
+        return Boolean(latestSessionId && runSessionId && latestSessionId !== runSessionId);
+      };
+
+      let activeSessionEntry = rebindQueuedRunToCurrentSession();
       const runId = crypto.randomUUID();
       const shouldSurfaceToControlUi = isInternalMessageChannel(
         resolveOriginMessageProvider({
@@ -278,8 +313,15 @@ export function createFollowupRunner(params: {
       const contextTokensUsed =
         agentCfgContextTokens ??
         lookupContextTokens(modelUsed) ??
-        sessionEntry?.contextTokens ??
+        activeSessionEntry?.contextTokens ??
         DEFAULT_CONTEXT_TOKENS;
+
+      if (isQueuedRunSuperseded()) {
+        logVerbose(
+          `followup queue: dropping superseded reply for ${sessionKey ?? queued.run.sessionId}`,
+        );
+        return;
+      }
 
       if (storePath && sessionKey) {
         await persistRunSessionUsage({

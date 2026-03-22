@@ -1,9 +1,24 @@
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import fs from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import type { FollowupRun, QueueSettings } from "./queue.js";
+import { loadSessionStore, saveSessionStore } from "../../config/sessions/store.js";
+import {
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+} from "../../config/sessions/paths.js";
+import {
+  clearFollowupQueue,
+  enqueueFollowupRun,
+  type FollowupRun,
+  type QueueSettings,
+} from "./queue.js";
+import * as sessionRunAccounting from "./session-run-accounting.js";
+import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
 const compactEmbeddedPiSessionMock = vi.fn();
@@ -474,7 +489,6 @@ describe("createFollowupRunner compaction", () => {
       await normalizeComparablePath(path.join(path.dirname(storePath), "session-rotated.jsonl")),
     );
   });
-
   it("does not count failed compaction end events in followup runs", async () => {
     const storePath = path.join(
       await fs.mkdtemp(path.join(tmpdir(), "openclaw-compaction-failed-")),
@@ -619,6 +633,106 @@ describe("createFollowupRunner compaction", () => {
 
     const store = loadSessionStore(storePath, { skipCache: true });
     expect(store.main?.compactionCount).toBe(2);
+  });
+});
+
+describe("createFollowupRunner session resets", () => {
+  it("rebinds queued followups to the latest session after a reset", async () => {
+    const sessionStore: Record<string, SessionEntry> = {
+      main: {
+        sessionId: "session-new",
+        sessionFile: "/tmp/session-new.jsonl",
+        updatedAt: Date.now(),
+      },
+    };
+    const onBlockReply = vi.fn(async () => {});
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: {
+        sessionId: "session-old",
+        sessionFile: "/tmp/session-old.jsonl",
+        updatedAt: Date.now(),
+      },
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          sessionId: "session-old",
+          sessionFile: "/tmp/session-old.jsonl",
+        },
+      }),
+    );
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as {
+      sessionId?: string;
+      sessionFile?: string;
+    };
+    expect(call.sessionId).toBe("session-new");
+    expect(call.sessionFile).toBe(
+      resolveSessionFilePath(
+        "session-new",
+        sessionStore.main,
+        resolveSessionFilePathOptions({ storePath: undefined }),
+      ),
+    );
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops followup output when the run is superseded by a newer session", async () => {
+    const sessionStore: Record<string, SessionEntry> = {
+      main: {
+        sessionId: "session-old",
+        sessionFile: "/tmp/session-old.jsonl",
+        updatedAt: Date.now(),
+      },
+    };
+    const onBlockReply = vi.fn(async () => {});
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+      sessionStore.main = {
+        sessionId: "session-new",
+        sessionFile: "/tmp/session-new.jsonl",
+        updatedAt: Date.now(),
+      };
+      return {
+        payloads: [{ text: "stale reply" }],
+        meta: {},
+      };
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          sessionId: "session-old",
+          sessionFile: "/tmp/session-old.jsonl",
+        },
+      }),
+    );
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).not.toHaveBeenCalled();
   });
 });
 

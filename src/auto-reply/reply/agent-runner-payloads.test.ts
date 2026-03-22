@@ -170,6 +170,7 @@ describe("buildReplyPayloads media filter integration", () => {
       hasSentPayload: () => false,
       enqueue: () => {},
       flush: async () => {},
+      abort: () => {},
       stop: () => {},
       hasBuffered: () => false,
     };

@@ -138,6 +138,7 @@ export async function runAgentTurnWithFallback(params: {
   activeSessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   resolvedVerboseLevel: VerboseLevel;
+  shouldSuppressOutboundDelivery?: () => boolean;
 }): Promise<AgentRunLoopResult> {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
@@ -251,6 +252,7 @@ export async function runAgentTurnWithFallback(params: {
             blockStreamingEnabled: params.blockStreamingEnabled,
             blockReplyPipeline,
             directlySentBlockKeys,
+            shouldSuppressDelivery: params.shouldSuppressOutboundDelivery,
           })
         : undefined;
       const onToolResult = params.opts?.onToolResult;
@@ -461,6 +463,9 @@ export async function runAgentTurnWithFallback(params: {
                   if (evt.stream === "compaction") {
                     const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
                     if (phase === "start") {
+                      if (params.shouldSuppressOutboundDelivery?.()) {
+                        return;
+                      }
                       if (params.opts?.onCompactionStart) {
                         await params.opts.onCompactionStart();
                       } else if (params.opts?.onBlockReply) {
@@ -524,8 +529,15 @@ export async function runAgentTurnWithFallback(params: {
                             if (skip) {
                               return;
                             }
+                            if (params.shouldSuppressOutboundDelivery?.()) {
+                              return;
+                            }
                             if (text !== undefined) {
                               await params.typingSignals.signalTextDelta(text);
+                            }
+                            if (params.shouldSuppressOutboundDelivery?.()) {
+                              return;
+                            }
                             }
                             await onToolResult({
                               ...payload,

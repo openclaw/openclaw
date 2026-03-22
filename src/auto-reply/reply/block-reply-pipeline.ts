@@ -7,6 +7,7 @@ import type { BlockStreamingCoalescing } from "./block-streaming.js";
 export type BlockReplyPipeline = {
   enqueue: (payload: ReplyPayload) => void;
   flush: (options?: { force?: boolean }) => Promise<void>;
+  abort: () => void;
   stop: () => void;
   hasBuffered: () => boolean;
   didStream: () => boolean;
@@ -233,6 +234,17 @@ export function createBlockReplyPipeline(params: {
     await sendChain;
   };
 
+  const abort = () => {
+    if (aborted) {
+      return;
+    }
+    aborted = true;
+    coalescer?.stop();
+    bufferedKeys.clear();
+    bufferedPayloadKeys.clear();
+    bufferedPayloads.length = 0;
+  };
+
   const stop = () => {
     coalescer?.stop();
   };
@@ -240,6 +252,7 @@ export function createBlockReplyPipeline(params: {
   return {
     enqueue,
     flush,
+    abort,
     stop,
     hasBuffered: () => Boolean(coalescer?.hasBuffered() || bufferedPayloads.length > 0),
     didStream: () => didStream,

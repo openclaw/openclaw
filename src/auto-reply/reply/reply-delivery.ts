@@ -68,8 +68,12 @@ export function createBlockReplyDeliveryHandler(params: {
   blockStreamingEnabled: boolean;
   blockReplyPipeline: BlockReplyPipeline | null;
   directlySentBlockKeys: Set<string>;
+  shouldSuppressDelivery?: () => boolean;
 }): (payload: ReplyPayload) => Promise<void> {
   return async (payload) => {
+    if (params.shouldSuppressDelivery?.()) {
+      return;
+    }
     const { text, skip } = params.normalizeStreamingText(payload);
     if (skip && !resolveSendableOutboundReplyParts(payload).hasMedia) {
       return;
@@ -106,6 +110,10 @@ export function createBlockReplyDeliveryHandler(params: {
     const blockPayload = params.applyReplyToMode(mediaNormalizedPayload);
     const blockHasMedia = resolveSendableOutboundReplyParts(blockPayload).hasMedia;
 
+    if (params.shouldSuppressDelivery?.()) {
+      return;
+    }
+
     // Skip empty payloads unless they have audioAsVoice flag (need to track it).
     if (!blockPayload.text && !blockHasMedia && !blockPayload.audioAsVoice) {
       return;
@@ -127,6 +135,9 @@ export function createBlockReplyDeliveryHandler(params: {
       // Send directly when flushing before tool execution (no pipeline but streaming enabled).
       // Track sent key to avoid duplicate in final payloads.
       params.directlySentBlockKeys.add(createBlockReplyContentKey(blockPayload));
+      if (params.shouldSuppressDelivery?.()) {
+        return;
+      }
       await params.onBlockReply(blockPayload);
     } else if (blockHasMedia) {
       // When block streaming is disabled, text-only block replies are accumulated into the
