@@ -770,7 +770,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           // Current GenAI registry attributes (gen_ai.system is deprecated)
           "gen_ai.provider.name": evt.provider ?? "unknown",
           "gen_ai.operation.name": "chat",
-          "gen_ai.usage.input_tokens": usage.promptTokens ?? usage.input ?? 0,
+          "gen_ai.usage.input_tokens":
+            usage.promptTokens ??
+            (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0),
           "gen_ai.usage.output_tokens": usage.output ?? 0,
         };
         if (evt.sessionKey) {
