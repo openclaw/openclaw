@@ -1,4 +1,5 @@
 import { parseExecArgvToken } from "./exec-approvals-analysis.js";
+import { validateSafeBinSemantics } from "./exec-safe-bin-semantics.js";
 import {
   buildLongFlagPrefixMap,
   collectKnownLongFlags,
@@ -130,10 +131,10 @@ function validatePositionalCount(positional: string[], profile: SafeBinProfile):
   if (typeof profile.maxPositional === "number" && positional.length > profile.maxPositional) {
     return false;
   }
-  return profile.positionalValidator?.(positional) ?? true;
+  return true;
 }
 
-export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): boolean {
+function collectPositionalTokens(args: string[], profile: SafeBinProfile): string[] | null {
   const allowedValueFlags = profile.allowedValueFlags ?? NO_FLAGS;
   const deniedFlags = profile.deniedFlags ?? NO_FLAGS;
   const knownLongFlags =
@@ -185,7 +186,7 @@ export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): bo
         longFlagPrefixMap,
       });
       if (nextIndex < 0) {
-        return false;
+        return null;
       }
       i = nextIndex;
       continue;
@@ -200,10 +201,28 @@ export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): bo
       deniedFlags,
     });
     if (nextIndex < 0) {
-      return false;
+      return null;
     }
     i = nextIndex;
   }
 
-  return validatePositionalCount(positional, profile);
+  return positional;
+}
+
+export function validateSafeBinArgv(
+  args: string[],
+  profile: SafeBinProfile,
+  options?: { binName?: string },
+): boolean {
+  const positional = collectPositionalTokens(args, profile);
+  if (!positional) {
+    return false;
+  }
+  if (!validatePositionalCount(positional, profile)) {
+    return false;
+  }
+  return validateSafeBinSemantics({
+    binName: options?.binName,
+    positional,
+  });
 }
