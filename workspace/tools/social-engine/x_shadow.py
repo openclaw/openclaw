@@ -209,30 +209,71 @@ def browse_and_find_tweets():
     return tweets_found
 
 
+def classify_tweet(tweet_text):
+    """Classify tweet type to match the best reply mode."""
+    text_lower = tweet_text.lower()
+
+    # Filter out: retweets, ads, promotional
+    if '已轉發' in tweet_text or 'RT @' in text_lower:
+        return 'retweet'  # Skip
+    if any(w in text_lower for w in ['sponsored', 'ad ', 'promo', '廣告']):
+        return 'ad'  # Skip
+
+    # Classify
+    if any(w in text_lower for w in ['bug', 'broken', 'frustrat', 'hate', 'annoying', 'worst', 'pain']):
+        return 'pain'  # Empathize + solution
+    if '?' in tweet_text or any(w in text_lower for w in ['anyone know', 'how do', 'what if', 'is there']):
+        return 'question'  # Direct answer from experience
+    if any(w in text_lower for w in ['shipped', 'launched', 'built', 'released', 'announcing']):
+        return 'launch'  # User perspective feedback
+    if any(w in text_lower for w in ['opinion', 'hot take', 'unpopular', 'debate', 'disagree', 'overrated']):
+        return 'opinion'  # Take a stance
+    if any(w in text_lower for w in ['haha', 'lol', 'guilty', 'feel bad', '😂', '😅']):
+        return 'humor'  # Short + fun + one insight
+    return 'technical'  # Default: add experience layer
+
+
 def generate_reply(tweet_text, account):
-    """Use LLM to generate a high-quality reply."""
-    prompt = f"""You are replying to @{account} on X/Twitter. This is a USER SESSION — your goal is to demonstrate you understand THIS PERSON, not just the topic.
+    """Use LLM to generate a high-quality reply, matched to tweet type."""
+    tweet_type = classify_tweet(tweet_text)
 
-First, infer from their tweet: What do they care about? What's their expertise level? What would make THEM specifically want to reply back?
+    # Skip retweets and ads
+    if tweet_type in ('retweet', 'ad'):
+        return ''
 
-Their tweet:
+    mode_instructions = {
+        'pain': 'Start with empathy ("Felt this" / "Hit the same wall"). Then share YOUR specific fix. Structure: empathy → what you did → result.',
+        'question': 'Answer directly from your experience. Start with "In my setup..." or "After 90 days...". Give the specific answer, not theory.',
+        'launch': 'React as a user who tried it. "Been using this since..." or "The thing that changed for me was...". Specific feedback, not praise.',
+        'opinion': 'Take a clear side. "I disagree because..." or "This is true but the deeper issue is...". No hedging.',
+        'humor': 'Match the light tone. One short sentence, then one unexpected insight. Keep it under 150 chars.',
+        'technical': 'Add one layer of depth they missed. Structure: "What most people miss about [their topic] is [your insight from production]."',
+    }
+
+    mode = mode_instructions.get(tweet_type, mode_instructions['technical'])
+
+    prompt = f"""You are @TangCruzZ replying to @{account} on X/Twitter.
+
+THEIR TWEET ({tweet_type} type):
 {tweet_text[:400]}
 
-Write a reply that:
-1. Adds a unique technical insight (not just agreement)
-2. Draws from experience running 10+ AI agents in production
-3. Is 1-3 sentences, under 280 characters
-4. Does NOT mention any product, link, or self-promotion
-5. Sounds like a knowledgeable peer, not a fan
+YOUR REPLY MODE: {mode}
 
-Reply:"""
+HARD RULES:
+- MAX 200 CHARACTERS. Not 280. 200. Count carefully.
+- Structure: Scene → Your different approach → Result. (3-part, each part one sentence max)
+- First person only: "I..." "My..." "After 90 days..."
+- NEVER start with: "Great" "I agree" "This is interesting" "True"
+- NEVER use literary quotes or philosophy
+- NEVER lecture. You are a peer sharing, not a teacher explaining.
+- Must be about THEIR specific point, not a tangent
+
+Reply (MAX 200 chars):"""
 
     reply = call_llm(prompt, system=SOUL)
 
-    # Clean up
     if reply:
         reply = reply.strip('"').strip("'").strip()
-    # Trim to 280 chars
     if reply and len(reply) > 280:
         reply = reply[:277] + "..."
 
@@ -255,25 +296,35 @@ def score_reply(reply_text, account):
         resonance_bonus = 0
 
     # LLM quality score
-    score_prompt = f"""Score this X/Twitter reply as a USER SESSION interaction (1-10).
+    score_prompt = f"""Score this reply on THREE dimensions. Final score = LOWEST of the three.
 
-You are evaluating whether this reply demonstrates understanding of THIS SPECIFIC PERSON, not just generic quality.
+Reply to @{account}: "{reply_text}"
 
-The person (@{account}) posted something. Our reply: "{reply_text}"
+1. UNDERSTANDING (1-10): Does this reply show we get what @{account} specifically cares about?
+   8+ = clearly responding to THEIR point. 5-6 = could be sent to anyone.
 
-Score on:
-1. Does this reply show we understand what THIS person cares about? (not generic advice)
-2. Would THIS person specifically want to reply back? (creates dialogue, not closes it)
-3. Does it add something they haven't thought of? (new angle for THEM)
-4. Is the tone calibrated to THEIR level? (peer to peer, not lecture)
+2. RESONANCE (1-10): Would @{account} feel "this person gets me" and want to reply?
+   8+ = creates dialogue. 5-6 = conversation ender.
 
-Calibration: 7-8 = solid understanding of the person. 9-10 = they'd DM us. 5-6 = could be sent to anyone.
+3. VALUE (1-10): Does it add something @{account} hasn't thought of?
+   8+ = new angle they'll remember. 5-6 = obvious/generic.
 
-Just the number:"""
+Penalty -2 if: starts with agreement, lectures, uses literary quotes, longer than 200 chars.
+
+Output THREE scores then the final (= lowest), format: U:X R:X V:X → X"""
 
     score_str = call_llm(score_prompt)
     try:
-        score = float(score_str.strip().split('\n')[0].split('/')[0])
+        # Parse "U:8 R:7 V:9 → 7" format
+        import re
+        # Try to find the final score after →
+        arrow_match = re.search(r'→\s*(\d+\.?\d*)', score_str)
+        if arrow_match:
+            score = float(arrow_match.group(1))
+        else:
+            # Fallback: find any number
+            nums = re.findall(r'\d+\.?\d*', score_str)
+            score = float(nums[-1]) if nums else 5.0
     except (ValueError, IndexError):
         score = 5.0
 
@@ -326,7 +377,13 @@ def cmd_run():
         print("  All already replied. Done.")
         return
 
-    # 3. Pick the highest-scored tweet
+    # 3. Filter out retweets/ads before picking
+    new_tweets = [t for t in new_tweets if classify_tweet(t['text']) not in ('retweet', 'ad')]
+    if not new_tweets:
+        print("  All remaining are retweets/ads. Done.")
+        return
+
+    # Pick the highest-scored tweet
     new_tweets.sort(key=lambda t: t.get('score', 0), reverse=True)
     tweet = new_tweets[0]
     print(f"\n  Selected: @{tweet['account']} (score={tweet.get('score', 0):.1f})")
