@@ -20,9 +20,9 @@ Loads additional bootstrap files into `Project Context` during `agent:bootstrap`
 
 ## Why
 
-Use this when your workspace has multiple context roots (for example monorepos) and
-you want to include extra `AGENTS.md`/`TOOLS.md`-class files without changing the
-workspace root.
+Use this when your workspace has multiple context roots (for example monorepos) or
+when your agent relies on extra companion context files (for example
+`tone_skills.md`) without changing the workspace root.
 
 ## Configuration
 
@@ -34,7 +34,7 @@ workspace root.
       "entries": {
         "bootstrap-extra-files": {
           "enabled": true,
-          "paths": ["packages/*/AGENTS.md", "packages/*/TOOLS.md"]
+          "paths": ["packages/*/AGENTS.md", "packages/*/TOOLS.md", "tone_skills.md"]
         }
       }
     }
@@ -50,4 +50,5 @@ workspace root.
 
 All paths are resolved from the workspace and must stay inside it (including realpath checks).
 Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `TOOLS.md`,
-`IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, `MEMORY.md`, `memory.md`).
+`IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, `MEMORY.md`, `memory.md`,
+`tone_skills.md`).

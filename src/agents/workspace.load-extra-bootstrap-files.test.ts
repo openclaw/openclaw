@@ -38,6 +38,17 @@ describe("loadExtraBootstrapFiles", () => {
     expect(files[0]?.content).toBe("tools");
   });
 
+  it("loads tone_skills.md when explicitly configured as an extra bootstrap file", async () => {
+    const workspaceDir = await createWorkspaceDir("tone-skills");
+    await fs.writeFile(path.join(workspaceDir, "tone_skills.md"), "band guidance", "utf-8");
+
+    const files = await loadExtraBootstrapFiles(workspaceDir, ["tone_skills.md"]);
+
+    expect(files).toHaveLength(1);
+    expect(files[0]?.name).toBe("tone_skills.md");
+    expect(files[0]?.content).toBe("band guidance");
+  });
+
   it("keeps path-traversal attempts outside workspace excluded", async () => {
     const rootDir = await createWorkspaceDir("root");
     const workspaceDir = path.join(rootDir, "workspace");

@@ -73,6 +73,26 @@ describe("bootstrap-extra-files hook", () => {
     );
   });
 
+  it("injects tone_skills.md when explicitly configured", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-tone-");
+    await fs.writeFile(path.join(tempDir, "tone_skills.md"), "tone guidance", "utf-8");
+
+    const cfg = createBootstrapExtraConfig(["tone_skills.md"]);
+    const context = await createBootstrapContext({
+      workspaceDir: tempDir,
+      cfg,
+      sessionKey: "agent:main:main",
+      rootFiles: [{ name: "AGENTS.md", content: "root agents" }],
+    });
+
+    const event = createHookEvent("agent", "bootstrap", "agent:main:main", context);
+    await handler(event);
+
+    const injected = context.bootstrapFiles.find((f) => f.name === "tone_skills.md");
+    expect(injected?.path).toBe(path.join(tempDir, "tone_skills.md"));
+    expect(injected?.content).toBe("tone guidance");
+  });
+
   it("re-applies subagent bootstrap allowlist after extras are added", async () => {
     const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-subagent-");
     const extraDir = path.join(tempDir, "packages", "persona");
