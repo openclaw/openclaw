@@ -524,7 +524,7 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
 }
 
 /** Channels that require opus audio and support voice-bubble playback */
-const VOICE_BUBBLE_CHANNELS = new Set(["telegram", "feishu", "whatsapp"]);
+const VOICE_BUBBLE_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "matrix"]);
 
 function resolveOutputFormat(channelId?: string | null) {
   if (channelId && VOICE_BUBBLE_CHANNELS.has(channelId)) {
@@ -632,13 +632,34 @@ async function maybeForwardTtsAudio(params: {
 }): Promise<void> {
   const fwd = params.config.forward;
   if (!fwd?.enabled || !fwd.command) {
+    logVerbose(
+      `TTS: forward skipped (enabled=${String(fwd?.enabled)}, commandPresent=${Boolean(fwd?.command)})`,
+    );
     return;
   }
   const cmd = substituteShellSafe(fwd.command, { file: params.audioPath });
+  logVerbose(`TTS: forward start file=${params.audioPath}`);
+  logVerbose(`TTS: forward exec: ${cmd}`);
   try {
-    await execFileAsync("sh", ["-c", cmd], { timeout: fwd.timeoutMs });
+    const result = await execFileAsync("sh", ["-c", cmd], { timeout: fwd.timeoutMs });
+    const stdout = typeof result?.stdout === "string" ? result.stdout.trim() : "";
+    const stderr = typeof result?.stderr === "string" ? result.stderr.trim() : "";
+    logVerbose(`TTS: forward success file=${params.audioPath}`);
+    if (stdout) {
+      logVerbose(`TTS: forward stdout: ${stdout}`);
+    }
+    if (stderr) {
+      logVerbose(`TTS: forward stderr: ${stderr}`);
+    }
   } catch (err) {
-    logVerbose(`TTS: forward command failed: ${(err as Error).message}`);
+    const e = err as Error & { stdout?: string; stderr?: string };
+    logVerbose(`TTS: forward failed file=${params.audioPath} error=${e.message}`);
+    if (e.stdout?.trim()) {
+      logVerbose(`TTS: forward stdout: ${e.stdout.trim()}`);
+    }
+    if (e.stderr?.trim()) {
+      logVerbose(`TTS: forward stderr: ${e.stderr.trim()}`);
+    }
   }
 }
 

@@ -10,7 +10,7 @@ title: "Text-to-Speech"
 # Text-to-speech (TTS)
 
 OpenClaw can convert outbound replies into audio using ElevenLabs, OpenAI, or Edge TTS.
-It works anywhere OpenClaw can send audio; Telegram gets a round voice-note bubble.
+It works anywhere OpenClaw can send audio; Telegram, Feishu, WhatsApp, and Matrix get a round voice-note bubble.
 
 ## Supported services
 
@@ -315,7 +315,7 @@ These override `messages.tts.*` for that host.
 
 ## Output formats (fixed)
 
-- **Telegram**: Opus voice note (`opus_48000_64` from ElevenLabs, `opus` from OpenAI).
+- **Voice-bubble channels** (Telegram, Feishu, WhatsApp, Matrix): Opus voice note (`opus_48000_64` from ElevenLabs, `opus` from OpenAI).
   - 48kHz / 64kbps is a good voice-note tradeoff and required for the round bubble.
 - **Other channels**: MP3 (`mp3_44100_128` from ElevenLabs, `mp3` from OpenAI).
   - 44.1kHz / 128kbps is the default balance for speech clarity.
@@ -327,7 +327,7 @@ These override `messages.tts.*` for that host.
     guaranteed Opus voice notes. citeturn1search1
   - If the configured Edge output format fails, OpenClaw retries with MP3.
 
-OpenAI/ElevenLabs formats are fixed; Telegram expects Opus for voice-note UX.
+OpenAI/ElevenLabs formats are fixed; voice-bubble channels (Telegram, Feishu, WhatsApp, Matrix) expect Opus for voice-note UX.
 
 ## Auto-TTS behavior
 
@@ -388,8 +388,8 @@ Notes:
 ## Agent tool
 
 The `tts` tool converts text to speech and returns a `MEDIA:` path. When the
-result is Telegram-compatible, the tool includes `[[audio_as_voice]]` so
-Telegram sends a voice bubble.
+result is voice-bubble-compatible (Telegram, Feishu, WhatsApp, Matrix), the tool
+includes `[[audio_as_voice]]` so the channel sends a voice bubble.
 
 ## Gateway RPC
 
