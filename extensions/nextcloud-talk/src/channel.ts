@@ -13,11 +13,13 @@ import {
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
-import { createDefaultChannelRuntimeState } from "openclaw/plugin-sdk/status-helpers";
+import {
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
 import {
   buildBaseChannelStatusSummary,
   buildChannelConfigSchema,
-  buildRuntimeAccountStatusSnapshot,
   clearAccountEntryFields,
   DEFAULT_ACCOUNT_ID,
   type ChannelPlugin,
@@ -168,31 +170,25 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
         },
       },
       setup: nextcloudTalkSetupAdapter,
-      status: {
+      status: createComputedAccountStatusAdapter<ResolvedNextcloudTalkAccount>({
         defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
         buildChannelSummary: ({ snapshot }) =>
           buildBaseChannelStatusSummary(snapshot, {
             secretSource: snapshot.secretSource ?? "none",
             mode: "webhook",
           }),
-        buildAccountSnapshot: ({ account, runtime }) => {
-          const configured = Boolean(account.secret?.trim() && account.baseUrl?.trim());
-          return buildRuntimeAccountStatusSnapshot(
-            { runtime },
-            {
-              accountId: account.accountId,
-              name: account.name,
-              enabled: account.enabled,
-              configured,
-              secretSource: account.secretSource,
-              baseUrl: account.baseUrl ? "[set]" : "[missing]",
-              mode: "webhook",
-              lastInboundAt: runtime?.lastInboundAt ?? null,
-              lastOutboundAt: runtime?.lastOutboundAt ?? null,
-            },
-          );
-        },
-      },
+        resolveAccountSnapshot: ({ account }) => ({
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured: Boolean(account.secret?.trim() && account.baseUrl?.trim()),
+          extra: {
+            secretSource: account.secretSource,
+            baseUrl: account.baseUrl ? "[set]" : "[missing]",
+            mode: "webhook",
+          },
+        }),
+      }),
       gateway: {
         startAccount: async (ctx) => {
           const account = ctx.account;

@@ -9,6 +9,7 @@ import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
+import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
 import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js";
 import { markdownToSignalTextChunks } from "./format.js";
 import {
@@ -20,7 +21,6 @@ import {
 import { signalMessageActions } from "./message-actions.js";
 import type { SignalProbe } from "./probe.js";
 import {
-  buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
@@ -295,7 +295,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
           hint: "<E.164|uuid:ID|group:ID|signal:group:ID|signal:+E.164>",
         },
       },
-      status: {
+      status: createComputedAccountStatusAdapter<ResolvedSignalAccount, SignalProbe>({
         defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
         collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("signal", accounts),
         buildChannelSummary: ({ snapshot }) =>
@@ -312,9 +312,16 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
           (probe as SignalProbe | undefined)?.version
             ? [{ text: `Signal daemon: ${(probe as SignalProbe).version}` }]
             : [],
-        buildAccountSnapshot: ({ account, runtime, probe }) =>
-          buildBaseAccountStatusSnapshot({ account, runtime, probe }, { baseUrl: account.baseUrl }),
-      },
+        resolveAccountSnapshot: ({ account }) => ({
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured: account.configured,
+          extra: {
+            baseUrl: account.baseUrl,
+          },
+        }),
+      }),
       gateway: {
         startAccount: async (ctx) => {
           const account = ctx.account;
