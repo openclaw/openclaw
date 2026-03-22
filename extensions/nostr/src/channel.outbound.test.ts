@@ -3,6 +3,11 @@ import { createStartAccountContext } from "../../../test/helpers/extensions/star
 import type { PluginRuntime } from "../runtime-api.js";
 import { nostrPlugin } from "./channel.js";
 import { setNostrRuntime } from "./runtime.js";
+import {
+  TEST_RELAY_URL,
+  TEST_RESOLVED_PRIVATE_KEY,
+  buildResolvedNostrAccount,
+} from "./test-fixtures.js";
 
 const mocks = vi.hoisted(() => ({
   normalizePubkey: vi.fn((value: string) => `normalized-${value.toLowerCase()}`),
@@ -15,6 +20,16 @@ vi.mock("./nostr-bus.js", () => ({
   normalizePubkey: mocks.normalizePubkey,
   startNostrBus: mocks.startNostrBus,
 }));
+
+function createCfg() {
+  return {
+    channels: {
+      nostr: {
+        privateKey: TEST_RESOLVED_PRIVATE_KEY, // pragma: allowlist secret
+      },
+    },
+  };
+}
 
 describe("nostr outbound cfg threading", () => {
   afterEach(() => {
@@ -47,26 +62,11 @@ describe("nostr outbound cfg threading", () => {
 
     const cleanup = (await nostrPlugin.gateway!.startAccount!(
       createStartAccountContext({
-        account: {
-          accountId: "default",
-          enabled: true,
-          configured: true,
-          privateKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", // pragma: allowlist secret
-          publicKey: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", // pragma: allowlist secret
-          relays: ["wss://relay.example.com"],
-          config: {},
-        },
-        abortSignal: new AbortController().signal,
+        account: buildResolvedNostrAccount(),
       }),
     )) as { stop: () => void };
 
-    const cfg = {
-      channels: {
-        nostr: {
-          privateKey: "resolved-nostr-private-key", // pragma: allowlist secret
-        },
-      },
-    };
+    const cfg = createCfg();
     await nostrPlugin.outbound!.sendText!({
       cfg: cfg as any,
       to: "NPUB123",

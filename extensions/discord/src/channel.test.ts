@@ -1,10 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  ChannelAccountSnapshot,
-  ChannelGatewayContext,
-} from "../../../src/channels/plugins/types.js";
 import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
 import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
 import type { ResolvedDiscordAccount } from "./accounts.js";
 import { discordPlugin } from "./channel.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -47,33 +44,6 @@ function createCfg(): OpenClawConfig {
       },
     },
   } as OpenClawConfig;
-}
-
-function createStartAccountCtx(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  runtime: ReturnType<typeof createRuntimeEnv>;
-}): ChannelGatewayContext<ResolvedDiscordAccount> {
-  const account = discordPlugin.config.resolveAccount(
-    params.cfg,
-    params.accountId,
-  ) as ResolvedDiscordAccount;
-  const snapshot: ChannelAccountSnapshot = {
-    accountId: params.accountId,
-    configured: true,
-    enabled: true,
-    running: false,
-  };
-  return {
-    accountId: params.accountId,
-    account,
-    cfg: params.cfg,
-    runtime: params.runtime,
-    abortSignal: new AbortController().signal,
-    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    getStatus: () => snapshot,
-    setStatus: vi.fn(),
-  };
 }
 
 afterEach(() => {
@@ -189,9 +159,9 @@ describe("discordPlugin outbound", () => {
 
     const cfg = createCfg();
     await discordPlugin.gateway!.startAccount!(
-      createStartAccountCtx({
+      createStartAccountContext({
+        account: discordPlugin.config.resolveAccount(cfg, "default") as ResolvedDiscordAccount,
         cfg,
-        accountId: "default",
         runtime: createRuntimeEnv(),
       }),
     );

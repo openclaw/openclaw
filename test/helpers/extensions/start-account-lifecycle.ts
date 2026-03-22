@@ -35,6 +35,23 @@ export async function abortStartedAccount(params: {
   await params.task;
 }
 
+export function waitForStartedMocks(...mocks: Array<ReturnType<typeof vi.fn>>) {
+  return async () => {
+    await vi.waitFor(() => {
+      for (const mock of mocks) {
+        expect(mock).toHaveBeenCalledOnce();
+      }
+    });
+  };
+}
+
+export function expectLifecyclePatch(
+  patches: ChannelAccountSnapshot[],
+  expected: Partial<ChannelAccountSnapshot>,
+) {
+  expect(patches).toContainEqual(expect.objectContaining(expected));
+}
+
 export async function expectPendingUntilAbort(params: {
   waitForStarted: () => Promise<void>;
   isSettled: () => boolean;
