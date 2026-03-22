@@ -100,6 +100,8 @@ Media sends are supported by URL-based file delivery.
 
 Multiple Synology Chat accounts are supported under `channels.synology-chat.accounts`.
 Each account can override token, incoming URL, webhook path, DM policy, and limits.
+Direct-message sessions are isolated per account and user, so the same numeric `user_id`
+on two different Synology accounts does not share transcript state.
 
 ```json5
 {
