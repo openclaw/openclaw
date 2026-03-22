@@ -1894,7 +1894,7 @@ describe("applyExtraParamsToAgent", () => {
         provider: "minimax-portal",
         id: "MiniMax-M2.7-highspeed",
         baseUrl: "https://api.minimax.io/anthropic",
-      } as Model<"anthropic-messages">,
+      } as unknown as Model<"anthropic-messages">,
     });
 
     expect(resolvedModelId).toBe("MiniMax-M2.7-highspeed");
@@ -1910,7 +1910,7 @@ describe("applyExtraParamsToAgent", () => {
         provider: "xai",
         id: "grok-4",
         baseUrl: "https://api.x.ai/v1",
-      } as Model<"openai-completions">,
+      } as unknown as Model<"openai-completions">,
     });
 
     expect(resolvedModelId).toBe("grok-4-fast");
