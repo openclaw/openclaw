@@ -116,6 +116,31 @@ export function registerDefaultAuthTokenSuite(): void {
       }
     });
 
+    test("uses a longer default timeout for loopback handshakes", async () => {
+      const prevHandshakeTimeout = process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
+      const prevTestHandshakeTimeout = process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
+      delete process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
+      delete process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
+      try {
+        const { DEFAULT_HANDSHAKE_TIMEOUT_MS, LOOPBACK_HANDSHAKE_TIMEOUT_MS } = await import(
+          "./server-constants.js"
+        );
+        expect(getHandshakeTimeoutMs()).toBe(DEFAULT_HANDSHAKE_TIMEOUT_MS);
+        expect(getHandshakeTimeoutMs({ isLoopback: true })).toBe(LOOPBACK_HANDSHAKE_TIMEOUT_MS);
+      } finally {
+        if (prevHandshakeTimeout === undefined) {
+          delete process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
+        } else {
+          process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = prevHandshakeTimeout;
+        }
+        if (prevTestHandshakeTimeout === undefined) {
+          delete process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
+        } else {
+          process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = prevTestHandshakeTimeout;
+        }
+      }
+    });
+
     test("connect (req) handshake returns hello-ok payload", async () => {
       const { STATE_DIR, createConfigIO } = await import("../config/config.js");
       const ws = await openWs(port);

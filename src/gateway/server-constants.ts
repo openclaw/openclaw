@@ -22,7 +22,8 @@ export const __setMaxChatHistoryMessagesBytesForTest = (value?: number) => {
   }
 };
 export const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10_000;
-export const getHandshakeTimeoutMs = () => {
+export const LOOPBACK_HANDSHAKE_TIMEOUT_MS = 30_000;
+export const getHandshakeTimeoutMs = (opts?: { isLoopback?: boolean }) => {
   // User-facing env var (works in all environments); test-only var gated behind VITEST
   const envKey =
     process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS ||
@@ -32,6 +33,9 @@ export const getHandshakeTimeoutMs = () => {
     if (Number.isFinite(parsed) && parsed > 0) {
       return parsed;
     }
+  }
+  if (opts?.isLoopback) {
+    return LOOPBACK_HANDSHAKE_TIMEOUT_MS;
   }
   return DEFAULT_HANDSHAKE_TIMEOUT_MS;
 };
