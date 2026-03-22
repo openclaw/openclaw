@@ -2,7 +2,9 @@ name: Deploy Blink Claw
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main           # production deploy
+      - 'pre-release/**'  # smoke test only, no production update
   workflow_dispatch:
     inputs:
       mode:
@@ -32,12 +34,14 @@ jobs:
         uses: actions/checkout@v6
 
       # Push to main always goes to :latest (production).
-      # Manual dispatch can choose pre-release-test (builds :pre-release, no production update)
-      # or production (builds :latest, updates all agents — same as push to main).
+      # Push to pre-release/* or manual dispatch (default) → :pre-release + smoke test only.
+      # Manual dispatch with mode=production → :latest + update all agents.
       - name: Resolve image tag
         id: resolve_tag
         run: |
-          if [ "${{ github.event_name }}" = "push" ] || [ "${{ inputs.mode }}" = "production" ]; then
+          IS_MAIN_PUSH="${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}"
+          IS_PRODUCTION_DISPATCH="${{ inputs.mode == 'production' }}"
+          if [ "$IS_MAIN_PUSH" = "true" ] || [ "$IS_PRODUCTION_DISPATCH" = "true" ]; then
             echo "image_tag=registry.fly.io/blink-claw:latest" >> "$GITHUB_OUTPUT"
             echo "is_production=true" >> "$GITHUB_OUTPUT"
             echo "Mode: PRODUCTION (:latest + update all agents)"
