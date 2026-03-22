@@ -4,9 +4,7 @@ import { looksLikeTelegramTargetId, normalizeTelegramMessagingTarget } from "./n
 describe("telegram target normalization", () => {
   it("normalizes telegram prefixes, group targets, and topic suffixes", () => {
     expect(normalizeTelegramMessagingTarget("telegram:123456")).toBe("telegram:123456");
-    expect(normalizeTelegramMessagingTarget("tg:group:-100123")).toBe(
-      "telegram:group:-100123",
-    );
+    expect(normalizeTelegramMessagingTarget("tg:group:-100123")).toBe("telegram:group:-100123");
     expect(normalizeTelegramMessagingTarget("telegram:-100123:topic:99")).toBe(
       "telegram:-100123:topic:99",
     );

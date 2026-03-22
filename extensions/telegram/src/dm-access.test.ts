@@ -90,11 +90,16 @@ describe("enforceTelegramDmAccess", () => {
     const sendMessage = vi.fn(async () => undefined);
     const logger = { info: vi.fn() };
     createChannelPairingChallengeIssuerMock.mockReturnValueOnce(
-      ({ sendPairingReply, onCreated }) =>
-        (async () => {
-          onCreated();
-          await sendPairingReply("Pairing code: 123456");
-        })(),
+      async ({
+        sendPairingReply,
+        onCreated,
+      }: {
+        sendPairingReply: (text: string) => Promise<void>;
+        onCreated: () => void;
+      }) => {
+        onCreated();
+        await sendPairingReply("Pairing code: 123456");
+      },
     );
 
     const allowed = await enforceTelegramDmAccess({
