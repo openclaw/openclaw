@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import { handleBlueBubblesWebhookRequest } from "./monitor.js";
 import { registerBlueBubblesWebhookTarget } from "./monitor.js";
@@ -14,6 +14,8 @@ export type WebhookRequestParams = {
   headers?: Record<string, string>;
   remoteAddress?: string;
 };
+
+export const LOOPBACK_REMOTE_ADDRESSES_FOR_TEST = ["127.0.0.1", "::1", "::ffff:127.0.0.1"] as const;
 
 export function createMockAccount(
   overrides: Partial<ResolvedBlueBubblesAccount["config"]> = {},
@@ -30,6 +32,38 @@ export function createMockAccount(
       allowFrom: [],
       groupAllowFrom: [],
       ...overrides,
+    },
+  };
+}
+
+export function createProtectedWebhookAccountForTest(password = "test-password") {
+  return createMockAccount({ password });
+}
+
+export function createNewMessagePayloadForTest(dataOverrides: Record<string, unknown> = {}) {
+  return {
+    type: "new-message",
+    data: {
+      text: "hello",
+      handle: { address: "+15551234567" },
+      isGroup: false,
+      isFromMe: false,
+      guid: "msg-1",
+      ...dataOverrides,
+    },
+  };
+}
+
+export function createMessageReactionPayloadForTest(dataOverrides: Record<string, unknown> = {}) {
+  return {
+    type: "message-reaction",
+    data: {
+      handle: { address: "+15551234567" },
+      isGroup: false,
+      isFromMe: false,
+      associatedMessageGuid: "msg-original-123",
+      associatedMessageType: 2000,
+      ...dataOverrides,
     },
   };
 }
@@ -81,6 +115,52 @@ export function createMockRequestForTest(params: WebhookRequestParams = {}): Inc
   );
 }
 
+export function createRemoteWebhookRequestParamsForTest(
+  params: {
+    body?: unknown;
+    remoteAddress?: string;
+    overrides?: WebhookRequestParams;
+  } = {},
+): WebhookRequestParams {
+  return {
+    body: params.body ?? {},
+    remoteAddress: params.remoteAddress ?? "192.168.1.100",
+    ...params.overrides,
+  };
+}
+
+export function createPasswordQueryRequestParamsForTest(
+  params: {
+    body?: unknown;
+    password?: string;
+    remoteAddress?: string;
+    overrides?: Omit<WebhookRequestParams, "url">;
+  } = {},
+): WebhookRequestParams {
+  return createRemoteWebhookRequestParamsForTest({
+    body: params.body,
+    remoteAddress: params.remoteAddress,
+    overrides: {
+      url: `/bluebubbles-webhook?password=${params.password ?? "test-password"}`,
+      ...params.overrides,
+    },
+  });
+}
+
+export function createLoopbackWebhookRequestParamsForTest(
+  remoteAddress: (typeof LOOPBACK_REMOTE_ADDRESSES_FOR_TEST)[number],
+  params: {
+    body?: unknown;
+    overrides?: Omit<WebhookRequestParams, "remoteAddress">;
+  } = {},
+): WebhookRequestParams {
+  return {
+    body: params.body ?? {},
+    remoteAddress,
+    ...params.overrides,
+  };
+}
+
 export function createHangingWebhookRequestForTest(
   url = "/bluebubbles-webhook?password=test-password",
   remoteAddress = "127.0.0.1",
@@ -119,6 +199,29 @@ export async function dispatchWebhookPayloadForTest(params: WebhookRequestParams
   const handled = await handleBlueBubblesWebhookRequest(req, res);
   await flushAsync();
   return { handled, res };
+}
+
+export async function expectWebhookStatusForTest(
+  req: IncomingMessage,
+  expectedStatus: number,
+  expectedBody?: string,
+) {
+  const res = createMockResponse();
+  const handled = await handleBlueBubblesWebhookRequest(req, res);
+  expect(handled).toBe(true);
+  expect(res.statusCode).toBe(expectedStatus);
+  if (expectedBody !== undefined) {
+    expect(res.body).toBe(expectedBody);
+  }
+  return res;
+}
+
+export async function expectWebhookRequestStatusForTest(
+  params: WebhookRequestParams,
+  expectedStatus: number,
+  expectedBody?: string,
+) {
+  return expectWebhookStatusForTest(createMockRequestForTest(params), expectedStatus, expectedBody);
 }
 
 export function registerWebhookTargetForTest(params: {
