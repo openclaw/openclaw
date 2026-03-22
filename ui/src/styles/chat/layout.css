@@ -743,6 +743,15 @@
   background: var(--hover-bg, rgba(255, 255, 255, 0.08));
 }
 
+.chat-controls__new-chat svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+}
+
 .chat-controls__new-chat:disabled {
   opacity: 0.4;
   cursor: not-allowed;
