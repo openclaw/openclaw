@@ -1,0 +1,72 @@
+import { sanitizeForLog } from "../../terminal/ansi.js";
+import { maybeRepairDiscordNumericIds } from "./providers/discord.js";
+import {
+  collectTelegramEmptyAllowlistExtraWarnings,
+  maybeRepairTelegramAllowFromUsernames,
+} from "./providers/telegram.js";
+import { maybeRepairAllowlistPolicyAllowFrom } from "./shared/allowlist-policy-repair.js";
+import {
+  applyDoctorConfigMutation,
+  type DoctorConfigMutationState,
+} from "./shared/config-mutation-state.js";
+import { scanEmptyAllowlistPolicyWarnings } from "./shared/empty-allowlist-scan.js";
+import { maybeRepairExecSafeBinProfiles } from "./shared/exec-safe-bins.js";
+import { maybeRepairLegacyToolsBySenderKeys } from "./shared/legacy-tools-by-sender.js";
+import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.js";
+
+export async function runDoctorRepairSequence(params: {
+  state: DoctorConfigMutationState;
+  doctorFixCommand: string;
+}): Promise<{
+  state: DoctorConfigMutationState;
+  changeNotes: string[];
+  warningNotes: string[];
+}> {
+  let state = params.state;
+  const changeNotes: string[] = [];
+  const warningNotes: string[] = [];
+
+  const applyMutation = (
+    mutation: {
+      config: DoctorConfigMutationState["candidate"];
+      changes: string[];
+      warnings?: string[];
+    },
+    options?: { sanitizeChanges?: boolean },
+  ) => {
+    if (mutation.changes.length > 0) {
+      changeNotes.push(
+        (options?.sanitizeChanges
+          ? mutation.changes.map((line) => sanitizeForLog(line))
+          : mutation.changes
+        ).join("\n"),
+      );
+      state = applyDoctorConfigMutation({
+        state,
+        mutation,
+        shouldRepair: true,
+      });
+    }
+    if (mutation.warnings && mutation.warnings.length > 0) {
+      warningNotes.push(mutation.warnings.join("\n"));
+    }
+  };
+
+  applyMutation(await maybeRepairTelegramAllowFromUsernames(state.candidate));
+  applyMutation(maybeRepairDiscordNumericIds(state.candidate));
+  applyMutation(maybeRepairOpenPolicyAllowFrom(state.candidate), { sanitizeChanges: true });
+  applyMutation(await maybeRepairAllowlistPolicyAllowFrom(state.candidate));
+
+  const emptyAllowlistWarnings = scanEmptyAllowlistPolicyWarnings(state.candidate, {
+    doctorFixCommand: params.doctorFixCommand,
+    extraWarningsForAccount: collectTelegramEmptyAllowlistExtraWarnings,
+  });
+  if (emptyAllowlistWarnings.length > 0) {
+    warningNotes.push(emptyAllowlistWarnings.map((line) => sanitizeForLog(line)).join("\n"));
+  }
+
+  applyMutation(maybeRepairLegacyToolsBySenderKeys(state.candidate));
+  applyMutation(maybeRepairExecSafeBinProfiles(state.candidate));
+
+  return { state, changeNotes, warningNotes };
+}
