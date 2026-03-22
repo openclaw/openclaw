@@ -102,6 +102,16 @@ describe("shouldSuppressMessagingToolReplies", () => {
     ).toBe(true);
   });
 
+  it("suppresses when target provider is undefined and target matches current provider route", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "telegram",
+        originatingTo: "123",
+        messagingToolSentTargets: [{ tool: "message", to: "123" }],
+      }),
+    ).toBe(true);
+  });
+
   it("does not suppress when providerless target does not match origin route", () => {
     expect(
       shouldSuppressMessagingToolReplies({

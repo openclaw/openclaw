@@ -1489,6 +1489,25 @@ export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "f
   return isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey) ? "minimal" : "full";
 }
 
+export function resolveRouteMessageProvider(params: {
+  messageProvider?: string;
+  messageChannel?: string;
+}): string | undefined {
+  const messageProvider = params.messageProvider?.trim().toLowerCase();
+  const messageChannel = params.messageChannel?.trim().toLowerCase();
+  if (!messageProvider) {
+    return messageChannel;
+  }
+  if (
+    messageProvider === "heartbeat" ||
+    messageProvider === "cron-event" ||
+    messageProvider === "exec-event"
+  ) {
+    return messageChannel ?? messageProvider;
+  }
+  return messageProvider;
+}
+
 export function resolveAttemptFsWorkspaceOnly(params: {
   config?: OpenClawConfig;
   sessionAgentId: string;
@@ -1733,6 +1752,10 @@ export async function runEmbeddedAttempt(
     let yieldAbortSettled: Promise<void> | null = null;
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
+    const routeMessageProvider = resolveRouteMessageProvider({
+      messageProvider: params.messageProvider,
+      messageChannel: params.messageChannel,
+    });
     const toolsRaw = params.disableTools
       ? []
       : createOpenClawCodingTools({
@@ -1742,7 +1765,7 @@ export async function runEmbeddedAttempt(
             elevated: params.bashElevated,
           },
           sandbox,
-          messageProvider: params.messageChannel ?? params.messageProvider,
+          messageProvider: routeMessageProvider,
           agentAccountId: params.agentAccountId,
           messageTo: params.messageTo,
           messageThreadId: params.messageThreadId,
@@ -2528,7 +2551,7 @@ export async function runEmbeddedAttempt(
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
         runId: params.runId,
-        messageProvider: params.messageChannel ?? params.messageProvider,
+        messageProvider: routeMessageProvider,
         originatingTo: params.messageTo ?? undefined,
         accountId: params.agentAccountId ?? undefined,
         hookRunner: getGlobalHookRunner() ?? undefined,

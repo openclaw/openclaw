@@ -8,6 +8,7 @@ import {
   composeSystemPromptWithHookContext,
   isOllamaCompatProvider,
   prependSystemPromptAddition,
+  resolveRouteMessageProvider,
   resolveAttemptFsWorkspaceOnly,
   resolveOllamaCompatNumCtxEnabled,
   resolvePromptBuildHookResult,
@@ -217,6 +218,34 @@ describe("resolvePromptModeForSession", () => {
     expect(resolvePromptModeForSession(undefined)).toBe("full");
     expect(resolvePromptModeForSession("agent:main")).toBe("full");
     expect(resolvePromptModeForSession("agent:main:thread:abc")).toBe("full");
+  });
+});
+
+describe("resolveRouteMessageProvider", () => {
+  it("prefers canonical messageProvider when provider is not synthetic", () => {
+    expect(
+      resolveRouteMessageProvider({
+        messageProvider: "bluebubbles",
+        messageChannel: "imessage",
+      }),
+    ).toBe("bluebubbles");
+  });
+
+  it("prefers messageChannel when provider is synthetic", () => {
+    expect(
+      resolveRouteMessageProvider({
+        messageProvider: "heartbeat",
+        messageChannel: "telegram",
+      }),
+    ).toBe("telegram");
+  });
+
+  it("falls back to messageChannel when canonical provider is absent", () => {
+    expect(
+      resolveRouteMessageProvider({
+        messageChannel: "telegram",
+      }),
+    ).toBe("telegram");
   });
 });
 
