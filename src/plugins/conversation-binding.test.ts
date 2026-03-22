@@ -12,7 +12,7 @@ import type { PluginRegistry } from "./registry.js";
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-binding-"));
 const approvalsPath = path.join(tempRoot, "plugin-binding-approvals.json");
 
-function createPluginRegistryStub(): PluginRegistry {
+function createEmptyPluginRegistry(): PluginRegistry {
   return {
     plugins: [],
     tools: [],
@@ -32,7 +32,7 @@ function createPluginRegistryStub(): PluginRegistry {
     commands: [],
     conversationBindingResolvedHandlers: [],
     diagnostics: [],
-  };
+  } as unknown as PluginRegistry;
 }
 const sessionBindingState = vi.hoisted(() => {
   const records = new Map<string, SessionBindingRecord>();
@@ -105,7 +105,7 @@ const sessionBindingState = vi.hoisted(() => {
 });
 
 const pluginRuntimeState = vi.hoisted(() => ({
-  registry: createPluginRegistryStub(),
+  registry: createEmptyPluginRegistry(),
 }));
 
 vi.mock("../infra/home-dir.js", async (importOriginal) => {
