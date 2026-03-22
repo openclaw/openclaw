@@ -121,6 +121,20 @@
       "hasChildren": false
     },
     {
+      "path": "acp.progressForward",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "ACP Progress Forward",
+      "help": "When true (default), ACP sessions forward compact milestone progress updates to the parent session that spawned them. Set false to disable automatic progress forwarding.",
+      "hasChildren": false
+    },
+    {
       "path": "acp.runtime",
       "kind": "core",
       "type": "object",

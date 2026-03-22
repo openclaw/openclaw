@@ -488,6 +488,7 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        progressForward: z.boolean().optional(),
       })
       .strict()
       .optional(),

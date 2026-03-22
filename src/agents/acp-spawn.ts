@@ -26,6 +26,7 @@ import { parseDurationMs } from "../cli/parse-duration.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath, type SessionEntry } from "../config/sessions.js";
+import { parseSessionThreadInfo } from "../config/sessions/delivery-info.js";
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
 import { callGateway } from "../gateway/call.js";
 import { areHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
@@ -200,10 +201,10 @@ function hasSessionLocalHeartbeatRelayRoute(params: {
   cfg: OpenClawConfig;
   parentSessionKey: string;
   requesterAgentId: string;
-}): boolean {
+}): { usable: boolean; parentThreadId?: string | number } {
   const scope = params.cfg.session?.scope ?? "per-sender";
   if (scope === "global") {
-    return false;
+    return { usable: false };
   }
 
   const heartbeat = resolveHeartbeatConfigForAgent({
@@ -211,16 +212,16 @@ function hasSessionLocalHeartbeatRelayRoute(params: {
     agentId: params.requesterAgentId,
   });
   if ((heartbeat?.target ?? "none") !== "last") {
-    return false;
+    return { usable: false };
   }
 
   // Explicit delivery overrides are not session-local and can route updates
   // to unrelated destinations (for example a pinned ops channel).
   if (typeof heartbeat?.to === "string" && heartbeat.to.trim().length > 0) {
-    return false;
+    return { usable: false };
   }
   if (typeof heartbeat?.accountId === "string" && heartbeat.accountId.trim().length > 0) {
-    return false;
+    return { usable: false };
   }
 
   const storePath = resolveStorePath(params.cfg.session?.store, {
@@ -229,7 +230,8 @@ function hasSessionLocalHeartbeatRelayRoute(params: {
   const sessionStore = loadSessionStore(storePath);
   const parentEntry = sessionStore[params.parentSessionKey];
   const parentDeliveryContext = deliveryContextFromSession(parentEntry);
-  return Boolean(parentDeliveryContext?.channel && parentDeliveryContext.to);
+  const usable = Boolean(parentDeliveryContext?.channel && parentDeliveryContext.to);
+  return { usable, parentThreadId: parentDeliveryContext?.threadId };
 }
 
 function resolveTargetAcpAgentId(params: {
@@ -464,38 +466,64 @@ export async function spawnAcpDirect(
           .listBySession(parentSessionKey)
           .some((record) => record.targetKind === "subagent" && record.status !== "ended")
       : false;
+  // Check if the parent session has an active thread/session binding (targetKind === "session").
+  // This catches thread-bound parent sessions even when ctx.agentThreadId is absent in the
+  // call context (e.g., certain HTTP tool invocation paths), preventing implicit progress
+  // forwarding to user-facing threads that should be excluded.
+  const requesterHasThreadBinding = parentSessionKey
+    ? bindingService
+        .listBySession(parentSessionKey)
+        .some((record) => record.targetKind === "session" && record.status !== "ended")
+    : false;
   const requesterHasThreadContext =
     typeof ctx.agentThreadId === "string"
       ? ctx.agentThreadId.trim().length > 0
       : ctx.agentThreadId != null;
+  // Also detect thread/topic markers in the session key itself, which can indicate a
+  // thread-bound parent session even when ctx.agentThreadId is absent (HTTP tool paths)
+  // and there is no binding record. Session keys like "agent:main:...:thread:123" or
+  // "agent:main:...:topic:456" carry first-class thread semantics via parseSessionThreadInfo.
+  const { threadId: requesterSessionKeyThreadId } = parseSessionThreadInfo(parentSessionKey);
+  const requesterSessionKeyHasThreadMarker = requesterSessionKeyThreadId !== undefined;
   const requesterHeartbeatEnabled = isHeartbeatEnabledForSessionAgent({
     cfg,
     sessionKey: parentSessionKey,
   });
   const requesterAgentId = requesterParsedSession?.agentId;
-  const requesterHeartbeatRelayRouteUsable =
+  const requesterHeartbeatRelayRouteResult =
     parentSessionKey && requesterAgentId
       ? hasSessionLocalHeartbeatRelayRoute({
           cfg,
           parentSessionKey,
           requesterAgentId,
         })
-      : false;
+      : { usable: false };
+  const requesterHeartbeatRelayRouteUsable = requesterHeartbeatRelayRouteResult.usable;
+  // Fallback thread detection: if the session key lacks :thread: markers and there's no
+  // binding/context signal, check deliveryContext.threadId (e.g., Discord threads with
+  // useSuffix=false where threadId is stored in the delivery context but not in the key).
+  const requesterHasThreadFromDeliveryContext =
+    requesterHeartbeatRelayRouteResult.parentThreadId != null;
 
   // For mode=run without thread binding, implicitly route output to parent
-  // only for spawned subagent orchestrator sessions with heartbeat enabled
-  // AND a session-local heartbeat delivery route (target=last + usable last route).
+  // when acp.progressForward is not explicitly disabled.
   // Skip requester sessions that are thread-bound (or carrying thread context)
   // so user-facing threads do not receive unsolicited ACP progress chatter
   // unless streamTo="parent" is explicitly requested. Use resolved spawnMode
   // (not params.mode) so default mode selection works.
+  // progressForward defaults to true when not set, so ACP sessions forward
+  // milestone updates to their parent session by default.
+  const progressForwardEnabled = cfg.acp?.progressForward !== false;
   const implicitStreamToParent =
     !streamToParentRequested &&
+    progressForwardEnabled &&
     spawnMode === "run" &&
     !requestThreadBinding &&
-    requesterIsSubagentSession &&
     !requesterHasActiveSubagentBinding &&
+    !requesterHasThreadBinding &&
     !requesterHasThreadContext &&
+    !requesterSessionKeyHasThreadMarker &&
+    !requesterHasThreadFromDeliveryContext &&
     requesterHeartbeatEnabled &&
     requesterHeartbeatRelayRouteUsable;
   const effectiveStreamToParent = streamToParentRequested || implicitStreamToParent;

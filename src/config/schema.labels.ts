@@ -415,6 +415,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "acp.stream.maxOutputChars": "ACP Stream Max Output Chars",
   "acp.stream.maxSessionUpdateChars": "ACP Stream Max Session Update Chars",
   "acp.stream.tagVisibility": "ACP Stream Tag Visibility",
+  "acp.progressForward": "ACP Progress Forward",
   "acp.runtime.ttlMinutes": "ACP Runtime TTL (minutes)",
   "acp.runtime.installCommand": "ACP Runtime Install Command",
   models: "Models",
