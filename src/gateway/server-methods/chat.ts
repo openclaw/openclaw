@@ -1703,6 +1703,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey: string;
       message: string;
       label?: string;
+      idempotencyKey?: string;
     };
 
     // Load session to find transcript file
@@ -1717,6 +1718,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     const appended = appendAssistantTranscriptMessage({
       message: p.message,
       label: p.label,
+      idempotencyKey: p.idempotencyKey,
       sessionId,
       storePath,
       sessionFile: entry?.sessionFile,

@@ -3,6 +3,11 @@ import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  loadSessionStore,
+  resolveAgentMainSessionKey,
+  resolveStorePath,
+} from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import {
@@ -228,6 +233,83 @@ function buildDirectCronDeliveryIdempotencyKey(params: {
   return `cron-direct-delivery:v1:${params.runSessionId}:${params.delivery.channel}:${accountId}:${normalizedTo}:${threadId}`;
 }
 
+function buildCronAwarenessIdempotencyKey(params: {
+  runSessionId: string;
+  sessionKey: string;
+}): string {
+  return `cron-awareness:v1:${params.runSessionId}:${params.sessionKey}`;
+}
+
+function resolveCronAwarenessSessionKey(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey?: string;
+}): string | undefined {
+  const agentId = params.agentId.trim();
+  if (!agentId) {
+    return undefined;
+  }
+  const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+  const store = loadSessionStore(storePath);
+  const requestedSessionKey = params.sessionKey?.trim();
+  const requestedEntry = requestedSessionKey ? store[requestedSessionKey] : undefined;
+  if (
+    requestedSessionKey &&
+    typeof requestedEntry?.sessionId === "string" &&
+    requestedEntry.sessionId.trim()
+  ) {
+    return requestedSessionKey;
+  }
+  const mainSessionKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId });
+  const mainEntry = store[mainSessionKey];
+  if (typeof mainEntry?.sessionId === "string" && mainEntry.sessionId.trim()) {
+    return mainSessionKey;
+  }
+  return undefined;
+}
+
+async function injectCronDeliveryAwareness(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey?: string;
+  message?: string;
+  runSessionId: string;
+  signal?: AbortSignal;
+}): Promise<void> {
+  if (params.signal?.aborted) {
+    return;
+  }
+  const message = params.message?.trim();
+  if (!message) {
+    return;
+  }
+  const awarenessSessionKey = resolveCronAwarenessSessionKey({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+  if (!awarenessSessionKey) {
+    return;
+  }
+  try {
+    await callGateway({
+      method: "chat.inject",
+      params: {
+        sessionKey: awarenessSessionKey,
+        message,
+        label: "Cron delivery",
+        idempotencyKey: buildCronAwarenessIdempotencyKey({
+          runSessionId: params.runSessionId,
+          sessionKey: awarenessSessionKey,
+        }),
+      },
+      timeoutMs: 10_000,
+    });
+  } catch {
+    // Best-effort; the outbound delivery already succeeded.
+  }
+}
+
 export function resetCompletedDirectCronDeliveriesForTests() {
   COMPLETED_DIRECT_CRON_DELIVERIES.clear();
 }
@@ -419,6 +501,14 @@ export async function dispatchCronDelivery(
       delivered = deliveryResults.length > 0;
       if (delivered) {
         rememberCompletedDirectCronDelivery(deliveryIdempotencyKey, deliveryResults);
+        await injectCronDeliveryAwareness({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          sessionKey: params.job.sessionKey,
+          message: outputText?.trim() ? outputText : synthesizedText,
+          runSessionId: params.runSessionId,
+          signal: params.abortSignal,
+        });
       }
       return null;
     } catch (err) {

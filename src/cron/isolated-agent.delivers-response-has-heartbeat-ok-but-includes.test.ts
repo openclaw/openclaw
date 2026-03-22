@@ -248,7 +248,17 @@ describe("runCronIsolatedAgentTurn", () => {
         "HEARTBEAT_OK 🦞",
         expect.objectContaining({ accountId: undefined }),
       );
-      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(callGateway).toHaveBeenCalledTimes(2);
+      expect(callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "chat.inject",
+          params: expect.objectContaining({
+            sessionKey: "agent:main:main",
+            message: "HEARTBEAT_OK 🦞",
+            label: "Cron delivery",
+          }),
+        }),
+      );
       expect(callGateway).toHaveBeenCalledWith(
         expect.objectContaining({
           method: "sessions.delete",
