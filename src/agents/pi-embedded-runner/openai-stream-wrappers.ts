@@ -158,6 +158,10 @@ function shouldStripResponsesPromptCache(model: { api?: unknown; baseUrl?: unkno
   if (typeof model.api !== "string" || !OPENAI_RESPONSES_APIS.has(model.api)) {
     return false;
   }
+  // Cast needed: Model<Api>.compat is OpenAICompletionsCompat | OpenAIResponsesCompat,
+  // which is not structurally assignable to { supportsPromptCache?: boolean } because
+  // OpenAICompletionsCompat has extra properties. Once pi-ai adds supportsPromptCache
+  // to its compat types, this cast can be removed.
   const compat = (model as { compat?: { supportsPromptCache?: boolean } }).compat;
   if (compat?.supportsPromptCache === true) {
     return false;

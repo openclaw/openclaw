@@ -2370,4 +2370,46 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.prompt_cache_key).toBe("session-default");
     expect(payload.prompt_cache_retention).toBe("24h");
   });
+
+  it("keeps prompt cache fields for non-OpenAI proxy with supportsPromptCache compat", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "custom-proxy",
+      applyModelId: "gpt-5.4",
+      model: {
+        api: "openai-responses",
+        provider: "custom-proxy",
+        id: "gpt-5.4",
+        baseUrl: "https://my-proxy.example.com/v1",
+        compat: { supportsPromptCache: true },
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        prompt_cache_key: "session-proxy",
+        prompt_cache_retention: "24h",
+      },
+    });
+    expect(payload.prompt_cache_key).toBe("session-proxy");
+    expect(payload.prompt_cache_retention).toBe("24h");
+  });
+
+  it("strips prompt cache fields for non-OpenAI proxy without supportsPromptCache compat", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "custom-proxy",
+      applyModelId: "gpt-5.4",
+      model: {
+        api: "openai-responses",
+        provider: "custom-proxy",
+        id: "gpt-5.4",
+        baseUrl: "https://my-proxy.example.com/v1",
+        compat: { supportsPromptCache: false },
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        prompt_cache_key: "session-proxy",
+        prompt_cache_retention: "24h",
+      },
+    });
+    expect(payload).not.toHaveProperty("prompt_cache_key");
+    expect(payload).not.toHaveProperty("prompt_cache_retention");
+  });
 });
