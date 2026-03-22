@@ -22,8 +22,14 @@ describe("ensureSandboxWorkspace", () => {
     await fs.writeFile(path.join(authorityDocs, "CODEBASE_MAP.md"), "map\n", "utf-8");
     await fs.writeFile(path.join(authorityRepoDocs, "PLAN.md"), "plan\n", "utf-8");
 
-    await fs.symlink(path.join(authorityRoot, "README.md"), path.join(sourceWorkspace, "README.md"));
-    await fs.symlink(path.join(authorityRoot, "CLAUDE.md"), path.join(sourceWorkspace, "CLAUDE.md"));
+    await fs.symlink(
+      path.join(authorityRoot, "README.md"),
+      path.join(sourceWorkspace, "README.md"),
+    );
+    await fs.symlink(
+      path.join(authorityRoot, "CLAUDE.md"),
+      path.join(sourceWorkspace, "CLAUDE.md"),
+    );
     await fs.symlink(authorityDocs, path.join(sourceWorkspace, "docs"));
     await fs.symlink(authorityRepoDocs, path.join(sourceWorkspace, "voro-docs"));
 
@@ -58,7 +64,11 @@ describe("ensureSandboxWorkspace", () => {
     await fs.writeFile(path.join(sourceWorkspace, "AGENTS.md"), "# Agent\n", "utf-8");
     await fs.writeFile(path.join(sourceWorkspace, "README.md"), "plain file\n", "utf-8");
     await fs.mkdir(path.join(sourceWorkspace, "docs"), { recursive: true });
-    await fs.writeFile(path.join(sourceWorkspace, "docs", "CODEBASE_MAP.md"), "plain dir\n", "utf-8");
+    await fs.writeFile(
+      path.join(sourceWorkspace, "docs", "CODEBASE_MAP.md"),
+      "plain dir\n",
+      "utf-8",
+    );
 
     await ensureSandboxWorkspace(sandboxWorkspace, sourceWorkspace, true);
 
