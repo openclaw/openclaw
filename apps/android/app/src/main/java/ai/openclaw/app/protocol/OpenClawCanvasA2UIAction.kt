@@ -58,19 +58,12 @@ object OpenClawCanvasA2UIAction {
   }
 
   fun jsDispatchA2UIActionStatus(actionId: String, ok: Boolean, error: String?): String {
-    val err = escapeJsString(error ?: "")
+    val err = jsonStringLiteral(error ?: "")
     val okLiteral = if (ok) "true" else "false"
-    val idEscaped = escapeJsString(actionId)
-    return "window.dispatchEvent(new CustomEvent('openclaw:a2ui-action-status', { detail: { id: \"${idEscaped}\", ok: ${okLiteral}, error: \"${err}\" } }));"
+    val idLiteral = jsonStringLiteral(actionId)
+    return "window.dispatchEvent(new CustomEvent('openclaw:a2ui-action-status', { detail: { id: ${idLiteral}, ok: ${okLiteral}, error: ${err} } }));"
   }
 
-  private fun escapeJsString(raw: String): String =
-    raw
-      .replace("\\", "\\\\")
-      .replace("\"", "\\\"")
-      .replace("\n", "\\n")
-      .replace("\r", "\\r")
-      .replace("\t", "\\t")
-      .replace("\u2028", "\\u2028")
-      .replace("\u2029", "\\u2029")
+  private fun jsonStringLiteral(raw: String): String =
+    JsonPrimitive(raw).toString().replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
 }
