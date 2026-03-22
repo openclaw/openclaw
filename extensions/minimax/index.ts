@@ -235,6 +235,7 @@ export default definePluginEntry({
         return apiKey ? { token: apiKey } : null;
       },
       isModernModelRef: ({ modelId }) => isModernMiniMaxModel(modelId),
+      resolveDefaultThinkingLevel: ({ reasoning }) => (reasoning ? "off" : undefined),
       fetchUsageSnapshot: async (ctx) =>
         await fetchMinimaxUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
     });
@@ -280,6 +281,7 @@ export default definePluginEntry({
         },
       ],
       isModernModelRef: ({ modelId }) => isModernMiniMaxModel(modelId),
+      resolveDefaultThinkingLevel: ({ reasoning }) => (reasoning ? "off" : undefined),
     });
     api.registerMediaUnderstandingProvider(minimaxMediaUnderstandingProvider);
     api.registerMediaUnderstandingProvider(minimaxPortalMediaUnderstandingProvider);

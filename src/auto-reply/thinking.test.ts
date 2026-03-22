@@ -180,6 +180,37 @@ describe("resolveThinkingDefaultForModel", () => {
     ).toBe("low");
   });
 
+  it("returns off for zai reasoning-capable models via provider hook", () => {
+    providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockImplementation(
+      ({ provider, context }) => (provider === "zai" && context.reasoning ? "off" : undefined),
+    );
+
+    expect(
+      resolveThinkingDefaultForModel({
+        provider: "zai",
+        model: "glm-5",
+        catalog: [{ provider: "zai", id: "glm-5", reasoning: true }],
+      }),
+    ).toBe("off");
+  });
+
+  it("returns off for minimax-portal reasoning-capable models via provider hook", () => {
+    providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockImplementation(
+      ({ provider, context }) =>
+        (provider === "minimax" || provider === "minimax-portal") && context.reasoning
+          ? "off"
+          : undefined,
+    );
+
+    expect(
+      resolveThinkingDefaultForModel({
+        provider: "minimax-portal",
+        model: "MiniMax-M2.5-highspeed",
+        catalog: [{ provider: "minimax-portal", id: "MiniMax-M2.5-highspeed", reasoning: true }],
+      }),
+    ).toBe("off");
+  });
+
   it("defaults to off when no adaptive or reasoning hint is present", () => {
     expect(
       resolveThinkingDefaultForModel({

@@ -284,6 +284,7 @@ export default definePluginEntry({
       wrapStreamFn: (ctx) =>
         createZaiToolStreamWrapper(ctx.streamFn, ctx.extraParams?.tool_stream !== false),
       isBinaryThinking: () => true,
+      resolveDefaultThinkingLevel: ({ reasoning }) => (reasoning ? "off" : undefined),
       isModernModelRef: ({ modelId }) => {
         const lower = modelId.trim().toLowerCase();
         return (
