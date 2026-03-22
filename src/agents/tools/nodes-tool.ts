@@ -310,7 +310,6 @@ export function createNodesTool(options?: {
                 expectedHost: resolvedNode.remoteIp,
                 invalidPayloadMessage: "invalid camera.snap payload",
               });
-              content.push({ type: "text", text: `MEDIA:${filePath}` });
               if (options?.modelHasVision && payload.base64) {
                 content.push({
                   type: "image",
