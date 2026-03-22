@@ -59,6 +59,38 @@ type OpenResponsesHttpOptions = {
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
 const DEFAULT_MAX_URL_PARTS = 8;
 
+// In-memory map from responseId -> sessionKey for previous_response_id continuity.
+// Entries are evicted after 30 minutes to bound memory usage.
+const RESPONSE_SESSION_TTL_MS = 30 * 60 * 1000;
+const responseSessionMap = new Map<string, { sessionKey: string; ts: number }>();
+
+function storeResponseSession(responseId: string, sessionKey: string) {
+  responseSessionMap.set(responseId, { sessionKey, ts: Date.now() });
+  if (responseSessionMap.size > 500) {
+    const now = Date.now();
+    for (const [key, value] of responseSessionMap) {
+      if (now - value.ts > RESPONSE_SESSION_TTL_MS) {
+        responseSessionMap.delete(key);
+      }
+    }
+  }
+}
+
+function lookupResponseSession(responseId: string | undefined): string | undefined {
+  if (!responseId) {
+    return undefined;
+  }
+  const entry = responseSessionMap.get(responseId);
+  if (!entry) {
+    return undefined;
+  }
+  if (Date.now() - entry.ts > RESPONSE_SESSION_TTL_MS) {
+    responseSessionMap.delete(responseId);
+    return undefined;
+  }
+  return entry.sessionKey;
+}
+
 function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
   res.write(`event: ${event.type}\n`);
   res.write(`data: ${JSON.stringify(event)}\n\n`);
@@ -228,6 +260,23 @@ function createAssistantOutputItem(params: {
     id: params.id,
     role: "assistant",
     content: [{ type: "output_text", text: params.text }],
+    status: params.status,
+  };
+}
+
+function createFunctionCallOutputItem(params: {
+  id: string;
+  callId: string;
+  name: string;
+  arguments: string;
+  status?: "in_progress" | "completed";
+}): OutputItem {
+  return {
+    type: "function_call",
+    id: params.id,
+    call_id: params.callId,
+    name: params.name,
+    arguments: params.arguments,
     status: params.status,
   };
 }
@@ -437,7 +486,10 @@ export async function handleOpenResponsesHttpRequest(
     });
     return true;
   }
-  const { sessionKey, messageChannel } = resolveGatewayRequestContext({
+  // Resolve session key: prefer previous_response_id lookup for tool-loop continuity,
+  // then fall back to standard header / user-based resolution.
+  const previousSessionKey = lookupResponseSession(payload.previous_response_id);
+  const resolved = resolveGatewayRequestContext({
     req,
     model,
     user,
@@ -445,6 +497,8 @@ export async function handleOpenResponsesHttpRequest(
     defaultMessageChannel: "webchat",
     useMessageChannelHeader: false,
   });
+  const sessionKey = previousSessionKey ?? resolved.sessionKey;
+  const messageChannel = resolved.messageChannel;
 
   // Build prompt from input
   const prompt = buildAgentPrompt(payload.input);
@@ -473,6 +527,9 @@ export async function handleOpenResponsesHttpRequest(
   }
 
   const responseId = `resp_${randomUUID()}`;
+  // Store responseId -> sessionKey so continuation turns via previous_response_id
+  // can resolve back to the same agent session.
+  storeResponseSession(responseId, sessionKey);
   const outputItemId = `msg_${randomUUID()}`;
   const deps = createDefaultDeps();
   const streamParams =
@@ -499,23 +556,43 @@ export async function handleOpenResponsesHttpRequest(
       const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
-      // If agent called a client tool, return function_call instead of text
+      // If agent called a client tool, return function_call (and any assistant text) to caller
       if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
         const functionCall = pendingToolCalls[0];
         const functionCallItemId = `call_${randomUUID()}`;
+
+        const assistantText =
+          Array.isArray(payloads) && payloads.length > 0
+            ? payloads
+                .map((p) => (typeof p.text === "string" ? p.text : ""))
+                .filter(Boolean)
+                .join("\n\n")
+            : "";
+
+        const output: OutputItem[] = [];
+        if (assistantText) {
+          output.push(
+            createAssistantOutputItem({
+              id: outputItemId,
+              text: assistantText,
+              status: "completed",
+            }),
+          );
+        }
+        output.push(
+          createFunctionCallOutputItem({
+            id: functionCallItemId,
+            callId: functionCall.id,
+            name: functionCall.name,
+            arguments: functionCall.arguments,
+          }),
+        );
+
         const response = createResponseResource({
           id: responseId,
           model,
           status: "incomplete",
-          output: [
-            {
-              type: "function_call",
-              id: functionCallItemId,
-              call_id: functionCall.id,
-              name: functionCall.name,
-              arguments: functionCall.arguments,
-            },
-          ],
+          output,
           usage,
         });
         sendJson(res, 200, response);
@@ -722,84 +799,105 @@ export async function handleOpenResponsesHttpRequest(
       });
 
       finalUsage = extractUsageFromResult(result);
+
+      // Check for pending client tool calls BEFORE maybeFinalize() because the
+      // lifecycle:end event may already have requested finalization.
+      const resultAny = result as { payloads?: Array<{ text?: string }>; meta?: unknown };
+      const meta = resultAny.meta;
+      const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
+
+      if (
+        !closed &&
+        stopReason === "tool_calls" &&
+        pendingToolCalls &&
+        pendingToolCalls.length > 0
+      ) {
+        const functionCall = pendingToolCalls[0];
+        const usage = finalUsage ?? createEmptyUsage();
+        const finalText =
+          accumulatedText ||
+          (Array.isArray(resultAny.payloads)
+            ? resultAny.payloads
+                .map((p) => (typeof p.text === "string" ? p.text : ""))
+                .filter(Boolean)
+                .join("\n\n")
+            : "");
+
+        writeSseEvent(res, {
+          type: "response.output_text.done",
+          item_id: outputItemId,
+          output_index: 0,
+          content_index: 0,
+          text: finalText,
+        });
+        writeSseEvent(res, {
+          type: "response.content_part.done",
+          item_id: outputItemId,
+          output_index: 0,
+          content_index: 0,
+          part: { type: "output_text", text: finalText },
+        });
+
+        const completedItem = createAssistantOutputItem({
+          id: outputItemId,
+          text: finalText,
+          status: "completed",
+        });
+        writeSseEvent(res, {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: completedItem,
+        });
+
+        const functionCallItemId = `call_${randomUUID()}`;
+        const functionCallItem = createFunctionCallOutputItem({
+          id: functionCallItemId,
+          callId: functionCall.id,
+          name: functionCall.name,
+          arguments: functionCall.arguments,
+        });
+        writeSseEvent(res, {
+          type: "response.output_item.added",
+          output_index: 1,
+          item: functionCallItem,
+        });
+        const completedFunctionCallItem = createFunctionCallOutputItem({
+          id: functionCallItemId,
+          callId: functionCall.id,
+          name: functionCall.name,
+          arguments: functionCall.arguments,
+          status: "completed",
+        });
+        writeSseEvent(res, {
+          type: "response.output_item.done",
+          output_index: 1,
+          item: completedFunctionCallItem,
+        });
+
+        const incompleteResponse = createResponseResource({
+          id: responseId,
+          model,
+          status: "incomplete",
+          output: [completedItem, functionCallItem],
+          usage,
+        });
+        closed = true;
+        unsubscribe();
+        writeSseEvent(res, { type: "response.completed", response: incompleteResponse });
+        writeDone(res);
+        res.end();
+        return;
+      }
+
       maybeFinalize();
 
       if (closed) {
         return;
       }
 
-      // Fallback: if no streaming deltas were received, send the full response
+      // Fallback: if no streaming deltas were received, send the full response as text
       if (!sawAssistantDelta) {
-        const resultAny = result as { payloads?: Array<{ text?: string }>; meta?: unknown };
         const payloads = resultAny.payloads;
-        const meta = resultAny.meta;
-        const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
-
-        // If agent called a client tool, emit function_call instead of text
-        if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
-          const functionCall = pendingToolCalls[0];
-          const usage = finalUsage ?? createEmptyUsage();
-
-          writeSseEvent(res, {
-            type: "response.output_text.done",
-            item_id: outputItemId,
-            output_index: 0,
-            content_index: 0,
-            text: "",
-          });
-          writeSseEvent(res, {
-            type: "response.content_part.done",
-            item_id: outputItemId,
-            output_index: 0,
-            content_index: 0,
-            part: { type: "output_text", text: "" },
-          });
-
-          const completedItem = createAssistantOutputItem({
-            id: outputItemId,
-            text: "",
-            status: "completed",
-          });
-          writeSseEvent(res, {
-            type: "response.output_item.done",
-            output_index: 0,
-            item: completedItem,
-          });
-
-          const functionCallItemId = `call_${randomUUID()}`;
-          const functionCallItem = {
-            type: "function_call" as const,
-            id: functionCallItemId,
-            call_id: functionCall.id,
-            name: functionCall.name,
-            arguments: functionCall.arguments,
-          };
-          writeSseEvent(res, {
-            type: "response.output_item.added",
-            output_index: 1,
-            item: functionCallItem,
-          });
-          writeSseEvent(res, {
-            type: "response.output_item.done",
-            output_index: 1,
-            item: { ...functionCallItem, status: "completed" as const },
-          });
-
-          const incompleteResponse = createResponseResource({
-            id: responseId,
-            model,
-            status: "incomplete",
-            output: [completedItem, functionCallItem],
-            usage,
-          });
-          closed = true;
-          unsubscribe();
-          writeSseEvent(res, { type: "response.completed", response: incompleteResponse });
-          writeDone(res);
-          res.end();
-          return;
-        }
-
         const content =
           Array.isArray(payloads) && payloads.length > 0
             ? payloads

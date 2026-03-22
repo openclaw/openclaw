@@ -618,6 +618,145 @@ describe("OpenResponses HTTP API (e2e)", () => {
     }
   });
 
+  it("preserves assistant text alongside non-stream function_call output", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "Let me check that." }],
+      meta: {
+        stopReason: "tool_calls",
+        pendingToolCalls: [
+          {
+            id: "call_1",
+            name: "get_weather",
+            arguments: '{"city":"Taipei"}',
+          },
+        ],
+      },
+    } as never);
+
+    const res = await postResponses(port, {
+      stream: false,
+      model: "openclaw",
+      input: "check the weather",
+      tools: WEATHER_TOOL,
+    });
+
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      status?: string;
+      output?: Array<Record<string, unknown>>;
+    };
+    expect(json.status).toBe("incomplete");
+    expect(json.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
+    expect(
+      ((json.output?.[0]?.content as Array<Record<string, unknown>> | undefined)?.[0]?.text as
+        | string
+        | undefined) ?? "",
+    ).toBe("Let me check that.");
+    expect(json.output?.[1]?.name).toBe("get_weather");
+    await ensureResponseConsumed(res);
+  });
+
+  it("falls back to payload text for streamed function_call responses", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "Let me check that." }],
+      meta: {
+        stopReason: "tool_calls",
+        pendingToolCalls: [
+          {
+            id: "call_1",
+            name: "get_weather",
+            arguments: '{"city":"Taipei"}',
+          },
+        ],
+      },
+    } as never);
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "check the weather",
+      tools: WEATHER_TOOL,
+    });
+
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    const events = parseSseEvents(text);
+    const outputTextDone = events.find((event) => event.event === "response.output_text.done");
+    expect(outputTextDone).toBeTruthy();
+    expect((JSON.parse(outputTextDone?.data ?? "{}") as { text?: string }).text).toBe(
+      "Let me check that.",
+    );
+
+    const completed = events.find((event) => event.event === "response.completed");
+    expect(completed).toBeTruthy();
+    const response = (
+      JSON.parse(completed?.data ?? "{}") as {
+        response?: { status?: string; output?: Array<Record<string, unknown>> };
+      }
+    ).response;
+    expect(response?.status).toBe("incomplete");
+    expect(response?.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
+    expect(
+      (((response?.output?.[0]?.content as Array<Record<string, unknown>> | undefined) ?? [])[0]
+        ?.text as string | undefined) ?? "",
+    ).toBe("Let me check that.");
+    expect(response?.output?.[1]?.name).toBe("get_weather");
+    expect(events.some((event) => event.data === "[DONE]")).toBe(true);
+  });
+
+  it("reuses the prior session when previous_response_id is provided", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "Let me check that." }],
+      meta: {
+        stopReason: "tool_calls",
+        pendingToolCalls: [
+          {
+            id: "call_1",
+            name: "get_weather",
+            arguments: '{"city":"Taipei"}',
+          },
+        ],
+      },
+    } as never);
+
+    const firstResponse = await postResponses(port, {
+      stream: false,
+      model: "openclaw",
+      input: "check the weather",
+      tools: WEATHER_TOOL,
+    });
+    expect(firstResponse.status).toBe(200);
+    const firstJson = (await firstResponse.json()) as { id?: string };
+    const firstOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+      | { sessionKey?: string }
+      | undefined;
+    expect(firstJson.id).toMatch(/^resp_/);
+    expect(firstOpts?.sessionKey).toBeTruthy();
+
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "It is sunny." }],
+    } as never);
+
+    const secondResponse = await postResponses(port, {
+      stream: false,
+      model: "openclaw",
+      previous_response_id: firstJson.id,
+      input: [{ type: "function_call_output", call_id: "call_1", output: "Sunny, 70F." }],
+    });
+    expect(secondResponse.status).toBe(200);
+    const secondOpts = (agentCommand.mock.calls[1] as unknown[] | undefined)?.[0] as
+      | { sessionKey?: string }
+      | undefined;
+    expect(secondOpts?.sessionKey).toBe(firstOpts?.sessionKey);
+    await ensureResponseConsumed(secondResponse);
+  });
+
   it("blocks unsafe URL-based file/image inputs", async () => {
     const port = enabledPort;
     agentCommand.mockClear();
