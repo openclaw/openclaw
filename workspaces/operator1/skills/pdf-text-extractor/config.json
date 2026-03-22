@@ -1,0 +1,17 @@
+{
+  "ocr": {
+    "enabled": true,
+    "defaultLanguage": "eng",
+    "quality": "medium",
+    "languages": ["eng", "spa", "fra", "deu", "ita", "por", "rus", "chi_sim", "jpn", "kor"]
+  },
+  "output": {
+    "defaultFormat": "text",
+    "preserveFormatting": true,
+    "includeMetadata": true
+  },
+  "batch": {
+    "maxConcurrent": 3,
+    "timeoutSeconds": 30
+  }
+}

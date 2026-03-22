@@ -1,0 +1,37 @@
+{
+  "lastRun": "2026-03-22",
+  "worldNews": {
+    "headlines": [
+      "Iran missile hits Dimona, Israel - 33 injured including child",
+      "20+ nations commit to securing Strait of Hormuz after Iran closure",
+      "Trump issues 48-hour ultimatum to Iran on Hormuz",
+      "EU summit tensions - Hungary's Orbán threatens anti-Ukraine measures",
+      "Chuck Norris dies at 86",
+      "Sudan army recaptures presidential palace in Khartoum after 2 years of civil war",
+      "Israel launches full-scale ground invasion in Rafah, 200+ Palestinian children killed",
+      "Trump calls NATO allies cowards for not securing Strait of Hormuz",
+      "U.S. deploying 2,200 Marines to Middle East as conflict continues",
+      "U.S.-Israel-Iran conflict: 787 deaths reported from bombings across 153 cities",
+      "Iran's South Pars gas field bombed, oil prices surge to $118/barrel",
+      "Iran retaliates with missile barrage on Qatar LNG terminal, Nasrallah missiles at Israeli/U.S. sites",
+      "Pentagon seeks $200B for war effort, red alerts across Israel",
+      "Global energy fallout: fuel rationing in Asia, U.S. gasoline at 2023 highs"
+    ]
+  },
+  "frontierAI": {
+    "models": [
+      "GPT-5.3 Garlic",
+      "Mercury 2",
+      "Step-3.5-Flash",
+      "Claude Opus 4.6",
+      "Claude Sonnet 4.6",
+      "GPT-5.4",
+      "GPT-5.3 Codex",
+      "Gemini 3.1 Pro",
+      "Grok 4.20"
+    ]
+  },
+  "chineseAI": {
+    "models": ["Qwen 3.5", "Doubao 2.0", "Kimi K2.5", "MiMo-V2-Pro", "GLM-5", "GLM-4.7-Flash"]
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "name": "pdf-text-extractor",
+  "version": "1.0.0",
+  "description": "Extract text from PDFs with OCR support. Zero dependencies.",
+  "keywords": [
+    "digitization",
+    "document",
+    "extraction",
+    "ocr",
+    "pdf",
+    "text"
+  ],
+  "license": "MIT",
+  "author": "Vernox",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vernox/skills"
+  },
+  "main": "index.js",
+  "scripts": {
+    "test": "node test.js"
+  },
+  "dependencies": {
+    "pdfjs-dist": "^3.11.174"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

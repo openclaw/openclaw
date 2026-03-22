@@ -1,0 +1,10 @@
+commit	score	delegation	memory	conciseness	silent_reply	error_rate	neo_exec	morpheus_exec	trinity_exec	status	description
+baseline	0.759	0.224	0.960	1.000	1.000	1.000	-	-	-	baseline	corrected baseline (removed cron false-positives from memory metric)
+99867af	0.759	0.224	0.960	1.000	1.000	1.000	-	-	-	keep	expand routing table: email/research keywords + delegation rule
+87c3710	0.759	0.224	0.960	1.000	1.000	1.000	-	-	-	keep	strengthen brevity: no markdown headers/bullets in short chat replies
+f5dba54	0.759	0.224	0.960	1.000	1.000	1.000	-	-	-	keep	heartbeat: delegate email/research to Neo/Trinity, not direct tool use
+0bb869a	0.778	0.261	1.000	1.000	1.000	1.000	-	-	-	keep	routing protocol step 4: delegate to Neo when tools needed (scored on fresh human session only)
+235c5b1	0.900	0.667	1.000	1.000	1.000	1.000	0.917	-	-	keep	prohibit exec+mcporter/curl for external data — spawn Neo instead
+d22211e	0.647	0.211	0.421	1.000	1.000	1.000	0.000	1.000	1.000	discard	cron tasks must delegate email/web/finance — HEARTBEAT.md addition did not improve delegation (reverted)
+e4d2f7f	0.656	0.259	0.392	1.000	1.000	1.000	1.000	1.000	1.000	discard	heartbeat must NEVER call mcp_search/web_fetch/exec — only spawn/message agents (reverted, regression)
+23f29d5	pending	-	-	-	-	-	-	-	-	pending	no-fallback rule: tell user to wait instead of using exec when subagent is slow

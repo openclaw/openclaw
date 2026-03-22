@@ -146,3 +146,13 @@ docs/superpowers/specs/2026-03-10-collapsed-side-nav-design.md
 test/config-form.analyze.telegram.test.ts
 ui/src/ui/theme-variants.browser.test.ts
 ui/src/ui/__screenshots__/
+
+# Workspace binary files (images, PDFs, videos)
+workspaces/**/*.png
+workspaces/**/*.jpg
+workspaces/**/*.jpeg
+workspaces/**/*.pdf
+workspaces/**/*.mp4
+workspaces/**/*.bak
+workspaces/**/video-analysis/
+workspaces/**/.git/

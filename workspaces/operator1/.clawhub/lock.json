@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "skills": {
+    "nano-pdf": {
+      "version": "1.0.0",
+      "installedAt": 1772761715454
+    },
+    "pdf-text-extractor": {
+      "version": "1.0.0",
+      "installedAt": 1772761717297
+    }
+  }
+}
