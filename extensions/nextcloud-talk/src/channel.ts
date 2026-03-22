@@ -1,3 +1,4 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,
@@ -132,14 +133,15 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
   config: {
     ...nextcloudTalkConfigAdapter,
     isConfigured: (account) => Boolean(account.secret?.trim() && account.baseUrl?.trim()),
-    describeAccount: (account) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: Boolean(account.secret?.trim() && account.baseUrl?.trim()),
-      secretSource: account.secretSource,
-      baseUrl: account.baseUrl ? "[set]" : "[missing]",
-    }),
+    describeAccount: (account) =>
+      describeAccountSnapshot({
+        account,
+        configured: Boolean(account.secret?.trim() && account.baseUrl?.trim()),
+        extra: {
+          secretSource: account.secretSource,
+          baseUrl: account.baseUrl ? "[set]" : "[missing]",
+        },
+      }),
   },
   security: {
     resolveDmPolicy: resolveNextcloudTalkDmPolicy,
@@ -219,22 +221,20 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
     },
     buildAccountSnapshot: ({ account, runtime }) => {
       const configured = Boolean(account.secret?.trim() && account.baseUrl?.trim());
-      const runtimeSnapshot = buildRuntimeAccountStatusSnapshot({ runtime });
-      return {
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured,
-        secretSource: account.secretSource,
-        baseUrl: account.baseUrl ? "[set]" : "[missing]",
-        running: runtimeSnapshot.running,
-        lastStartAt: runtimeSnapshot.lastStartAt,
-        lastStopAt: runtimeSnapshot.lastStopAt,
-        lastError: runtimeSnapshot.lastError,
-        mode: "webhook",
-        lastInboundAt: runtime?.lastInboundAt ?? null,
-        lastOutboundAt: runtime?.lastOutboundAt ?? null,
-      };
+      return buildRuntimeAccountStatusSnapshot(
+        { runtime },
+        {
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured,
+          secretSource: account.secretSource,
+          baseUrl: account.baseUrl ? "[set]" : "[missing]",
+          mode: "webhook",
+          lastInboundAt: runtime?.lastInboundAt ?? null,
+          lastOutboundAt: runtime?.lastOutboundAt ?? null,
+        },
+      );
     },
   },
   gateway: {

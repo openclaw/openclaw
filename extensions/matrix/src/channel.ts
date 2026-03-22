@@ -1,3 +1,4 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
@@ -40,6 +41,7 @@ import {
   resolveMatrixTargetIdentity,
 } from "./matrix/target-ids.js";
 import {
+  buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
   buildProbeChannelStatusSummary,
   collectStatusIssuesFromLastError,
@@ -216,13 +218,14 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
   config: {
     ...matrixConfigAdapter,
     isConfigured: (account) => account.configured,
-    describeAccount: (account) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
-      baseUrl: account.homeserver,
-    }),
+    describeAccount: (account) =>
+      describeAccountSnapshot({
+        account,
+        configured: account.configured,
+        extra: {
+          baseUrl: account.homeserver,
+        },
+      }),
   },
   security: {
     resolveDmPolicy: resolveMatrixDmPolicy,
@@ -410,20 +413,22 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
         };
       }
     },
-    buildAccountSnapshot: ({ account, runtime, probe }) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
-      baseUrl: account.homeserver,
-      running: runtime?.running ?? false,
-      lastStartAt: runtime?.lastStartAt ?? null,
-      lastStopAt: runtime?.lastStopAt ?? null,
-      lastError: runtime?.lastError ?? null,
-      probe,
-      lastProbeAt: runtime?.lastProbeAt ?? null,
-      ...buildTrafficStatusSummary(runtime),
-    }),
+    buildAccountSnapshot: ({ account, runtime, probe }) =>
+      buildComputedAccountStatusSnapshot(
+        {
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured: account.configured,
+          runtime,
+          probe,
+        },
+        {
+          baseUrl: account.homeserver,
+          lastProbeAt: runtime?.lastProbeAt ?? null,
+          ...buildTrafficStatusSummary(runtime),
+        },
+      ),
   },
   gateway: {
     startAccount: async (ctx) => {

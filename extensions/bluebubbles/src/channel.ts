@@ -1,3 +1,4 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,
@@ -132,13 +133,14 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
   config: {
     ...bluebubblesConfigAdapter,
     isConfigured: (account) => account.configured,
-    describeAccount: (account): ChannelAccountSnapshot => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
-      baseUrl: account.baseUrl,
-    }),
+    describeAccount: (account): ChannelAccountSnapshot =>
+      describeAccountSnapshot({
+        account,
+        configured: account.configured,
+        extra: {
+          baseUrl: account.baseUrl,
+        },
+      }),
   },
   actions: bluebubblesMessageActions,
   security: {
@@ -323,19 +325,20 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
     buildAccountSnapshot: ({ account, runtime, probe }) => {
       const running = runtime?.running ?? false;
       const probeOk = (probe as BlueBubblesProbe | undefined)?.ok;
-      const base = buildComputedAccountStatusSnapshot({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: account.configured,
-        runtime,
-        probe,
-      });
-      return {
-        ...base,
-        baseUrl: account.baseUrl,
-        connected: probeOk ?? running,
-      };
+      return buildComputedAccountStatusSnapshot(
+        {
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured: account.configured,
+          runtime,
+          probe,
+        },
+        {
+          baseUrl: account.baseUrl,
+          connected: probeOk ?? running,
+        },
+      );
     },
   },
   gateway: {

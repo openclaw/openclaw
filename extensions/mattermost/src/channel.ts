@@ -1,3 +1,4 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import { createMessageToolButtonsSchema } from "openclaw/plugin-sdk/channel-actions";
 import {
@@ -328,14 +329,15 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   config: {
     ...mattermostConfigAdapter,
     isConfigured: (account) => Boolean(account.botToken && account.baseUrl),
-    describeAccount: (account) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: Boolean(account.botToken && account.baseUrl),
-      botTokenSource: account.botTokenSource,
-      baseUrl: account.baseUrl,
-    }),
+    describeAccount: (account) =>
+      describeAccountSnapshot({
+        account,
+        configured: Boolean(account.botToken && account.baseUrl),
+        extra: {
+          botTokenSource: account.botTokenSource,
+          baseUrl: account.baseUrl,
+        },
+      }),
   },
   security: {
     resolveDmPolicy: resolveMattermostDmPolicy,
@@ -443,24 +445,24 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
       }
       return await probeMattermost(baseUrl, token, timeoutMs);
     },
-    buildAccountSnapshot: ({ account, runtime, probe }) => {
-      const base = buildComputedAccountStatusSnapshot({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: Boolean(account.botToken && account.baseUrl),
-        runtime,
-        probe,
-      });
-      return {
-        ...base,
-        botTokenSource: account.botTokenSource,
-        baseUrl: account.baseUrl,
-        connected: runtime?.connected ?? false,
-        lastConnectedAt: runtime?.lastConnectedAt ?? null,
-        lastDisconnect: runtime?.lastDisconnect ?? null,
-      };
-    },
+    buildAccountSnapshot: ({ account, runtime, probe }) =>
+      buildComputedAccountStatusSnapshot(
+        {
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured: Boolean(account.botToken && account.baseUrl),
+          runtime,
+          probe,
+        },
+        {
+          botTokenSource: account.botTokenSource,
+          baseUrl: account.baseUrl,
+          connected: runtime?.connected ?? false,
+          lastConnectedAt: runtime?.lastConnectedAt ?? null,
+          lastDisconnect: runtime?.lastDisconnect ?? null,
+        },
+      ),
   },
   gateway: {
     startAccount: async (ctx) => {

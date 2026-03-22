@@ -1,3 +1,4 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,
@@ -146,13 +147,14 @@ export const googlechatPlugin = createChatChannelPlugin({
     config: {
       ...googleChatConfigAdapter,
       isConfigured: (account) => account.credentialSource !== "none",
-      describeAccount: (account) => ({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: account.credentialSource !== "none",
-        credentialSource: account.credentialSource,
-      }),
+      describeAccount: (account) =>
+        describeAccountSnapshot({
+          account,
+          configured: account.credentialSource !== "none",
+          extra: {
+            credentialSource: account.credentialSource,
+          },
+        }),
     },
     groups: {
       resolveRequireMention: resolveGoogleChatGroupRequireMention,
@@ -252,25 +254,25 @@ export const googlechatPlugin = createChatChannelPlugin({
         }),
       probeAccount: async ({ account }) =>
         (await loadGoogleChatChannelRuntime()).probeGoogleChat(account),
-      buildAccountSnapshot: ({ account, runtime, probe }) => {
-        const base = buildComputedAccountStatusSnapshot({
-          accountId: account.accountId,
-          name: account.name,
-          enabled: account.enabled,
-          configured: account.credentialSource !== "none",
-          runtime,
-          probe,
-        });
-        return {
-          ...base,
-          credentialSource: account.credentialSource,
-          audienceType: account.config.audienceType,
-          audience: account.config.audience,
-          webhookPath: account.config.webhookPath,
-          webhookUrl: account.config.webhookUrl,
-          dmPolicy: account.config.dm?.policy ?? "pairing",
-        };
-      },
+      buildAccountSnapshot: ({ account, runtime, probe }) =>
+        buildComputedAccountStatusSnapshot(
+          {
+            accountId: account.accountId,
+            name: account.name,
+            enabled: account.enabled,
+            configured: account.credentialSource !== "none",
+            runtime,
+            probe,
+          },
+          {
+            credentialSource: account.credentialSource,
+            audienceType: account.config.audienceType,
+            audience: account.config.audience,
+            webhookPath: account.config.webhookPath,
+            webhookUrl: account.config.webhookUrl,
+            dmPolicy: account.config.dm?.policy ?? "pairing",
+          },
+        ),
     },
     gateway: {
       startAccount: async (ctx) => {

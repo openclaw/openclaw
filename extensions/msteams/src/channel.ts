@@ -1,3 +1,4 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { createMessageToolCardSchema } from "openclaw/plugin-sdk/channel-actions";
 import { createTopLevelChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
@@ -183,11 +184,11 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
   config: {
     ...msteamsConfigAdapter,
     isConfigured: (_account, cfg) => Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams)),
-    describeAccount: (account) => ({
-      accountId: account.accountId,
-      enabled: account.enabled,
-      configured: account.configured,
-    }),
+    describeAccount: (account) =>
+      describeAccountSnapshot({
+        account,
+        configured: account.configured,
+      }),
   },
   security: {
     collectWarnings: projectWarningCollector(
@@ -489,13 +490,16 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
       }
       return lines;
     },
-    buildAccountSnapshot: ({ account, runtime, probe }) => ({
-      accountId: account.accountId,
-      enabled: account.enabled,
-      configured: account.configured,
-      ...buildRuntimeAccountStatusSnapshot({ runtime, probe }),
-      port: runtime?.port ?? null,
-    }),
+    buildAccountSnapshot: ({ account, runtime, probe }) =>
+      buildRuntimeAccountStatusSnapshot(
+        { runtime, probe },
+        {
+          accountId: account.accountId,
+          enabled: account.enabled,
+          configured: account.configured,
+          port: runtime?.port ?? null,
+        },
+      ),
   },
   gateway: {
     startAccount: async (ctx) => {
