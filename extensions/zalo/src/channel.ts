@@ -1,3 +1,4 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
@@ -139,13 +140,14 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
   config: {
     ...zaloConfigAdapter,
     isConfigured: (account) => Boolean(account.token?.trim()),
-    describeAccount: (account): ChannelAccountSnapshot => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: Boolean(account.token?.trim()),
-      tokenSource: account.tokenSource,
-    }),
+    describeAccount: (account): ChannelAccountSnapshot =>
+      describeAccountSnapshot({
+        account,
+        configured: Boolean(account.token?.trim()),
+        extra: {
+          tokenSource: account.tokenSource,
+        },
+      }),
   },
   security: {
     resolveDmPolicy: resolveZaloDmPolicy,

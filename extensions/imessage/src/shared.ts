@@ -1,3 +1,4 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
@@ -91,12 +92,11 @@ export function createIMessagePluginBase(params: {
     config: {
       ...imessageConfigAdapter,
       isConfigured: (account) => account.configured,
-      describeAccount: (account) => ({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: account.configured,
-      }),
+      describeAccount: (account) =>
+        describeAccountSnapshot({
+          account,
+          configured: account.configured,
+        }),
     },
     security: {
       resolveDmPolicy: imessageResolveDmPolicy,
