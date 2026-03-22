@@ -3,6 +3,14 @@
   "version": "2026.3.14",
   "description": "OpenClaw BlueBubbles channel plugin",
   "type": "module",
+  "peerDependencies": {
+    "openclaw": ">=2026.3.14"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
   "dependencies": {
     "zod": "^4.3.6"
   },

@@ -3,6 +3,14 @@
   "version": "2026.3.14",
   "description": "OpenClaw Feishu/Lark channel plugin (community maintained by @m1heng)",
   "type": "module",
+  "peerDependencies": {
+    "openclaw": ">=2026.3.14"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.59.0",
     "@sinclair/typebox": "0.34.48",

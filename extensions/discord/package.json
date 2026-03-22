@@ -3,6 +3,14 @@
   "version": "2026.3.14",
   "description": "OpenClaw Discord channel plugin",
   "type": "module",
+  "peerDependencies": {
+    "openclaw": ">=2026.3.14"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
   "dependencies": {
     "@buape/carbon": "0.0.0-beta-20260317045421",
     "@discordjs/voice": "^0.19.2",

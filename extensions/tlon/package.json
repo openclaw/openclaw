@@ -3,6 +3,14 @@
   "version": "2026.3.14",
   "description": "OpenClaw Tlon/Urbit channel plugin",
   "type": "module",
+  "peerDependencies": {
+    "openclaw": ">=2026.3.14"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1000.0",
     "@aws-sdk/s3-request-presigner": "3.1000.0",
