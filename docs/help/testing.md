@@ -71,12 +71,11 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
     sufficient substitute for those integration paths.
 - Pool note:
   - Base Vitest config still defaults to `forks`.
-  - Unit wrapper lanes default to `threads`, with explicit manifest fork/vmFork exceptions.
+  - Unit wrapper lanes default to `threads`, with explicit manifest fork-only exceptions.
   - Extension scoped config defaults to `threads`.
   - `pnpm test` also defaults to `--isolate=false` at the wrapper level for faster file startup.
   - Opt back into Vitest file isolation with `OPENCLAW_TEST_ISOLATE=1 pnpm test`.
   - `OPENCLAW_TEST_NO_ISOLATE=0` or `OPENCLAW_TEST_NO_ISOLATE=false` also force isolated runs.
-  - `OPENCLAW_TEST_VM_FORKS=1` remains an opt-in experiment on Node 22, 23, and 24 only.
 
 ### E2E (gateway smoke)
 
