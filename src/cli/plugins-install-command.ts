@@ -25,9 +25,9 @@ import {
   buildPreferredClawHubSpec,
   createHookPackInstallLogger,
   createPluginInstallLogger,
+  decidePreferredClawHubFallback,
   formatPluginInstallWithHookFallbackError,
   resolveFileNpmSpecToLocalPath,
-  shouldFallbackFromClawHubToNpm,
 } from "./plugins-command-helpers.js";
 import { persistHookPackInstall, persistPluginInstall } from "./plugins-install-persist.js";
 
@@ -406,7 +406,7 @@ export async function runPluginInstallCommand(params: {
       });
       return;
     }
-    if (!shouldFallbackFromClawHubToNpm(clawhubResult.error)) {
+    if (decidePreferredClawHubFallback(clawhubResult) !== "fallback_to_npm") {
       defaultRuntime.error(clawhubResult.error);
       return defaultRuntime.exit(1);
     }

@@ -104,6 +104,10 @@ vi.mock("../hooks/installs.js", () => ({
 }));
 
 vi.mock("../plugins/clawhub.js", () => ({
+  CLAWHUB_INSTALL_ERROR_CODE: {
+    PACKAGE_NOT_FOUND: "package_not_found",
+    VERSION_NOT_FOUND: "version_not_found",
+  },
   installPluginFromClawHub: (...args: unknown[]) => installPluginFromClawHub(...args),
   formatClawHubSpecifier: ({ name, version }: { name: string; version?: string }) =>
     `clawhub:${name}${version ? `@${version}` : ""}`,
@@ -454,6 +458,7 @@ describe("plugins cli", () => {
     installPluginFromClawHub.mockResolvedValue({
       ok: false,
       error: "ClawHub /api/v1/packages/demo failed (404): Package not found",
+      code: "package_not_found",
     });
     installPluginFromNpmSpec.mockResolvedValue({
       ok: true,
@@ -491,6 +496,7 @@ describe("plugins cli", () => {
     installPluginFromClawHub.mockResolvedValue({
       ok: false,
       error: 'Use "openclaw skills install demo" instead.',
+      code: "skill_package",
     });
 
     await expect(runCommand(["plugins", "install", "demo"])).rejects.toThrow("__exit__:1");
@@ -517,6 +523,7 @@ describe("plugins cli", () => {
     installPluginFromClawHub.mockResolvedValue({
       ok: false,
       error: "ClawHub /api/v1/packages/@acme/demo-hooks failed (404): Package not found",
+      code: "package_not_found",
     });
     installPluginFromNpmSpec.mockResolvedValue({
       ok: false,
