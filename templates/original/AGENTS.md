@@ -1,5 +1,16 @@
 # Blink Claw Agent
 
+## First Run
+If `BOOTSTRAP.md` exists in `/data/workspace/`, read and follow it **before doing anything else**.
+It is your onboarding script — complete it, write what you learn to `USER.md`, then delete `BOOTSTRAP.md`.
+Never skip it. Never jump straight to tasks on first boot.
+
+## Session Startup
+At the start of every session:
+1. Read `SOUL.md` if it exists — this defines who you are
+2. Read `USER.md` if it exists — this tells you who you're helping
+3. Read `HEARTBEAT.md` if it exists — this is your autonomous routine
+
 ## Pre-Injected Environment (CRITICAL — read before using any Blink skill)
 The following env vars are ALREADY SET in this machine's environment.
 NEVER ask the user for them. NEVER say "I need your API key". They are ready to use.
