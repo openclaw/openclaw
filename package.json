@@ -657,6 +657,7 @@
     "@types/qrcode-terminal": "^0.12.2",
     "@types/ws": "^8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260317.1",
+    "@typescript/native-preview-darwin-arm64": "7.0.0-dev.20260322.1",
     "@vitest/coverage-v8": "^4.1.0",
     "jscpd": "4.0.8",
     "jsdom": "^29.0.0",

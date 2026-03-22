@@ -198,6 +198,9 @@ importers:
       '@typescript/native-preview':
         specifier: 7.0.0-dev.20260317.1
         version: 7.0.0-dev.20260317.1
+      '@typescript/native-preview-darwin-arm64':
+        specifier: 7.0.0-dev.20260322.1
+        version: 7.0.0-dev.20260322.1
       '@vitest/coverage-v8':
         specifier: ^4.1.0
         version: 4.1.0(@vitest/browser@4.1.0(vite@8.0.0(@types/node@25.5.0)(esbuild@0.27.3)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.2))(vitest@4.1.0))(vitest@4.1.0)
@@ -3333,6 +3336,11 @@ packages:
 
   '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260317.1':
     resolution: {integrity: sha512-E63cwlaAKeOXGcSaTcuVKdfGQJoms/vSMZH8lYsvxU6el3X96LdbXVcAIqbqwDfPJt7rQ6gw/OOGO45BlTlxSw==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260322.1':
+    resolution: {integrity: sha512-5wSilxwLGX5fMKJgsUkCBwOfW9GMG3WF5j77CVBOdFI7miFaR3JQaPzTA+uyHDMNIIeSDo1KtV77GT48Y/d0Xg==}
     cpu: [arm64]
     os: [darwin]
 
@@ -9919,6 +9927,8 @@ snapshots:
 
   '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260317.1':
     optional: true
+
+  '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260322.1': {}
 
   '@typescript/native-preview-darwin-x64@7.0.0-dev.20260317.1':
     optional: true
