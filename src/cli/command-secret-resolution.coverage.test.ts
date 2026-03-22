@@ -18,6 +18,14 @@ async function readCommandSource(relativePath: string): Promise<string> {
   const absolutePath = path.join(process.cwd(), relativePath);
   const source = await fs.readFile(absolutePath, "utf8");
   const reexportMatch = source.match(/^export \* from "(?<target>[^"]+)";$/m)?.groups?.target;
+  const runtimeImportMatch = source.match(/import\("(?<target>\.[^"]+\.runtime\.js)"\)/m)?.groups
+    ?.target;
+  if (runtimeImportMatch) {
+    const resolvedTarget = path.join(path.dirname(absolutePath), runtimeImportMatch);
+    const tsResolvedTarget = resolvedTarget.replace(/\.js$/u, ".ts");
+    const runtimeSource = await fs.readFile(tsResolvedTarget, "utf8");
+    return `${source}\n${runtimeSource}`;
+  }
   if (!reexportMatch) {
     return source;
   }
