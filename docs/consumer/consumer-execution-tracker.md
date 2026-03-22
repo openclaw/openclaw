@@ -1,6 +1,6 @@
 # OpenClaw Consumer Execution Tracker
 
-Last updated: 2026-03-20
+Last updated: 2026-03-22
 Owner: consumer execution team
 Status: Active
 
@@ -14,6 +14,7 @@ Use these documents in this order when there is any ambiguity:
 4. `docs/consumer/openclaw-consumer-brutal-execution-board.md` (30-day cadence)
 5. `docs/consumer/openclaw-consumer-go-to-market-plan.md` (architecture and launch context)
 6. `docs/consumer/macos-consumer-app.md` (consumer macOS app identity, UX, and distribution assumptions)
+7. `docs/consumer/gui-control-mvp-decision.md` (why GUI control is deferred for MVP and what evidence would justify bringing it back)
 
 ## Locked decisions
 
@@ -24,6 +25,7 @@ Use these documents in this order when there is any ambiguity:
   3. Claude-in-Chrome investigation/adaptation
   4. Browserbase (currently credential-blocked; run when creds arrive)
 - Benchmark output path is `docs/consumer/browser-spike-results.md`.
+- Consumer GUI control is deferred for MVP by default; revisit only if the packaged consumer app plus the consumer Telegram bot can perform one safe GUI-control action reliably with low setup friction for non-technical users.
 - Benchmark protocol is 2 runs per approach/task, using median time.
 
 ## Workstream registry (single source)
