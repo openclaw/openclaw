@@ -1,5 +1,8 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { mergeAccountConfig, resolveAccountEntry } from "openclaw/plugin-sdk/account-resolution";
+import {
+  resolveAccountEntry,
+  resolveMergedAccountConfig,
+} from "openclaw/plugin-sdk/account-resolution";
 import { createAccountListHelpers, type OpenClawConfig } from "../runtime-api.js";
 import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "../secret-input.js";
 import type {
@@ -48,9 +51,12 @@ function mergeMattermostAccountConfig(
   accountId: string,
 ): MattermostAccountConfig {
   const account = resolveAccountConfig(cfg, accountId) ?? {};
-  const merged = mergeAccountConfig<MattermostAccountConfig>({
+  const merged = resolveMergedAccountConfig<MattermostAccountConfig>({
     channelConfig: cfg.channels?.mattermost as MattermostAccountConfig | undefined,
-    accountConfig: account,
+    accounts: cfg.channels?.mattermost?.accounts as
+      | Record<string, Partial<MattermostAccountConfig>>
+      | undefined,
+    accountId,
     omitKeys: ["defaultAccount"],
   });
 

@@ -1,10 +1,9 @@
 import {
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
-  mergeAccountConfig,
   normalizeAccountId,
   normalizeChatType,
-  resolveAccountEntry,
+  resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import type { SlackAccountSurfaceFields } from "./account-surface-fields.js";
@@ -30,20 +29,16 @@ const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("sl
 export const listSlackAccountIds = listAccountIds;
 export const resolveDefaultSlackAccountId = resolveDefaultAccountId;
 
-function resolveAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): SlackAccountConfig | undefined {
-  return resolveAccountEntry(cfg.channels?.slack?.accounts, accountId);
-}
-
 export function mergeSlackAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): SlackAccountConfig {
-  return mergeAccountConfig<SlackAccountConfig>({
+  return resolveMergedAccountConfig<SlackAccountConfig>({
     channelConfig: cfg.channels?.slack as SlackAccountConfig | undefined,
-    accountConfig: resolveAccountConfig(cfg, accountId),
+    accounts: cfg.channels?.slack?.accounts as
+      | Record<string, Partial<SlackAccountConfig>>
+      | undefined,
+    accountId,
   });
 }
 
