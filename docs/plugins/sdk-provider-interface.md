@@ -19,20 +19,13 @@ for the interface itself.
 
 ## Import
 
-```typescript
-import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-models";
-```
-
-Common supporting imports:
-
-```typescript
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
-```
+Use the current provider-facing SDK surface shown in
+[Provider Plugins](/plugins/sdk-provider-plugins) and
+[Plugin Entry Points](/plugins/sdk-entrypoints).
 
 <Warning>
-  These supporting provider subpaths are expected to move under a provider
-  namespace very soon.
+  Additional provider helper subpaths are intentionally not listed here because
+  they are expected to move under a provider namespace very soon.
 </Warning>
 
 ## Required fields
@@ -51,9 +44,6 @@ In practice, most real providers also define `catalog` or
 ## Minimal shape
 
 ```typescript
-import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-models";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
-
 export const acmeProvider: ProviderPlugin = {
   id: "acme-ai",
   label: "Acme AI",

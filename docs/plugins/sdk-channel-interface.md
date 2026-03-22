@@ -23,16 +23,9 @@ the interface itself.
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 ```
 
-Common supporting imports:
-
-- `openclaw/plugin-sdk/channel-contract` for shared channel contract types
-- `openclaw/plugin-sdk/channel-setup` for setup helpers
-- `openclaw/plugin-sdk/channel-config-helpers` for config adapters
-- `openclaw/plugin-sdk/channel-send-result` for outbound result helpers
-
 <Warning>
-  These supporting channel subpaths are expected to move under a channel
-  namespace very soon.
+  Additional channel helper subpaths are intentionally not listed here because
+  they are expected to move under a channel namespace very soon.
 </Warning>
 
 ## Required fields

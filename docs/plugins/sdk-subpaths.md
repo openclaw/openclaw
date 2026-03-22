@@ -51,8 +51,8 @@ helpers as needed. See [Channel Plugins](/plugins/sdk-channel-plugins) and
 [Channel Plugin Interface](/plugins/sdk-channel-interface).
 
 <Warning>
-  Channel helper subpaths are expected to move under a channel namespace very
-  soon. Avoid spreading new channel-specific imports more broadly than needed.
+  Additional channel helper subpaths are intentionally omitted here because
+  they are expected to move under a channel namespace very soon.
 </Warning>
 
 ### Provider work
@@ -63,9 +63,8 @@ provider helpers when needed. See
 [Provider Plugin Interface](/plugins/sdk-provider-interface).
 
 <Warning>
-  Provider helper subpaths are expected to move under a provider namespace very
-  soon. Prefer the provider guides and interface docs over copying long import
-  lists.
+  Additional provider helper subpaths are intentionally omitted here because
+  they are expected to move under a provider namespace very soon.
 </Warning>
 
 ### Runtime and setup work
@@ -74,32 +73,26 @@ Shared runtime helpers live in the runtime guide. See
 [Plugin Runtime Helpers](/plugins/sdk-runtime).
 
 <Warning>
-  Runtime helper subpaths are expected to move under a runtime namespace very
-  soon. Keep new usages narrow and localized.
+  Additional runtime helper subpaths are intentionally omitted here because
+  they are expected to move under a runtime namespace very soon.
 </Warning>
 
 Setup entrypoints, manifests, and config adapters live in the setup guide. See
 [Plugin Setup and Config](/plugins/sdk-setup).
 
-## Common supporting imports
+## Supporting subpaths we still recommend listing
 
-| Subpath                                | Use it for                                |
-| -------------------------------------- | ----------------------------------------- |
-| `openclaw/plugin-sdk/channel-setup`    | Setup surfaces and setup helpers          |
-| `openclaw/plugin-sdk/channel-contract` | Shared channel contract types             |
-| `openclaw/plugin-sdk/provider-auth`    | API key auth and shared auth helpers      |
-| `openclaw/plugin-sdk/provider-models`  | Model normalization helpers               |
-| `openclaw/plugin-sdk/runtime-store`    | Persistent plugin runtime storage         |
-| `openclaw/plugin-sdk/command-auth`     | Command-gating helpers                    |
-| `openclaw/plugin-sdk/webhook-ingress`  | Shared webhook request and target helpers |
-| `openclaw/plugin-sdk/reply-payload`    | Shared reply-payload shaping              |
+| Subpath                               | Use it for                                |
+| ------------------------------------- | ----------------------------------------- |
+| `openclaw/plugin-sdk/command-auth`    | Command-gating helpers                    |
+| `openclaw/plugin-sdk/webhook-ingress` | Shared webhook request and target helpers |
+| `openclaw/plugin-sdk/reply-payload`   | Shared reply-payload shaping              |
 
 ## Compatibility shims
 
-| Import path                           | Status             | Notes                                                     |
-| ------------------------------------- | ------------------ | --------------------------------------------------------- |
-| `openclaw/plugin-sdk`                 | Deprecated         | Old root barrel. New code should use focused subpaths.    |
-| `openclaw/plugin-sdk/channel-runtime` | Compatibility only | Old channel shim. Prefer narrower channel subpaths above. |
+| Import path           | Status     | Notes                                                  |
+| --------------------- | ---------- | ------------------------------------------------------ |
+| `openclaw/plugin-sdk` | Deprecated | Old root barrel. New code should use focused subpaths. |
 
 ## What is not part of the public contract
 
