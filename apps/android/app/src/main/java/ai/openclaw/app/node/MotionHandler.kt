@@ -10,7 +10,7 @@ import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import ai.openclaw.app.gateway.GatewaySession
 import java.time.Instant
-import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
@@ -142,18 +142,18 @@ private object SystemMotionDataSource : MotionDataSource {
     val averageDelta: Double,
   )
 
+  @OptIn(InternalCoroutinesApi::class)
   private suspend fun readStepCounter(sensorManager: SensorManager, sensor: Sensor): Int? {
     val sample =
       withTimeoutOrNull(1200L) {
         suspendCancellableCoroutine<Float?> { cont ->
-          val resumed = AtomicBoolean(false)
           val listener =
             object : SensorEventListener {
               override fun onSensorChanged(event: SensorEvent?) {
                 val value = event?.values?.firstOrNull()
-                if (!resumed.compareAndSet(false, true)) return
+                val token = cont.tryResume(value) ?: return
+                cont.completeResume(token)
                 sensorManager.unregisterListener(this)
-                cont.resume(value) { _, _, _ -> }
               }
 
               override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
@@ -170,6 +170,7 @@ private object SystemMotionDataSource : MotionDataSource {
     return sample?.toInt()?.takeIf { it >= 0 }
   }
 
+  @OptIn(InternalCoroutinesApi::class)
   private suspend fun readAccelerometerSample(
     sensorManager: SensorManager,
     sensor: Sensor,
@@ -177,7 +178,6 @@ private object SystemMotionDataSource : MotionDataSource {
     val sample =
       withTimeoutOrNull(ACCELEROMETER_SAMPLE_TIMEOUT_MS) {
         suspendCancellableCoroutine<AccelerometerSample?> { cont ->
-          val resumed = AtomicBoolean(false)
           var count = 0
           var sumDelta = 0.0
           val listener =
@@ -194,13 +194,13 @@ private object SystemMotionDataSource : MotionDataSource {
                 sumDelta += abs(magnitude - SensorManager.GRAVITY_EARTH.toDouble())
                 count += 1
                 if (count >= ACCELEROMETER_SAMPLE_TARGET) {
-                  if (!resumed.compareAndSet(false, true)) return
                   val result = AccelerometerSample(
                     samples = count,
                     averageDelta = sumDelta / count,
                   )
+                  val token = cont.tryResume(result) ?: return
+                  cont.completeResume(token)
                   sensorManager.unregisterListener(this)
-                  cont.resume(result) { _, _, _ -> }
                 }
               }
 
