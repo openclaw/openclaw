@@ -1,5 +1,6 @@
 // Public runtime/transport helpers for plugins that need shared infra behavior.
 
+console.log("INFRA-RUNTIME MODULE LOADED at", Date.now());
 export * from "../infra/backoff.js";
 export * from "../infra/channel-activity.js";
 export * from "../infra/dedupe.js";

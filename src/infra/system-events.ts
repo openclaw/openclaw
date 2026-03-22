@@ -71,6 +71,7 @@ export function isSystemEventContextChanged(
 }
 
 export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
+  console.log("REAL enqueueSystemEvent CALLED! at", Date.now(), "text=", text);
   const key = requireSessionKey(options?.sessionKey);
   const entry = getOrCreateSessionQueue(key);
   const cleaned = text.trim();

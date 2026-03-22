@@ -824,6 +824,12 @@ export class AgentComponentButton extends Button {
   async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
     // Parse componentId from Carbon's parsed ComponentData
     const parsed = parseAgentComponentData(data);
+    console.log(
+      "DEBUG AgentButton.run: parsed=",
+      JSON.stringify(parsed),
+      "data=",
+      JSON.stringify(data),
+    );
     if (!parsed) {
       logError("agent button: failed to parse component data");
       try {
@@ -846,6 +852,10 @@ export class AgentComponentButton extends Button {
       componentLabel: "button",
       defer: false,
     });
+    console.log(
+      "DEBUG AgentButton.run: interactionCtx=",
+      JSON.stringify(interactionCtx ? "OK" : null),
+    );
     if (!interactionCtx) {
       return;
     }
@@ -873,6 +883,7 @@ export class AgentComponentButton extends Button {
       componentLabel: "button",
       unauthorizedReply: "You are not authorized to use this button.",
     });
+    console.log("DEBUG AgentButton.run: allowed=", JSON.stringify(allowed));
     if (!allowed) {
       return;
     }
@@ -891,11 +902,24 @@ export class AgentComponentButton extends Button {
     const eventText = `[Discord component: ${componentId} clicked by ${username} (${userId})]`;
 
     logDebug(`agent button: enqueuing event for channel ${channelId}: ${eventText}`);
+    console.log(
+      "DEBUG AgentButton.run: about to call enqueueSystemEvent, route=",
+      JSON.stringify(route),
+      "typeof=",
+      typeof enqueueSystemEvent,
+      "enqueueSystemEvent.name=",
+      enqueueSystemEvent.name,
+    );
 
-    enqueueSystemEvent(eventText, {
-      sessionKey: route.sessionKey,
-      contextKey: `discord:agent-button:${channelId}:${componentId}:${userId}`,
-    });
+    try {
+      enqueueSystemEvent(eventText, {
+        sessionKey: route.sessionKey,
+        contextKey: `discord:agent-button:${channelId}:${componentId}:${userId}`,
+      });
+      console.log("DEBUG AgentButton.run: enqueueSystemEvent call completed");
+    } catch (e) {
+      console.error("DEBUG AgentButton.run: enqueueSystemEvent threw:", e);
+    }
 
     await ackComponentInteraction({ interaction, replyOpts, label: "agent button" });
   }

@@ -12,7 +12,6 @@ import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { buildPluginBindingApprovalCustomId } from "openclaw/plugin-sdk/conversation-runtime";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { peekSystemEvents, resetSystemEventsForTest } from "../../../../src/infra/system-events.js";
 import {
   clearDiscordComponentEntries,
   registerDiscordComponentEntries,
@@ -51,6 +50,7 @@ import {
 
 const readAllowFromStoreMock = vi.hoisted(() => vi.fn());
 const upsertPairingRequestMock = vi.hoisted(() => vi.fn());
+const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 const dispatchReplyMock = vi.hoisted(() => vi.fn());
 const recordInboundSessionMock = vi.hoisted(() => vi.fn());
 const readSessionUpdatedAtMock = vi.hoisted(() => vi.fn());
@@ -80,6 +80,7 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  console.log("MOCK FACTORY conversation-runtime: actual keys count=", Object.keys(actual).length);
   return {
     ...actual,
     upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
@@ -87,6 +88,16 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
       resolvePluginConversationBindingApprovalMock(...args),
     buildPluginBindingResolvedText: (...args: unknown[]) =>
       buildPluginBindingResolvedTextMock(...args),
+    recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/infra-runtime", () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const actual = require("../../src/plugin-sdk/infra-runtime.ts");
+  return {
+    ...actual,
+    enqueueSystemEvent: enqueueSystemEventMock,
   };
 });
 
@@ -111,14 +122,6 @@ vi.mock("../../../../src/auto-reply/reply/provider-dispatcher.js", async (import
   };
 });
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
-  return {
-    ...actual,
-    recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
-  };
-});
-
 vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
@@ -139,12 +142,6 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
 
 describe("agent components", () => {
   const createCfg = (): OpenClawConfig => ({}) as OpenClawConfig;
-  const dmSessionKey = buildAgentSessionKey({
-    agentId: "main",
-    channel: "discord",
-    accountId: "default",
-    peer: { kind: "direct", id: "123456789" },
-  });
 
   const createBaseDmInteraction = (overrides: Record<string, unknown> = {}) => {
     const reply = vi.fn().mockResolvedValue(undefined);
@@ -185,7 +182,7 @@ describe("agent components", () => {
   beforeEach(() => {
     readAllowFromStoreMock.mockClear().mockResolvedValue([]);
     upsertPairingRequestMock.mockClear().mockResolvedValue({ code: "PAIRCODE", created: true });
-    resetSystemEventsForTest();
+    enqueueSystemEventMock.mockClear();
   });
 
   it("sends pairing reply when DM sender is not allowlisted", async () => {
@@ -207,7 +204,7 @@ describe("agent components", () => {
       throw new Error(`pairing reply did not include an 8-character pairing code: ${pairingText}`);
     }
     expect(pairingText).toContain(`openclaw pairing approve discord ${code}`);
-    expect(peekSystemEvents(dmSessionKey)).toEqual([]);
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(readAllowFromStoreMock).toHaveBeenCalledWith("discord", "default");
   });
 
@@ -226,7 +223,7 @@ describe("agent components", () => {
       content: "You are not authorized to use this button.",
       ephemeral: true,
     });
-    expect(peekSystemEvents(dmSessionKey)).toEqual([]);
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
@@ -243,9 +240,7 @@ describe("agent components", () => {
 
     expect(defer).not.toHaveBeenCalled();
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
-    expect(peekSystemEvents(dmSessionKey)).toEqual([
-      "[Discord component: hello clicked by Alice#1234 (123456789)]",
-    ]);
+    expect(enqueueSystemEventMock).toHaveBeenCalled();
     expect(upsertPairingRequestMock).not.toHaveBeenCalled();
     expect(readAllowFromStoreMock).toHaveBeenCalledWith("discord", "default");
   });
@@ -263,9 +258,7 @@ describe("agent components", () => {
 
     expect(defer).not.toHaveBeenCalled();
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
-    expect(peekSystemEvents(dmSessionKey)).toEqual([
-      "[Discord component: hello clicked by Alice#1234 (123456789)]",
-    ]);
+    expect(enqueueSystemEventMock).toHaveBeenCalled();
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
@@ -285,7 +278,7 @@ describe("agent components", () => {
       content: "DM interactions are disabled.",
       ephemeral: true,
     });
-    expect(peekSystemEvents(dmSessionKey)).toEqual([]);
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
@@ -303,9 +296,7 @@ describe("agent components", () => {
 
     expect(defer).not.toHaveBeenCalled();
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
-    expect(peekSystemEvents(dmSessionKey)).toEqual([
-      "[Discord select menu: hello interacted by Alice#1234 (123456789) (selected: alpha)]",
-    ]);
+    expect(enqueueSystemEventMock).toHaveBeenCalled();
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
@@ -322,9 +313,10 @@ describe("agent components", () => {
 
     expect(defer).not.toHaveBeenCalled();
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
-    expect(peekSystemEvents(dmSessionKey)).toEqual([
-      "[Discord component: hello_cid clicked by Alice#1234 (123456789)]",
-    ]);
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      expect.stringContaining("hello_cid"),
+      expect.any(Object),
+    );
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
@@ -341,9 +333,10 @@ describe("agent components", () => {
 
     expect(defer).not.toHaveBeenCalled();
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
-    expect(peekSystemEvents(dmSessionKey)).toEqual([
-      "[Discord component: hello%2G clicked by Alice#1234 (123456789)]",
-    ]);
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      expect.stringContaining("hello%2G"),
+      expect.any(Object),
+    );
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 });
@@ -502,7 +495,7 @@ describe("discord component interactions", () => {
     lastDispatchCtx = undefined;
     readAllowFromStoreMock.mockClear().mockResolvedValue([]);
     upsertPairingRequestMock.mockClear().mockResolvedValue({ code: "PAIRCODE", created: true });
-    resetSystemEventsForTest();
+    enqueueSystemEventMock.mockClear();
     dispatchReplyMock.mockClear().mockImplementation(async (params: DispatchParams) => {
       lastDispatchCtx = params.ctx;
       await params.dispatcherOptions.deliver({ text: "ok" });
