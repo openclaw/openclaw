@@ -47,8 +47,11 @@ describe("msteams policy", () => {
         conversationId: "chan456",
       });
 
-      expect(res.teamConfig?.requireMention).toBe(false);
-      expect(res.channelConfig?.requireMention).toBe(true);
+      if (!res.teamConfig || !res.channelConfig) {
+        throw new Error("expected matched team and channel config");
+      }
+      expect(res.teamConfig.requireMention).toBe(false);
+      expect(res.channelConfig.requireMention).toBe(true);
       expect(res.allowlistConfigured).toBe(true);
       expect(res.allowed).toBe(true);
       expect(res.channelMatchKey).toBe("chan456");
@@ -82,8 +85,11 @@ describe("msteams policy", () => {
     it("matches team and channel by name when dangerous name matching is enabled", () => {
       const res = resolveNamedTeamRouteConfig(true);
 
-      expect(res.teamConfig?.requireMention).toBe(true);
-      expect(res.channelConfig?.requireMention).toBe(false);
+      if (!res.teamConfig || !res.channelConfig) {
+        throw new Error("expected matched named team and channel config");
+      }
+      expect(res.teamConfig.requireMention).toBe(true);
+      expect(res.channelConfig.requireMention).toBe(false);
       expect(res.allowed).toBe(true);
     });
   });
