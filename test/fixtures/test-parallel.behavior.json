@@ -24,34 +24,6 @@
     ],
     "threadPinned": [
       {
-        "file": "src/cli/secrets-cli.test.ts",
-        "reason": "Measured ~11% faster under threads than forks on base config while keeping secrets CLI coverage green."
-      },
-      {
-        "file": "src/cli/deps.test.ts",
-        "reason": "Measured ~81% faster under threads than forks on base config while keeping dependency checks green."
-      },
-      {
-        "file": "src/cli/daemon-cli/restart-health.test.ts",
-        "reason": "Measured ~35% faster under threads than forks on base config while keeping daemon restart health coverage green."
-      },
-      {
-        "file": "src/cli/security-cli.test.ts",
-        "reason": "Measured ~31% faster under threads than forks on base config while keeping security CLI coverage green."
-      },
-      {
-        "file": "src/cli/memory-cli.test.ts",
-        "reason": "Measured ~50% faster under threads than forks on base config while keeping memory CLI coverage green."
-      },
-      {
-        "file": "src/cli/skills-cli.test.ts",
-        "reason": "Measured ~27% faster under threads than forks on base config while keeping skills CLI coverage green."
-      },
-      {
-        "file": "src/cli/completion-fish.test.ts",
-        "reason": "Measured ~41% faster under threads than forks on base config while keeping fish completion coverage green."
-      },
-      {
         "file": "src/cron/isolated-agent.uses-last-non-empty-agent-text-as.test.ts",
         "reason": "Measured ~15% faster under threads than forks on this host while keeping the file green."
       },
