@@ -604,6 +604,28 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances).toHaveLength(1);
   });
 
+  it("respects blockStreamingDefault: on from agents config", async () => {
+    const result = createFeishuReplyDispatcher({
+      cfg: { agents: { defaults: { blockStreamingDefault: "on" } } } as never,
+      agentId: "agent",
+      runtime: createRuntimeLogger(),
+      chatId: "oc_chat",
+    });
+
+    expect(result.replyOptions.disableBlockStreaming).toBe(false);
+  });
+
+  it("disables block streaming by default when blockStreamingDefault is not set", async () => {
+    const result = createFeishuReplyDispatcher({
+      cfg: { agents: { defaults: {} } } as never,
+      agentId: "agent",
+      runtime: createRuntimeLogger(),
+      chatId: "oc_chat",
+    });
+
+    expect(result.replyOptions.disableBlockStreaming).toBe(true);
+  });
+
   it("passes replyToMessageId and replyInThread to streaming.start()", async () => {
     const { options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
