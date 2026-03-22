@@ -413,28 +413,41 @@ export function parseTtsDirectives(
   });
 
   // Resolve deferred generic model= now that provider= (if any) is known.
+  // Skip if the target provider already has a model from an explicit *_model key.
   if (pendingGenericModel != null && policy.allowModelId) {
     const m = pendingGenericModel;
     if (overrides.provider === "openai") {
-      if (isValidOpenAIModel(m, openaiBaseUrl)) {
-        overrides.openai = { ...overrides.openai, model: m };
-      } else {
-        warnings.push(`invalid OpenAI model "${m}"`);
+      if (!overrides.openai?.model) {
+        if (isValidOpenAIModel(m, openaiBaseUrl)) {
+          overrides.openai = { ...overrides.openai, model: m };
+        } else {
+          warnings.push(`invalid OpenAI model "${m}"`);
+        }
       }
     } else if (overrides.provider === "elevenlabs") {
-      overrides.elevenlabs = { ...overrides.elevenlabs, modelId: m };
+      if (!overrides.elevenlabs?.modelId) {
+        overrides.elevenlabs = { ...overrides.elevenlabs, modelId: m };
+      }
     } else if (overrides.provider === "minimax") {
-      if (isValidMinimaxModel(m)) {
-        overrides.minimax = { ...overrides.minimax, model: m };
-      } else {
-        warnings.push(`invalid MiniMax model "${m}"`);
+      if (!overrides.minimax?.model) {
+        if (isValidMinimaxModel(m)) {
+          overrides.minimax = { ...overrides.minimax, model: m };
+        } else {
+          warnings.push(`invalid MiniMax model "${m}"`);
+        }
       }
     } else if (isValidMinimaxModel(m)) {
-      overrides.minimax = { ...overrides.minimax, model: m };
+      if (!overrides.minimax?.model) {
+        overrides.minimax = { ...overrides.minimax, model: m };
+      }
     } else if (isValidOpenAIModel(m, openaiBaseUrl)) {
-      overrides.openai = { ...overrides.openai, model: m };
+      if (!overrides.openai?.model) {
+        overrides.openai = { ...overrides.openai, model: m };
+      }
     } else {
-      overrides.elevenlabs = { ...overrides.elevenlabs, modelId: m };
+      if (!overrides.elevenlabs?.modelId) {
+        overrides.elevenlabs = { ...overrides.elevenlabs, modelId: m };
+      }
     }
   }
 

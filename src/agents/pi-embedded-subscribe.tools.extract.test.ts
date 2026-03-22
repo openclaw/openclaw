@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { normalizeTelegramMessagingTarget } from "../../extensions/telegram/api.js";
+import { normalizeTelegramMessagingTarget } from "../../extensions/telegram/src/normalize.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { extractMessagingToolSend } from "./pi-embedded-subscribe.tools.js";

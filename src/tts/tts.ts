@@ -364,8 +364,8 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
         path: "messages.tts.minimax.apiKey",
       }),
       baseUrl: raw.minimax?.baseUrl?.trim() || DEFAULT_MINIMAX_BASE_URL,
-      model: raw.minimax?.model ?? DEFAULT_MINIMAX_MODEL,
-      voiceId: raw.minimax?.voiceId ?? DEFAULT_MINIMAX_VOICE_ID,
+      model: raw.minimax?.model?.trim() || DEFAULT_MINIMAX_MODEL,
+      voiceId: raw.minimax?.voiceId?.trim() || DEFAULT_MINIMAX_VOICE_ID,
       speed: raw.minimax?.speed ?? DEFAULT_MINIMAX_SPEED,
       vol: raw.minimax?.vol ?? DEFAULT_MINIMAX_VOL,
       pitch: raw.minimax?.pitch ?? DEFAULT_MINIMAX_PITCH,
@@ -567,7 +567,7 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
 }
 
 /** Channels that require opus audio and support voice-bubble playback */
-const VOICE_BUBBLE_CHANNELS = new Set(["telegram", "feishu", "whatsapp"]);
+const VOICE_BUBBLE_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "matrix"]);
 
 function resolveOutputFormat(channelId?: string | null) {
   if (channelId && VOICE_BUBBLE_CHANNELS.has(channelId)) {
