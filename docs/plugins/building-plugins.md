@@ -25,10 +25,10 @@ and users install with `openclaw plugins install <npm-spec>`.
 ## What kind of plugin?
 
 <CardGroup cols={3}>
-  <Card title="Channel plugin" icon="message" href="/plugins/sdk-channel-plugins">
+  <Card title="Channel plugin" icon="messages-square" href="/plugins/sdk-channel-plugins">
     Connect OpenClaw to a messaging platform (Discord, IRC, etc.)
   </Card>
-  <Card title="Provider plugin" icon="microchip" href="/plugins/sdk-provider-plugins">
+  <Card title="Provider plugin" icon="cpu" href="/plugins/sdk-provider-plugins">
     Add a model provider (LLM, proxy, or custom endpoint)
   </Card>
   <Card title="Tool / hook plugin" icon="wrench">
@@ -215,22 +215,22 @@ internal imports — never import your own plugin through its SDK path.
 ## Next steps
 
 <CardGroup cols={2}>
-  <Card title="Channel Plugins" icon="message" href="/plugins/sdk-channel-plugins">
+  <Card title="Channel Plugins" icon="messages-square" href="/plugins/sdk-channel-plugins">
     Build a messaging channel plugin
   </Card>
-  <Card title="Provider Plugins" icon="microchip" href="/plugins/sdk-provider-plugins">
+  <Card title="Provider Plugins" icon="cpu" href="/plugins/sdk-provider-plugins">
     Build a model provider plugin
   </Card>
-  <Card title="SDK Overview" icon="book" href="/plugins/sdk-overview">
+  <Card title="SDK Overview" icon="book-open" href="/plugins/sdk-overview">
     Import map and registration API reference
   </Card>
-  <Card title="Runtime Helpers" icon="gear" href="/plugins/sdk-runtime">
+  <Card title="Runtime Helpers" icon="settings" href="/plugins/sdk-runtime">
     TTS, search, subagent via api.runtime
   </Card>
-  <Card title="Testing" icon="flask" href="/plugins/sdk-testing">
+  <Card title="Testing" icon="test-tubes" href="/plugins/sdk-testing">
     Test utilities and patterns
   </Card>
-  <Card title="Plugin Manifest" icon="file-code" href="/plugins/manifest">
+  <Card title="Plugin Manifest" icon="file-json" href="/plugins/manifest">
     Full manifest schema reference
   </Card>
 </CardGroup>

@@ -348,16 +348,16 @@ extensions/acme-chat/
 ## Advanced topics
 
 <CardGroup cols={2}>
-  <Card title="Threading options" href="/plugins/sdk-entrypoints#registration-mode">
+  <Card title="Threading options" icon="git-branch" href="/plugins/sdk-entrypoints#registration-mode">
     Fixed, account-scoped, or custom reply modes
   </Card>
-  <Card title="Message tool integration" href="/plugins/architecture#channel-plugins-and-the-shared-message-tool">
+  <Card title="Message tool integration" icon="puzzle" href="/plugins/architecture#channel-plugins-and-the-shared-message-tool">
     describeMessageTool and action discovery
   </Card>
-  <Card title="Target resolution" href="/plugins/architecture#channel-target-resolution">
+  <Card title="Target resolution" icon="crosshair" href="/plugins/architecture#channel-target-resolution">
     inferTargetChatType, looksLikeId, resolveTarget
   </Card>
-  <Card title="Runtime helpers" href="/plugins/sdk-runtime">
+  <Card title="Runtime helpers" icon="settings" href="/plugins/sdk-runtime">
     TTS, STT, media, subagent via api.runtime
   </Card>
 </CardGroup>
