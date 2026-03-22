@@ -289,6 +289,44 @@ describe("provider wizard boundaries", () => {
     expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
   });
 
+  it("skips provider-wizard memoization when plugin cache opt-outs are set", () => {
+    const provider = makeProvider({
+      id: "sglang",
+      label: "SGLang",
+      auth: [{ id: "server", label: "Server", kind: "custom", run: vi.fn() }],
+      wizard: {
+        setup: {
+          choiceLabel: "SGLang setup",
+          groupId: "sglang",
+          groupLabel: "SGLang",
+        },
+      },
+    });
+    const config = {
+      plugins: {
+        allow: ["sglang"],
+      },
+    };
+    const env = {
+      OPENCLAW_HOME: "/tmp/openclaw-home",
+      OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+    } as NodeJS.ProcessEnv;
+    resolvePluginProviders.mockReturnValue([provider]);
+
+    resolveProviderWizardOptions({
+      config,
+      workspaceDir: "/tmp/workspace",
+      env,
+    });
+    resolveProviderWizardOptions({
+      config,
+      workspaceDir: "/tmp/workspace",
+      env,
+    });
+
+    expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
+  });
+
   it("routes model-selected hooks only to the matching provider", async () => {
     const matchingHook = vi.fn(async () => {});
     const otherHook = vi.fn(async () => {});

@@ -146,6 +146,33 @@ describe("resolvePluginWebSearchProviders", () => {
     expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(2);
   });
 
+  it("skips web-search snapshot memoization when plugin cache opt-outs are set", () => {
+    const config = {
+      plugins: {
+        allow: ["brave"],
+      },
+    };
+    const env = {
+      OPENCLAW_HOME: "/tmp/openclaw-home",
+      OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+    } as NodeJS.ProcessEnv;
+
+    resolvePluginWebSearchProviders({
+      config,
+      env,
+      bundledAllowlistCompat: true,
+      workspaceDir: "/tmp/workspace",
+    });
+    resolvePluginWebSearchProviders({
+      config,
+      env,
+      bundledAllowlistCompat: true,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(2);
+  });
+
   it("prefers the active plugin registry for runtime resolution", () => {
     const registry = createEmptyPluginRegistry();
     registry.webSearchProviders.push({

@@ -17,6 +17,20 @@ const providerWizardCache = new WeakMap<
   WeakMap<NodeJS.ProcessEnv, Map<string, ProviderPlugin[]>>
 >();
 
+function shouldUseProviderWizardCache(env: NodeJS.ProcessEnv): boolean {
+  if (env.OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE?.trim()) {
+    return false;
+  }
+  if (env.OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE?.trim()) {
+    return false;
+  }
+  const manifestCacheMs = env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS?.trim();
+  if (manifestCacheMs === "0") {
+    return false;
+  }
+  return true;
+}
+
 function buildProviderWizardCacheKey(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
@@ -131,6 +145,13 @@ function resolveProviderWizardProviders(params: {
     return resolvePluginProviders(params);
   }
   const env = params.env ?? process.env;
+  if (!shouldUseProviderWizardCache(env)) {
+    return resolvePluginProviders({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env,
+    });
+  }
   const cacheKey = buildProviderWizardCacheKey({
     config: params.config,
     workspaceDir: params.workspaceDir,
