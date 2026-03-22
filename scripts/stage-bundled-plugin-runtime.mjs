@@ -3,57 +3,86 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { removePathIfExists } from "./runtime-postbuild-shared.mjs";
 
-function linkOrCopyFile(sourcePath, targetPath) {
-  try {
-    fs.linkSync(sourcePath, targetPath);
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error) {
-      const code = error.code;
-      if (code === "EXDEV" || code === "EPERM" || code === "EMLINK") {
-        fs.copyFileSync(sourcePath, targetPath);
-        return;
-      }
-    }
-    throw error;
-  }
+function symlinkType() {
+  return process.platform === "win32" ? "junction" : "dir";
 }
 
-function mirrorTreeWithHardlinks(sourceRoot, targetRoot) {
-  fs.mkdirSync(targetRoot, { recursive: true });
-  const queue = [{ sourceDir: sourceRoot, targetDir: targetRoot }];
+function relativeSymlinkTarget(sourcePath, targetPath) {
+  const relativeTarget = path.relative(path.dirname(targetPath), sourcePath);
+  return relativeTarget || ".";
+}
 
-  while (queue.length > 0) {
-    const current = queue.pop();
-    if (!current) {
+function symlinkPath(sourcePath, targetPath, type) {
+  fs.symlinkSync(relativeSymlinkTarget(sourcePath, targetPath), targetPath, type);
+}
+
+function shouldWrapRuntimeJsFile(sourcePath) {
+  return path.extname(sourcePath) === ".js";
+}
+
+function shouldCopyRuntimeFile(sourcePath) {
+  const relativePath = sourcePath.replace(/\\/g, "/");
+  return (
+    relativePath.endsWith("/package.json") ||
+    relativePath.endsWith("/openclaw.plugin.json") ||
+    relativePath.endsWith("/.codex-plugin/plugin.json") ||
+    relativePath.endsWith("/.claude-plugin/plugin.json") ||
+    relativePath.endsWith("/.cursor-plugin/plugin.json")
+  );
+}
+
+function writeRuntimeModuleWrapper(sourcePath, targetPath) {
+  const specifier = relativeSymlinkTarget(sourcePath, targetPath).replace(/\\/g, "/");
+  const normalizedSpecifier = specifier.startsWith(".") ? specifier : `./${specifier}`;
+  fs.writeFileSync(
+    targetPath,
+    [
+      `export * from ${JSON.stringify(normalizedSpecifier)};`,
+      `import * as module from ${JSON.stringify(normalizedSpecifier)};`,
+      "export default module.default;",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+}
+
+function stagePluginRuntimeOverlay(sourceDir, targetDir) {
+  fs.mkdirSync(targetDir, { recursive: true });
+
+  for (const dirent of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+    if (dirent.name === "node_modules") {
       continue;
     }
 
-    for (const dirent of fs.readdirSync(current.sourceDir, { withFileTypes: true })) {
-      const sourcePath = path.join(current.sourceDir, dirent.name);
-      const targetPath = path.join(current.targetDir, dirent.name);
+    const sourcePath = path.join(sourceDir, dirent.name);
+    const targetPath = path.join(targetDir, dirent.name);
 
-      if (dirent.isDirectory()) {
-        fs.mkdirSync(targetPath, { recursive: true });
-        queue.push({ sourceDir: sourcePath, targetDir: targetPath });
-        continue;
-      }
-
-      if (dirent.isSymbolicLink()) {
-        fs.symlinkSync(fs.readlinkSync(sourcePath), targetPath);
-        continue;
-      }
-
-      if (!dirent.isFile()) {
-        continue;
-      }
-
-      linkOrCopyFile(sourcePath, targetPath);
+    if (dirent.isDirectory()) {
+      stagePluginRuntimeOverlay(sourcePath, targetPath);
+      continue;
     }
-  }
-}
 
-function symlinkType() {
-  return process.platform === "win32" ? "junction" : "dir";
+    if (dirent.isSymbolicLink()) {
+      fs.symlinkSync(fs.readlinkSync(sourcePath), targetPath);
+      continue;
+    }
+
+    if (!dirent.isFile()) {
+      continue;
+    }
+
+    if (shouldWrapRuntimeJsFile(sourcePath)) {
+      writeRuntimeModuleWrapper(sourcePath, targetPath);
+      continue;
+    }
+
+    if (shouldCopyRuntimeFile(sourcePath)) {
+      fs.copyFileSync(sourcePath, targetPath);
+      continue;
+    }
+
+    symlinkPath(sourcePath, targetPath);
+  }
 }
 
 function linkPluginNodeModules(params) {
@@ -69,7 +98,6 @@ export function stageBundledPluginRuntime(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const distRoot = path.join(repoRoot, "dist");
   const runtimeRoot = path.join(repoRoot, "dist-runtime");
-  const sourceExtensionsRoot = path.join(repoRoot, "extensions");
   const distExtensionsRoot = path.join(distRoot, "extensions");
   const runtimeExtensionsRoot = path.join(runtimeRoot, "extensions");
 
@@ -79,18 +107,20 @@ export function stageBundledPluginRuntime(params = {}) {
   }
 
   removePathIfExists(runtimeRoot);
-  mirrorTreeWithHardlinks(distRoot, runtimeRoot);
+  fs.mkdirSync(runtimeExtensionsRoot, { recursive: true });
 
   for (const dirent of fs.readdirSync(distExtensionsRoot, { withFileTypes: true })) {
     if (!dirent.isDirectory()) {
       continue;
     }
+    const distPluginDir = path.join(distExtensionsRoot, dirent.name);
     const runtimePluginDir = path.join(runtimeExtensionsRoot, dirent.name);
-    const sourcePluginNodeModulesDir = path.join(sourceExtensionsRoot, dirent.name, "node_modules");
+    const distPluginNodeModulesDir = path.join(distPluginDir, "node_modules");
 
+    stagePluginRuntimeOverlay(distPluginDir, runtimePluginDir);
     linkPluginNodeModules({
       runtimePluginDir,
-      sourcePluginNodeModulesDir,
+      sourcePluginNodeModulesDir: distPluginNodeModulesDir,
     });
   }
 }

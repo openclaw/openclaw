@@ -1,5 +1,4 @@
+import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
 import { zaloPlugin } from "./src/channel.js";
 
-export default {
-  plugin: zaloPlugin,
-};
+export default defineSetupPluginEntry(zaloPlugin);

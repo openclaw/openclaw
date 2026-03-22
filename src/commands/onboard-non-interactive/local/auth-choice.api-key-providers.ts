@@ -1,11 +1,9 @@
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
+import { applyAuthProfileConfig } from "../../../plugins/provider-auth-helpers.js";
+import { setLitellmApiKey } from "../../../plugins/provider-auth-storage.js";
 import type { RuntimeEnv } from "../../../runtime.js";
-import {
-  applyAuthProfileConfig,
-  applyLitellmConfig,
-  setLitellmApiKey,
-} from "../../onboard-auth.js";
+import { applyLitellmConfig } from "../../onboard-auth.config-litellm.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 
 type ApiKeyStorageOptions = {

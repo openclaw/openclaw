@@ -18,6 +18,13 @@ const run = (cwd: string, cmd: string, args: string[] = [], env?: NodeJS.Process
   }).trim();
 };
 
+function writeExecutable(dir: string, name: string, contents: string): void {
+  writeFileSync(path.join(dir, name), contents, {
+    encoding: "utf8",
+    mode: 0o755,
+  });
+}
+
 describe("git-hooks/pre-commit (integration)", () => {
   it("does not treat staged filenames as git-add flags (e.g. --all)", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-pre-commit-"));
@@ -45,10 +52,10 @@ describe("git-hooks/pre-commit (integration)", () => {
     );
     const fakeBinDir = path.join(dir, "bin");
     mkdirSync(fakeBinDir, { recursive: true });
-    writeFileSync(path.join(fakeBinDir, "node"), "#!/usr/bin/env bash\nexit 0\n", {
-      encoding: "utf8",
-      mode: 0o755,
-    });
+    writeExecutable(fakeBinDir, "node", "#!/usr/bin/env bash\nexit 0\n");
+    // The hook ends with `pnpm check`, but this fixture is only exercising staged-file handling.
+    // Stub pnpm too so Windows CI does not invoke a real package-manager command in the temp repo.
+    writeExecutable(fakeBinDir, "pnpm", "#!/usr/bin/env bash\nexit 0\n");
 
     // Create an untracked file that should NOT be staged by the hook.
     writeFileSync(path.join(dir, "secret.txt"), "do-not-stage\n", "utf8");

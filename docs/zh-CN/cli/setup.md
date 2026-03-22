@@ -1,6 +1,6 @@
 ---
 read_when:
-  - 你正在进行首次运行设置，但不使用完整的设置向导
+  - 你正在进行首次运行设置，但不使用完整的 CLI 新手引导
   - 你想设置默认工作区路径
 summary: "`openclaw setup` 的 CLI 参考（初始化配置 + 工作区）"
 title: setup
@@ -20,7 +20,7 @@ x-i18n:
 相关内容：
 
 - 入门指南：[入门指南](/start/getting-started)
-- 向导：[新手引导](/start/onboarding)
+- CLI 新手引导：[CLI 新手引导](/start/wizard)
 
 ## 示例
 
@@ -29,7 +29,7 @@ openclaw setup
 openclaw setup --workspace ~/.openclaw/workspace
 ```
 
-通过 setup 运行向导：
+通过 setup 运行新手引导：
 
 ```bash
 openclaw setup --wizard

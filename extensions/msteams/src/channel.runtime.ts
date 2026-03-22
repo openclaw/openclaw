@@ -1,4 +1,18 @@
-export { listMSTeamsDirectoryGroupsLive, listMSTeamsDirectoryPeersLive } from "./directory-live.js";
-export { msteamsOutbound } from "./outbound.js";
-export { probeMSTeams } from "./probe.js";
-export { sendAdaptiveCardMSTeams, sendMessageMSTeams } from "./send.js";
+import {
+  listMSTeamsDirectoryGroupsLive as listMSTeamsDirectoryGroupsLiveImpl,
+  listMSTeamsDirectoryPeersLive as listMSTeamsDirectoryPeersLiveImpl,
+} from "./directory-live.js";
+import { msteamsOutbound as msteamsOutboundImpl } from "./outbound.js";
+import { probeMSTeams as probeMSTeamsImpl } from "./probe.js";
+import {
+  sendAdaptiveCardMSTeams as sendAdaptiveCardMSTeamsImpl,
+  sendMessageMSTeams as sendMessageMSTeamsImpl,
+} from "./send.js";
+export const msTeamsChannelRuntime = {
+  listMSTeamsDirectoryGroupsLive: listMSTeamsDirectoryGroupsLiveImpl,
+  listMSTeamsDirectoryPeersLive: listMSTeamsDirectoryPeersLiveImpl,
+  msteamsOutbound: { ...msteamsOutboundImpl },
+  probeMSTeams: probeMSTeamsImpl,
+  sendAdaptiveCardMSTeams: sendAdaptiveCardMSTeamsImpl,
+  sendMessageMSTeams: sendMessageMSTeamsImpl,
+};

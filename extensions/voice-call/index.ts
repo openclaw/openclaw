@@ -1,8 +1,9 @@
 import { Type } from "@sinclair/typebox";
-import type {
-  GatewayRequestHandlerOptions,
-  OpenClawPluginApi,
-} from "openclaw/plugin-sdk/voice-call";
+import {
+  definePluginEntry,
+  type GatewayRequestHandlerOptions,
+  type OpenClawPluginApi,
+} from "./api.js";
 import { registerVoiceCallCli } from "./src/cli.js";
 import {
   VoiceCallConfigSchema,
@@ -80,7 +81,7 @@ const voiceCallConfigSchema = {
     "streaming.streamPath": { label: "Media Stream Path", advanced: true },
     "tts.provider": {
       label: "TTS Provider Override",
-      help: "Deep-merges with messages.tts (Edge is ignored for calls).",
+      help: "Deep-merges with messages.tts (Microsoft is ignored for calls).",
       advanced: true,
     },
     "tts.openai.model": { label: "OpenAI TTS Model", advanced: true },
@@ -143,7 +144,7 @@ const VoiceCallToolSchema = Type.Union([
   }),
 ]);
 
-const voiceCallPlugin = {
+export default definePluginEntry({
   id: "voice-call",
   name: "Voice Call",
   description: "Voice-call plugin with Telnyx/Twilio/Plivo providers",
@@ -560,6 +561,4 @@ const voiceCallPlugin = {
       },
     });
   },
-};
-
-export default voiceCallPlugin;
+});

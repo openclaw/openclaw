@@ -1,5 +1,5 @@
 import type { AnyMessageContent } from "@whiskeysockets/baileys";
-import type { NormalizedLocation } from "../../../../src/channels/location.js";
+import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
 
 export type WebListenerCloseReason = {
   status?: number;
@@ -30,7 +30,6 @@ export type WebInboundMessage = {
   groupParticipants?: string[];
   mentionedJids?: string[];
   selfJid?: string | null;
-  selfLid?: string | null;
   selfE164?: string | null;
   fromMe?: boolean;
   location?: NormalizedLocation;

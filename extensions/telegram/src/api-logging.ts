@@ -1,7 +1,7 @@
-import { danger } from "../../../src/globals.js";
-import { formatErrorMessage } from "../../../src/infra/errors.js";
-import { createSubsystemLogger } from "../../../src/logging/subsystem.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
+import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 
 export type TelegramApiLogger = (message: string) => void;
 

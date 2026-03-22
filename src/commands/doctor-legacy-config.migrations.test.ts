@@ -297,4 +297,376 @@ describe("normalizeCompatibilityConfigValues", () => {
       "Moved browser.ssrfPolicy.allowPrivateNetwork → browser.ssrfPolicy.dangerouslyAllowPrivateNetwork (true).",
     );
   });
+
+  it("migrates nano-banana skill config to native image generation config", () => {
+    const res = normalizeCompatibilityConfigValues({
+      skills: {
+        entries: {
+          "nano-banana-pro": {
+            enabled: true,
+            apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
+          },
+        },
+      },
+    });
+
+    expect(res.config.agents?.defaults?.imageGenerationModel).toEqual({
+      primary: "google/gemini-3-pro-image-preview",
+    });
+    expect(res.config.models?.providers?.google?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "GEMINI_API_KEY",
+    });
+    expect(res.config.skills?.entries).toBeUndefined();
+    expect(res.changes).toEqual([
+      "Moved skills.entries.nano-banana-pro → agents.defaults.imageGenerationModel.primary (google/gemini-3-pro-image-preview).",
+      "Moved skills.entries.nano-banana-pro.apiKey → models.providers.google.apiKey.",
+      "Removed legacy skills.entries.nano-banana-pro.",
+    ]);
+  });
+
+  it("prefers legacy nano-banana env.GEMINI_API_KEY over skill apiKey during migration", () => {
+    const res = normalizeCompatibilityConfigValues({
+      skills: {
+        entries: {
+          "nano-banana-pro": {
+            apiKey: "ignored-skill-api-key",
+            env: {
+              GEMINI_API_KEY: "env-gemini-key",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config.models?.providers?.google?.apiKey).toBe("env-gemini-key");
+    expect(res.changes).toContain(
+      "Moved skills.entries.nano-banana-pro.env.GEMINI_API_KEY → models.providers.google.apiKey.",
+    );
+  });
+
+  it("preserves explicit native config while removing legacy nano-banana skill config", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          imageGenerationModel: {
+            primary: "fal/fal-ai/flux/dev",
+          },
+        },
+      },
+      models: {
+        providers: {
+          google: {
+            apiKey: "existing-google-key",
+            baseUrl: "https://generativelanguage.googleapis.com",
+            models: [],
+          },
+        },
+      },
+      skills: {
+        entries: {
+          "nano-banana-pro": {
+            apiKey: "legacy-gemini-key",
+          },
+          peekaboo: { enabled: true },
+        },
+      },
+    });
+
+    expect(res.config.agents?.defaults?.imageGenerationModel).toEqual({
+      primary: "fal/fal-ai/flux/dev",
+    });
+    expect(res.config.models?.providers?.google?.apiKey).toBe("existing-google-key");
+    expect(res.config.skills?.entries).toEqual({
+      peekaboo: { enabled: true },
+    });
+    expect(res.changes).toEqual(["Removed legacy skills.entries.nano-banana-pro."]);
+  });
+
+  it("removes nano-banana from skills.allowBundled during migration", () => {
+    const res = normalizeCompatibilityConfigValues({
+      skills: {
+        allowBundled: ["peekaboo", "nano-banana-pro"],
+      },
+    });
+
+    expect(res.config.skills?.allowBundled).toEqual(["peekaboo"]);
+    expect(res.changes).toEqual(["Removed nano-banana-pro from skills.allowBundled."]);
+  });
+
+  it("migrates legacy web search provider config to plugin-owned config paths", () => {
+    const res = normalizeCompatibilityConfigValues({
+      tools: {
+        web: {
+          search: {
+            provider: "gemini",
+            maxResults: 5,
+            apiKey: "brave-key",
+            gemini: {
+              apiKey: "gemini-key",
+              model: "gemini-2.5-flash",
+            },
+            firecrawl: {
+              apiKey: "firecrawl-key",
+              baseUrl: "https://api.firecrawl.dev",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config.tools?.web?.search).toEqual({
+      provider: "gemini",
+      maxResults: 5,
+    });
+    expect(res.config.plugins?.entries?.brave).toEqual({
+      enabled: true,
+      config: {
+        webSearch: {
+          apiKey: "brave-key",
+        },
+      },
+    });
+    expect(res.config.plugins?.entries?.google).toEqual({
+      enabled: true,
+      config: {
+        webSearch: {
+          apiKey: "gemini-key",
+          model: "gemini-2.5-flash",
+        },
+      },
+    });
+    expect(res.config.plugins?.entries?.firecrawl).toEqual({
+      enabled: true,
+      config: {
+        webSearch: {
+          apiKey: "firecrawl-key",
+          baseUrl: "https://api.firecrawl.dev",
+        },
+      },
+    });
+    expect(res.changes).toEqual([
+      "Moved tools.web.search.apiKey → plugins.entries.brave.config.webSearch.apiKey.",
+      "Moved tools.web.search.firecrawl → plugins.entries.firecrawl.config.webSearch.",
+      "Moved tools.web.search.gemini → plugins.entries.google.config.webSearch.",
+    ]);
+  });
+
+  it("merges legacy web search provider config into explicit plugin config without overriding it", () => {
+    const res = normalizeCompatibilityConfigValues({
+      tools: {
+        web: {
+          search: {
+            provider: "gemini",
+            gemini: {
+              apiKey: "legacy-gemini-key",
+              model: "legacy-model",
+            },
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          google: {
+            enabled: true,
+            config: {
+              webSearch: {
+                model: "explicit-model",
+                baseUrl: "https://generativelanguage.googleapis.com",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config.tools?.web?.search).toEqual({
+      provider: "gemini",
+    });
+    expect(res.config.plugins?.entries?.google).toEqual({
+      enabled: true,
+      config: {
+        webSearch: {
+          apiKey: "legacy-gemini-key",
+          model: "explicit-model",
+          baseUrl: "https://generativelanguage.googleapis.com",
+        },
+      },
+    });
+    expect(res.changes).toEqual([
+      "Merged tools.web.search.gemini → plugins.entries.google.config.webSearch (filled missing fields from legacy; kept explicit plugin config values).",
+    ]);
+  });
+
+  it("migrates legacy talk flat fields to provider/providers", () => {
+    const res = normalizeCompatibilityConfigValues({
+      talk: {
+        voiceId: "voice-123",
+        voiceAliases: {
+          Clawd: "EXAVITQu4vr4xnSDxMaL",
+        },
+        modelId: "eleven_v3",
+        outputFormat: "pcm_44100",
+        apiKey: "secret-key",
+        interruptOnSpeech: false,
+        silenceTimeoutMs: 1500,
+      },
+    });
+
+    expect(res.config.talk).toEqual({
+      provider: "elevenlabs",
+      providers: {
+        elevenlabs: {
+          voiceId: "voice-123",
+          voiceAliases: {
+            Clawd: "EXAVITQu4vr4xnSDxMaL",
+          },
+          modelId: "eleven_v3",
+          outputFormat: "pcm_44100",
+          apiKey: "secret-key",
+        },
+      },
+      voiceId: "voice-123",
+      voiceAliases: {
+        Clawd: "EXAVITQu4vr4xnSDxMaL",
+      },
+      modelId: "eleven_v3",
+      outputFormat: "pcm_44100",
+      apiKey: "secret-key",
+      interruptOnSpeech: false,
+      silenceTimeoutMs: 1500,
+    });
+    expect(res.changes).toEqual([
+      "Moved legacy talk flat fields → talk.provider/talk.providers.elevenlabs.",
+    ]);
+  });
+
+  it("normalizes talk provider ids without overriding explicit provider config", () => {
+    const res = normalizeCompatibilityConfigValues({
+      talk: {
+        provider: " elevenlabs ",
+        providers: {
+          " elevenlabs ": {
+            voiceId: "voice-123",
+          },
+        },
+        apiKey: "secret-key",
+      },
+    });
+
+    expect(res.config.talk).toEqual({
+      provider: "elevenlabs",
+      providers: {
+        elevenlabs: {
+          voiceId: "voice-123",
+        },
+      },
+      apiKey: "secret-key",
+    });
+    expect(res.changes).toEqual([
+      "Normalized talk.provider/providers shape (trimmed provider ids and merged missing compatibility fields).",
+    ]);
+  });
+
+  it("migrates tools.message.allowCrossContextSend to canonical crossContext settings", () => {
+    const res = normalizeCompatibilityConfigValues({
+      tools: {
+        message: {
+          allowCrossContextSend: true,
+          crossContext: {
+            allowWithinProvider: false,
+            allowAcrossProviders: false,
+          },
+        },
+      },
+    });
+
+    expect(res.config.tools?.message).toEqual({
+      crossContext: {
+        allowWithinProvider: true,
+        allowAcrossProviders: true,
+      },
+    });
+    expect(res.changes).toEqual([
+      "Moved tools.message.allowCrossContextSend → tools.message.crossContext.allowWithinProvider/allowAcrossProviders (true).",
+    ]);
+  });
+
+  it("migrates legacy deepgram media options to providerOptions.deepgram", () => {
+    const res = normalizeCompatibilityConfigValues({
+      tools: {
+        media: {
+          audio: {
+            deepgram: {
+              detectLanguage: true,
+              smartFormat: true,
+            },
+            providerOptions: {
+              deepgram: {
+                punctuate: false,
+              },
+            },
+            models: [
+              {
+                provider: "deepgram",
+                deepgram: {
+                  punctuate: true,
+                },
+              },
+            ],
+          },
+          models: [
+            {
+              provider: "deepgram",
+              deepgram: {
+                smartFormat: false,
+              },
+              providerOptions: {
+                deepgram: {
+                  detect_language: true,
+                },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(res.config.tools?.media?.audio).toEqual({
+      providerOptions: {
+        deepgram: {
+          detect_language: true,
+          smart_format: true,
+          punctuate: false,
+        },
+      },
+      models: [
+        {
+          provider: "deepgram",
+          providerOptions: {
+            deepgram: {
+              punctuate: true,
+            },
+          },
+        },
+      ],
+    });
+    expect(res.config.tools?.media?.models).toEqual([
+      {
+        provider: "deepgram",
+        providerOptions: {
+          deepgram: {
+            smart_format: false,
+            detect_language: true,
+          },
+        },
+      },
+    ]);
+    expect(res.changes).toEqual([
+      "Merged tools.media.audio.deepgram → tools.media.audio.providerOptions.deepgram (filled missing canonical fields from legacy).",
+      "Moved tools.media.audio.models[0].deepgram → tools.media.audio.models[0].providerOptions.deepgram.",
+      "Merged tools.media.models[0].deepgram → tools.media.models[0].providerOptions.deepgram (filled missing canonical fields from legacy).",
+    ]);
+  });
 });

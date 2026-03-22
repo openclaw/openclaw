@@ -196,7 +196,7 @@ describe("discoverOpenClawPlugins", () => {
     expect(ids).toContain("voice-call");
   });
 
-  it("normalizes bundled provider package ids to canonical plugin ids", async () => {
+  it("strips provider suffixes from package-derived ids", async () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions", "ollama-provider-pack");
     mkdirSafe(path.join(globalExt, "src"));
@@ -217,6 +217,46 @@ describe("discoverOpenClawPlugins", () => {
     const ids = candidates.map((c) => c.idHint);
     expect(ids).toContain("ollama");
     expect(ids).not.toContain("ollama-provider");
+  });
+
+  it("normalizes bundled speech package ids to canonical plugin ids", async () => {
+    const stateDir = makeTempDir();
+    const extensionsDir = path.join(stateDir, "extensions");
+    const elevenlabsDir = path.join(extensionsDir, "elevenlabs-speech-pack");
+    const microsoftDir = path.join(extensionsDir, "microsoft-speech-pack");
+
+    mkdirSafe(path.join(elevenlabsDir, "src"));
+    mkdirSafe(path.join(microsoftDir, "src"));
+
+    writePluginPackageManifest({
+      packageDir: elevenlabsDir,
+      packageName: "@openclaw/elevenlabs-speech",
+      extensions: ["./src/index.ts"],
+    });
+    writePluginPackageManifest({
+      packageDir: microsoftDir,
+      packageName: "@openclaw/microsoft-speech",
+      extensions: ["./src/index.ts"],
+    });
+
+    fs.writeFileSync(
+      path.join(elevenlabsDir, "src", "index.ts"),
+      "export default function () {}",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(microsoftDir, "src", "index.ts"),
+      "export default function () {}",
+      "utf-8",
+    );
+
+    const { candidates } = await discoverWithStateDir(stateDir, {});
+
+    const ids = candidates.map((c) => c.idHint);
+    expect(ids).toContain("elevenlabs");
+    expect(ids).toContain("microsoft");
+    expect(ids).not.toContain("elevenlabs-speech");
+    expect(ids).not.toContain("microsoft-speech");
   });
 
   it("treats configured directory paths as plugin packages", async () => {

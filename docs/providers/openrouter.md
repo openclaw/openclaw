@@ -24,7 +24,7 @@ openclaw onboard --auth-choice apiKey --token-provider openrouter --token "$OPEN
   env: { OPENROUTER_API_KEY: "sk-or-..." },
   agents: {
     defaults: {
-      model: { primary: "openrouter/anthropic/claude-sonnet-4-5" },
+      model: { primary: "openrouter/anthropic/claude-sonnet-4-6" },
     },
   },
 }

@@ -48,7 +48,9 @@ describe("memory manager sync failures", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: indexPath },
+            store: { path: indexPath, vector: { enabled: false } },
+            cache: { enabled: false },
+            query: { minScore: 0, hybrid: { enabled: false } },
             sync: { watch: true, watchDebounceMs: 1, onSessionStart: false, onSearch: false },
           },
         },
@@ -56,8 +58,10 @@ describe("memory manager sync failures", () => {
       },
     } as OpenClawConfig;
 
-    manager = await getRequiredMemoryIndexManager({ cfg, agentId: "main" });
-    const syncSpy = vi.spyOn(manager, "sync");
+    manager = await getRequiredMemoryIndexManager({ cfg, agentId: "main", purpose: "status" });
+    const syncSpy = vi
+      .spyOn(manager, "sync")
+      .mockRejectedValueOnce(new Error("openai embeddings failed: 400 bad request"));
 
     // Call the internal scheduler directly; it uses fire-and-forget sync.
     (manager as unknown as { scheduleWatchSync: () => void }).scheduleWatchSync();

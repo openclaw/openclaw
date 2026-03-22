@@ -1,9 +1,9 @@
-import { hasControlCommand } from "../../../../../src/auto-reply/command-detection.js";
-import { parseActivationCommand } from "../../../../../src/auto-reply/group-activation.js";
-import { recordPendingHistoryEntryIfEnabled } from "../../../../../src/auto-reply/reply/history.js";
-import { resolveMentionGating } from "../../../../../src/channels/mention-gating.js";
-import type { loadConfig } from "../../../../../src/config/config.js";
-import { normalizeE164 } from "../../../../../src/utils.js";
+import { resolveMentionGating } from "openclaw/plugin-sdk/channel-inbound";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
+import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { recordPendingHistoryEntryIfEnabled } from "openclaw/plugin-sdk/reply-history";
+import { parseActivationCommand } from "openclaw/plugin-sdk/reply-runtime";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import type { MentionConfig } from "../mentions.js";
 import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
@@ -127,17 +127,14 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
     conversationId: params.conversationId,
   });
   const requireMention = activation !== "always";
-  const selfJid = params.msg.selfJid?.replace(/:\d+/, "");
-  const selfLid = params.msg.selfLid?.replace(/:\d+/, "");
-  // replyToSenderJid may carry either a standard JID or an @lid identifier.
-  const replySenderJid = params.msg.replyToSenderJid?.replace(/:\d+/, "");
+  const selfJid = params.msg.selfJid?.replace(/:\\d+/, "");
+  const replySenderJid = params.msg.replyToSenderJid?.replace(/:\\d+/, "");
   const selfE164 = params.msg.selfE164 ? normalizeE164(params.msg.selfE164) : null;
   const replySenderE164 = params.msg.replyToSenderE164
     ? normalizeE164(params.msg.replyToSenderE164)
     : null;
   const implicitMention = Boolean(
     (selfJid && replySenderJid && selfJid === replySenderJid) ||
-    (selfLid && replySenderJid && selfLid === replySenderJid) ||
     (selfE164 && replySenderE164 && selfE164 === replySenderE164),
   );
   const mentionGate = resolveMentionGating({

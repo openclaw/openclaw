@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   hasReplyChannelData,
   hasReplyContent,
+  hasReplyPayloadContent,
   normalizeInteractiveReply,
   resolveInteractiveTextFallback,
 } from "./payload.js";
@@ -40,6 +41,41 @@ describe("hasReplyContent", () => {
         text: "   ",
         extraContent: true,
       }),
+    ).toBe(true);
+  });
+});
+
+describe("hasReplyPayloadContent", () => {
+  it("trims text and falls back to channel data by default", () => {
+    expect(
+      hasReplyPayloadContent({
+        text: "   ",
+        channelData: { slack: { blocks: [] } },
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts explicit channel-data overrides and extra content", () => {
+    expect(
+      hasReplyPayloadContent(
+        {
+          text: "   ",
+          channelData: {},
+        },
+        {
+          hasChannelData: true,
+        },
+      ),
+    ).toBe(true);
+    expect(
+      hasReplyPayloadContent(
+        {
+          text: "   ",
+        },
+        {
+          extraContent: true,
+        },
+      ),
     ).toBe(true);
   });
 });
