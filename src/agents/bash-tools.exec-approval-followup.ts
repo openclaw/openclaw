@@ -40,13 +40,16 @@ export async function sendExecApprovalFollowup(
       ? String(params.turnSourceThreadId)
       : undefined;
 
-  // Only request external delivery when there is an explicit channel+to
-  // target.  When the turn originated from webchat (no external target),
-  // setting deliver=false avoids the "Channel is required" gateway error.
-  // The agent still runs and its output reaches the webchat user through
-  // the session transcript / WebSocket stream (session-tool-result-guard
-  // emits transcript updates with message payloads that server.impl
-  // forwards to subscribed webchat connections).
+  // Suppress external delivery only when the turn explicitly came from
+  // webchat (internal channel, no external "to" address).  In that case
+  // the gateway would fail with "Channel is required" because no external
+  // route can be resolved.  The agent still runs and its output reaches
+  // the webchat user through the session transcript / WebSocket stream.
+  //
+  // When channel info is absent entirely (e.g. CLI / automation), keep
+  // deliver=true so the gateway can fall back to the session's last
+  // external route.
+  const isWebchatOnly = channel === "webchat" && !to;
   const hasExplicitTarget = Boolean(channel && to);
 
   await callGatewayTool(
@@ -55,7 +58,7 @@ export async function sendExecApprovalFollowup(
     {
       sessionKey,
       message: buildExecApprovalFollowupPrompt(resultText),
-      deliver: hasExplicitTarget,
+      deliver: !isWebchatOnly,
       bestEffortDeliver: true,
       channel: hasExplicitTarget ? channel : undefined,
       to: hasExplicitTarget ? to : undefined,
