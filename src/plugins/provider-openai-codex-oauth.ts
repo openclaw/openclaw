@@ -18,6 +18,11 @@ export async function loginOpenAICodexOAuth(params: {
   localBrowserMessage?: string;
 }): Promise<OAuthCredentials | null> {
   const { prompter, runtime, isRemote, openUrl, localBrowserMessage } = params;
+
+  // Ensure env-based proxy dispatcher is active before any outbound fetch calls,
+  // including the TLS preflight check.
+  ensureGlobalUndiciEnvProxyDispatcher();
+
   const preflight = await runOpenAIOAuthTlsPreflight();
   if (!preflight.ok && preflight.kind === "tls-cert") {
     const hint = formatOpenAIOAuthTlsPreflightFix(preflight);
@@ -52,12 +57,6 @@ export async function loginOpenAICodexOAuth(params: {
       localBrowserMessage: localBrowserMessage ?? "Complete sign-in in browser…",
       manualPromptMessage: manualInputPromptMessage,
     });
-
-    // Ensure env-based proxy dispatcher is active before the OAuth token exchange.
-    // The move from @mariozechner/pi-ai to @mariozechner/pi-ai/oauth dropped the
-    // implicit http-proxy.js side-effect import that previously initialized the
-    // global undici dispatcher (#51569, #51619).
-    ensureGlobalUndiciEnvProxyDispatcher();
 
     const creds = await loginOpenAICodex({
       onAuth: baseOnAuth,
