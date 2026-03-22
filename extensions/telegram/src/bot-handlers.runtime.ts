@@ -486,11 +486,6 @@ export const registerTelegramHandlers = ({
       [{ text: "🔍 Research more", callback_data: `${RESEARCH_CB_PREFIX}${queryId}` }],
     ],
   });
-  const buildImageResearchMarkup = (queryId: string) => ({
-    inline_keyboard: [
-      [{ text: "🎨 Generate it!", callback_data: `${RESEARCH_CB_PREFIX}${queryId}` }],
-    ],
-  });
 
   const inlineDebounceMs = 400;
   const inlineDebounceTimers = new Map<
@@ -1143,20 +1138,13 @@ export const registerTelegramHandlers = ({
         // Strip shell metacharacters to prevent prompt injection via user-controlled input
         const queryText = rawQueryText.replace(/[`$\\|&;(){}<>!]/g, "");
         const queryHtml = escapeHtml(queryText);
-        const IMAGE_INTENT_RE =
-          /\b(draw|paint|generat|creat|make|design|render|sketch|image|picture|photo|pic|illustrat|artwork|art|visuali|anime|cartoon)\w*\b/i;
-        const isImageIntent = IMAGE_INTENT_RE.test(queryText);
         clearTimeout(pending.cleanupTimer);
         researchPending.delete(queryId);
-        await ctx
-          .answerCallbackQuery({ text: isImageIntent ? "Generating… 🎨" : "Researching… 🔍" })
-          .catch(() => {});
+        await ctx.answerCallbackQuery({ text: "Researching… 🔍" }).catch(() => {});
         await bot.api
           .editMessageTextInline(
             inlineMessageId,
-            isImageIntent
-              ? `<b>Q:</b> ${queryHtml}\n\n<i>🖌️ Drawing…</i>`
-              : `<b>Q:</b> ${queryHtml}\n\n<i>🔍 Researching…</i>`,
+            `<b>Q:</b> ${queryHtml}\n\n<i>🔍 Researching…</i>`,
             { parse_mode: "HTML", reply_markup: { inline_keyboard: [] } },
           )
           .catch(() => {});
@@ -1169,7 +1157,7 @@ export const registerTelegramHandlers = ({
           cfg,
           channel: "telegram",
           accountId,
-          peer: { kind: "inline", id: senderId },
+          peer: { kind: "direct", id: senderId },
         });
         const dmSessionKey = dmRoute.sessionKey;
         const dmStorePath = resolveStorePath(cfg.session?.store, { agentId: dmRoute.agentId });
@@ -1180,26 +1168,7 @@ export const registerTelegramHandlers = ({
         const senderName =
           [callback.from?.first_name, callback.from?.last_name].filter(Boolean).join(" ") ||
           senderId;
-        const nanobananaKey =
-          (cfg as unknown as { skills?: { entries?: Record<string, { apiKey?: string }> } }).skills
-            ?.entries?.["nano-banana-pro"]?.apiKey ?? "";
-        const homeDir = process.env.HOME ?? "/home/linuxuser";
-        const nanobananaScript = `${homeDir}/.openclaw/workspace/skills/nano-banana-pro/scripts/generate_image.py`;
-        const uvBin = `${homeDir}/.local/bin/uv`;
-        const inlineOutputPath = `/tmp/inline-img-${Date.now()}.png`;
-
-        const researchBodyForAgent = isImageIntent
-          ? [
-              `[Image generation request. Do NOT explain or ask questions — generate the image immediately using the exec tool.]`,
-              `Run this command EXACTLY (no modifications):`,
-              `${uvBin} run ${nanobananaScript} --prompt ${JSON.stringify(queryText)} --filename ${JSON.stringify(inlineOutputPath)} --resolution 1K${nanobananaKey ? ` --api-key ${JSON.stringify(nanobananaKey)}` : ""}`,
-              `When the command succeeds, output the file path on its own line in EXACTLY this format (replace <path> with the actual output path):`,
-              `FILE:<path>`,
-              `The output path for this request is: ${inlineOutputPath}`,
-              `Then write a single short caption on the next line.`,
-              `The query: ${queryText}`,
-            ].join("\n")
-          : `[Research request — skip any startup file reads, answer this question directly using web search or other relevant tools.]\n${queryText}`;
+        const researchBodyForAgent = `[Research request — skip any startup file reads, answer this question directly using web search or other relevant tools.]\n${queryText}`;
         const researchBody = formatInboundEnvelope({
           channel: "Telegram",
           from: senderName,
@@ -1232,8 +1201,6 @@ export const registerTelegramHandlers = ({
 
         const STREAM_INTERVAL_MS = 2000;
         let streamText = "";
-        let detectedImagePath: string | null = null;
-        const FILE_LINE_RE = /^FILE:(\/\S+\.(?:png|jpg|jpeg|gif|webp))$/im;
         let lastEdit = 0;
         let editChain: Promise<unknown> = Promise.resolve();
         const toHtml = (md: string) => markdownToTelegramHtml(md, {});
@@ -1267,9 +1234,7 @@ export const registerTelegramHandlers = ({
               ? bot.api
                   .editMessageTextInline(
                     inlineMessageId,
-                    isImageIntent
-                      ? `<b>Q:</b> ${queryHtml}\n\n<i>🖌️ Generating… ${frame}</i>`
-                      : `<b>Q:</b> ${queryHtml}\n\n<i>🔍 Researching… ${frame}</i>`,
+                    `<b>Q:</b> ${queryHtml}\n\n<i>🔍 Researching… ${frame}</i>`,
                     { parse_mode: "HTML", reply_markup: { inline_keyboard: [] } },
                   )
                   .catch(() => {})
@@ -1288,12 +1253,7 @@ export const registerTelegramHandlers = ({
                 spinnerActive = false;
                 clearInterval(spinnerInterval);
               }
-              const fileMatch = FILE_LINE_RE.exec(payload.text);
-              if (fileMatch) {
-                detectedImagePath = fileMatch[1];
-              }
-              const cleanedText = payload.text.replace(FILE_LINE_RE, "").trim();
-              streamText += (streamText ? "\n\n" : "") + cleanedText;
+              streamText += (streamText ? "\n\n" : "") + payload.text.trim();
               const now = Date.now();
               if (deferTimer === null && now - lastEdit >= STREAM_INTERVAL_MS) {
                 lastEdit = now;
@@ -1323,53 +1283,8 @@ export const registerTelegramHandlers = ({
             }
             await editChain;
             runtime.log?.(
-              `[telegram] inline research: done query_id=${queryId} streamText=${streamText.length}chars imagePath=${detectedImagePath ?? "none"}`,
+              `[telegram] inline research: done query_id=${queryId} streamText=${streamText.length}chars`,
             );
-
-            if (detectedImagePath) {
-              try {
-                const sent = await bot.api.sendPhoto(
-                  Number(senderId),
-                  new InputFile(detectedImagePath),
-                  { caption: streamText.trim() || queryText, disable_notification: true },
-                );
-                const fileId = sent.photo.at(-1)!.file_id;
-                await bot.api.deleteMessage(Number(senderId), sent.message_id).catch(() => {});
-                await bot.api
-                  .editMessageMediaInline(inlineMessageId, {
-                    type: "photo",
-                    media: fileId,
-                    caption: streamText.trim() || queryText,
-                  })
-                  .then(() =>
-                    runtime.log?.(`[telegram] inline research: image edit ok query_id=${queryId}`),
-                  )
-                  .catch((err) =>
-                    runtime.error?.(
-                      danger(
-                        `[telegram] inline research: image edit failed query_id=${queryId}: ${String(err)}`,
-                      ),
-                    ),
-                  );
-              } catch (err) {
-                runtime.error?.(
-                  danger(
-                    `[telegram] inline research: image upload failed query_id=${queryId}: ${String(err)}`,
-                  ),
-                );
-                const fallbackHtml = streamText ? toHtml(streamText) : "";
-                const fallbackMsg = fallbackHtml
-                  ? `<b>Q:</b> ${queryHtml}\n\n<b>A:</b> ${fallbackHtml}`.slice(0, 4096)
-                  : `<b>Q:</b> ${queryHtml}\n\n<i>Image generation failed.</i>`;
-                await bot.api
-                  .editMessageTextInline(inlineMessageId, fallbackMsg, {
-                    parse_mode: "HTML",
-                    reply_markup: { inline_keyboard: [] },
-                  })
-                  .catch(() => {});
-              }
-              return;
-            }
 
             const finalHtml = streamText ? toHtml(streamText) : "";
             const finalMsg = finalHtml
