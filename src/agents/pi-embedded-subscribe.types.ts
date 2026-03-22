@@ -37,6 +37,9 @@ export type SubscribeEmbeddedPiSessionParams = {
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void | Promise<void>;
   enforceFinalTag?: boolean;
   config?: OpenClawConfig;
+  currentChannelProvider?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string;
   sessionKey?: string;
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;

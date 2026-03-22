@@ -399,7 +399,11 @@ export async function handleToolExecutionStart(
     const argsRecord = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
     const isMessagingSend = isMessagingToolSendAction(toolName, argsRecord);
     if (isMessagingSend) {
-      const sendTargets = extractMessagingToolSends(toolName, argsRecord);
+      const sendTargets = extractMessagingToolSends(toolName, argsRecord, {
+        currentChannelProvider: ctx.params.currentChannelProvider,
+        currentChannelId: ctx.params.currentChannelId,
+        currentThreadTs: ctx.params.currentThreadTs,
+      });
       if (sendTargets.length > 0) {
         ctx.state.pendingMessagingTargets.set(toolCallId, sendTargets);
       }

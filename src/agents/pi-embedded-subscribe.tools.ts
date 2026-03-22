@@ -366,8 +366,11 @@ function normalizeMessageToolTarget(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function resolveMessageToolTargets(args: Record<string, unknown>): string[] {
-  const targets = [
+function resolveMessageToolTargets(
+  args: Record<string, unknown>,
+  currentChannelId?: string,
+): string[] {
+  const explicitTargets = [
     normalizeMessageToolTarget(args.to),
     normalizeMessageToolTarget(args.target),
     normalizeMessageToolTarget(args.channelId),
@@ -375,12 +378,22 @@ function resolveMessageToolTargets(args: Record<string, unknown>): string[] {
       ? args.targets.map((value) => normalizeMessageToolTarget(value))
       : []),
   ].filter((value): value is string => Boolean(value));
-  return Array.from(new Set(targets));
+  if (explicitTargets.length > 0) {
+    return Array.from(new Set(explicitTargets));
+  }
+  return currentChannelId ? [currentChannelId] : [];
 }
+
+type ExtractMessagingToolSendOptions = {
+  currentChannelProvider?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string;
+};
 
 export function extractMessagingToolSends(
   toolName: string,
   args: Record<string, unknown>,
+  options?: ExtractMessagingToolSendOptions,
 ): MessagingToolSend[] {
   // Provider docking: new provider tools must implement plugin.actions.extractToolSend.
   const action = typeof args.action === "string" ? args.action.trim() : "";
@@ -395,25 +408,38 @@ export function extractMessagingToolSends(
     if (action !== "send" && action !== "thread-reply") {
       return [];
     }
-    const toRaw = resolveMessageToolTargets(args);
+    const providerRaw = typeof args.provider === "string" ? args.provider.trim() : "";
+    const channelRaw = typeof args.channel === "string" ? args.channel.trim() : "";
+    const providerHint = providerRaw || channelRaw || options?.currentChannelProvider;
+    const providerId = providerHint ? normalizeChannelId(providerHint) : null;
+    const provider = providerId ?? (providerHint ? providerHint.toLowerCase() : undefined);
+    const toRaw = resolveMessageToolTargets(args, options?.currentChannelId);
     if (toRaw.length === 0) {
       return [];
     }
-    const providerRaw = typeof args.provider === "string" ? args.provider.trim() : "";
-    const channelRaw = typeof args.channel === "string" ? args.channel.trim() : "";
-    const providerHint = providerRaw || channelRaw;
-    const providerId = providerHint ? normalizeChannelId(providerHint) : null;
-    const provider = providerId ?? (providerHint ? providerHint.toLowerCase() : undefined);
+    const normalizedCurrentTarget = provider
+      ? normalizeTargetForProvider(provider, options?.currentChannelId)
+      : options?.currentChannelId;
+    const implicitThreadId = options?.currentThreadTs?.trim();
     return toRaw
       .map((target) => (provider ? normalizeTargetForProvider(provider, target) : target))
       .filter((to): to is string => Boolean(to))
-      .map((to) => ({
-        tool: toolName,
-        ...(provider ? { provider } : {}),
-        ...(accountId ? { accountId } : {}),
-        ...(threadId ? { threadId } : {}),
-        to,
-      }));
+      .map((to) => {
+        const shouldUseImplicitThreadId =
+          !threadId &&
+          provider === "telegram" &&
+          Boolean(implicitThreadId) &&
+          Boolean(normalizedCurrentTarget) &&
+          to === normalizedCurrentTarget;
+        return {
+          tool: toolName,
+          ...(provider ? { provider } : {}),
+          ...(accountId ? { accountId } : {}),
+          ...(threadId ? { threadId } : {}),
+          ...(!threadId && shouldUseImplicitThreadId ? { threadId: implicitThreadId } : {}),
+          to,
+        };
+      });
   }
   const providerId = normalizeChannelId(toolName);
   if (!providerId) {
@@ -441,6 +467,7 @@ export function extractMessagingToolSends(
 export function extractMessagingToolSend(
   toolName: string,
   args: Record<string, unknown>,
+  options?: ExtractMessagingToolSendOptions,
 ): MessagingToolSend | undefined {
-  return extractMessagingToolSends(toolName, args)[0];
+  return extractMessagingToolSends(toolName, args, options)[0];
 }

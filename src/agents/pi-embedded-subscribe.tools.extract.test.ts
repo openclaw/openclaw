@@ -97,4 +97,47 @@ describe("extractMessagingToolSend", () => {
       { tool: "message", provider: "telegram", to: "telegram:456", threadId: "99" },
     ]);
   });
+
+  it("tracks implicit current-route sends when message target is omitted", () => {
+    const result = extractMessagingToolSend(
+      "message",
+      {
+        action: "send",
+        content: "same route",
+      },
+      {
+        currentChannelProvider: "telegram",
+        currentChannelId: "123",
+      },
+    );
+
+    expect(result).toEqual({
+      tool: "message",
+      provider: "telegram",
+      to: "telegram:123",
+    });
+  });
+
+  it("preserves implicit Telegram topic threading for same-chat sends", () => {
+    const result = extractMessagingToolSend(
+      "message",
+      {
+        action: "send",
+        channel: "telegram",
+        to: "123",
+      },
+      {
+        currentChannelProvider: "telegram",
+        currentChannelId: "123",
+        currentThreadTs: "77",
+      },
+    );
+
+    expect(result).toEqual({
+      tool: "message",
+      provider: "telegram",
+      to: "telegram:123",
+      threadId: "77",
+    });
+  });
 });
