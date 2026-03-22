@@ -1,3 +1,7 @@
+import {
+  listCombinedAccountIds,
+  resolveListedDefaultAccountId,
+} from "../channels/plugins/account-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { tryReadSecretFileSync } from "../infra/secret-file.js";
 import {
@@ -151,43 +155,32 @@ export function resolveLineAccount(params: {
 
 export function listLineAccountIds(cfg: OpenClawConfig): string[] {
   const lineConfig = cfg.channels?.line as LineConfig | undefined;
-  const accounts = lineConfig?.accounts;
-  const ids = new Set<string>();
-
-  // Add default account if configured at base level
-  if (
+  const hasBaseCredentials = Boolean(
     lineConfig?.channelAccessToken?.trim() ||
     lineConfig?.tokenFile ||
-    process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim()
-  ) {
-    ids.add(DEFAULT_ACCOUNT_ID);
-  }
-
-  // Add named accounts
-  if (accounts) {
-    for (const id of Object.keys(accounts)) {
-      ids.add(id);
-    }
-  }
-
-  return Array.from(ids);
+    process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim(),
+  );
+  const preferred = normalizeOptionalAccountId(lineConfig?.defaultAccount);
+  const configuredAccountIds = [
+    ...new Set(
+      Object.keys(lineConfig?.accounts ?? {})
+        .filter(Boolean)
+        .map(normalizeSharedAccountId),
+    ),
+  ];
+  return listCombinedAccountIds({
+    configuredAccountIds,
+    implicitAccountId: hasBaseCredentials ? (preferred ?? DEFAULT_ACCOUNT_ID) : undefined,
+  });
 }
 
 export function resolveDefaultLineAccountId(cfg: OpenClawConfig): string {
-  const preferred = normalizeOptionalAccountId(
-    (cfg.channels?.line as LineConfig | undefined)?.defaultAccount,
-  );
-  if (
-    preferred &&
-    listLineAccountIds(cfg).some((accountId) => normalizeSharedAccountId(accountId) === preferred)
-  ) {
-    return preferred;
-  }
-  const ids = listLineAccountIds(cfg);
-  if (ids.includes(DEFAULT_ACCOUNT_ID)) {
-    return DEFAULT_ACCOUNT_ID;
-  }
-  return ids[0] ?? DEFAULT_ACCOUNT_ID;
+  return resolveListedDefaultAccountId({
+    accountIds: listLineAccountIds(cfg),
+    configuredDefaultAccountId: normalizeOptionalAccountId(
+      (cfg.channels?.line as LineConfig | undefined)?.defaultAccount,
+    ),
+  });
 }
 
 export function normalizeAccountId(accountId: string | undefined): string {
