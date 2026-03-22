@@ -6,8 +6,18 @@ import {
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import { msteamsPlugin } from "./channel.js";
 
+function requireDirectorySelf(
+  directory: typeof msteamsPlugin.directory | null | undefined,
+): NonNullable<NonNullable<typeof msteamsPlugin.directory>["self"]> {
+  if (!directory?.self) {
+    throw new Error("expected msteams directory.self");
+  }
+  return directory.self;
+}
+
 describe("msteams directory", () => {
   const runtimeEnv = createDirectoryTestRuntime() as RuntimeEnv;
+  const directorySelf = requireDirectorySelf(msteamsPlugin.directory);
 
   describe("self()", () => {
     it("returns bot identity when credentials are configured", async () => {
@@ -21,13 +31,13 @@ describe("msteams directory", () => {
         },
       } as unknown as OpenClawConfig;
 
-      const result = await msteamsPlugin.directory?.self?.({ cfg, runtime: runtimeEnv });
+      const result = await directorySelf({ cfg, runtime: runtimeEnv });
       expect(result).toEqual({ kind: "user", id: "test-app-id-1234", name: "test-app-id-1234" });
     });
 
     it("returns null when credentials are not configured", async () => {
       const cfg = { channels: {} } as unknown as OpenClawConfig;
-      const result = await msteamsPlugin.directory?.self?.({ cfg, runtime: runtimeEnv });
+      const result = await directorySelf({ cfg, runtime: runtimeEnv });
       expect(result).toBeNull();
     });
   });
