@@ -1,11 +1,11 @@
 import type { Component } from "@mariozechner/pi-tui";
 import {
   Input,
+  Key,
   matchesKey,
   type SelectItem,
   SelectList,
   type SelectListTheme,
-  getKeybindings,
 } from "@mariozechner/pi-tui";
 import chalk from "chalk";
 import { fuzzyFilterLower, prepareSearchItems } from "./fuzzy-filter.js";
@@ -110,8 +110,7 @@ export class FilterableSelectList implements Component {
     }
 
     // Escape: clear filter or cancel
-    const kb = getKeybindings();
-    if (kb.matches(keyData, "tui.select.cancel")) {
+    if (matchesKey(keyData, Key.escape)) {
       if (this.filterText) {
         this.filterText = "";
         this.input.setValue("");
