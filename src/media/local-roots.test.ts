@@ -2,6 +2,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getAgentScopedMediaLocalRoots, getDefaultMediaLocalRoots } from "./local-roots.js";
 
+function normalizeHostPath(value: string): string {
+  return path.normalize(path.resolve(value));
+}
+
 describe("local media roots", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -12,11 +16,12 @@ describe("local media roots", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
 
     const roots = getDefaultMediaLocalRoots();
+    const normalizedRoots = roots.map(normalizeHostPath);
 
-    expect(roots).toContain(path.join(stateDir, "media"));
-    expect(roots).toContain(path.join(stateDir, "workspace"));
-    expect(roots).toContain(path.join(stateDir, "sandboxes"));
-    expect(roots).not.toContain(path.join(stateDir, "agents"));
+    expect(normalizedRoots).toContain(normalizeHostPath(path.join(stateDir, "media")));
+    expect(normalizedRoots).toContain(normalizeHostPath(path.join(stateDir, "workspace")));
+    expect(normalizedRoots).toContain(normalizeHostPath(path.join(stateDir, "sandboxes")));
+    expect(normalizedRoots).not.toContain(normalizeHostPath(path.join(stateDir, "agents")));
     expect(roots.length).toBeGreaterThanOrEqual(3);
   });
 
@@ -25,9 +30,10 @@ describe("local media roots", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
 
     const roots = getAgentScopedMediaLocalRoots({}, "ops");
+    const normalizedRoots = roots.map(normalizeHostPath);
 
-    expect(roots).toContain(path.join(stateDir, "workspace-ops"));
-    expect(roots).toContain(path.join(stateDir, "sandboxes"));
-    expect(roots).not.toContain(path.join(stateDir, "agents"));
+    expect(normalizedRoots).toContain(normalizeHostPath(path.join(stateDir, "workspace-ops")));
+    expect(normalizedRoots).toContain(normalizeHostPath(path.join(stateDir, "sandboxes")));
+    expect(normalizedRoots).not.toContain(normalizeHostPath(path.join(stateDir, "agents")));
   });
 });
