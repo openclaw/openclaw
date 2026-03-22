@@ -7,6 +7,7 @@ import {
   collectMatrixInstallPathWarnings,
   formatMatrixLegacyCryptoPreview,
   formatMatrixLegacyStatePreview,
+  runMatrixDoctorSequence,
 } from "./matrix.js";
 
 vi.mock("../../../infra/matrix-migration-snapshot.js", () => ({
@@ -136,5 +137,41 @@ describe("doctor matrix provider helpers", () => {
       expect.stringContaining("Matrix encrypted-state migration prepared."),
     ]);
     expect(result.warnings).toEqual([]);
+  });
+
+  it("collects matrix preview and install warnings through the provider sequence", async () => {
+    const matrixStateModule = await import("../../../infra/matrix-legacy-state.js");
+    const matrixCryptoModule = await import("../../../infra/matrix-legacy-crypto.js");
+
+    const stateSpy = vi.spyOn(matrixStateModule, "detectLegacyMatrixState").mockReturnValue({
+      accountId: "default",
+      legacyStoragePath: "/tmp/legacy-sync.json",
+      targetStoragePath: "/tmp/new-sync.json",
+      legacyCryptoPath: "/tmp/legacy-crypto.json",
+      targetCryptoPath: "/tmp/new-crypto.json",
+      selectionNote: "Picked the newest account.",
+      targetRootDir: "/tmp/account-root",
+    });
+    const cryptoSpy = vi.spyOn(matrixCryptoModule, "detectLegacyMatrixCrypto").mockReturnValue({
+      warnings: ["matrix warning"],
+      plans: [],
+    });
+
+    try {
+      const result = await runMatrixDoctorSequence({
+        cfg: {},
+        env: process.env,
+        shouldRepair: false,
+      });
+
+      expect(result.changeNotes).toEqual([]);
+      expect(result.warningNotes).toEqual([
+        expect.stringContaining("Matrix plugin upgraded in place."),
+        "- matrix warning",
+      ]);
+    } finally {
+      stateSpy.mockRestore();
+      cryptoSpy.mockRestore();
+    }
   });
 });

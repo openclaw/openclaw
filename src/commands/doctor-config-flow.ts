@@ -2,19 +2,12 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
-import { detectLegacyMatrixCrypto } from "../infra/matrix-legacy-crypto.js";
-import { detectLegacyMatrixState } from "../infra/matrix-legacy-state.js";
 import { note } from "../terminal/note.js";
 import { noteOpencodeProviderOverrides } from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
-import {
-  applyMatrixDoctorRepair,
-  collectMatrixInstallPathWarnings,
-  formatMatrixLegacyCryptoPreview,
-  formatMatrixLegacyStatePreview,
-} from "./doctor/providers/matrix.js";
+import { runMatrixDoctorSequence } from "./doctor/providers/matrix.js";
 import { runDoctorRepairSequence } from "./doctor/repair-sequencing.js";
 import {
   applyLegacyCompatibilityStep,
@@ -82,44 +75,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }));
   }
 
-  const matrixLegacyState = detectLegacyMatrixState({
+  const matrixSequence = await runMatrixDoctorSequence({
     cfg: candidate,
     env: process.env,
+    shouldRepair,
   });
-  const matrixLegacyCrypto = detectLegacyMatrixCrypto({
-    cfg: candidate,
-    env: process.env,
-  });
-  if (shouldRepair) {
-    const matrixRepair = await applyMatrixDoctorRepair({
-      cfg: candidate,
-      env: process.env,
-    });
-    for (const change of matrixRepair.changes) {
-      note(change, "Doctor changes");
-    }
-    for (const warning of matrixRepair.warnings) {
-      note(warning, "Doctor warnings");
-    }
-  } else if (matrixLegacyState) {
-    if ("warning" in matrixLegacyState) {
-      note(`- ${matrixLegacyState.warning}`, "Doctor warnings");
-    } else {
-      note(formatMatrixLegacyStatePreview(matrixLegacyState), "Doctor warnings");
-    }
+  for (const change of matrixSequence.changeNotes) {
+    note(change, "Doctor changes");
   }
-  if (
-    !shouldRepair &&
-    (matrixLegacyCrypto.warnings.length > 0 || matrixLegacyCrypto.plans.length > 0)
-  ) {
-    for (const preview of formatMatrixLegacyCryptoPreview(matrixLegacyCrypto)) {
-      note(preview, "Doctor warnings");
-    }
-  }
-
-  const matrixInstallWarnings = await collectMatrixInstallPathWarnings(candidate);
-  if (matrixInstallWarnings.length > 0) {
-    note(matrixInstallWarnings.join("\n"), "Doctor warnings");
+  for (const warning of matrixSequence.warningNotes) {
+    note(warning, "Doctor warnings");
   }
 
   const missingDefaultAccountBindingWarnings =

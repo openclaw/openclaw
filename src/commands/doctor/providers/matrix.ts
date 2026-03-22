@@ -145,3 +145,49 @@ export async function applyMatrixDoctorRepair(params: {
 
   return { changes, warnings };
 }
+
+export async function runMatrixDoctorSequence(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  shouldRepair: boolean;
+}): Promise<{ changeNotes: string[]; warningNotes: string[] }> {
+  const matrixLegacyState = detectLegacyMatrixState({
+    cfg: params.cfg,
+    env: params.env,
+  });
+  const matrixLegacyCrypto = detectLegacyMatrixCrypto({
+    cfg: params.cfg,
+    env: params.env,
+  });
+  const warningNotes: string[] = [];
+  const changeNotes: string[] = [];
+
+  if (params.shouldRepair) {
+    const matrixRepair = await applyMatrixDoctorRepair({
+      cfg: params.cfg,
+      env: params.env,
+    });
+    changeNotes.push(...matrixRepair.changes);
+    warningNotes.push(...matrixRepair.warnings);
+  } else if (matrixLegacyState) {
+    if ("warning" in matrixLegacyState) {
+      warningNotes.push(`- ${matrixLegacyState.warning}`);
+    } else {
+      warningNotes.push(formatMatrixLegacyStatePreview(matrixLegacyState));
+    }
+  }
+
+  if (
+    !params.shouldRepair &&
+    (matrixLegacyCrypto.warnings.length > 0 || matrixLegacyCrypto.plans.length > 0)
+  ) {
+    warningNotes.push(...formatMatrixLegacyCryptoPreview(matrixLegacyCrypto));
+  }
+
+  const matrixInstallWarnings = await collectMatrixInstallPathWarnings(params.cfg);
+  if (matrixInstallWarnings.length > 0) {
+    warningNotes.push(matrixInstallWarnings.join("\n"));
+  }
+
+  return { changeNotes, warningNotes };
+}
