@@ -92,7 +92,7 @@ export async function runChannelsCapabilities(
 
     const configured = Boolean(
       channelId === "telegram"
-        ? cfg.channels?.telegram?.accounts?.[accountId]?.token
+        ? cfg.channels?.telegram?.accounts?.[accountId]?.botToken
         : channelId === "feishu"
           ? cfg.channels?.feishu?.accounts?.[accountId]?.appId
           : null,

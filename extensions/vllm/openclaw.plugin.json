@@ -1,9 +1,0 @@
-{
-  "id": "vllm",
-  "providers": ["vllm"],
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {}
-  }
-}
