@@ -18,6 +18,7 @@ const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
 const runGatewayLoop = vi.fn(async ({ start }: { start: () => Promise<unknown> }) => {
   await start();
 });
+const normalizeStateDirEnv = vi.fn((_env?: NodeJS.ProcessEnv) => undefined);
 const configState = vi.hoisted(() => ({
   cfg: {} as Record<string, unknown>,
   snapshot: { exists: false } as Record<string, unknown>,
@@ -28,6 +29,7 @@ const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeC
 vi.mock("../../config/config.js", () => ({
   getConfigPath: () => "/tmp/openclaw-test-missing-config.json",
   loadConfig: () => configState.cfg,
+  normalizeStateDirEnv: (env?: NodeJS.ProcessEnv) => normalizeStateDirEnv(env),
   readConfigFileSnapshot: async () => configState.snapshot,
   resolveStateDir: () => "/tmp",
   resolveGatewayPort: () => 18789,
@@ -137,6 +139,7 @@ describe("gateway run option collisions", () => {
     waitForPortBindable.mockClear();
     ensureDevGatewayConfig.mockClear();
     runGatewayLoop.mockClear();
+    normalizeStateDirEnv.mockClear();
   });
 
   async function runGatewayCli(argv: string[]) {
@@ -180,6 +183,7 @@ describe("gateway run option collisions", () => {
         }),
       }),
     );
+    expect(normalizeStateDirEnv).toHaveBeenCalledWith(process.env);
   });
 
   it("starts gateway when token mode has no configured token (startup bootstrap path)", async () => {

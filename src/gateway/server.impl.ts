@@ -16,6 +16,7 @@ import {
   isNixMode,
   loadConfig,
   migrateLegacyConfig,
+  normalizeStateDirEnv,
   readConfigFileSnapshot,
   writeConfigFile,
 } from "../config/config.js";
@@ -363,6 +364,7 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  normalizeStateDirEnv(process.env);
   const minimalTestGateway =
     process.env.VITEST === "1" && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
 

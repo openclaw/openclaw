@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
+  normalizeStateDirEnv,
   resolveDefaultConfigCandidates,
   resolveConfigPathCandidate,
   resolveConfigPath,
@@ -55,6 +56,28 @@ describe("state + config path candidates", () => {
     } as NodeJS.ProcessEnv;
 
     expect(resolveStateDir(env, () => "/home/test")).toBe(path.resolve("/new/state"));
+  });
+
+  it("normalizes relative OPENCLAW_STATE_DIR overrides to absolute paths", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: ".",
+      OPENCLAW_HOME: "/srv/openclaw-home",
+    } as NodeJS.ProcessEnv;
+
+    normalizeStateDirEnv(env);
+
+    expect(env.OPENCLAW_STATE_DIR).toBe(path.resolve("."));
+  });
+
+  it("normalizes legacy CLAWDBOT_STATE_DIR overrides to absolute paths", () => {
+    const env = {
+      CLAWDBOT_STATE_DIR: "./state",
+      OPENCLAW_HOME: "/srv/openclaw-home",
+    } as NodeJS.ProcessEnv;
+
+    normalizeStateDirEnv(env);
+
+    expect(env.CLAWDBOT_STATE_DIR).toBe(path.resolve("./state"));
   });
 
   it("uses OPENCLAW_HOME for default state/config locations", () => {
