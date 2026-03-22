@@ -7,7 +7,7 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "./constants.js";
-import { resolveHomeDir } from "./paths.js";
+import { resolveOsHomeDir } from "./paths.js";
 import { execSchtasks } from "./schtasks-exec.js";
 
 export type ExtraGatewayService = {
@@ -322,7 +322,7 @@ export async function findExtraGatewayServices(
 
   if (process.platform === "darwin") {
     try {
-      const home = resolveHomeDir(env);
+      const home = resolveOsHomeDir(env);
       const userDir = path.join(home, "Library", "LaunchAgents");
       for (const svc of await scanLaunchdDir({
         dir: userDir,
@@ -352,7 +352,7 @@ export async function findExtraGatewayServices(
 
   if (process.platform === "linux") {
     try {
-      const home = resolveHomeDir(env);
+      const home = resolveOsHomeDir(env);
       const userDir = path.join(home, ".config", "systemd", "user");
       for (const svc of await scanSystemdDir({
         dir: userDir,

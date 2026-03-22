@@ -18,7 +18,7 @@ import {
   scheduleDetachedLaunchdRestartHandoff,
 } from "./launchd-restart-handoff.js";
 import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
-import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
+import { resolveGatewayStateDir, resolveOsHomeDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
@@ -46,7 +46,7 @@ function resolveLaunchAgentPlistPathForLabel(
   env: Record<string, string | undefined>,
   label: string,
 ): string {
-  const home = toPosixPath(resolveHomeDir(env));
+  const home = toPosixPath(resolveOsHomeDir(env));
   return path.posix.join(home, "Library", "LaunchAgents", `${label}.plist`);
 }
 
@@ -372,7 +372,7 @@ export async function uninstallLegacyLaunchAgents({
     return agents;
   }
 
-  const home = toPosixPath(resolveHomeDir(env));
+  const home = toPosixPath(resolveOsHomeDir(env));
   const trashDir = path.posix.join(home, ".Trash");
   try {
     await fs.mkdir(trashDir, { recursive: true });
@@ -419,7 +419,7 @@ export async function uninstallLaunchAgent({
     return;
   }
 
-  const home = toPosixPath(resolveHomeDir(env));
+  const home = toPosixPath(resolveOsHomeDir(env));
   const trashDir = path.posix.join(home, ".Trash");
   const dest = path.join(trashDir, `${label}.plist`);
   try {
@@ -483,7 +483,7 @@ export async function installLaunchAgent({
   }
 
   const plistPath = resolveLaunchAgentPlistPathForLabel(env, label);
-  const home = toPosixPath(resolveHomeDir(env));
+  const home = toPosixPath(resolveOsHomeDir(env));
   const libraryDir = path.posix.join(home, "Library");
   await ensureSecureDirectory(home);
   await ensureSecureDirectory(libraryDir);
