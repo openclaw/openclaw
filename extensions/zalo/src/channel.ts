@@ -235,21 +235,22 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
       await (await loadZaloChannelRuntime()).probeZaloAccount({ account, timeoutMs }),
     buildAccountSnapshot: ({ account, runtime }) => {
       const configured = Boolean(account.token?.trim());
-      const base = buildBaseAccountStatusSnapshot({
-        account: {
-          accountId: account.accountId,
-          name: account.name,
-          enabled: account.enabled,
-          configured,
+      return buildBaseAccountStatusSnapshot(
+        {
+          account: {
+            accountId: account.accountId,
+            name: account.name,
+            enabled: account.enabled,
+            configured,
+          },
+          runtime,
         },
-        runtime,
-      });
-      return {
-        ...base,
-        tokenSource: account.tokenSource,
-        mode: account.config.webhookUrl ? "webhook" : "polling",
-        dmPolicy: account.config.dmPolicy ?? "pairing",
-      };
+        {
+          tokenSource: account.tokenSource,
+          mode: account.config.webhookUrl ? "webhook" : "polling",
+          dmPolicy: account.config.dmPolicy ?? "pairing",
+        },
+      );
     },
   },
   gateway: {

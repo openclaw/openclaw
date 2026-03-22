@@ -490,13 +490,16 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
       }
       return lines;
     },
-    buildAccountSnapshot: ({ account, runtime, probe }) => ({
-      accountId: account.accountId,
-      enabled: account.enabled,
-      configured: account.configured,
-      ...buildRuntimeAccountStatusSnapshot({ runtime, probe }),
-      port: runtime?.port ?? null,
-    }),
+    buildAccountSnapshot: ({ account, runtime, probe }) =>
+      buildRuntimeAccountStatusSnapshot(
+        { runtime, probe },
+        {
+          accountId: account.accountId,
+          enabled: account.enabled,
+          configured: account.configured,
+          port: runtime?.port ?? null,
+        },
+      ),
   },
   gateway: {
     startAccount: async (ctx) => {
