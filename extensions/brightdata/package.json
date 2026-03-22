@@ -11,6 +11,9 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "bundle": {
+      "stageRuntimeDependencies": true
+    }
   }
 }
