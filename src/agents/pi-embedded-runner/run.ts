@@ -1091,6 +1091,21 @@ export async function runEmbeddedPiAgent(
               overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
             ) {
               overflowCompactionAttempts++;
+              // Inject AGENTS.md critical sections into the retry's system prompt
+              // so the agent regains its grounding after SDK auto-compaction.
+              try {
+                const postCompactionCtx = await readPostCompactionContext(
+                  resolvedWorkspace,
+                  params.config,
+                );
+                if (postCompactionCtx) {
+                  effectiveExtraSystemPrompt = params.extraSystemPrompt
+                    ? `${params.extraSystemPrompt}\n\n${postCompactionCtx}`
+                    : postCompactionCtx;
+                }
+              } catch {
+                // Silent failure — post-compaction context is best-effort
+              }
               log.warn(
                 `context overflow persisted after in-attempt compaction (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); retrying prompt without additional compaction for ${provider}/${modelId}`,
               );

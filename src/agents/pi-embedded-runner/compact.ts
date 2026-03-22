@@ -12,7 +12,6 @@ import {
   resolveTelegramReactionLevel,
 } from "../../../extensions/telegram/api.js";
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
-import { readPostCompactionContext } from "../../auto-reply/reply/post-compaction-context.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -23,7 +22,6 @@ import {
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { getMemorySearchManager } from "../../memory/index.js";
 import { resolveSignalReactionLevel } from "../../plugin-sdk/signal.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -1017,22 +1015,6 @@ export async function compactEmbeddedPiSessionDirect(
           sessionKey: params.sessionKey,
           sessionFile: params.sessionFile,
         });
-        // Re-inject AGENTS.md critical sections (Session Startup, Red Lines) for the
-        // next agent turn — mirrors auto-reply path (agent-runner.ts).
-        // Addresses TODO(#9611): post-compaction context injection.
-        if (params.sessionKey) {
-          try {
-            const contextContent = await readPostCompactionContext(
-              effectiveWorkspace,
-              params.config,
-            );
-            if (contextContent) {
-              enqueueSystemEvent(contextContent, { sessionKey: params.sessionKey });
-            }
-          } catch {
-            // Silent failure — post-compaction context is best-effort
-          }
-        }
         // Estimate tokens after compaction by summing token estimates for remaining messages
         let tokensAfter: number | undefined;
         try {
@@ -1273,21 +1255,6 @@ export async function compactEmbeddedPiSession(
             sessionKey: params.sessionKey,
             sessionFile: params.sessionFile,
           });
-        }
-        // Re-inject AGENTS.md critical sections (Session Startup, Red Lines) for the
-        // next agent turn — mirrors auto-reply path (agent-runner.ts).
-        if (engineOwnsCompaction && result.ok && result.compacted && params.sessionKey) {
-          try {
-            const contextContent = await readPostCompactionContext(
-              params.workspaceDir,
-              params.config,
-            );
-            if (contextContent) {
-              enqueueSystemEvent(contextContent, { sessionKey: params.sessionKey });
-            }
-          } catch {
-            // Silent failure — post-compaction context is best-effort
-          }
         }
         if (result.ok && result.compacted && hookRunner?.hasHooks("after_compaction")) {
           try {
