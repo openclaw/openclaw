@@ -1994,6 +1994,47 @@ describe("BlueBubbles webhook monitor", () => {
       expect(callArgs.ctx.Body).toContain("550e8400-e29b-41d4-a716-446655440000");
     });
 
+    it("keeps updated-message UUID churn payloads when media is present", async () => {
+      const account = createMockAccount({ dmPolicy: "open" });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      await handleBlueBubblesWebhookRequest(
+        createMockRequest("POST", "/bluebubbles-webhook", {
+          type: "updated-message",
+          data: {
+            text: "550e8400-e29b-41d4-a716-446655440000",
+            handle: { address: "+15551234567" },
+            isGroup: false,
+            isFromMe: false,
+            guid: "edited-msg-uuid-media",
+            chatGuid: "iMessage;-;+15551234567",
+            attachments: [
+              {
+                guid: "attachment-guid-1",
+                mimeType: "image/png",
+                transferName: "photo.png",
+              },
+            ],
+            date: Date.now(),
+          },
+        }),
+        createMockResponse(),
+      );
+
+      await flushAsync();
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    });
+
     it("processes updated-message text reversions back to the original body", async () => {
       const account = createMockAccount({ dmPolicy: "open" });
       const config: OpenClawConfig = {};

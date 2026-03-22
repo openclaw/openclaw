@@ -209,7 +209,13 @@ function shouldIgnoreUpdatedNonConversationalEvent(
 
   // UUID-like churn is only safe to drop when the payload carries no explicit
   // edit or media signal that would make it conversational.
-  if (text && looksLikeBlueBubblesGuid(text) && !hasEditMetadata && !hasAssociatedSignal) {
+  if (
+    text &&
+    looksLikeBlueBubblesGuid(text) &&
+    !hasEditMetadata &&
+    !hasAssociatedSignal &&
+    !hasMediaPayload
+  ) {
     return true;
   }
 
