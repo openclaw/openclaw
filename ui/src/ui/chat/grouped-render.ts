@@ -209,7 +209,7 @@ function extractGroupMeta(group: MessageGroup, contextWindow: number | null): Gr
   let model: string | null = null;
   let hasUsage = false;
 
-  for (const { message } of group.messages) {
+  for (const { message } of group.messages ?? []) {
     const m = message as Record<string, unknown>;
     if (m.role !== "assistant") {
       continue;
@@ -308,7 +308,7 @@ function renderMessageMeta(meta: GroupMeta | null) {
 
 function extractGroupText(group: MessageGroup): string {
   const parts: string[] = [];
-  for (const { message } of group.messages) {
+  for (const { message } of group.messages ?? []) {
     const text = extractTextCached(message);
     if (text?.trim()) {
       parts.push(text.trim());
