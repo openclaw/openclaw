@@ -128,16 +128,6 @@ function extractKimiCitations(data: KimiSearchResponse): string[] {
   return [...new Set(citations)];
 }
 
-function buildKimiToolResultContent(data: KimiSearchResponse): string {
-  return JSON.stringify({
-    search_results: (data.search_results ?? []).map((entry) => ({
-      title: entry.title ?? "",
-      url: entry.url ?? "",
-      content: entry.content ?? "",
-    })),
-  });
-}
-
 async function runKimiSearch(params: {
   query: string;
   apiKey: string;
@@ -162,6 +152,10 @@ async function runKimiSearch(params: {
           },
           body: JSON.stringify({
             model: params.model,
+            // Moonshot requires thinking to be explicitly disabled when using
+            // $web_search with thinking-capable models (e.g. kimi-k2.5).
+            // Sending thinking:false (bool) is rejected; the object form is required.
+            thinking: { type: "disabled" },
             messages,
             tools: [KIMI_WEB_SEARCH_TOOL],
           }),
@@ -195,7 +189,6 @@ async function runKimiSearch(params: {
           tool_calls: toolCalls,
         });
 
-        const toolContent = buildKimiToolResultContent(data);
         let pushed = false;
         for (const toolCall of toolCalls) {
           const toolCallId = toolCall.id?.trim();
@@ -203,7 +196,15 @@ async function runKimiSearch(params: {
             continue;
           }
           pushed = true;
-          messages.push({ role: "tool", tool_call_id: toolCallId, content: toolContent });
+          // Per Moonshot $web_search docs: echo the tool-call arguments back verbatim
+          // as the tool-result content. The model resolves the internal search_id from
+          // those arguments server-side; synthesizing the content here produces empty results.
+          messages.push({
+            role: "tool",
+            tool_call_id: toolCallId,
+            name: toolCall.function?.name,
+            content: toolCall.function?.arguments ?? "{}",
+          });
         }
         if (!pushed) {
           return { done: true, content: text ?? "No response", citations: [...collectedCitations] };
