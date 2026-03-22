@@ -21,9 +21,15 @@ _Generated from persona: coo_
 
 ## Memory Maintenance
 
-Every 3rd heartbeat:
+Every 3rd heartbeat, consolidate memory:
 
-1. Check if memory/YYYY-MM-DD.md was written today. If not, write a brief summary of today's work.
-2. Review memory/\*.md files from the last 3 days.
-3. Update MEMORY.md with key decisions, remove outdated info.
-4. Keep MEMORY.md under 150 lines.
+1. **Capture this session:** Look at what happened since the last heartbeat — tasks delegated, decisions made, results received, user requests. Write a meaningful entry to `memory/YYYY-MM-DD.md`:
+   ```
+   ## [HH:MM] Heartbeat Summary
+   - Delegated email check to Neo — 3 new emails, none urgent
+   - User asked about project status — reported 2 active, 1 blocked
+   - Decision: moved workspaces to repo root
+   ```
+2. **Consolidate daily notes:** Review `memory/*.md` from the last 3 days. Move important decisions, lessons, and project status changes into `MEMORY.md`.
+3. **Prune:** Remove outdated entries from `MEMORY.md`. Keep it under 150 lines.
+4. **Skip if nothing happened:** If no tasks were completed and no decisions were made since the last heartbeat, do not write an empty entry.
