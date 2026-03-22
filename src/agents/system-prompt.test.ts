@@ -534,6 +534,32 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("places configSystemPrompt after project context files", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [{ path: "AGENTS.md", content: "Bootstrap rules" }],
+      configSystemPrompt: "Config injected rule",
+    });
+
+    const projectIdx = prompt.indexOf("# Project Context");
+    const bootstrapIdx = prompt.indexOf("Bootstrap rules");
+    const configIdx = prompt.indexOf("## Config Rules");
+    const configContentIdx = prompt.indexOf("Config injected rule");
+    expect(projectIdx).toBeGreaterThan(-1);
+    expect(bootstrapIdx).toBeGreaterThan(-1);
+    expect(configIdx).toBeGreaterThan(bootstrapIdx);
+    expect(configContentIdx).toBeGreaterThan(bootstrapIdx);
+  });
+
+  it("omits config rules section when configSystemPrompt is empty", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      configSystemPrompt: "  ",
+    });
+
+    expect(prompt).not.toContain("## Config Rules");
+  });
+
   it("omits project context when no context files are injected", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

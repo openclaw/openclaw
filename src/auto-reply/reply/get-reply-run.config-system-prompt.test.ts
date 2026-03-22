@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { resolveConfigSystemPrompt } from "../../agents/config-system-prompt.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveConfigSystemPrompt } from "./get-reply-run.js";
 
 describe("resolveConfigSystemPrompt", () => {
   it("returns empty string when no config is set", () => {

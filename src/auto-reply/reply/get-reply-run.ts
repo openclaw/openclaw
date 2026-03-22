@@ -18,7 +18,7 @@ import { updateSessionStore } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
-import { normalizeAgentId, normalizeMainKey } from "../../routing/session-key.js";
+import { normalizeMainKey } from "../../routing/session-key.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
@@ -269,15 +269,11 @@ export async function runPreparedReply(
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
   );
-  // Resolve config-injected system prompt (agents.defaults.systemPrompt / rules,
-  // with per-agent override from agents.list[].systemPrompt / rules).
-  const configSystemPrompt = resolveConfigSystemPrompt(cfg, agentId);
   const extraSystemPromptParts = [
     inboundMetaPrompt,
     groupChatContext,
     groupIntro,
     groupSystemPrompt,
-    configSystemPrompt,
   ].filter(Boolean);
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
@@ -568,23 +564,4 @@ export async function runPreparedReply(
     shouldInjectGroupIntro,
     typingMode,
   });
-}
-
-export function resolveConfigSystemPrompt(cfg: OpenClawConfig, agentId: string): string {
-  const agentEntry = cfg.agents?.list?.find(
-    (e) => normalizeAgentId(e.id) === normalizeAgentId(agentId),
-  );
-  // Per-agent fields override defaults (not merge).
-  const systemPrompt = agentEntry?.systemPrompt ?? cfg.agents?.defaults?.systemPrompt;
-  const rules = agentEntry?.rules ?? cfg.agents?.defaults?.rules;
-
-  const parts: string[] = [];
-  if (systemPrompt?.trim()) {
-    parts.push(systemPrompt.trim());
-  }
-  if (rules && rules.length > 0) {
-    const numbered = rules.map((r: string, i: number) => `${i + 1}. ${r}`).join("\n");
-    parts.push(numbered);
-  }
-  return parts.join("\n\n");
 }

@@ -13,6 +13,8 @@ export function buildEmbeddedSystemPrompt(params: {
   defaultThinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
   extraSystemPrompt?: string;
+  /** Config-injected system prompt (agents.defaults.systemPrompt / rules). Placed after Project Context. */
+  configSystemPrompt?: string;
   ownerNumbers?: string[];
   ownerDisplay?: "raw" | "hash";
   ownerDisplaySecret?: string;
@@ -58,6 +60,7 @@ export function buildEmbeddedSystemPrompt(params: {
     defaultThinkLevel: params.defaultThinkLevel,
     reasoningLevel: params.reasoningLevel,
     extraSystemPrompt: params.extraSystemPrompt,
+    configSystemPrompt: params.configSystemPrompt,
     ownerNumbers: params.ownerNumbers,
     ownerDisplay: params.ownerDisplay,
     ownerDisplaySecret: params.ownerDisplaySecret,
