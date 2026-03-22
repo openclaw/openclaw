@@ -22,9 +22,10 @@ source = "openclaw_staging_data"
 destination = "/data"
 
 [processes]
-# Bootstrap a minimal config if none exists (enables host-header origin fallback for Control UI),
-# then start the gateway. Skips fly-entrypoint.sh — no tools or workspace needed on staging.
-app = "sh -c 'CONFIG=/data/openclaw.json; [ -f \"$CONFIG\" ] || echo \"{\\\"gateway\\\":{\\\"controlUi\\\":{\\\"dangerouslyAllowHostHeaderOriginFallback\\\":true,\\\"dangerouslyDisableDeviceAuth\\\":true}}}\" > \"$CONFIG\"; exec node dist/index.js gateway --allow-unconfigured --port 3000 --bind lan'"
+# Use the same entrypoint as production so workspace versioning (git clone/pull of
+# jhs129/openclaw-agents) runs on staging too. Bootstrap a minimal openclaw.json
+# with staging-safe flags if none exists (will be overwritten by staging-up.sh config sync).
+app = "sh -c 'CONFIG=/data/openclaw.json; [ -f \"$CONFIG\" ] || echo \"{\\\"gateway\\\":{\\\"controlUi\\\":{\\\"dangerouslyAllowHostHeaderOriginFallback\\\":true,\\\"dangerouslyDisableDeviceAuth\\\":true}}}\" > \"$CONFIG\"; exec /app/scripts/fly-entrypoint.sh node dist/index.js gateway --allow-unconfigured --port 3000 --bind lan'"
 
 [http_service]
 internal_port = 3000
