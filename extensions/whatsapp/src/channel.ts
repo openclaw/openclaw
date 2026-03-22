@@ -161,8 +161,10 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       sendPollWhatsApp: async (...args) =>
         await getWhatsAppRuntime().channel.whatsapp.sendPollWhatsApp(...args),
       shouldLogVerbose: () => getWhatsAppRuntime().logging.shouldLogVerbose(),
-      resolveTarget: ({ to, allowFrom, mode }) =>
-        resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
+      resolveTarget: ({ to, allowFrom, mode, cfg, accountId }) => {
+        const account = cfg ? resolveWhatsAppAccount({ cfg, accountId }) : null;
+        return resolveWhatsAppOutboundTarget({ to, allowFrom, allowTo: account?.allowTo, mode });
+      },
     }),
     normalizePayload: ({ payload }) => ({
       ...payload,

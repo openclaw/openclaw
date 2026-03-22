@@ -168,6 +168,8 @@ export type ChannelOutboundAdapter = {
     cfg?: OpenClawConfig;
     to?: string;
     allowFrom?: string[];
+    /** Outbound-only allowlist; when set, used for target gating instead of allowFrom. */
+    allowTo?: string[];
     accountId?: string | null;
     mode?: ChannelOutboundTargetMode;
   }) => { ok: true; to: string } | { ok: false; error: Error };

@@ -18,10 +18,12 @@ vi.mock("./runtime-api.js", async () => {
     resolveWhatsAppOutboundTarget: ({
       to,
       allowFrom,
+      allowTo,
       mode,
     }: {
       to?: string;
       allowFrom: string[];
+      allowTo?: string[];
       mode: "explicit" | "implicit";
     }) => {
       const raw = typeof to === "string" ? to.trim() : "";
@@ -34,8 +36,10 @@ vi.mock("./runtime-api.js", async () => {
       }
 
       if (mode === "implicit" && !normalized.endsWith("@g.us")) {
-        const allowAll = allowFrom.includes("*");
-        const allowExact = allowFrom.some((entry) => {
+        // Use allowTo for outbound gating when defined; otherwise fall back to allowFrom.
+        const outboundList = allowTo != null ? allowTo : allowFrom;
+        const allowAll = outboundList.includes("*");
+        const allowExact = outboundList.some((entry) => {
           if (!entry) {
             return false;
           }
@@ -139,6 +143,47 @@ describe("whatsapp resolveTarget", () => {
       throw new Error("expected resolution to fail");
     }
     expect(result.error).toBeDefined();
+  });
+
+  it("should allow target not in allowFrom when allowTo contains wildcard", () => {
+    const result = resolveTarget({
+      to: "5511888888888",
+      mode: "implicit",
+      allowFrom: ["5511999999999"],
+      allowTo: ["*"],
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
+    expect(result.to).toBe("5511888888888@s.whatsapp.net");
+  });
+
+  it("should allow target in allowTo even when not in allowFrom", () => {
+    const result = resolveTarget({
+      to: "5511888888888",
+      mode: "implicit",
+      allowFrom: ["5511999999999"],
+      allowTo: ["5511888888888"],
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
+    expect(result.to).toBe("5511888888888@s.whatsapp.net");
+  });
+
+  it("should block target not in allowTo even if it is in allowFrom", () => {
+    const result = resolveTarget({
+      to: "5511888888888",
+      mode: "implicit",
+      allowFrom: ["5511888888888"],
+      allowTo: ["5511999999999"],
+    });
+
+    expect(result.ok).toBe(false);
   });
 
   installCommonResolveTargetErrorCases({

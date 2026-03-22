@@ -161,6 +161,28 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
 
     Multi-account override: `channels.whatsapp.accounts.<id>.dmPolicy` (and `allowFrom`) take precedence over channel-level defaults for that account.
 
+    **Outbound-only allowlist (`allowTo`)**
+
+    By default, outbound sends are gated by the same `allowFrom` list. To decouple inbound and outbound — for example, keeping the agent private to yourself while allowing it to message contacts — set `allowTo`:
+
+    ```json
+    {
+      "channels": {
+        "whatsapp": {
+          "dmPolicy": "allowlist",
+          "allowFrom": ["+15551234567"],
+          "allowTo": ["*"]
+        }
+      }
+    }
+    ```
+
+    - `allowTo: ["*"]` — agent can send to any number outbound; inbound stays restricted by `allowFrom`/`dmPolicy`
+    - `allowTo: ["+15559876543"]` — agent can only send outbound to that specific number
+    - omitting `allowTo` — outbound is gated by `allowFrom` as before (backward compatible)
+
+    `allowTo` applies to both message sends and action targets (e.g. reactions). Per-account override: `channels.whatsapp.accounts.<id>.allowTo`.
+
     Runtime behavior details:
 
     - pairings are persisted in channel allow-store and merged with configured `allowFrom`

@@ -81,9 +81,10 @@ function setLastSessionEntry(params: {
   });
 }
 
-function setWhatsAppAllowFrom(allowFrom: string[]) {
+function setWhatsAppAllowFrom(allowFrom: string[], allowTo?: string[]) {
   vi.mocked(resolveWhatsAppAccount).mockReturnValue({
     allowFrom,
+    ...(allowTo !== undefined ? { allowTo } : {}),
   } as unknown as ReturnType<typeof resolveWhatsAppAccount>);
 }
 
@@ -142,6 +143,78 @@ describe("resolveDeliveryTarget", () => {
       to: "+15550000099",
     });
 
+    expect(result.to).toBe("+15550000099");
+  });
+
+  it("uses allowTo for implicit target validation when configured", async () => {
+    // allowFrom is locked to the owner (+15550000001); allowTo opens a contact (+15550000099).
+    // Implicit delivery to the contact should not be rerouted back to the owner.
+    setLastSessionEntry({
+      sessionId: "sess-w3",
+      lastChannel: "whatsapp",
+      lastTo: "+15550000099",
+    });
+    setWhatsAppAllowFrom(["+15550000001"], ["+15550000099"]);
+    setStoredWhatsAppAllowFrom([]);
+
+    const cfg = makeCfg({ bindings: [] });
+    const result = await resolveLastTarget(cfg);
+
+    expect(result.channel).toBe("whatsapp");
+    expect(result.to).toBe("+15550000099");
+  });
+
+  it("allowTo wildcard skips implicit target redirect", async () => {
+    // allowTo: ["*"] means allow all — any implicit target should pass through unchanged.
+    setLastSessionEntry({
+      sessionId: "sess-w4",
+      lastChannel: "whatsapp",
+      lastTo: "+15550000099",
+    });
+    setWhatsAppAllowFrom(["+15550000001"], ["*"]);
+    setStoredWhatsAppAllowFrom([]);
+
+    const cfg = makeCfg({ bindings: [] });
+    const result = await resolveLastTarget(cfg);
+
+    expect(result.channel).toBe("whatsapp");
+    expect(result.to).toBe("+15550000099");
+  });
+
+  it("group JID passes through implicit check even when allowTo is set", async () => {
+    // Groups are always allowed by resolve-outbound-target; the prefilter must not redirect them.
+    const groupJid = "123456789012345678@g.us";
+    setLastSessionEntry({
+      sessionId: "sess-w5",
+      lastChannel: "whatsapp",
+      lastTo: groupJid,
+    });
+    setWhatsAppAllowFrom(["+15550000001"], ["+15550000099"]);
+    setStoredWhatsAppAllowFrom([]);
+
+    const cfg = makeCfg({ bindings: [] });
+    const result = await resolveLastTarget(cfg);
+
+    expect(result.channel).toBe("whatsapp");
+    expect(result.to).toBe(groupJid);
+  });
+
+  it("falls back to first allowTo entry when last target is not in allowTo", async () => {
+    // allowFrom=[owner], allowTo=[contactA]. Last DM was contactB (not in allowTo).
+    // Fallback should be contactA (first allowTo entry), not the owner — otherwise
+    // resolveOutboundTarget rejects the fallback because the owner is not in allowTo.
+    setLastSessionEntry({
+      sessionId: "sess-w6",
+      lastChannel: "whatsapp",
+      lastTo: "+15550000002",
+    });
+    setWhatsAppAllowFrom(["+15550000001"], ["+15550000099"]);
+    setStoredWhatsAppAllowFrom([]);
+
+    const cfg = makeCfg({ bindings: [] });
+    const result = await resolveLastTarget(cfg);
+
+    expect(result.channel).toBe("whatsapp");
     expect(result.to).toBe("+15550000099");
   });
 
