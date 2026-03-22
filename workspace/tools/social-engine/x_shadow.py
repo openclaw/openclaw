@@ -289,8 +289,9 @@ HARD RULES:
 - NEVER start with: "Great" "I agree" "This is interesting" "True" or any agreement opener
 - NEVER lecture, philosophize, or use literary quotes
 - Must have TEETH — a stance, a number, a specific outcome. Not vague wisdom.
+- REPLY IN THE SAME LANGUAGE AS THEIR TWEET. If Turkish, reply in Turkish. If Japanese, reply in Japanese. If English, reply in English. Match their language exactly.
 
-Reply (MAX 200 chars, start by referencing THEIR point):"""
+Reply (MAX 200 chars, start by referencing THEIR point, in THEIR language):"""
 
     reply = call_llm(prompt, system=SOUL)
 
