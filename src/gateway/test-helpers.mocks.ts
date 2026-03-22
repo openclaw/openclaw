@@ -298,6 +298,7 @@ export const piSdkMock = hoisted.piSdkMock;
 export const cronIsolatedRun = hoisted.cronIsolatedRun;
 export const agentCommand = hoisted.agentCommand;
 export const getReplyFromConfig: Mock<GetReplyFromConfigFn> = hoisted.getReplyFromConfig;
+export const sendWhatsAppMock = hoisted.sendWhatsAppMock;
 
 export const testState = hoisted.testState;
 
@@ -715,12 +716,30 @@ vi.mock("../commands/agent.js", () => ({
   agentCommand,
   agentCommandFromIngress: agentCommand,
 }));
+vi.mock("../auto-reply/dispatch.js", async () => {
+  return await vi.importActual<typeof import("../auto-reply/dispatch.js")>(
+    "../auto-reply/dispatch.js",
+  );
+});
+vi.mock("/src/auto-reply/dispatch.js", async () => {
+  return await vi.importActual<typeof import("../auto-reply/dispatch.js")>(
+    "../auto-reply/dispatch.js",
+  );
+});
 vi.mock("../auto-reply/reply.js", () => ({
   getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
     hoisted.getReplyFromConfig(...args),
 }));
 
 vi.mock("/src/auto-reply/reply.js", () => ({
+  getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
+    hoisted.getReplyFromConfig(...args),
+}));
+vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => ({
+  getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
+    hoisted.getReplyFromConfig(...args),
+}));
+vi.mock("/src/auto-reply/reply/get-reply-from-config.runtime.js", () => ({
   getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
     hoisted.getReplyFromConfig(...args),
 }));
@@ -745,6 +764,14 @@ vi.mock("../plugins/loader.js", async () => {
     loadOpenClawPlugins: () => pluginRegistryState.registry,
   };
 });
+vi.mock("../plugins/runtime/runtime-whatsapp-boundary.js", () => ({
+  sendMessageWhatsApp: (...args: unknown[]) =>
+    (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
+}));
+vi.mock("/src/plugins/runtime/runtime-whatsapp-boundary.js", () => ({
+  sendMessageWhatsApp: (...args: unknown[]) =>
+    (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
+}));
 
 process.env.OPENCLAW_SKIP_CHANNELS = "1";
 process.env.OPENCLAW_SKIP_CRON = "1";

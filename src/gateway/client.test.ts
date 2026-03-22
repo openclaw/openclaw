@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
 
@@ -158,7 +158,13 @@ describe("GatewayClient security checks", () => {
 
   beforeEach(() => {
     envSnapshot.restore();
+    delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
     wsInstances.length = 0;
+  });
+
+  afterEach(() => {
+    envSnapshot.restore();
+    delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
   });
 
   it("blocks ws:// to non-loopback addresses (CWE-319)", () => {

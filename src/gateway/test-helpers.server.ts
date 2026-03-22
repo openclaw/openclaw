@@ -38,6 +38,7 @@ import {
   getReplyFromConfig,
   piSdkMock,
   resetTestPluginRegistry,
+  sendWhatsAppMock,
   sessionStoreSaveDelayMs,
   setTestConfigRoot,
   testIsNixMode,
@@ -192,18 +193,33 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   applyGatewaySkipEnv();
   const stateDir = process.env.OPENCLAW_STATE_DIR;
   if (stateDir) {
-    await fs.rm(stateDir, { recursive: true, force: true });
+    await fs.rm(stateDir, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 25,
+    });
     await fs.mkdir(stateDir, { recursive: true });
   }
   if (options.uniqueConfigRoot) {
     const suiteRoot = path.join(tempHome, ".openclaw-test-suite");
     await fs.mkdir(suiteRoot, { recursive: true });
     tempConfigRoot = path.join(suiteRoot, `case-${suiteConfigRootSeq++}`);
-    await fs.rm(tempConfigRoot, { recursive: true, force: true });
+    await fs.rm(tempConfigRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 25,
+    });
     await fs.mkdir(tempConfigRoot, { recursive: true });
   } else {
     tempConfigRoot = path.join(tempHome, ".openclaw-test");
-    await fs.rm(tempConfigRoot, { recursive: true, force: true });
+    await fs.rm(tempConfigRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 25,
+    });
     await fs.mkdir(tempConfigRoot, { recursive: true });
   }
   setTestConfigRoot(tempConfigRoot);
@@ -239,6 +255,8 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   agentCommand.mockResolvedValue(undefined);
   getReplyFromConfig.mockReset();
   getReplyFromConfig.mockResolvedValue(undefined);
+  sendWhatsAppMock.mockReset();
+  sendWhatsAppMock.mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" });
   embeddedRunMock.activeIds.clear();
   embeddedRunMock.abortCalls = [];
   embeddedRunMock.waitCalls = [];
