@@ -1301,6 +1301,17 @@ description: test skill
         detailIncludes: ["zzzzzzzzzzzzzz"],
         detailExcludes: ["did you mean"],
       },
+      {
+        name: "does not flag denyCommands that name default dangerous node commands",
+        cfg: {
+          gateway: {
+            nodes: {
+              denyCommands: ["camera.snap"],
+            },
+          },
+        } satisfies OpenClawConfig,
+        expectAbsent: true,
+      },
     ] as const;
 
     await Promise.all(
@@ -1309,6 +1320,10 @@ description: test skill
         const finding = res.findings.find(
           (f) => f.checkId === "gateway.nodes.deny_commands_ineffective",
         );
+        if ("expectAbsent" in testCase && testCase.expectAbsent) {
+          expect(finding, testCase.name).toBeUndefined();
+          return;
+        }
         expect(finding?.severity, testCase.name).toBe("warn");
         for (const text of testCase.detailIncludes) {
           expect(finding?.detail, `${testCase.name}:${text}`).toContain(text);
