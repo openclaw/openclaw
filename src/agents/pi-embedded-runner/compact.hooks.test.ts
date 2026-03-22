@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { getApiProvider, unregisterApiProviders } from "@mariozechner/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getCustomApiRegistrySourceId } from "../custom-api-registry.js";
@@ -16,12 +17,14 @@ import {
   resetCompactHooksHarnessMocks,
   sanitizeSessionHistoryMock,
   sessionAbortCompactionMock,
+  sessionMessages,
   sessionCompactImpl,
   triggerInternalHook,
 } from "./compact.hooks.harness.js";
 
 let compactEmbeddedPiSessionDirect: typeof import("./compact.js").compactEmbeddedPiSessionDirect;
 let compactEmbeddedPiSession: typeof import("./compact.js").compactEmbeddedPiSession;
+let compactTesting: typeof import("./compact.js").__testing;
 let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 
 const TEST_SESSION_ID = "session-1";
@@ -108,6 +111,7 @@ beforeAll(async () => {
   const loaded = await loadCompactHooksHarness();
   compactEmbeddedPiSessionDirect = loaded.compactEmbeddedPiSessionDirect;
   compactEmbeddedPiSession = loaded.compactEmbeddedPiSession;
+  compactTesting = loaded.__testing;
   onSessionTranscriptUpdate = loaded.onSessionTranscriptUpdate;
 });
 
@@ -154,6 +158,20 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     estimateTokensMock.mockReset();
     estimateTokensMock.mockReturnValue(10);
     sessionAbortCompactionMock.mockReset();
+    sessionMessages.splice(
+      0,
+      sessionMessages.length,
+      { role: "user", content: "hello", timestamp: 1 },
+      { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
+      {
+        role: "toolResult",
+        toolCallId: "t1",
+        toolName: "exec",
+        content: [{ type: "text", text: "output" }],
+        isError: false,
+        timestamp: 3,
+      },
+    );
     unregisterApiProviders(getCustomApiRegistrySourceId("ollama"));
   });
 
@@ -490,6 +508,111 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     });
   });
 
+  it("skips compaction when the transcript only contains boilerplate replies and tool output", async () => {
+    sessionMessages.splice(
+      0,
+      sessionMessages.length,
+      { role: "user", content: "<b>HEARTBEAT_OK</b>", timestamp: 1 },
+      {
+        role: "toolResult",
+        toolCallId: "t1",
+        toolName: "exec",
+        content: [{ type: "text", text: "checked" }],
+        isError: false,
+        timestamp: 2,
+      },
+    );
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      customInstructions: "focus on decisions",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      compacted: false,
+      reason: "no real conversation messages",
+    });
+    expect(sessionCompactImpl).not.toHaveBeenCalled();
+  });
+
+  it("skips compaction when the transcript only contains heartbeat boilerplate and reasoning blocks", async () => {
+    sessionMessages.splice(
+      0,
+      sessionMessages.length,
+      { role: "user", content: "<b>HEARTBEAT_OK</b>", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "checking" }],
+        timestamp: 2,
+      },
+    );
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      customInstructions: "focus on decisions",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      compacted: false,
+      reason: "no real conversation messages",
+    });
+    expect(sessionCompactImpl).not.toHaveBeenCalled();
+  });
+
+  it("does not treat assistant-only tool-call blocks as meaningful conversation", () => {
+    expect(
+      compactTesting.hasMeaningfulConversationContent({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+      } as AgentMessage),
+    ).toBe(false);
+  });
+
+  it("counts tool output as real only when a meaningful user ask exists in the lookback window", () => {
+    const heartbeatToolResultWindow = [
+      { role: "user", content: "<b>HEARTBEAT_OK</b>" },
+      {
+        role: "toolResult",
+        toolCallId: "t1",
+        toolName: "exec",
+        content: [{ type: "text", text: "checked" }],
+      },
+    ] as AgentMessage[];
+    expect(
+      compactTesting.hasRealConversationContent(
+        heartbeatToolResultWindow[1],
+        heartbeatToolResultWindow,
+        1,
+      ),
+    ).toBe(false);
+
+    const realAskToolResultWindow = [
+      { role: "assistant", content: "NO_REPLY" },
+      { role: "user", content: "please inspect the failing PR" },
+      {
+        role: "toolResult",
+        toolCallId: "t2",
+        toolName: "exec",
+        content: [{ type: "text", text: "checked" }],
+      },
+    ] as AgentMessage[];
+    expect(
+      compactTesting.hasRealConversationContent(
+        realAskToolResultWindow[2],
+        realAskToolResultWindow,
+        2,
+      ),
+    ).toBe(true);
+  });
+
   it("registers the Ollama api provider before compaction", async () => {
     resolveModelMock.mockReturnValue({
       model: {
@@ -621,6 +744,36 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
     } finally {
       cleanup();
     }
+  });
+
+  it("runs maintain after successful compaction with a transcript rewrite helper", async () => {
+    const maintain = vi.fn(async (_params?: unknown) => ({
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+    }));
+    resolveContextEngineMock.mockResolvedValue({
+      info: { ownsCompaction: true },
+      compact: contextEngineCompactMock,
+      maintain,
+    } as never);
+
+    const result = await compactEmbeddedPiSession(wrappedCompactionArgs());
+
+    expect(result.ok).toBe(true);
+    expect(maintain).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: TEST_SESSION_KEY,
+        sessionFile: TEST_SESSION_FILE,
+        runtimeContext: expect.objectContaining({
+          workspaceDir: TEST_WORKSPACE_DIR,
+        }),
+      }),
+    );
+    const runtimeContext = (
+      maintain.mock.calls[0]?.[0] as { runtimeContext?: Record<string, unknown> } | undefined
+    )?.runtimeContext;
+    expect(typeof runtimeContext?.rewriteTranscriptEntries).toBe("function");
   });
 
   it("does not fire after_compaction when compaction fails", async () => {

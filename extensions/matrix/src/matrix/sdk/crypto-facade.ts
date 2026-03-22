@@ -1,4 +1,3 @@
-import { Attachment, EncryptedAttachment } from "@matrix-org/matrix-sdk-crypto-nodejs";
 import type { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
 import type { EncryptedFile } from "./types.js";
 import type {
@@ -64,6 +63,15 @@ export type MatrixCryptoFacade = {
   ) => Promise<{ decimal?: [number, number, number]; emoji?: Array<[string, string]> }>;
 };
 
+type MatrixCryptoNodeRuntime = typeof import("./crypto-node.runtime.js");
+let matrixCryptoNodeRuntimePromise: Promise<MatrixCryptoNodeRuntime> | null = null;
+
+async function loadMatrixCryptoNodeRuntime(): Promise<MatrixCryptoNodeRuntime> {
+  // Keep the native crypto package out of the main CLI startup graph.
+  matrixCryptoNodeRuntimePromise ??= import("./crypto-node.runtime.js");
+  return await matrixCryptoNodeRuntimePromise;
+}
+
 export function createMatrixCryptoFacade(deps: {
   client: MatrixCryptoFacadeClient;
   verificationManager: MatrixVerificationManager;
@@ -110,6 +118,7 @@ export function createMatrixCryptoFacade(deps: {
     encryptMedia: async (
       buffer: Buffer,
     ): Promise<{ buffer: Buffer; file: Omit<EncryptedFile, "url"> }> => {
+      const { Attachment } = await loadMatrixCryptoNodeRuntime();
       const encrypted = Attachment.encrypt(new Uint8Array(buffer));
       const mediaInfoJson = encrypted.mediaEncryptionInfo;
       if (!mediaInfoJson) {
@@ -130,6 +139,7 @@ export function createMatrixCryptoFacade(deps: {
       file: EncryptedFile,
       opts?: { maxBytes?: number; readIdleTimeoutMs?: number },
     ): Promise<Buffer> => {
+      const { Attachment, EncryptedAttachment } = await loadMatrixCryptoNodeRuntime();
       const encrypted = await deps.downloadContent(file.url, opts);
       const metadata: EncryptedFile = {
         url: file.url,

@@ -255,7 +255,7 @@ function renderContextNotice(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
 ) {
-  const used = session?.inputTokens ?? 0;
+  const used = session?.totalTokens ?? 0;
   const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
   if (!used || !limit) {
     return nothing;
@@ -662,7 +662,7 @@ function renderPinnedSection(
       }}>
         ${icons.bookmark}
         ${entries.length} pinned
-        ${vs.pinnedExpanded ? icons.chevronDown : icons.chevronRight}
+        <span class="collapse-chevron ${vs.pinnedExpanded ? "" : "collapse-chevron--collapsed"}">${icons.chevronDown}</span>
       </button>
       ${
         vs.pinnedExpanded

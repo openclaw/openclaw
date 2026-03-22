@@ -4,7 +4,8 @@
   "description": "OpenClaw Tlon/Urbit channel plugin",
   "type": "module",
   "dependencies": {
-    "@tloncorp/api": "github:tloncorp/api-beta#7eede1c1a756977b09f96aa14a92e2b06318ae87",
+    "@aws-sdk/client-s3": "3.1000.0",
+    "@aws-sdk/s3-request-presigner": "3.1000.0",
     "@tloncorp/tlon-skill": "0.2.2",
     "@urbit/aura": "^3.0.0",
     "zod": "^4.3.6"

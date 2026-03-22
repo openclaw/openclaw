@@ -204,7 +204,9 @@ If the old store reports room keys that were never backed up, OpenClaw warns ins
 - Meaning: OpenClaw found a helper file path that escapes the plugin root or fails plugin boundary checks, so it refused to import it.
 - What to do: reinstall the Matrix plugin from a trusted path, then rerun `openclaw doctor --fix` or restart the gateway.
 
-`gateway: failed creating a Matrix migration snapshot; skipping Matrix migration for now: ...`
+`- Failed creating a Matrix migration snapshot before repair: ...`
+
+`- Skipping Matrix migration changes for now. Resolve the snapshot failure, then rerun "openclaw doctor --fix".`
 
 - Meaning: OpenClaw refused to mutate Matrix state because it could not create the recovery snapshot first.
 - What to do: resolve the backup error, then rerun `openclaw doctor --fix` or restart the gateway.
@@ -236,7 +238,7 @@ If the old store reports room keys that were never backed up, OpenClaw warns ins
 - Meaning: backup exists, but OpenClaw could not recover the recovery key automatically.
 - What to do: run `openclaw matrix verify backup restore --recovery-key "<your-recovery-key>"`.
 
-`Failed inspecting legacy Matrix encrypted state for account "...": ...`
+`Failed inspecting legacy Matrix encrypted state for account "..." (...): ...`
 
 - Meaning: OpenClaw found the old encrypted store, but it could not inspect it safely enough to prepare recovery.
 - What to do: rerun `openclaw doctor --fix`. If it repeats, keep the old state directory intact and recover using another verified Matrix client plus `openclaw matrix verify backup restore --recovery-key "<your-recovery-key>"`.

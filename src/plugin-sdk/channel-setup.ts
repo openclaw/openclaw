@@ -1,11 +1,13 @@
 import type { ChannelSetupWizard } from "../channels/plugins/setup-wizard.js";
 import type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";
+import type { ChannelSetupInput } from "../channels/plugins/types.core.js";
 import {
   createOptionalChannelSetupAdapter,
   createOptionalChannelSetupWizard,
 } from "./optional-channel-setup.js";
 
 export type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";
+export type { ChannelSetupInput } from "../channels/plugins/types.core.js";
 export type { ChannelSetupDmPolicy, ChannelSetupWizard } from "./setup.js";
 export {
   DEFAULT_ACCOUNT_ID,

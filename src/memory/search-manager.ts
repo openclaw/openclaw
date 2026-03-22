@@ -8,8 +8,24 @@ import type {
   MemorySyncProgressUpdate,
 } from "./types.js";
 
+const MEMORY_SEARCH_MANAGER_CACHE_KEY = "__openclawMemorySearchManagerCache";
+type MemorySearchManagerCacheStore = {
+  qmdManagerCache: Map<string, MemorySearchManager>;
+};
+
+function getMemorySearchManagerCacheStore(): MemorySearchManagerCacheStore {
+  const globalCache = globalThis as typeof globalThis & {
+    [MEMORY_SEARCH_MANAGER_CACHE_KEY]?: MemorySearchManagerCacheStore;
+  };
+  // Keep caches reachable across `vi.resetModules()` so later cleanup can close older instances.
+  globalCache[MEMORY_SEARCH_MANAGER_CACHE_KEY] ??= {
+    qmdManagerCache: new Map<string, MemorySearchManager>(),
+  };
+  return globalCache[MEMORY_SEARCH_MANAGER_CACHE_KEY];
+}
+
 const log = createSubsystemLogger("memory");
-const QMD_MANAGER_CACHE = new Map<string, MemorySearchManager>();
+const { qmdManagerCache: QMD_MANAGER_CACHE } = getMemorySearchManagerCacheStore();
 let managerRuntimePromise: Promise<typeof import("./manager-runtime.js")> | null = null;
 
 function loadManagerRuntime() {
@@ -30,13 +46,11 @@ export async function getMemorySearchManager(params: {
   const resolved = resolveMemoryBackendConfig(params);
   if (resolved.backend === "qmd" && resolved.qmd) {
     const statusOnly = params.purpose === "status";
-    let cacheKey: string | undefined;
-    if (!statusOnly) {
-      cacheKey = buildQmdCacheKey(params.agentId, resolved.qmd);
-      const cached = QMD_MANAGER_CACHE.get(cacheKey);
-      if (cached) {
-        return { manager: cached };
-      }
+    const baseCacheKey = buildQmdCacheKey(params.agentId, resolved.qmd);
+    const cacheKey = `${baseCacheKey}:${statusOnly ? "status" : "full"}`;
+    const cached = QMD_MANAGER_CACHE.get(cacheKey);
+    if (cached) {
+      return { manager: cached };
     }
     try {
       const { QmdMemoryManager } = await import("./qmd-manager.js");
@@ -48,6 +62,7 @@ export async function getMemorySearchManager(params: {
       });
       if (primary) {
         if (statusOnly) {
+          QMD_MANAGER_CACHE.set(cacheKey, primary);
           return { manager: primary };
         }
         const wrapper = new FallbackMemoryManager(
@@ -59,14 +74,10 @@ export async function getMemorySearchManager(params: {
             },
           },
           () => {
-            if (cacheKey) {
-              QMD_MANAGER_CACHE.delete(cacheKey);
-            }
+            QMD_MANAGER_CACHE.delete(cacheKey);
           },
         );
-        if (cacheKey) {
-          QMD_MANAGER_CACHE.set(cacheKey, wrapper);
-        }
+        QMD_MANAGER_CACHE.set(cacheKey, wrapper);
         return { manager: wrapper };
       }
     } catch (err) {

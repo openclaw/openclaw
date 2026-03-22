@@ -1,8 +1,5 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import {
-  type ChannelSetupDmPolicy,
-  type ChannelSetupWizardAdapter,
-} from "openclaw/plugin-sdk/setup";
+import { type ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
 import { requiresExplicitMatrixDefaultAccount } from "./account-selection.js";
 import { listMatrixDirectoryGroupsLive } from "./directory-live.js";
 import {
@@ -11,7 +8,11 @@ import {
   resolveMatrixAccount,
   resolveMatrixAccountConfig,
 } from "./matrix/accounts.js";
-import { resolveMatrixEnvAuthReadiness, validateMatrixHomeserverUrl } from "./matrix/client.js";
+import {
+  resolveMatrixEnvAuthReadiness,
+  resolveValidatedMatrixHomeserverUrl,
+  validateMatrixHomeserverUrl,
+} from "./matrix/client.js";
 import {
   resolveMatrixConfigFieldPath,
   resolveMatrixConfigPath,
@@ -23,6 +24,7 @@ import type { DmPolicy } from "./runtime-api.js";
 import {
   addWildcardAllowFrom,
   formatDocsLink,
+  isPrivateOrLoopbackHost,
   mergeAllowFromEntries,
   moveSingleAccountChannelSectionToDefaultAccount,
   normalizeAccountId,
@@ -35,6 +37,54 @@ import { runMatrixSetupBootstrapAfterConfigWrite } from "./setup-bootstrap.js";
 import type { CoreConfig } from "./types.js";
 
 const channel = "matrix" as const;
+
+type MatrixOnboardingStatus = {
+  channel: typeof channel;
+  configured: boolean;
+  statusLines: string[];
+  selectionHint?: string;
+  quickstartScore?: number;
+};
+
+type MatrixAccountOverrides = Partial<Record<typeof channel, string>>;
+
+type MatrixOnboardingConfigureContext = {
+  cfg: CoreConfig;
+  runtime: RuntimeEnv;
+  prompter: WizardPrompter;
+  options?: unknown;
+  forceAllowFrom: boolean;
+  accountOverrides: MatrixAccountOverrides;
+  shouldPromptAccountIds: boolean;
+};
+
+type MatrixOnboardingInteractiveContext = MatrixOnboardingConfigureContext & {
+  configured: boolean;
+  label?: string;
+};
+
+type MatrixOnboardingAdapter = {
+  channel: typeof channel;
+  getStatus: (ctx: {
+    cfg: CoreConfig;
+    options?: unknown;
+    accountOverrides: MatrixAccountOverrides;
+  }) => Promise<MatrixOnboardingStatus>;
+  configure: (
+    ctx: MatrixOnboardingConfigureContext,
+  ) => Promise<{ cfg: CoreConfig; accountId?: string }>;
+  configureInteractive?: (
+    ctx: MatrixOnboardingInteractiveContext,
+  ) => Promise<{ cfg: CoreConfig; accountId?: string } | "skip">;
+  afterConfigWritten?: (ctx: {
+    previousCfg: CoreConfig;
+    cfg: CoreConfig;
+    accountId: string;
+    runtime: RuntimeEnv;
+  }) => Promise<void> | void;
+  dmPolicy?: ChannelSetupDmPolicy;
+  disable?: (cfg: CoreConfig) => CoreConfig;
+};
 
 function resolveMatrixOnboardingAccountId(cfg: CoreConfig, accountId?: string): string {
   return normalizeAccountId(
@@ -70,6 +120,15 @@ async function noteMatrixAuthHelp(prompter: WizardPrompter): Promise<void> {
     ].join("\n"),
     "Matrix setup",
   );
+}
+
+function requiresMatrixPrivateNetworkOptIn(homeserver: string): boolean {
+  try {
+    const parsed = new URL(homeserver);
+    return parsed.protocol === "http:" && !isPrivateOrLoopbackHost(parsed.hostname);
+  } catch {
+    return false;
+  }
 }
 
 async function promptMatrixAllowFrom(params: {
@@ -298,7 +357,9 @@ async function runMatrixConfigure(params: {
       initialValue: existing.homeserver ?? envHomeserver,
       validate: (value) => {
         try {
-          validateMatrixHomeserverUrl(String(value ?? ""));
+          validateMatrixHomeserverUrl(String(value ?? ""), {
+            allowPrivateNetwork: true,
+          });
           return undefined;
         } catch (error) {
           return error instanceof Error ? error.message : "Invalid Matrix homeserver URL";
@@ -306,6 +367,23 @@ async function runMatrixConfigure(params: {
       },
     }),
   ).trim();
+  const requiresAllowPrivateNetwork = requiresMatrixPrivateNetworkOptIn(homeserver);
+  const shouldPromptAllowPrivateNetwork =
+    requiresAllowPrivateNetwork || existing.allowPrivateNetwork === true;
+  const allowPrivateNetwork = shouldPromptAllowPrivateNetwork
+    ? await params.prompter.confirm({
+        message: "Allow private/internal Matrix homeserver traffic for this account?",
+        initialValue: existing.allowPrivateNetwork === true || requiresAllowPrivateNetwork,
+      })
+    : false;
+  if (requiresAllowPrivateNetwork && !allowPrivateNetwork) {
+    throw new Error(
+      "Matrix homeserver requires allowPrivateNetwork for trusted private/internal access",
+    );
+  }
+  await resolveValidatedMatrixHomeserverUrl(homeserver, {
+    allowPrivateNetwork,
+  });
 
   let accessToken = existing.accessToken ?? "";
   let password = typeof existing.password === "string" ? existing.password : "";
@@ -384,6 +462,9 @@ async function runMatrixConfigure(params: {
   next = updateMatrixAccountConfig(next, accountId, {
     enabled: true,
     homeserver,
+    ...(shouldPromptAllowPrivateNetwork
+      ? { allowPrivateNetwork: allowPrivateNetwork ? true : null }
+      : {}),
     userId: userId || null,
     accessToken: accessToken || null,
     password: password || null,
@@ -473,7 +554,7 @@ async function runMatrixConfigure(params: {
   return { cfg: next, accountId };
 }
 
-export const matrixOnboardingAdapter: ChannelSetupWizardAdapter = {
+export const matrixOnboardingAdapter: MatrixOnboardingAdapter = {
   channel,
   getStatus: async ({ cfg, accountOverrides }) => {
     const resolvedCfg = cfg as CoreConfig;

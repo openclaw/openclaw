@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { createJiti } from "jiti";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   loadPluginManifestRegistry,
   type PluginManifestRecord,
 } from "../plugins/manifest-registry.js";
+import { shouldPreferNativeJiti } from "../plugins/sdk-alias.js";
 import { openBoundaryFileSync } from "./boundary-file-read.js";
 
 const MATRIX_PLUGIN_ID = "matrix";
@@ -98,13 +100,24 @@ let jitiLoader: ReturnType<typeof createJiti> | null = null;
 const inspectorCache = new Map<string, Promise<MatrixLegacyCryptoInspector>>();
 
 function getJiti() {
-  if (!jitiLoader) {
-    jitiLoader = createJiti(import.meta.url, {
-      interopDefault: false,
-      extensions: [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs", ".json"],
-    });
+  if (jitiLoader) {
+    return jitiLoader;
   }
+
+  jitiLoader = createJiti(import.meta.url, {
+    interopDefault: false,
+    tryNative: false,
+    extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
+  });
   return jitiLoader;
+}
+
+function canRetryWithJiti(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const code = "code" in error ? (error as { code?: unknown }).code : undefined;
+  return code === "ERR_MODULE_NOT_FOUND" || code === "ERR_UNKNOWN_FILE_EXTENSION";
 }
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
@@ -154,7 +167,19 @@ export async function loadMatrixLegacyCryptoInspector(params: {
   }
 
   const pending = (async () => {
-    const loaded: unknown = await getJiti().import(helperPath);
+    let loaded: unknown;
+    if (shouldPreferNativeJiti(helperPath)) {
+      try {
+        loaded = await import(pathToFileURL(helperPath).href);
+      } catch (error) {
+        if (!canRetryWithJiti(error)) {
+          throw error;
+        }
+        loaded = getJiti()(helperPath);
+      }
+    } else {
+      loaded = getJiti()(helperPath);
+    }
     const inspectLegacyMatrixCryptoStore = resolveInspectorExport(loaded);
     if (!inspectLegacyMatrixCryptoStore) {
       throw new Error(

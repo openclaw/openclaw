@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { LookupFn } from "../../runtime-api.js";
 import type { CoreConfig } from "../types.js";
 import {
   getMatrixScopedEnvVarNames,
@@ -7,18 +8,32 @@ import {
   resolveMatrixConfigForAccount,
   resolveMatrixAuth,
   resolveMatrixAuthContext,
+  resolveValidatedMatrixHomeserverUrl,
   validateMatrixHomeserverUrl,
 } from "./client/config.js";
-import * as credentialsModule from "./credentials.js";
+import * as credentialsReadModule from "./credentials-read.js";
 import * as sdkModule from "./sdk.js";
 
-const saveMatrixCredentialsMock = vi.hoisted(() => vi.fn());
+function createLookupFn(addresses: Array<{ address: string; family: number }>): LookupFn {
+  return vi.fn(async (_hostname: string, options?: unknown) => {
+    if (typeof options === "number" || !options || !(options as { all?: boolean }).all) {
+      return addresses[0]!;
+    }
+    return addresses;
+  }) as unknown as LookupFn;
+}
 
-vi.mock("./credentials.js", () => ({
+const saveMatrixCredentialsMock = vi.hoisted(() => vi.fn());
+const touchMatrixCredentialsMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./credentials-read.js", () => ({
   loadMatrixCredentials: vi.fn(() => null),
-  saveMatrixCredentials: saveMatrixCredentialsMock,
   credentialsMatchConfig: vi.fn(() => false),
-  touchMatrixCredentials: vi.fn(),
+}));
+
+vi.mock("./credentials-write.runtime.js", () => ({
+  saveMatrixCredentials: saveMatrixCredentialsMock,
+  touchMatrixCredentials: touchMatrixCredentialsMock,
 }));
 
 describe("resolveMatrixConfig", () => {
@@ -321,6 +336,28 @@ describe("resolveMatrixConfig", () => {
     );
     expect(validateMatrixHomeserverUrl("http://127.0.0.1:8008")).toBe("http://127.0.0.1:8008");
   });
+
+  it("accepts internal http homeservers only when private-network access is enabled", () => {
+    expect(() => validateMatrixHomeserverUrl("http://matrix-synapse:8008")).toThrow(
+      "Matrix homeserver must use https:// unless it targets a private or loopback host",
+    );
+    expect(
+      validateMatrixHomeserverUrl("http://matrix-synapse:8008", {
+        allowPrivateNetwork: true,
+      }),
+    ).toBe("http://matrix-synapse:8008");
+  });
+
+  it("rejects public http homeservers even when private-network access is enabled", async () => {
+    await expect(
+      resolveValidatedMatrixHomeserverUrl("http://matrix.example.org:8008", {
+        allowPrivateNetwork: true,
+        lookupFn: createLookupFn([{ address: "93.184.216.34", family: 4 }]),
+      }),
+    ).rejects.toThrow(
+      "Matrix homeserver must use https:// unless it targets a private or loopback host",
+    );
+  });
 });
 
 describe("resolveMatrixAuth", () => {
@@ -414,14 +451,14 @@ describe("resolveMatrixAuth", () => {
   });
 
   it("uses cached matching credentials when access token is not configured", async () => {
-    vi.mocked(credentialsModule.loadMatrixCredentials).mockReturnValue({
+    vi.mocked(credentialsReadModule.loadMatrixCredentials).mockReturnValue({
       homeserver: "https://matrix.example.org",
       userId: "@bot:example.org",
       accessToken: "cached-token",
       deviceId: "CACHEDDEVICE",
       createdAt: "2026-01-01T00:00:00.000Z",
     });
-    vi.mocked(credentialsModule.credentialsMatchConfig).mockReturnValue(true);
+    vi.mocked(credentialsReadModule.credentialsMatchConfig).mockReturnValue(true);
 
     const cfg = {
       channels: {
@@ -464,13 +501,13 @@ describe("resolveMatrixAuth", () => {
   });
 
   it("falls back to config deviceId when cached credentials are missing it", async () => {
-    vi.mocked(credentialsModule.loadMatrixCredentials).mockReturnValue({
+    vi.mocked(credentialsReadModule.loadMatrixCredentials).mockReturnValue({
       homeserver: "https://matrix.example.org",
       userId: "@bot:example.org",
       accessToken: "tok-123",
       createdAt: "2026-01-01T00:00:00.000Z",
     });
-    vi.mocked(credentialsModule.credentialsMatchConfig).mockReturnValue(true);
+    vi.mocked(credentialsReadModule.credentialsMatchConfig).mockReturnValue(true);
 
     const cfg = {
       channels: {
@@ -498,6 +535,28 @@ describe("resolveMatrixAuth", () => {
       expect.any(Object),
       "default",
     );
+  });
+
+  it("carries the private-network opt-in through Matrix auth resolution", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "http://127.0.0.1:8008",
+          allowPrivateNetwork: true,
+          userId: "@bot:example.org",
+          accessToken: "tok-123",
+          deviceId: "DEVICE123",
+        },
+      },
+    } as CoreConfig;
+
+    const auth = await resolveMatrixAuth({ cfg, env: {} as NodeJS.ProcessEnv });
+
+    expect(auth).toMatchObject({
+      homeserver: "http://127.0.0.1:8008",
+      allowPrivateNetwork: true,
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
   });
 
   it("resolves token-only non-default account userId from whoami instead of inheriting the base user", async () => {
@@ -533,8 +592,8 @@ describe("resolveMatrixAuth", () => {
   });
 
   it("uses named-account password auth instead of inheriting the base access token", async () => {
-    vi.mocked(credentialsModule.loadMatrixCredentials).mockReturnValue(null);
-    vi.mocked(credentialsModule.credentialsMatchConfig).mockReturnValue(false);
+    vi.mocked(credentialsReadModule.loadMatrixCredentials).mockReturnValue(null);
+    vi.mocked(credentialsReadModule.credentialsMatchConfig).mockReturnValue(false);
     const doRequestSpy = vi.spyOn(sdkModule.MatrixClient.prototype, "doRequest").mockResolvedValue({
       access_token: "ops-token",
       user_id: "@ops:example.org",
@@ -615,13 +674,13 @@ describe("resolveMatrixAuth", () => {
   });
 
   it("uses config deviceId with cached credentials when token is loaded from cache", async () => {
-    vi.mocked(credentialsModule.loadMatrixCredentials).mockReturnValue({
+    vi.mocked(credentialsReadModule.loadMatrixCredentials).mockReturnValue({
       homeserver: "https://matrix.example.org",
       userId: "@bot:example.org",
       accessToken: "tok-123",
       createdAt: "2026-01-01T00:00:00.000Z",
     });
-    vi.mocked(credentialsModule.credentialsMatchConfig).mockReturnValue(true);
+    vi.mocked(credentialsReadModule.credentialsMatchConfig).mockReturnValue(true);
 
     const cfg = {
       channels: {

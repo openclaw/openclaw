@@ -478,14 +478,14 @@ export function installChannelDirectoryContractSuite(params: {
 }
 
 export function installSessionBindingContractSuite(params: {
-  getCapabilities: () => SessionBindingCapabilities;
+  getCapabilities: () => SessionBindingCapabilities | Promise<SessionBindingCapabilities>;
   bindAndResolve: () => Promise<SessionBindingRecord>;
   unbindAndVerify: (binding: SessionBindingRecord) => Promise<void>;
   cleanup: () => Promise<void> | void;
   expectedCapabilities: SessionBindingCapabilities;
 }) {
-  it("registers the expected session binding capabilities", () => {
-    expect(params.getCapabilities()).toEqual(params.expectedCapabilities);
+  it("registers the expected session binding capabilities", async () => {
+    expect(await Promise.resolve(params.getCapabilities())).toEqual(params.expectedCapabilities);
   });
 
   it("binds and resolves a session binding through the shared service", async () => {

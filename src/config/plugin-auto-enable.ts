@@ -1,4 +1,4 @@
-import { hasAnyWhatsAppAuth } from "openclaw/plugin-sdk/whatsapp";
+import { hasAnyWhatsAppAuth } from "../../extensions/whatsapp/auth-presence.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { hasMeaningfulChannelConfig } from "../channels/config-presence.js";
 import {
@@ -26,6 +26,11 @@ type PluginEnableChange = {
 export type PluginAutoEnableResult = {
   config: OpenClawConfig;
   changes: string[];
+};
+
+const EMPTY_PLUGIN_MANIFEST_REGISTRY: PluginManifestRegistry = {
+  plugins: [],
+  diagnostics: [],
 };
 
 const PROVIDER_PLUGIN_IDS: Array<{ pluginId: string; providerId: string }> = [
@@ -330,6 +335,22 @@ function collectCandidateChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv)
   return Array.from(channelIds);
 }
 
+function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig): boolean {
+  const configuredChannels = cfg.channels as Record<string, unknown> | undefined;
+  if (!configuredChannels || typeof configuredChannels !== "object") {
+    return false;
+  }
+  for (const key of Object.keys(configuredChannels)) {
+    if (key === "defaults" || key === "modelByChannel") {
+      continue;
+    }
+    if (!normalizeChatChannelId(key)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function resolveConfiguredPlugins(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -478,7 +499,10 @@ export function applyPluginAutoEnable(params: {
 }): PluginAutoEnableResult {
   const env = params.env ?? process.env;
   const registry =
-    params.manifestRegistry ?? loadPluginManifestRegistry({ config: params.config, env });
+    params.manifestRegistry ??
+    (configMayNeedPluginManifestRegistry(params.config)
+      ? loadPluginManifestRegistry({ config: params.config, env })
+      : EMPTY_PLUGIN_MANIFEST_REGISTRY);
   const configured = resolveConfiguredPlugins(params.config, env, registry);
   if (configured.length === 0) {
     return { config: params.config, changes: [] };
