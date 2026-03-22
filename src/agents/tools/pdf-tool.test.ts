@@ -398,7 +398,7 @@ describe("createPdfTool", () => {
             config: cfg,
             agentDir,
             workspaceDir,
-            fsPolicy: { workspaceOnly: true },
+            fsPolicy: { workspaceOnly: true, allowedRoots: [] },
           }),
         );
 
@@ -411,6 +411,47 @@ describe("createPdfTool", () => {
       } finally {
         await fs.rm(workspaceDir, { recursive: true, force: true });
         await fs.rm(outsideDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("allows non-sandbox pdf paths inside fsPolicy.allowedRoots", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
+      const { loadSpy } = await stubPdfToolInfra(agentDir, {
+        provider: "anthropic",
+        input: ["text", "document"],
+      });
+      const nativeProviders = await import("./pdf-native-providers.js");
+      vi.spyOn(nativeProviders, "anthropicAnalyzePdf").mockResolvedValue("native summary");
+
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-ws-"));
+      const allowedDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-allowed-"));
+      try {
+        const cfg = withDefaultModel(ANTHROPIC_PDF_MODEL);
+        const tool = requirePdfTool(
+          createPdfTool({
+            config: cfg,
+            agentDir,
+            workspaceDir,
+            fsPolicy: { workspaceOnly: true, allowedRoots: [allowedDir] },
+          }),
+        );
+
+        const allowedPdf = path.join(allowedDir, "shared.pdf");
+        await fs.writeFile(allowedPdf, "%PDF-1.4 fake");
+
+        const result = await tool.execute("t1", { prompt: "test", pdf: allowedPdf });
+        expect(result).toMatchObject({
+          content: [{ type: "text", text: "native summary" }],
+        });
+        expect(loadSpy).toHaveBeenCalledWith(
+          allowedPdf,
+          expect.objectContaining({ localRoots: expect.arrayContaining([allowedDir]) }),
+        );
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+        await fs.rm(allowedDir, { recursive: true, force: true });
       }
     });
   });

@@ -315,6 +315,65 @@ describe("createImageGenerateTool", () => {
     );
   });
 
+  it("passes fsPolicy.allowedRoots through for reference image loading", async () => {
+    vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "google",
+      model: "gemini-3-pro-image-preview",
+      attempts: [],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "edited.png",
+        },
+      ],
+    });
+    const loadSpy = vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      kind: "image",
+      buffer: Buffer.from("input-image"),
+      contentType: "image/png",
+    });
+    vi.spyOn(imageOps, "getImageMetadata").mockResolvedValue({
+      width: 3200,
+      height: 1800,
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/edited.png",
+      id: "edited.png",
+      size: 7,
+      contentType: "image/png",
+    });
+
+    const tool = createImageGenerateTool({
+      config: {
+        agents: {
+          defaults: {
+            imageGenerationModel: {
+              primary: "google/gemini-3-pro-image-preview",
+            },
+          },
+        },
+      },
+      workspaceDir: "/workspace",
+      fsPolicy: { workspaceOnly: true, allowedRoots: ["/shared/media"] },
+    });
+
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("expected image_generate tool");
+    }
+
+    await tool.execute("call-edit-allowed", {
+      prompt: "edit",
+      image: "/shared/media/reference.png",
+    });
+
+    expect(loadSpy).toHaveBeenCalledWith(
+      "/shared/media/reference.png",
+      expect.objectContaining({ localRoots: expect.arrayContaining(["/shared/media"]) }),
+    );
+  });
+
   it("forwards explicit aspect ratio and supports up to 5 reference images", async () => {
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
       provider: "google",

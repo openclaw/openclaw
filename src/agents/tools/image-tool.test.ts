@@ -539,7 +539,7 @@ describe("image tool implicit imageModel config", () => {
           config: cfg,
           agentDir,
           workspaceDir,
-          fsPolicy: { workspaceOnly: true },
+          fsPolicy: { workspaceOnly: true, allowedRoots: [] },
         });
 
         // File inside workspace is allowed.
@@ -556,6 +556,32 @@ describe("image tool implicit imageModel config", () => {
           ).rejects.toThrow(/not under an allowed directory/i);
         } finally {
           await fs.rm(outsideDir, { recursive: true, force: true });
+        }
+      });
+    });
+  });
+
+  it("allows non-sandbox image paths inside fsPolicy.allowedRoots", async () => {
+    await withTempWorkspacePng(async ({ workspaceDir }) => {
+      const fetch = stubMinimaxOkFetch();
+      await withTempAgentDir(async (agentDir) => {
+        const cfg = createMinimaxImageConfig();
+        const allowedDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-allowed-"));
+        const allowedImage = path.join(allowedDir, "shared.png");
+        await fs.writeFile(allowedImage, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+
+        try {
+          const tool = createRequiredImageTool({
+            config: cfg,
+            agentDir,
+            workspaceDir,
+            fsPolicy: { workspaceOnly: true, allowedRoots: [allowedDir] },
+          });
+
+          await expectImageToolExecOk(tool, allowedImage);
+          expect(fetch).toHaveBeenCalledTimes(1);
+        } finally {
+          await fs.rm(allowedDir, { recursive: true, force: true });
         }
       });
     });

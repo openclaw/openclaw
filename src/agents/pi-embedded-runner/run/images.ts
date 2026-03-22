@@ -11,6 +11,7 @@ import {
 import { assertSandboxPath } from "../../sandbox-paths.js";
 import type { SandboxFsBridge } from "../../sandbox/fs-bridge.js";
 import { sanitizeImageBlocks } from "../../tool-images.js";
+import { resolveMediaToolLocalRoots } from "../../tools/media-tool-shared.js";
 import { log } from "../logger.js";
 
 /**
@@ -197,6 +198,7 @@ export async function loadImageFromRef(
   options?: {
     maxBytes?: number;
     workspaceOnly?: boolean;
+    allowedRoots?: string[];
     sandbox?: { root: string; bridge: SandboxFsBridge };
   },
 ): Promise<ImageContent | null> {
@@ -211,6 +213,7 @@ export async function loadImageFromRef(
             root: options.sandbox.root,
             bridge: options.sandbox.bridge,
             workspaceOnly: options.workspaceOnly,
+            allowedRoots: options.allowedRoots,
           },
           mediaPath: targetPath,
         });
@@ -224,12 +227,20 @@ export async function loadImageFromRef(
     } else if (!path.isAbsolute(targetPath)) {
       targetPath = path.resolve(workspaceDir, targetPath);
     }
+    const localRoots = options?.sandbox
+      ? undefined
+      : resolveMediaToolLocalRoots(workspaceDir, {
+          workspaceOnly: options?.workspaceOnly,
+          allowedRoots: options?.allowedRoots,
+        });
+
     if (options?.workspaceOnly && !options?.sandbox) {
       const root = options?.sandbox?.root ?? workspaceDir;
       await assertSandboxPath({
         filePath: targetPath,
         cwd: root,
         root,
+        additionalRoots: localRoots,
       });
     }
 
@@ -240,7 +251,10 @@ export async function loadImageFromRef(
           sandboxValidated: true,
           readFile: createSandboxBridgeReadFile({ sandbox: options.sandbox }),
         })
-      : await loadWebMedia(targetPath, options?.maxBytes);
+      : await loadWebMedia(targetPath, {
+          maxBytes: options?.maxBytes,
+          localRoots,
+        });
 
     if (media.kind !== "image") {
       log.debug(`Native image: not an image file: ${targetPath} (got ${media.kind})`);
@@ -290,6 +304,7 @@ export async function detectAndLoadPromptImages(params: {
   maxBytes?: number;
   maxDimensionPx?: number;
   workspaceOnly?: boolean;
+  allowedRoots?: string[];
   sandbox?: { root: string; bridge: SandboxFsBridge };
 }): Promise<{
   /** Images for the current prompt (existingImages + detected in current prompt) */
@@ -331,6 +346,7 @@ export async function detectAndLoadPromptImages(params: {
     const image = await loadImageFromRef(ref, params.workspaceDir, {
       maxBytes: params.maxBytes,
       workspaceOnly: params.workspaceOnly,
+      allowedRoots: params.allowedRoots,
       sandbox: params.sandbox,
     });
     if (image) {

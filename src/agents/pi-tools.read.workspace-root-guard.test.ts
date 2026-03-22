@@ -5,10 +5,12 @@ import type { AnyAgentTool } from "./pi-tools.types.js";
 
 const mocks = vi.hoisted(() => ({
   assertSandboxPath: vi.fn(async () => ({ resolved: "/tmp/root", relative: "" })),
+  resolveSandboxInputPath: vi.fn((filePath: string) => filePath),
 }));
 
 vi.mock("./sandbox-paths.js", () => ({
   assertSandboxPath: mocks.assertSandboxPath,
+  resolveSandboxInputPath: mocks.resolveSandboxInputPath,
 }));
 
 function createToolHarness() {
@@ -29,6 +31,8 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
 
   beforeEach(() => {
     mocks.assertSandboxPath.mockClear();
+    mocks.resolveSandboxInputPath.mockClear();
+    mocks.resolveSandboxInputPath.mockImplementation((filePath: string) => filePath);
   });
 
   it("maps container workspace paths to host workspace root", async () => {
@@ -89,6 +93,28 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
       cwd: root,
       root,
     });
+  });
+
+  it("normalizes Windows-style tilde paths before calling the wrapped tool", async () => {
+    const { execute, tool } = createToolHarness();
+    mocks.resolveSandboxInputPath.mockReturnValue("C:/Users/me/projects/note.txt");
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc-tilde-win", { path: "~\\projects\\note.txt" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: "~\\projects\\note.txt",
+      cwd: root,
+      root,
+    });
+    expect(execute).toHaveBeenCalledWith(
+      "tc-tilde-win",
+      { path: "C:/Users/me/projects/note.txt" },
+      undefined,
+      undefined,
+    );
   });
 
   it("does not remap absolute paths outside the configured container workdir", async () => {

@@ -1,4 +1,8 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import {
   createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,
@@ -41,5 +45,36 @@ describe("createSandboxBridgeReadFile", () => {
 
     expect(resolved).toEqual({ resolved: "/sandbox/image.png" });
     expect(stat).not.toHaveBeenCalled();
+  });
+
+  it("allows default media roots when workspaceOnly is enabled", async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-root-"));
+    const defaultRoot = resolvePreferredOpenClawTmpDir();
+    await fs.mkdir(defaultRoot, { recursive: true });
+    const mediaDir = await fs.mkdtemp(path.join(defaultRoot, "openclaw-sandbox-media-"));
+    const mediaPath = path.join(mediaDir, "generated.png");
+    await fs.writeFile(mediaPath, Buffer.from("ok"));
+
+    try {
+      const resolved = await resolveSandboxedBridgeMediaPath({
+        sandbox: {
+          root: sandboxRoot,
+          workspaceOnly: true,
+          bridge: {
+            resolvePath: ({ filePath }: { filePath: string }) => ({
+              relativePath: path.basename(filePath),
+              containerPath: filePath,
+              hostPath: filePath,
+            }),
+          } as unknown as SandboxFsBridge,
+        },
+        mediaPath,
+      });
+
+      expect(resolved).toEqual({ resolved: mediaPath });
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+      await fs.rm(mediaDir, { recursive: true, force: true });
+    }
   });
 });

@@ -23,8 +23,8 @@ function expandPath(filePath: string): string {
   if (normalized === "~") {
     return os.homedir();
   }
-  if (normalized.startsWith("~/")) {
-    return os.homedir() + normalized.slice(1);
+  if (normalized.startsWith("~/") || normalized.startsWith("~\\")) {
+    return path.join(os.homedir(), normalized.slice(2));
   }
   return normalized;
 }
@@ -41,26 +41,52 @@ export function resolveSandboxInputPath(filePath: string, cwd: string): string {
   return resolveToCwd(filePath, cwd);
 }
 
-export function resolveSandboxPath(params: { filePath: string; cwd: string; root: string }): {
+export function resolveSandboxPath(params: {
+  filePath: string;
+  cwd: string;
+  root: string;
+  additionalRoots?: string[];
+}): {
   resolved: string;
   relative: string;
+  matchedRoot: string;
 } {
   const resolved = resolveSandboxInputPath(params.filePath, params.cwd);
   const rootResolved = path.resolve(params.root);
   const relative = path.relative(rootResolved, resolved);
   if (!relative || relative === "") {
-    return { resolved, relative: "" };
+    return { resolved, relative: "", matchedRoot: rootResolved };
   }
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`Path escapes sandbox root (${shortPath(rootResolved)}): ${params.filePath}`);
+  if (!relative.startsWith("..") && !path.isAbsolute(relative)) {
+    return { resolved, relative, matchedRoot: rootResolved };
   }
-  return { resolved, relative };
+
+  // Check additional roots
+  if (params.additionalRoots?.length) {
+    for (const extraRoot of params.additionalRoots) {
+      const expandedExtra = expandPath(extraRoot);
+      if (!path.isAbsolute(expandedExtra)) {
+        throw new Error(`allowedRoots entries must be absolute paths: ${extraRoot}`);
+      }
+      const resolvedExtra = path.resolve(expandedExtra);
+      const extraRelative = path.relative(resolvedExtra, resolved);
+      if (
+        extraRelative === "" ||
+        (!extraRelative.startsWith("..") && !path.isAbsolute(extraRelative))
+      ) {
+        return { resolved, relative: extraRelative, matchedRoot: resolvedExtra };
+      }
+    }
+  }
+
+  throw new Error(`Path escapes sandbox root (${shortPath(rootResolved)}): ${params.filePath}`);
 }
 
 export async function assertSandboxPath(params: {
   filePath: string;
   cwd: string;
   root: string;
+  additionalRoots?: string[];
   allowFinalSymlinkForUnlink?: boolean;
   allowFinalHardlinkForUnlink?: boolean;
 }) {
@@ -71,7 +97,7 @@ export async function assertSandboxPath(params: {
   };
   await assertNoPathAliasEscape({
     absolutePath: resolved.resolved,
-    rootPath: params.root,
+    rootPath: resolved.matchedRoot,
     boundaryLabel: "sandbox root",
     policy,
   });

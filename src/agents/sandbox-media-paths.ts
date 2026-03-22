@@ -1,4 +1,5 @@
 import path from "node:path";
+import { getDefaultLocalRoots } from "../plugin-sdk/web-media.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
@@ -6,6 +7,7 @@ export type SandboxedBridgeMediaPathConfig = {
   root: string;
   bridge: SandboxFsBridge;
   workspaceOnly?: boolean;
+  allowedRoots?: string[];
 };
 
 export function createSandboxBridgeReadFile(params: {
@@ -26,6 +28,9 @@ export async function resolveSandboxedBridgeMediaPath(params: {
   const normalizeFileUrl = (rawPath: string) =>
     rawPath.startsWith("file://") ? rawPath.slice("file://".length) : rawPath;
   const filePath = normalizeFileUrl(params.mediaPath);
+  const mediaBoundaryRoots = params.sandbox.workspaceOnly
+    ? Array.from(new Set([...(params.sandbox.allowedRoots ?? []), ...getDefaultLocalRoots()]))
+    : params.sandbox.allowedRoots;
   const enforceWorkspaceBoundary = async (hostPath: string) => {
     if (!params.sandbox.workspaceOnly) {
       return;
@@ -34,6 +39,7 @@ export async function resolveSandboxedBridgeMediaPath(params: {
       filePath: hostPath,
       cwd: params.sandbox.root,
       root: params.sandbox.root,
+      additionalRoots: mediaBoundaryRoots,
     });
   };
 

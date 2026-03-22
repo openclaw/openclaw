@@ -3,17 +3,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
-import {
-  appendFileWithinRoot,
-  SafeOpenError,
-  openFileWithinRoot,
-  readFileWithinRoot,
-  writeFileWithinRoot,
-} from "../infra/fs-safe.js";
+import { appendFileWithinRoot, readFileWithinRoot, writeFileWithinRoot } from "../infra/fs-safe.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
-import { toRelativeWorkspacePath } from "./path-policy.js";
 import { wrapHostEditToolWithPostWriteRecovery } from "./pi-tools.host-edit.js";
 import {
   CLAUDE_PARAM_GROUPS,
@@ -23,7 +16,7 @@ import {
   wrapToolParamNormalization,
 } from "./pi-tools.params.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
-import { assertSandboxPath } from "./sandbox-paths.js";
+import { assertSandboxPath, resolveSandboxInputPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
@@ -351,8 +344,12 @@ async function normalizeReadImageResult(
   return { ...result, content: nextContent };
 }
 
-export function wrapToolWorkspaceRootGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
-  return wrapToolWorkspaceRootGuardWithOptions(tool, root);
+export function wrapToolWorkspaceRootGuard(
+  tool: AnyAgentTool,
+  root: string,
+  additionalRoots?: string[],
+): AnyAgentTool {
+  return wrapToolWorkspaceRootGuardWithOptions(tool, root, undefined, additionalRoots);
 }
 
 function mapContainerPathToWorkspaceRoot(params: {
@@ -562,12 +559,29 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
   };
 }
 
+function normalizeWrappedToolPathForExecution(filePath: string, root: string): string {
+  const trimmed = filePath.trim();
+  if (!trimmed) {
+    return filePath;
+  }
+  if (
+    trimmed === "~" ||
+    trimmed.startsWith("~/") ||
+    trimmed.startsWith("~\\") ||
+    trimmed.startsWith("@")
+  ) {
+    return resolveSandboxInputPath(trimmed, root);
+  }
+  return filePath;
+}
+
 export function wrapToolWorkspaceRootGuardWithOptions(
   tool: AnyAgentTool,
   root: string,
   options?: {
     containerWorkdir?: string;
   },
+  additionalRoots?: string[],
 ): AnyAgentTool {
   return {
     ...tool,
@@ -576,6 +590,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
       const record =
         normalized ??
         (args && typeof args === "object" ? (args as Record<string, unknown>) : undefined);
+      let executionArgs = normalized ?? args;
       const filePath = record?.path;
       if (typeof filePath === "string" && filePath.trim()) {
         const sandboxPath = mapContainerPathToWorkspaceRoot({
@@ -583,9 +598,13 @@ export function wrapToolWorkspaceRootGuardWithOptions(
           root,
           containerWorkdir: options?.containerWorkdir,
         });
-        await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
+        await assertSandboxPath({ filePath: sandboxPath, cwd: root, root, additionalRoots });
+        const normalizedPath = normalizeWrappedToolPathForExecution(sandboxPath, root);
+        if (normalizedPath !== filePath && record) {
+          executionArgs = { ...record, path: normalizedPath };
+        }
       }
-      return tool.execute(toolCallId, normalized ?? args, signal, onUpdate);
+      return tool.execute(toolCallId, executionArgs, signal, onUpdate);
     },
   };
 }
@@ -621,14 +640,20 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
 }
 
-export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
+export function createHostWorkspaceWriteTool(
+  root: string,
+  options?: { workspaceOnly?: boolean; allowedRoots?: string[] },
+) {
   const base = createWriteTool(root, {
     operations: createHostWriteOperations(root, options),
   }) as unknown as AnyAgentTool;
   return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
 }
 
-export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
+export function createHostWorkspaceEditTool(
+  root: string,
+  options?: { workspaceOnly?: boolean; allowedRoots?: string[] },
+) {
   const base = createEditTool(root, {
     operations: createHostEditOperations(root, options),
   }) as unknown as AnyAgentTool;
@@ -718,8 +743,12 @@ async function writeHostFile(absolutePath: string, content: string) {
   await fs.writeFile(resolved, content, "utf-8");
 }
 
-function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
+function createHostWriteOperations(
+  root: string,
+  options?: { workspaceOnly?: boolean; allowedRoots?: string[] },
+) {
   const workspaceOnly = options?.workspaceOnly ?? false;
+  const allowedRoots = options?.allowedRoots;
 
   if (!workspaceOnly) {
     // When workspaceOnly is false, allow writes anywhere on the host
@@ -732,28 +761,44 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
     } as const;
   }
 
-  // When workspaceOnly is true, enforce workspace boundary
+  // When workspaceOnly is true, enforce workspace boundary (with optional allowedRoots)
   return {
     mkdir: async (dir: string) => {
-      const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
-      const resolved = relative ? path.resolve(root, relative) : path.resolve(root);
-      await assertSandboxPath({ filePath: resolved, cwd: root, root });
-      await fs.mkdir(resolved, { recursive: true });
+      const sandboxResult = await assertSandboxPath({
+        filePath: dir,
+        cwd: root,
+        root,
+        additionalRoots: allowedRoots,
+      });
+      await fs.mkdir(sandboxResult.resolved, { recursive: true });
     },
     writeFile: async (absolutePath: string, content: string) => {
-      const relative = toRelativeWorkspacePath(root, absolutePath);
+      const sandboxResult = await assertSandboxPath({
+        filePath: absolutePath,
+        cwd: root,
+        root,
+        additionalRoots: allowedRoots,
+      });
+      if (!sandboxResult.relative) {
+        throw new Error(`Cannot write to root directory itself: ${absolutePath}`);
+      }
       await writeFileWithinRoot({
-        rootDir: root,
-        relativePath: relative,
+        rootDir: sandboxResult.matchedRoot,
+        relativePath: sandboxResult.relative,
         data: content,
+        encoding: "utf-8",
         mkdir: true,
       });
     },
   } as const;
 }
 
-function createHostEditOperations(root: string, options?: { workspaceOnly?: boolean }) {
+function createHostEditOperations(
+  root: string,
+  options?: { workspaceOnly?: boolean; allowedRoots?: string[] },
+) {
   const workspaceOnly = options?.workspaceOnly ?? false;
+  const allowedRoots = options?.allowedRoots;
 
   if (!workspaceOnly) {
     // When workspaceOnly is false, allow edits anywhere on the host
@@ -770,51 +815,63 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
     } as const;
   }
 
-  // When workspaceOnly is true, enforce workspace boundary
+  // When workspaceOnly is true, enforce workspace boundary (with optional allowedRoots)
   return {
     readFile: async (absolutePath: string) => {
-      const relative = toRelativeWorkspacePath(root, absolutePath);
+      const sandboxResult = await assertSandboxPath({
+        filePath: absolutePath,
+        cwd: root,
+        root,
+        additionalRoots: allowedRoots,
+      });
+      if (!sandboxResult.relative) {
+        throw new Error(`Cannot read root directory itself: ${absolutePath}`);
+      }
       const safeRead = await readFileWithinRoot({
-        rootDir: root,
-        relativePath: relative,
+        rootDir: sandboxResult.matchedRoot,
+        relativePath: sandboxResult.relative,
       });
       return safeRead.buffer;
     },
     writeFile: async (absolutePath: string, content: string) => {
-      const relative = toRelativeWorkspacePath(root, absolutePath);
+      const sandboxResult = await assertSandboxPath({
+        filePath: absolutePath,
+        cwd: root,
+        root,
+        additionalRoots: allowedRoots,
+      });
+      if (!sandboxResult.relative) {
+        throw new Error(`Cannot write to root directory itself: ${absolutePath}`);
+      }
       await writeFileWithinRoot({
-        rootDir: root,
-        relativePath: relative,
+        rootDir: sandboxResult.matchedRoot,
+        relativePath: sandboxResult.relative,
         data: content,
+        encoding: "utf-8",
         mkdir: true,
       });
     },
     access: async (absolutePath: string) => {
-      let relative: string;
+      let sandboxResult;
       try {
-        relative = toRelativeWorkspacePath(root, absolutePath);
+        sandboxResult = await assertSandboxPath({
+          filePath: absolutePath,
+          cwd: root,
+          root,
+          additionalRoots: allowedRoots,
+        });
       } catch {
-        // Path escapes workspace root.  Don't throw here – the upstream
-        // library replaces any `access` error with a misleading "File not
-        // found" message.  By returning silently the subsequent `readFile`
-        // call will throw the same "Path escapes workspace root" error
-        // through a code-path that propagates the original message.
+        // Don't throw here – the upstream library replaces any `access` error
+        // with a misleading "File not found" message. By returning silently the
+        // subsequent `readFile` call will throw through a code-path that
+        // propagates the original message.
         return;
       }
       try {
-        const opened = await openFileWithinRoot({
-          rootDir: root,
-          relativePath: relative,
-        });
-        await opened.handle.close().catch(() => {});
+        await fs.access(sandboxResult.resolved);
       } catch (error) {
-        if (error instanceof SafeOpenError && error.code === "not-found") {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
           throw createFsAccessError("ENOENT", absolutePath);
-        }
-        if (error instanceof SafeOpenError && error.code === "outside-workspace") {
-          // Don't throw here – see the comment above about the upstream
-          // library swallowing access errors as "File not found".
-          return;
         }
         throw error;
       }

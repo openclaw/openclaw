@@ -4,7 +4,11 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { resolveSandboxedMediaSource } from "./sandbox-paths.js";
+import {
+  assertSandboxPath,
+  resolveSandboxPath,
+  resolveSandboxedMediaSource,
+} from "./sandbox-paths.js";
 
 async function withSandboxRoot<T>(run: (sandboxDir: string) => Promise<T>) {
   const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-media-"));
@@ -276,5 +280,256 @@ describe("resolveSandboxedMediaSource", () => {
       sandboxRoot: "/any/path",
     });
     expect(result).toBe("");
+  });
+});
+
+describe("resolveSandboxPath with additionalRoots", () => {
+  it("resolves a path inside the primary root without additionalRoots", () => {
+    const result = resolveSandboxPath({
+      filePath: "file.txt",
+      cwd: "/workspace",
+      root: "/workspace",
+    });
+    expect(result.resolved).toBe("/workspace/file.txt");
+    expect(result.relative).toBe("file.txt");
+    expect(result.matchedRoot).toBe("/workspace");
+  });
+
+  it("resolves a path inside an additional root", () => {
+    const result = resolveSandboxPath({
+      filePath: "/extra/data/file.txt",
+      cwd: "/workspace",
+      root: "/workspace",
+      additionalRoots: ["/extra/data"],
+    });
+    expect(result.resolved).toBe("/extra/data/file.txt");
+    expect(result.relative).toBe("file.txt");
+    expect(result.matchedRoot).toBe("/extra/data");
+  });
+
+  it("rejects a path outside both primary and additional roots", () => {
+    expect(() =>
+      resolveSandboxPath({
+        filePath: "/etc/passwd",
+        cwd: "/workspace",
+        root: "/workspace",
+        additionalRoots: ["/extra/data"],
+      }),
+    ).toThrow(/sandbox/i);
+  });
+
+  it("rejects relative additionalRoots entries", () => {
+    expect(() =>
+      resolveSandboxPath({
+        filePath: "/etc/passwd",
+        cwd: "/workspace",
+        root: "/workspace",
+        additionalRoots: ["relative/root"],
+      }),
+    ).toThrow(/allowedRoots entries must be absolute paths/i);
+  });
+
+  it("applies tilde expansion for additionalRoots entries", () => {
+    const homeDir = os.homedir();
+    const result = resolveSandboxPath({
+      filePath: path.join(homeDir, "notes", "file.txt"),
+      cwd: "/workspace",
+      root: "/workspace",
+      additionalRoots: ["~/notes"],
+    });
+    expect(result.resolved).toBe(path.join(homeDir, "notes", "file.txt"));
+    expect(result.relative).toBe("file.txt");
+    expect(result.matchedRoot).toBe(path.resolve(homeDir, "notes"));
+  });
+
+  it("applies tilde expansion for Windows-style additionalRoots entries", () => {
+    const homeDir = os.homedir();
+    const result = resolveSandboxPath({
+      filePath: path.join(homeDir, "notes", "file.txt"),
+      cwd: "/workspace",
+      root: "/workspace",
+      additionalRoots: ["~\\notes"],
+    });
+    expect(result.resolved).toBe(path.join(homeDir, "notes", "file.txt"));
+    expect(result.relative).toBe("file.txt");
+    expect(result.matchedRoot).toBe(path.resolve(homeDir, "notes"));
+  });
+
+  it("empty additionalRoots behaves same as no additionalRoots (backward compat)", () => {
+    // Path inside root works
+    const result = resolveSandboxPath({
+      filePath: "file.txt",
+      cwd: "/workspace",
+      root: "/workspace",
+      additionalRoots: [],
+    });
+    expect(result.resolved).toBe("/workspace/file.txt");
+    expect(result.matchedRoot).toBe("/workspace");
+
+    // Path outside root throws
+    expect(() =>
+      resolveSandboxPath({
+        filePath: "/etc/passwd",
+        cwd: "/workspace",
+        root: "/workspace",
+        additionalRoots: [],
+      }),
+    ).toThrow(/sandbox/i);
+  });
+
+  it("returns matchedRoot for primary root when path is inside primary root", () => {
+    const result = resolveSandboxPath({
+      filePath: "/workspace/deep/file.txt",
+      cwd: "/workspace",
+      root: "/workspace",
+      additionalRoots: ["/extra"],
+    });
+    expect(result.matchedRoot).toBe("/workspace");
+  });
+
+  it("prefers primary root when path matches both primary and additional root", () => {
+    // If /workspace/sub is an additionalRoot, a file inside /workspace should match primary first
+    const result = resolveSandboxPath({
+      filePath: "/workspace/sub/file.txt",
+      cwd: "/workspace",
+      root: "/workspace",
+      additionalRoots: ["/workspace/sub"],
+    });
+    expect(result.matchedRoot).toBe("/workspace");
+  });
+});
+
+describe("assertSandboxPath with additionalRoots", () => {
+  async function withTempDirs<T>(
+    run: (dirs: { primary: string; extra: string }) => Promise<T>,
+  ): Promise<T> {
+    const primary = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-primary-"));
+    const extra = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-extra-"));
+    try {
+      return await run({ primary, extra });
+    } finally {
+      await fs.rm(primary, { recursive: true, force: true });
+      await fs.rm(extra, { recursive: true, force: true });
+    }
+  }
+
+  it("accepts a file inside an additional root", async () => {
+    await withTempDirs(async ({ primary, extra }) => {
+      const filePath = path.join(extra, "file.txt");
+      await fs.writeFile(filePath, "content");
+      const result = await assertSandboxPath({
+        filePath,
+        cwd: primary,
+        root: primary,
+        additionalRoots: [extra],
+      });
+      expect(result.resolved).toBe(filePath);
+      expect(result.matchedRoot).toBe(path.resolve(extra));
+    });
+  });
+
+  it("rejects a path outside both primary and additional roots", async () => {
+    await withTempDirs(async ({ primary, extra }) => {
+      await expect(
+        assertSandboxPath({
+          filePath: "/etc/passwd",
+          cwd: primary,
+          root: primary,
+          additionalRoots: [extra],
+        }),
+      ).rejects.toThrow(/sandbox/i);
+    });
+  });
+
+  it("rejects a symlink inside an additional root that points outside it", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withTempDirs(async ({ primary, extra }) => {
+      // Create a file outside both roots
+      const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-outside-"));
+      const outsideFile = path.join(outsideDir, "secret.txt");
+      await fs.writeFile(outsideFile, "secret");
+
+      // Create a symlink inside the additional root pointing outside
+      const symlinkPath = path.join(extra, "escape-link");
+      await fs.symlink(outsideFile, symlinkPath);
+
+      try {
+        await expect(
+          assertSandboxPath({
+            filePath: symlinkPath,
+            cwd: primary,
+            root: primary,
+            additionalRoots: [extra],
+          }),
+        ).rejects.toThrow(/symlink|sandbox/i);
+      } finally {
+        await fs.rm(symlinkPath, { force: true });
+        await fs.rm(outsideDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("accepts a file inside the primary root when additionalRoots are set", async () => {
+    await withTempDirs(async ({ primary, extra }) => {
+      const filePath = path.join(primary, "file.txt");
+      await fs.writeFile(filePath, "content");
+      const result = await assertSandboxPath({
+        filePath,
+        cwd: primary,
+        root: primary,
+        additionalRoots: [extra],
+      });
+      expect(result.resolved).toBe(filePath);
+      expect(result.matchedRoot).toBe(path.resolve(primary));
+    });
+  });
+
+  it("works with tilde-expanded additional roots", async () => {
+    await withTempDirs(async ({ primary, extra }) => {
+      // Create a file inside extra root
+      const filePath = path.join(extra, "note.txt");
+      await fs.writeFile(filePath, "content");
+
+      // Construct a tilde-based path if extra is under homedir
+      const homeDir = os.homedir();
+      const tildeRoot = extra.startsWith(homeDir) ? "~" + extra.slice(homeDir.length) : extra;
+
+      const result = await assertSandboxPath({
+        filePath,
+        cwd: primary,
+        root: primary,
+        additionalRoots: [tildeRoot],
+      });
+      expect(result.resolved).toBe(filePath);
+    });
+  });
+
+  it("empty additionalRoots behaves same as without additionalRoots", async () => {
+    await withTempDirs(async ({ primary, extra }) => {
+      // File in primary root works
+      const filePath = path.join(primary, "file.txt");
+      await fs.writeFile(filePath, "content");
+      const result = await assertSandboxPath({
+        filePath,
+        cwd: primary,
+        root: primary,
+        additionalRoots: [],
+      });
+      expect(result.resolved).toBe(filePath);
+
+      // File in extra root fails (not in additionalRoots)
+      const extraFile = path.join(extra, "file.txt");
+      await fs.writeFile(extraFile, "content");
+      await expect(
+        assertSandboxPath({
+          filePath: extraFile,
+          cwd: primary,
+          root: primary,
+          additionalRoots: [],
+        }),
+      ).rejects.toThrow(/sandbox/i);
+    });
   });
 });

@@ -255,6 +255,7 @@ export function createImageTool(options?: {
 
   const localRoots = resolveMediaToolLocalRoots(options?.workspaceDir, {
     workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
+    allowedRoots: options?.fsPolicy?.allowedRoots,
   });
 
   return {
@@ -333,6 +334,7 @@ export function createImageTool(options?: {
               root: options.sandbox.root.trim(),
               bridge: options.sandbox.bridge,
               workspaceOnly: options.fsPolicy?.workspaceOnly === true,
+              allowedRoots: options.fsPolicy?.allowedRoots,
             }
           : null;
 
