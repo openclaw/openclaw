@@ -10,8 +10,8 @@ import {
 } from "openclaw/plugin-sdk/channel-send-result";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
+import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
 import {
-  buildComputedAccountStatusSnapshot,
   buildTokenChannelStatusSummary,
   clearAccountEntryFields,
   DEFAULT_ACCOUNT_ID,
@@ -323,7 +323,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
         }),
     }),
   },
-  status: {
+  status: createComputedAccountStatusAdapter<ResolvedLineAccount>({
     defaultRuntime: {
       accountId: DEFAULT_ACCOUNT_ID,
       running: false,
@@ -357,26 +357,22 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
     buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
     probeAccount: async ({ account, timeoutMs }) =>
       getLineRuntime().channel.line.probeLineBot(account.channelAccessToken, timeoutMs),
-    buildAccountSnapshot: ({ account, runtime, probe }) => {
+    resolveAccountSnapshot: ({ account }) => {
       const configured = Boolean(
         account.channelAccessToken?.trim() && account.channelSecret?.trim(),
       );
-      return buildComputedAccountStatusSnapshot(
-        {
-          accountId: account.accountId,
-          name: account.name,
-          enabled: account.enabled,
-          configured,
-          runtime,
-          probe,
-        },
-        {
+      return {
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured,
+        extra: {
           tokenSource: account.tokenSource,
           mode: "webhook",
         },
-      );
+      };
     },
-  },
+  }),
   gateway: {
     startAccount: async (ctx) => {
       const account = ctx.account;

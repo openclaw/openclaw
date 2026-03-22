@@ -18,8 +18,8 @@ import {
 } from "openclaw/plugin-sdk/directory-runtime";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
 import {
-  buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
   createAccountStatusSink,
@@ -207,7 +207,7 @@ export const googlechatPlugin = createChatChannelPlugin({
       },
     },
     actions: googlechatActions,
-    status: {
+    status: createComputedAccountStatusAdapter<ResolvedGoogleChatAccount>({
       defaultRuntime: {
         accountId: DEFAULT_ACCOUNT_ID,
         running: false,
@@ -254,26 +254,21 @@ export const googlechatPlugin = createChatChannelPlugin({
         }),
       probeAccount: async ({ account }) =>
         (await loadGoogleChatChannelRuntime()).probeGoogleChat(account),
-      buildAccountSnapshot: ({ account, runtime, probe }) =>
-        buildComputedAccountStatusSnapshot(
-          {
-            accountId: account.accountId,
-            name: account.name,
-            enabled: account.enabled,
-            configured: account.credentialSource !== "none",
-            runtime,
-            probe,
-          },
-          {
-            credentialSource: account.credentialSource,
-            audienceType: account.config.audienceType,
-            audience: account.config.audience,
-            webhookPath: account.config.webhookPath,
-            webhookUrl: account.config.webhookUrl,
-            dmPolicy: account.config.dm?.policy ?? "pairing",
-          },
-        ),
-    },
+      resolveAccountSnapshot: ({ account }) => ({
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured: account.credentialSource !== "none",
+        extra: {
+          credentialSource: account.credentialSource,
+          audienceType: account.config.audienceType,
+          audience: account.config.audience,
+          webhookPath: account.config.webhookPath,
+          webhookUrl: account.config.webhookUrl,
+          dmPolicy: account.config.dm?.policy ?? "pairing",
+        },
+      }),
+    }),
     gateway: {
       startAccount: async (ctx) => {
         const account = ctx.account;

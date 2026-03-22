@@ -17,6 +17,7 @@ import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-
 import { createScopedAccountReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
+import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
 import { MattermostConfigSchema } from "./config-schema.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
 import {
@@ -37,7 +38,6 @@ import { sendMessageMattermost } from "./mattermost/send.js";
 import { resolveMattermostOpaqueTarget } from "./mattermost/target-resolution.js";
 import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
 import {
-  buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
   createAccountStatusSink,
   DEFAULT_ACCOUNT_ID,
@@ -420,7 +420,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
         }),
     }),
   },
-  status: {
+  status: createComputedAccountStatusAdapter<ResolvedMattermostAccount>({
     defaultRuntime: {
       accountId: DEFAULT_ACCOUNT_ID,
       running: false,
@@ -445,25 +445,20 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
       }
       return await probeMattermost(baseUrl, token, timeoutMs);
     },
-    buildAccountSnapshot: ({ account, runtime, probe }) =>
-      buildComputedAccountStatusSnapshot(
-        {
-          accountId: account.accountId,
-          name: account.name,
-          enabled: account.enabled,
-          configured: Boolean(account.botToken && account.baseUrl),
-          runtime,
-          probe,
-        },
-        {
-          botTokenSource: account.botTokenSource,
-          baseUrl: account.baseUrl,
-          connected: runtime?.connected ?? false,
-          lastConnectedAt: runtime?.lastConnectedAt ?? null,
-          lastDisconnect: runtime?.lastDisconnect ?? null,
-        },
-      ),
-  },
+    resolveAccountSnapshot: ({ account, runtime }) => ({
+      accountId: account.accountId,
+      name: account.name,
+      enabled: account.enabled,
+      configured: Boolean(account.botToken && account.baseUrl),
+      extra: {
+        botTokenSource: account.botTokenSource,
+        baseUrl: account.baseUrl,
+        connected: runtime?.connected ?? false,
+        lastConnectedAt: runtime?.lastConnectedAt ?? null,
+        lastDisconnect: runtime?.lastDisconnect ?? null,
+      },
+    }),
+  }),
   gateway: {
     startAccount: async (ctx) => {
       const account = ctx.account;
