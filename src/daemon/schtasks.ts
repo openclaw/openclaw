@@ -325,7 +325,7 @@ async function resolveConfiguredGatewayPort(env: GatewayServiceEnv): Promise<num
     }
   }
   try {
-    const io = createConfigIO({ env });
+    const io = createConfigIO({ env: { ...env } });
     const snapshot = await io.readConfigFileSnapshot();
     if (!snapshot.exists || !snapshot.valid) {
       return null;
