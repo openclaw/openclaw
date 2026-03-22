@@ -4,6 +4,10 @@ import http, { type IncomingMessage, type Server, type ServerResponse } from "no
 import type { Socket } from "node:net";
 import path from "node:path";
 import type { Duplex } from "node:stream";
+import {
+  clearTimeout as clearNativeTimeout,
+  setTimeout as scheduleNativeTimeout,
+} from "node:timers";
 import chokidar from "chokidar";
 import { type WebSocket, WebSocketServer } from "ws";
 import { resolveStateDir } from "../config/paths.js";
@@ -26,6 +30,8 @@ export type CanvasHostOpts = {
   listenHost?: string;
   allowInTests?: boolean;
   liveReload?: boolean;
+  watchFactory?: typeof chokidar.watch;
+  webSocketServerClass?: typeof WebSocketServer;
 };
 
 export type CanvasHostServerOpts = CanvasHostOpts & {
@@ -45,6 +51,8 @@ export type CanvasHostHandlerOpts = {
   basePath?: string;
   allowInTests?: boolean;
   liveReload?: boolean;
+  watchFactory?: typeof chokidar.watch;
+  webSocketServerClass?: typeof WebSocketServer;
 };
 
 export type CanvasHostHandler = {
@@ -224,7 +232,8 @@ export async function createCanvasHostHandler(
   const reloadDebounceMs = testMode ? 12 : 75;
   const writeStabilityThresholdMs = testMode ? 12 : 75;
   const writePollIntervalMs = testMode ? 5 : 10;
-  const wss = liveReload ? new WebSocketServer({ noServer: true }) : null;
+  const WebSocketServerClass = opts.webSocketServerClass ?? WebSocketServer;
+  const wss = liveReload ? new WebSocketServerClass({ noServer: true }) : null;
   const sockets = new Set<WebSocket>();
   if (wss) {
     wss.on("connection", (ws) => {
@@ -248,9 +257,9 @@ export async function createCanvasHostHandler(
   };
   const scheduleReload = () => {
     if (debounce) {
-      clearTimeout(debounce);
+      clearNativeTimeout(debounce);
     }
-    debounce = setTimeout(() => {
+    debounce = scheduleNativeTimeout(() => {
       debounce = null;
       broadcastReload();
     }, reloadDebounceMs);
@@ -258,8 +267,9 @@ export async function createCanvasHostHandler(
   };
 
   let watcherClosed = false;
+  const watchFactory = opts.watchFactory ?? chokidar.watch.bind(chokidar);
   const watcher = liveReload
-    ? chokidar.watch(rootReal, {
+    ? watchFactory(rootReal, {
         ignoreInitial: true,
         awaitWriteFinish: {
           stabilityThreshold: writeStabilityThresholdMs,
@@ -385,10 +395,17 @@ export async function createCanvasHostHandler(
     handleUpgrade,
     close: async () => {
       if (debounce) {
-        clearTimeout(debounce);
+        clearNativeTimeout(debounce);
       }
       watcherClosed = true;
       await watcher?.close().catch(() => {});
+      for (const ws of sockets) {
+        try {
+          ws.terminate?.();
+        } catch {
+          // ignore
+        }
+      }
       if (wss) {
         await new Promise<void>((resolve) => wss.close(() => resolve()));
       }
@@ -409,6 +426,8 @@ export async function startCanvasHost(opts: CanvasHostServerOpts): Promise<Canva
       basePath: CANVAS_HOST_PATH,
       allowInTests: opts.allowInTests,
       liveReload: opts.liveReload,
+      watchFactory: opts.watchFactory,
+      webSocketServerClass: opts.webSocketServerClass,
     }));
   const ownsHandler = opts.ownsHandler ?? opts.handler === undefined;
 
