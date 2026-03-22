@@ -82,7 +82,7 @@ export { collectDiscordStatusIssues } from "../../extensions/discord/api.js";
 export {
   DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
   DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
-} from "../../extensions/discord/runtime-api.js";
+} from "../../extensions/discord/timeouts.js";
 export { normalizeExplicitDiscordSessionKey } from "../../extensions/discord/session-key-api.js";
 export {
   autoBindSpawnedDiscordSubagent,
