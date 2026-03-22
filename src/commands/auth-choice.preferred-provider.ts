@@ -24,7 +24,6 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   "google-gemini-cli": "google-gemini-cli",
   "mistral-api-key": "mistral",
   ollama: "ollama",
-  sglang: "sglang",
   "zai-api-key": "zai",
   "zai-coding-global": "zai",
   "zai-coding-cn": "zai",
@@ -50,7 +49,6 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   "byteplus-api-key": "byteplus",
   "qianfan-api-key": "qianfan",
   "custom-api-key": "custom",
-  vllm: "vllm",
 };
 
 export function resolvePreferredProviderForAuthChoice(params: {

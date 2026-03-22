@@ -40,10 +40,6 @@ const OPENAI_COMPAT_LOCAL_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
-const SGLANG_BASE_URL = "http://127.0.0.1:30000/v1";
-
-const VLLM_BASE_URL = "http://127.0.0.1:8000/v1";
-
 type OpenAICompatModelsResponse = {
   data?: Array<{
     id?: string;
@@ -190,40 +186,6 @@ export async function buildVercelAiGatewayProvider(): Promise<ProviderConfig> {
     baseUrl: VERCEL_AI_GATEWAY_BASE_URL,
     api: "anthropic-messages",
     models: await discoverVercelAiGatewayModels(),
-  };
-}
-
-export async function buildVllmProvider(params?: {
-  baseUrl?: string;
-  apiKey?: string;
-}): Promise<ProviderConfig> {
-  const baseUrl = (params?.baseUrl?.trim() || VLLM_BASE_URL).replace(/\/+$/, "");
-  const models = await discoverOpenAICompatibleLocalModels({
-    baseUrl,
-    apiKey: params?.apiKey,
-    label: "vLLM",
-  });
-  return {
-    baseUrl,
-    api: "openai-completions",
-    models,
-  };
-}
-
-export async function buildSglangProvider(params?: {
-  baseUrl?: string;
-  apiKey?: string;
-}): Promise<ProviderConfig> {
-  const baseUrl = (params?.baseUrl?.trim() || SGLANG_BASE_URL).replace(/\/+$/, "");
-  const models = await discoverOpenAICompatibleLocalModels({
-    baseUrl,
-    apiKey: params?.apiKey,
-    label: "SGLang",
-  });
-  return {
-    baseUrl,
-    api: "openai-completions",
-    models,
   };
 }
 
