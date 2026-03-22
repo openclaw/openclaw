@@ -10,7 +10,8 @@ const REMINDER_COMMITMENT_PATTERNS: RegExp[] = [
   // "remember to [verb]" implies a future action/reminder, not memory storage
   /\b(?:i\s*['\u2018\u2019]?ll|i will)\s+(?:make sure to\s+)?remember\s+to\s+/i,
   // Conjunction forms: "I'll remember and remind you", "I will remember, then set a reminder"
-  /\b(?:i\s*['\u2018\u2019]?ll|i will)\s+remember\b.*?\b(?:and|then|,)\s*(?:make sure to\s+)?(?:remind|ping|follow up|follow-up|check back|circle back|(?:set|create|schedule)\s+(?:a\s+)?reminder)\b/i,
+  // Uses `s` (dotAll) flag so `.*?` crosses newlines in multi-line payloads
+  /\b(?:i\s*['\u2018\u2019]?ll|i will)\s+remember\b.*?\b(?:and|then|,)\s*(?:make sure to\s+)?(?:remind|ping|follow up|follow-up|check back|circle back|(?:set|create|schedule)\s+(?:a\s+)?reminder)\b/is,
   /\b(?:i\s*['\u2018\u2019]?ll|i will)\s+(?:set|create|schedule)\s+(?:a\s+)?reminder\b/i,
 ];
 

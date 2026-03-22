@@ -32,6 +32,9 @@ describe("hasUnbackedReminderCommitment", () => {
       "I'll remember and set a reminder for tomorrow",
       "I will remember, then create a reminder",
       "I'll remember and make sure to remind you tomorrow",
+      // Multiline conjunction forms
+      "I'll remember\nand remind you tomorrow",
+      "I will remember,\nthen follow up later",
     ];
 
     for (const text of positives) {
