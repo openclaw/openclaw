@@ -82,6 +82,11 @@ type StatusArgs = {
   resolvedVerbose?: VerboseLevel;
   resolvedReasoning?: ReasoningLevel;
   resolvedElevated?: ElevatedLevel;
+  displayModelRef?: {
+    provider: string;
+    model: string;
+  };
+  displayModelAuth?: string;
   modelAuth?: string;
   activeModelAuth?: string;
   usageLine?: string;
@@ -743,6 +748,17 @@ export function buildStatusMessage(args: StatusArgs): string {
     activeModelRef: activeModelLabel,
     state: entry,
   });
+  const displayModelLabel =
+    formatProviderModelRef(
+      args.displayModelRef?.provider ?? "",
+      args.displayModelRef?.model ?? "",
+    ) || selectedModelLabel;
+  const useDisplayModel = displayModelLabel !== selectedModelLabel && !fallbackState.active;
+  const modelLabel = useDisplayModel ? displayModelLabel : selectedModelLabel;
+  const modelAuthLabelValue = useDisplayModel
+    ? (args.displayModelAuth ??
+      (displayModelLabel === activeModelLabel ? activeAuthLabelValue : selectedAuthLabelValue))
+    : selectedAuthLabelValue;
   const effectiveCostAuthMode = fallbackState.active
     ? activeAuthMode
     : (selectedAuthMode ?? activeAuthMode);
@@ -768,7 +784,6 @@ export function buildStatusMessage(args: StatusArgs): string {
       : undefined;
   const costLabel = showCost && hasUsage ? formatUsd(cost) : undefined;
 
-  const selectedAuthLabel = selectedAuthLabelValue ? ` · 🔑 ${selectedAuthLabelValue}` : "";
   const channelModelNote = (() => {
     if (!args.config || !entry) {
       return undefined;
@@ -810,8 +825,9 @@ export function buildStatusMessage(args: StatusArgs): string {
     }
     return "channel override";
   })();
-  const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
-  const modelLine = `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`;
+  const modelNote = channelModelNote && !useDisplayModel ? ` · ${channelModelNote}` : "";
+  const modelAuthLabel = modelAuthLabelValue ? ` · 🔑 ${modelAuthLabelValue}` : "";
+  const modelLine = `🧠 Model: ${modelLabel}${modelAuthLabel}${modelNote}`;
   const showFallbackAuth = activeAuthLabelValue && activeAuthLabelValue !== selectedAuthLabelValue;
   const fallbackLine = fallbackState.active
     ? `↪️ Fallback: ${activeModelLabel}${

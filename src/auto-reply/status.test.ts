@@ -735,6 +735,64 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("di_123...abc");
   });
 
+  it("shows a display-only runtime model when no fallback is active", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-5.4",
+      },
+      sessionEntry: {
+        sessionId: "runtime-display-only",
+        updatedAt: 0,
+        modelProvider: "anthropic",
+        model: "claude-opus-4-6",
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      displayModelRef: {
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      },
+      displayModelAuth: "oauth",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: anthropic/claude-opus-4-6");
+    expect(normalized).toContain("oauth");
+    expect(normalized).not.toContain("Fallback:");
+  });
+
+  it("does not let display-only runtime models hide active fallback state", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-5.4",
+      },
+      sessionEntry: {
+        sessionId: "runtime-display-fallback",
+        updatedAt: 0,
+        modelProvider: "anthropic",
+        model: "claude-opus-4-6",
+        fallbackNoticeSelectedModel: "openai/gpt-5.4",
+        fallbackNoticeActiveModel: "anthropic/claude-opus-4-6",
+        fallbackNoticeReason: "rate limit",
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      activeModelAuth: "oauth",
+      displayModelRef: {
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      },
+      displayModelAuth: "oauth",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: openai/gpt-5.4");
+    expect(normalized).toContain("Fallback: anthropic/claude-opus-4-6");
+    expect(normalized).toContain("(rate limit)");
+  });
+
   it("omits active fallback details when runtime drift does not match fallback state", () => {
     const text = buildStatusMessage({
       agent: {
