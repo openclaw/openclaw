@@ -199,6 +199,7 @@ export const ModelCompatSchema = z
         z.literal("zai"),
         z.literal("qwen"),
         z.literal("qwen-chat-template"),
+        z.literal("openrouter"),
       ])
       .optional(),
     requiresToolResultName: z.boolean().optional(),
