@@ -10,10 +10,6 @@
         "reason": "Filesystem guard scans are sensitive to contention."
       },
       {
-        "file": "src/infra/git-commit.test.ts",
-        "reason": "Mutates process.cwd() and core loader seams."
-      },
-      {
         "file": "src/config/doc-baseline.integration.test.ts",
         "reason": "Rebuilds bundled config baselines through many channel schema subprocesses; keep out of the shared lane."
       },
@@ -382,6 +378,10 @@
         "reason": "Measured ~10% faster under threads than forks on this host while keeping the file green."
       },
       {
+        "file": "src/plugins/sdk-alias.test.ts",
+        "reason": "Measured ~17% faster under threads than forks on this host after removing process.chdir() from the test."
+      },
+      {
         "file": "src/config/config.plugin-validation.test.ts",
         "reason": "Measured ~11% faster under threads than forks on this host while keeping the file green."
       },
@@ -536,6 +536,10 @@
       {
         "file": "src/infra/provider-usage.test.ts",
         "reason": "Measured ~17% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/infra/git-commit.test.ts",
+        "reason": "Measured ~11% faster under threads than forks on this host after removing process.chdir() from related thread-blocking tests."
       },
       {
         "file": "src/infra/provider-usage.auth.normalizes-keys.test.ts",
