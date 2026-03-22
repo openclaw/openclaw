@@ -140,7 +140,7 @@ describe("gateway run option collisions", () => {
     waitForPortBindable.mockClear();
     ensureDevGatewayConfig.mockClear();
     runGatewayLoop.mockClear();
-    normalizeStateDirEnv.mockClear();
+    normalizeStateDirEnv.mockReset();
     callOrder.length = 0;
   });
 

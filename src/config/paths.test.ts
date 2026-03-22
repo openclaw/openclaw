@@ -87,7 +87,9 @@ describe("state + config path candidates", () => {
         normalizeStateDirEnv(env);
         process.chdir(laterDir);
 
-        expect(await fs.realpath(resolveStateDir(env, () => root))).toBe(await fs.realpath(initialDir));
+        expect(await fs.realpath(resolveStateDir(env, () => root))).toBe(
+          await fs.realpath(initialDir),
+        );
       } finally {
         process.chdir(originalCwd);
       }
