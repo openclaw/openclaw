@@ -353,6 +353,14 @@ const UrlAllowlistDomainPattern =
 // Suffixes that the SSRF guard unconditionally blocks — allowlisting them is a no-op.
 const SSRF_ALWAYS_BLOCKED_SUFFIXES = [".localhost", ".local", ".internal"];
 
+// Bare hostnames the SSRF guard unconditionally blocks. Rejecting at schema time avoids
+// confusing SsrFBlockedError at request time when operators follow documented examples.
+const SSRF_ALWAYS_BLOCKED_BARE = new Set([
+  "localhost",
+  "localhost.localdomain",
+  "metadata.google.internal",
+]);
+
 const UrlAllowlistSchema = z
   .array(
     z
@@ -363,10 +371,20 @@ const UrlAllowlistSchema = z
       })
       .refine(
         (val) => {
-          // Only reject wildcard patterns like *.localhost / *.local / *.internal —
+          // Reject bare hostnames that the SSRF guard unconditionally blocks.
+          const lower = val.toLowerCase();
+          return !SSRF_ALWAYS_BLOCKED_BARE.has(lower);
+        },
+        {
+          message:
+            '"localhost", "localhost.localdomain", and "metadata.google.internal" are always blocked by the SSRF guard and cannot be allowlisted.',
+        },
+      )
+      .refine(
+        (val) => {
+          // Reject wildcard patterns like *.localhost / *.local / *.internal —
           // their subdomains are unconditionally blocked by the SSRF guard so allowlisting
-          // them is always a no-op. Bare single-label hostnames (e.g. "localhost") are
-          // allowed through here; the SSRF guard handles them at request time.
+          // them is always a no-op.
           if (!val.startsWith("*.")) {
             return true;
           }

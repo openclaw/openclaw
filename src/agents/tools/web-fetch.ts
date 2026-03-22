@@ -569,7 +569,11 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     finalUrl = result.finalUrl;
     release = result.release;
 
-    // Check redirect target against allowlist
+    // Check redirect target against the URL allowlist. This runs after the TCP connection
+    // because the SSRF guard already validates each redirect hop's DNS resolution at the
+    // network level — private/internal IPs are blocked before any bytes flow. The allowlist
+    // check here is a content-policy gate (which domains' content the agent may see), not a
+    // network-safety gate, so post-connection is sufficient.
     if (
       params.urlAllowlist &&
       finalUrl !== params.url &&
@@ -810,37 +814,50 @@ export function createWebFetchTool(options?: {
           // Malformed URL — let runWebFetch produce the canonical "Invalid URL" error.
         }
         if (parseable && !isUrlAllowedByAllowlist(url, urlAllowlist)) {
-          throw new AllowlistBlockedError(`URL not allowed by urlAllowlist: ${url}`);
+          return jsonResult({
+            error: "allowlist_blocked",
+            message: `URL not allowed by urlAllowlist: ${url}`,
+          });
         }
       }
       const extractMode = readStringParam(params, "extractMode") === "text" ? "text" : "markdown";
       const maxChars = readNumberParam(params, "maxChars", { integer: true });
       const maxCharsCap = resolveFetchMaxCharsCap(fetch);
-      const result = await runWebFetch({
-        url,
-        extractMode,
-        maxChars: resolveMaxChars(
-          maxChars ?? fetch?.maxChars,
-          DEFAULT_FETCH_MAX_CHARS,
-          maxCharsCap,
-        ),
-        maxResponseBytes,
-        maxRedirects: resolveMaxRedirects(fetch?.maxRedirects, DEFAULT_FETCH_MAX_REDIRECTS),
-        timeoutSeconds: resolveTimeoutSeconds(fetch?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
-        cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
-        userAgent,
-        readabilityEnabled,
-        urlAllowlist,
-        firecrawlEnabled,
-        firecrawlApiKey,
-        firecrawlBaseUrl,
-        firecrawlOnlyMainContent,
-        firecrawlMaxAgeMs,
-        firecrawlProxy: "auto",
-        firecrawlStoreInCache: true,
-        firecrawlTimeoutSeconds,
-      });
-      return jsonResult(result);
+      try {
+        const result = await runWebFetch({
+          url,
+          extractMode,
+          maxChars: resolveMaxChars(
+            maxChars ?? fetch?.maxChars,
+            DEFAULT_FETCH_MAX_CHARS,
+            maxCharsCap,
+          ),
+          maxResponseBytes,
+          maxRedirects: resolveMaxRedirects(fetch?.maxRedirects, DEFAULT_FETCH_MAX_REDIRECTS),
+          timeoutSeconds: resolveTimeoutSeconds(fetch?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
+          cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
+          userAgent,
+          readabilityEnabled,
+          urlAllowlist,
+          firecrawlEnabled,
+          firecrawlApiKey,
+          firecrawlBaseUrl,
+          firecrawlOnlyMainContent,
+          firecrawlMaxAgeMs,
+          firecrawlProxy: "auto",
+          firecrawlStoreInCache: true,
+          firecrawlTimeoutSeconds,
+        });
+        return jsonResult(result);
+      } catch (error) {
+        if (error instanceof AllowlistBlockedError) {
+          return jsonResult({
+            error: "allowlist_blocked",
+            message: error.message,
+          });
+        }
+        throw error;
+      }
     },
   };
 }

@@ -4,7 +4,6 @@ import {
   resolveWebSearchDefinition,
   resolveWebSearchProviderId,
 } from "../../web-search/runtime.js";
-import { resolveUrlAllowlist } from "./web-shared.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
 import {
@@ -12,6 +11,7 @@ import {
   filterResultsByAllowlist,
   SEARCH_CACHE,
 } from "./web-search-provider-common.js";
+import { resolveUrlAllowlist } from "./web-shared.js";
 
 export function createWebSearchTool(options?: {
   config?: OpenClawConfig;
