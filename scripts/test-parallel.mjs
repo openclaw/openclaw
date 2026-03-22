@@ -49,6 +49,7 @@ const cleanupTempArtifacts = () => {
   tempArtifactDir = null;
 };
 const existingUnitConfigFiles = (entries) => existingFiles(entries).filter(isUnitConfigTestFile);
+const baseThreadSingletonFiles = existingFiles(behaviorManifest.base?.threadSingleton ?? []);
 const unitBehaviorIsolatedFiles = existingUnitConfigFiles(behaviorManifest.unit.isolated);
 const unitSingletonIsolatedFiles = existingUnitConfigFiles(behaviorManifest.unit.singletonIsolated);
 const unitThreadSingletonFiles = existingUnitConfigFiles(behaviorManifest.unit.threadSingleton);
@@ -611,6 +612,7 @@ const resolveFilterMatches = (fileFilter) => {
 };
 const isVmForkSingletonUnitFile = (fileFilter) => unitVmForkSingletonFiles.includes(fileFilter);
 const isThreadSingletonUnitFile = (fileFilter) => unitThreadSingletonFiles.includes(fileFilter);
+const isBaseThreadSingletonFile = (fileFilter) => baseThreadSingletonFiles.includes(fileFilter);
 const createTargetedEntry = (owner, isolated, filters) => {
   const name = isolated ? `${owner}-isolated` : owner;
   const forceForks = isolated;
@@ -646,6 +648,12 @@ const createTargetedEntry = (owner, isolated, filters) => {
     return {
       name,
       args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=threads", ...filters],
+    };
+  }
+  if (owner === "base-threads") {
+    return {
+      name,
+      args: ["vitest", "run", "--config", "vitest.config.ts", "--pool=threads", ...filters],
     };
   }
   if (owner === "extensions") {
@@ -718,7 +726,9 @@ const createPerFileTargetedEntry = (file) => {
     ? "unit-threads"
     : isVmForkSingletonUnitFile(file)
       ? "unit-vmforks"
-      : target.owner;
+      : isBaseThreadSingletonFile(file)
+        ? "base-threads"
+        : target.owner;
   return {
     ...createTargetedEntry(owner, target.isolated, [file]),
     name: formatPerFileEntryName(owner, file),
@@ -747,7 +757,9 @@ const targetedEntries = (() => {
         ? "unit-threads"
         : isVmForkSingletonUnitFile(normalizedFile)
           ? "unit-vmforks"
-          : target.owner;
+          : isBaseThreadSingletonFile(normalizedFile)
+            ? "base-threads"
+            : target.owner;
       const key = `${owner}:${target.isolated ? "isolated" : "default"}`;
       const files = acc.get(key) ?? [];
       files.push(normalizedFile);
@@ -760,7 +772,9 @@ const targetedEntries = (() => {
         ? "unit-threads"
         : isVmForkSingletonUnitFile(matchedFile)
           ? "unit-vmforks"
-          : target.owner;
+          : isBaseThreadSingletonFile(matchedFile)
+            ? "base-threads"
+            : target.owner;
       const key = `${owner}:${target.isolated ? "isolated" : "default"}`;
       const files = acc.get(key) ?? [];
       files.push(matchedFile);
