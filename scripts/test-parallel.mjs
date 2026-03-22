@@ -749,41 +749,9 @@ const createTargetedEntry = (owner, isolated, filters) => {
     ],
   };
 };
-const formatPerFileEntryName = (owner, file) => {
-  const baseName = path
-    .basename(file)
-    .replace(/\.live\.test\.ts$/u, "")
-    .replace(/\.e2e\.test\.ts$/u, "")
-    .replace(/\.test\.ts$/u, "");
-  return `${owner}-${baseName}`;
-};
-const createPerFileTargetedEntry = (file) => {
-  const target = inferTarget(file);
-  const owner = isThreadSingletonUnitFile(file)
-    ? "unit-threads"
-    : isVmForkSingletonUnitFile(file)
-      ? "unit-vmforks"
-      : isBaseThreadSingletonFile(file)
-        ? "base-threads"
-        : target.owner;
-  return {
-    ...createTargetedEntry(owner, target.isolated, [file]),
-    name: formatPerFileEntryName(owner, file),
-  };
-};
 const targetedEntries = (() => {
   if (passthroughFileFilters.length === 0) {
     return [];
-  }
-  if (disableIsolation) {
-    const matchedFiles = passthroughFileFilters.flatMap((fileFilter) => {
-      const resolved = resolveFilterMatches(fileFilter);
-      if (resolved.length > 0) {
-        return resolved;
-      }
-      return [normalizeRepoPath(fileFilter)];
-    });
-    return [...new Set(matchedFiles)].map((file) => createPerFileTargetedEntry(file));
   }
   const groups = passthroughFileFilters.reduce((acc, fileFilter) => {
     const matchedFiles = resolveFilterMatches(fileFilter);
@@ -824,9 +792,6 @@ const targetedEntries = (() => {
     return createTargetedEntry(owner, mode === "isolated", [...new Set(filters)]);
   });
 })();
-if (disableIsolation && passthroughFileFilters.length === 0) {
-  runs = allKnownUnitFiles.map((file) => createPerFileTargetedEntry(file));
-}
 // Node 25 local runs still show cross-process worker shutdown contention even
 // after moving the known heavy files into singleton lanes.
 const topLevelParallelEnabled =

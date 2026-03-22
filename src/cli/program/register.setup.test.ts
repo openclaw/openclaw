@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const setupCommandMock = vi.fn();
 const setupWizardCommandMock = vi.fn();
@@ -21,10 +21,23 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
+const mockedModuleIds = [
+  "../../commands/setup.js",
+  "../../commands/onboard.js",
+  "../../runtime.js",
+];
+
 let registerSetupCommand: typeof import("./register.setup.js").registerSetupCommand;
 
 beforeAll(async () => {
   ({ registerSetupCommand } = await import("./register.setup.js"));
+});
+
+afterAll(() => {
+  for (const id of mockedModuleIds) {
+    vi.doUnmock(id);
+  }
+  vi.resetModules();
 });
 
 describe("registerSetupCommand", () => {
