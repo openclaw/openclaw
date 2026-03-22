@@ -85,11 +85,31 @@ operon-guard init --agent path/to/agent.py
 
 The `--json` flag does **not** produce pure JSON. The CLI prints human-readable preamble
 lines (`Using spec: ...`, `Adapter: ...`) to stdout before the JSON block — piping
-directly to `jq` or any JSON parser will fail. Isolate the JSON object with `grep`:
+directly to `jq` or any JSON parser will fail. Isolate the JSON object:
 
+**macOS / Linux (bash):**
 ```bash
 set -o pipefail
 operon-guard test path/to/agent.py --json | grep -A9999 '^{'
+```
+
+**Windows (PowerShell):**
+```powershell
+$lines = operon-guard test path/to/agent.py --json
+$start = ($lines | Select-String -Pattern '^\{').LineNumber - 1
+$lines[$start..($lines.Length - 1)] -join "`n"
+```
+
+**Cross-platform (Python — works everywhere):**
+```python
+import subprocess, sys
+out = subprocess.run(
+    ["operon-guard", "test", "path/to/agent.py", "--json"],
+    capture_output=True, text=True
+).stdout
+start = next((i for i, l in enumerate(out.splitlines()) if l.startswith("{")), None)
+if start is not None:
+    print("\n".join(out.splitlines()[start:]))
 ```
 
 ## Specifying the Entry Point
