@@ -85,7 +85,7 @@ export function stripInertPollCreationParams(params: Record<string, unknown>): v
         }
       }
     } else if (def.kind === "boolean") {
-      remove = raw === false;
+      remove = raw === false || (typeof raw === "string" && raw.trim().toLowerCase() === "false");
     }
 
     if (remove) {

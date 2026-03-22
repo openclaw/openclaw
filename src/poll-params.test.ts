@@ -60,6 +60,8 @@ describe("poll params", () => {
       pollDurationHours: 0,
       pollDurationSeconds: "0",
       pollMulti: false,
+      pollAnonymous: "false",
+      pollPublic: "FALSE",
     };
     stripInertPollCreationParams(cleared);
     expect(cleared).toEqual({});
