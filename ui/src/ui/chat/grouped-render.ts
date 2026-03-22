@@ -23,6 +23,9 @@ type ImageBlock = {
   alt?: string;
 };
 
+const MEDIA_FILENAME_WITH_UUID_RE =
+  /^(.+)---[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}(\.[^./\\]+)?$/i;
+
 function normalizeImageDataUrl(data: string, mimeType?: string): string | null {
   const trimmed = data.trim();
   if (!trimmed) {
@@ -69,6 +72,46 @@ function extractImageUrlFromContentBlock(block: Record<string, unknown>): ImageB
   return null;
 }
 
+function extractMediaPathBasename(mediaPath: string): string {
+  const trimmed = mediaPath.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const withoutQuery = trimmed.split(/[?#]/, 1)[0] ?? "";
+  const segments = withoutQuery.split(/[/\\]/);
+  return segments.at(-1)?.trim() ?? "";
+}
+
+function extractMediaPathAlt(mediaPath: string): string | undefined {
+  const basename = extractMediaPathBasename(mediaPath);
+  if (!basename) {
+    return undefined;
+  }
+  const match = basename.match(MEDIA_FILENAME_WITH_UUID_RE);
+  if (!match?.[1]) {
+    return basename;
+  }
+  return `${match[1]}${match[2] ?? ""}`;
+}
+
+function resolveHistoryMediaUrl(mediaPath: string): string | null {
+  const trimmed = mediaPath.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (
+    /^https?:\/\//i.test(trimmed) ||
+    /^blob:/i.test(trimmed) ||
+    /^data:image\//i.test(trimmed) ||
+    trimmed.startsWith("/media/") ||
+    trimmed.startsWith("media/")
+  ) {
+    return trimmed;
+  }
+  const mediaId = extractMediaPathBasename(trimmed);
+  return mediaId ? `media/${mediaId}` : null;
+}
+
 function extractImageUrlFromAttachment(attachment: Record<string, unknown>): ImageBlock | null {
   const attachmentType =
     typeof attachment.type === "string" ? attachment.type.trim().toLowerCase() : undefined;
@@ -97,6 +140,47 @@ function extractImageUrlFromAttachment(attachment: Record<string, unknown>): Ima
     url,
     alt: typeof attachment.fileName === "string" ? attachment.fileName : undefined,
   };
+}
+
+function extractImageUrlsFromMediaPaths(message: Record<string, unknown>): ImageBlock[] {
+  const rawPaths = Array.isArray(message.MediaPaths)
+    ? message.MediaPaths
+    : typeof message.MediaPath === "string"
+      ? [message.MediaPath]
+      : [];
+  if (rawPaths.length === 0) {
+    return [];
+  }
+
+  const mediaPaths = rawPaths.filter((value): value is string => typeof value === "string");
+  if (mediaPaths.length === 0) {
+    return [];
+  }
+
+  const rawTypes =
+    Array.isArray(message.MediaTypes) && message.MediaTypes.length === mediaPaths.length
+      ? message.MediaTypes
+      : mediaPaths.length === 1 && typeof message.MediaType === "string"
+        ? [message.MediaType]
+        : [];
+
+  const imageTypes = rawTypes
+    .map((value) => (typeof value === "string" ? value.trim() : ""))
+    .filter((value) => value.length > 0);
+  if (imageTypes.length !== mediaPaths.length) {
+    return [];
+  }
+
+  return mediaPaths.flatMap((mediaPath, index) => {
+    if (!imageTypes[index]?.toLowerCase().startsWith("image/")) {
+      return [];
+    }
+    const url = resolveHistoryMediaUrl(mediaPath);
+    if (!url) {
+      return [];
+    }
+    return [{ url, alt: extractMediaPathAlt(mediaPath) }];
+  });
 }
 
 function extractImages(message: unknown): ImageBlock[] {
@@ -130,6 +214,10 @@ function extractImages(message: unknown): ImageBlock[] {
       }
       pushImage(extractImageUrlFromAttachment(attachment as Record<string, unknown>));
     }
+  }
+
+  for (const image of extractImageUrlsFromMediaPaths(m)) {
+    pushImage(image);
   }
 
   return images;

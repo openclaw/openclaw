@@ -15,18 +15,14 @@ function renderAssistantImage(url: string) {
   };
 }
 
-function renderUserHistoryAttachment(base64: string) {
+function renderUserHistoryImage() {
   return {
     role: "user",
     content: [{ type: "text", text: "see image" }],
-    attachments: [
-      {
-        type: "image",
-        mimeType: "image/png",
-        fileName: "dot.png",
-        content: base64,
-      },
-    ],
+    MediaPath: "/tmp/chat-send-image-a.png",
+    MediaPaths: ["/tmp/chat-send-image-a.png"],
+    MediaType: "image/png",
+    MediaTypes: ["image/png"],
     timestamp: Date.now(),
   };
 }
@@ -36,10 +32,8 @@ describe("chat image open safety", () => {
     const app = mountApp("/chat");
     await app.updateComplete;
 
-    const pngBase64 =
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
     app.chatMessages = [
-      renderUserHistoryAttachment(pngBase64),
+      renderUserHistoryImage(),
       {
         role: "assistant",
         content: [{ type: "text", text: "done" }],
@@ -50,8 +44,8 @@ describe("chat image open safety", () => {
 
     const image = app.querySelector<HTMLImageElement>(".chat-group.user .chat-message-image");
     expect(image).not.toBeNull();
-    expect(image?.getAttribute("src")).toBe(`data:image/png;base64,${pngBase64}`);
-    expect(image?.getAttribute("alt")).toBe("dot.png");
+    expect(image?.getAttribute("src")).toBe("media/chat-send-image-a.png");
+    expect(image?.getAttribute("alt")).toBe("chat-send-image-a.png");
   });
 
   it("opens safe image URLs in a hardened new tab", async () => {

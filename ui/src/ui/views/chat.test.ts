@@ -693,10 +693,8 @@ describe("chat view", () => {
     expect(senderLabels).not.toContain("You");
   });
 
-  it("renders history attachments inline for user messages after chat reload", () => {
+  it("renders persisted history media paths inline for user messages after chat reload", () => {
     const container = document.createElement("div");
-    const pngBase64 =
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
     render(
       renderChat(
         createProps({
@@ -704,14 +702,10 @@ describe("chat view", () => {
             {
               role: "user",
               content: [{ type: "text", text: "see image" }],
-              attachments: [
-                {
-                  type: "image",
-                  mimeType: "image/png",
-                  fileName: "dot.png",
-                  content: pngBase64,
-                },
-              ],
+              MediaPath: "/tmp/chat-send-image-a.png",
+              MediaPaths: ["/tmp/chat-send-image-a.png"],
+              MediaType: "image/png",
+              MediaTypes: ["image/png"],
               timestamp: 1000,
             },
             {
@@ -727,8 +721,8 @@ describe("chat view", () => {
 
     const image = container.querySelector<HTMLImageElement>(".chat-group.user .chat-message-image");
     expect(image).not.toBeNull();
-    expect(image?.getAttribute("src")).toBe(`data:image/png;base64,${pngBase64}`);
-    expect(image?.getAttribute("alt")).toBe("dot.png");
+    expect(image?.getAttribute("src")).toBe("media/chat-send-image-a.png");
+    expect(image?.getAttribute("alt")).toBe("chat-send-image-a.png");
   });
 
   it("renders image-typed history attachments even when mimeType is missing", () => {
