@@ -561,6 +561,7 @@ Docs: https://docs.openclaw.ai
 - Feishu/streaming recovery: clear stale `streamingStartPromise` when card creation fails (HTTP 400) so subsequent messages can retry streaming instead of silently dropping all future replies. Fixes #43322.
 - Exec/env sandbox: block JVM agent injection (`JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS`, `JDK_JAVA_OPTIONS`), Python breakpoint hijack (`PYTHONBREAKPOINT`), and .NET startup hooks (`DOTNET_STARTUP_HOOKS`) from the host exec environment. (#49025)
 - Android/camera clip cleanup: delete temporary clip files even when `readBytes()` fails so failed clip captures do not leak cache storage. (#41890) Thanks @Kaneki-x.
+- Android/photos: recycle decoded and intermediate bitmaps in `photos.latest` so repeated photo fetches stop leaking native memory. (#41888) Thanks @Kaneki-x.
 
 ### Security
 
