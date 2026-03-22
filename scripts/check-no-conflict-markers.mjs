@@ -3,7 +3,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { runAsScript } from "./lib/ts-guard-utils.mjs";
+import { fileURLToPath } from "node:url";
 
 function isBinaryBuffer(buffer) {
   return buffer.includes(0);
@@ -77,4 +77,9 @@ export async function main() {
   process.exitCode = 1;
 }
 
-runAsScript(import.meta.url, main);
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
