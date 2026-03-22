@@ -15,11 +15,13 @@ function resolvePluginImageGenerationProviders(
   cfg?: OpenClawConfig,
 ): ImageGenerationProviderPlugin[] {
   const active = getActivePluginRegistry();
-  const registry =
-    (active?.imageGenerationProviders?.length ?? 0) > 0 || !cfg
-      ? active
-      : loadOpenClawPlugins({ config: cfg });
-  return registry?.imageGenerationProviders?.map((entry) => entry.provider) ?? [];
+  const activeEntries = active?.imageGenerationProviders?.map((entry) => entry.provider) ?? [];
+  if (activeEntries.length > 0 || !cfg) {
+    return activeEntries;
+  }
+  return loadOpenClawPlugins({ config: cfg }).imageGenerationProviders.map(
+    (entry) => entry.provider,
+  );
 }
 
 function buildProviderMaps(cfg?: OpenClawConfig): {
