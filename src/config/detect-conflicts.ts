@@ -66,7 +66,12 @@ export function detectConfigConflicts(config: OpenClawConfig): ConflictResult[] 
     });
   }
 
-  if (sandboxMode === "all" && execAsk === "always" && execHost === "sandbox" && execSecurity !== "full") {
+  if (
+    sandboxMode === "all" &&
+    execAsk === "always" &&
+    execHost === "sandbox" &&
+    execSecurity !== "full"
+  ) {
     conflicts.push({
       level: "info",
       message:

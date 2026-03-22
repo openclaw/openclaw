@@ -14,9 +14,11 @@ describe("detectConfigConflicts", () => {
       agents: { defaults: { sandbox: { mode: "non-main" } } },
     } as OpenClawConfig);
 
-    expect(conflicts.some((entry) => entry.level === "warning" && entry.message.includes("tools.exec.ask"))).toBe(
-      true,
-    );
+    expect(
+      conflicts.some(
+        (entry) => entry.level === "warning" && entry.message.includes("tools.exec.ask"),
+      ),
+    ).toBe(true);
   });
 
   it("reports warning when elevated is enabled and sandbox is active", () => {
@@ -39,7 +41,10 @@ describe("detectConfigConflicts", () => {
     } as OpenClawConfig);
 
     expect(
-      conflicts.some((entry) => entry.level === "warning" && entry.message.includes('tools.exec.host is "gateway"')),
+      conflicts.some(
+        (entry) =>
+          entry.level === "warning" && entry.message.includes('tools.exec.host is "gateway"'),
+      ),
     ).toBe(true);
   });
 
@@ -53,7 +58,8 @@ describe("detectConfigConflicts", () => {
 
     expect(
       conflicts.some(
-        (entry) => entry.level === "critical" && entry.message.includes('gateway.auth.mode is "none"'),
+        (entry) =>
+          entry.level === "critical" && entry.message.includes('gateway.auth.mode is "none"'),
       ),
     ).toBe(true);
   });
