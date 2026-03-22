@@ -3059,7 +3059,7 @@
           }
         },
         {
-          "declaration": "export function defineChannelPluginEntry<TPlugin extends ChannelPlugin>({ id, name, description, plugin, configSchema, setRuntime, registerFull, }: DefineChannelPluginEntryOptions<TPlugin>): DefinedPluginEntry;",
+          "declaration": "export function defineChannelPluginEntry<TPlugin>({ id, name, description, plugin, configSchema, setRuntime, registerFull, }: DefineChannelPluginEntryOptions<TPlugin>): DefinedPluginEntry;",
           "exportName": "defineChannelPluginEntry",
           "kind": "function",
           "source": {
