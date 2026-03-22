@@ -29,10 +29,6 @@ function createChatHeaderState(
     omitSessionFromList?: boolean;
     createResult?: { ok: boolean; key?: string };
     createRequest?: (params: Record<string, unknown>) => Promise<{ ok: boolean; key?: string }>;
-    historyRequest?: (params: Record<string, unknown>) => Promise<{
-      messages?: Array<unknown>;
-      thinkingLevel?: string | null;
-    }>;
     sessionsResult?: SessionsListResult;
   } = {},
 ): { state: AppViewState; request: ReturnType<typeof vi.fn> } {
@@ -91,9 +87,6 @@ function createChatHeaderState(
       return { ok: true, key: "main" };
     }
     if (method === "chat.history") {
-      if (overrides.historyRequest) {
-        return overrides.historyRequest(params);
-      }
       return { messages: [], thinkingLevel: null };
     }
     if (method === "sessions.create") {
@@ -163,6 +156,15 @@ function createChatHeaderState(
 
 function flushTasks() {
   return new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
+async function withPromptStub(run: () => Promise<void>) {
+  vi.stubGlobal("prompt", vi.fn().mockReturnValue("Session label"));
+  try {
+    await run();
+  } finally {
+    vi.unstubAllGlobals();
+  }
 }
 
 function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
@@ -888,8 +890,7 @@ describe("chat view", () => {
   });
 
   it("refreshes session options when create returns without a session key", async () => {
-    vi.stubGlobal("prompt", vi.fn().mockReturnValue("Session label"));
-    try {
+    await withPromptStub(async () => {
       const { state, request } = createChatHeaderState({ createResult: { ok: true } });
       const container = document.createElement("div");
       render(renderChatSessionSelect(state), container);
@@ -903,14 +904,11 @@ describe("chat view", () => {
       expect(state.lastError).toBe("Session was created but no session key was returned.");
       expect(state.newChatSessionPending).toBe(false);
       expect(request.mock.calls.map(([method]) => method)).toContain("sessions.list");
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    });
   });
 
   it("switches to the created session and clears pending state on success", async () => {
-    vi.stubGlobal("prompt", vi.fn().mockReturnValue("Session label"));
-    try {
+    await withPromptStub(async () => {
       const { state, request } = createChatHeaderState();
       const container = document.createElement("div");
       render(renderChatSessionSelect(state), container);
@@ -934,39 +932,30 @@ describe("chat view", () => {
         limit: 200,
       });
       expect(request.mock.calls.map(([method]) => method)).toContain("sessions.list");
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    });
   });
 
   it("does not auto-switch away from a newer session after a delayed create response", async () => {
-    vi.stubGlobal("prompt", vi.fn().mockReturnValue("Session label"));
-    try {
+    await withPromptStub(async () => {
       let resolveCreate: ((value: { ok: boolean; key?: string }) => void) | undefined;
-      const createPromise = new Promise<{ ok: boolean; key?: string }>((resolve) => {
-        resolveCreate = resolve;
-      });
-      const sessionsResult = {
-        ts: 0,
-        path: "",
-        count: 2,
-        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
-        sessions: [
-          {
-            key: "main",
-            kind: "direct",
-            updatedAt: null,
-          },
-          {
-            key: "other",
-            kind: "direct",
-            updatedAt: null,
-          },
-        ],
-      } satisfies SessionsListResult;
+      const createRequest = vi.fn(
+        async () =>
+          new Promise<{ ok: boolean; key?: string }>((resolve) => {
+            resolveCreate = resolve;
+          }),
+      );
       const { state, request } = createChatHeaderState({
-        sessionsResult,
-        createRequest: vi.fn(async () => createPromise),
+        sessionsResult: {
+          ts: 0,
+          path: "",
+          count: 2,
+          defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+          sessions: [
+            { key: "main", kind: "direct", updatedAt: null },
+            { key: "other", kind: "direct", updatedAt: null },
+          ],
+        } satisfies SessionsListResult,
+        createRequest,
       });
       const container = document.createElement("div");
       render(renderChatSessionSelect(state), container);
@@ -1001,9 +990,7 @@ describe("chat view", () => {
         limit: 200,
       });
       expect(request.mock.calls.map(([method]) => method)).toContain("sessions.list");
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    });
   });
 
   it("keeps the selected model visible when the active session is absent from sessions.list", async () => {
