@@ -60,6 +60,8 @@ const ignoredFiles = new Set([
   "src/secrets/runtime-web-tools.test.ts",
 ]);
 
+let webSearchProviderInventoryPromise;
+
 function normalizeRelativePath(filePath) {
   return path.relative(repoRoot, filePath).split(path.sep).join("/");
 }
@@ -185,32 +187,37 @@ function scanGenericCoreImports(lines, relativeFile, inventory) {
 }
 
 export async function collectWebSearchProviderBoundaryInventory() {
-  const inventory = [];
-  const files = (
-    await Promise.all(scanRoots.map(async (root) => await walkFiles(path.join(repoRoot, root))))
-  )
-    .flat()
-    .toSorted((left, right) =>
-      normalizeRelativePath(left).localeCompare(normalizeRelativePath(right)),
-    );
+  if (!webSearchProviderInventoryPromise) {
+    webSearchProviderInventoryPromise = (async () => {
+      const inventory = [];
+      const files = (
+        await Promise.all(scanRoots.map(async (root) => await walkFiles(path.join(repoRoot, root))))
+      )
+        .flat()
+        .toSorted((left, right) =>
+          normalizeRelativePath(left).localeCompare(normalizeRelativePath(right)),
+        );
 
-  for (const filePath of files) {
-    const relativeFile = normalizeRelativePath(filePath);
-    if (ignoredFiles.has(relativeFile) || relativeFile.includes(".test.")) {
-      continue;
-    }
-    const content = await fs.readFile(filePath, "utf8");
-    const lines = content.split(/\r?\n/);
+      for (const filePath of files) {
+        const relativeFile = normalizeRelativePath(filePath);
+        if (ignoredFiles.has(relativeFile) || relativeFile.includes(".test.")) {
+          continue;
+        }
+        const content = await fs.readFile(filePath, "utf8");
+        const lines = content.split(/\r?\n/);
 
-    if (relativeFile === "src/plugins/web-search-providers.ts") {
-      scanWebSearchProviderRegistry(lines, relativeFile, inventory);
-      continue;
-    }
+        if (relativeFile === "src/plugins/web-search-providers.ts") {
+          scanWebSearchProviderRegistry(lines, relativeFile, inventory);
+          continue;
+        }
 
-    scanGenericCoreImports(lines, relativeFile, inventory);
+        scanGenericCoreImports(lines, relativeFile, inventory);
+      }
+
+      return inventory.toSorted(compareInventoryEntries);
+    })();
   }
-
-  return inventory.toSorted(compareInventoryEntries);
+  return await webSearchProviderInventoryPromise;
 }
 
 export async function readExpectedInventory() {

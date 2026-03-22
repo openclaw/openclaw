@@ -35,7 +35,7 @@ const baselinePathByMode = {
   ),
 };
 
-const inventoryPromiseByMode = new Map();
+let allInventoryByModePromise;
 let parsedExtensionSourceFilesPromise;
 
 const ruleTextByMode = {
@@ -193,30 +193,42 @@ function shouldReport(mode, resolvedPath) {
   return !resolvedPath.startsWith("src/plugin-sdk/");
 }
 
-function collectFromSourceFile(mode, sourceFile, filePath) {
-  const entries = [];
+function collectEntriesByModeFromSourceFile(sourceFile, filePath) {
+  const entriesByMode = {
+    "src-outside-plugin-sdk": [],
+    "plugin-sdk-internal": [],
+    "relative-outside-package": [],
+  };
   const extensionRoot = resolveExtensionRoot(filePath);
 
   function push(kind, specifierNode, specifier) {
     const resolvedPath = resolveSpecifier(specifier, filePath);
-    if (mode === "relative-outside-package") {
-      if (!specifier.startsWith(".") || !resolvedPath || !extensionRoot) {
-        return;
-      }
-      if (resolvedPath === extensionRoot || resolvedPath.startsWith(`${extensionRoot}/`)) {
-        return;
-      }
-    } else if (!shouldReport(mode, resolvedPath)) {
-      return;
-    }
-    entries.push({
+    const baseEntry = {
       file: normalizePath(filePath),
       line: toLine(sourceFile, specifierNode),
       kind,
       specifier,
       resolvedPath,
-      reason: classifyReason(mode, kind, resolvedPath, specifier),
-    });
+    };
+
+    if (specifier.startsWith(".") && resolvedPath && extensionRoot) {
+      if (!(resolvedPath === extensionRoot || resolvedPath.startsWith(`${extensionRoot}/`))) {
+        entriesByMode["relative-outside-package"].push({
+          ...baseEntry,
+          reason: classifyReason("relative-outside-package", kind, resolvedPath, specifier),
+        });
+      }
+    }
+
+    for (const mode of ["src-outside-plugin-sdk", "plugin-sdk-internal"]) {
+      if (!shouldReport(mode, resolvedPath)) {
+        continue;
+      }
+      entriesByMode[mode].push({
+        ...baseEntry,
+        reason: classifyReason(mode, kind, resolvedPath, specifier),
+      });
+    }
   }
 
   function visit(node) {
@@ -240,26 +252,35 @@ function collectFromSourceFile(mode, sourceFile, filePath) {
   }
 
   visit(sourceFile);
-  return entries;
+  return entriesByMode;
 }
 
 export async function collectExtensionPluginSdkBoundaryInventory(mode) {
   if (!MODES.has(mode)) {
     throw new Error(`Unknown mode: ${mode}`);
   }
-  let pending = inventoryPromiseByMode.get(mode);
-  if (!pending) {
-    pending = (async () => {
+  if (!allInventoryByModePromise) {
+    allInventoryByModePromise = (async () => {
       const files = await collectParsedExtensionSourceFiles();
-      const inventory = [];
+      const inventoryByMode = {
+        "src-outside-plugin-sdk": [],
+        "plugin-sdk-internal": [],
+        "relative-outside-package": [],
+      };
       for (const { filePath, sourceFile } of files) {
-        inventory.push(...collectFromSourceFile(mode, sourceFile, filePath));
+        const entriesByMode = collectEntriesByModeFromSourceFile(sourceFile, filePath);
+        for (const inventoryMode of MODES) {
+          inventoryByMode[inventoryMode].push(...entriesByMode[inventoryMode]);
+        }
       }
-      return inventory.toSorted(compareEntries);
+      for (const inventoryMode of MODES) {
+        inventoryByMode[inventoryMode] = inventoryByMode[inventoryMode].toSorted(compareEntries);
+      }
+      return inventoryByMode;
     })();
-    inventoryPromiseByMode.set(mode, pending);
   }
-  return await pending;
+  const inventoryByMode = await allInventoryByModePromise;
+  return inventoryByMode[mode];
 }
 
 export async function readExpectedInventory(mode) {
