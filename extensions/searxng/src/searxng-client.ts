@@ -4,12 +4,15 @@ import {
   normalizeCacheKey,
   readCache,
   resolveCacheTtlMs,
+  withWebToolsNetworkGuard,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { wrapWebContent } from "openclaw/plugin-sdk/security-runtime";
 import {
+  DEFAULT_SEARXNG_BASE_URL,
   resolveSearXNGApiKey,
   resolveSearXNGBaseUrl,
+  resolveSearXNGAllowPrivateNetwork,
   resolveSearXNGTimeoutSeconds,
 } from "./config.js";
 
@@ -36,11 +39,13 @@ export async function runSearXNGSearch(
   const timeoutSeconds = resolveSearXNGTimeoutSeconds(params.timeoutSeconds);
   const count = params.count ?? DEFAULT_SEARCH_COUNT;
 
+  const allowPrivateNetwork = resolveSearXNGAllowPrivateNetwork(params.cfg);
+
   const cacheKey = normalizeCacheKey(
     JSON.stringify({
       type: "searxng-search",
       q: params.query,
-      count,
+      num: count,
       baseUrl,
       timeRange: params.timeRange,
       language: params.language,
@@ -51,14 +56,25 @@ export async function runSearXNGSearch(
     return { ...cached.value, cached: true };
   }
 
-  const url = new URL("/search", baseUrl);
-  url.searchParams.set("q", params.query);
-  url.searchParams.set("format", "json");
+  const endpoint = (() => {
+    try {
+      const url = new URL(baseUrl);
+      url.pathname = url.pathname.replace(/\/$/, "") + "/search";
+      return url.toString();
+    } catch {
+      return new URL("/search", DEFAULT_SEARXNG_BASE_URL).toString();
+    }
+  })();
+
+  const queryParams = new URLSearchParams();
+  queryParams.set("q", params.query);
+  queryParams.set("format", "json");
+  queryParams.set("num", String(count));
   if (params.timeRange) {
-    url.searchParams.set("time_range", params.timeRange);
+    queryParams.set("time_range", params.timeRange);
   }
   if (params.language) {
-    url.searchParams.set("language", params.language);
+    queryParams.set("language", params.language);
   }
 
   const headers: Record<string, string> = {
@@ -70,17 +86,25 @@ export async function runSearXNGSearch(
   }
 
   const start = Date.now();
-  const response = await fetch(url.toString(), {
-    method: "GET",
-    headers,
-    signal: AbortSignal.timeout(timeoutSeconds * 1000),
-  });
-
-  if (!response.ok) {
-    throw new Error(`SearXNG Search failed: ${response.status} ${response.statusText}`);
-  }
-
-  const payload = (await response.json()) as Record<string, unknown>;
+  const payload = await withWebToolsNetworkGuard(
+    {
+      url: `${endpoint}?${queryParams.toString()}`,
+      init: {
+        method: "GET",
+        headers,
+      },
+      timeoutSeconds,
+      policy: {
+        dangerouslyAllowPrivateNetwork: allowPrivateNetwork,
+      },
+    },
+    async ({ response }: { response: Response }) => {
+      if (!response.ok) {
+        throw new Error(`SearXNG Search failed: ${response.status} ${response.statusText}`);
+      }
+      return (await response.json()) as Record<string, unknown>;
+    },
+  );
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
   const results = rawResults.map((r: Record<string, unknown>) => ({
     title: typeof r.title === "string" ? wrapWebContent(r.title, "web_search") : "",

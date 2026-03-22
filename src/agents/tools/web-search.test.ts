@@ -319,8 +319,8 @@ describe("web_search brave mode resolution", () => {
       {
         title: "Example",
         url: "https://example.com",
-        description: "A B",
-        age: "2024-01-01",
+        siteName: "example.com",
+        snippets: ["A", "B"],
       },
     ]);
   });
