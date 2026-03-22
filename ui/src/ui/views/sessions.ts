@@ -5,6 +5,18 @@ import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../types.ts";
 
+function formatSessionTimestamp(updatedAt: number | null): string {
+  if (!updatedAt) {
+    return "";
+  }
+  const d = new Date(updatedAt);
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const hours = String(d.getHours()).padStart(2, "0");
+  const minutes = String(d.getMinutes()).padStart(2, "0");
+  return `${month}/${day} ${hours}:${minutes}`;
+}
+
 export type SessionsProps = {
   loading: boolean;
   result: SessionsListResult | null;
@@ -465,6 +477,10 @@ function renderRow(
           ? "data-table-badge--global"
           : "data-table-badge--unknown";
 
+  const timestamp = formatSessionTimestamp(row.updatedAt);
+  const preview = row.lastMessagePreview?.trim();
+  const showPreview = timestamp && preview;
+
   return html`
     <tr>
       <td class="data-table-checkbox-col">
@@ -504,6 +520,11 @@ function renderRow(
           ${
             showDisplayName
               ? html`<span class="muted session-key-display-name">${displayName}</span>`
+              : nothing
+          }
+          ${
+            showPreview
+              ? html`<div class="session-preview" style="font-size: 12px; color: var(--muted); margin-top: 4px;">[${timestamp}] ${preview}</div>`
               : nothing
           }
         </div>

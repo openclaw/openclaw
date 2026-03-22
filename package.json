@@ -797,6 +797,7 @@
       "qs": "6.14.2",
       "node-domexception": "npm:@nolyfill/domexception@^1.0.28",
       "@sinclair/typebox": "0.34.48",
+      "punycode": "npm:punycode.js@^2.3.1",
       "tar": "7.5.11",
       "tough-cookie": "4.1.3",
       "yauzl": "3.2.1"
