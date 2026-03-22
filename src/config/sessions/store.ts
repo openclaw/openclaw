@@ -231,8 +231,7 @@ export function loadSessionStore(
   let serializedFromDisk: string | undefined;
 
   if (directoryVersion) {
-    const loaded = loadSessionStoreFromDirectory({ storePath });
-    store = loaded.store;
+    store = loadSessionStoreFromDirectory({ storePath }).store;
     setSerializedSessionStore(storePath, undefined);
   } else {
     // Retry up to 3 times when the file is empty or unparseable. On Windows the
@@ -569,22 +568,24 @@ async function saveSessionStoreUnlocked(
   }
 
   if (hasLegacySessionStoreFile(storePath)) {
-    await migrateLegacySessionStoreToDirectory({
+    const migrated = await migrateLegacySessionStoreToDirectory({
       storePath,
       normalizeKey: normalizeStoreSessionKey,
       sourceStore: store,
     });
-    if (isSessionStoreCacheEnabled()) {
-      writeSessionStoreCache({
-        storePath,
-        store,
-        versionToken: readDirectorySessionStoreVersion(storePath),
-      });
-    } else {
-      dropSessionStoreObjectCache(storePath);
+    if (migrated) {
+      if (isSessionStoreCacheEnabled()) {
+        writeSessionStoreCache({
+          storePath,
+          store,
+          versionToken: readDirectorySessionStoreVersion(storePath),
+        });
+      } else {
+        dropSessionStoreObjectCache(storePath);
+      }
+      setSerializedSessionStore(storePath, undefined);
+      return;
     }
-    setSerializedSessionStore(storePath, undefined);
-    return;
   }
 
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
@@ -755,6 +756,21 @@ async function persistDirectorySessionEntry(params: {
   sessionKey: string;
   next: SessionEntry;
 }): Promise<SessionEntry> {
+  if (resolveMaintenanceConfig().mode === "enforce") {
+    const previousStore = loadSessionStoreFromDirectory({ storePath: params.storePath }).store;
+    const nextStore: Record<string, SessionEntry> = {
+      ...previousStore,
+      [params.sessionKey]: params.next,
+    };
+    await saveSessionStoreUnlocked(
+      params.storePath,
+      nextStore,
+      { activeSessionKey: params.sessionKey },
+      { previousStore },
+    );
+    return params.next;
+  }
+
   await writeSessionEntryToDirectory({
     storePath: params.storePath,
     sessionKey: params.sessionKey,

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as jsonFiles from "../../infra/json-files.js";
+import { loadConfig } from "../config.js";
 import {
   clearSessionStoreCacheForTest,
   decodeDirectorySessionStoreEntryFileName,
@@ -13,6 +14,7 @@ import {
   readSessionUpdatedAt,
   resolveSessionStoreDir,
   resolveSessionStoreStatePath,
+  saveSessionStore,
   updateLastRoute,
   updateSessionStoreEntry,
 } from "./store.js";
@@ -47,6 +49,7 @@ describe("directory session store", () => {
 
   beforeEach(() => {
     clearSessionStoreCacheForTest();
+    vi.mocked(loadConfig).mockReturnValue({});
   });
 
   afterEach(() => {
@@ -77,6 +80,25 @@ describe("directory session store", () => {
     );
   });
 
+  it("hashes oversized session keys into fixed-length filenames", async () => {
+    const longKey = `agent:main:${"x".repeat(400)}`;
+    const encoded = encodeDirectorySessionStoreKey(longKey);
+
+    expect(encoded.startsWith("session-hash-")).toBe(true);
+    expect(encoded.length).toBeLessThan(80);
+    expect(decodeDirectorySessionStoreEntryFileName(encoded)).toBeNull();
+
+    const storePath = await writeLegacyStore(
+      {
+        [longKey]: { sessionId: "sess-long", updatedAt: 10 },
+      },
+      "long-key",
+    );
+
+    await expect(migrateSessionStoreToDirectory(storePath)).resolves.toBe(true);
+    expect(loadSessionStore(storePath)[longKey]?.sessionId).toBe("sess-long");
+  });
+
   it("migrates legacy sessions.json into an authoritative sessions.d layout", async () => {
     const storePath = await writeLegacyStore(
       {
@@ -100,6 +122,22 @@ describe("directory session store", () => {
     expect(Object.keys(loaded).toSorted()).toEqual(["agent:main:main", "agent:main:other"]);
     expect(loaded["agent:main:main"]?.sessionId).toBe("sess-newer");
     expect(loaded["agent:main:main"]?.modelOverride).toBe("gpt-5.2");
+  });
+
+  it("persists empty stores back to legacy json when migration has no entries", async () => {
+    const storePath = await writeLegacyStore(
+      {
+        "agent:main:main": { sessionId: "sess-1", updatedAt: 10 },
+      },
+      "empty-legacy",
+    );
+
+    await saveSessionStore(storePath, {});
+    clearSessionStoreCacheForTest();
+
+    expect(loadSessionStore(storePath)).toEqual({});
+    expect(fs.readFileSync(storePath, "utf-8").trim()).toBe("{}");
+    expect(fs.existsSync(resolveSessionStoreStatePath(storePath))).toBe(false);
   });
 
   it("keeps legacy JSON authoritative when staged migration fails", async () => {
@@ -237,6 +275,103 @@ describe("directory session store", () => {
       }),
     ).toBe(88);
     expect(readdirSpy).not.toHaveBeenCalled();
+  });
+
+  it("skips blocked prototype keys when loading directory stores", async () => {
+    const storePath = await writeLegacyStore(
+      {
+        "agent:main:main": { sessionId: "sess-1", updatedAt: 10 },
+      },
+      "blocked-key",
+    );
+
+    await migrateSessionStoreToDirectory(storePath);
+    const entriesDir = path.join(resolveSessionStoreDir(storePath), "entries");
+    fs.writeFileSync(
+      path.join(entriesDir, encodeDirectorySessionStoreKey("__proto__")),
+      JSON.stringify({ sessionKey: "__proto__", entry: { sessionId: "evil", updatedAt: 99 } }),
+      "utf-8",
+    );
+
+    const loaded = loadSessionStore(storePath);
+    expect(loaded["agent:main:main"]?.sessionId).toBe("sess-1");
+    expect(Object.getPrototypeOf(loaded)).not.toEqual({ sessionId: "evil", updatedAt: 99 });
+    expect(Object.prototype.hasOwnProperty.call(loaded, "__proto__")).toBe(false);
+  });
+
+  it("rejects symlinked legacy stores during migration", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const dir = await makeCaseDir("legacy-symlink");
+    const targetPath = path.join(dir, "target.json");
+    const storePath = path.join(dir, "sessions.json");
+    await fsPromises.writeFile(
+      targetPath,
+      JSON.stringify({ "agent:main:main": { sessionId: "sess-1", updatedAt: 10 } }),
+      "utf-8",
+    );
+    await fsPromises.symlink(targetPath, storePath);
+
+    await expect(migrateSessionStoreToDirectory(storePath)).resolves.toBe(false);
+    expect(fs.existsSync(resolveSessionStoreStatePath(storePath))).toBe(false);
+  });
+
+  it("rejects writable directory stores before updating entries", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const storePath = await writeLegacyStore(
+      {
+        "agent:main:main": { sessionId: "sess-1", updatedAt: 10 },
+      },
+      "unsafe-dir",
+    );
+
+    await migrateSessionStoreToDirectory(storePath);
+    const entriesDir = path.join(resolveSessionStoreDir(storePath), "entries");
+    await fsPromises.chmod(entriesDir, 0o777);
+
+    await expect(
+      updateSessionStoreEntry({
+        storePath,
+        sessionKey: "agent:main:main",
+        update: async () => ({ thinkingLevel: "high" }),
+      }),
+    ).rejects.toThrow(/writable session-store directory/);
+  });
+
+  it("enforces maintenance when fast-path directory writes update an entry", async () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          maxEntries: 1,
+          rotateBytes: 10_485_760,
+        },
+      },
+    });
+
+    const storePath = await writeLegacyStore(
+      {
+        "agent:main:main": { sessionId: "sess-1", updatedAt: 10 },
+        "agent:main:other": { sessionId: "sess-2", updatedAt: 20 },
+      },
+      "maintenance-fast-path",
+    );
+
+    await migrateSessionStoreToDirectory(storePath);
+    await updateLastRoute({
+      storePath,
+      sessionKey: "agent:main:main",
+      channel: "telegram",
+      to: "12345",
+    });
+
+    expect(Object.keys(loadSessionStore(storePath))).toEqual(["agent:main:main"]);
   });
 
   it("ignores dotfiles and symlinked entry files when loading directory stores", async () => {

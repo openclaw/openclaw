@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { stableStringify } from "../../agents/stable-stringify.js";
 import * as jsonFiles from "../../infra/json-files.js";
+import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SessionEntry } from "./types.js";
 
@@ -12,9 +14,12 @@ const DIRECTORY_STORE_NAME = "sessions.d";
 const DIRECTORY_STORE_ENTRIES_DIR_NAME = "entries";
 const DIRECTORY_STORE_STATE_FILE_NAME = "state.json";
 const DIRECTORY_STORE_FILE_PREFIX = "session-";
+const DIRECTORY_STORE_HASHED_FILE_PREFIX = "session-hash-";
 const DIRECTORY_STORE_FILE_SUFFIX = ".json";
 const DIRECTORY_STORE_KIND = "openclaw-session-store-directory";
 const DIRECTORY_STORE_LAYOUT_VERSION = 1;
+const DIRECTORY_STORE_MAX_INLINE_SESSION_KEY_BYTES = 120;
+const LEGACY_SESSION_STORE_MAX_BYTES = 64 * 1024 * 1024;
 
 type DirectorySessionStoreState = {
   kind: typeof DIRECTORY_STORE_KIND;
@@ -27,6 +32,16 @@ type DirectorySessionStorePaths = {
   rootDir: string;
   entriesDir: string;
   statePath: string;
+};
+
+type DirectorySessionEntryDocument = {
+  sessionKey: string;
+  entry: SessionEntry;
+};
+
+type DirectorySessionEntryRecord = {
+  sessionKey: string;
+  entry: SessionEntry;
 };
 
 function isValidStateVersion(value: unknown): value is number {
@@ -90,7 +105,36 @@ function readActiveDirectorySessionStoreState(
   return readDirectorySessionStoreStateFile(paths.statePath);
 }
 
-function readSessionEntryFile(filePath: string): SessionEntry | null {
+function normalizeDirectorySessionKey(sessionKey: string): string {
+  const normalized = sessionKey.trim();
+  if (!normalized) {
+    throw new Error("sessionKey must be a non-empty string");
+  }
+  return normalized;
+}
+
+function createSessionKeyDigest(sessionKey: string): string {
+  return createHash("sha256").update(sessionKey, "utf8").digest("base64url");
+}
+
+function buildDirectorySessionEntryDocument(
+  sessionKey: string,
+  entry: SessionEntry,
+): DirectorySessionEntryDocument {
+  return {
+    sessionKey,
+    entry,
+  };
+}
+
+function isSessionEntryRecord(value: unknown): value is SessionEntry {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function readSessionEntryFile(
+  filePath: string,
+  expectedSessionKey?: string,
+): DirectorySessionEntryRecord | null {
   try {
     const stat = fs.lstatSync(filePath);
     if (!stat.isFile() || stat.isSymbolicLink()) {
@@ -104,7 +148,27 @@ function readSessionEntryFile(filePath: string): SessionEntry | null {
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return null;
     }
-    return parsed as SessionEntry;
+
+    const document = parsed as Partial<DirectorySessionEntryDocument>;
+    if (typeof document.sessionKey === "string" && isSessionEntryRecord(document.entry)) {
+      const sessionKey = normalizeDirectorySessionKey(document.sessionKey);
+      if (expectedSessionKey && expectedSessionKey !== sessionKey) {
+        return null;
+      }
+      return {
+        sessionKey,
+        entry: document.entry,
+      };
+    }
+
+    if (!expectedSessionKey || !isSessionEntryRecord(parsed)) {
+      return null;
+    }
+
+    return {
+      sessionKey: expectedSessionKey,
+      entry: parsed,
+    };
   } catch {
     return null;
   }
@@ -119,31 +183,64 @@ function buildDirectoryStoreState(version: number): DirectorySessionStoreState {
   };
 }
 
-async function ensureSafeDirectory(dirPath: string): Promise<void> {
+async function ensureSafeDirectory(dirPath: string): Promise<string> {
+  let stat: fs.Stats;
   try {
-    const stat = await fsPromises.lstat(dirPath);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) {
-      throw new Error(`expected regular directory: ${dirPath}`);
-    }
-    return;
+    stat = await fsPromises.lstat(dirPath);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {
       await fsPromises.mkdir(dirPath, { recursive: true, mode: 0o700 });
-      return;
+      stat = await fsPromises.lstat(dirPath);
+    } else {
+      throw err;
     }
-    throw err;
+  }
+
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error(`expected regular directory: ${dirPath}`);
+  }
+  if (process.platform !== "win32" && (stat.mode & 0o022) !== 0) {
+    throw new Error(`refusing writable session-store directory: ${dirPath}`);
+  }
+  if (
+    process.platform !== "win32" &&
+    typeof process.getuid === "function" &&
+    stat.uid !== process.getuid()
+  ) {
+    throw new Error(`refusing session-store directory owned by another user: ${dirPath}`);
+  }
+
+  return await fsPromises.realpath(dirPath);
+}
+
+async function writeDirectoryTextFileAtomic(params: {
+  dirPath: string;
+  fileName: string;
+  content: string;
+  mode?: number;
+}): Promise<void> {
+  const validatedDir = await ensureSafeDirectory(params.dirPath);
+  const filePath = path.join(params.dirPath, params.fileName);
+  await jsonFiles.writeTextAtomic(filePath, params.content, { mode: params.mode });
+
+  const actualPath = await fsPromises.realpath(filePath).catch(() => null);
+  if (!actualPath) {
+    throw new Error(`failed to verify directory session store write: ${filePath}`);
+  }
+  const relativePath = path.relative(validatedDir, actualPath);
+  if (relativePath === "" || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    throw new Error(`directory session store write escaped validated directory: ${filePath}`);
   }
 }
 
 async function writeDirectoryStoreStateFile(statePath: string, version: number): Promise<void> {
-  await jsonFiles.writeTextAtomic(
-    statePath,
-    JSON.stringify(buildDirectoryStoreState(version), null, 2),
-    {
-      mode: 0o600,
-    },
-  );
+  await writeDirectoryTextFileAtomic({
+    dirPath: path.dirname(statePath),
+    fileName: path.basename(statePath),
+    content: JSON.stringify(buildDirectoryStoreState(version), null, 2),
+    mode: 0o600,
+  });
 }
 
 async function writeDirectorySessionEntryFile(
@@ -151,16 +248,24 @@ async function writeDirectorySessionEntryFile(
   sessionKey: string,
   entry: SessionEntry,
 ): Promise<void> {
-  await ensureSafeDirectory(entriesDir);
-  const filePath = path.join(entriesDir, encodeDirectorySessionStoreKey(sessionKey));
-  await jsonFiles.writeTextAtomic(filePath, JSON.stringify(entry, null, 2), { mode: 0o600 });
+  const normalizedKey = normalizeDirectorySessionKey(sessionKey);
+  await writeDirectoryTextFileAtomic({
+    dirPath: entriesDir,
+    fileName: encodeDirectorySessionStoreKey(normalizedKey),
+    content: JSON.stringify(buildDirectorySessionEntryDocument(normalizedKey, entry), null, 2),
+    mode: 0o600,
+  });
 }
 
 async function deleteDirectorySessionEntryFile(
   entriesDir: string,
   sessionKey: string,
 ): Promise<boolean> {
-  const filePath = path.join(entriesDir, encodeDirectorySessionStoreKey(sessionKey));
+  await ensureSafeDirectory(entriesDir);
+  const filePath = path.join(
+    entriesDir,
+    encodeDirectorySessionStoreKey(normalizeDirectorySessionKey(sessionKey)),
+  );
   try {
     const stat = await fsPromises.lstat(filePath);
     if (!stat.isFile() || stat.isSymbolicLink()) {
@@ -267,19 +372,27 @@ export function resolveSessionStoreStatePath(storePath: string): string {
 }
 
 /**
- * Encode a session key into a reversible, filesystem-safe filename.
+ * Encode a session key into a filesystem-safe filename.
+ * Short keys remain reversible; oversized keys switch to a fixed-length hash.
  */
 export function encodeDirectorySessionStoreKey(sessionKey: string): string {
-  if (!sessionKey.trim()) {
-    throw new Error("sessionKey must be a non-empty string");
+  const normalized = normalizeDirectorySessionKey(sessionKey);
+  if (Buffer.byteLength(normalized, "utf8") > DIRECTORY_STORE_MAX_INLINE_SESSION_KEY_BYTES) {
+    return `${DIRECTORY_STORE_HASHED_FILE_PREFIX}${createSessionKeyDigest(normalized)}${DIRECTORY_STORE_FILE_SUFFIX}`;
   }
-  return `${DIRECTORY_STORE_FILE_PREFIX}${Buffer.from(sessionKey, "utf8").toString("base64url")}${DIRECTORY_STORE_FILE_SUFFIX}`;
+  return `${DIRECTORY_STORE_FILE_PREFIX}${Buffer.from(normalized, "utf8").toString("base64url")}${DIRECTORY_STORE_FILE_SUFFIX}`;
 }
 
 /**
  * Decode a directory-store entry filename back to its original session key.
  */
 export function decodeDirectorySessionStoreEntryFileName(fileName: string): string | null {
+  if (
+    fileName.startsWith(DIRECTORY_STORE_HASHED_FILE_PREFIX) &&
+    fileName.endsWith(DIRECTORY_STORE_FILE_SUFFIX)
+  ) {
+    return null;
+  }
   if (
     fileName.startsWith(".") ||
     !fileName.startsWith(DIRECTORY_STORE_FILE_PREFIX) ||
@@ -327,20 +440,17 @@ export function readDirectorySessionStoreVersion(storePath: string): string | un
  */
 export function loadSessionStoreFromDirectory(params: { storePath: string }): {
   store: Record<string, SessionEntry>;
-  versionToken?: string;
 } {
   const paths = resolveDirectorySessionStorePaths(params.storePath);
-  let lastStore: Record<string, SessionEntry> = {};
-  let lastVersionToken: string | undefined;
+  let lastStore: Record<string, SessionEntry> = Object.create(null) as Record<string, SessionEntry>;
 
   for (let attempt = 0; attempt < 2; attempt++) {
     const startState = readActiveDirectorySessionStoreState(params.storePath);
     if (!startState) {
-      return { store: {}, versionToken: undefined };
+      return { store: Object.create(null) as Record<string, SessionEntry> };
     }
 
-    const store: Record<string, SessionEntry> = {};
-    lastVersionToken = String(startState.version);
+    const store: Record<string, SessionEntry> = Object.create(null) as Record<string, SessionEntry>;
 
     try {
       const entries = fs.readdirSync(paths.entriesDir, { withFileTypes: true });
@@ -348,28 +458,32 @@ export function loadSessionStoreFromDirectory(params: { storePath: string }): {
         if (!entry.isFile() || entry.isSymbolicLink()) {
           continue;
         }
-        const sessionKey = decodeDirectorySessionStoreEntryFileName(entry.name);
-        if (!sessionKey) {
+        const sessionKeyFromName =
+          decodeDirectorySessionStoreEntryFileName(entry.name) ?? undefined;
+        const sessionEntry = readSessionEntryFile(
+          path.join(paths.entriesDir, entry.name),
+          sessionKeyFromName,
+        );
+        if (!sessionEntry || isBlockedObjectKey(sessionEntry.sessionKey)) {
           continue;
         }
-        const sessionEntry = readSessionEntryFile(path.join(paths.entriesDir, entry.name));
-        if (sessionEntry) {
-          store[sessionKey] = sessionEntry;
+        if (encodeDirectorySessionStoreKey(sessionEntry.sessionKey) !== entry.name) {
+          continue;
         }
+        store[sessionEntry.sessionKey] = sessionEntry.entry;
       }
     } catch {
-      return { store: {}, versionToken: undefined };
+      return { store: Object.create(null) as Record<string, SessionEntry> };
     }
 
     const endState = readActiveDirectorySessionStoreState(params.storePath);
     lastStore = store;
     if (endState && endState.version === startState.version) {
-      return { store, versionToken: String(endState.version) };
+      return { store };
     }
-    lastVersionToken = endState ? String(endState.version) : lastVersionToken;
   }
 
-  return { store: lastStore, versionToken: lastVersionToken };
+  return { store: lastStore };
 }
 
 /**
@@ -383,13 +497,17 @@ export function readSessionEntryFromDirectory(params: {
     return null;
   }
   const paths = resolveDirectorySessionStorePaths(params.storePath);
-  return readSessionEntryFile(
-    path.join(paths.entriesDir, encodeDirectorySessionStoreKey(params.sessionKey)),
+  return (
+    readSessionEntryFile(
+      path.join(paths.entriesDir, encodeDirectorySessionStoreKey(params.sessionKey)),
+      normalizeDirectorySessionKey(params.sessionKey),
+    )?.entry ?? null
   );
 }
 
 /**
  * Persist one session entry and bump the store version stamp.
+ * Caller must hold the session-store lock for `storePath`.
  */
 export async function writeSessionEntryToDirectory(params: {
   storePath: string;
@@ -407,6 +525,7 @@ export async function writeSessionEntryToDirectory(params: {
 
 /**
  * Remove one session entry from the directory store and bump the store version when changed.
+ * Caller must hold the session-store lock for `storePath`.
  */
 export async function deleteSessionEntryFromDirectory(params: {
   storePath: string;
@@ -477,6 +596,10 @@ export async function migrateLegacySessionStoreToDirectory(params: {
   let sourceStore = params.sourceStore;
   if (!sourceStore) {
     try {
+      const stat = await fsPromises.lstat(params.storePath);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > LEGACY_SESSION_STORE_MAX_BYTES) {
+        return false;
+      }
       const raw = await fsPromises.readFile(params.storePath, "utf-8");
       if (!raw.trim()) {
         return false;
