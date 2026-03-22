@@ -306,6 +306,25 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    it("escalates exec to critical at criticalThreshold", () => {
+      const result = detectLoopAfterRepeatedCalls({
+        toolName: "exec",
+        toolParams: { command: "ls /tmp" },
+        result: {
+          content: [{ type: "text", text: "file-a\nfile-b" }],
+          details: { status: "completed", exitCode: 0 },
+        },
+        count: 6,
+        config: execThresholdConfig,
+      });
+      expect(result.stuck).toBe(true);
+      if (result.stuck) {
+        expect(result.level).toBe("critical");
+        expect(result.detector).toBe("generic_repeat");
+        expect(result.message).toContain("CRITICAL");
+      }
+    });
+
     it("does not warn for different exec commands", () => {
       const state = createState();
       recordSuccessfulCall(
