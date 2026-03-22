@@ -1,3 +1,4 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
@@ -71,12 +72,10 @@ export function createZalouserPluginBase(params: {
     config: {
       ...zalouserConfigAdapter,
       isConfigured: async (account) => await checkZcaAuthenticated(account.profile),
-      describeAccount: (account) => ({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: undefined,
-      }),
+      describeAccount: (account) =>
+        describeAccountSnapshot({
+          account,
+        }),
     },
     setup: params.setup,
   };

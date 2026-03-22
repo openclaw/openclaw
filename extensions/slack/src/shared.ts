@@ -1,3 +1,4 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,
@@ -206,14 +207,15 @@ export function createSlackPluginBase(params: {
     config: {
       ...slackConfigAdapter,
       isConfigured: (account) => isSlackPluginAccountConfigured(account),
-      describeAccount: (account) => ({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: isSlackPluginAccountConfigured(account),
-        botTokenSource: account.botTokenSource,
-        appTokenSource: account.appTokenSource,
-      }),
+      describeAccount: (account) =>
+        describeAccountSnapshot({
+          account,
+          configured: isSlackPluginAccountConfigured(account),
+          extra: {
+            botTokenSource: account.botTokenSource,
+            appTokenSource: account.appTokenSource,
+          },
+        }),
     },
     setup: params.setup,
   }) as Pick<

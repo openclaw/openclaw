@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import {
   createAccountListHelpers,
+  describeAccountSnapshot,
   listCombinedAccountIds,
   mergeAccountConfig,
   resolveListedDefaultAccountId,
@@ -191,6 +192,43 @@ describe("resolveListedDefaultAccountId", () => {
         ambiguousFallbackAccountId: "default",
       }),
     ).toBe("default");
+  });
+});
+
+describe("describeAccountSnapshot", () => {
+  it("builds the standard snapshot shape with optional extras", () => {
+    expect(
+      describeAccountSnapshot({
+        account: {
+          accountId: "work",
+          name: "Work",
+          enabled: true,
+        },
+        configured: true,
+        extra: {
+          tokenSource: "config",
+        },
+      }),
+    ).toEqual({
+      accountId: "work",
+      name: "Work",
+      enabled: true,
+      configured: true,
+      tokenSource: "config",
+    });
+  });
+
+  it("normalizes missing identity fields to the shared defaults", () => {
+    expect(
+      describeAccountSnapshot({
+        account: {},
+      }),
+    ).toEqual({
+      accountId: "default",
+      name: undefined,
+      enabled: true,
+      configured: undefined,
+    });
   });
 });
 
