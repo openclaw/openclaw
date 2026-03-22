@@ -1,6 +1,6 @@
 import { lookup as dnsLookupCb, type LookupAddress } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
-import { Agent, EnvHttpProxyAgent, ProxyAgent, type Dispatcher } from "undici";
+import type { Dispatcher } from "undici";
 import {
   extractEmbeddedIpv4FromIpv6,
   isBlockedSpecialUseIpv4Address,
@@ -13,6 +13,7 @@ import {
   parseLooseIpAddress,
 } from "../../shared/net/ip.js";
 import { normalizeHostname } from "./hostname.js";
+import { loadUndiciRuntimeDeps } from "./undici-runtime.js";
 
 type LookupCallback = (
   err: NodeJS.ErrnoException | null,
@@ -400,6 +401,7 @@ export function createPinnedDispatcher(
   policy?: PinnedDispatcherPolicy,
   ssrfPolicy?: SsrFPolicy,
 ): Dispatcher {
+  const { Agent, EnvHttpProxyAgent, ProxyAgent } = loadUndiciRuntimeDeps();
   const lookup = resolvePinnedDispatcherLookup(pinned, policy?.pinnedHostname, ssrfPolicy);
 
   if (!policy || policy.mode === "direct") {

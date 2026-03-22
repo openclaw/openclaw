@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -16,8 +17,9 @@ vi.mock("./store.js", async (importOriginal) => {
   };
 });
 
-const { startMediaServer } = await import("./server.js");
-const { MEDIA_MAX_BYTES } = await import("./store.js");
+let startMediaServer: typeof import("./server.js").startMediaServer;
+let MEDIA_MAX_BYTES: typeof import("./store.js").MEDIA_MAX_BYTES;
+let realFetch: typeof import("undici").fetch;
 
 async function waitForFileRemoval(filePath: string, maxTicks = 1000) {
   for (let tick = 0; tick < maxTicks; tick += 1) {
@@ -46,6 +48,13 @@ describe("media server", () => {
   }
 
   beforeAll(async () => {
+    vi.useRealTimers();
+    vi.doUnmock("undici");
+    vi.resetModules();
+    const require = createRequire(import.meta.url);
+    ({ startMediaServer } = await import("./server.js"));
+    ({ MEDIA_MAX_BYTES } = await import("./store.js"));
+    ({ fetch: realFetch } = require("undici") as typeof import("undici"));
     MEDIA_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-test-"));
     server = await startMediaServer(0, 1_000);
     port = (server.address() as AddressInfo).port;
@@ -59,7 +68,7 @@ describe("media server", () => {
 
   it("serves media and cleans up after send", async () => {
     const file = await writeMediaFile("file1", "hello");
-    const res = await fetch(mediaUrl("file1"));
+    const res = await realFetch(mediaUrl("file1"));
     expect(res.status).toBe(200);
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     expect(await res.text()).toBe("hello");
@@ -70,7 +79,7 @@ describe("media server", () => {
     const file = await writeMediaFile("old", "stale");
     const past = Date.now() - 10_000;
     await fs.utimes(file, past / 1000, past / 1000);
-    const res = await fetch(mediaUrl("old"));
+    const res = await realFetch(mediaUrl("old"));
     expect(res.status).toBe(410);
     await expect(fs.stat(file)).rejects.toThrow();
   });
@@ -98,7 +107,7 @@ describe("media server", () => {
     },
   ] as const)("$testName", async (testCase) => {
     await testCase.setup?.();
-    const res = await fetch(mediaUrl(testCase.mediaPath));
+    const res = await realFetch(mediaUrl(testCase.mediaPath));
     expect(res.status).toBe(400);
     expect(await res.text()).toBe("invalid path");
   });
@@ -106,25 +115,25 @@ describe("media server", () => {
   it("rejects oversized media files", async () => {
     const file = await writeMediaFile("big", "");
     await fs.truncate(file, MEDIA_MAX_BYTES + 1);
-    const res = await fetch(mediaUrl("big"));
+    const res = await realFetch(mediaUrl("big"));
     expect(res.status).toBe(413);
     expect(await res.text()).toBe("too large");
   });
 
   it("returns not found for missing media IDs", async () => {
-    const res = await fetch(mediaUrl("missing-file"));
+    const res = await realFetch(mediaUrl("missing-file"));
     expect(res.status).toBe(404);
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     expect(await res.text()).toBe("not found");
   });
 
   it("returns 404 when route param is missing (dot path)", async () => {
-    const res = await fetch(mediaUrl("."));
+    const res = await realFetch(mediaUrl("."));
     expect(res.status).toBe(404);
   });
 
   it("rejects overlong media id", async () => {
-    const res = await fetch(mediaUrl(`${"a".repeat(201)}.txt`));
+    const res = await realFetch(mediaUrl(`${"a".repeat(201)}.txt`));
     expect(res.status).toBe(400);
     expect(await res.text()).toBe("invalid path");
   });
