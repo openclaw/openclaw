@@ -10,16 +10,21 @@ const satisfiesGatewayMinimumMock = vi.fn();
 const resolveRuntimeServiceVersionMock = vi.fn();
 const installPluginFromArchiveMock = vi.fn();
 
-vi.mock("../infra/clawhub.js", () => ({
-  parseClawHubPluginSpec: (...args: unknown[]) => parseClawHubPluginSpecMock(...args),
-  fetchClawHubPackageDetail: (...args: unknown[]) => fetchClawHubPackageDetailMock(...args),
-  fetchClawHubPackageVersion: (...args: unknown[]) => fetchClawHubPackageVersionMock(...args),
-  downloadClawHubPackageArchive: (...args: unknown[]) => downloadClawHubPackageArchiveMock(...args),
-  resolveLatestVersionFromPackage: (...args: unknown[]) =>
-    resolveLatestVersionFromPackageMock(...args),
-  satisfiesPluginApiRange: (...args: unknown[]) => satisfiesPluginApiRangeMock(...args),
-  satisfiesGatewayMinimum: (...args: unknown[]) => satisfiesGatewayMinimumMock(...args),
-}));
+vi.mock("../infra/clawhub.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/clawhub.js")>("../infra/clawhub.js");
+  return {
+    ...actual,
+    parseClawHubPluginSpec: (...args: unknown[]) => parseClawHubPluginSpecMock(...args),
+    fetchClawHubPackageDetail: (...args: unknown[]) => fetchClawHubPackageDetailMock(...args),
+    fetchClawHubPackageVersion: (...args: unknown[]) => fetchClawHubPackageVersionMock(...args),
+    downloadClawHubPackageArchive: (...args: unknown[]) =>
+      downloadClawHubPackageArchiveMock(...args),
+    resolveLatestVersionFromPackage: (...args: unknown[]) =>
+      resolveLatestVersionFromPackageMock(...args),
+    satisfiesPluginApiRange: (...args: unknown[]) => satisfiesPluginApiRangeMock(...args),
+    satisfiesGatewayMinimum: (...args: unknown[]) => satisfiesGatewayMinimumMock(...args),
+  };
+});
 
 vi.mock("../version.js", () => ({
   resolveRuntimeServiceVersion: (...args: unknown[]) => resolveRuntimeServiceVersionMock(...args),
@@ -29,7 +34,9 @@ vi.mock("./install.js", () => ({
   installPluginFromArchive: (...args: unknown[]) => installPluginFromArchiveMock(...args),
 }));
 
-const { formatClawHubSpecifier, installPluginFromClawHub } = await import("./clawhub.js");
+const { ClawHubRequestError } = await import("../infra/clawhub.js");
+const { CLAWHUB_INSTALL_ERROR_CODE, formatClawHubSpecifier, installPluginFromClawHub } =
+  await import("./clawhub.js");
 
 describe("installPluginFromClawHub", () => {
   beforeEach(() => {
@@ -147,8 +154,43 @@ describe("installPluginFromClawHub", () => {
       },
     });
 
-    await expect(installPluginFromClawHub({ spec: "clawhub:calendar" })).rejects.toThrow(
-      'Use "openclaw skills install calendar" instead.',
+    await expect(installPluginFromClawHub({ spec: "clawhub:calendar" })).resolves.toMatchObject({
+      ok: false,
+      code: CLAWHUB_INSTALL_ERROR_CODE.SKILL_PACKAGE,
+      error: '"calendar" is a skill. Use "openclaw skills install calendar" instead.',
+    });
+  });
+
+  it("returns typed package-not-found failures", async () => {
+    fetchClawHubPackageDetailMock.mockRejectedValueOnce(
+      new ClawHubRequestError({
+        path: "/api/v1/packages/demo",
+        status: 404,
+        body: "Package not found",
+      }),
     );
+
+    await expect(installPluginFromClawHub({ spec: "clawhub:demo" })).resolves.toMatchObject({
+      ok: false,
+      code: CLAWHUB_INSTALL_ERROR_CODE.PACKAGE_NOT_FOUND,
+      error: "Package not found on ClawHub.",
+    });
+  });
+
+  it("returns typed version-not-found failures", async () => {
+    parseClawHubPluginSpecMock.mockReturnValueOnce({ name: "demo", version: "9.9.9" });
+    fetchClawHubPackageVersionMock.mockRejectedValueOnce(
+      new ClawHubRequestError({
+        path: "/api/v1/packages/demo/versions/9.9.9",
+        status: 404,
+        body: "Version not found",
+      }),
+    );
+
+    await expect(installPluginFromClawHub({ spec: "clawhub:demo@9.9.9" })).resolves.toMatchObject({
+      ok: false,
+      code: CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND,
+      error: "Version not found on ClawHub: demo@9.9.9.",
+    });
   });
 });

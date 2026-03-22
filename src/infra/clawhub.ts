@@ -179,6 +179,20 @@ type ClawHubRequestParams = {
   fetchImpl?: FetchLike;
 };
 
+export class ClawHubRequestError extends Error {
+  readonly status: number;
+  readonly requestPath: string;
+  readonly responseBody: string;
+
+  constructor(params: { path: string; status: number; body: string }) {
+    super(`ClawHub ${params.path} failed (${params.status}): ${params.body}`);
+    this.name = "ClawHubRequestError";
+    this.status = params.status;
+    this.requestPath = params.path;
+    this.responseBody = params.body;
+  }
+}
+
 function normalizeBaseUrl(baseUrl?: string): string {
   const envValue =
     process.env.OPENCLAW_CLAWHUB_URL?.trim() ||
@@ -389,9 +403,11 @@ async function readErrorBody(response: Response): Promise<string> {
 async function fetchJson<T>(params: ClawHubRequestParams): Promise<T> {
   const { response, url } = await clawhubRequest(params);
   if (!response.ok) {
-    throw new Error(
-      `ClawHub ${url.pathname} failed (${response.status}): ${await readErrorBody(response)}`,
-    );
+    throw new ClawHubRequestError({
+      path: url.pathname,
+      status: response.status,
+      body: await readErrorBody(response),
+    });
   }
   return (await response.json()) as T;
 }
@@ -567,9 +583,11 @@ export async function downloadClawHubPackageArchive(params: {
     fetchImpl: params.fetchImpl,
   });
   if (!response.ok) {
-    throw new Error(
-      `ClawHub ${url.pathname} failed (${response.status}): ${await readErrorBody(response)}`,
-    );
+    throw new ClawHubRequestError({
+      path: url.pathname,
+      status: response.status,
+      body: await readErrorBody(response),
+    });
   }
   const bytes = new Uint8Array(await response.arrayBuffer());
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-package-"));
@@ -603,9 +621,11 @@ export async function downloadClawHubSkillArchive(params: {
     },
   });
   if (!response.ok) {
-    throw new Error(
-      `ClawHub ${url.pathname} failed (${response.status}): ${await readErrorBody(response)}`,
-    );
+    throw new ClawHubRequestError({
+      path: url.pathname,
+      status: response.status,
+      body: await readErrorBody(response),
+    });
   }
   const bytes = new Uint8Array(await response.arrayBuffer());
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-skill-"));

@@ -9,7 +9,6 @@ import { installPluginFromClawHub } from "./clawhub.js";
 import {
   installPluginFromNpmSpec,
   PLUGIN_INSTALL_ERROR_CODE,
-  type InstallPluginResult,
   resolvePluginInstallDir,
 } from "./install.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "./installs.js";
@@ -64,7 +63,7 @@ function formatNpmInstallFailure(params: {
   pluginId: string;
   spec: string;
   phase: "check" | "update";
-  result: Extract<InstallPluginResult, { ok: false }>;
+  result: { error: string; code?: string };
 }): string {
   if (params.result.code === PLUGIN_INSTALL_ERROR_CODE.NPM_PACKAGE_NOT_FOUND) {
     return `Failed to ${params.phase} ${params.pluginId}: npm package not found for ${params.spec}.`;
