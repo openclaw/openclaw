@@ -161,11 +161,11 @@ export function renderMessageGroup(
         opts.basePath,
       )}
       <div class="chat-group-messages">
-        ${group.messages.map((item, index) =>
+        ${(group.messages ?? []).map((item, index) =>
           renderGroupedMessage(
             item.message,
             {
-              isStreaming: group.isStreaming && index === group.messages.length - 1,
+              isStreaming: group.isStreaming && index === (group.messages?.length ?? 0) - 1,
               showReasoning: opts.showReasoning,
               showToolCalls: opts.showToolCalls ?? true,
             },
