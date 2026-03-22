@@ -1,6 +1,9 @@
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
-import { createDefaultChannelRuntimeState } from "openclaw/plugin-sdk/status-helpers";
+import {
+  createAsyncComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
 // WhatsApp-specific imports from local extension code (moved from src/web/ and src/channels/plugins/)
 import { resolveWhatsAppAccount, type ResolvedWhatsAppAccount } from "./accounts.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
@@ -207,7 +210,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         },
         resolveRecipients: ({ cfg, opts }) => resolveWhatsAppHeartbeatRecipients(cfg, opts),
       },
-      status: {
+      status: createAsyncComputedAccountStatusAdapter<ResolvedWhatsAppAccount>({
         defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, {
           connected: false,
           reconnectAttempts: 0,
@@ -252,26 +255,26 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             healthState: snapshot.healthState ?? undefined,
           };
         },
-        buildAccountSnapshot: async ({ account, runtime }) => {
+        resolveAccountSnapshot: async ({ account, runtime }) => {
           const linked = await (await loadWhatsAppChannelRuntime()).webAuthExists(account.authDir);
           return {
             accountId: account.accountId,
             name: account.name,
             enabled: account.enabled,
             configured: true,
-            linked,
-            running: runtime?.running ?? false,
-            connected: runtime?.connected ?? false,
-            reconnectAttempts: runtime?.reconnectAttempts,
-            lastConnectedAt: runtime?.lastConnectedAt ?? null,
-            lastDisconnect: runtime?.lastDisconnect ?? null,
-            lastInboundAt: runtime?.lastInboundAt ?? runtime?.lastMessageAt ?? null,
-            lastMessageAt: runtime?.lastMessageAt ?? null,
-            lastEventAt: runtime?.lastEventAt ?? null,
-            lastError: runtime?.lastError ?? null,
-            healthState: runtime?.healthState ?? undefined,
-            dmPolicy: account.dmPolicy,
-            allowFrom: account.allowFrom,
+            extra: {
+              linked,
+              connected: runtime?.connected ?? false,
+              reconnectAttempts: runtime?.reconnectAttempts,
+              lastConnectedAt: runtime?.lastConnectedAt ?? null,
+              lastDisconnect: runtime?.lastDisconnect ?? null,
+              lastInboundAt: runtime?.lastInboundAt ?? runtime?.lastMessageAt ?? null,
+              lastMessageAt: runtime?.lastMessageAt ?? null,
+              lastEventAt: runtime?.lastEventAt ?? null,
+              healthState: runtime?.healthState ?? undefined,
+              dmPolicy: account.dmPolicy,
+              allowFrom: account.allowFrom,
+            },
           };
         },
         resolveAccountState: ({ configured }) => (configured ? "linked" : "not linked"),
@@ -280,7 +283,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             runtimeExports.logWebSelfId(account.authDir, runtime, includeChannelPrefix),
           );
         },
-      },
+      }),
       gateway: {
         startAccount: async (ctx) => {
           const account = ctx.account;
