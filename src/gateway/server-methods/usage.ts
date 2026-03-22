@@ -607,7 +607,7 @@ export const usageHandlers: GatewayRequestHandlers = {
         aggregateTotals.missingCostEntries += usage.missingCostEntries;
       }
 
-      const channel = merged.storeEntry?.channel ?? merged.storeEntry?.origin?.provider;
+      const channel = merged.storeEntry?.origin?.provider ?? merged.storeEntry?.channel;
       const chatType = merged.storeEntry?.chatType ?? merged.storeEntry?.origin?.chatType;
 
       if (usage) {
