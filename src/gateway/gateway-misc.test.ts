@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { describe, expect, it, test, vi } from "vitest";
 import { defaultVoiceWakeTriggers } from "../infra/voicewake.js";
 import { GatewayClient } from "./client.js";
+import { GATEWAY_CLIENT_IDS } from "./protocol/client-info.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
 import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
@@ -418,5 +419,81 @@ describe("formatError", () => {
     expect(formatError({ status: 500, code: "EPIPE" })).toBe("status=500 code=EPIPE");
     expect(formatError({ status: 404 })).toBe("status=404 code=unknown");
     expect(formatError({ code: "ENOENT" })).toBe("status=unknown code=ENOENT");
+  });
+});
+
+describe("hasExecApprovalClients recognition", () => {
+  // Mirrors the inline logic in server.impl.ts hasExecApprovalClients
+  function hasExecApprovalClients(clients: Set<GatewayWsClient>): boolean {
+    for (const gatewayClient of clients) {
+      const clientId = gatewayClient.connect.client?.id;
+      if (
+        clientId === GATEWAY_CLIENT_IDS.CONTROL_UI ||
+        clientId === GATEWAY_CLIENT_IDS.WEBCHAT_UI
+      ) {
+        return true;
+      }
+      const scopes = Array.isArray(gatewayClient.connect.scopes)
+        ? gatewayClient.connect.scopes
+        : [];
+      if (scopes.includes("operator.admin") || scopes.includes("operator.approvals")) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function makeClient(
+    clientId: string,
+    scopes?: string[],
+  ): GatewayWsClient {
+    return {
+      socket: {} as GatewayWsClient["socket"],
+      connect: {
+        client: { id: clientId },
+        scopes,
+      } as GatewayWsClient["connect"],
+      connId: `conn-${clientId}`,
+    };
+  }
+
+  it("returns true for control-ui client with empty scopes", () => {
+    const clients = new Set<GatewayWsClient>([
+      makeClient(GATEWAY_CLIENT_IDS.CONTROL_UI, []),
+    ]);
+    expect(hasExecApprovalClients(clients)).toBe(true);
+  });
+
+  it("returns true for webchat-ui client with empty scopes", () => {
+    const clients = new Set<GatewayWsClient>([
+      makeClient(GATEWAY_CLIENT_IDS.WEBCHAT_UI, []),
+    ]);
+    expect(hasExecApprovalClients(clients)).toBe(true);
+  });
+
+  it("returns true for operator.admin scope regardless of client id", () => {
+    const clients = new Set<GatewayWsClient>([
+      makeClient("some-other-client", ["operator.admin"]),
+    ]);
+    expect(hasExecApprovalClients(clients)).toBe(true);
+  });
+
+  it("returns true for operator.approvals scope regardless of client id", () => {
+    const clients = new Set<GatewayWsClient>([
+      makeClient("some-other-client", ["operator.approvals"]),
+    ]);
+    expect(hasExecApprovalClients(clients)).toBe(true);
+  });
+
+  it("returns false when no matching client id or scope", () => {
+    const clients = new Set<GatewayWsClient>([
+      makeClient("some-other-client", ["operator.read"]),
+    ]);
+    expect(hasExecApprovalClients(clients)).toBe(false);
+  });
+
+  it("returns false for empty client set", () => {
+    const clients = new Set<GatewayWsClient>();
+    expect(hasExecApprovalClients(clients)).toBe(false);
   });
 });

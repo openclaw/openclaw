@@ -81,6 +81,7 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
+import { GATEWAY_CLIENT_IDS } from "./protocol/client-info.js";
 import { startGatewayModelPricingRefresh } from "./model-pricing-cache.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
@@ -1084,6 +1085,13 @@ export async function startGatewayServer(
     hasConnectedMobileNode: hasMobileNodeConnected,
     hasExecApprovalClients: () => {
       for (const gatewayClient of clients) {
+        const clientId = gatewayClient.connect.client?.id;
+        if (
+          clientId === GATEWAY_CLIENT_IDS.CONTROL_UI ||
+          clientId === GATEWAY_CLIENT_IDS.WEBCHAT_UI
+        ) {
+          return true;
+        }
         const scopes = Array.isArray(gatewayClient.connect.scopes)
           ? gatewayClient.connect.scopes
           : [];
