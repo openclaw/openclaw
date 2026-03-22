@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { normalizeLegacyDeliveryInput } from "./legacy-delivery.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { migrateLegacyCronPayload } from "./payload-migration.js";
@@ -215,6 +216,22 @@ export function normalizeStoredCronJobs(
       delete raw.jobId;
       mutated = true;
       trackIssue("jobId");
+    }
+
+    // Coerce legacy numeric ids and ensure every job has a non-empty string id (#51498).
+    if (typeof raw.id === "number" && Number.isFinite(raw.id)) {
+      raw.id = String(Math.trunc(raw.id));
+      mutated = true;
+      trackIssue("jobId");
+    }
+    const idTrimmed = typeof raw.id === "string" ? raw.id.trim() : "";
+    if (!idTrimmed) {
+      raw.id = randomUUID();
+      mutated = true;
+      trackIssue("jobId");
+    } else if (typeof raw.id !== "string" || raw.id !== idTrimmed) {
+      raw.id = idTrimmed;
+      mutated = true;
     }
 
     if (typeof raw.schedule === "string") {

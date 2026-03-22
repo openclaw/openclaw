@@ -73,6 +73,20 @@ export type HealthSummary = {
 };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+/**
+ * Default wall-clock budget for {@link getHealthSnapshot}. Channel probes used to run
+ * sequentially (N × timeout), which could exceed common CLI/gateway limits (~30s) when many
+ * plugins/accounts are configured (#51498). Parallel probes + this cap keep snapshots bounded.
+ */
+const DEFAULT_HEALTH_SNAPSHOT_BUDGET_MS = 25_000;
+
+function resolveProbeBudgetMs(deadlineMs: number, perProbeCap: number): number {
+  const remaining = deadlineMs - Date.now();
+  if (remaining <= 0) {
+    return 0;
+  }
+  return Math.min(perProbeCap, Math.max(50, remaining));
+}
 
 const debugHealth = (...args: unknown[]) => {
   if (isTruthyEnvValue(process.env.OPENCLAW_DEBUG_HEALTH)) {
@@ -419,6 +433,8 @@ export const formatHealthChannelLines = (
 export async function getHealthSnapshot(params?: {
   timeoutMs?: number;
   probe?: boolean;
+  /** Wall-clock budget for the full snapshot (parallel probes + summaries). */
+  maxSnapshotMs?: number;
 }): Promise<HealthSummary> {
   const timeoutMs = params?.timeoutMs;
   const cfg = loadConfig();
@@ -447,6 +463,8 @@ export async function getHealthSnapshot(params?: {
 
   const start = Date.now();
   const cappedTimeout = timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : Math.max(50, timeoutMs);
+  const maxSnapshotMs = params?.maxSnapshotMs ?? DEFAULT_HEALTH_SNAPSHOT_BUDGET_MS;
+  const deadlineMs = start + Math.max(1000, maxSnapshotMs);
   const doProbe = params?.probe !== false;
   const channels: Record<string, ChannelHealthSummary> = {};
   const channelOrder = listChannelPlugins().map((plugin) => plugin.id);
@@ -484,80 +502,91 @@ export async function getHealthSnapshot(params?: {
       preferredAccountId,
       accountIdsToProbe,
     });
-    const accountSummaries: Record<string, ChannelAccountHealthSummary> = {};
-
-    for (const accountId of accountIdsToProbe) {
-      const { account, enabled, configured, diagnostics } = await resolveHealthAccountContext({
-        plugin,
-        cfg,
-        accountId,
-      });
-      if (diagnostics.length > 0) {
-        debugHealth("account.diagnostics", { channel: plugin.id, accountId, diagnostics });
-      }
-
-      let probe: unknown;
-      let lastProbeAt: number | null = null;
-      if (enabled && configured && doProbe && plugin.status?.probeAccount) {
-        try {
-          probe = await plugin.status.probeAccount({
-            account,
-            timeoutMs: cappedTimeout,
-            cfg,
-          });
-          lastProbeAt = Date.now();
-        } catch (err) {
-          probe = { ok: false, error: formatErrorMessage(err) };
-          lastProbeAt = Date.now();
+    const accountEntries = await Promise.all(
+      accountIdsToProbe.map(async (accountId) => {
+        const { account, enabled, configured, diagnostics } = await resolveHealthAccountContext({
+          plugin,
+          cfg,
+          accountId,
+        });
+        if (diagnostics.length > 0) {
+          debugHealth("account.diagnostics", { channel: plugin.id, accountId, diagnostics });
         }
-      }
 
-      const probeRecord =
-        probe && typeof probe === "object" ? (probe as Record<string, unknown>) : null;
-      const bot =
-        probeRecord && typeof probeRecord.bot === "object"
-          ? (probeRecord.bot as { username?: string | null })
-          : null;
-      if (bot?.username) {
-        debugHealth("probe.bot", { channel: plugin.id, accountId, username: bot.username });
-      }
+        let probe: unknown;
+        let lastProbeAt: number | null = null;
+        const budgetMs = resolveProbeBudgetMs(deadlineMs, cappedTimeout);
+        if (enabled && configured && doProbe && plugin.status?.probeAccount) {
+          if (budgetMs > 0) {
+            try {
+              probe = await plugin.status.probeAccount({
+                account,
+                timeoutMs: budgetMs,
+                cfg,
+              });
+              lastProbeAt = Date.now();
+            } catch (err) {
+              probe = { ok: false, error: formatErrorMessage(err) };
+              lastProbeAt = Date.now();
+            }
+          } else {
+            probe = { ok: false, error: "health snapshot budget exceeded" };
+            lastProbeAt = Date.now();
+          }
+        }
 
-      const snapshot: ChannelAccountSnapshot = {
-        accountId,
-        enabled,
-        configured,
-      };
-      if (probe !== undefined) {
-        snapshot.probe = probe;
-      }
-      if (lastProbeAt) {
-        snapshot.lastProbeAt = lastProbeAt;
-      }
+        const probeRecord =
+          probe && typeof probe === "object" ? (probe as Record<string, unknown>) : null;
+        const bot =
+          probeRecord && typeof probeRecord.bot === "object"
+            ? (probeRecord.bot as { username?: string | null })
+            : null;
+        if (bot?.username) {
+          debugHealth("probe.bot", { channel: plugin.id, accountId, username: bot.username });
+        }
 
-      const summary = plugin.status?.buildChannelSummary
-        ? await plugin.status.buildChannelSummary({
-            account,
-            cfg,
-            defaultAccountId: accountId,
-            snapshot,
-          })
-        : undefined;
-      const record =
-        summary && typeof summary === "object"
-          ? (summary as ChannelAccountHealthSummary)
-          : ({
-              accountId,
-              configured,
-              probe,
-              lastProbeAt,
-            } satisfies ChannelAccountHealthSummary);
-      if (record.configured === undefined) {
-        record.configured = configured;
-      }
-      if (record.lastProbeAt === undefined && lastProbeAt) {
-        record.lastProbeAt = lastProbeAt;
-      }
-      record.accountId = accountId;
+        const snapshot: ChannelAccountSnapshot = {
+          accountId,
+          enabled,
+          configured,
+        };
+        if (probe !== undefined) {
+          snapshot.probe = probe;
+        }
+        if (lastProbeAt) {
+          snapshot.lastProbeAt = lastProbeAt;
+        }
+
+        const summary = plugin.status?.buildChannelSummary
+          ? await plugin.status.buildChannelSummary({
+              account,
+              cfg,
+              defaultAccountId: accountId,
+              snapshot,
+            })
+          : undefined;
+        const record =
+          summary && typeof summary === "object"
+            ? (summary as ChannelAccountHealthSummary)
+            : ({
+                accountId,
+                configured,
+                probe,
+                lastProbeAt,
+              } satisfies ChannelAccountHealthSummary);
+        if (record.configured === undefined) {
+          record.configured = configured;
+        }
+        if (record.lastProbeAt === undefined && lastProbeAt) {
+          record.lastProbeAt = lastProbeAt;
+        }
+        record.accountId = accountId;
+        return { accountId, record };
+      }),
+    );
+
+    const accountSummaries: Record<string, ChannelAccountHealthSummary> = {};
+    for (const { accountId, record } of accountEntries) {
       accountSummaries[accountId] = record;
     }
 

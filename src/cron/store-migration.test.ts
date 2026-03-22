@@ -97,6 +97,32 @@ describe("normalizeStoredCronJobs", () => {
     expect(result.issues.legacyPayloadKind).toBeUndefined();
   });
 
+  it("assigns uuid when id is missing and coerces numeric id to string (#51498)", () => {
+    const jobs = [
+      {
+        jobId: null,
+        name: "needs-id",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "agentTurn", message: "hi" },
+        state: {},
+      },
+      {
+        id: 42,
+        name: "numeric-id",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "agentTurn", message: "hi" },
+        state: {},
+      },
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    expect(result.mutated).toBe(true);
+    expect(typeof jobs[0]?.id).toBe("string");
+    expect(String(jobs[0]?.id).length).toBeGreaterThan(10);
+    expect(jobs[1]?.id).toBe("42");
+  });
+
   it("normalizes whitespace-padded and non-canonical payload kinds", () => {
     const jobs = [
       {
