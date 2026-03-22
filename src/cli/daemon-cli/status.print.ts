@@ -52,7 +52,7 @@ function sanitizeDaemonStatusForJson(status: DaemonStatus): DaemonStatus {
 export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
   if (opts.json) {
     const sanitized = sanitizeDaemonStatusForJson(status);
-    defaultRuntime.log(JSON.stringify(sanitized, null, 2));
+    defaultRuntime.writeJson(sanitized);
     return;
   }
 

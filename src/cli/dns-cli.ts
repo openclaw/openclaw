@@ -154,16 +154,10 @@ export function registerDnsCli(program: Command) {
       );
       defaultRuntime.log("");
       defaultRuntime.log(theme.heading("Recommended ~/.openclaw/openclaw.json:"));
-      defaultRuntime.log(
-        JSON.stringify(
-          {
-            gateway: { bind: "auto" },
-            discovery: { wideArea: { enabled: true, domain: wideAreaDomain } },
-          },
-          null,
-          2,
-        ),
-      );
+      defaultRuntime.writeJson({
+        gateway: { bind: "auto" },
+        discovery: { wideArea: { enabled: true, domain: wideAreaDomain } },
+      });
       defaultRuntime.log("");
       defaultRuntime.log(theme.heading("Tailscale admin (DNS → Nameservers):"));
       defaultRuntime.log(

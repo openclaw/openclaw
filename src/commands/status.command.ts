@@ -17,7 +17,7 @@ import {
   formatPluginCompatibilityNotice,
   summarizePluginCompatibility,
 } from "../plugins/status.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { formatHealthChannelLines, type HealthSummary } from "./health.js";
@@ -196,42 +196,36 @@ export async function statusCommand(
       getDaemonStatusSummary(),
       getNodeDaemonStatusSummary(),
     ]);
-    runtime.log(
-      JSON.stringify(
-        {
-          ...summary,
-          os: osSummary,
-          update,
-          updateChannel: channelInfo.channel,
-          updateChannelSource: channelInfo.source,
-          memory,
-          memoryPlugin,
-          gateway: {
-            mode: gatewayMode,
-            url: gatewayConnection.url,
-            urlSource: gatewayConnection.urlSource,
-            misconfigured: remoteUrlMissing,
-            reachable: gatewayReachable,
-            connectLatencyMs: gatewayProbe?.connectLatencyMs ?? null,
-            self: gatewaySelf,
-            error: gatewayProbe?.error ?? null,
-            authWarning: gatewayProbeAuthWarning ?? null,
-          },
-          gatewayService: daemon,
-          nodeService: nodeDaemon,
-          agents: agentStatus,
-          securityAudit,
-          secretDiagnostics,
-          pluginCompatibility: {
-            count: pluginCompatibility.length,
-            warnings: pluginCompatibility,
-          },
-          ...(health || usage || lastHeartbeat ? { health, usage, lastHeartbeat } : {}),
-        },
-        null,
-        2,
-      ),
-    );
+    writeRuntimeJson(runtime, {
+      ...summary,
+      os: osSummary,
+      update,
+      updateChannel: channelInfo.channel,
+      updateChannelSource: channelInfo.source,
+      memory,
+      memoryPlugin,
+      gateway: {
+        mode: gatewayMode,
+        url: gatewayConnection.url,
+        urlSource: gatewayConnection.urlSource,
+        misconfigured: remoteUrlMissing,
+        reachable: gatewayReachable,
+        connectLatencyMs: gatewayProbe?.connectLatencyMs ?? null,
+        self: gatewaySelf,
+        error: gatewayProbe?.error ?? null,
+        authWarning: gatewayProbeAuthWarning ?? null,
+      },
+      gatewayService: daemon,
+      nodeService: nodeDaemon,
+      agents: agentStatus,
+      securityAudit,
+      secretDiagnostics,
+      pluginCompatibility: {
+        count: pluginCompatibility.length,
+        warnings: pluginCompatibility,
+      },
+      ...(health || usage || lastHeartbeat ? { health, usage, lastHeartbeat } : {}),
+    });
     return;
   }
 
