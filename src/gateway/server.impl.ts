@@ -81,7 +81,9 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
+import { GATEWAY_CLIENT_IDS } from "./protocol/client-info.js";
 import { startGatewayModelPricingRefresh } from "./model-pricing-cache.js";
+import { isWebchatClient } from "../utils/message-channel.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
@@ -1084,6 +1086,18 @@ export async function startGatewayServer(
     hasConnectedMobileNode: hasMobileNodeConnected,
     hasExecApprovalClients: () => {
       for (const gatewayClient of clients) {
+        // Plain HTTP (non-secure context): crypto.subtle is unavailable in the browser,
+        // so the control-ui cannot establish device identity. clearUnboundScopes() in
+        // ws-connection/message-handler.ts strips all scopes on connect, making the
+        // scope-based check below always return false even when control-ui is connected
+        // and actively displaying the approval popup. Recognize control-ui and webchat
+        // clients by their client identity instead.
+        if (
+          gatewayClient.connect.clientId === GATEWAY_CLIENT_IDS.CONTROL_UI ||
+          isWebchatClient(gatewayClient.connect)
+        ) {
+          return true;
+        }
         const scopes = Array.isArray(gatewayClient.connect.scopes)
           ? gatewayClient.connect.scopes
           : [];
