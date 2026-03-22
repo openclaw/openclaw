@@ -6,6 +6,7 @@ import {
   clearPluginManifestRegistryCache,
   loadPluginManifestRegistry,
 } from "./manifest-registry.js";
+import type { OpenClawPackageManifest } from "./manifest.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
@@ -37,6 +38,8 @@ function createPluginCandidate(params: {
   origin: "bundled" | "global" | "workspace" | "config";
   format?: "openclaw" | "bundle";
   bundleFormat?: "codex" | "claude" | "cursor";
+  packageManifest?: OpenClawPackageManifest;
+  packageDir?: string;
 }): PluginCandidate {
   return {
     idHint: params.idHint,
@@ -45,6 +48,8 @@ function createPluginCandidate(params: {
     origin: params.origin,
     format: params.format,
     bundleFormat: params.bundleFormat,
+    packageManifest: params.packageManifest,
+    packageDir: params.packageDir,
   };
 }
 
@@ -237,6 +242,99 @@ describe("loadPluginManifestRegistry", () => {
         choiceLabel: "OpenAI API key",
       },
     ]);
+  });
+
+  it("skips plugins whose minHostVersion is newer than the current host", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "synology-chat", configSchema: { type: "object" } });
+
+    const registry = loadPluginManifestRegistry({
+      cache: false,
+      env: { OPENCLAW_VERSION: "2026.3.21" },
+      candidates: [
+        createPluginCandidate({
+          idHint: "synology-chat",
+          rootDir: dir,
+          packageDir: dir,
+          origin: "global",
+          packageManifest: {
+            install: {
+              npmSpec: "@openclaw/synology-chat",
+              minHostVersion: ">=2026.3.22",
+            },
+          },
+        }),
+      ],
+    });
+
+    expect(registry.plugins).toEqual([]);
+    expect(
+      registry.diagnostics.some((diag) =>
+        diag.message.includes("plugin requires OpenClaw >=2026.3.22, but this host is 2026.3.21"),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects invalid minHostVersion metadata", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "synology-chat", configSchema: { type: "object" } });
+
+    const registry = loadPluginManifestRegistry({
+      cache: false,
+      candidates: [
+        createPluginCandidate({
+          idHint: "synology-chat",
+          rootDir: dir,
+          packageDir: dir,
+          origin: "global",
+          packageManifest: {
+            install: {
+              npmSpec: "@openclaw/synology-chat",
+              minHostVersion: "2026.3.22",
+            },
+          },
+        }),
+      ],
+    });
+
+    expect(registry.plugins).toEqual([]);
+    expect(
+      registry.diagnostics.some((diag) =>
+        diag.message.includes("plugin manifest invalid | openclaw.install.minHostVersion must use"),
+      ),
+    ).toBe(true);
+  });
+
+  it("warns distinctly when host version cannot be determined", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "synology-chat", configSchema: { type: "object" } });
+
+    const registry = loadPluginManifestRegistry({
+      cache: false,
+      env: { OPENCLAW_VERSION: "unknown" },
+      candidates: [
+        createPluginCandidate({
+          idHint: "synology-chat",
+          rootDir: dir,
+          packageDir: dir,
+          origin: "global",
+          packageManifest: {
+            install: {
+              npmSpec: "@openclaw/synology-chat",
+              minHostVersion: ">=2026.3.22",
+            },
+          },
+        }),
+      ],
+    });
+
+    expect(registry.plugins).toEqual([]);
+    expect(
+      registry.diagnostics.some((diag) =>
+        diag.message.includes("host version could not be determined"),
+      ),
+    ).toBe(true);
+    expect(registry.diagnostics.some((diag) => diag.level === "warn")).toBe(true);
   });
 
   it("reports bundled plugins as the duplicate winner for auto-discovered globals", () => {
@@ -723,5 +821,51 @@ describe("loadPluginManifestRegistry", () => {
     expect(
       fs.realpathSync(second.plugins.find((plugin) => plugin.id === "demo")?.rootDir ?? ""),
     ).toBe(fs.realpathSync(demoB));
+  });
+
+  it("does not reuse cached manifests across host version changes", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "synology-chat", configSchema: { type: "object" } });
+    fs.writeFileSync(path.join(dir, "index.ts"), "export default {}", "utf-8");
+    const candidates = [
+      createPluginCandidate({
+        idHint: "synology-chat",
+        rootDir: dir,
+        packageDir: dir,
+        origin: "global",
+        packageManifest: {
+          install: {
+            npmSpec: "@openclaw/synology-chat",
+            minHostVersion: ">=2026.3.22",
+          },
+        },
+      }),
+    ];
+
+    const olderHost = loadPluginManifestRegistry({
+      cache: true,
+      candidates,
+      env: {
+        ...process.env,
+        OPENCLAW_VERSION: "2026.3.21",
+      },
+    });
+    const newerHost = loadPluginManifestRegistry({
+      cache: true,
+      candidates,
+      env: {
+        ...process.env,
+        OPENCLAW_VERSION: "2026.3.22",
+      },
+    });
+
+    expect(olderHost.plugins).toEqual([]);
+    expect(
+      olderHost.diagnostics.some((diag) => diag.message.includes("this host is 2026.3.21")),
+    ).toBe(true);
+    expect(newerHost.plugins.some((plugin) => plugin.id === "synology-chat")).toBe(true);
+    expect(
+      newerHost.diagnostics.some((diag) => diag.message.includes("this host is 2026.3.21")),
+    ).toBe(false);
   });
 });

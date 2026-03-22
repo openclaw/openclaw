@@ -17,10 +17,10 @@ describe("msteams polls", () => {
       options: ["Pizza", "Sushi"],
     });
 
-    expect(card.pollId).toBeTruthy();
-    expect(card.fallbackText).toContain("Poll: Lunch?");
-    expect(card.fallbackText).toContain("1. Pizza");
-    expect(card.fallbackText).toContain("2. Sushi");
+    expect(card.pollId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+    expect(card.fallbackText).toBe("Poll: Lunch?\n1. Pizza\n2. Sushi");
   });
 
   it("extracts poll votes from activity values", () => {
@@ -54,6 +54,9 @@ describe("msteams polls", () => {
       selections: ["0", "1"],
     });
     const stored = await store.getPoll("poll-2");
-    expect(stored?.votes["user-1"]).toEqual(["0"]);
+    if (!stored) {
+      throw new Error("expected stored poll after recordVote");
+    }
+    expect(stored.votes["user-1"]).toEqual(["0"]);
   });
 });

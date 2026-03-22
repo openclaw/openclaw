@@ -108,9 +108,10 @@ describe("waitForDiscordGatewayStop", () => {
       },
     });
 
-    expect(forceStop).toBeDefined();
-
-    forceStop?.(new Error("reconnect watchdog timeout"));
+    if (!forceStop) {
+      throw new Error("registerForceStop did not expose a stopper callback");
+    }
+    forceStop(new Error("reconnect watchdog timeout"));
 
     await expect(promise).rejects.toThrow("reconnect watchdog timeout");
     expect(disconnect).toHaveBeenCalledTimes(1);

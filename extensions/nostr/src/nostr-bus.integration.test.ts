@@ -1,6 +1,33 @@
 import { describe, expect, it, vi } from "vitest";
 import { createMetrics, createNoopMetrics, type MetricEvent } from "./metrics.js";
 import { createSeenTracker } from "./seen-tracker.js";
+import { TEST_RELAY_URL } from "./test-fixtures.js";
+
+const TEST_RELAY_URL_1 = "wss://relay1.com";
+const TEST_RELAY_URL_2 = "wss://relay2.com";
+const TEST_RELAY_URL_PRIMARY = "wss://relay.com";
+const TEST_RELAY_URL_GOOD = "wss://good-relay.com";
+const TEST_RELAY_URL_BAD = "wss://bad-relay.com";
+
+function createTracker(overrides?: Partial<Parameters<typeof createSeenTracker>[0]>) {
+  return createSeenTracker({
+    maxEntries: 100,
+    ttlMs: 60000,
+    ...overrides,
+  });
+}
+
+function createCollectingMetrics() {
+  const events: MetricEvent[] = [];
+  return {
+    events,
+    metrics: createMetrics((event) => events.push(event)),
+  };
+}
+
+function createPlainMetrics() {
+  return createMetrics();
+}
 
 // ============================================================================
 // Seen Tracker Integration Tests
@@ -9,7 +36,7 @@ import { createSeenTracker } from "./seen-tracker.js";
 describe("SeenTracker", () => {
   describe("basic operations", () => {
     it("tracks seen IDs", () => {
-      const tracker = createSeenTracker({ maxEntries: 100, ttlMs: 60000 });
+      const tracker = createTracker();
 
       // First check returns false and adds
       expect(tracker.has("id1")).toBe(false);
@@ -20,7 +47,7 @@ describe("SeenTracker", () => {
     });
 
     it("peek does not add", () => {
-      const tracker = createSeenTracker({ maxEntries: 100, ttlMs: 60000 });
+      const tracker = createTracker();
 
       expect(tracker.peek("id1")).toBe(false);
       expect(tracker.peek("id1")).toBe(false); // Still false
@@ -32,7 +59,7 @@ describe("SeenTracker", () => {
     });
 
     it("delete removes entries", () => {
-      const tracker = createSeenTracker({ maxEntries: 100, ttlMs: 60000 });
+      const tracker = createTracker();
 
       tracker.add("id1");
       expect(tracker.peek("id1")).toBe(true);
@@ -44,7 +71,7 @@ describe("SeenTracker", () => {
     });
 
     it("clear removes all entries", () => {
-      const tracker = createSeenTracker({ maxEntries: 100, ttlMs: 60000 });
+      const tracker = createTracker();
 
       tracker.add("id1");
       tracker.add("id2");
@@ -59,7 +86,7 @@ describe("SeenTracker", () => {
     });
 
     it("seed pre-populates entries", () => {
-      const tracker = createSeenTracker({ maxEntries: 100, ttlMs: 60000 });
+      const tracker = createTracker();
 
       tracker.seed(["id1", "id2", "id3"]);
       expect(tracker.size()).toBe(3);
@@ -73,7 +100,7 @@ describe("SeenTracker", () => {
 
   describe("LRU eviction", () => {
     it("evicts least recently used when at capacity", () => {
-      const tracker = createSeenTracker({ maxEntries: 3, ttlMs: 60000 });
+      const tracker = createTracker({ maxEntries: 3 });
 
       tracker.add("id1");
       tracker.add("id2");
@@ -92,7 +119,7 @@ describe("SeenTracker", () => {
     });
 
     it("accessing an entry moves it to front (prevents eviction)", () => {
-      const tracker = createSeenTracker({ maxEntries: 3, ttlMs: 60000 });
+      const tracker = createTracker({ maxEntries: 3 });
 
       tracker.add("id1");
       tracker.add("id2");
@@ -112,7 +139,7 @@ describe("SeenTracker", () => {
     });
 
     it("handles capacity of 1", () => {
-      const tracker = createSeenTracker({ maxEntries: 1, ttlMs: 60000 });
+      const tracker = createTracker({ maxEntries: 1 });
 
       tracker.add("id1");
       expect(tracker.peek("id1")).toBe(true);
@@ -125,7 +152,7 @@ describe("SeenTracker", () => {
     });
 
     it("seed respects maxEntries", () => {
-      const tracker = createSeenTracker({ maxEntries: 2, ttlMs: 60000 });
+      const tracker = createTracker({ maxEntries: 2 });
 
       tracker.seed(["id1", "id2", "id3", "id4"]);
       expect(tracker.size()).toBe(2);
@@ -142,7 +169,7 @@ describe("SeenTracker", () => {
     it("expires entries after TTL", async () => {
       vi.useFakeTimers();
 
-      const tracker = createSeenTracker({
+      const tracker = createTracker({
         maxEntries: 100,
         ttlMs: 100,
         pruneIntervalMs: 50,
@@ -164,7 +191,7 @@ describe("SeenTracker", () => {
     it("has() refreshes TTL", async () => {
       vi.useFakeTimers();
 
-      const tracker = createSeenTracker({
+      const tracker = createTracker({
         maxEntries: 100,
         ttlMs: 100,
         pruneIntervalMs: 50,
@@ -197,8 +224,7 @@ describe("SeenTracker", () => {
 describe("Metrics", () => {
   describe("createMetrics", () => {
     it("emits metric events to callback", () => {
-      const events: MetricEvent[] = [];
-      const metrics = createMetrics((event) => events.push(event));
+      const { events, metrics } = createCollectingMetrics();
 
       metrics.emit("event.received");
       metrics.emit("event.processed");
@@ -211,16 +237,15 @@ describe("Metrics", () => {
     });
 
     it("includes labels in metric events", () => {
-      const events: MetricEvent[] = [];
-      const metrics = createMetrics((event) => events.push(event));
+      const { events, metrics } = createCollectingMetrics();
 
-      metrics.emit("relay.connect", 1, { relay: "wss://relay.example.com" });
+      metrics.emit("relay.connect", 1, { relay: TEST_RELAY_URL });
 
-      expect(events[0].labels).toEqual({ relay: "wss://relay.example.com" });
+      expect(events[0].labels).toEqual({ relay: TEST_RELAY_URL });
     });
 
     it("accumulates counters in snapshot", () => {
-      const metrics = createMetrics();
+      const metrics = createPlainMetrics();
 
       metrics.emit("event.received");
       metrics.emit("event.received");
@@ -236,39 +261,39 @@ describe("Metrics", () => {
     });
 
     it("tracks per-relay stats", () => {
-      const metrics = createMetrics();
+      const metrics = createPlainMetrics();
 
-      metrics.emit("relay.connect", 1, { relay: "wss://relay1.com" });
-      metrics.emit("relay.connect", 1, { relay: "wss://relay2.com" });
-      metrics.emit("relay.error", 1, { relay: "wss://relay1.com" });
-      metrics.emit("relay.error", 1, { relay: "wss://relay1.com" });
+      metrics.emit("relay.connect", 1, { relay: TEST_RELAY_URL_1 });
+      metrics.emit("relay.connect", 1, { relay: TEST_RELAY_URL_2 });
+      metrics.emit("relay.error", 1, { relay: TEST_RELAY_URL_1 });
+      metrics.emit("relay.error", 1, { relay: TEST_RELAY_URL_1 });
 
       const snapshot = metrics.getSnapshot();
-      expect(snapshot.relays["wss://relay1.com"]).toBeDefined();
-      expect(snapshot.relays["wss://relay1.com"].connects).toBe(1);
-      expect(snapshot.relays["wss://relay1.com"].errors).toBe(2);
-      expect(snapshot.relays["wss://relay2.com"].connects).toBe(1);
-      expect(snapshot.relays["wss://relay2.com"].errors).toBe(0);
+      expect(snapshot.relays[TEST_RELAY_URL_1]).toBeDefined();
+      expect(snapshot.relays[TEST_RELAY_URL_1].connects).toBe(1);
+      expect(snapshot.relays[TEST_RELAY_URL_1].errors).toBe(2);
+      expect(snapshot.relays[TEST_RELAY_URL_2].connects).toBe(1);
+      expect(snapshot.relays[TEST_RELAY_URL_2].errors).toBe(0);
     });
 
     it("tracks circuit breaker state changes", () => {
-      const metrics = createMetrics();
+      const metrics = createPlainMetrics();
 
-      metrics.emit("relay.circuit_breaker.open", 1, { relay: "wss://relay.com" });
+      metrics.emit("relay.circuit_breaker.open", 1, { relay: TEST_RELAY_URL_PRIMARY });
 
       let snapshot = metrics.getSnapshot();
-      expect(snapshot.relays["wss://relay.com"].circuitBreakerState).toBe("open");
-      expect(snapshot.relays["wss://relay.com"].circuitBreakerOpens).toBe(1);
+      expect(snapshot.relays[TEST_RELAY_URL_PRIMARY].circuitBreakerState).toBe("open");
+      expect(snapshot.relays[TEST_RELAY_URL_PRIMARY].circuitBreakerOpens).toBe(1);
 
-      metrics.emit("relay.circuit_breaker.close", 1, { relay: "wss://relay.com" });
+      metrics.emit("relay.circuit_breaker.close", 1, { relay: TEST_RELAY_URL_PRIMARY });
 
       snapshot = metrics.getSnapshot();
-      expect(snapshot.relays["wss://relay.com"].circuitBreakerState).toBe("closed");
-      expect(snapshot.relays["wss://relay.com"].circuitBreakerCloses).toBe(1);
+      expect(snapshot.relays[TEST_RELAY_URL_PRIMARY].circuitBreakerState).toBe("closed");
+      expect(snapshot.relays[TEST_RELAY_URL_PRIMARY].circuitBreakerCloses).toBe(1);
     });
 
     it("tracks all rejection reasons", () => {
-      const metrics = createMetrics();
+      const metrics = createPlainMetrics();
 
       metrics.emit("event.rejected.invalid_shape");
       metrics.emit("event.rejected.wrong_kind");
@@ -295,17 +320,17 @@ describe("Metrics", () => {
     });
 
     it("tracks relay message types", () => {
-      const metrics = createMetrics();
+      const metrics = createPlainMetrics();
 
-      metrics.emit("relay.message.event", 1, { relay: "wss://relay.com" });
-      metrics.emit("relay.message.eose", 1, { relay: "wss://relay.com" });
-      metrics.emit("relay.message.closed", 1, { relay: "wss://relay.com" });
-      metrics.emit("relay.message.notice", 1, { relay: "wss://relay.com" });
-      metrics.emit("relay.message.ok", 1, { relay: "wss://relay.com" });
-      metrics.emit("relay.message.auth", 1, { relay: "wss://relay.com" });
+      metrics.emit("relay.message.event", 1, { relay: TEST_RELAY_URL_PRIMARY });
+      metrics.emit("relay.message.eose", 1, { relay: TEST_RELAY_URL_PRIMARY });
+      metrics.emit("relay.message.closed", 1, { relay: TEST_RELAY_URL_PRIMARY });
+      metrics.emit("relay.message.notice", 1, { relay: TEST_RELAY_URL_PRIMARY });
+      metrics.emit("relay.message.ok", 1, { relay: TEST_RELAY_URL_PRIMARY });
+      metrics.emit("relay.message.auth", 1, { relay: TEST_RELAY_URL_PRIMARY });
 
       const snapshot = metrics.getSnapshot();
-      const relay = snapshot.relays["wss://relay.com"];
+      const relay = snapshot.relays[TEST_RELAY_URL_PRIMARY];
       expect(relay.messagesReceived.event).toBe(1);
       expect(relay.messagesReceived.eose).toBe(1);
       expect(relay.messagesReceived.closed).toBe(1);
@@ -315,7 +340,7 @@ describe("Metrics", () => {
     });
 
     it("tracks decrypt success/failure", () => {
-      const metrics = createMetrics();
+      const metrics = createPlainMetrics();
 
       metrics.emit("decrypt.success");
       metrics.emit("decrypt.success");
@@ -327,7 +352,7 @@ describe("Metrics", () => {
     });
 
     it("tracks memory gauges (replaces rather than accumulates)", () => {
-      const metrics = createMetrics();
+      const metrics = createPlainMetrics();
 
       metrics.emit("memory.seen_tracker_size", 100);
       metrics.emit("memory.seen_tracker_size", 150);
@@ -338,11 +363,11 @@ describe("Metrics", () => {
     });
 
     it("reset clears all counters", () => {
-      const metrics = createMetrics();
+      const metrics = createPlainMetrics();
 
       metrics.emit("event.received");
       metrics.emit("event.processed");
-      metrics.emit("relay.connect", 1, { relay: "wss://relay.com" });
+      metrics.emit("relay.connect", 1, { relay: TEST_RELAY_URL_PRIMARY });
 
       metrics.reset();
 
@@ -359,7 +384,7 @@ describe("Metrics", () => {
 
       expect(() => {
         metrics.emit("event.received");
-        metrics.emit("relay.connect", 1, { relay: "wss://relay.com" });
+        metrics.emit("relay.connect", 1, { relay: TEST_RELAY_URL_PRIMARY });
       }).not.toThrow();
     });
 
@@ -380,18 +405,17 @@ describe("Metrics", () => {
 describe("Circuit Breaker Behavior", () => {
   // Test the circuit breaker logic through metrics emissions
   it("emits circuit breaker metrics in correct sequence", () => {
-    const events: MetricEvent[] = [];
-    const metrics = createMetrics((event) => events.push(event));
+    const { events, metrics } = createCollectingMetrics();
 
     // Simulate 5 failures -> open
     for (let i = 0; i < 5; i++) {
-      metrics.emit("relay.error", 1, { relay: "wss://relay.com" });
+      metrics.emit("relay.error", 1, { relay: TEST_RELAY_URL_PRIMARY });
     }
-    metrics.emit("relay.circuit_breaker.open", 1, { relay: "wss://relay.com" });
+    metrics.emit("relay.circuit_breaker.open", 1, { relay: TEST_RELAY_URL_PRIMARY });
 
     // Simulate recovery
-    metrics.emit("relay.circuit_breaker.half_open", 1, { relay: "wss://relay.com" });
-    metrics.emit("relay.circuit_breaker.close", 1, { relay: "wss://relay.com" });
+    metrics.emit("relay.circuit_breaker.half_open", 1, { relay: TEST_RELAY_URL_PRIMARY });
+    metrics.emit("relay.circuit_breaker.close", 1, { relay: TEST_RELAY_URL_PRIMARY });
 
     const cbEvents = events.filter((e) => e.name.startsWith("relay.circuit_breaker"));
     expect(cbEvents).toHaveLength(3);
@@ -407,19 +431,19 @@ describe("Circuit Breaker Behavior", () => {
 
 describe("Health Scoring", () => {
   it("metrics track relay errors for health scoring", () => {
-    const metrics = createMetrics();
+    const metrics = createPlainMetrics();
 
     // Simulate mixed success/failure pattern
-    metrics.emit("relay.connect", 1, { relay: "wss://good-relay.com" });
-    metrics.emit("relay.connect", 1, { relay: "wss://bad-relay.com" });
+    metrics.emit("relay.connect", 1, { relay: TEST_RELAY_URL_GOOD });
+    metrics.emit("relay.connect", 1, { relay: TEST_RELAY_URL_BAD });
 
-    metrics.emit("relay.error", 1, { relay: "wss://bad-relay.com" });
-    metrics.emit("relay.error", 1, { relay: "wss://bad-relay.com" });
-    metrics.emit("relay.error", 1, { relay: "wss://bad-relay.com" });
+    metrics.emit("relay.error", 1, { relay: TEST_RELAY_URL_BAD });
+    metrics.emit("relay.error", 1, { relay: TEST_RELAY_URL_BAD });
+    metrics.emit("relay.error", 1, { relay: TEST_RELAY_URL_BAD });
 
     const snapshot = metrics.getSnapshot();
-    expect(snapshot.relays["wss://good-relay.com"].errors).toBe(0);
-    expect(snapshot.relays["wss://bad-relay.com"].errors).toBe(3);
+    expect(snapshot.relays[TEST_RELAY_URL_GOOD].errors).toBe(0);
+    expect(snapshot.relays[TEST_RELAY_URL_BAD].errors).toBe(3);
   });
 });
 

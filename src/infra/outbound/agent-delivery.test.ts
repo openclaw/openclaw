@@ -13,14 +13,10 @@ vi.mock("./targets.js", async () => {
 });
 
 import type { OpenClawConfig } from "../../config/config.js";
-type AgentDeliveryModule = typeof import("./agent-delivery.js");
+import { resolveAgentDeliveryPlan, resolveAgentOutboundTarget } from "./agent-delivery.js";
 
-let resolveAgentDeliveryPlan: AgentDeliveryModule["resolveAgentDeliveryPlan"];
-let resolveAgentOutboundTarget: AgentDeliveryModule["resolveAgentOutboundTarget"];
-
-beforeEach(async () => {
-  vi.resetModules();
-  ({ resolveAgentDeliveryPlan, resolveAgentOutboundTarget } = await import("./agent-delivery.js"));
+beforeEach(() => {
+  mocks.resolveOutboundTarget.mockClear();
 });
 
 describe("agent delivery helpers", () => {

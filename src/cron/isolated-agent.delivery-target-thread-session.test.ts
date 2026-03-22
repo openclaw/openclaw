@@ -1,11 +1,10 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseTelegramTarget } from "../../extensions/telegram/src/targets.js";
 import type { OpenClawConfig } from "../config/config.js";
 
 // Mock session store so we can control what entries exist.
 const mockStore: Record<string, Record<string, unknown>> = {};
 type DeliveryTargetModule = typeof import("./isolated-agent/delivery-target.js");
-
 let resolveDeliveryTarget: DeliveryTargetModule["resolveDeliveryTarget"];
 
 beforeAll(async () => {
@@ -41,6 +40,13 @@ beforeAll(async () => {
     normalizeChannelId: vi.fn((id: string) => id),
   }));
   ({ resolveDeliveryTarget } = await import("./isolated-agent/delivery-target.js"));
+});
+
+afterAll(() => {
+  vi.doUnmock("../config/sessions.js");
+  vi.doUnmock("../infra/outbound/channel-selection.js");
+  vi.doUnmock("../channels/plugins/index.js");
+  vi.resetModules();
 });
 
 beforeEach(() => {
