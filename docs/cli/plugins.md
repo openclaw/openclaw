@@ -46,14 +46,16 @@ capabilities.
 ### Install
 
 ```bash
-openclaw plugins install <path-or-spec>
-openclaw plugins install <npm-spec> --pin
-openclaw plugins install clawhub:<package>
-openclaw plugins install <plugin>@<marketplace>
-openclaw plugins install <plugin> --marketplace <marketplace>
+openclaw plugins install <package>                      # ClawHub first, then npm
+openclaw plugins install clawhub:<package>              # ClawHub only
+openclaw plugins install <package> --pin                # pin version
+openclaw plugins install <path>                         # local path
+openclaw plugins install <plugin>@<marketplace>         # marketplace
+openclaw plugins install <plugin> --marketplace <name>  # marketplace (explicit)
 ```
 
-Security note: treat plugin installs like running code. Prefer pinned versions.
+Bare package names are checked against ClawHub first, then npm. Security note:
+treat plugin installs like running code. Prefer pinned versions.
 
 `plugins install` is also the install surface for hook packs that expose
 `openclaw.hooks` in `package.json`. Use `openclaw hooks` for filtered hook
