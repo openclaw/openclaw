@@ -2,7 +2,10 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
+import { clearAllBootstrapSnapshots } from "../agents/bootstrap-cache.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { useFrozenTime, useRealTime } from "../test-utils/frozen-time.js";
 import type { CronService } from "./service.js";
 import type { CronJob, CronJobState } from "./types.js";
@@ -28,11 +31,21 @@ export function setupCronIssueRegressionFixtures() {
   });
 
   beforeEach(() => {
+    vi.clearAllTimers();
     useFrozenTime("2026-02-06T10:05:00.000Z");
   });
 
-  afterAll(async () => {
+  afterEach(() => {
+    vi.clearAllTimers();
     useRealTime();
+    clearSessionStoreCacheForTest();
+    resetAgentRunContextForTest();
+    clearAllBootstrapSnapshots();
+    vi.restoreAllMocks();
+    vi.resetModules();
+  });
+
+  afterAll(async () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 

@@ -2,41 +2,20 @@ import { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 
-const loadConfigMock = vi.hoisted(() => vi.fn());
-const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
-const resolveGatewayPortMock = vi.hoisted(() => vi.fn(() => 18789));
-const copyToClipboardMock = vi.hoisted(() => vi.fn(async () => false));
+const loadConfigMock = vi.fn();
+const readConfigFileSnapshotMock = vi.fn();
+const resolveGatewayPortMock = vi.fn(() => 18789);
+const copyToClipboardMock = vi.fn(async () => false);
 
 const runtimeLogs: string[] = [];
 const runtimeErrors: string[] = [];
-const runtime = vi.hoisted(() => ({
+const runtime = {
   log: (message: string) => runtimeLogs.push(message),
   error: (message: string) => runtimeErrors.push(message),
   exit: (code: number) => {
     throw new Error(`__exit__:${code}`);
   },
-}));
-
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: loadConfigMock,
-    readConfigFileSnapshot: readConfigFileSnapshotMock,
-    resolveGatewayPort: resolveGatewayPortMock,
-  };
-});
-
-vi.mock("../infra/clipboard.js", () => ({
-  copyToClipboard: copyToClipboardMock,
-}));
-
-vi.mock("../runtime.js", () => ({
-  defaultRuntime: runtime,
-}));
-
-let registerQrCli: typeof import("./qr-cli.js").registerQrCli;
-let registerMaintenanceCommands: typeof import("./program/register.maintenance.js").registerMaintenanceCommands;
+};
 
 function createGatewayTokenRefFixture() {
   return {
@@ -81,10 +60,45 @@ function decodeSetupCode(setupCode: string): {
 }
 
 async function runCli(args: string[]): Promise<void> {
-  const program = new Command();
-  registerQrCli(program);
-  registerMaintenanceCommands(program);
-  await program.parseAsync(args, { from: "user" });
+  await withCliModules(async ({ registerQrCli, registerMaintenanceCommands }) => {
+    const program = new Command();
+    registerQrCli(program);
+    registerMaintenanceCommands(program);
+    await program.parseAsync(args, { from: "user" });
+  });
+}
+
+async function withCliModules<T>(
+  run: (modules: {
+    registerQrCli: typeof import("./qr-cli.js").registerQrCli;
+    registerMaintenanceCommands: typeof import("./program/register.maintenance.js").registerMaintenanceCommands;
+  }) => Promise<T>,
+): Promise<T> {
+  vi.resetModules();
+  vi.doMock("../config/config.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../config/config.js")>();
+    return {
+      ...actual,
+      loadConfig: loadConfigMock,
+      readConfigFileSnapshot: readConfigFileSnapshotMock,
+      resolveGatewayPort: resolveGatewayPortMock,
+    };
+  });
+  vi.doMock("../infra/clipboard.js", () => ({
+    copyToClipboard: copyToClipboardMock,
+  }));
+  vi.doMock("../runtime.js", () => ({
+    defaultRuntime: runtime,
+  }));
+  try {
+    const { registerQrCli } = await import("./qr-cli.js");
+    const { registerMaintenanceCommands } = await import("./program/register.maintenance.js");
+    return await run({ registerQrCli, registerMaintenanceCommands });
+  } finally {
+    vi.doUnmock("../config/config.js");
+    vi.doUnmock("../infra/clipboard.js");
+    vi.doUnmock("../runtime.js");
+  }
 }
 
 describe("cli integration: qr + dashboard token SecretRef", () => {
@@ -100,14 +114,10 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     ]);
   });
 
-  beforeAll(async () => {
-    vi.resetModules();
-    ({ registerQrCli } = await import("./qr-cli.js"));
-    ({ registerMaintenanceCommands } = await import("./program/register.maintenance.js"));
-  });
-
   afterAll(() => {
     envSnapshot.restore();
+    vi.restoreAllMocks();
+    vi.resetModules();
   });
 
   beforeEach(() => {
@@ -165,7 +175,9 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
       config: fixture,
     });
 
-    await expect(runCli(["qr", "--setup-code-only"])).rejects.toThrow("__exit__:1");
+    await expect(runCli(["qr", "--setup-code-only"])).rejects.toThrow(
+      /(__exit__:1|process\.exit unexpectedly called with "?1"?)/,
+    );
     expect(runtimeErrors.join("\n")).toMatch(/SHARED_GATEWAY_TOKEN/);
 
     runtimeLogs.length = 0;
