@@ -452,6 +452,108 @@ describe("normalizeCronJobCreate", () => {
   });
 });
 
+describe("cron schedule coercion", () => {
+  it("preserves expr when explicitly set to empty string (regression test for issue #50942)", () => {
+    // Before fix: { kind: "cron", expr: "" } had expr silently deleted,
+    // causing "invalid cron schedule: expr is required" at runtime.
+    // After fix: expr field is preserved so validation gives a clear error.
+    const normalized = normalizeCronJobCreate({
+      name: "empty-expr",
+      enabled: true,
+      schedule: { kind: "cron", expr: "" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "tick" },
+    }) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.kind).toBe("cron");
+    // expr field should be preserved (empty string) so validation throws clear error
+    expect("expr" in schedule).toBe(true);
+    expect(schedule.expr).toBe("");
+  });
+
+  it("normalizes whitespace-only expr to empty string for cron kind", () => {
+    // Whitespace-only expr should be normalized to "" so minLength validation catches it
+    const normalized = normalizeCronJobCreate({
+      name: "whitespace-expr",
+      enabled: true,
+      schedule: { kind: "cron", expr: "   " },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "tick" },
+    }) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.kind).toBe("cron");
+    expect("expr" in schedule).toBe(true);
+    expect(schedule.expr).toBe("");
+  });
+
+  it("deletes non-string expr values", () => {
+    // Non-string expr values should be deleted
+    const normalized = normalizeCronJobCreate({
+      name: "numeric-expr",
+      enabled: true,
+      schedule: { kind: "cron", expr: 42 } as unknown as Record<string, unknown>,
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "tick" },
+    }) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.kind).toBe("cron");
+    expect("expr" in schedule).toBe(false);
+  });
+
+  it("deletes blank expr from non-cron schedule types (at)", () => {
+    // Non-cron types with blank expr should have it deleted before schema validation
+    const normalized = normalizeCronJobCreate({
+      name: "at-with-blank-expr",
+      enabled: true,
+      schedule: { kind: "at", at: "2026-01-12T18:00:00Z", expr: "" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "tick" },
+    }) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.kind).toBe("at");
+    expect("expr" in schedule).toBe(false);
+  });
+
+  it("deletes blank expr from non-cron schedule types (every)", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "every-with-blank-expr",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60000, expr: "" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "tick" },
+    }) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.kind).toBe("every");
+    expect("expr" in schedule).toBe(false);
+  });
+
+  it("does not infer expr when kind is cron with no expr", () => {
+    // { kind: "cron" } with no expr should not get an expr added
+    const normalized = normalizeCronJobCreate({
+      name: "no-expr",
+      enabled: true,
+      schedule: { kind: "cron" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "tick" },
+    }) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.kind).toBe("cron");
+    expect("expr" in schedule).toBe(false);
+  });
+});
+
 describe("normalizeCronJobPatch", () => {
   it("infers agentTurn kind for model-only payload patches", () => {
     const normalized = normalizeCronJobPatch({
