@@ -209,6 +209,10 @@ export function stripThinkingTagsFromText(text: string): string {
   return stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
 }
 
+/**
+ * Refined assistant text extraction that avoids artificial line breaks
+ * introduced by thinking tag promotion.
+ */
 export function extractAssistantText(msg: AssistantMessage): string {
   const extracted =
     extractTextFromChatContent(msg.content, {
@@ -216,11 +220,13 @@ export function extractAssistantText(msg: AssistantMessage): string {
         stripThinkingTagsFromText(
           stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
         ).trim(),
-      joinWith: "\n",
-      normalizeText: (text) => text.trim(),
+      // Use no-joiner strategy here because the blocks might be parts of a single
+      // sentence (e.g. Okay.<think>...</think>Done).
+      joinWith: "",
+      normalizeText: (text) => text, // Don't trim individual blocks to preserve spacing
     }) ?? "";
   const errorContext = msg.stopReason === "error";
-  return sanitizeUserFacingText(extracted, { errorContext });
+  return sanitizeUserFacingText(extracted.trim(), { errorContext });
 }
 
 export function extractAssistantThinking(msg: AssistantMessage): string {
@@ -265,6 +271,7 @@ type MarkdownMaskRegion = { start: number; end: number; masked: boolean };
  */
 function getMarkdownMaskRegions(text: string): MarkdownMaskRegion[] {
   const regions: MarkdownMaskRegion[] = [];
+  // Regex covers both fenced code blocks (```) and inline code (`).
   const maskRe = /(`{1,3})[\s\S]*?\1/g;
   let lastIdx = 0;
   for (const match of text.matchAll(maskRe)) {
@@ -602,7 +609,7 @@ export function splitMinimaxToolCalls(
                   }
                   blocks.push({
                     type: "toolCall",
-                    id: `mc_mm_${globalCounter.val++}_${normalizeToolName(toolName)}`,
+                    id: `mc_mm_fb_${globalCounter.val++}_${normalizeToolName(toolName)}`,
                     name: normalizeToolName(toolName),
                     arguments: args,
                   });
