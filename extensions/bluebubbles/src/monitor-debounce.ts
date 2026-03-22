@@ -137,6 +137,8 @@ export function createBlueBubblesDebounceRegistry(params: {
   processMessage: (message: NormalizedWebhookMessage, target: WebhookTarget) => Promise<void>;
 }): BlueBubblesDebounceRegistry {
   const targetDebouncers = new Map<WebhookTarget, BlueBubblesDebouncer>();
+  const hasStableUpdatedMessageIdentity = (message: NormalizedWebhookMessage): boolean =>
+    Boolean(message.messageId?.trim() || message.associatedMessageGuid?.trim());
   const settleReplayLifecycle = (
     entries: BlueBubblesDebounceEntry[],
     result: "success" | "failure",
@@ -192,9 +194,11 @@ export function createBlueBubblesDebounceRegistry(params: {
         shouldDebounce: (entry) => {
           const msg = entry.message;
           if (entry.eventType === "updated-message") {
-            // Process edits immediately and flush any pending same-key buffer first.
-            // This avoids synthesizing "old text + edited text" merged bodies.
-            return false;
+            // Only fast-path edits when we can flush the matching identity bucket safely.
+            // GUID-less edits are better debounced so they do not flush an unrelated
+            // fallback bucket or miss the original pending bucket when BlueBubbles
+            // shifts the timestamp between webhook deliveries.
+            return !hasStableUpdatedMessageIdentity(msg);
           }
           // Skip debouncing for from-me messages (they're just cached, not processed)
           if (msg.fromMe) {
@@ -257,16 +261,16 @@ export function createBlueBubblesDebounceRegistry(params: {
       targetDebouncers.set(target, debouncer);
       return {
         enqueue: async (entry) => {
-          if (entry.eventType === "updated-message") {
+          if (
+            entry.eventType === "updated-message" &&
+            hasStableUpdatedMessageIdentity(entry.message)
+          ) {
             const associatedMessageGuid = entry.message.associatedMessageGuid?.trim();
             if (associatedMessageGuid) {
               await debouncer.flushKey(
                 `bluebubbles:${account.accountId}:balloon:${associatedMessageGuid}`,
               );
             }
-            await debouncer.flushKey(
-              resolveBlueBubblesFallbackDebounceKey(account.accountId, entry.message),
-            );
           }
           await debouncer.enqueue(entry);
         },

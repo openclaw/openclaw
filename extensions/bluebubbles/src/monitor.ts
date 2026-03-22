@@ -49,6 +49,30 @@ type PendingWebhookReplayRetryEntry = {
 };
 const pendingInboundWebhookReplayRetries = new Map<string, PendingWebhookReplayRetryEntry>();
 
+function resetBlueBubblesWebhookReplayStateForAccount(accountId: string): void {
+  const accountPrefix = `bluebubbles|${accountId}|`;
+  for (const scopeKey of recentInboundWebhookReplayScopes.keys()) {
+    if (scopeKey.startsWith(accountPrefix)) {
+      recentInboundWebhookReplayScopes.delete(scopeKey);
+    }
+  }
+  for (const scopeKey of pendingInboundWebhookReplayScopes.keys()) {
+    if (scopeKey.startsWith(accountPrefix)) {
+      pendingInboundWebhookReplayScopes.delete(scopeKey);
+    }
+  }
+  for (const replayKey of pendingInboundWebhookReplayKeys) {
+    if (replayKey.startsWith(accountPrefix)) {
+      pendingInboundWebhookReplayKeys.delete(replayKey);
+    }
+  }
+  for (const [replayKey, entry] of pendingInboundWebhookReplayRetries) {
+    if (replayKey.startsWith(accountPrefix) || entry.target.account.accountId === accountId) {
+      pendingInboundWebhookReplayRetries.delete(replayKey);
+    }
+  }
+}
+
 export function registerBlueBubblesWebhookTarget(target: WebhookTarget): () => void {
   const registered = registerWebhookTargetWithPluginRoute({
     targetsByPath: webhookTargets,
@@ -74,6 +98,7 @@ export function registerBlueBubblesWebhookTarget(target: WebhookTarget): () => v
     registered.unregister();
     // Clean up debouncer when target is unregistered
     debounceRegistry.removeDebouncer(registered.target);
+    resetBlueBubblesWebhookReplayStateForAccount(registered.target.account.accountId);
   };
 }
 
