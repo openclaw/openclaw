@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { expectSingleNpmPackIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
 import {
   expectInstallUsesIgnoreScripts,
@@ -10,9 +10,14 @@ import {
   expectUnsupportedNpmSpec,
   mockNpmPackMetadataResult,
 } from "../test-utils/npm-spec-install-test-helpers.js";
-import { isAddressInUseError } from "./gmail-watcher.js";
+import { isAddressInUseError } from "./gmail-watcher-errors.js";
+import {
+  installHooksFromArchive,
+  installHooksFromNpmSpec,
+  installHooksFromPath,
+} from "./install.js";
 
-const fixtureRoot = path.join(os.tmpdir(), `openclaw-hook-install-${randomUUID()}`);
+const fixtureRoot = path.join(process.cwd(), ".tmp", `openclaw-hook-install-${randomUUID()}`);
 const sharedArchiveDir = path.join(fixtureRoot, "_archives");
 let tempDirIndex = 0;
 const sharedArchivePathByName = new Map<string, string>();
@@ -35,10 +40,6 @@ function makeTempDir() {
   fs.mkdirSync(dir);
   return dir;
 }
-
-const { runCommandWithTimeout } = await import("../process/exec.js");
-const { installHooksFromArchive, installHooksFromNpmSpec, installHooksFromPath } =
-  await import("./install.js");
 
 afterAll(() => {
   try {
@@ -271,57 +272,57 @@ describe("installHooksFromPath", () => {
     expect(fs.existsSync(path.join(result.targetDir, "HOOK.md"))).toBe(true);
   });
 
-  it("rejects hook pack entries that traverse outside package directory", async () => {
-    const stateDir = makeTempDir();
-    const workDir = makeTempDir();
-    const pkgDir = path.join(workDir, "package");
-    const outsideHookDir = path.join(workDir, "outside");
-    fs.mkdirSync(pkgDir, { recursive: true });
-    fs.mkdirSync(outsideHookDir, { recursive: true });
-    writeHookPackManifest({
-      pkgDir,
-      hooks: ["../outside"],
-    });
-    fs.writeFileSync(path.join(outsideHookDir, "HOOK.md"), "---\nname: outside\n---\n", "utf-8");
-    fs.writeFileSync(path.join(outsideHookDir, "handler.ts"), "export default async () => {};\n");
+  it("rejects out-of-package hook entries", async () => {
+    const cases = [
+      {
+        hooks: ["../outside"],
+        setupLink: false,
+        expected: "openclaw.hooks entry escapes package directory",
+      },
+      {
+        hooks: ["./linked"],
+        setupLink: true,
+        expected: "openclaw.hooks entry resolves outside package directory",
+      },
+    ] as const;
 
-    const result = await installHooksFromPath({
-      path: pkgDir,
-      hooksDir: path.join(stateDir, "hooks"),
-    });
+    for (const testCase of cases) {
+      const stateDir = makeTempDir();
+      const workDir = makeTempDir();
+      const pkgDir = path.join(workDir, "package");
+      const outsideHookDir = path.join(workDir, "outside");
+      const linkedDir = path.join(pkgDir, "linked");
+      fs.mkdirSync(pkgDir, { recursive: true });
+      fs.mkdirSync(outsideHookDir, { recursive: true });
+      fs.writeFileSync(path.join(outsideHookDir, "HOOK.md"), "---\nname: outside\n---\n", "utf-8");
+      fs.writeFileSync(
+        path.join(outsideHookDir, "handler.ts"),
+        "export default async () => {};\n",
+        "utf-8",
+      );
+      if (testCase.setupLink) {
+        try {
+          fs.symlinkSync(
+            outsideHookDir,
+            linkedDir,
+            process.platform === "win32" ? "junction" : "dir",
+          );
+        } catch {
+          continue;
+        }
+      }
+      writeHookPackManifest({
+        pkgDir,
+        hooks: [...testCase.hooks],
+      });
 
-    expectPathInstallFailureContains(result, "openclaw.hooks entry escapes package directory");
-  });
+      const result = await installHooksFromPath({
+        path: pkgDir,
+        hooksDir: path.join(stateDir, "hooks"),
+      });
 
-  it("rejects hook pack entries that escape via symlink", async () => {
-    const stateDir = makeTempDir();
-    const workDir = makeTempDir();
-    const pkgDir = path.join(workDir, "package");
-    const outsideHookDir = path.join(workDir, "outside");
-    const linkedDir = path.join(pkgDir, "linked");
-    fs.mkdirSync(pkgDir, { recursive: true });
-    fs.mkdirSync(outsideHookDir, { recursive: true });
-    fs.writeFileSync(path.join(outsideHookDir, "HOOK.md"), "---\nname: outside\n---\n", "utf-8");
-    fs.writeFileSync(path.join(outsideHookDir, "handler.ts"), "export default async () => {};\n");
-    try {
-      fs.symlinkSync(outsideHookDir, linkedDir, process.platform === "win32" ? "junction" : "dir");
-    } catch {
-      return;
+      expectPathInstallFailureContains(result, testCase.expected);
     }
-    writeHookPackManifest({
-      pkgDir,
-      hooks: ["./linked"],
-    });
-
-    const result = await installHooksFromPath({
-      path: pkgDir,
-      hooksDir: path.join(stateDir, "hooks"),
-    });
-
-    expectPathInstallFailureContains(
-      result,
-      "openclaw.hooks entry resolves outside package directory",
-    );
   });
 });
 

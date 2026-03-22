@@ -310,6 +310,14 @@
         "reason": "Terminates cleanly under threads, but not process forks on this host."
       },
       {
+        "file": "src/plugin-sdk/subpaths.test.ts",
+        "reason": "Measured ~23% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/plugins/install.test.ts",
+        "reason": "Measured ~18% faster under threads than forks on this host while keeping the file green."
+      },
+      {
         "file": "src/infra/outbound/deliver.test.ts",
         "reason": "Terminates cleanly under threads, but not process forks on this host."
       },
@@ -328,6 +336,10 @@
       {
         "file": "src/infra/outbound/message-action-runner.context.test.ts",
         "reason": "Terminates cleanly under threads, but not process forks on this host."
+      },
+      {
+        "file": "src/infra/provider-usage.test.ts",
+        "reason": "Measured ~17% faster under threads than forks on this host while keeping the file green."
       },
       {
         "file": "src/tts/tts.test.ts",

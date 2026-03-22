@@ -1,9 +1,9 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { safePathSegmentHashed } from "../infra/install-safe-path.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import * as skillScanner from "../security/skill-scanner.js";
 import {
   expectSingleNpmInstallIgnoreScriptsCall,
@@ -14,18 +14,19 @@ import {
   expectIntegrityDriftRejected,
   mockNpmPackMetadataResult,
 } from "../test-utils/npm-spec-install-test-helpers.js";
+import {
+  installPluginFromArchive,
+  installPluginFromDir,
+  installPluginFromNpmSpec,
+  installPluginFromPath,
+  PLUGIN_INSTALL_ERROR_CODE,
+  resolvePluginInstallDir,
+} from "./install.js";
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: vi.fn(),
 }));
 
-let installPluginFromArchive: typeof import("./install.js").installPluginFromArchive;
-let installPluginFromDir: typeof import("./install.js").installPluginFromDir;
-let installPluginFromNpmSpec: typeof import("./install.js").installPluginFromNpmSpec;
-let installPluginFromPath: typeof import("./install.js").installPluginFromPath;
-let PLUGIN_INSTALL_ERROR_CODE: typeof import("./install.js").PLUGIN_INSTALL_ERROR_CODE;
-let resolvePluginInstallDir: typeof import("./install.js").resolvePluginInstallDir;
-let runCommandWithTimeout: typeof import("../process/exec.js").runCommandWithTimeout;
 let suiteTempRoot = "";
 let suiteFixtureRoot = "";
 let tempDirCounter = 0;
@@ -67,7 +68,9 @@ function ensureSuiteTempRoot() {
   if (suiteTempRoot) {
     return suiteTempRoot;
   }
-  suiteTempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-install-"));
+  const bundleTempRoot = path.join(process.cwd(), ".tmp");
+  fs.mkdirSync(bundleTempRoot, { recursive: true });
+  suiteTempRoot = fs.mkdtempSync(path.join(bundleTempRoot, "openclaw-plugin-install-"));
   return suiteTempRoot;
 }
 
@@ -433,16 +436,6 @@ afterAll(() => {
 });
 
 beforeAll(async () => {
-  ({
-    installPluginFromArchive,
-    installPluginFromDir,
-    installPluginFromNpmSpec,
-    installPluginFromPath,
-    PLUGIN_INSTALL_ERROR_CODE,
-    resolvePluginInstallDir,
-  } = await import("./install.js"));
-  ({ runCommandWithTimeout } = await import("../process/exec.js"));
-
   installPluginFromDirTemplateDir = path.join(
     ensureSuiteFixtureRoot(),
     "install-from-dir-template",
@@ -847,25 +840,13 @@ describe("installPluginFromDir", () => {
     expectInstalledWithPluginId(res, extensionsDir, "@openclaw/test-plugin");
   });
 
-  it("rejects bare @ as an invalid scoped id", () => {
-    expect(() => resolvePluginInstallDir("@")).toThrow(
-      "invalid plugin name: scoped ids must use @scope/name format",
-    );
-  });
+  it("keeps scoped install-dir validation aligned", () => {
+    for (const invalidId of ["@", "@/name", "team/name"]) {
+      expect(() => resolvePluginInstallDir(invalidId)).toThrow(
+        "invalid plugin name: scoped ids must use @scope/name format",
+      );
+    }
 
-  it("rejects empty scoped segments like @/name", () => {
-    expect(() => resolvePluginInstallDir("@/name")).toThrow(
-      "invalid plugin name: scoped ids must use @scope/name format",
-    );
-  });
-
-  it("rejects two-segment ids without a scope prefix", () => {
-    expect(() => resolvePluginInstallDir("team/name")).toThrow(
-      "invalid plugin name: scoped ids must use @scope/name format",
-    );
-  });
-
-  it("uses a unique hashed install dir for scoped ids", () => {
     const extensionsDir = path.join(makeTempDir(), "extensions");
     const scopedTarget = resolvePluginInstallDir("@scope/name", extensionsDir);
     const hashedFlatId = safePathSegmentHashed("@scope/name");
