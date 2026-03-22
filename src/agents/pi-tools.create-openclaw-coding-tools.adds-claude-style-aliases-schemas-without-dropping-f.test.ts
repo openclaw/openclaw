@@ -39,6 +39,71 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
+  it("accepts file alias for read/write and exposes it in their schemas", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-file-alias-"));
+    try {
+      const tools = createOpenClawCodingTools({ workspaceDir: tmpDir });
+      const { readTool, writeTool } = expectReadWriteEditTools(tools);
+
+      const readParameters = readTool?.parameters as
+        | { properties?: Record<string, unknown> }
+        | undefined;
+      const writeParameters = writeTool?.parameters as
+        | { properties?: Record<string, unknown> }
+        | undefined;
+      expect(readParameters?.properties?.file).toBeDefined();
+      expect(writeParameters?.properties?.file).toBeDefined();
+
+      const filePath = "file-alias.txt";
+      await writeTool?.execute("tool-file-alias-write", {
+        file: filePath,
+        content: "hello file alias",
+      });
+
+      const result = await readTool?.execute("tool-file-alias-read", {
+        file: filePath,
+      });
+
+      const textBlocks = result?.content?.filter((block) => block.type === "text") as
+        | Array<{ text?: string }>
+        | undefined;
+      const combinedText = textBlocks?.map((block) => block.text ?? "").join("\n");
+      expect(combinedText).toContain("hello file alias");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts file, old_text, and new_text aliases for edit and exposes them in the schema", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-alias-"));
+    try {
+      const filePath = path.join(tmpDir, "edit-alias.txt");
+      await fs.writeFile(filePath, "hello world\n", "utf8");
+
+      const tools = createOpenClawCodingTools({ workspaceDir: tmpDir });
+      const { editTool } = expectReadWriteEditTools(tools);
+
+      const parameters = editTool?.parameters as
+        | { properties?: Record<string, unknown> }
+        | undefined;
+      expect(parameters?.properties).toBeDefined();
+      expect(parameters?.properties?.file).toBeDefined();
+      expect(parameters?.properties?.old_text).toBeDefined();
+      expect(parameters?.properties?.new_text).toBeDefined();
+
+      await editTool?.execute("tool-edit-alias", {
+        file: "edit-alias.txt",
+        old_text: "world",
+        new_text: "friend",
+      });
+
+      const edited = await fs.readFile(filePath, "utf8");
+      expect(edited).toBe("hello friend\n");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("coerces structured content blocks for write", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-structured-write-"));
     try {

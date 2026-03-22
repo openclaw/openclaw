@@ -13,20 +13,20 @@ function parameterValidationError(message: string): Error {
 }
 
 export const CLAUDE_PARAM_GROUPS = {
-  read: [{ keys: ["path", "file_path"], label: "path (path or file_path)" }],
+  read: [{ keys: ["path", "file_path", "file"], label: "path (path, file_path, or file)" }],
   write: [
-    { keys: ["path", "file_path"], label: "path (path or file_path)" },
+    { keys: ["path", "file_path", "file"], label: "path (path, file_path, or file)" },
     { keys: ["content"], label: "content" },
   ],
   edit: [
-    { keys: ["path", "file_path"], label: "path (path or file_path)" },
+    { keys: ["path", "file_path", "file"], label: "path (path, file_path, or file)" },
     {
-      keys: ["oldText", "old_string"],
-      label: "oldText (oldText or old_string)",
+      keys: ["oldText", "old_string", "old_text"],
+      label: "oldText (oldText, old_string, or old_text)",
     },
     {
-      keys: ["newText", "new_string"],
-      label: "newText (newText or new_string)",
+      keys: ["newText", "new_string", "new_text"],
+      label: "newText (newText, new_string, or new_text)",
       allowEmpty: true,
     },
   ],
@@ -82,8 +82,26 @@ function normalizeTextLikeParam(record: Record<string, unknown>, key: string) {
   }
 }
 
-// Normalize tool parameters from Claude Code conventions to pi-coding-agent conventions.
-// Claude Code uses file_path/old_string/new_string while pi-coding-agent uses path/oldText/newText.
+function normalizeAliasKey(
+  record: Record<string, unknown>,
+  canonicalKey: string,
+  aliasKeys: readonly string[],
+) {
+  if (canonicalKey in record) {
+    return;
+  }
+  for (const aliasKey of aliasKeys) {
+    if (!(aliasKey in record)) {
+      continue;
+    }
+    record[canonicalKey] = record[aliasKey];
+    delete record[aliasKey];
+    return;
+  }
+}
+
+// Normalize tool parameters from Claude-style aliases to pi-coding-agent conventions.
+// Some models emit file/file_path and old_text/old_string/new_text/new_string variants.
 // This prevents models trained on Claude Code from getting stuck in tool-call loops.
 export function normalizeToolParams(params: unknown): Record<string, unknown> | undefined {
   if (!params || typeof params !== "object") {
@@ -91,21 +109,9 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
   }
   const record = params as Record<string, unknown>;
   const normalized = { ...record };
-  // file_path → path (read, write, edit)
-  if ("file_path" in normalized && !("path" in normalized)) {
-    normalized.path = normalized.file_path;
-    delete normalized.file_path;
-  }
-  // old_string → oldText (edit)
-  if ("old_string" in normalized && !("oldText" in normalized)) {
-    normalized.oldText = normalized.old_string;
-    delete normalized.old_string;
-  }
-  // new_string → newText (edit)
-  if ("new_string" in normalized && !("newText" in normalized)) {
-    normalized.newText = normalized.new_string;
-    delete normalized.new_string;
-  }
+  normalizeAliasKey(normalized, "path", ["file_path", "file"]);
+  normalizeAliasKey(normalized, "oldText", ["old_string", "old_text"]);
+  normalizeAliasKey(normalized, "newText", ["new_string", "new_text"]);
   // Some providers/models emit text payloads as structured blocks instead of raw strings.
   // Normalize these for write/edit so content matching and writes stay deterministic.
   normalizeTextLikeParam(normalized, "content");
@@ -132,8 +138,11 @@ export function patchToolSchemaForClaudeCompatibility(tool: AnyAgentTool): AnyAg
 
   const aliasPairs: Array<{ original: string; alias: string }> = [
     { original: "path", alias: "file_path" },
+    { original: "path", alias: "file" },
     { original: "oldText", alias: "old_string" },
+    { original: "oldText", alias: "old_text" },
     { original: "newText", alias: "new_string" },
+    { original: "newText", alias: "new_text" },
   ];
 
   for (const { original, alias } of aliasPairs) {
