@@ -367,6 +367,7 @@ export {
   createScopedDmSecurityResolver,
 } from "./channel-config-helpers.js";
 export { approveDevicePairing, listDevicePairing, rejectDevicePairing } from "../infra/device-pairing.js";
+export { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
 export { createDedupeCache } from "../infra/dedupe.js";
 export type { DedupeCache } from "../infra/dedupe.js";
 export { createPersistentDedupe } from "./persistent-dedupe.js";
