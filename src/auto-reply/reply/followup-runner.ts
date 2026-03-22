@@ -20,6 +20,7 @@ import type { OriginatingChannelType } from "../templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveRunAuthProfile } from "./agent-runner-utils.js";
+import { runAfterDispatchIdle, runAndWaitForDispatchIdle } from "./followup-dispatch-idle.js";
 import {
   resolveOriginAccountId,
   resolveOriginMessageProvider,
@@ -123,16 +124,21 @@ export function createFollowupRunner(params: {
             originatingChannel,
           });
           if (opts?.onBlockReply && origin && origin === provider) {
-            await opts.onBlockReply(payload);
+            await runAndWaitForDispatchIdle(
+              () => opts.onBlockReply!(payload),
+              opts.waitForDispatchIdle,
+            );
           }
         }
       } else if (opts?.onBlockReply) {
-        await opts.onBlockReply(payload);
+        await runAndWaitForDispatchIdle(() => opts.onBlockReply!(payload), opts.waitForDispatchIdle);
       }
     }
   };
 
   return async (queued: FollowupRun) => {
+    await runAfterDispatchIdle(opts?.waitForDispatchIdle);
+
     try {
       const runId = crypto.randomUUID();
       const shouldSurfaceToControlUi = isInternalMessageChannel(
