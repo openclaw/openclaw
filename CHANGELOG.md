@@ -409,7 +409,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Agents/edit tool: show current file contents on exact-match failures and avoid false edit failures after successful writes.
+- Agents/edit tool: accept common path/text alias spellings, show current file contents on exact-match failures, and avoid false edit failures after successful writes.
 
 ## 2026.3.13
 
