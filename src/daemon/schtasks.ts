@@ -68,10 +68,57 @@ function resolveLegacyOsHomeTaskScriptPath(env: GatewayServiceEnv): string | nul
   return path.resolve(legacyPath) === path.resolve(currentPath) ? null : legacyPath;
 }
 
-function resolveTaskScriptCandidates(env: GatewayServiceEnv): string[] {
-  const candidates = [resolveTaskScriptPath(env), resolveLegacyOsHomeTaskScriptPath(env)].filter(
-    (value): value is string => Boolean(value),
+function normalizeTaskScriptPath(value: string): string {
+  return path.normalize(value.replace(/^"|"$/g, ""));
+}
+
+function parseScheduledTaskScriptPathFromQuery(output: string): string | null {
+  const taskToRun = parseKeyValueOutput(output, ":")["task to run"]?.trim();
+  return taskToRun ? normalizeTaskScriptPath(taskToRun) : null;
+}
+
+async function readStartupEntryTaskScriptPath(env: GatewayServiceEnv): Promise<string | null> {
+  try {
+    const content = await fs.readFile(resolveStartupEntryPath(env), "utf8");
+    for (const rawLine of content.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line) {
+        continue;
+      }
+      const lower = line.toLowerCase();
+      if (line.startsWith("@echo") || lower.startsWith("rem ")) {
+        continue;
+      }
+      const command = line.match(/\/c\s+(.+)$/i)?.[1];
+      if (!command) {
+        continue;
+      }
+      const [scriptPath] = parseCmdScriptCommandLine(command);
+      if (scriptPath) {
+        return normalizeTaskScriptPath(scriptPath);
+      }
+    }
+  } catch {}
+  return null;
+}
+
+async function queryInstalledTaskScriptPath(env: GatewayServiceEnv): Promise<string | null> {
+  const res = await execSchtasks(["/Query", "/TN", resolveTaskName(env), "/V", "/FO", "LIST"]).catch(
+    () => null,
   );
+  if (!res || res.code !== 0) {
+    return null;
+  }
+  return parseScheduledTaskScriptPathFromQuery(res.stdout || "");
+}
+
+async function resolveTaskScriptCandidates(env: GatewayServiceEnv): Promise<string[]> {
+  const candidates = [
+    await readStartupEntryTaskScriptPath(env),
+    await queryInstalledTaskScriptPath(env),
+    resolveTaskScriptPath(env),
+    resolveLegacyOsHomeTaskScriptPath(env),
+  ].filter((value): value is string => Boolean(value));
   return Array.from(new Set(candidates.map((value) => path.normalize(value))));
 }
 
@@ -132,7 +179,7 @@ function resolveTaskUser(env: GatewayServiceEnv): string | null {
 export async function readScheduledTaskCommand(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceCommandConfig | null> {
-  for (const scriptPath of resolveTaskScriptCandidates(env)) {
+  for (const scriptPath of await resolveTaskScriptCandidates(env)) {
     try {
       const content = await fs.readFile(scriptPath, "utf8");
       let workingDirectory = "";
@@ -182,7 +229,11 @@ export async function readScheduledTaskCommand(
 
 async function resolveInstalledTaskScriptPath(env: GatewayServiceEnv): Promise<string> {
   const command = await readScheduledTaskCommand(env).catch(() => null);
-  return command?.sourcePath ?? resolveTaskScriptPath(env);
+  if (command?.sourcePath) {
+    return command.sourcePath;
+  }
+  const [candidate] = await resolveTaskScriptCandidates(env).catch(() => []);
+  return candidate ?? resolveTaskScriptPath(env);
 }
 
 export type ScheduledTaskInfo = {

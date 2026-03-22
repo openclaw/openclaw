@@ -1,13 +1,23 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "./test-helpers/schtasks-base-mocks.js";
+import { resetSchtasksBaseMocks, schtasksResponses } from "./test-helpers/schtasks-fixtures.js";
 import {
   deriveScheduledTaskRuntimeStatus,
   parseSchtasksQuery,
   readScheduledTaskCommand,
   resolveTaskScriptPath,
 } from "./schtasks.js";
+
+beforeEach(() => {
+  resetSchtasksBaseMocks();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("schtasks runtime parsing", () => {
   it.each(["Ready", "Running"])("parses %s status", (status) => {
@@ -333,6 +343,50 @@ describe("readScheduledTaskCommand", () => {
         expect(result).toEqual({
           programArguments: ["node", "gateway.js", "--from-legacy-os-home"],
           sourcePath: legacyScriptPath,
+        });
+      },
+    );
+  });
+
+  it("prefers the installed task script query over caller-derived OPENCLAW_HOME guesses", async () => {
+    await withScheduledTaskScript(
+      {
+        env: (tmpDir) => ({
+          OPENCLAW_HOME: path.join(tmpDir, "shell-home"),
+        }),
+      },
+      async (env) => {
+        const installedEnv = {
+          ...env,
+          OPENCLAW_HOME: path.join(env.USERPROFILE!, "installed-home"),
+        };
+        const installedScriptPath = resolveTaskScriptPath(installedEnv);
+        await fs.mkdir(path.dirname(installedScriptPath), { recursive: true });
+        await fs.writeFile(
+          installedScriptPath,
+          ["@echo off", "node gateway.js --from-installed-task"].join("\r\n"),
+          "utf8",
+        );
+
+        const wrongScriptPath = resolveTaskScriptPath(env);
+        await fs.mkdir(path.dirname(wrongScriptPath), { recursive: true });
+        await fs.writeFile(
+          wrongScriptPath,
+          ["@echo off", "node gateway.js --from-shell-home"].join("\r\n"),
+          "utf8",
+        );
+
+        schtasksResponses.push({
+          code: 0,
+          stdout: `TaskName: OpenClaw Gateway\r\nTask To Run: "${installedScriptPath}"\r\n`,
+          stderr: "",
+        });
+
+        const result = await readScheduledTaskCommand(env);
+
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js", "--from-installed-task"],
+          sourcePath: installedScriptPath,
         });
       },
     );
