@@ -122,4 +122,4 @@ Tips:
 | Search with depth, topic, AI answers | `tavily_search`  |
 | Extract content from specific URLs   | `tavily_extract` |
 
-See [Web tools](/tools/web) for the full web tool setup and provider comparison.
+See [Web Search](/tools/web) for the full provider setup and comparison.
