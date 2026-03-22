@@ -84,8 +84,17 @@ function registerPairCommand(params?: {
       },
     }),
   );
-  expect(command).toBeTruthy();
-  return command!;
+  if (!command) {
+    throw new Error("device-pair plugin did not register its /pair command");
+  }
+  return command;
+}
+
+function requireText(result: { text?: unknown } | null | undefined): string {
+  if (typeof result?.text !== "string") {
+    throw new Error("pair command did not return a text response");
+  }
+  return result.text;
 }
 
 function createChannelRuntime(
@@ -135,15 +144,16 @@ describe("device-pair /pair qr", () => {
 
   it("returns an inline QR image for webchat surfaces", async () => {
     const command = registerPairCommand();
-    const result = await command?.handler(createCommandContext({ channel: "webchat" }));
+    const result = await command.handler(createCommandContext({ channel: "webchat" }));
+    const text = requireText(result);
 
     expect(pluginApiMocks.renderQrPngBase64).toHaveBeenCalledTimes(1);
-    expect(result?.text).toContain("Scan this QR code with the OpenClaw iOS app:");
-    expect(result?.text).toContain("![OpenClaw pairing QR](data:image/png;base64,ZmFrZXBuZw==)");
-    expect(result?.text).toContain("- Security: single-use bootstrap token");
-    expect(result?.text).toContain("**Important:** Run `/pair cleanup` after pairing finishes.");
-    expect(result?.text).toContain("If this QR code leaks, run `/pair cleanup` immediately.");
-    expect(result?.text).not.toContain("```");
+    expect(text).toContain("Scan this QR code with the OpenClaw iOS app:");
+    expect(text).toContain("![OpenClaw pairing QR](data:image/png;base64,ZmFrZXBuZw==)");
+    expect(text).toContain("- Security: single-use bootstrap token");
+    expect(text).toContain("**Important:** Run `/pair cleanup` after pairing finishes.");
+    expect(text).toContain("If this QR code leaks, run `/pair cleanup` immediately.");
+    expect(text).not.toContain("```");
   });
 
   it("reissues the bootstrap token if webchat QR rendering fails before falling back", async () => {
@@ -159,16 +169,17 @@ describe("device-pair /pair qr", () => {
     pluginApiMocks.renderQrPngBase64.mockRejectedValueOnce(new Error("render failed"));
 
     const command = registerPairCommand();
-    const result = await command?.handler(createCommandContext({ channel: "webchat" }));
+    const result = await command.handler(createCommandContext({ channel: "webchat" }));
+    const text = requireText(result);
 
     expect(pluginApiMocks.revokeDeviceBootstrapToken).toHaveBeenCalledWith({
       token: "first-token",
     });
     expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(2);
-    expect(result?.text).toContain(
+    expect(text).toContain(
       "QR image delivery is not available on this channel right now, so I generated a pasteable setup code instead.",
     );
-    expect(result?.text).toContain("Pairing setup code generated.");
+    expect(text).toContain("Pairing setup code generated.");
   });
 
   it.each([
@@ -273,7 +284,8 @@ describe("device-pair /pair qr", () => {
       runtime: createChannelRuntime(testCase.runtimeKey, testCase.sendKey, sendMessage),
     });
 
-    const result = await command?.handler(createCommandContext(testCase.ctx));
+    const result = await command.handler(createCommandContext(testCase.ctx));
+    const text = requireText(result);
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
     const [target, caption, opts] = sendMessage.mock.calls[0] as [
@@ -293,9 +305,9 @@ describe("device-pair /pair qr", () => {
     expect(opts.mediaLocalRoots).toEqual([path.dirname(opts.mediaUrl!)]);
     expect(opts).toMatchObject(testCase.expectedOpts);
     expect(sentPng).toBe("fakepng");
-    await expect(fs.access(opts.mediaUrl!)).rejects.toBeTruthy();
-    expect(result?.text).toContain("QR code sent above.");
-    expect(result?.text).toContain("IMPORTANT: Run /pair cleanup after pairing finishes.");
+    await expect(fs.access(opts.mediaUrl!)).rejects.toThrow();
+    expect(text).toContain("QR code sent above.");
+    expect(text).toContain("IMPORTANT: Run /pair cleanup after pairing finishes.");
   });
 
   it("reissues the bootstrap token after QR delivery failure before falling back", async () => {
@@ -314,34 +326,36 @@ describe("device-pair /pair qr", () => {
       runtime: createChannelRuntime("discord", "sendMessageDiscord", sendMessage),
     });
 
-    const result = await command?.handler(
+    const result = await command.handler(
       createCommandContext({
         channel: "discord",
         senderId: "123",
       }),
     );
+    const text = requireText(result);
 
     expect(pluginApiMocks.revokeDeviceBootstrapToken).toHaveBeenCalledWith({
       token: "first-token",
     });
     expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(2);
-    expect(result?.text).toContain("Pairing setup code generated.");
-    expect(result?.text).toContain("If this code leaks or you are done, run /pair cleanup");
+    expect(text).toContain("Pairing setup code generated.");
+    expect(text).toContain("If this code leaks or you are done, run /pair cleanup");
   });
 
   it("falls back to the setup code instead of ASCII when the channel cannot send media", async () => {
     const command = registerPairCommand();
-    const result = await command?.handler(
+    const result = await command.handler(
       createCommandContext({
         channel: "msteams",
         senderId: "8:orgid:123",
       }),
     );
+    const text = requireText(result);
 
-    expect(result?.text).toContain("QR image delivery is not available on this channel");
-    expect(result?.text).toContain("Setup code:");
-    expect(result?.text).toContain("IMPORTANT: After pairing finishes, run /pair cleanup.");
-    expect(result?.text).not.toContain("```");
+    expect(text).toContain("QR image delivery is not available on this channel");
+    expect(text).toContain("Setup code:");
+    expect(text).toContain("IMPORTANT: After pairing finishes, run /pair cleanup.");
+    expect(text).not.toContain("```");
   });
 
   it("supports invalidating unused setup codes", async () => {
