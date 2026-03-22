@@ -342,6 +342,8 @@ Use ONLY names, events, topics from the conversation. If the latest message is a
           allResults.push(res);
           seenUris.add(id);
           addedForQuery++;
+          const scoreStr = res._score !== undefined ? res._score.toFixed(3) : "n/a";
+          this.log(`      score=${scoreStr} "${res.content.substring(0, 70)}"`);
         }
       }
     }
@@ -426,13 +428,9 @@ Use ONLY names, events, topics from the conversation. If the latest message is a
 
     const finalResonance = `\n---\n[SUBCONSCIOUS RESONANCE]\n${rewrittenLines}\n---\n`;
 
-    // Always log the final resonance block for visibility
-    process.stderr.write(`\n ================================================ `);
-    process.stderr.write(`\n🧠 [MIND] DRIFTING INTO RESONANCE: \n${finalResonance} `);
     process.stderr.write(
       `⏱️  [LATENCY] Total: ${totalTime.toFixed(0)}ms (Queries: ${t_queries.toFixed(0)}ms, Search: ${t_search.toFixed(0)}ms, Rewrite: ${t_rewrite.toFixed(0)}ms)\n`,
     );
-    process.stderr.write(`================================================\n`);
 
     if (onEvent) {
       onEvent({
