@@ -583,18 +583,13 @@ describe("installPluginFromArchive", () => {
     expect(manifest.version).toBe("0.0.2");
   });
 
-  it("rejects traversal-like plugin names", async () => {
-    await expectArchiveInstallReservedSegmentRejection({
-      packageName: "@evil/..",
-      outName: "traversal.tgz",
-    });
-  });
-
-  it("rejects reserved plugin ids", async () => {
-    await expectArchiveInstallReservedSegmentRejection({
-      packageName: "@evil/.",
-      outName: "reserved.tgz",
-    });
+  it("rejects reserved archive package ids", async () => {
+    for (const params of [
+      { packageName: "@evil/..", outName: "traversal.tgz" },
+      { packageName: "@evil/.", outName: "reserved.tgz" },
+    ]) {
+      await expectArchiveInstallReservedSegmentRejection(params);
+    }
   });
 
   it("rejects packages without openclaw.extensions", async () => {
@@ -802,42 +797,45 @@ describe("installPluginFromDir", () => {
     ).toBe(true);
   });
 
-  it("preserves scoped manifest ids as install keys", async () => {
-    const { pluginDir, extensionsDir } = setupManifestInstallFixture({
-      manifestId: "@team/memory-cognee",
-    });
+  it("keeps scoped install ids aligned across manifest and package-name cases", async () => {
+    const scenarios = [
+      {
+        setup: () => setupManifestInstallFixture({ manifestId: "@team/memory-cognee" }),
+        expectedPluginId: "@team/memory-cognee",
+        install: (pluginDir: string, extensionsDir: string) =>
+          installPluginFromDir({
+            dirPath: pluginDir,
+            extensionsDir,
+            expectedPluginId: "@team/memory-cognee",
+            logger: { info: () => {}, warn: () => {} },
+          }),
+      },
+      {
+        setup: () => setupInstallPluginFromDirFixture(),
+        expectedPluginId: "@openclaw/test-plugin",
+        install: (pluginDir: string, extensionsDir: string) =>
+          installPluginFromDir({
+            dirPath: pluginDir,
+            extensionsDir,
+          }),
+      },
+      {
+        setup: () => setupInstallPluginFromDirFixture(),
+        expectedPluginId: "@openclaw/test-plugin",
+        install: (pluginDir: string, extensionsDir: string) =>
+          installPluginFromDir({
+            dirPath: pluginDir,
+            extensionsDir,
+            expectedPluginId: "test-plugin",
+          }),
+      },
+    ] as const;
 
-    const res = await installPluginFromDir({
-      dirPath: pluginDir,
-      extensionsDir,
-      expectedPluginId: "@team/memory-cognee",
-      logger: { info: () => {}, warn: () => {} },
-    });
-
-    expectInstalledWithPluginId(res, extensionsDir, "@team/memory-cognee");
-  });
-
-  it("preserves scoped package names when no plugin manifest id is present", async () => {
-    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
-
-    const res = await installPluginFromDir({
-      dirPath: pluginDir,
-      extensionsDir,
-    });
-
-    expectInstalledWithPluginId(res, extensionsDir, "@openclaw/test-plugin");
-  });
-
-  it("accepts legacy unscoped expected ids for scoped package names without manifest ids", async () => {
-    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
-
-    const res = await installPluginFromDir({
-      dirPath: pluginDir,
-      extensionsDir,
-      expectedPluginId: "test-plugin",
-    });
-
-    expectInstalledWithPluginId(res, extensionsDir, "@openclaw/test-plugin");
+    for (const scenario of scenarios) {
+      const { pluginDir, extensionsDir } = scenario.setup();
+      const res = await scenario.install(pluginDir, extensionsDir);
+      expectInstalledWithPluginId(res, extensionsDir, scenario.expectedPluginId);
+    }
   });
 
   it("keeps scoped install-dir validation aligned", () => {
@@ -1153,77 +1151,74 @@ describe("installPluginFromNpmSpec", () => {
     }
   });
 
-  it("rejects bare npm specs that resolve to prerelease versions", async () => {
-    const run = vi.mocked(runCommandWithTimeout);
-    mockNpmPackMetadataResult(run, {
+  it("handles prerelease npm specs correctly", async () => {
+    const prereleaseMetadata = {
       id: "@openclaw/voice-call@0.0.2-beta.1",
       name: "@openclaw/voice-call",
       version: "0.0.2-beta.1",
       filename: "voice-call-0.0.2-beta.1.tgz",
       integrity: "sha512-beta",
       shasum: "betashasum",
-    });
+    };
 
-    const result = await installPluginFromNpmSpec({
-      spec: "@openclaw/voice-call",
-      logger: { info: () => {}, warn: () => {} },
-    });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("prerelease version 0.0.2-beta.1");
-      expect(result.error).toContain('"@openclaw/voice-call@beta"');
-    }
-  });
+    {
+      const run = vi.mocked(runCommandWithTimeout);
+      mockNpmPackMetadataResult(run, prereleaseMetadata);
 
-  it("allows explicit prerelease npm tags", async () => {
-    const run = vi.mocked(runCommandWithTimeout);
-    let packTmpDir = "";
-    const packedName = "voice-call-0.0.2-beta.1.tgz";
-    const voiceCallArchiveBuffer = VOICE_CALL_ARCHIVE_V1_BUFFER;
-    run.mockImplementation(async (argv, opts) => {
-      if (argv[0] === "npm" && argv[1] === "pack") {
-        packTmpDir = String(typeof opts === "number" ? "" : (opts.cwd ?? ""));
-        fs.writeFileSync(path.join(packTmpDir, packedName), voiceCallArchiveBuffer);
-        return {
-          code: 0,
-          stdout: JSON.stringify([
-            {
-              id: "@openclaw/voice-call@0.0.2-beta.1",
-              name: "@openclaw/voice-call",
-              version: "0.0.2-beta.1",
-              filename: packedName,
-              integrity: "sha512-beta",
-              shasum: "betashasum",
-            },
-          ]),
-          stderr: "",
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+      const result = await installPluginFromNpmSpec({
+        spec: "@openclaw/voice-call",
+        logger: { info: () => {}, warn: () => {} },
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain("prerelease version 0.0.2-beta.1");
+        expect(result.error).toContain('"@openclaw/voice-call@beta"');
       }
-      throw new Error(`unexpected command: ${argv.join(" ")}`);
-    });
-
-    const { extensionsDir } = await setupVoiceCallArchiveInstall({
-      outName: "voice-call-0.0.2-beta.1.tgz",
-      version: "0.0.1",
-    });
-    const result = await installPluginFromNpmSpec({
-      spec: "@openclaw/voice-call@beta",
-      extensionsDir,
-      logger: { info: () => {}, warn: () => {} },
-    });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
     }
-    expect(result.npmResolution?.version).toBe("0.0.2-beta.1");
-    expect(result.npmResolution?.resolvedSpec).toBe("@openclaw/voice-call@0.0.2-beta.1");
-    expectSingleNpmPackIgnoreScriptsCall({
-      calls: run.mock.calls,
-      expectedSpec: "@openclaw/voice-call@beta",
-    });
-    expect(packTmpDir).not.toBe("");
+
+    vi.clearAllMocks();
+
+    {
+      const run = vi.mocked(runCommandWithTimeout);
+      let packTmpDir = "";
+      const packedName = "voice-call-0.0.2-beta.1.tgz";
+      const voiceCallArchiveBuffer = VOICE_CALL_ARCHIVE_V1_BUFFER;
+      run.mockImplementation(async (argv, opts) => {
+        if (argv[0] === "npm" && argv[1] === "pack") {
+          packTmpDir = String(typeof opts === "number" ? "" : (opts.cwd ?? ""));
+          fs.writeFileSync(path.join(packTmpDir, packedName), voiceCallArchiveBuffer);
+          return {
+            code: 0,
+            stdout: JSON.stringify([prereleaseMetadata]),
+            stderr: "",
+            signal: null,
+            killed: false,
+            termination: "exit",
+          };
+        }
+        throw new Error(`unexpected command: ${argv.join(" ")}`);
+      });
+
+      const { extensionsDir } = await setupVoiceCallArchiveInstall({
+        outName: "voice-call-0.0.2-beta.1.tgz",
+        version: "0.0.1",
+      });
+      const result = await installPluginFromNpmSpec({
+        spec: "@openclaw/voice-call@beta",
+        extensionsDir,
+        logger: { info: () => {}, warn: () => {} },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      expect(result.npmResolution?.version).toBe("0.0.2-beta.1");
+      expect(result.npmResolution?.resolvedSpec).toBe("@openclaw/voice-call@0.0.2-beta.1");
+      expectSingleNpmPackIgnoreScriptsCall({
+        calls: run.mock.calls,
+        expectedSpec: "@openclaw/voice-call@beta",
+      });
+      expect(packTmpDir).not.toBe("");
+    }
   });
 });
