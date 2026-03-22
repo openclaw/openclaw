@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  createAsyncComputedAccountStatusAdapter,
   buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,
   buildComputedAccountStatusSnapshot,
@@ -219,6 +220,50 @@ describe("createComputedAccountStatusAdapter", () => {
         probe: { ok: true },
       }),
     ).toEqual({
+      accountId: "default",
+      name: undefined,
+      enabled: true,
+      configured: true,
+      running: true,
+      lastStartAt: null,
+      lastStopAt: null,
+      lastError: null,
+      probe: { ok: true },
+      lastInboundAt: null,
+      lastOutboundAt: null,
+      profileUrl: "https://example.test",
+      connected: true,
+    });
+  });
+});
+
+describe("createAsyncComputedAccountStatusAdapter", () => {
+  it("builds account snapshots from async computed account metadata and extras", async () => {
+    const status = createAsyncComputedAccountStatusAdapter<
+      { accountId: string; enabled: boolean; profileUrl: string },
+      { ok: boolean }
+    >({
+      defaultRuntime: createDefaultChannelRuntimeState("default"),
+      resolveAccountSnapshot: async ({ account, runtime, probe }) => ({
+        accountId: account.accountId,
+        enabled: account.enabled,
+        configured: true,
+        extra: {
+          profileUrl: account.profileUrl,
+          connected: runtime?.running ?? false,
+          probe,
+        },
+      }),
+    });
+
+    await expect(
+      status.buildAccountSnapshot?.({
+        account: { accountId: "default", enabled: true, profileUrl: "https://example.test" },
+        cfg: {} as never,
+        runtime: { accountId: "default", running: true },
+        probe: { ok: true },
+      }),
+    ).resolves.toEqual({
       accountId: "default",
       name: undefined,
       enabled: true,
