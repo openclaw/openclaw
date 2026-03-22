@@ -46,7 +46,7 @@ See [Security](/gateway/security) and [Remote access](/gateway/remote).
 Use `/v1/chat/completions` when you are integrating tooling or a trusted app-side backend with an existing gateway and can safely hold gateway operator credentials.
 
 - Prefer this over adding a new built-in channel when your integration is just another operator/client surface for the same gateway.
-- For native mobile clients that connect directly to a remote gateway, prefer [WebChat](/web/webchat) or the [Gateway Protocol](/gateway/protocol) so the device can use the native Gateway WebSocket path and paired-device auth flow instead of a shared HTTP token/password.
+- For native mobile clients that connect directly to a remote gateway, prefer [WebChat](/web/webchat) or the [Gateway Protocol](/gateway/protocol) and implement the paired-device bootstrap/device-token flow so the device does not need a shared HTTP token/password.
 - Build a channel plugin instead when you are integrating an external messaging network with its own users, rooms, webhook delivery, or outbound transport. See [Building Plugins](/plugins/building-plugins).
 
 ## Choosing an agent
@@ -122,7 +122,7 @@ curl -sS http://127.0.0.1:18789/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{
     "model": "openclaw:main",
-    "user": "thread:YOUR_THREAD_ID",
+    "user": "conv:YOUR_CONVERSATION_ID",
     "messages": [{"role":"user","content":"Summarize my tasks for today"}]
   }'
 ```
