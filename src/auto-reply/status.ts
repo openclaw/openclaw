@@ -618,21 +618,6 @@ export function buildStatusMessage(args: StatusArgs): string {
           cost: costConfig,
         })
       : undefined;
-  // Prefer stored estimatedCostUsd (accumulated per-turn, most accurate).
-  // Fall back to recalculation with cache tokens included.
-  const totalCost =
-    storedCost ??
-    (showCost && hasUsage
-      ? estimateUsageCost({
-          usage: {
-            input: inputTokens ?? undefined,
-            output: outputTokens ?? undefined,
-            cacheRead: cacheRead ?? undefined,
-            cacheWrite: cacheWrite ?? undefined,
-          },
-          cost: costConfig,
-        })
-      : undefined);
   // When showing per-component breakdown, use consistent 4-decimal precision
   // so the parts visibly add up. Total-only (no cache) uses standard formatUsd.
   const hasCache = (cacheRead ?? 0) > 0 || (cacheWrite ?? 0) > 0;
@@ -640,12 +625,27 @@ export function buildStatusMessage(args: StatusArgs): string {
     v !== undefined && Number.isFinite(v) ? `$${v.toFixed(4)}` : undefined;
   const tokenOnlyCostLabel = hasCache ? formatComponentUsd(tokenOnlyCost) : undefined;
   const cacheOnlyCostLabel = hasCache ? formatComponentUsd(cacheOnlyCost) : undefined;
-  const totalCostLabel =
-    showCost && hasUsage
-      ? hasCache
-        ? formatComponentUsd(totalCost)
-        : formatUsd(totalCost)
-      : undefined;
+  // When showing a per-component breakdown (hasCache), sum the components so the parts always
+  // add up to the total — both are from the same turn. For the no-cache path, prefer the
+  // accumulated storedCost (session total) or fall back to a full recalculation.
+  const totalCostLabel = (() => {
+    if (!showCost || !hasUsage) return undefined;
+    if (hasCache) {
+      const sum = (tokenOnlyCost ?? 0) + (cacheOnlyCost ?? 0);
+      return formatComponentUsd(sum);
+    }
+    const fallback =
+      showCost && hasUsage
+        ? estimateUsageCost({
+            usage: {
+              input: inputTokens ?? undefined,
+              output: outputTokens ?? undefined,
+            },
+            cost: costConfig,
+          })
+        : undefined;
+    return formatUsd(storedCost ?? fallback);
+  })();
 
   const selectedAuthLabel = selectedAuthLabelValue ? ` · 🔑 ${selectedAuthLabelValue}` : "";
   const channelModelNote = (() => {

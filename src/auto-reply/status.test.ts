@@ -91,7 +91,7 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Queue: collect");
   });
 
-  it("prefers accumulated estimatedCostUsd over recalculation", () => {
+  it("sums per-component costs for consistent turn-scoped total", () => {
     const text = buildStatusMessage({
       config: {
         models: {
@@ -139,7 +139,7 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Cost: $0.0605");
   });
 
-  it("recalculates cost with cache tokens when estimatedCostUsd is absent", () => {
+  it("sums per-component costs when estimatedCostUsd is absent", () => {
     const text = buildStatusMessage({
       config: {
         models: {
