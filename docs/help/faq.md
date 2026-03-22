@@ -2148,12 +2148,11 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
   <Accordion title='Why do I see "Unknown model: minimax/MiniMax-M2.7"?'>
     This means the **provider isn't configured** (no MiniMax provider config or auth
-    profile was found), so the model can't be resolved. A fix for this detection is
-    in **2026.1.12** (unreleased at the time of writing).
+    profile was found), so the model can't be resolved.
 
     Fix checklist:
 
-    1. Upgrade to **2026.1.12** (or run from source `main`), then restart the gateway.
+    1. Upgrade to a current OpenClaw release (or run from source `main`), then restart the gateway.
     2. Make sure MiniMax is configured (wizard or JSON), or that a MiniMax API key
        exists in env/auth profiles so the provider can be injected.
     3. Use the exact model id (case-sensitive): `minimax/MiniMax-M2.7`,
