@@ -5,10 +5,8 @@ export const pluginSdkEntrypoints = [...pluginSdkEntryList];
 export const pluginSdkSubpaths = pluginSdkEntrypoints.filter((entry) => entry !== "index");
 
 /** Map every SDK entrypoint name to its source file path inside the repo. */
-export function buildPluginSdkEntrySources() {
-  return Object.fromEntries(
-    pluginSdkEntrypoints.map((entry) => [entry, `src/plugin-sdk/${entry}.ts`]),
-  );
+export function buildPluginSdkEntrySources(entries: readonly string[] = pluginSdkEntrypoints) {
+  return Object.fromEntries(entries.map((entry) => [entry, `src/plugin-sdk/${entry}.ts`]));
 }
 
 /** List the public package specifiers that should resolve to plugin SDK entrypoints. */
