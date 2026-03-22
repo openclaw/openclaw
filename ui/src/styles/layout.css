@@ -508,7 +508,7 @@
   background: transparent;
   border: none;
   border-radius: 10px;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
   cursor: pointer;
   text-align: left;
   transition:
