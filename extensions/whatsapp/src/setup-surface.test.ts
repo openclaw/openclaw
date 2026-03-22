@@ -31,11 +31,15 @@ vi.mock("../../../src/utils.js", async () => {
   };
 });
 
-vi.mock("./accounts.js", () => ({
-  listWhatsAppAccountIds: listWhatsAppAccountIdsMock,
-  resolveDefaultWhatsAppAccountId: resolveDefaultWhatsAppAccountIdMock,
-  resolveWhatsAppAuthDir: resolveWhatsAppAuthDirMock,
-}));
+vi.mock("./accounts.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./accounts.js")>();
+  return {
+    ...actual,
+    listWhatsAppAccountIds: listWhatsAppAccountIdsMock,
+    resolveDefaultWhatsAppAccountId: resolveDefaultWhatsAppAccountIdMock,
+    resolveWhatsAppAuthDir: resolveWhatsAppAuthDirMock,
+  };
+});
 
 function createRuntime(): RuntimeEnv {
   return {
