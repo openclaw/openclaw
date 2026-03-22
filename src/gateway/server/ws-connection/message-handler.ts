@@ -537,6 +537,14 @@ export function attachGatewayWsMessageHandler(params: {
           if (!device && (!isControlUi || decision.kind !== "allow" || trustedProxyAuthOk)) {
             clearUnboundScopes();
           }
+          // If the operator configured gateway.auth.scopes AND the connection
+          // authenticated via shared token/password (without a device), grant
+          // the configured scopes. This enables auto-pairing flows where a
+          // device-less connection needs operator.pairing to approve itself.
+          if (!device && sharedAuthOk && resolvedAuth.scopes && resolvedAuth.scopes.length > 0) {
+            scopes = [...resolvedAuth.scopes];
+            connectParams.scopes = scopes;
+          }
           if (decision.kind === "allow") {
             return true;
           }

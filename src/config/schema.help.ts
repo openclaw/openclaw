@@ -86,6 +86,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Gateway auth mode: "none", "token", "password", or "trusted-proxy" depending on your edge architecture. Use token/password for direct exposure, and trusted-proxy only behind hardened identity-aware proxies.',
   "gateway.auth.allowTailscale":
     "Allows trusted Tailscale identity paths to satisfy gateway auth checks when configured. Use this only when your tailnet identity posture is strong and operator workflows depend on it.",
+  "gateway.auth.scopes":
+    "Scopes granted to device-less connections that authenticate via shared token or password. Without this, device-less connections receive no scopes after clearUnboundScopes. Include operator.pairing to enable auto-pairing for remote agents.",
   "gateway.auth.rateLimit":
     "Login/auth attempt throttling controls to reduce credential brute-force risk at the gateway boundary. Keep enabled in exposed environments and tune thresholds to your traffic baseline.",
   "gateway.auth.trustedProxy":

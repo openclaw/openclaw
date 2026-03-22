@@ -156,6 +156,14 @@ export type GatewayAuthConfig = {
   password?: SecretInput;
   /** Allow Tailscale identity headers when serve mode is enabled. */
   allowTailscale?: boolean;
+  /**
+   * Scopes granted to connections authenticated via shared token or password
+   * that do not present a paired device identity.
+   * Without this, device-less token/password connections receive no scopes,
+   * which prevents auto-pairing flows from calling device.pair.approve.
+   * Default when absent: [] (no scopes for device-less connections).
+   */
+  scopes?: string[];
   /** Rate-limit configuration for failed authentication attempts. */
   rateLimit?: GatewayAuthRateLimitConfig;
   /**

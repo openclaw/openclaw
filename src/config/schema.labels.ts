@@ -76,6 +76,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.auth": "Gateway Auth",
   "gateway.auth.mode": "Gateway Auth Mode",
   "gateway.auth.allowTailscale": "Gateway Auth Allow Tailscale Identity",
+  "gateway.auth.scopes": "Gateway Auth Token Scopes",
   "gateway.auth.rateLimit": "Gateway Auth Rate Limit",
   "gateway.auth.trustedProxy": "Gateway Trusted Proxy Auth",
   "gateway.trustedProxies": "Gateway Trusted Proxy CIDRs",
