@@ -273,6 +273,27 @@ ENV NODE_ENV=production
 ENV NPM_CONFIG_PREFIX=/data/npm-global
 ENV PATH="/data/npm-global/bin:${PATH}"
 
+# Pre-warm Jiti cache: boot the gateway once with WhatsApp enabled so Jiti
+# compiles all TypeScript extensions during Docker build (not at runtime).
+# Without this, WhatsApp/Baileys Jiti compilation takes 90-300s on shared CPUs.
+# The compiled cache at node_modules/.cache/jiti/ bakes into the image layer.
+RUN mkdir -p /tmp/oc-warmup/workspace/.whatsapp /tmp/oc-warmup/agents/main/agent && \
+    printf '%s' '{"agents":{"defaults":{"workspace":"/tmp/oc-warmup/workspace"}},"gateway":{"auth":{"mode":"token"}},"browser":{"noSandbox":true},"channels":{"whatsapp":{"accounts":{"default":{"authDir":"/tmp/oc-warmup/workspace/.whatsapp"}}}}}' \
+      > /tmp/oc-warmup/openclaw.json && \
+    OPENCLAW_STATE_DIR=/tmp/oc-warmup \
+    OPENCLAW_HEADLESS=true \
+    OPENCLAW_GATEWAY_TOKEN=warmup \
+    timeout 180 node openclaw.mjs gateway --allow-unconfigured 2>&1 & \
+    GW_PID=$! && \
+    for i in $(seq 1 60); do \
+      if curl -sf http://127.0.0.1:18789/healthz > /dev/null 2>&1; then break; fi; \
+      sleep 3; \
+    done && \
+    kill $GW_PID 2>/dev/null; wait $GW_PID 2>/dev/null || true && \
+    rm -rf /tmp/oc-warmup && \
+    chown -R node:node /app/node_modules/.cache 2>/dev/null || true && \
+    echo "Jiti cache warmed (WhatsApp + all extensions pre-compiled)"
+
 # Blink entrypoint: runs as root to prepare fresh Fly volumes (/data),
 # then drops to node user via gosu before exec'ing the gateway.
 COPY blink-entrypoint.sh /app/blink-entrypoint.sh
