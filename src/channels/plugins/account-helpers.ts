@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  resolveAccountEntry,
+  resolveNormalizedAccountEntry,
+} from "../../routing/account-lookup.js";
+import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   normalizeOptionalAccountId,
@@ -76,4 +80,21 @@ export function mergeAccountConfig<TConfig extends Record<string, unknown>>(para
     ...base,
     ...params.accountConfig,
   };
+}
+
+export function resolveMergedAccountConfig<TConfig extends Record<string, unknown>>(params: {
+  channelConfig: TConfig | undefined;
+  accounts: Record<string, Partial<TConfig>> | undefined;
+  accountId: string;
+  omitKeys?: string[];
+  normalizeAccountId?: (accountId: string) => string;
+}): TConfig {
+  const accountConfig = params.normalizeAccountId
+    ? resolveNormalizedAccountEntry(params.accounts, params.accountId, params.normalizeAccountId)
+    : resolveAccountEntry(params.accounts, params.accountId);
+  return mergeAccountConfig<TConfig>({
+    channelConfig: params.channelConfig,
+    accountConfig,
+    omitKeys: params.omitKeys,
+  });
 }

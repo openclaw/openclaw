@@ -1,9 +1,8 @@
 import {
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
-  mergeAccountConfig,
   normalizeAccountId,
-  resolveAccountEntry,
+  resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedZalouserAccount, ZalouserAccountConfig, ZalouserConfig } from "./types.js";
@@ -15,22 +14,13 @@ const {
 } = createAccountListHelpers("zalouser");
 export { listZalouserAccountIds, resolveDefaultZalouserAccountId };
 
-function resolveAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): ZalouserAccountConfig | undefined {
-  return resolveAccountEntry(
-    (cfg.channels?.zalouser as ZalouserConfig | undefined)?.accounts as
-      | Record<string, ZalouserAccountConfig>
+function mergeZalouserAccountConfig(cfg: OpenClawConfig, accountId: string): ZalouserAccountConfig {
+  const merged = resolveMergedAccountConfig<ZalouserAccountConfig>({
+    channelConfig: cfg.channels?.zalouser as ZalouserAccountConfig | undefined,
+    accounts: (cfg.channels?.zalouser as ZalouserConfig | undefined)?.accounts as
+      | Record<string, Partial<ZalouserAccountConfig>>
       | undefined,
     accountId,
-  );
-}
-
-function mergeZalouserAccountConfig(cfg: OpenClawConfig, accountId: string): ZalouserAccountConfig {
-  const merged = mergeAccountConfig<ZalouserAccountConfig>({
-    channelConfig: cfg.channels?.zalouser as ZalouserAccountConfig | undefined,
-    accountConfig: resolveAccountConfig(cfg, accountId),
     omitKeys: ["defaultAccount"],
   });
   return {

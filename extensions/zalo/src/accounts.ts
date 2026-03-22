@@ -1,6 +1,8 @@
-import { createAccountListHelpers, mergeAccountConfig } from "openclaw/plugin-sdk/account-helpers";
+import {
+  createAccountListHelpers,
+  resolveMergedAccountConfig,
+} from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { resolveZaloToken } from "./token.js";
 import type { ResolvedZaloAccount, ZaloAccountConfig, ZaloConfig } from "./types.js";
@@ -11,22 +13,13 @@ const { listAccountIds: listZaloAccountIds, resolveDefaultAccountId: resolveDefa
   createAccountListHelpers("zalo");
 export { listZaloAccountIds, resolveDefaultZaloAccountId };
 
-function resolveAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): ZaloAccountConfig | undefined {
-  return resolveAccountEntry(
-    (cfg.channels?.zalo as ZaloConfig | undefined)?.accounts as
-      | Record<string, ZaloAccountConfig>
+function mergeZaloAccountConfig(cfg: OpenClawConfig, accountId: string): ZaloAccountConfig {
+  return resolveMergedAccountConfig<ZaloAccountConfig>({
+    channelConfig: cfg.channels?.zalo as ZaloAccountConfig | undefined,
+    accounts: (cfg.channels?.zalo as ZaloConfig | undefined)?.accounts as
+      | Record<string, Partial<ZaloAccountConfig>>
       | undefined,
     accountId,
-  );
-}
-
-function mergeZaloAccountConfig(cfg: OpenClawConfig, accountId: string): ZaloAccountConfig {
-  return mergeAccountConfig<ZaloAccountConfig>({
-    channelConfig: cfg.channels?.zalo as ZaloAccountConfig | undefined,
-    accountConfig: resolveAccountConfig(cfg, accountId),
     omitKeys: ["defaultAccount"],
   });
 }

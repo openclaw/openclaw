@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
-import { createAccountListHelpers, mergeAccountConfig } from "./account-helpers.js";
+import {
+  createAccountListHelpers,
+  mergeAccountConfig,
+  resolveMergedAccountConfig,
+} from "./account-helpers.js";
 
 const { listConfiguredAccountIds, listAccountIds, resolveDefaultAccountId } =
   createAccountListHelpers("testchannel");
@@ -153,6 +157,53 @@ describe("mergeAccountConfig", () => {
     expect(merged).toEqual({
       enabled: true,
       name: "Work",
+    });
+  });
+});
+
+describe("resolveMergedAccountConfig", () => {
+  it("merges the matching account config into channel config", () => {
+    const merged = resolveMergedAccountConfig<{
+      enabled?: boolean;
+      name?: string;
+    }>({
+      channelConfig: {
+        enabled: true,
+      },
+      accounts: {
+        work: {
+          name: "Work",
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(merged).toEqual({
+      enabled: true,
+      name: "Work",
+    });
+  });
+
+  it("supports normalized account lookups", () => {
+    const merged = resolveMergedAccountConfig<{
+      enabled?: boolean;
+      name?: string;
+    }>({
+      channelConfig: {
+        enabled: true,
+      },
+      accounts: {
+        "Router D": {
+          name: "Router",
+        },
+      },
+      accountId: "router-d",
+      normalizeAccountId,
+    });
+
+    expect(merged).toEqual({
+      enabled: true,
+      name: "Router",
     });
   });
 });
