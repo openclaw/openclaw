@@ -1,8 +1,8 @@
 import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
 import type { ImageGenerationProviderPlugin } from "../../plugins/types.js";
+import { OPENAI_DEFAULT_IMAGE_MODEL as DEFAULT_OPENAI_IMAGE_MODEL } from "../../providers/openai-defaults.js";
 
 const DEFAULT_OPENAI_IMAGE_BASE_URL = "https://api.openai.com/v1";
-const DEFAULT_OPENAI_IMAGE_MODEL = "gpt-image-1";
 const DEFAULT_OUTPUT_MIME = "image/png";
 const DEFAULT_SIZE = "1024x1024";
 const OPENAI_SUPPORTED_SIZES = ["1024x1024", "1024x1536", "1536x1024"] as const;

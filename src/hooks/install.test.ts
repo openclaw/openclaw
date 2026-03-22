@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { expectSingleNpmPackIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
 import {
   expectInstallUsesIgnoreScripts,
@@ -10,9 +10,14 @@ import {
   expectUnsupportedNpmSpec,
   mockNpmPackMetadataResult,
 } from "../test-utils/npm-spec-install-test-helpers.js";
-import { isAddressInUseError } from "./gmail-watcher.js";
+import { isAddressInUseError } from "./gmail-watcher-errors.js";
+import {
+  installHooksFromArchive,
+  installHooksFromNpmSpec,
+  installHooksFromPath,
+} from "./install.js";
 
-const fixtureRoot = path.join(os.tmpdir(), `openclaw-hook-install-${randomUUID()}`);
+const fixtureRoot = path.join(process.cwd(), ".tmp", `openclaw-hook-install-${randomUUID()}`);
 const sharedArchiveDir = path.join(fixtureRoot, "_archives");
 let tempDirIndex = 0;
 const sharedArchivePathByName = new Map<string, string>();
@@ -35,10 +40,6 @@ function makeTempDir() {
   fs.mkdirSync(dir);
   return dir;
 }
-
-const { runCommandWithTimeout } = await import("../process/exec.js");
-const { installHooksFromArchive, installHooksFromNpmSpec, installHooksFromPath } =
-  await import("./install.js");
 
 afterAll(() => {
   try {
