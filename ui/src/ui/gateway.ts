@@ -209,6 +209,11 @@ export type GatewayBrowserClientOptions = {
   onGap?: (info: { expected: number; received: number }) => void;
 };
 
+function normalizeAuthToken(value: string | undefined | null): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
 const CONNECT_FAILED_CLOSE_CODE = 4008;
 
@@ -284,8 +289,11 @@ export class GatewayBrowserClient {
   private pendingConnectError: GatewayErrorInfo | undefined;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
+  private lastGoodAuthToken: string | undefined;
 
-  constructor(private opts: GatewayBrowserClientOptions) {}
+  constructor(private opts: GatewayBrowserClientOptions) {
+    this.lastGoodAuthToken = normalizeAuthToken(opts.token);
+  }
 
   start() {
     this.closed = false;
@@ -391,7 +399,7 @@ export class GatewayBrowserClient {
     const isSecureContext = typeof crypto !== "undefined" && !!crypto.subtle;
     let deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null = null;
     let selectedAuth: SelectedConnectAuth = {
-      authToken: explicitGatewayToken,
+      authToken: explicitGatewayToken ?? this.lastGoodAuthToken,
       authPassword: explicitPassword,
       canFallbackToShared: false,
     };
@@ -404,6 +412,9 @@ export class GatewayBrowserClient {
       });
       if (this.pendingDeviceTokenRetry && selectedAuth.authDeviceToken) {
         this.pendingDeviceTokenRetry = false;
+      }
+      if (!selectedAuth.authToken) {
+        selectedAuth.authToken = this.lastGoodAuthToken;
       }
     }
 
@@ -429,7 +440,12 @@ export class GatewayBrowserClient {
   private handleConnectHello(hello: GatewayHelloOk, plan: ConnectPlan) {
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
+    if (plan.selectedAuth.authToken) {
+      this.lastGoodAuthToken = plan.selectedAuth.authToken;
+    }
     if (hello?.auth?.deviceToken && plan.deviceIdentity) {
+      this.lastGoodAuthToken =
+        normalizeAuthToken(hello.auth.deviceToken) ?? this.lastGoodAuthToken;
       storeDeviceAuthToken({
         deviceId: plan.deviceIdentity.deviceId,
         role: hello.auth.role ?? plan.role,
@@ -482,6 +498,7 @@ export class GatewayBrowserClient {
       connectErrorCode === ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH
     ) {
       clearDeviceAuthToken({ deviceId: plan.deviceIdentity.deviceId, role: plan.role });
+      this.lastGoodAuthToken = normalizeAuthToken(this.opts.token) ?? this.lastGoodAuthToken;
     }
     this.ws?.close(CONNECT_FAILED_CLOSE_CODE, "connect failed");
   }
