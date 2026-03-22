@@ -531,6 +531,28 @@ describe("config io write", () => {
     });
   });
 
+  it('ignores literal "undefined" home env values when choosing the audit log path', async () => {
+    await withSuiteHome(async (home) => {
+      const { lines } = await writeGatewayPatchAndReadLastAuditEntry({
+        home,
+        initialConfig: { gateway: { mode: "local" } },
+        gatewayPatch: { bind: "loopback" },
+        env: {
+          HOME: "undefined",
+          USERPROFILE: "null",
+          OPENCLAW_HOME: "undefined",
+        } as NodeJS.ProcessEnv,
+      });
+      expect(lines.length).toBeGreaterThan(0);
+      await expect(
+        fs.stat(path.join(home, ".openclaw", "logs", "config-audit.jsonl")),
+      ).resolves.toBeDefined();
+      await expect(
+        fs.stat(path.resolve("undefined", ".openclaw", "logs", "config-audit.jsonl")),
+      ).rejects.toThrow();
+    });
+  });
+
   it("records gateway watch session markers in config audit entries", async () => {
     await withSuiteHome(async (home) => {
       const { last } = await writeGatewayPatchAndReadLastAuditEntry({
