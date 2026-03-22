@@ -1,4 +1,4 @@
-export function resolveChannelConfigValue(
+function resolveChannelRootValue(
   configForm: Record<string, unknown> | null | undefined,
   channelId: string,
 ): Record<string, unknown> | null {
@@ -15,6 +15,34 @@ export function resolveChannelConfigValue(
     return fallback as Record<string, unknown>;
   }
   return null;
+}
+
+export function resolveChannelAccountConfigValue(
+  configForm: Record<string, unknown> | null | undefined,
+  channelId: string,
+  accountId: string | null | undefined,
+): Record<string, unknown> | null {
+  const channel = resolveChannelRootValue(configForm, channelId);
+  if (!channel || !accountId?.trim()) {
+    return null;
+  }
+  const accounts = channel.accounts;
+  if (!accounts || typeof accounts !== "object") {
+    return null;
+  }
+  const account = (accounts as Record<string, unknown>)[accountId];
+  return account && typeof account === "object" ? (account as Record<string, unknown>) : null;
+}
+
+export function resolveChannelConfigValue(
+  configForm: Record<string, unknown> | null | undefined,
+  channelId: string,
+  accountId?: string | null,
+): Record<string, unknown> | null {
+  return (
+    resolveChannelAccountConfigValue(configForm, channelId, accountId) ??
+    resolveChannelRootValue(configForm, channelId)
+  );
 }
 
 export function formatChannelExtraValue(raw: unknown): string {

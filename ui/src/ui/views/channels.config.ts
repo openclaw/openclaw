@@ -6,6 +6,7 @@ import { analyzeConfigSchema, renderNode, schemaType, type JsonSchema } from "./
 
 type ChannelConfigFormProps = {
   channelId: string;
+  accountId?: string | null;
   configValue: Record<string, unknown> | null;
   schema: unknown;
   uiHints: ConfigUiHints;
@@ -49,11 +50,18 @@ function resolveSchemaNode(
   return current;
 }
 
+function resolveScopedChannelPath(channelId: string, accountId?: string | null): Array<string> {
+  return accountId?.trim()
+    ? ["channels", channelId, "accounts", accountId]
+    : ["channels", channelId];
+}
+
 function resolveChannelValue(
   config: Record<string, unknown>,
   channelId: string,
+  accountId?: string | null,
 ): Record<string, unknown> {
-  return resolveChannelConfigValue(config, channelId) ?? {};
+  return resolveChannelConfigValue(config, channelId, accountId) ?? {};
 }
 
 const EXTRA_CHANNEL_FIELDS = ["groupPolicy", "streamMode", "dmPolicy"] as const;
@@ -90,20 +98,21 @@ export function renderChannelConfigForm(props: ChannelConfigFormProps) {
       <div class="callout danger">Schema unavailable. Use Raw.</div>
     `;
   }
-  const node = resolveSchemaNode(normalized, ["channels", props.channelId]);
+  const scopedPath = resolveScopedChannelPath(props.channelId, props.accountId);
+  const node = resolveSchemaNode(normalized, scopedPath);
   if (!node) {
     return html`
       <div class="callout danger">Channel config schema unavailable.</div>
     `;
   }
   const configValue = props.configValue ?? {};
-  const value = resolveChannelValue(configValue, props.channelId);
+  const value = resolveChannelValue(configValue, props.channelId, props.accountId);
   return html`
     <div class="config-form">
       ${renderNode({
         schema: node,
         value,
-        path: ["channels", props.channelId],
+        path: scopedPath,
         hints: props.uiHints,
         unsupported: new Set(analysis.unsupportedPaths),
         disabled: props.disabled,
@@ -115,9 +124,20 @@ export function renderChannelConfigForm(props: ChannelConfigFormProps) {
   `;
 }
 
+function resolvePreferredChannelAccountId(channelId: string, props: ChannelsProps): string | null {
+  const defaultAccountId = props.snapshot?.channelDefaultAccountId?.[channelId];
+  if (defaultAccountId?.trim()) {
+    return defaultAccountId;
+  }
+  const accounts = props.snapshot?.channelAccounts?.[channelId] ?? [];
+  const configured = accounts.find((account) => account.configured && account.accountId?.trim());
+  return configured?.accountId?.trim() || accounts[0]?.accountId?.trim() || null;
+}
+
 export function renderChannelConfigSection(params: { channelId: string; props: ChannelsProps }) {
   const { channelId, props } = params;
   const disabled = props.configSaving || props.configSchemaLoading;
+  const accountId = resolvePreferredChannelAccountId(channelId, props);
   return html`
     <div style="margin-top: 16px;">
       ${
@@ -127,6 +147,7 @@ export function renderChannelConfigSection(params: { channelId: string; props: C
             `
           : renderChannelConfigForm({
               channelId,
+              accountId,
               configValue: props.configForm,
               schema: props.configSchema,
               uiHints: props.configUiHints,
