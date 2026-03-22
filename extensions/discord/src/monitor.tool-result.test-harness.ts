@@ -7,6 +7,7 @@ export const updateLastRouteMock: MockFn = vi.fn();
 export const dispatchMock: MockFn = vi.fn();
 export const readAllowFromStoreMock: MockFn = vi.fn();
 export const upsertPairingRequestMock: MockFn = vi.fn();
+export const loadConfigMock: MockFn = vi.fn();
 
 vi.mock("./send.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./send.js")>();
@@ -52,6 +53,8 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
+    loadConfig: (...args: unknown[]) => loadConfigMock(...args),
+    readSessionUpdatedAt: vi.fn(() => undefined),
     resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),
     readSessionUpdatedAt: vi.fn(() => undefined),
     updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
