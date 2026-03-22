@@ -125,6 +125,26 @@ describe("temporal decay", () => {
     expect(merged[0]?.score ?? 0).toBeGreaterThan(merged[1]?.score ?? 0);
   });
 
+  it("applies decay to date-prefixed session-memory snapshots", async () => {
+    const merged = await mergeVectorResultsWithTemporalDecay([
+      createVectorMemoryEntry({
+        id: "old",
+        path: "memory/2025-01-01-old-passcode.md",
+        snippet: "old passcode",
+        vectorScore: 0.95,
+      }),
+      createVectorMemoryEntry({
+        id: "new",
+        path: "memory/2026-02-10-new-passcode.md",
+        snippet: "new passcode",
+        vectorScore: 0.8,
+      }),
+    ]);
+
+    expect(merged[0]?.path).toBe("memory/2026-02-10-new-passcode.md");
+    expect(merged[0]?.score ?? 0).toBeGreaterThan(merged[1]?.score ?? 0);
+  });
+
   it("handles future dates, zero age, and very old memories", async () => {
     const merged = await mergeVectorResultsWithTemporalDecay([
       createVectorMemoryEntry({
@@ -151,6 +171,25 @@ describe("temporal decay", () => {
     expect(byPath.get("memory/2099-01-01.md")?.score).toBeCloseTo(0.9);
     expect(byPath.get("memory/2026-02-10.md")?.score).toBeCloseTo(0.8);
     expect(byPath.get("memory/2000-01-01.md")?.score ?? 1).toBeLessThan(0.001);
+  });
+
+  it("does not treat non-date-prefixed memory files as dated snapshots", async () => {
+    const dir = await makeTempDir();
+    const topicPath = path.join(dir, "memory", "notes-2026-02-10.md");
+    await fs.mkdir(path.dirname(topicPath), { recursive: true });
+    await fs.writeFile(topicPath, "should stay evergreen");
+
+    const veryOld = new Date(Date.UTC(2010, 0, 1));
+    await fs.utimes(topicPath, veryOld, veryOld);
+
+    const decayed = await applyTemporalDecayToHybridResults({
+      results: [{ path: "memory/notes-2026-02-10.md", score: 0.75, source: "memory" }],
+      workspaceDir: dir,
+      temporalDecay: { enabled: true, halfLifeDays: 30 },
+      nowMs: NOW_MS,
+    });
+
+    expect(decayed[0]?.score).toBeCloseTo(0.75);
   });
 
   it("uses file mtime fallback for non-memory sources", async () => {

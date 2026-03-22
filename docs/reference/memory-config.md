@@ -512,8 +512,9 @@ With the default half-life of 30 days:
 - Non-dated files in `memory/` (e.g., `memory/projects.md`, `memory/network.md`)
 - These contain durable reference information that should always rank normally.
 
-**Dated daily files** (`memory/YYYY-MM-DD.md`) use the date extracted from the filename.
-Other sources (e.g., session transcripts) fall back to file modification time (`mtime`).
+**Date-prefixed memory files** (for example `memory/YYYY-MM-DD.md` and
+`memory/YYYY-MM-DD-slug.md`) use the date extracted from the filename. Other
+sources (e.g., session transcripts) fall back to file modification time (`mtime`).
 
 **Example -- query: "what's Rod's work schedule?"**
 
