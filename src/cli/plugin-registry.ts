@@ -1,6 +1,7 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging.js";
+import { loggingState } from "../logging/state.js";
 import {
   resolveChannelPluginIds,
   resolveConfiguredChannelPluginIds,
@@ -51,28 +52,34 @@ export function ensurePluginRegistryLoaded(options?: { scope?: PluginRegistrySco
     error: (msg) => log.error(msg),
     debug: (msg) => log.debug(msg),
   };
-  loadOpenClawPlugins({
-    config,
-    workspaceDir,
-    logger,
-    throwOnLoadError: true,
-    ...(scope === "configured-channels"
-      ? {
-          onlyPluginIds: resolveConfiguredChannelPluginIds({
-            config,
-            workspaceDir,
-            env: process.env,
-          }),
-        }
-      : scope === "channels"
+  const prevForceStderr = loggingState.forceConsoleToStderr;
+  loggingState.forceConsoleToStderr = true;
+  try {
+    loadOpenClawPlugins({
+      config,
+      workspaceDir,
+      logger,
+      throwOnLoadError: true,
+      ...(scope === "configured-channels"
         ? {
-            onlyPluginIds: resolveChannelPluginIds({
+            onlyPluginIds: resolveConfiguredChannelPluginIds({
               config,
               workspaceDir,
               env: process.env,
             }),
           }
-        : {}),
-  });
+        : scope === "channels"
+          ? {
+              onlyPluginIds: resolveChannelPluginIds({
+                config,
+                workspaceDir,
+                env: process.env,
+              }),
+            }
+          : {}),
+    });
+  } finally {
+    loggingState.forceConsoleToStderr = prevForceStderr;
+  }
   pluginRegistryLoaded = scope;
 }
