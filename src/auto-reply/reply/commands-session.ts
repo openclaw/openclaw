@@ -357,10 +357,17 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
       cfg: params.cfg,
       provider: params.provider,
       model: params.model,
+      agentId: params.agentId,
       sessionEntry: params.sessionEntry,
     });
     const suffix =
-      state.source === "config" ? " (config)" : state.source === "default" ? " (default)" : "";
+      state.source === "agent"
+        ? " (agent)"
+        : state.source === "config"
+          ? " (config)"
+          : state.source === "default"
+            ? " (default)"
+            : "";
     return {
       shouldContinue: false,
       reply: { text: `⚙️ Current fast mode: ${state.enabled ? "on" : "off"}${suffix}.` },
