@@ -380,7 +380,7 @@ export function isPrivateOrLoopbackHost(host: string): boolean {
   if (!parsed) {
     return false;
   }
-  if (parsed.isLocalhost) {
+  if (parsed.isLocalhost || parsed.isBareName) {
     return true;
   }
   const normalized = normalizeIp(parsed.unbracketedHost);
@@ -404,16 +404,22 @@ export function isPrivateOrLoopbackHost(host: string): boolean {
 
 function parseHostForAddressChecks(
   host: string,
-): { isLocalhost: boolean; unbracketedHost: string } | null {
+): { isLocalhost: boolean; isBareName: boolean; unbracketedHost: string } | null {
   if (!host) {
     return null;
   }
   const normalizedHost = host.trim().toLowerCase();
   if (normalizedHost === "localhost") {
-    return { isLocalhost: true, unbracketedHost: normalizedHost };
+    return { isLocalhost: true, isBareName: false, unbracketedHost: normalizedHost };
   }
   return {
     isLocalhost: false,
+    // Bare hostnames (no dots, not IP addresses) are internal service names
+    // (Docker, Kubernetes, mDNS, etc.) and cannot exist on the public internet.
+    isBareName:
+      !normalizedHost.includes(".") &&
+      !normalizedHost.startsWith("[") &&
+      net.isIP(normalizedHost) === 0,
     // Handle bracketed IPv6 addresses like [::1]
     unbracketedHost:
       normalizedHost.startsWith("[") && normalizedHost.endsWith("]")

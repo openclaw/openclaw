@@ -444,6 +444,18 @@ describe("isPrivateOrLoopbackHost", () => {
     expect(isPrivateOrLoopbackHost("203.0.113.10")).toBe(false);
   });
 
+  it("accepts bare hostnames (Docker/Kubernetes internal service names)", () => {
+    expect(isPrivateOrLoopbackHost("synapse")).toBe(true);
+    expect(isPrivateOrLoopbackHost("postgres")).toBe(true);
+    expect(isPrivateOrLoopbackHost("redis")).toBe(true);
+    expect(isPrivateOrLoopbackHost("my-matrix-server")).toBe(true);
+  });
+
+  it("rejects FQDNs with dots (not bare hostnames)", () => {
+    expect(isPrivateOrLoopbackHost("matrix.example.com")).toBe(false);
+    expect(isPrivateOrLoopbackHost("synapse.local.domain")).toBe(false);
+  });
+
   it("rejects empty/falsy input", () => {
     expect(isPrivateOrLoopbackHost("")).toBe(false);
   });
