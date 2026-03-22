@@ -1,4 +1,4 @@
-import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
+import { createAccountListHelpers, mergeAccountConfig } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { parseOptionalDelimitedEntries } from "openclaw/plugin-sdk/core";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/infra-runtime";
@@ -60,19 +60,16 @@ function resolveAccountConfig(cfg: CoreConfig, accountId: string): IrcAccountCon
 }
 
 function mergeIrcAccountConfig(cfg: CoreConfig, accountId: string): IrcAccountConfig {
-  const {
-    accounts: _ignored,
-    defaultAccount: _ignoredDefaultAccount,
-    ...base
-  } = (cfg.channels?.irc ?? {}) as IrcAccountConfig & {
-    accounts?: unknown;
-    defaultAccount?: unknown;
-  };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
-  const merged: IrcAccountConfig = { ...base, ...account };
-  if (base.nickserv || account.nickserv) {
+  const merged: IrcAccountConfig = mergeAccountConfig<IrcAccountConfig>({
+    channelConfig: cfg.channels?.irc as IrcAccountConfig | undefined,
+    accountConfig: account,
+    omitKeys: ["defaultAccount"],
+  });
+  const baseNickServ = (cfg.channels?.irc as IrcAccountConfig | undefined)?.nickserv;
+  if (baseNickServ || account.nickserv) {
     merged.nickserv = {
-      ...base.nickserv,
+      ...baseNickServ,
       ...account.nickserv,
     };
   }
