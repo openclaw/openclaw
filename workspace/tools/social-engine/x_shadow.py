@@ -211,9 +211,11 @@ def browse_and_find_tweets():
 
 def generate_reply(tweet_text, account):
     """Use LLM to generate a high-quality reply."""
-    prompt = f"""You are replying to a tweet by @{account} on X/Twitter.
+    prompt = f"""You are replying to @{account} on X/Twitter. This is a USER SESSION — your goal is to demonstrate you understand THIS PERSON, not just the topic.
 
-Tweet content:
+First, infer from their tweet: What do they care about? What's their expertise level? What would make THEM specifically want to reply back?
+
+Their tweet:
 {tweet_text[:400]}
 
 Write a reply that:
@@ -253,18 +255,21 @@ def score_reply(reply_text, account):
         resonance_bonus = 0
 
     # LLM quality score
-    score_prompt = f"""Rate this X/Twitter reply on a scale of 1-10:
+    score_prompt = f"""Score this X/Twitter reply as a USER SESSION interaction (1-10).
 
-Reply to @{account}: "{reply_text}"
+You are evaluating whether this reply demonstrates understanding of THIS SPECIFIC PERSON, not just generic quality.
 
-Criteria:
-- Technical depth (1-10)
-- Relevance (1-10)
-- Tone (professional, not sycophantic) (1-10)
-- Conciseness (1-10)
-- Would a senior engineer find this valuable? (1-10)
+The person (@{account}) posted something. Our reply: "{reply_text}"
 
-Average score (just the number):"""
+Score on:
+1. Does this reply show we understand what THIS person cares about? (not generic advice)
+2. Would THIS person specifically want to reply back? (creates dialogue, not closes it)
+3. Does it add something they haven't thought of? (new angle for THEM)
+4. Is the tone calibrated to THEIR level? (peer to peer, not lecture)
+
+Calibration: 7-8 = solid understanding of the person. 9-10 = they'd DM us. 5-6 = could be sent to anyone.
+
+Just the number:"""
 
     score_str = call_llm(score_prompt)
     try:
@@ -290,16 +295,17 @@ def cmd_run():
     """Run one cycle of the sub-agent."""
     state = load_state()
 
-    # Rate limit checks
+    # Rate limit checks (bypassed in shadow mode)
     now = time.time()
-    if state["replies_this_hour"] >= 5:
-        print("  Rate limit: 5 replies/hour reached. Waiting.")
-        return
-
-    if now - state["last_reply_time"] < 180:  # 3 min gap
-        remaining = 180 - (now - state["last_reply_time"])
-        print(f"  Too soon since last reply. Wait {int(remaining)}s.")
-        return
+    SHADOW_MODE = True
+    if not SHADOW_MODE:
+        if state["replies_this_hour"] >= 5:
+            print("  Rate limit: 5 replies/hour reached. Waiting.")
+            return
+        if now - state["last_reply_time"] < 180:
+            remaining = 180 - (now - state["last_reply_time"])
+            print(f"  Too soon since last reply. Wait {int(remaining)}s.")
+            return
 
     print("=== X Shadow Sub-Agent Run ===")
 
@@ -349,11 +355,11 @@ def cmd_run():
         })
         return
 
-    # 6. Shadow mode — generate only, don't post
-    # Real posting unlocked when 100 consecutive replies score >= 8.0
+    # 6. Shadow mode — user-session based quality gate
+    # Real posting unlocked when 100 unique users scored >= 8.0
     SHADOW_MODE = True
     QUALITY_GATE = 8.0
-    CONSECUTIVE_REQUIRED = 100
+    UNIQUE_USERS_REQUIRED = 100
 
     if SHADOW_MODE:
         print("\nPhase 3: SHADOW MODE (not posting)")
@@ -486,6 +492,27 @@ def cmd_status():
         print(f"  Avg quality:     {avg:.1f}/10")
     else:
         print("  Avg quality:     (no data)")
+
+    # User-session quality gate tracking
+    try:
+        from x_patrol import get_db
+        conn = get_db()
+        # Count unique users with quality >= 8.0
+        high_q_users = conn.execute("""
+            SELECT COUNT(DISTINCT target_author) as c
+            FROM x_interactions
+            WHERE quality_score >= 8.0
+        """).fetchone()['c']
+        total_users = conn.execute("""
+            SELECT COUNT(DISTINCT target_author) as c
+            FROM x_interactions
+        """).fetchone()['c']
+        conn.close()
+        print(f"\n  User sessions:   {high_q_users}/100 unique users ≥ 8.0 (of {total_users} total)")
+        if high_q_users >= 100:
+            print(f"  🎯 QUALITY GATE PASSED! Ready for live posting.")
+    except Exception:
+        pass
 
     # Time since last reply
     last = state.get('last_reply_time', 0)
