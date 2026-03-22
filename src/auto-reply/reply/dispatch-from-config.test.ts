@@ -988,6 +988,92 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("aborts ACP dispatch promptly when the caller abort signal fires", async () => {
+    setNoAbort();
+    let releaseTurn: (() => void) | undefined;
+    const releasePromise = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+    const runtime = {
+      ensureSession: vi.fn(
+        async (input: { sessionKey: string; mode: string; agent: string }) =>
+          ({
+            sessionKey: input.sessionKey,
+            backend: "acpx",
+            runtimeSessionName: `${input.sessionKey}:${input.mode}`,
+          }) as { sessionKey: string; backend: string; runtimeSessionName: string },
+      ),
+      runTurn: vi.fn(async function* (params: { signal?: AbortSignal }) {
+        await new Promise<void>((resolve) => {
+          if (params.signal?.aborted) {
+            resolve();
+            return;
+          }
+          const onAbort = () => resolve();
+          params.signal?.addEventListener("abort", onAbort, { once: true });
+          void releasePromise.then(resolve);
+        });
+        yield { type: "done" };
+      }),
+      cancel: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+    };
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex-acp:session-1",
+      storeSessionKey: "agent:codex-acp:session-1",
+      cfg: {},
+      storePath: "/tmp/mock-sessions.json",
+      entry: {},
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+
+    const abortController = new AbortController();
+    const cfg = {
+      acp: {
+        enabled: true,
+        dispatch: { enabled: true },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: "agent:codex-acp:session-1",
+      BodyForAgent: "write a test",
+    });
+    const dispatchPromise = dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyOptions: { abortSignal: abortController.signal },
+    });
+    await vi.waitFor(() => {
+      expect(runtime.runTurn).toHaveBeenCalledTimes(1);
+    });
+    abortController.abort();
+    const outcome = await Promise.race([
+      dispatchPromise.then(() => "settled" as const),
+      new Promise<"pending">((resolve) => {
+        setTimeout(() => resolve("pending"), 100);
+      }),
+    ]);
+    releaseTurn?.();
+    await dispatchPromise;
+
+    expect(outcome).toBe("settled");
+  });
+
   it("posts a one-time resolved-session-id notice in thread after the first ACP turn", async () => {
     setNoAbort();
     const runtime = createAcpRuntime([{ type: "text_delta", text: "hello" }, { type: "done" }]);
