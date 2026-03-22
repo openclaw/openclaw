@@ -419,8 +419,8 @@ run_with_spinner() {
                 GUM=""
                 GUM_STATUS="skipped"
                 GUM_REASON="gum raw mode unavailable"
+                ui_warn "Spinner unavailable in this terminal; continuing without spinner"
             fi
-            return 0
         fi
         local gum_status=$?
         if is_gum_raw_mode_failure "$gum_err" || is_gum_raw_mode_failure "$gum_out"; then
