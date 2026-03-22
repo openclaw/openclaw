@@ -1,4 +1,4 @@
-import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
+import { createAccountListHelpers, mergeAccountConfig } from "openclaw/plugin-sdk/account-helpers";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { hasConfiguredSecretInput, normalizeSecretInputString } from "./secret-input.js";
@@ -34,14 +34,14 @@ function mergeBlueBubblesAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): BlueBubblesAccountConfig {
-  const base = (cfg.channels?.bluebubbles ?? {}) as BlueBubblesAccountConfig & {
-    accounts?: unknown;
-    defaultAccount?: unknown;
-  };
-  const { accounts: _ignored, defaultAccount: _ignoredDefaultAccount, ...rest } = base;
   const account = resolveAccountConfig(cfg, accountId) ?? {};
-  const chunkMode = account.chunkMode ?? rest.chunkMode ?? "length";
-  return { ...rest, ...account, chunkMode };
+  const merged = mergeAccountConfig<BlueBubblesAccountConfig>({
+    channelConfig: cfg.channels?.bluebubbles as BlueBubblesAccountConfig | undefined,
+    accountConfig: account,
+    omitKeys: ["defaultAccount"],
+  });
+  const chunkMode = account.chunkMode ?? merged.chunkMode ?? "length";
+  return { ...merged, chunkMode };
 }
 
 export function resolveBlueBubblesAccount(params: {

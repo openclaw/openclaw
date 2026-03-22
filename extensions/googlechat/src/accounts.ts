@@ -1,4 +1,4 @@
-import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
+import { createAccountListHelpers, mergeAccountConfig } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { isSecretRef, type OpenClawConfig } from "openclaw/plugin-sdk/core";
 import type { GoogleChatAccountConfig } from "./types.config.js";
@@ -40,7 +40,11 @@ function mergeGoogleChatAccountConfig(
   accountId: string,
 ): GoogleChatAccountConfig {
   const raw = cfg.channels?.["googlechat"] ?? {};
-  const { accounts: _ignored, defaultAccount: _ignored2, ...base } = raw;
+  const base = mergeAccountConfig<GoogleChatAccountConfig>({
+    channelConfig: raw as GoogleChatAccountConfig,
+    accountConfig: undefined,
+    omitKeys: ["defaultAccount"],
+  });
   const defaultAccountConfig = resolveAccountConfig(cfg, DEFAULT_ACCOUNT_ID) ?? {};
   const account = resolveAccountConfig(cfg, accountId) ?? {};
   if (accountId === DEFAULT_ACCOUNT_ID) {
