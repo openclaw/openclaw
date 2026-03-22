@@ -17,6 +17,27 @@ const providerWizardCache = new WeakMap<
   WeakMap<NodeJS.ProcessEnv, Map<string, ProviderPlugin[]>>
 >();
 
+function buildProviderWizardCacheKey(params: {
+  config: OpenClawConfig;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+}): string {
+  return JSON.stringify({
+    workspaceDir: params.workspaceDir ?? "",
+    config: params.config,
+    env: {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: params.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "",
+      OPENCLAW_HOME: params.env.OPENCLAW_HOME ?? "",
+      OPENCLAW_STATE_DIR: params.env.OPENCLAW_STATE_DIR ?? "",
+      CLAWDBOT_STATE_DIR: params.env.CLAWDBOT_STATE_DIR ?? "",
+      OPENCLAW_CONFIG_PATH: params.env.OPENCLAW_CONFIG_PATH ?? "",
+      HOME: params.env.HOME ?? "",
+      USERPROFILE: params.env.USERPROFILE ?? "",
+      VITEST: params.env.VITEST ?? "",
+    },
+  });
+}
+
 export type ProviderWizardOption = {
   value: string;
   label: string;
@@ -110,7 +131,11 @@ function resolveProviderWizardProviders(params: {
     return resolvePluginProviders(params);
   }
   const env = params.env ?? process.env;
-  const cacheKey = params.workspaceDir ?? "";
+  const cacheKey = buildProviderWizardCacheKey({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env,
+  });
   const configCache = providerWizardCache.get(params.config);
   const envCache = configCache?.get(env);
   const cached = envCache?.get(cacheKey);
