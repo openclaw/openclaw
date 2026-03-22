@@ -171,7 +171,7 @@ export function renderChatSessionSelect(state: AppViewState) {
         class="chat-controls__new-chat"
         title="New chat session"
         aria-label="New chat session"
-        ?disabled=${!state.connected}
+        ?disabled=${!state.connected || Boolean(state.chatRunId)}
         @click=${() => createNewChatSession(state)}
       >
         ${icons.plus}
