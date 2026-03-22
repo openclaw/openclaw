@@ -82,6 +82,7 @@ export function buildTelegramSendParams(opts?: {
   const params: Record<string, unknown> = {};
   if (opts?.replyToMessageId) {
     params.reply_to_message_id = opts.replyToMessageId;
+    params.allow_sending_without_reply = true;
   }
   if (threadParams) {
     params.message_thread_id = threadParams.message_thread_id;
