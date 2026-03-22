@@ -1,7 +1,8 @@
 {
   "env": {
     "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}",
-    "OPENAI_API_KEY": "${OPENAI_API_KEY}"
+    "OPENAI_API_KEY": "${OPENAI_API_KEY}",
+    "BRAVE_API_KEY": "${BRAVE_API_KEY}"
   },
   "agents": {
     "defaults": {
@@ -34,6 +35,7 @@
     "web": {
       "search": {
         "enabled": true,
+        "provider": "brave",
         "maxResults": 5,
         "cacheTtlMinutes": 15
       },
@@ -68,6 +70,15 @@
   "plugins": {
     "load": {
       "paths": ["/app/sophia/.openclaw/extensions"]
+    },
+    "entries": {
+      "brave": {
+        "config": {
+          "webSearch": {
+            "mode": "llm-context"
+          }
+        }
+      }
     }
   },
   "channels": {
