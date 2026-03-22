@@ -22102,6 +22102,34 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.ackReaction",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.ackReactionScope",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "group-mentions",
+        "group-all",
+        "direct",
+        "all",
+        "none",
+        "off"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.actions",
       "kind": "channel",
       "type": "object",
@@ -22152,7 +22180,27 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.actions.profile",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.actions.reactions",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.actions.verification",
       "kind": "channel",
       "type": "boolean",
       "required": false,
@@ -22210,6 +22258,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.avatarUrl",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.chunkMode",
       "kind": "channel",
       "type": "string",
@@ -22225,6 +22283,16 @@
     },
     {
       "path": "channels.matrix.defaultAccount",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.deviceId",
       "kind": "channel",
       "type": "string",
       "required": false,
@@ -22652,6 +22720,20 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.reactionNotifications",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "off",
+        "own"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.replyToMode",
       "kind": "channel",
       "type": "string",
@@ -22860,9 +22942,93 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.startupVerification",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "off",
+        "if-unverified"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.startupVerificationCooldownHours",
+      "kind": "channel",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.textChunkLimit",
       "kind": "channel",
       "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.threadBindings",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.matrix.threadBindings.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.threadBindings.idleHours",
+      "kind": "channel",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.threadBindings.maxAgeHours",
+      "kind": "channel",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.threadBindings.spawnAcpSessions",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.threadBindings.spawnSubagentSessions",
+      "kind": "channel",
+      "type": "boolean",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -46026,6 +46192,203 @@
     },
     {
       "path": "plugins.entries.anthropic.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.azure-blob",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Azure Blob Storage",
+      "help": "List containers, list blobs, and read blob contents from Azure Storage via agent tools. (plugin: azure-blob)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.azure-blob.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Azure Blob Storage Config",
+      "help": "Plugin-defined config payload for azure-blob.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.azure-blob.config.accountKey",
+      "kind": "plugin",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "security"
+      ],
+      "label": "Storage account key",
+      "help": "Shared key for the account (fallback: AZURE_STORAGE_ACCOUNT_KEY).",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.azure-blob.config.accountName",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Storage account name",
+      "help": "Used with account key when no connection string is set (fallback: AZURE_STORAGE_ACCOUNT_NAME).",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.azure-blob.config.accountUrl",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Blob service URL",
+      "help": "Override blob endpoint (sovereign clouds, custom domain). Default: https://{account}.blob.core.windows.net",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.azure-blob.config.connectionString",
+      "kind": "plugin",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "security"
+      ],
+      "label": "Azure Storage connection string",
+      "help": "Full connection string (fallback: AZURE_STORAGE_CONNECTION_STRING).",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.azure-blob.config.defaultContainer",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Default container",
+      "help": "Optional default container when the tool omits containerName.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.azure-blob.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable Azure Blob Storage",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.azure-blob.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.azure-blob.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.azure-blob.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.azure-blob.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.azure-blob.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.azure-blob.subagent.allowModelOverride",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
