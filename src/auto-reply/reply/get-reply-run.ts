@@ -540,7 +540,10 @@ export async function runPreparedReply(
       inputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
       ...(isReasoningTagProvider(provider) ? { enforceFinalTag: true } : {}),
-      // Pass image model fallbacks when image model override is active
+      // Pass image model fallbacks when image model override is active.
+      // Note: Empty array [] is truthy, so this correctly preserves [] (no fallbacks)
+      // vs undefined (use default fallback chain). The downstream model-fallback.ts
+      // distinguishes these cases via `fallbacksOverride !== undefined`.
       ...(opts?.modelOverrideFallbacks ? { imageModelFallbacks: opts.modelOverrideFallbacks } : {}),
     },
   };
