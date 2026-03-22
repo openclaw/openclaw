@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to backfill (for example v2026.3.13)
+        description: Existing release tag to backfill (for example v2026.3.22)
         required: true
         type: string
 

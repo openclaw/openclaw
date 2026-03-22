@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/tlon",
-  "version": "2026.3.14",
+  "version": "2026.3.22",
   "description": "OpenClaw Tlon/Urbit channel plugin",
   "type": "module",
   "dependencies": {
@@ -14,7 +14,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.3.14"
+    "openclaw": ">=2026.3.22"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -40,7 +40,7 @@
       "npmSpec": "@openclaw/tlon",
       "localPath": "extensions/tlon",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.3.14"
+      "minHostVersion": ">=2026.3.22"
     }
   }
 }
