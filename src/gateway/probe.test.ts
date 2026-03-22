@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const gatewayClientState = vi.hoisted(() => ({
   options: null as Record<string, unknown> | null,
   requests: [] as string[],
+  delaysMs: {} as Record<string, number>,
 }));
 
 class MockGatewayClient {
@@ -29,8 +30,11 @@ class MockGatewayClient {
 
   async request(method: string): Promise<unknown> {
     gatewayClientState.requests.push(method);
+    const delayMs = gatewayClientState.delaysMs[method];
+    if (typeof delayMs === "number" && delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
     if (method === "health") {
-      await new Promise((resolve) => setTimeout(resolve, 2_000));
       return {};
     }
     if (method === "system-presence") {
@@ -47,6 +51,10 @@ vi.mock("./client.js", () => ({
 const { clampProbeTimeoutMs, probeGateway } = await import("./probe.js");
 
 describe("probeGateway", () => {
+  beforeEach(() => {
+    gatewayClientState.delaysMs = { health: 2_000 };
+  });
+
   it("clamps probe timeout to timer-safe bounds", () => {
     expect(clampProbeTimeoutMs(1)).toBe(250);
     expect(clampProbeTimeoutMs(2_000)).toBe(2_000);
@@ -115,7 +123,7 @@ describe("probeGateway", () => {
     expect(result.configSnapshot).toBeNull();
   });
 
-  it("treats reachability as successful when status/presence finish before a slow health call", async () => {
+  it("treats reachability as successful when status/presence/config finish before a slow health call", async () => {
     const result = await probeGateway({
       url: "ws://127.0.0.1:18789",
       auth: { token: "secret" },
@@ -127,5 +135,29 @@ describe("probeGateway", () => {
     expect(result.status).toEqual({});
     expect(result.presence).toEqual([]);
     expect(result.health).toBeNull();
+  });
+
+  it("requires config.get before treating a full probe as successful", async () => {
+    gatewayClientState.delaysMs = {
+      health: 2_000,
+      "config.get": 2_000,
+    };
+    vi.useFakeTimers();
+    try {
+      const probePromise = probeGateway({
+        url: "ws://127.0.0.1:18789",
+        auth: { token: "secret" },
+        timeoutMs: 100,
+      });
+
+      await vi.advanceTimersByTimeAsync(300);
+      const result = await probePromise;
+
+      expect(result.ok).toBe(false);
+      expect(result.error).toBe("timeout");
+      expect(result.configSnapshot).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

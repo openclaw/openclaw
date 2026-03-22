@@ -141,10 +141,13 @@ export async function probeGateway(opts: {
           const readHealth = trackBestEffort(client.request("health"));
           const statusPromise = client.request("status");
           const presencePromise = client.request("system-presence");
-          const readConfigSnapshot = trackBestEffort(client.request("config.get", {}));
-          const [status, presence] = await Promise.all([statusPromise, presencePromise]);
+          const configSnapshotPromise = client.request("config.get", {});
+          const [status, presence, configSnapshot] = await Promise.all([
+            statusPromise,
+            presencePromise,
+            configSnapshotPromise,
+          ]);
           const healthState = readHealth();
-          const configSnapshotState = readConfigSnapshot();
           settle({
             ok: true,
             connectLatencyMs,
@@ -153,7 +156,7 @@ export async function probeGateway(opts: {
             health: healthState.settled ? healthState.value : null,
             status,
             presence: Array.isArray(presence) ? (presence as SystemPresence[]) : null,
-            configSnapshot: configSnapshotState.settled ? configSnapshotState.value : null,
+            configSnapshot,
           });
         } catch (err) {
           settle({
