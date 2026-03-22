@@ -49,6 +49,21 @@ function buildMinimaxCatalog(): ModelDefinitionConfig[] {
       input: ["text", "image"],
     }),
     buildMinimaxTextModel({
+      id: "MiniMax-M2",
+      name: "MiniMax M2",
+      reasoning: true,
+    }),
+    buildMinimaxTextModel({
+      id: "MiniMax-M2.1",
+      name: "MiniMax M2.1",
+      reasoning: true,
+    }),
+    buildMinimaxTextModel({
+      id: "MiniMax-M2.1-highspeed",
+      name: "MiniMax M2.1 Highspeed",
+      reasoning: true,
+    }),
+    buildMinimaxTextModel({
       id: MINIMAX_DEFAULT_MODEL_ID,
       name: "MiniMax M2.7",
       reasoning: true,
