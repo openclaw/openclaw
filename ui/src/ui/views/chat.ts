@@ -26,6 +26,7 @@ import {
   type SlashCommandDef,
 } from "../chat/slash-commands.ts";
 import { isSttSupported, startStt, stopStt } from "../chat/speech.ts";
+import { copyTextToClipboard } from "../clipboard.ts";
 import { icons } from "../icons.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../types.ts";
@@ -878,13 +879,12 @@ export function renderChat(props: ChatProps) {
       return;
     }
     const code = (btn as HTMLElement).dataset.code ?? "";
-    navigator.clipboard.writeText(code).then(
-      () => {
+    void copyTextToClipboard(code).then((ok) => {
+      if (ok) {
         btn.classList.add("copied");
         setTimeout(() => btn.classList.remove("copied"), 1500);
-      },
-      () => {},
-    );
+      }
+    });
   };
 
   const chatItems = buildChatItems(props);
