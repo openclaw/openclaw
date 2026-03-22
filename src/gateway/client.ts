@@ -22,6 +22,7 @@ import {
 } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
+import { ADMIN_SCOPE, READ_SCOPE } from "./method-scopes.js";
 import { isLoopbackHost, isSecureWebSocketUrl } from "./net.js";
 import {
   ConnectErrorDetailCodes,
@@ -413,7 +414,7 @@ export class GatewayClient {
           }
         : undefined;
     const signedAtMs = Date.now();
-    const scopes = this.opts.scopes ?? ["operator.admin"];
+    const scopes = this.opts.scopes ?? [ADMIN_SCOPE, READ_SCOPE];
     const platform = this.opts.platform ?? process.platform;
     const device = (() => {
       if (!this.opts.deviceIdentity) {
