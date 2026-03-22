@@ -15,6 +15,7 @@ import {
   createRawChannelSendResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import { createStaticReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { listResolvedDirectoryUserEntriesFromAllowFrom } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -26,6 +27,7 @@ import {
 } from "./accounts.js";
 import { zaloMessageActions } from "./actions.js";
 import { ZaloConfigSchema } from "./config-schema.js";
+import type { ZaloProbeResult } from "./probe.js";
 import {
   buildBaseAccountStatusSnapshot,
   buildChannelConfigSchema,
@@ -66,6 +68,30 @@ function normalizeZaloMessagingTarget(raw: string): string | undefined {
 }
 
 const loadZaloChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
+const zaloTextChunkLimit = 2000;
+
+const zaloRawSendResultAdapter = createRawChannelSendResultAdapter({
+  channel: "zalo",
+  sendText: async ({ to, text, accountId, cfg }) =>
+    await (
+      await loadZaloChannelRuntime()
+    ).sendZaloText({
+      to,
+      text,
+      accountId: accountId ?? undefined,
+      cfg,
+    }),
+  sendMedia: async ({ to, text, mediaUrl, accountId, cfg }) =>
+    await (
+      await loadZaloChannelRuntime()
+    ).sendZaloText({
+      to,
+      text,
+      accountId: accountId ?? undefined,
+      mediaUrl,
+      cfg,
+    }),
+});
 
 const zaloConfigAdapter = createScopedChannelConfigAdapter<ResolvedZaloAccount>({
   sectionKey: "zalo",
@@ -121,140 +147,122 @@ const collectZaloSecurityWarnings = createOpenProviderGroupPolicyWarningCollecto
   },
 });
 
-export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
-  id: "zalo",
-  meta,
-  setup: zaloSetupAdapter,
-  setupWizard: zaloSetupWizard,
-  capabilities: {
-    chatTypes: ["direct", "group"],
-    media: true,
-    reactions: false,
-    threads: false,
-    polls: false,
-    nativeCommands: false,
-    blockStreaming: true,
-  },
-  reload: { configPrefixes: ["channels.zalo"] },
-  configSchema: buildChannelConfigSchema(ZaloConfigSchema),
-  config: {
-    ...zaloConfigAdapter,
-    isConfigured: (account) => Boolean(account.token?.trim()),
-    describeAccount: (account): ChannelAccountSnapshot =>
-      describeAccountSnapshot({
-        account,
-        configured: Boolean(account.token?.trim()),
-        extra: {
-          tokenSource: account.tokenSource,
+export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
+  createChatChannelPlugin({
+    base: {
+      id: "zalo",
+      meta,
+      setup: zaloSetupAdapter,
+      setupWizard: zaloSetupWizard,
+      capabilities: {
+        chatTypes: ["direct", "group"],
+        media: true,
+        reactions: false,
+        threads: false,
+        polls: false,
+        nativeCommands: false,
+        blockStreaming: true,
+      },
+      reload: { configPrefixes: ["channels.zalo"] },
+      configSchema: buildChannelConfigSchema(ZaloConfigSchema),
+      config: {
+        ...zaloConfigAdapter,
+        isConfigured: (account) => Boolean(account.token?.trim()),
+        describeAccount: (account): ChannelAccountSnapshot =>
+          describeAccountSnapshot({
+            account,
+            configured: Boolean(account.token?.trim()),
+            extra: {
+              tokenSource: account.tokenSource,
+            },
+          }),
+      },
+      groups: {
+        resolveRequireMention: () => true,
+      },
+      actions: zaloMessageActions,
+      messaging: {
+        normalizeTarget: normalizeZaloMessagingTarget,
+        resolveOutboundSessionRoute: (params) => resolveZaloOutboundSessionRoute(params),
+        targetResolver: {
+          looksLikeId: isNumericTargetId,
+          hint: "<chatId>",
         },
+      },
+      directory: createChannelDirectoryAdapter({
+        listPeers: async (params) =>
+          listResolvedDirectoryUserEntriesFromAllowFrom<ResolvedZaloAccount>({
+            ...params,
+            resolveAccount: adaptScopedAccountAccessor(resolveZaloAccount),
+            resolveAllowFrom: (account) => account.config.allowFrom,
+            normalizeId: (entry) => entry.trim().replace(/^(zalo|zl):/i, ""),
+          }),
+        listGroups: async () => [],
       }),
-  },
-  security: {
-    resolveDmPolicy: resolveZaloDmPolicy,
-    collectWarnings: collectZaloSecurityWarnings,
-  },
-  groups: {
-    resolveRequireMention: () => true,
-  },
-  threading: {
-    resolveReplyToMode: createStaticReplyToModeResolver("off"),
-  },
-  actions: zaloMessageActions,
-  messaging: {
-    normalizeTarget: normalizeZaloMessagingTarget,
-    resolveOutboundSessionRoute: (params) => resolveZaloOutboundSessionRoute(params),
-    targetResolver: {
-      looksLikeId: isNumericTargetId,
-      hint: "<chatId>",
+      status: {
+        defaultRuntime: {
+          accountId: DEFAULT_ACCOUNT_ID,
+          running: false,
+          lastStartAt: null,
+          lastStopAt: null,
+          lastError: null,
+        },
+        collectStatusIssues: collectZaloStatusIssues,
+        buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
+        probeAccount: async ({ account, timeoutMs }) =>
+          await (await loadZaloChannelRuntime()).probeZaloAccount({ account, timeoutMs }),
+        buildAccountSnapshot: ({ account, runtime }) => {
+          const configured = Boolean(account.token?.trim());
+          return buildBaseAccountStatusSnapshot(
+            {
+              account: {
+                accountId: account.accountId,
+                name: account.name,
+                enabled: account.enabled,
+                configured,
+              },
+              runtime,
+            },
+            {
+              tokenSource: account.tokenSource,
+              mode: account.config.webhookUrl ? "webhook" : "polling",
+              dmPolicy: account.config.dmPolicy ?? "pairing",
+            },
+          );
+        },
+      },
+      gateway: {
+        startAccount: async (ctx) =>
+          await (await loadZaloChannelRuntime()).startZaloGatewayAccount(ctx),
+      },
     },
-  },
-  directory: createChannelDirectoryAdapter({
-    listPeers: async (params) =>
-      listResolvedDirectoryUserEntriesFromAllowFrom<ResolvedZaloAccount>({
-        ...params,
-        resolveAccount: adaptScopedAccountAccessor(resolveZaloAccount),
-        resolveAllowFrom: (account) => account.config.allowFrom,
-        normalizeId: (entry) => entry.trim().replace(/^(zalo|zl):/i, ""),
-      }),
-    listGroups: async () => [],
-  }),
-  pairing: {
-    idLabel: "zaloUserId",
-    normalizeAllowEntry: (entry) => entry.trim().replace(/^(zalo|zl):/i, ""),
-    notifyApproval: async (params) =>
-      await (await loadZaloChannelRuntime()).notifyZaloPairingApproval(params),
-  },
-  outbound: {
-    deliveryMode: "direct",
-    chunker: chunkTextForOutbound,
-    chunkerMode: "text",
-    textChunkLimit: 2000,
-    sendPayload: async (ctx) =>
-      await sendPayloadWithChunkedTextAndMedia({
-        ctx,
-        textChunkLimit: zaloPlugin.outbound!.textChunkLimit,
-        chunker: zaloPlugin.outbound!.chunker,
-        sendText: (nextCtx) => zaloPlugin.outbound!.sendText!(nextCtx),
-        sendMedia: (nextCtx) => zaloPlugin.outbound!.sendMedia!(nextCtx),
-        emptyResult: createEmptyChannelResult("zalo"),
-      }),
-    ...createRawChannelSendResultAdapter({
-      channel: "zalo",
-      sendText: async ({ to, text, accountId, cfg }) =>
-        await (
-          await loadZaloChannelRuntime()
-        ).sendZaloText({
-          to,
-          text,
-          accountId: accountId ?? undefined,
-          cfg: cfg,
+    security: {
+      resolveDmPolicy: resolveZaloDmPolicy,
+      collectWarnings: collectZaloSecurityWarnings,
+    },
+    pairing: {
+      idLabel: "zaloUserId",
+      normalizeAllowEntry: (entry) => entry.trim().replace(/^(zalo|zl):/i, ""),
+      notifyApproval: async (params) =>
+        await (await loadZaloChannelRuntime()).notifyZaloPairingApproval(params),
+    },
+    threading: {
+      resolveReplyToMode: createStaticReplyToModeResolver("off"),
+    },
+    outbound: {
+      deliveryMode: "direct",
+      chunker: chunkTextForOutbound,
+      chunkerMode: "text",
+      textChunkLimit: zaloTextChunkLimit,
+      sendPayload: async (ctx) =>
+        await sendPayloadWithChunkedTextAndMedia({
+          ctx,
+          textChunkLimit: zaloTextChunkLimit,
+          chunker: chunkTextForOutbound,
+          sendText: (nextCtx) => zaloRawSendResultAdapter.sendText!(nextCtx),
+          sendMedia: (nextCtx) => zaloRawSendResultAdapter.sendMedia!(nextCtx),
+          emptyResult: createEmptyChannelResult("zalo"),
         }),
-      sendMedia: async ({ to, text, mediaUrl, accountId, cfg }) =>
-        await (
-          await loadZaloChannelRuntime()
-        ).sendZaloText({
-          to,
-          text,
-          accountId: accountId ?? undefined,
-          mediaUrl,
-          cfg: cfg,
-        }),
-    }),
-  },
-  status: {
-    defaultRuntime: {
-      accountId: DEFAULT_ACCOUNT_ID,
-      running: false,
-      lastStartAt: null,
-      lastStopAt: null,
-      lastError: null,
+      ...zaloRawSendResultAdapter,
     },
-    collectStatusIssues: collectZaloStatusIssues,
-    buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
-    probeAccount: async ({ account, timeoutMs }) =>
-      await (await loadZaloChannelRuntime()).probeZaloAccount({ account, timeoutMs }),
-    buildAccountSnapshot: ({ account, runtime }) => {
-      const configured = Boolean(account.token?.trim());
-      return buildBaseAccountStatusSnapshot(
-        {
-          account: {
-            accountId: account.accountId,
-            name: account.name,
-            enabled: account.enabled,
-            configured,
-          },
-          runtime,
-        },
-        {
-          tokenSource: account.tokenSource,
-          mode: account.config.webhookUrl ? "webhook" : "polling",
-          dmPolicy: account.config.dmPolicy ?? "pairing",
-        },
-      );
-    },
-  },
-  gateway: {
-    startAccount: async (ctx) =>
-      await (await loadZaloChannelRuntime()).startZaloGatewayAccount(ctx),
-  },
-};
+  });
