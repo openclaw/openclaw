@@ -20,7 +20,7 @@ import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/exte
 import {
   createRuntimeOutboundDelegates,
   resolveOutboundSendDep,
-} from "openclaw/plugin-sdk/infra-runtime";
+} from "openclaw/plugin-sdk/outbound-runtime";
 import {
   buildOutboundBaseSessionKey,
   normalizeOutboundThreadId,
@@ -77,7 +77,11 @@ const resolveSlackDmPolicy = createScopedDmSecurityResolver<ResolvedSlackAccount
   resolvePolicy: (account) => account.dm?.policy,
   resolveAllowFrom: (account) => account.dm?.allowFrom,
   allowFromPathSuffix: "dm.",
-  normalizeEntry: (raw) => raw.replace(/^(slack|user):/i, ""),
+  normalizeEntry: (raw) =>
+    raw
+      .trim()
+      .replace(/^(slack|user):/i, "")
+      .trim(),
 });
 
 // Select the appropriate Slack token for read/write operations.
