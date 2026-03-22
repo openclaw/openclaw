@@ -40,6 +40,22 @@ function normalizePossibleLocalImagePath(text: string | undefined): string | nul
   return raw;
 }
 
+/** Markdown image pattern: ![alt](url) — only HTTP(S) URLs. */
+const MARKDOWN_IMAGE_RE = /!\[([^\]]*)\]\((https?:\/\/[^)]+)\)/g;
+
+/**
+ * Extract markdown image URLs from text and return cleaned text with
+ * image references removed. Only extracts HTTP(S) URLs.
+ */
+function extractMarkdownImageUrls(text: string): { imageUrls: string[]; cleanedText: string } {
+  const imageUrls: string[] = [];
+  const cleanedText = text.replace(MARKDOWN_IMAGE_RE, (_match, _alt: string, url: string) => {
+    imageUrls.push(url);
+    return "";
+  });
+  return { imageUrls, cleanedText: cleanedText.replace(/\n{3,}/g, "\n\n").trim() };
+}
+
 function shouldUseCard(text: string): boolean {
   return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
 }
@@ -112,6 +128,41 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         } catch (err) {
           console.error(`[feishu] local image path auto-send failed:`, err);
           // fall through to plain text as last resort
+        }
+      }
+
+      // Extract markdown image URLs from LLM output and upload as native
+      // Feishu images instead of sending them as plain text links.
+      const extracted = extractMarkdownImageUrls(text);
+      if (extracted.imageUrls.length > 0) {
+        let lastMediaResult: Awaited<ReturnType<typeof sendMediaFeishu>> | undefined;
+        for (const url of extracted.imageUrls) {
+          try {
+            lastMediaResult = await sendMediaFeishu({
+              cfg,
+              to,
+              mediaUrl: url,
+              accountId: accountId ?? undefined,
+              replyToMessageId,
+              mediaLocalRoots,
+            });
+          } catch (err) {
+            console.error(`[feishu] image URL upload failed for ${url}:`, err);
+          }
+        }
+        // Send remaining text if any content is left after removing image references.
+        if (extracted.cleanedText) {
+          return await sendOutboundText({
+            cfg,
+            to,
+            text: extracted.cleanedText,
+            accountId: accountId ?? undefined,
+            replyToMessageId,
+          });
+        }
+        // Only images, no remaining text.
+        if (lastMediaResult) {
+          return lastMediaResult;
         }
       }
 
