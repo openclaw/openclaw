@@ -71,7 +71,12 @@ async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
   }
   try {
     const type = await fileTypeFromBuffer(buffer);
-    return type?.mime ?? undefined;
+    const mime = type?.mime ?? undefined;
+    // file-type reports animated PNG as image/apng; treat as PNG for downstream vision/API paths (#51881).
+    if (mime === "image/apng") {
+      return "image/png";
+    }
+    return mime;
   } catch {
     return undefined;
   }
