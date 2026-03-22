@@ -195,6 +195,12 @@ export function projectSafeChannelAccountSnapshotFields(
     ...(readNumber(record, "reconnectAttempts") !== undefined
       ? { reconnectAttempts: readNumber(record, "reconnectAttempts") }
       : {}),
+    ...(readNumber(record, "lastInboundAt") !== undefined
+      ? { lastInboundAt: readNumber(record, "lastInboundAt") }
+      : {}),
+    ...(readTrimmedString(record, "healthState")
+      ? { healthState: readTrimmedString(record, "healthState") }
+      : {}),
     ...(readTrimmedString(record, "mode") ? { mode: readTrimmedString(record, "mode") } : {}),
     ...(readTrimmedString(record, "dmPolicy")
       ? { dmPolicy: readTrimmedString(record, "dmPolicy") }
