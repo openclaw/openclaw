@@ -3,7 +3,9 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
+  buildAllowedModelSet,
   buildModelAliasIndex,
+  modelKey,
   resolveModelRefFromString,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
@@ -16,6 +18,7 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.j
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
 import { createChannelReplyPipeline } from "../../plugin-sdk/channel-reply-pipeline.js";
@@ -76,6 +79,45 @@ import type {
   GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
 } from "./types.js";
+
+/**
+ * Filter fallback models against the agent allowlist.
+ * Only include fallbacks that are in the allowed set.
+ */
+function filterFallbacksByAllowlist(params: {
+  fallbacks: string[];
+  cfg: OpenClawConfig;
+  agentId?: string;
+  defaultProvider: string;
+  aliasIndex: ReturnType<typeof buildModelAliasIndex>;
+}): string[] {
+  const { fallbacks, cfg, agentId, defaultProvider, aliasIndex } = params;
+  const { allowAny, allowedKeys } = buildAllowedModelSet({
+    cfg,
+    catalog: [],
+    defaultProvider,
+    defaultModel: undefined,
+    agentId,
+  });
+  if (allowAny) {
+    return fallbacks.filter((fb) => fb?.trim());
+  }
+  return fallbacks.filter((fb) => {
+    if (!fb?.trim()) {
+      return false;
+    }
+    const resolved = resolveModelRefFromString({
+      raw: fb.trim(),
+      defaultProvider,
+      aliasIndex,
+    });
+    if (!resolved) {
+      return false;
+    }
+    const key = modelKey(resolved.ref.provider, resolved.ref.model);
+    return allowedKeys.has(key);
+  });
+}
 
 type TranscriptAppendResult = {
   ok: boolean;
@@ -1312,6 +1354,12 @@ export const chatHandlers: GatewayRequestHandlers = {
     const rawSessionKey = p.sessionKey;
     const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
 
+    // Resolve agentId early for image model allowlist check
+    const agentId = resolveSessionAgentId({
+      sessionKey,
+      config: cfg,
+    });
+
     // When images are detected, switch to the configured image model.
     // This ensures non-vision models don't fail when users send images via Dashboard.
     let imageModelOverride: string | undefined;
@@ -1320,14 +1368,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       const imageModelConfig = cfg.agents?.defaults?.imageModel;
       const imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
       if (imageModelPrimary) {
+        // Build alias index for resolving model aliases (used for checking and filtering)
+        const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "" });
+
         // Check if user has a stored model override that is already an image model
         // If so, respect user's choice and don't switch
         const sessionModelOverride = entry?.modelOverride;
         const sessionProviderOverride = entry?.providerOverride;
         if (sessionModelOverride) {
-          // Build alias index for resolving model aliases
-          const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "" });
-
           // Collect all image model keys for checking (resolve aliases to full provider/model format)
           const imageModelKeys = new Set<string>();
 
@@ -1378,8 +1426,15 @@ export const chatHandlers: GatewayRequestHandlers = {
           } else {
             // User's stored model is not an image model, switch to imageModel
             imageModelOverride = imageModelPrimary;
+            // Filter fallbacks against agent allowlist
             if (typeof imageModelConfig === "object" && Array.isArray(imageModelConfig.fallbacks)) {
-              imageModelFallbacks = imageModelConfig.fallbacks;
+              imageModelFallbacks = filterFallbacksByAllowlist({
+                fallbacks: imageModelConfig.fallbacks,
+                cfg,
+                agentId,
+                defaultProvider: "",
+                aliasIndex,
+              });
             } else {
               imageModelFallbacks = [];
             }
@@ -1390,8 +1445,15 @@ export const chatHandlers: GatewayRequestHandlers = {
         } else {
           // No stored override, switch to imageModel
           imageModelOverride = imageModelPrimary;
+          // Filter fallbacks against agent allowlist
           if (typeof imageModelConfig === "object" && Array.isArray(imageModelConfig.fallbacks)) {
-            imageModelFallbacks = imageModelConfig.fallbacks;
+            imageModelFallbacks = filterFallbacksByAllowlist({
+              fallbacks: imageModelConfig.fallbacks,
+              cfg,
+              agentId,
+              defaultProvider: "",
+              aliasIndex,
+            });
           } else {
             imageModelFallbacks = [];
           }
@@ -1532,10 +1594,6 @@ export const chatHandlers: GatewayRequestHandlers = {
         GatewayClientScopes: client?.connect?.scopes,
       };
 
-      const agentId = resolveSessionAgentId({
-        sessionKey,
-        config: cfg,
-      });
       const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
         cfg,
         agentId,

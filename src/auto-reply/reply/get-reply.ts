@@ -6,6 +6,7 @@ import {
 } from "../../agents/agent-scope.js";
 import {
   buildAllowedModelSet,
+  buildModelAliasIndex,
   modelKey,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
@@ -13,6 +14,10 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../../config/model-input.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -316,11 +321,57 @@ export async function getReplyFromConfig(
   const hasSessionModelOverride = Boolean(
     sessionEntry.modelOverride?.trim() || sessionEntry.providerOverride?.trim(),
   );
-  // Skip channel model override when image model was already selected for attachments
+
+  // Check if channel model is already a vision model (skip image model switch if so)
+  let channelModelIsVisionModel = false;
+  if (channelModelOverride) {
+    const imageModelConfig = cfg.agents?.defaults?.imageModel;
+    const imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
+    if (imageModelPrimary) {
+      // Collect all image model keys
+      const imageModelKeys = new Set<string>();
+      const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "" });
+
+      const addResolvedModelKey = (rawModel: string) => {
+        imageModelKeys.add(rawModel.trim());
+        const resolved = resolveModelRefFromString({
+          raw: rawModel.trim(),
+          defaultProvider: "",
+          aliasIndex,
+        });
+        if (resolved) {
+          imageModelKeys.add(modelKey(resolved.ref.provider, resolved.ref.model));
+        }
+      };
+
+      addResolvedModelKey(imageModelPrimary);
+      const fallbacks = resolveAgentModelFallbackValues(imageModelConfig);
+      for (const fb of fallbacks) {
+        if (fb?.trim()) {
+          addResolvedModelKey(fb);
+        }
+      }
+
+      // Check if channel model is a vision model
+      const channelResolved = resolveModelRefFromString({
+        raw: channelModelOverride.model,
+        defaultProvider,
+        aliasIndex,
+      });
+      if (channelResolved) {
+        const channelKey = modelKey(channelResolved.ref.provider, channelResolved.ref.model);
+        channelModelIsVisionModel =
+          imageModelKeys.has(channelKey) || imageModelKeys.has(channelModelOverride.model);
+      }
+    }
+  }
+
+  // Skip channel model override when image model was already selected for attachments,
+  // UNLESS the channel model is already a vision model (no need to switch)
   if (
     !hasResolvedHeartbeatModelOverride &&
     !hasSessionModelOverride &&
-    !hasAppliedImageModelOverride &&
+    !(hasAppliedImageModelOverride && !channelModelIsVisionModel) &&
     channelModelOverride
   ) {
     const resolved = resolveModelRefFromString({
