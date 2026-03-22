@@ -1,4 +1,4 @@
-// @ts-nocheck
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
 function normalizeTags(raw: unknown): string[] {
   if (!raw) return [];
@@ -26,26 +26,41 @@ function wrapContentWithEnvelope(content: string, metadata: { category?: string;
   return lines.join("\n");
 }
 
-function extractTextFromMcpResult(payload: any): string {
-  const result = payload?.result;
-  if (!result) {
+function toErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+function extractTextFromMcpResult(payload: unknown): string {
+  if (!payload || typeof payload !== "object") {
     return JSON.stringify(payload);
   }
-  const content = Array.isArray(result.content) ? result.content : [];
+
+  const result = (payload as { result?: unknown }).result;
+  if (!result || typeof result !== "object") {
+    return JSON.stringify(payload);
+  }
+
+  const content = Array.isArray((result as { content?: unknown }).content)
+    ? ((result as { content?: unknown[] }).content ?? [])
+    : [];
+
   const textBlocks = content
-    .map((item: any) => {
+    .map((item) => {
       if (!item || typeof item !== "object") return "";
-      if (typeof item.text === "string") return item.text;
-      return "";
+      const text = (item as { text?: unknown }).text;
+      return typeof text === "string" ? text : "";
     })
     .filter(Boolean);
+
   if (textBlocks.length > 0) {
     return textBlocks.join("\n\n");
   }
+
   return JSON.stringify(result, null, 2);
 }
 
-function parseMcpPayload(raw: string): any {
+function parseMcpPayload(raw: string): unknown {
   const trimmed = (raw || "").trim();
   if (!trimmed) {
     throw new Error("OpenBrain MCP returned empty payload");
@@ -75,6 +90,11 @@ function parseMcpPayload(raw: string): any {
   throw new Error(`OpenBrain MCP returned non-JSON payload: ${trimmed.slice(0, 400)}`);
 }
 
+type McpPayload = {
+  result?: unknown;
+  error?: unknown;
+};
+
 async function callMcpTool({
   url,
   apiKey,
@@ -89,7 +109,7 @@ async function callMcpTool({
   timeoutMs: number;
   toolName: string;
   args: Record<string, unknown>;
-}) {
+}): Promise<McpPayload> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -125,24 +145,23 @@ async function callMcpTool({
       throw new Error(`OpenBrain MCP HTTP ${response.status}: ${raw.slice(0, 400)}`);
     }
 
-    let payload: any;
-    try {
-      payload = parseMcpPayload(raw);
-    } catch (e: any) {
-      throw new Error(e?.message || `OpenBrain MCP parse failure: ${raw.slice(0, 400)}`);
+    const payload = parseMcpPayload(raw);
+    if (!payload || typeof payload !== "object") {
+      throw new Error(`OpenBrain MCP parse failure: ${raw.slice(0, 400)}`);
     }
 
-    if (payload?.error) {
-      throw new Error(`OpenBrain MCP tool error: ${JSON.stringify(payload.error)}`);
+    const typedPayload = payload as McpPayload;
+    if (typedPayload.error) {
+      throw new Error(`OpenBrain MCP tool error: ${JSON.stringify(typedPayload.error)}`);
     }
 
-    return payload;
+    return typedPayload;
   } finally {
     clearTimeout(timer);
   }
 }
 
-const plugin = {
+export default definePluginEntry({
   id: "openbrain-native",
   name: "OpenBrain Native",
   description: "Direct OpenBrain MCP tools without shell wrappers",
@@ -163,7 +182,7 @@ const plugin = {
     required: ["url"],
   },
 
-  register(api: any) {
+  register(api) {
     const cfg = {
       searchToolName: "search_thoughts",
       captureToolName: "capture_thought",
@@ -190,7 +209,7 @@ const plugin = {
           },
           required: ["query"],
         },
-        async execute(_toolCallId: string, params: any) {
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
           const query = String(params?.query || "").trim();
           if (!query) {
             return { content: [{ type: "text", text: "query is required" }] };
@@ -216,10 +235,10 @@ const plugin = {
 
             return {
               content: [{ type: "text", text: extractTextFromMcpResult(payload) }],
-              details: payload?.result ?? null,
+              details: payload.result ?? null,
             };
-          } catch (err: any) {
-            return { content: [{ type: "text", text: `openbrain_search failed: ${err?.message || String(err)}` }] };
+          } catch (err: unknown) {
+            return { content: [{ type: "text", text: `openbrain_search failed: ${toErrorMessage(err)}` }] };
           }
         },
       },
@@ -237,16 +256,14 @@ const plugin = {
             content: { type: "string", description: "Thought content to capture" },
             category: { type: "string", description: "Optional category label" },
             tags: {
-              anyOf: [
-                { type: "string", description: "Comma-separated tags" },
-                { type: "array", items: { type: "string" }, description: "Tag array" },
-              ],
+              type: "string",
+              description: "Comma-separated tags",
             },
             source: { type: "string", description: "Optional source label" },
           },
           required: ["content"],
         },
-        async execute(_toolCallId: string, params: any) {
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
           const base = String(params?.content || "").trim();
           if (!base) {
             return { content: [{ type: "text", text: "content is required" }] };
@@ -273,10 +290,10 @@ const plugin = {
 
             return {
               content: [{ type: "text", text: extractTextFromMcpResult(payload) }],
-              details: payload?.result ?? null,
+              details: payload.result ?? null,
             };
-          } catch (err: any) {
-            return { content: [{ type: "text", text: `openbrain_capture failed: ${err?.message || String(err)}` }] };
+          } catch (err: unknown) {
+            return { content: [{ type: "text", text: `openbrain_capture failed: ${toErrorMessage(err)}` }] };
           }
         },
       },
@@ -298,7 +315,7 @@ const plugin = {
             days: { type: "number" },
           },
         },
-        async execute(_toolCallId: string, params: any) {
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
           const args: Record<string, unknown> = {};
           for (const key of ["limit", "type", "topic", "person", "days"]) {
             if (params && params[key] !== undefined && params[key] !== null && params[key] !== "") {
@@ -319,16 +336,14 @@ const plugin = {
 
             return {
               content: [{ type: "text", text: extractTextFromMcpResult(payload) }],
-              details: payload?.result ?? null,
+              details: payload.result ?? null,
             };
-          } catch (err: any) {
-            return { content: [{ type: "text", text: `openbrain_list_recent failed: ${err?.message || String(err)}` }] };
+          } catch (err: unknown) {
+            return { content: [{ type: "text", text: `openbrain_list_recent failed: ${toErrorMessage(err)}` }] };
           }
         },
       },
       { optional: true },
     );
   },
-};
-
-export default plugin;
+});

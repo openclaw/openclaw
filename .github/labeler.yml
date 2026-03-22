@@ -221,6 +221,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/open-prose/**"
+"extensions: openbrain-native":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/openbrain-native/**"
 "extensions: qwen-portal-auth":
   - changed-files:
       - any-glob-to-any-file:

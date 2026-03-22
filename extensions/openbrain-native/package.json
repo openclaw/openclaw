@@ -1,6 +1,7 @@
 {
   "name": "@openclaw/openbrain-native",
   "version": "1.0.0",
+  "private": true,
   "description": "Native OpenBrain MCP bridge tools for OpenClaw",
   "type": "module",
   "openclaw": {
