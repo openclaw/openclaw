@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import "./test-runtime-mocks.js";
@@ -18,7 +19,7 @@ vi.mock("./embeddings.js", () => ({
   createEmbeddingProvider: async () => {
     hoisted.providerCreateCalls += 1;
     if (hoisted.providerDelayMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, hoisted.providerDelayMs));
+      await sleep(hoisted.providerDelayMs);
     }
     return {
       requestedProvider: "openai",
