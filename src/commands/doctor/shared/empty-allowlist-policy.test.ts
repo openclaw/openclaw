@@ -28,6 +28,19 @@ describe("doctor empty allowlist policy warnings", () => {
     ]);
   });
 
+  it("warns when zalouser group allowlist mode does not fall back to allowFrom", () => {
+    const warnings = collectEmptyAllowlistPolicyWarningsForAccount({
+      account: { groupPolicy: "allowlist", allowFrom: ["123"] },
+      channelName: "zalouser",
+      doctorFixCommand: "openclaw doctor --fix",
+      prefix: "channels.zalouser",
+    });
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('channels.zalouser.groupPolicy is "allowlist"');
+    expect(warnings[0]).toContain("this channel does not fall back to allowFrom");
+  });
+
   it("stays quiet for channels that do not use sender-based group allowlists", () => {
     const warnings = collectEmptyAllowlistPolicyWarningsForAccount({
       account: { groupPolicy: "allowlist" },

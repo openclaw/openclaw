@@ -26,6 +26,7 @@ function allowsGroupAllowFromFallback(channelName?: string): boolean {
   return !(
     channelName === "googlechat" ||
     channelName === "imessage" ||
+    channelName === "zalouser" ||
     channelName === "matrix" ||
     channelName === "msteams" ||
     channelName === "irc"
