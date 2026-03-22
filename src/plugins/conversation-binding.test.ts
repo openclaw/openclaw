@@ -34,6 +34,11 @@ function createEmptyPluginRegistry(): PluginRegistry {
     diagnostics: [],
   };
 }
+
+function createPluginRegistryStub(): PluginRegistry {
+  return createEmptyPluginRegistry();
+}
+
 const sessionBindingState = vi.hoisted(() => {
   const records = new Map<string, SessionBindingRecord>();
   let nextId = 1;
