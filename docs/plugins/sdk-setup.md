@@ -1,5 +1,5 @@
 ---
-title: "Plugin SDK Setup"
+title: "Plugin Setup and Config"
 sidebarTitle: "Setup and Config"
 summary: "Setup wizards, setup-entry.ts, config schemas, and package.json metadata"
 read_when:
