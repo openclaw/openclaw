@@ -505,6 +505,19 @@ export type ToolsConfig = {
       userAgent?: string;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
+      /** SSRF policy for web fetch tool. */
+      ssrfPolicy?: {
+        /** Allow private network addresses. */
+        allowPrivateNetwork?: boolean;
+        /** Dangerously allow private network addresses (legacy alias). */
+        dangerouslyAllowPrivateNetwork?: boolean;
+        /** Allow RFC 2544 benchmark range (198.18.x.x) used by TUN-mode DNS hijacking. */
+        allowRfc2544BenchmarkRange?: boolean;
+        /** Explicitly allowed hostnames. */
+        allowedHostnames?: string[];
+        /** Hostname allowlist patterns. */
+        hostnameAllowlist?: string[];
+      };
       firecrawl?: {
         /** Enable Firecrawl fallback (default: true when apiKey is set). */
         enabled?: boolean;
