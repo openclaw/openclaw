@@ -81,13 +81,10 @@ function getLaneState(lane: string): LaneState {
  * Register a lazy concurrency resolver for a lane.
  * The resolver will be called on first use of the lane if it hasn't been
  * explicitly configured via setCommandLaneConcurrency().
- * 
+ *
  * This allows lanes to be initialized on-demand without adding startup cost.
  */
-export function registerLazyLaneConcurrency(
-  lane: string,
-  resolver: LazyConcurrencyResolver,
-): void {
+export function registerLazyLaneConcurrency(lane: string, resolver: LazyConcurrencyResolver): void {
   lazyResolvers.set(lane, resolver);
 }
 
@@ -98,18 +95,18 @@ export function registerLazyLaneConcurrency(
  */
 async function ensureLaneConcurrency(lane: string): Promise<void> {
   const state = getLaneState(lane);
-  
+
   // If already configured (not default), skip
   if (state.maxConcurrent !== 1) {
     return;
   }
-  
+
   // Check if we have a lazy resolver
   const resolver = lazyResolvers.get(lane);
   if (!resolver) {
     return;
   }
-  
+
   // Resolve and apply concurrency
   try {
     const maxConcurrent = await resolver();
@@ -197,10 +194,10 @@ export async function enqueueCommandInLane<T>(
     return Promise.reject(new GatewayDrainingError());
   }
   const cleaned = lane.trim() || CommandLane.Main;
-  
+
   // Ensure lane concurrency is initialized (supports lazy loading)
   await ensureLaneConcurrency(cleaned);
-  
+
   const warnAfterMs = opts?.warnAfterMs ?? 2_000;
   const state = getLaneState(cleaned);
   return new Promise<T>((resolve, reject) => {
