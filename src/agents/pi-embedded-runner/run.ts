@@ -1084,20 +1084,16 @@ export async function runEmbeddedPiAgent(
             );
             const isCompactionFailure = isCompactionFailureError(errorText);
             const hadAttemptLevelCompaction = attemptCompactionCount > 0;
-            // Pre-read AGENTS.md refresh to budget its token cost into compaction
-            // and reuse the content for injection (avoids reading the file twice).
+            // Pre-read AGENTS.md refresh and cache the content for injection
+            // into the retry's system prompt (avoids reading the file twice).
             let cachedPostCompactionCtx: string | null = null;
-            let postCompactionTokenOverhead = 0;
             try {
               cachedPostCompactionCtx = await readPostCompactionContext(
                 resolvedWorkspace,
                 params.config,
               );
-              if (cachedPostCompactionCtx) {
-                postCompactionTokenOverhead = Math.ceil(cachedPostCompactionCtx.length / 4);
-              }
             } catch {
-              // best-effort — use zero overhead
+              // best-effort
             }
             // If this attempt already compacted (SDK auto-compaction), avoid immediately
             // running another explicit compaction for the same overflow trigger.
@@ -1195,7 +1191,7 @@ export async function runEmbeddedPiAgent(
                   sessionId: params.sessionId,
                   sessionKey: params.sessionKey,
                   sessionFile: params.sessionFile,
-                  tokenBudget: Math.max(1, ctxInfo.tokens - postCompactionTokenOverhead),
+                  tokenBudget: ctxInfo.tokens,
                   ...(observedOverflowTokens !== undefined
                     ? { currentTokenCount: observedOverflowTokens }
                     : {}),
