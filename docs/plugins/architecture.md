@@ -18,6 +18,8 @@ sidebarTitle: "Internals"
   - [Tool Plugins](/plugins/sdk-tool-plugins) — build tools, hooks, and commands
   - [Channel Plugins](/plugins/sdk-channel-plugins) — build a messaging channel
   - [Provider Plugins](/plugins/sdk-provider-plugins) — build a model provider
+  - [Channel Plugin Interface](/plugins/sdk-channel-interface) — public channel shape
+  - [Provider Plugin Interface](/plugins/sdk-provider-interface) — public provider shape
   - [SDK Overview](/plugins/sdk-overview) — import map and registration API
 </Info>
 

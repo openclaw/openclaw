@@ -192,6 +192,8 @@ my-plugin/
 
 - [SDK Subpaths](/plugins/sdk-subpaths) — supported public import paths
 - [Entry Points](/plugins/sdk-entrypoints) — `definePluginEntry` and `defineChannelPluginEntry` options
+- [Channel Plugin Interface](/plugins/sdk-channel-interface) — public `ChannelPlugin` shape
+- [Provider Plugin Interface](/plugins/sdk-provider-interface) — public `ProviderPlugin` shape
 - [Runtime Helpers](/plugins/sdk-runtime) — full `api.runtime` namespace reference
 - [Setup and Config](/plugins/sdk-setup) — packaging, manifests, config schemas
 - [Testing](/plugins/sdk-testing) — test utilities and lint rules

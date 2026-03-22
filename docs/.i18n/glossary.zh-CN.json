@@ -252,6 +252,14 @@
     "target": "SDK 概览"
   },
   {
+    "source": "Plugins",
+    "target": "插件"
+  },
+  {
+    "source": "plugins CLI",
+    "target": "plugins CLI"
+  },
+  {
     "source": "Install and use plugins",
     "target": "安装和使用插件"
   },
@@ -288,6 +296,10 @@
     "target": "运行时辅助工具"
   },
   {
+    "source": "Plugin Runtime Helpers",
+    "target": "插件运行时辅助工具"
+  },
+  {
     "source": "Plugin Setup",
     "target": "插件设置"
   },
@@ -302,6 +314,10 @@
   {
     "source": "Setup and Config",
     "target": "设置和配置"
+  },
+  {
+    "source": "Migrate to SDK",
+    "target": "迁移到 SDK"
   },
   {
     "source": "Building Plugins",
@@ -320,6 +336,14 @@
     "target": "渠道插件"
   },
   {
+    "source": "Channel Plugin Interface",
+    "target": "渠道插件接口"
+  },
+  {
+    "source": "Channel Interface",
+    "target": "渠道接口"
+  },
+  {
     "source": "SDK Channel Plugins",
     "target": "SDK 渠道插件"
   },
@@ -334,6 +358,14 @@
   {
     "source": "Provider Plugins",
     "target": "提供商插件"
+  },
+  {
+    "source": "Provider Plugin Interface",
+    "target": "提供商插件接口"
+  },
+  {
+    "source": "Provider Interface",
+    "target": "提供商接口"
   },
   {
     "source": "SDK Provider Plugins",
@@ -366,6 +398,10 @@
   {
     "source": "Plugin SDK Testing",
     "target": "插件 SDK 测试"
+  },
+  {
+    "source": "Plugin Testing",
+    "target": "插件测试"
   },
   {
     "source": "SDK Testing",

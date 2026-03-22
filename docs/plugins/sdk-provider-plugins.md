@@ -364,6 +364,7 @@ providers:
 
 ## Next steps
 
+- [Provider Plugin Interface](/plugins/sdk-provider-interface) — public `ProviderPlugin` field reference
 - [Channel Plugins](/plugins/sdk-channel-plugins) — if your plugin also provides a channel
 - [SDK Runtime](/plugins/sdk-runtime) — `api.runtime` helpers (TTS, search, subagent)
 - [SDK Subpaths](/plugins/sdk-subpaths) — supported subpath import reference

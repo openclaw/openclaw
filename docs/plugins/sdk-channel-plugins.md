@@ -364,6 +364,7 @@ extensions/acme-chat/
 
 ## Next steps
 
+- [Channel Plugin Interface](/plugins/sdk-channel-interface) — public `ChannelPlugin` field reference
 - [Provider Plugins](/plugins/sdk-provider-plugins) — if your plugin also provides models
 - [SDK Subpaths](/plugins/sdk-subpaths) — supported subpath import reference
 - [SDK Testing](/plugins/sdk-testing) — test utilities and contract tests
