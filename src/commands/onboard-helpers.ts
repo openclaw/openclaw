@@ -456,6 +456,22 @@ function summarizeError(err: unknown): string {
 
 export const DEFAULT_WORKSPACE = DEFAULT_AGENT_WORKSPACE_DIR;
 
+function pickPrimaryTailnetIPv4ForDisplay(): string | undefined {
+  try {
+    return pickPrimaryTailnetIPv4();
+  } catch {
+    return undefined;
+  }
+}
+
+function pickPrimaryLanIPv4ForDisplay(): string | undefined {
+  try {
+    return pickPrimaryLanIPv4();
+  } catch {
+    return undefined;
+  }
+}
+
 export function resolveControlUiLinks(params: {
   port: number;
   bind?: "auto" | "lan" | "loopback" | "custom" | "tailnet";
@@ -465,7 +481,7 @@ export function resolveControlUiLinks(params: {
   const port = params.port;
   const bind = params.bind ?? "loopback";
   const customBindHost = params.customBindHost?.trim();
-  const tailnetIPv4 = pickPrimaryTailnetIPv4();
+  const tailnetIPv4 = pickPrimaryTailnetIPv4ForDisplay();
   const host = (() => {
     if (bind === "custom" && customBindHost && isValidIPv4(customBindHost)) {
       return customBindHost;
@@ -474,7 +490,7 @@ export function resolveControlUiLinks(params: {
       return tailnetIPv4 ?? "127.0.0.1";
     }
     if (bind === "lan") {
-      return pickPrimaryLanIPv4() ?? "127.0.0.1";
+      return pickPrimaryLanIPv4ForDisplay() ?? "127.0.0.1";
     }
     return "127.0.0.1";
   })();
