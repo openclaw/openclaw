@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { DmPolicy, GroupPolicy } from "../../config/types.js";
 import type { SecretInput } from "../../config/types.secrets.js";
+import { resolveSecretInputModeForEnvSelection } from "../../plugins/provider-auth-mode.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import {
@@ -15,11 +16,11 @@ import type {
 import type { ChannelSetupWizard, ChannelSetupWizardAllowFromEntry } from "./setup-wizard.js";
 
 let providerAuthInputPromise:
-  | Promise<typeof import("../../plugins/provider-auth-input.js")>
+  | Promise<Pick<typeof import("../../plugins/provider-auth-ref.js"), "promptSecretRefForSetup">>
   | undefined;
 
 function loadProviderAuthInput() {
-  providerAuthInputPromise ??= import("../../plugins/provider-auth-input.js");
+  providerAuthInputPromise ??= import("../../plugins/provider-auth-ref.js");
   return providerAuthInputPromise;
 }
 
@@ -999,8 +1000,6 @@ export async function promptSingleChannelSecretInput(params: {
   inputPrompt: string;
   preferredEnvVar?: string;
 }): Promise<SingleChannelSecretInputPromptResult> {
-  const { promptSecretRefForSetup, resolveSecretInputModeForEnvSelection } =
-    await loadProviderAuthInput();
   const selectedMode = await resolveSecretInputModeForEnvSelection({
     prompter: params.prompter as WizardPrompter,
     explicitMode: params.secretInputMode,
@@ -1042,6 +1041,7 @@ export async function promptSingleChannelSecretInput(params: {
     }
   }
 
+  const { promptSecretRefForSetup } = await loadProviderAuthInput();
   const resolved = await promptSecretRefForSetup({
     provider: params.providerHint,
     config: params.cfg,
