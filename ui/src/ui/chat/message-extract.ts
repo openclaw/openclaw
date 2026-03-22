@@ -1,6 +1,6 @@
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
-import { stripRelevantMemoriesTags } from "../../../../src/shared/text/assistant-visible-text.js";
+import { stripLeadingRelevantMemoriesTags } from "../../../../src/shared/text/assistant-visible-text.js";
 import { stripThinkingTags } from "../format.ts";
 
 const textCache = new WeakMap<object, string | null>();
@@ -12,7 +12,7 @@ function processMessageText(text: string, role: string): string {
     return stripThinkingTags(text);
   }
   if (shouldStripInboundMetadata) {
-    return stripRelevantMemoriesTags(stripInboundMetadata(stripEnvelope(text)));
+    return stripLeadingRelevantMemoriesTags(stripInboundMetadata(stripEnvelope(text)));
   }
   return stripEnvelope(text);
 }
