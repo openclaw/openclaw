@@ -819,6 +819,10 @@ export async function runReplyAgent(params: {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
     }
 
+    if (isFollowupRunSuperseded()) {
+      return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+    }
+
     return finalizeWithFollowup(
       finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
       queueKey,

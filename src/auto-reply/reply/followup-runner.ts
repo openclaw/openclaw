@@ -445,10 +445,6 @@ export function createFollowupRunner(params: {
       });
       const finalPayloads = suppressMessagingToolReplies ? [] : mediaFilteredPayloads;
 
-      if (finalPayloads.length === 0) {
-        return;
-      }
-
       if (autoCompactionCount > 0) {
         const previousSessionId = queued.run.sessionId;
         const count = await incrementRunCompactionCount({
@@ -481,6 +477,10 @@ export function createFollowupRunner(params: {
             isCompactionNotice: true,
           });
         }
+      }
+
+      if (finalPayloads.length === 0) {
+        return;
       }
 
       await sendFollowupPayloads(finalPayloads, queued);
