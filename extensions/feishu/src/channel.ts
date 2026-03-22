@@ -12,7 +12,7 @@ import type {
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createAllowlistProviderGroupPolicyWarningCollector,
-  projectWarningCollector,
+  projectConfigAccountIdWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
@@ -963,13 +963,10 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       },
     },
     security: {
-      collectWarnings: projectWarningCollector(
-        ({ cfg, accountId }: { cfg: ClawdbotConfig; accountId?: string | null }) => ({
-          cfg,
-          accountId,
-        }),
-        collectFeishuSecurityWarnings,
-      ),
+      collectWarnings: projectConfigAccountIdWarningCollector<{
+        cfg: ClawdbotConfig;
+        accountId?: string | null;
+      }>(collectFeishuSecurityWarnings),
     },
     pairing: {
       text: {

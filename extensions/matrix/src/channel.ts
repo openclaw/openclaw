@@ -10,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createAllowlistProviderOpenWarningCollector,
-  projectWarningCollector,
+  projectAccountConfigWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import { createScopedAccountReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
@@ -411,11 +411,8 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
     },
     security: {
       resolveDmPolicy: resolveMatrixDmPolicy,
-      collectWarnings: projectWarningCollector(
-        ({ account, cfg }: { account: ResolvedMatrixAccount; cfg: unknown }) => ({
-          account,
-          cfg: cfg as CoreConfig,
-        }),
+      collectWarnings: projectAccountConfigWarningCollector(
+        (cfg) => cfg as CoreConfig,
         collectMatrixSecurityWarningsForAccount,
       ),
     },

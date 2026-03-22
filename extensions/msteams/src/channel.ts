@@ -9,7 +9,7 @@ import type {
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createAllowlistProviderGroupPolicyWarningCollector,
-  projectWarningCollector,
+  projectConfigWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
@@ -475,8 +475,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
       },
     },
     security: {
-      collectWarnings: projectWarningCollector(
-        ({ cfg }: { cfg: OpenClawConfig }) => ({ cfg }),
+      collectWarnings: projectConfigWarningCollector<{ cfg: OpenClawConfig }>(
         collectMSTeamsSecurityWarnings,
       ),
     },
