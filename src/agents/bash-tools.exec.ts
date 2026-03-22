@@ -42,6 +42,10 @@ import {
   resolveWorkdir,
   truncateMiddle,
 } from "./bash-tools.shared.js";
+import {
+  extractSandboxExecutionTargetFromCommand,
+  validateSandboxExecutionTemplateImports,
+} from "./sandbox-execution-templates.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 
 export type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -51,36 +55,12 @@ export type {
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
 
-function extractScriptTargetFromCommand(
-  command: string,
-): { kind: "python"; relOrAbsPath: string } | { kind: "node"; relOrAbsPath: string } | null {
-  const raw = command.trim();
-  if (!raw) {
-    return null;
-  }
-
-  // Intentionally simple parsing: we only support common forms like
-  //   python file.py
-  //   python3 -u file.py
-  //   node --experimental-something file.js
-  // If the command is more complex (pipes, heredocs, quoted paths with spaces), skip preflight.
-  const pythonMatch = raw.match(/^\s*(python3?|python)\s+(?:-[^\s]+\s+)*([^\s]+\.py)\b/i);
-  if (pythonMatch?.[2]) {
-    return { kind: "python", relOrAbsPath: pythonMatch[2] };
-  }
-  const nodeMatch = raw.match(/^\s*(node)\s+(?:--[^\s]+\s+)*([^\s]+\.js)\b/i);
-  if (nodeMatch?.[2]) {
-    return { kind: "node", relOrAbsPath: nodeMatch[2] };
-  }
-
-  return null;
-}
-
-async function validateScriptFileForShellBleed(params: {
+async function validateScriptFilePreflight(params: {
   command: string;
   workdir: string;
+  sandboxed: boolean;
 }): Promise<void> {
-  const target = extractScriptTargetFromCommand(params.command);
+  const target = extractSandboxExecutionTargetFromCommand(params.command);
   if (!target) {
     return;
   }
@@ -145,6 +125,17 @@ async function validateScriptFileForShellBleed(params: {
       );
     }
   }
+
+  if (!params.sandboxed) {
+    return;
+  }
+
+  validateSandboxExecutionTemplateImports({
+    kind: target.kind,
+    filePath: absPath,
+    workdir: params.workdir,
+    content,
+  });
 }
 
 export function createExecTool(
@@ -503,7 +494,11 @@ export function createExecTool(
 
       // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
       // before we execute and burn tokens in cron loops.
-      await validateScriptFileForShellBleed({ command: params.command, workdir });
+      await validateScriptFilePreflight({
+        command: params.command,
+        workdir,
+        sandboxed: Boolean(sandbox),
+      });
 
       const run = await runExecProcess({
         command: params.command,

@@ -428,6 +428,26 @@ Common pitfalls:
 Tool allow/deny policies still apply before sandbox rules. If a tool is denied
 globally or per-agent, sandboxing doesn’t bring it back.
 
+## Sandboxed research-script preflight
+
+When a sandboxed `exec` command directly runs a Python or Node script
+(`python*.py`, `node *.js`, `node *.mjs`, `node *.cjs`), OpenClaw applies a
+deterministic research template before launch.
+
+- Python sandbox template: only a curated stdlib import set plus workspace-local
+  modules/packages are allowed.
+- Node sandbox template: only a curated `node:` builtin set plus relative
+  workspace-local files are allowed.
+- Unsafe runtime/process/network imports such as `subprocess`, `socket`,
+  `node:child_process`, `node:http`, and dynamic `require()` / `import()` calls
+  are blocked with an `exec preflight` error before the command starts.
+- Bare third-party dependencies are also blocked unless the template allowlist
+  is expanded in code.
+
+This import-template validation is sandbox-only. Host exec keeps the existing
+shell-bleed preflight checks, but it does not enforce the research import
+template.
+
 `tools.elevated` is an explicit escape hatch that runs `exec` on the host.
 `/exec` directives only apply for authorized senders and persist per session; to hard-disable
 `exec`, use tool policy deny (see [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)).
