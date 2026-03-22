@@ -32,6 +32,20 @@ describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
     ]);
   });
 
+  it("does not label explicit discord streaming=false as a default-off case", () => {
+    const res = normalizeCompatibilityConfigValues({
+      channels: {
+        discord: {
+          streaming: false,
+        },
+      },
+    });
+
+    expect(res.config.channels?.discord?.streaming).toBe("off");
+    expect(res.config.channels?.discord?.streamMode).toBeUndefined();
+    expect(res.changes).toEqual(["Normalized channels.discord.streaming boolean → enum (off)."]);
+  });
+
   it("explains why discord preview streaming stays off when legacy config resolves to off", () => {
     const res = normalizeCompatibilityConfigValues({
       channels: {
