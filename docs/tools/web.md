@@ -156,7 +156,7 @@ examples.
     ```
 
     For a gateway install, put it in `~/.openclaw/.env`.
-    See [Env vars](/help/faq#how-does-openclaw-load-environment-variables).
+    See [Env vars](/help/faq#env-vars-and-env-loading).
 
   </Tab>
 </Tabs>
