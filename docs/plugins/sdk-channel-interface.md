@@ -30,6 +30,11 @@ Common supporting imports:
 - `openclaw/plugin-sdk/channel-config-helpers` for config adapters
 - `openclaw/plugin-sdk/channel-send-result` for outbound result helpers
 
+<Warning>
+  These supporting channel subpaths are expected to move under a channel
+  namespace very soon.
+</Warning>
+
 ## Required fields
 
 These fields are the public core of a `ChannelPlugin`:

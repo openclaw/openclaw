@@ -30,6 +30,11 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 ```
 
+<Warning>
+  These supporting provider subpaths are expected to move under a provider
+  namespace very soon.
+</Warning>
+
 ## Required fields
 
 These fields are the public core of a `ProviderPlugin`:

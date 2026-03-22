@@ -38,18 +38,48 @@ Use these documented subpaths instead of:
 
 ## Choose subpaths by task
 
-- Tool, hook, and command plugins usually start with
-  `openclaw/plugin-sdk/plugin-entry`. See [Tool Plugins](/plugins/sdk-tool-plugins).
-- Channel plugins start with `openclaw/plugin-sdk/core`, then pull focused
-  helpers as needed. See [Channel Plugins](/plugins/sdk-channel-plugins) and
-  [Channel Plugin Interface](/plugins/sdk-channel-interface).
-- Provider plugins usually start with `openclaw/plugin-sdk/plugin-entry`, plus
-  provider helpers when needed. See [Provider Plugins](/plugins/sdk-provider-plugins)
-  and [Provider Plugin Interface](/plugins/sdk-provider-interface).
-- Shared runtime helpers live in the runtime guide. See
-  [Plugin Runtime Helpers](/plugins/sdk-runtime).
-- Setup entrypoints, manifests, and config adapters live in the setup guide.
-  See [Plugin Setup and Config](/plugins/sdk-setup).
+### Tool, hook, and command work
+
+Tool, hook, and command plugins usually start with
+`openclaw/plugin-sdk/plugin-entry`. See
+[Tool Plugins](/plugins/sdk-tool-plugins).
+
+### Channel work
+
+Channel plugins start with `openclaw/plugin-sdk/core`, then pull focused
+helpers as needed. See [Channel Plugins](/plugins/sdk-channel-plugins) and
+[Channel Plugin Interface](/plugins/sdk-channel-interface).
+
+<Warning>
+  Channel helper subpaths are expected to move under a channel namespace very
+  soon. Avoid spreading new channel-specific imports more broadly than needed.
+</Warning>
+
+### Provider work
+
+Provider plugins usually start with `openclaw/plugin-sdk/plugin-entry`, plus
+provider helpers when needed. See
+[Provider Plugins](/plugins/sdk-provider-plugins) and
+[Provider Plugin Interface](/plugins/sdk-provider-interface).
+
+<Warning>
+  Provider helper subpaths are expected to move under a provider namespace very
+  soon. Prefer the provider guides and interface docs over copying long import
+  lists.
+</Warning>
+
+### Runtime and setup work
+
+Shared runtime helpers live in the runtime guide. See
+[Plugin Runtime Helpers](/plugins/sdk-runtime).
+
+<Warning>
+  Runtime helper subpaths are expected to move under a runtime namespace very
+  soon. Keep new usages narrow and localized.
+</Warning>
+
+Setup entrypoints, manifests, and config adapters live in the setup guide. See
+[Plugin Setup and Config](/plugins/sdk-setup).
 
 ## Common supporting imports
 
