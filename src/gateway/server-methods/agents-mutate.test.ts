@@ -423,11 +423,7 @@ describe("agents.create", () => {
       undefined,
     );
     expect(mocks.refreshRuntimeConfigFromDisk).toHaveBeenCalledTimes(1);
-    expect(mocks.refreshRuntimeConfigFromDisk).toHaveBeenCalledWith(
-      expect.objectContaining({
-        __agentIds: expect.arrayContaining(["ready-agent"]),
-      }),
-    );
+    expect(mocks.refreshRuntimeConfigFromDisk).toHaveBeenCalledWith();
 
     const { respond: filesRespond, promise: filesPromise } = makeCall("agents.files.list", {
       agentId: "ready-agent",
@@ -494,7 +490,7 @@ describe("agents.create", () => {
     }
   });
 
-  it("keeps readiness refresh scoped to the created config payload", async () => {
+  it("uses the latest disk-visible config during readiness refresh", async () => {
     mocks.state.runtimeConfig = null;
     let refreshAttempts = 0;
     const refreshPayloads: Array<Record<string, unknown> | undefined> = [];
@@ -509,7 +505,9 @@ describe("agents.create", () => {
         };
         return;
       }
-      mocks.state.runtimeConfig = cfg ? { ...cfg } : null;
+      mocks.state.runtimeConfig = mocks.state.writtenConfig
+        ? { ...mocks.state.writtenConfig }
+        : null;
     });
 
     const { respond, promise } = makeCall("agents.create", {
@@ -528,9 +526,10 @@ describe("agents.create", () => {
     );
     expect(refreshAttempts).toBeGreaterThan(1);
     const lastRefresh = refreshPayloads.at(-1);
-    expect(lastRefresh?.__agentIds).toEqual(expect.arrayContaining(["stale-safe-agent"]));
-    const refreshedAgentIds = Array.isArray(lastRefresh?.__agentIds) ? lastRefresh.__agentIds : [];
-    expect(refreshedAgentIds).not.toContain("newer-agent");
+    expect(lastRefresh).toBeUndefined();
+    expect((mocks.state.runtimeConfig as { __agentIds?: string[] } | null)?.__agentIds).toEqual(
+      expect.arrayContaining(["stale-safe-agent", "newer-agent"]),
+    );
   });
 
   it("ensures workspace is set up before writing config", async () => {

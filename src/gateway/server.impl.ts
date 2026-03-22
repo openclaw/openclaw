@@ -1054,58 +1054,53 @@ export async function startGatewayServer(
           );
         });
 
-    if (!minimalTestGateway) {
-      heartbeatRunner = startHeartbeatRunner({ cfg: cfgAtStart });
-    }
+  const refreshRuntimeConfigFromDisk: import("./server-methods/types.js").GatewayRequestContext["refreshRuntimeConfigFromDisk"] =
+    async (configOverride) => {
+      if (!getActiveSecretsRuntimeSnapshot()) {
+        return;
+      }
+      if (configOverride) {
+        await activateRuntimeSecrets(configOverride, { reason: "reload", activate: true });
+        return;
+      }
+      const reloadMode = resolveGatewayReloadSettings(loadConfig()).mode;
+      if (reloadMode === "off" || reloadMode === "restart") {
+        return;
+      }
+      const snapshot = await readConfigFileSnapshot();
+      if (!snapshot.exists || !snapshot.valid) {
+        return;
+      }
+      await activateRuntimeSecrets(snapshot.config, { reason: "reload", activate: true });
+    };
 
-    const healthCheckMinutes = cfgAtStart.gateway?.channelHealthCheckMinutes;
-    const healthCheckDisabled = healthCheckMinutes === 0;
-    const staleEventThresholdMinutes = cfgAtStart.gateway?.channelStaleEventThresholdMinutes;
-    const maxRestartsPerHour = cfgAtStart.gateway?.channelMaxRestartsPerHour;
-    channelHealthMonitor = healthCheckDisabled
-      ? null
-      : startChannelHealthMonitor({
-          channelManager,
-          checkIntervalMs: (healthCheckMinutes ?? 5) * 60_000,
-          ...(staleEventThresholdMinutes != null && {
-            staleEventThresholdMs: staleEventThresholdMinutes * 60_000,
-          }),
-          ...(maxRestartsPerHour != null && { maxRestartsPerHour }),
-        });
-
-    if (!minimalTestGateway) {
-      void cron.start().catch((err) => logCron.error(`failed to start: ${String(err)}`));
-    }
-
-    stopModelPricingRefresh =
-      !minimalTestGateway && process.env.VITEST !== "1"
-        ? startGatewayModelPricingRefresh({ config: cfgAtStart })
-        : () => {};
-
-    // Recover pending outbound deliveries from previous crash/restart.
-    if (!minimalTestGateway) {
-      void (async () => {
-        const { recoverPendingDeliveries } = await import("../infra/outbound/delivery-queue.js");
-        const { deliverOutboundPayloads } = await import("../infra/outbound/deliver.js");
-        const logRecovery = log.child("delivery-recovery");
-        await recoverPendingDeliveries({
-          deliver: deliverOutboundPayloads,
-          log: logRecovery,
-          cfg: cfgAtStart,
-        });
-      })().catch((err) => log.error(`Delivery recovery failed: ${String(err)}`));
-    }
-
-    const execApprovalManager = new ExecApprovalManager();
-    const execApprovalForwarder = createExecApprovalForwarder();
-    const execApprovalHandlers = createExecApprovalHandlers(execApprovalManager, {
-      forwarder: execApprovalForwarder,
-    });
-    const secretsHandlers = createSecretsHandlers({
-      reloadSecrets: async () => {
-        const active = getActiveSecretsRuntimeSnapshot();
-        if (!active) {
-          throw new Error("Secrets runtime snapshot is not active.");
+  const gatewayRequestContext: import("./server-methods/types.js").GatewayRequestContext = {
+    deps,
+    cron,
+    cronStorePath,
+    execApprovalManager,
+    loadGatewayModelCatalog,
+    getHealthCache,
+    refreshHealthSnapshot: refreshGatewayHealthSnapshot,
+    logHealth,
+    logGateway: log,
+    incrementPresenceVersion,
+    getHealthVersion,
+    broadcast,
+    broadcastToConnIds,
+    nodeSendToSession,
+    nodeSendToAllSubscribed,
+    nodeSubscribe,
+    nodeUnsubscribe,
+    nodeUnsubscribeAll,
+    hasConnectedMobileNode: hasMobileNodeConnected,
+    hasExecApprovalClients: () => {
+      for (const gatewayClient of clients) {
+        const scopes = Array.isArray(gatewayClient.connect.scopes)
+          ? gatewayClient.connect.scopes
+          : [];
+        if (scopes.includes("operator.admin") || scopes.includes("operator.approvals")) {
+          return true;
         }
         const prepared = await activateRuntimeSecrets(active.sourceConfig, {
           reason: "reload",
@@ -1290,6 +1285,7 @@ export async function startGatewayServer(
     markChannelLoggedOut,
     wizardRunner,
     broadcastVoiceWakeChanged,
+    refreshRuntimeConfigFromDisk,
   };
 
   // Register a lazy fallback for plugin subagent dispatch in non-WS paths
@@ -1318,27 +1314,7 @@ export async function startGatewayServer(
       ...secretsHandlers,
     },
     broadcast,
-    context: {
-      ...gatewayRequestContext,
-      refreshRuntimeConfigFromDisk: async (configOverride) => {
-        if (!getActiveSecretsRuntimeSnapshot()) {
-          return;
-        }
-        if (configOverride) {
-          await activateRuntimeSecrets(configOverride, { reason: "reload", activate: true });
-          return;
-        }
-        const reloadMode = resolveGatewayReloadSettings(loadConfig()).mode;
-        if (reloadMode === "off" || reloadMode === "restart") {
-          return;
-        }
-        const snapshot = await readConfigFileSnapshot();
-        if (!snapshot.exists || !snapshot.valid) {
-          return;
-        }
-        await activateRuntimeSecrets(snapshot.config, { reason: "reload", activate: true });
-      },
-    },
+    context: gatewayRequestContext,
   });
   logGatewayStartup({
     cfg: cfgAtStart,

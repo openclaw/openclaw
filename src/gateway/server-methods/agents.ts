@@ -24,12 +24,7 @@ import {
   listAgentEntries,
   pruneAgentConfig,
 } from "../../commands/agents.config.js";
-import {
-  clearConfigCache,
-  loadConfig,
-  projectConfigOntoRuntimeSourceSnapshot,
-  writeConfigFile,
-} from "../../config/config.js";
+import { clearConfigCache, loadConfig, writeConfigFile } from "../../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
 import { sameFileIdentity } from "../../infra/file-identity.js";
 import {
@@ -723,15 +718,9 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     await writeConfigFile(nextConfig);
 
-    const sourceConfigForCreate = projectConfigOntoRuntimeSourceSnapshot(nextConfig);
     const refreshRuntimeConfigForCreate =
       typeof context.refreshRuntimeConfigFromDisk === "function"
-        ? async () => {
-            // Refresh runtime from the source-shaped config we just persisted
-            // for this mutation so secrets refs remain intact and unrelated
-            // disk edits are not imported during readiness polling.
-            await context.refreshRuntimeConfigFromDisk?.(sourceConfigForCreate);
-          }
+        ? async () => await context.refreshRuntimeConfigFromDisk?.()
         : undefined;
     const ready = await waitForAgentReady({
       agentId,
