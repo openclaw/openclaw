@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { withTempHome } from "../../test/helpers/temp-home.js";
+import { MODEL_CONTEXT_TOKEN_CACHE } from "../agents/context-cache.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { createSuccessfulImageMediaDecision } from "./media-understanding.test-fixtures.js";
@@ -25,6 +26,7 @@ vi.mock("../plugins/commands.js", () => ({
 
 afterEach(() => {
   vi.restoreAllMocks();
+  MODEL_CONTEXT_TOKEN_CACHE.clear();
 });
 
 describe("buildStatusMessage", () => {
@@ -266,7 +268,7 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("Context: 49k/1.0m");
   });
 
-  it("keeps the live context limit when fallback status already computed one", () => {
+  it("keeps an explicit runtime context limit when fallback status already computed one", () => {
     const text = buildStatusMessage({
       config: {
         models: {
@@ -282,8 +284,8 @@ describe("buildStatusMessage", () => {
       } as unknown as OpenClawConfig,
       agent: {
         model: "xiaomi/mimo-v2-flash",
-        contextTokens: 123_456,
       },
+      runtimeContextTokens: 123_456,
       sessionEntry: {
         sessionId: "fallback-context-window-live-limit",
         updatedAt: 0,
@@ -296,6 +298,50 @@ describe("buildStatusMessage", () => {
         fallbackNoticeReason: "model not allowed",
         totalTokens: 49_000,
         contextTokens: 1_048_576,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      activeModelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.5");
+    expect(normalized).toContain("Context: 49k/123k");
+    expect(normalized).not.toContain("Context: 49k/1.0m");
+    expect(normalized).not.toContain("Context: 49k/200k");
+  });
+
+  it("keeps the persisted runtime context limit for fallback sessions when no live override is passed", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            "minimax-portal": {
+              models: [{ id: "MiniMax-M2.5", contextWindow: 200_000 }],
+            },
+            xiaomi: {
+              models: [{ id: "mimo-v2-flash", contextWindow: 1_048_576 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "xiaomi/mimo-v2-flash",
+      },
+      sessionEntry: {
+        sessionId: "fallback-context-window-persisted-limit",
+        updatedAt: 0,
+        providerOverride: "xiaomi",
+        modelOverride: "mimo-v2-flash",
+        modelProvider: "minimax-portal",
+        model: "MiniMax-M2.5",
+        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
+        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.5",
+        fallbackNoticeReason: "model not allowed",
+        totalTokens: 49_000,
+        contextTokens: 123_456,
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -614,6 +660,7 @@ describe("buildStatusMessage", () => {
     dir: string;
     agentId: string;
     sessionId: string;
+    model?: string;
     usage: {
       input: number;
       output: number;
@@ -638,7 +685,7 @@ describe("buildStatusMessage", () => {
           type: "message",
           message: {
             role: "assistant",
-            model: "claude-opus-4-5",
+            model: params.model ?? "claude-opus-4-5",
             usage: params.usage,
           },
         }),
@@ -765,6 +812,59 @@ describe("buildStatusMessage", () => {
         });
 
         expect(normalizeTestText(text)).toContain("Context: 1.2k/32k");
+      },
+      { prefix: "openclaw-status-" },
+    );
+  });
+
+  it("keeps transcript-derived slash model ids on model-only context lookup", async () => {
+    await withTempHome(
+      async (dir) => {
+        MODEL_CONTEXT_TOKEN_CACHE.set("google/gemini-2.5-pro", 999_000);
+
+        const sessionId = "sess-openrouter-google";
+        writeTranscriptUsageLog({
+          dir,
+          agentId: "main",
+          sessionId,
+          model: "google/gemini-2.5-pro",
+          usage: {
+            input: 2,
+            output: 3,
+            cacheRead: 1200,
+            cacheWrite: 0,
+            totalTokens: 1205,
+          },
+        });
+
+        const text = buildStatusMessage({
+          config: {
+            models: {
+              providers: {
+                google: {
+                  models: [{ id: "gemini-2.5-pro", contextWindow: 2_000_000 }],
+                },
+              },
+            },
+          } as unknown as OpenClawConfig,
+          agent: {
+            model: "openrouter/google/gemini-2.5-pro",
+          },
+          sessionEntry: {
+            sessionId,
+            updatedAt: 0,
+            totalTokens: 5,
+          },
+          sessionKey: "agent:main:main",
+          sessionScope: "per-sender",
+          queue: { mode: "collect", depth: 0 },
+          includeTranscriptUsage: true,
+          modelAuth: "api-key",
+        });
+
+        const normalized = normalizeTestText(text);
+        expect(normalized).toContain("Context: 1.2k/999k");
+        expect(normalized).not.toContain("Context: 1.2k/2.0m");
       },
       { prefix: "openclaw-status-" },
     );

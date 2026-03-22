@@ -70,6 +70,7 @@ type StatusArgs = {
   config?: OpenClawConfig;
   agent: AgentConfig;
   agentId?: string;
+  runtimeContextTokens?: number;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
   parentSessionKey?: string;
@@ -447,6 +448,8 @@ export function buildStatusMessage(args: StatusArgs): string {
   });
   let activeProvider = modelRefs.active.provider;
   let activeModel = modelRefs.active.model;
+  let contextLookupProvider: string | undefined = activeProvider;
+  let contextLookupModel = activeModel;
 
   let inputTokens = entry?.inputTokens;
   let outputTokens = entry?.outputTokens;
@@ -477,9 +480,16 @@ export function buildStatusMessage(args: StatusArgs): string {
           if (provider && model) {
             activeProvider = provider;
             activeModel = model;
+            // Preserve model-only lookup for transcript-derived provider/model IDs
+            // like "google/gemini-2.5-pro" that may come from a different upstream
+            // provider (for example OpenRouter).
+            contextLookupProvider = undefined;
+            contextLookupModel = logUsage.model;
           }
         } else {
           activeModel = logUsage.model;
+          contextLookupProvider = undefined;
+          contextLookupModel = logUsage.model;
         }
       }
       if (!inputTokens || inputTokens === 0) {
@@ -493,21 +503,54 @@ export function buildStatusMessage(args: StatusArgs): string {
 
   const activeModelLabel = formatProviderModelRef(activeProvider, activeModel) || "unknown";
   const runtimeDiffersFromSelected = activeModelLabel !== (modelRefs.selected.label || "unknown");
-  const contextTokensOverride = runtimeDiffersFromSelected
-    ? args.agent?.contextTokens
-    : (entry?.contextTokens ?? args.agent?.contextTokens);
-  // When a fallback model is active, persisted session contextTokens can still
-  // reflect the originally selected model. Keep any already-computed live
-  // override from the caller, but otherwise recompute from the active runtime
-  // model so /status reports the real window instead of the stale selected one.
-  const contextTokens =
-    resolveContextTokensForModel({
-      cfg: contextConfig,
-      provider: activeProvider,
-      model: activeModel,
-      contextTokensOverride,
-      fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
-    }) ?? DEFAULT_CONTEXT_TOKENS;
+  const selectedContextTokens = resolveContextTokensForModel({
+    cfg: contextConfig,
+    provider: selectedProvider,
+    model: selectedModel,
+  });
+  const activeContextTokens = resolveContextTokensForModel({
+    cfg: contextConfig,
+    ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
+    model: contextLookupModel,
+    fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+  });
+  const persistedContextTokens =
+    typeof entry?.contextTokens === "number" && entry.contextTokens > 0
+      ? entry.contextTokens
+      : undefined;
+  const explicitRuntimeContextTokens =
+    typeof args.runtimeContextTokens === "number" && args.runtimeContextTokens > 0
+      ? args.runtimeContextTokens
+      : undefined;
+  // When a fallback model is active, the selected-model context limit that
+  // callers keep on the agent config is often stale. Prefer an explicit runtime
+  // snapshot when available, otherwise keep a persisted runtime snapshot unless
+  // it still matches the selected-model window and the active runtime window differs.
+  const contextTokens = runtimeDiffersFromSelected
+    ? (explicitRuntimeContextTokens ??
+      (() => {
+        if (persistedContextTokens === undefined) {
+          return activeContextTokens ?? DEFAULT_CONTEXT_TOKENS;
+        }
+        const persistedLooksSelectedWindow =
+          typeof selectedContextTokens === "number" &&
+          persistedContextTokens === selectedContextTokens;
+        const activeWindowDiffersFromSelected =
+          typeof selectedContextTokens === "number" &&
+          typeof activeContextTokens === "number" &&
+          activeContextTokens !== selectedContextTokens;
+        if (persistedLooksSelectedWindow && activeWindowDiffersFromSelected) {
+          return activeContextTokens;
+        }
+        return persistedContextTokens;
+      })())
+    : (resolveContextTokensForModel({
+        cfg: contextConfig,
+        ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
+        model: contextLookupModel,
+        contextTokensOverride: persistedContextTokens ?? args.agent?.contextTokens,
+        fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+      }) ?? DEFAULT_CONTEXT_TOKENS);
 
   const thinkLevel =
     args.resolvedThink ?? args.sessionEntry?.thinkingLevel ?? args.agent?.thinkingDefault ?? "off";
