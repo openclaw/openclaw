@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { listNativeCommandSpecs } from "../../../../src/auto-reply/commands-registry.js";
 import type { OpenClawConfig, loadConfig } from "../../../../src/config/config.js";
 import { createDiscordNativeCommand } from "./native-command.js";
@@ -33,6 +33,17 @@ function findOption(
   return command.options?.find((entry) => entry.name === name);
 }
 
+function requireOption(
+  command: ReturnType<typeof createDiscordNativeCommand>,
+  name: string,
+): CommandOption {
+  const option = findOption(command, name);
+  if (!option) {
+    throw new Error(`missing command option: ${name}`);
+  }
+  return option;
+}
+
 function readAutocomplete(option: CommandOption | undefined): unknown {
   if (!option || typeof option !== "object") {
     return undefined;
@@ -49,21 +60,39 @@ function readChoices(option: CommandOption | undefined): unknown[] | undefined {
 }
 
 describe("createDiscordNativeCommand option wiring", () => {
-  it("uses autocomplete for /acp action so inline action values are accepted", () => {
+  it("uses autocomplete for /acp action so inline action values are accepted", async () => {
     const command = createNativeCommand("acp");
-    const action = findOption(command, "action");
+    const action = requireOption(command, "action");
+    const autocomplete = readAutocomplete(action);
+    if (typeof autocomplete !== "function") {
+      throw new Error("acp action option did not wire autocomplete");
+    }
+    const respond = vi.fn(async (_choices: unknown[]) => undefined);
 
-    expect(action).toBeDefined();
-    expect(typeof readAutocomplete(action)).toBe("function");
     expect(readChoices(action)).toBeUndefined();
+    await autocomplete({
+      options: {
+        getFocused: () => ({ value: "st" }),
+      },
+      respond,
+    } as never);
+    expect(respond).toHaveBeenCalledWith([
+      { name: "steer", value: "steer" },
+      { name: "status", value: "status" },
+      { name: "install", value: "install" },
+    ]);
   });
 
   it("keeps static choices for non-acp string action arguments", () => {
     const command = createNativeCommand("voice");
-    const action = findOption(command, "action");
+    const action = requireOption(command, "action");
+    const choices = readChoices(action);
 
-    expect(action).toBeDefined();
     expect(readAutocomplete(action)).toBeUndefined();
-    expect(readChoices(action)?.length).toBeGreaterThan(0);
+    expect(choices).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: expect.any(String), value: expect.any(String) }),
+      ]),
+    );
   });
 });

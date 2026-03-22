@@ -220,12 +220,14 @@ describe("runDiscordGatewayLifecycle", () => {
       const patch = (call[0] ?? {}) as Record<string, unknown>;
       return patch.connected === true;
     });
-    expect(connectedCall).toBeDefined();
-    expect(connectedCall![0]).toMatchObject({
+    if (!connectedCall) {
+      throw new Error("connected status update was not emitted");
+    }
+    expect(connectedCall[0]).toMatchObject({
       connected: true,
       lastDisconnect: null,
     });
-    expect(connectedCall![0].lastConnectedAt).toBeTypeOf("number");
+    expect(connectedCall[0].lastConnectedAt).toBeTypeOf("number");
   });
 
   it("forces a fresh reconnect when startup never reaches READY, then recovers", async () => {
@@ -409,10 +411,12 @@ describe("runDiscordGatewayLifecycle", () => {
       expect(gateway.connect).toHaveBeenNthCalledWith(1, true);
       expect(gateway.connect).toHaveBeenNthCalledWith(2, true);
       expect(gateway.connect).toHaveBeenNthCalledWith(3, false);
-      expect(gateway.state).toBeDefined();
-      expect(gateway.state?.sessionId).toBeNull();
-      expect(gateway.state?.resumeGatewayUrl).toBeNull();
-      expect(gateway.state?.sequence).toBeNull();
+      if (!gateway.state) {
+        throw new Error("gateway state was not initialized");
+      }
+      expect(gateway.state.sessionId).toBeNull();
+      expect(gateway.state.resumeGatewayUrl).toBeNull();
+      expect(gateway.state.sequence).toBeNull();
       expect(gateway.sequence).toBeNull();
     } finally {
       vi.useRealTimers();
@@ -554,7 +558,7 @@ describe("runDiscordGatewayLifecycle", () => {
 
     // onAbort should have pushed connected: false
     const connectedFalse = statusUpdates.find((s) => s.connected === false);
-    expect(connectedFalse).toBeDefined();
+    expect(connectedFalse).toEqual(expect.objectContaining({ connected: false }));
 
     // No connected: true should appear — the isConnected check must be
     // guarded by !lifecycleStopping to avoid contradicting the abort.
