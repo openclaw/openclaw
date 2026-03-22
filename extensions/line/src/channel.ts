@@ -1,9 +1,8 @@
-import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   createPairingPrefixStripper,
   createTextPairingAdapter,
 } from "openclaw/plugin-sdk/channel-pairing";
-import { createAllowlistProviderRestrictSendersWarningCollector } from "openclaw/plugin-sdk/channel-policy";
+import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
 import {
   createAttachedChannelResultAdapter,
   createEmptyChannelResult,
@@ -29,25 +28,20 @@ import { getLineRuntime } from "./runtime.js";
 import { lineSetupAdapter } from "./setup-core.js";
 import { lineSetupWizard } from "./setup-surface.js";
 
-const resolveLineDmPolicy = createScopedDmSecurityResolver<ResolvedLineAccount>({
+const lineSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedLineAccount>({
   channelKey: "line",
-  resolvePolicy: (account) => account.config.dmPolicy,
-  resolveAllowFrom: (account) => account.config.allowFrom,
+  resolveDmPolicy: (account) => account.config.dmPolicy,
+  resolveDmAllowFrom: (account) => account.config.allowFrom,
+  resolveGroupPolicy: (account) => account.config.groupPolicy,
+  surface: "LINE groups",
+  openScope: "any member in groups",
+  groupPolicyPath: "channels.line.groupPolicy",
+  groupAllowFromPath: "channels.line.groupAllowFrom",
+  mentionGated: false,
   policyPathSuffix: "dmPolicy",
   approveHint: "openclaw pairing approve line <code>",
-  normalizeEntry: (raw) => raw.replace(/^line:(?:user:)?/i, ""),
+  normalizeDmEntry: (raw) => raw.replace(/^line:(?:user:)?/i, ""),
 });
-
-const collectLineSecurityWarnings =
-  createAllowlistProviderRestrictSendersWarningCollector<ResolvedLineAccount>({
-    providerConfigPresent: (cfg) => cfg.channels?.line !== undefined,
-    resolveGroupPolicy: (account) => account.config.groupPolicy,
-    surface: "LINE groups",
-    openScope: "any member in groups",
-    groupPolicyPath: "channels.line.groupPolicy",
-    groupAllowFromPath: "channels.line.groupAllowFrom",
-    mentionGated: false,
-  });
 
 export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
   id: "line",
@@ -69,10 +63,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
     },
   }),
   setupWizard: lineSetupWizard,
-  security: {
-    resolveDmPolicy: resolveLineDmPolicy,
-    collectWarnings: collectLineSecurityWarnings,
-  },
+  security: lineSecurityAdapter,
   groups: {
     resolveRequireMention: resolveLineGroupRequireMention,
   },
