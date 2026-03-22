@@ -169,7 +169,7 @@ const resolveDiscordAllowlistGroupOverrides = createNestedAllowlistOverrideResol
 });
 
 const resolveDiscordAllowlistNames = createAccountScopedAllowlistNameResolver({
-  resolveAccount: ({ cfg, accountId }) => resolveDiscordAccount({ cfg, accountId }),
+  resolveAccount: resolveDiscordAccount,
   resolveToken: (account: ResolvedDiscordAccount) => account.token,
   resolveNames: ({ token, entries }) => resolveDiscordUserAllowlist({ token, entries }),
 });
@@ -325,7 +325,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   allowlist: {
     ...buildLegacyDmAccountAllowlistAdapter({
       channelId: "discord",
-      resolveAccount: ({ cfg, accountId }) => resolveDiscordAccount({ cfg, accountId }),
+      resolveAccount: resolveDiscordAccount,
       normalize: ({ cfg, accountId, values }) =>
         discordConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
       resolveDmAllowFrom: (account) => account.config.allowFrom ?? account.config.dm?.allowFrom,
