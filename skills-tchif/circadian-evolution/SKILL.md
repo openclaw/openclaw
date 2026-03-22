@@ -1,4 +1,7 @@
-\# Circadian Evolution Protocol v1.0
+---
+name: circadian-evolution
+description: Implements a circadian self-improvement cycle for agents: day full agentic grind → evening analysis (detect >60% redundant/saturated data) → night targeted fine-tuning (LoRA/Unsloth/pruning on daily errors) → morning reboot with +15-25% density and zero noise.
+---\# Circadian Evolution Protocol v1.0
 
 
 
