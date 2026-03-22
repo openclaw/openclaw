@@ -177,6 +177,7 @@ Docs: https://docs.openclaw.ai
 - Voice Call: enforce spoken-output contract and fix stream TTS silence regression (#51500) Thanks @joshavant.
 - xAI/models: rename the bundled Grok 4.20 catalog entries to the GA IDs and normalize saved deprecated beta IDs at runtime so existing configs and sessions keep resolving. (#50772) thanks @Jaaneek
 - Plugins/Matrix TTS: send auto-TTS replies as native Matrix voice bubbles instead of generic audio attachments. (#37080) thanks @Matthew19990919.
+- Exec/WebChat: run exec-approval completion follow-ups with `deliver=false` when the turn source is not an outbound message channel (for example WebChat-only setups), avoiding gateway agent RPC errors that required an external delivery target. (#51936)
 
 ### Fixes
 

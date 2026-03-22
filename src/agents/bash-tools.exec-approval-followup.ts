@@ -1,3 +1,4 @@
+import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 type ExecApprovalFollowupParams = {
@@ -33,8 +34,15 @@ export async function sendExecApprovalFollowup(
     return false;
   }
 
-  const channel = params.turnSourceChannel?.trim();
+  const channelRaw = params.turnSourceChannel?.trim();
   const to = params.turnSourceTo?.trim();
+  const normalizedChannel = channelRaw ? normalizeMessageChannel(channelRaw) : undefined;
+  // WebChat and other internal surfaces are not outbound-deliverable; forcing deliver=true
+  // makes the gateway agent RPC fail when no external message channel is configured (#51936).
+  const hasOutboundDeliverTarget =
+    Boolean(channelRaw && to) &&
+    normalizedChannel != null &&
+    isDeliverableMessageChannel(normalizedChannel);
   const threadId =
     params.turnSourceThreadId != null && params.turnSourceThreadId !== ""
       ? String(params.turnSourceThreadId)
@@ -46,12 +54,14 @@ export async function sendExecApprovalFollowup(
     {
       sessionKey,
       message: buildExecApprovalFollowupPrompt(resultText),
-      deliver: true,
+      deliver: hasOutboundDeliverTarget,
       bestEffortDeliver: true,
-      channel: channel && to ? channel : undefined,
-      to: channel && to ? to : undefined,
-      accountId: channel && to ? params.turnSourceAccountId?.trim() || undefined : undefined,
-      threadId: channel && to ? threadId : undefined,
+      channel: hasOutboundDeliverTarget ? normalizedChannel : undefined,
+      to: hasOutboundDeliverTarget ? to : undefined,
+      accountId: hasOutboundDeliverTarget
+        ? params.turnSourceAccountId?.trim() || undefined
+        : undefined,
+      threadId: hasOutboundDeliverTarget ? threadId : undefined,
       idempotencyKey: `exec-approval-followup:${params.approvalId}`,
     },
     { expectFinal: true },
