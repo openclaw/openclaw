@@ -1,20 +1,8 @@
 import type { CampfireWebhookPayload } from "../types.js";
-
-function normalizeOrigin(value: string): string | null {
-  try {
-    return new URL(value).origin;
-  } catch {
-    return null;
-  }
-}
+import { isCampfireUrlInWorkspaceScope } from "../workspace-url.js";
 
 function isAllowedReplyUrl(replyUrl: string, baseUrl: string): boolean {
-  const replyOrigin = normalizeOrigin(replyUrl);
-  const expectedOrigin = normalizeOrigin(baseUrl);
-  if (!replyOrigin || !expectedOrigin) {
-    return false;
-  }
-  return replyOrigin === expectedOrigin;
+  return isCampfireUrlInWorkspaceScope(replyUrl, baseUrl);
 }
 
 export function buildCampfireInboundContext(params: {

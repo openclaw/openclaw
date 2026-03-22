@@ -63,4 +63,27 @@ describe("campfire channel plugin", () => {
     ).rejects.toThrow("must match channels.campfire.baseUrl");
     expect(sendText).not.toHaveBeenCalled();
   });
+
+  it("rejects outbound targets outside the configured workspace path", async () => {
+    const sendText = vi.fn().mockResolvedValue(undefined);
+    const plugin = createCampfirePlugin({ sendText });
+    const cfg = {
+      channels: {
+        campfire: {
+          baseUrl: "https://3.basecamp.com/1234567",
+          botKey: "42-AbCdEf",
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      plugin.outbound?.sendText?.({
+        cfg,
+        to: "https://3.basecamp.com/7654321/buckets/7/chats/88/messages/99",
+        text: "Hello world",
+        accountId: "default",
+      }),
+    ).rejects.toThrow("must match channels.campfire.baseUrl");
+    expect(sendText).not.toHaveBeenCalled();
+  });
 });

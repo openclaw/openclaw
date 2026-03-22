@@ -9,14 +9,7 @@ import {
 import { campfireGateway } from "./monitor/provider.js";
 import { sendCampfireText } from "./send.js";
 import type { ResolvedCampfireAccount } from "./types.js";
-
-function resolveOrigin(value: string): string | null {
-  try {
-    return new URL(value).origin;
-  } catch {
-    return null;
-  }
-}
+import { isCampfireUrlInWorkspaceScope, isValidCampfireUrl } from "./workspace-url.js";
 
 function assertCampfireOutboundTarget(target: string, account: ResolvedCampfireAccount): string {
   const normalizedTarget = target.trim();
@@ -24,13 +17,11 @@ function assertCampfireOutboundTarget(target: string, account: ResolvedCampfireA
     throw new Error("Campfire target URL is required");
   }
 
-  const targetOrigin = resolveOrigin(normalizedTarget);
-  if (!targetOrigin) {
+  if (!isValidCampfireUrl(normalizedTarget)) {
     throw new Error("Campfire target must be a valid URL");
   }
 
-  const accountOrigin = resolveOrigin(account.baseUrl);
-  if (accountOrigin && targetOrigin !== accountOrigin) {
+  if (!isCampfireUrlInWorkspaceScope(normalizedTarget, account.baseUrl)) {
     throw new Error("Campfire target must match channels.campfire.baseUrl");
   }
 
@@ -84,7 +75,7 @@ export function createCampfirePlugin(params?: {
     messaging: {
       normalizeTarget: (target) => target.trim() || undefined,
       targetResolver: {
-        looksLikeId: (id) => Boolean(resolveOrigin(id.trim())),
+        looksLikeId: (id) => isValidCampfireUrl(id.trim()),
         hint: "<campfire room webhook URL>",
       },
     },

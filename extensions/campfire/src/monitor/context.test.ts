@@ -60,4 +60,20 @@ describe("buildCampfireInboundContext", () => {
     expect(first.threadKey).toBe("campfire:room:7");
     expect(second.threadKey).toBe("campfire:room:7");
   });
+
+  it("blocks reply URLs outside the configured workspace path", () => {
+    const context = buildCampfireInboundContext({
+      payload: createPayload({
+        room: {
+          id: 7,
+          name: "General",
+          path: "https://3.basecamp.com/7654321/buckets/7/chats/88/messages/99",
+        },
+      }),
+      allowFrom: [],
+      baseUrl: "https://3.basecamp.com/1234567",
+    });
+
+    expect(context.isAllowed).toBe(false);
+  });
 });
