@@ -100,6 +100,10 @@ export function resetProviderRuntimeHookCacheForTest(): void {
   >();
 }
 
+export function clearProviderRuntimeHookCache(): void {
+  resetProviderRuntimeHookCacheForTest();
+}
+
 function resolveProviderPluginsForHooks(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
