@@ -203,8 +203,8 @@ All done.`;
 
     const calls = msg.content.filter((c) => c && typeof c === "object" && c.type === "toolCall");
     expect(calls.length).toBe(2);
-    expect(calls[0]).toMatchObject({ type: "toolCall", name: "t1", arguments: { p: "1" } });
-    expect(calls[1]).toMatchObject({ type: "toolCall", name: "t2", arguments: { p: "2" } });
+    expect(calls[0]).toMatchObject({ type: "toolCall", name: "t1", arguments: { p: 1 } });
+    expect(calls[1]).toMatchObject({ type: "toolCall", name: "t2", arguments: { p: 2 } });
   });
 
   it("handles malformed XML with only closing wrapper tag", () => {
@@ -240,8 +240,8 @@ All done.`;
 
     const calls = msg.content.filter((c) => c && typeof c === "object" && c.type === "toolCall");
     expect(calls.length).toBe(2);
-    expect(calls[0]).toMatchObject({ type: "toolCall", name: "t1", arguments: { p: "1" } });
-    expect(calls[1]).toMatchObject({ type: "toolCall", name: "t2", arguments: { p: "2" } });
+    expect(calls[0]).toMatchObject({ type: "toolCall", name: "t1", arguments: { p: 1 } });
+    expect(calls[1]).toMatchObject({ type: "toolCall", name: "t2", arguments: { p: 2 } });
   });
 
   it("parses JSON-like arguments correctly", () => {
@@ -333,9 +333,26 @@ All done.`;
       arguments: {
         b1: true,
         b2: false,
-        n1: "123", // Numbers should remain strings
+        n1: 123, // Numbers should now be parsed
       },
     });
+  });
+
+  it("handles tool calls nested in thinking tags within string-form content", () => {
+    const text = `<think>Internal thoughts... <minimax:tool_call><invoke name="Bash"><parameter name="command">ls</parameter></invoke></minimax:tool_call> End of thoughts.</think>`;
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: text as unknown as AssistantMessage["content"],
+      timestamp: Date.now(),
+    });
+
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    // Should result in [thinking, toolCall, thinking]
+    expect(msg.content.length).toBe(3);
+    expect(msg.content[0]).toMatchObject({ type: "thinking", thinking: "Internal thoughts... " });
+    expect(msg.content[1]).toMatchObject({ type: "toolCall", name: "exec" });
+    expect(msg.content[2]).toMatchObject({ type: "thinking", thinking: " End of thoughts." });
   });
 
   it("preserves leading/trailing whitespace in arguments", () => {

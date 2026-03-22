@@ -310,7 +310,31 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
 }
 
 export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
-  if (!Array.isArray(message.content)) {
+  if (!message) {
+    return;
+  }
+
+  const originalContent = message.content;
+
+  // Handle string-form assistant content
+  if (typeof originalContent === "string") {
+    const split = splitThinkingTaggedText(originalContent);
+    if (!split) {
+      return;
+    }
+    const next: AssistantMessage["content"] = [];
+    for (const part of split) {
+      if (part.type === "thinking") {
+        next.push({ type: "thinking", thinking: part.thinking });
+      } else {
+        next.push({ type: "text", text: part.text });
+      }
+    }
+    message.content = next;
+    return;
+  }
+
+  if (!Array.isArray(originalContent)) {
     return;
   }
   const hasThinkingBlock = message.content.some(
@@ -363,6 +387,18 @@ export function promoteMinimaxToolCallsToBlocks(message: AssistantMessage): void
     if (!messageContent.toLowerCase().includes("minimax:tool_call")) {
       return;
     }
+
+    // IMPORTANT: First promote thinking tags while it's still a single string.
+    // This handles cases where XML is nested inside <think> tags.
+    promoteThinkingTagsToBlocks(message);
+
+    // If it was promoted to blocks, we continue with the array-based logic below.
+    // If it's still a string (e.g. no think tags), we split it manually here.
+    if (typeof message.content !== "string") {
+      promoteMinimaxToolCallsToBlocks(message);
+      return;
+    }
+
     const split = splitMinimaxToolCalls(messageContent);
     if (!split) {
       return;
@@ -520,6 +556,14 @@ export function parseXmlParameterValue(value: string): unknown {
   }
   if (trimmed === "false") {
     return false;
+  }
+
+  // Parse numeric scalars (integers or floats).
+  if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+    const num = Number(trimmed);
+    if (!isNaN(num)) {
+      return num;
+    }
   }
 
   if (
