@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
-import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import { createNonExitingRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { monitorSingleAccount } from "./monitor.account.js";
 import { setFeishuRuntime } from "./runtime.js";
@@ -183,7 +183,7 @@ async function setupLifecycleMonitor(accountId: "account-A" | "account-B") {
   });
   createEventDispatcherMock.mockReturnValueOnce({ register });
 
-  const runtime = createRuntimeEnv({ throwOnExit: false });
+  const runtime = createNonExitingRuntimeEnv();
   runtimesByAccount.set(accountId, runtime);
 
   await monitorSingleAccount({

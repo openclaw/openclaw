@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  createPluginSetupWizardAdapter,
+  createPluginSetupWizardConfigure,
   createTestWizardPrompter,
   runSetupWizardConfigure,
   type WizardPrompter,
@@ -8,7 +8,7 @@ import {
 import type { OpenClawConfig } from "../runtime-api.js";
 import { zaloPlugin } from "./channel.js";
 
-const zaloConfigureAdapter = createPluginSetupWizardAdapter(zaloPlugin);
+const zaloConfigure = createPluginSetupWizardConfigure(zaloPlugin);
 
 describe("zalo setup wizard", () => {
   it("configures a polling token flow", async () => {
@@ -29,7 +29,7 @@ describe("zalo setup wizard", () => {
     });
 
     const result = await runSetupWizardConfigure({
-      configure: zaloConfigureAdapter.configure,
+      configure: zaloConfigure,
       cfg: {} as OpenClawConfig,
       prompter,
       options: { secretInputMode: "plaintext" as const },

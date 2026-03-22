@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  createPluginSetupWizardAdapter,
+  createPluginSetupWizardConfigure,
   createTestWizardPrompter,
   runSetupWizardConfigure,
   type WizardPrompter,
@@ -8,7 +8,7 @@ import {
 import type { OpenClawConfig } from "../runtime-api.js";
 import { googlechatPlugin } from "./channel.js";
 
-const googlechatConfigureAdapter = createPluginSetupWizardAdapter(googlechatPlugin);
+const googlechatConfigure = createPluginSetupWizardConfigure(googlechatPlugin);
 
 describe("googlechat setup wizard", () => {
   it("configures service-account auth and webhook audience", async () => {
@@ -25,7 +25,7 @@ describe("googlechat setup wizard", () => {
     });
 
     const result = await runSetupWizardConfigure({
-      configure: googlechatConfigureAdapter.configure,
+      configure: googlechatConfigure,
       cfg: {} as OpenClawConfig,
       prompter,
       options: {},
