@@ -49,7 +49,7 @@ Fix in the plugin package:
 
 1. Add `openclaw.extensions` to `package.json`.
 2. Point entries at built runtime files (usually `./dist/index.js`).
-3. Republish the plugin and run `openclaw plugins install <npm-spec>` again.
+3. Republish the plugin and run `openclaw plugins install <package>` again.
 
 Example:
 
