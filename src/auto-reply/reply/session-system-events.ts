@@ -24,6 +24,8 @@ export async function drainFormattedSystemEvents(params: {
     if (lower.includes("reason periodic")) {
       return null;
     }
+    // Filter out the actual heartbeat prompt, but not cron jobs that mention "heartbeat".
+    // The heartbeat prompt starts with "Read HEARTBEAT.md" - cron payloads won't match this.
     if (lower.startsWith("read heartbeat.md")) {
       return null;
     }
@@ -99,6 +101,11 @@ export async function drainFormattedSystemEvents(params: {
     return undefined;
   }
 
+  // Format events as trusted System: lines for the message timeline.
+  // Inbound sanitization rewrites any user-supplied "System:" to "System (untrusted):",
+  // so these gateway-originated lines are distinguishable by the model.
+  // Each sub-line of a multi-line event gets its own System: prefix so continuation
+  // lines can't be mistaken for user content.
   return systemLines
     .flatMap((line) => line.split("\n").map((subline) => `System: ${subline}`))
     .join("\n");
