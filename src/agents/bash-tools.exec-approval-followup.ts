@@ -40,12 +40,11 @@ export async function sendExecApprovalFollowup(
       ? String(params.turnSourceThreadId)
       : undefined;
 
-  // When the turn originated from webchat (internal channel) and there is
-  // no external "to" address, skip external delivery.  The agent result
-  // still reaches the user through the active WebSocket stream.
-  // When no channel info is present at all, keep deliver=true so the
-  // gateway can fall back to the session's last external route.
-  const isWebchatOnly = channel === "webchat" && !to;
+  // Always request delivery so the gateway routes the agent result to
+  // the appropriate channel.  bestEffortDeliver lets the gateway degrade
+  // gracefully: when the resolved channel is internal (webchat) and no
+  // external channel can be found, the agent still runs and its output
+  // reaches the user through the session transcript / WebSocket stream.
   const hasExplicitTarget = Boolean(channel && to);
 
   await callGatewayTool(
@@ -54,7 +53,7 @@ export async function sendExecApprovalFollowup(
     {
       sessionKey,
       message: buildExecApprovalFollowupPrompt(resultText),
-      deliver: !isWebchatOnly,
+      deliver: true,
       bestEffortDeliver: true,
       channel: hasExplicitTarget ? channel : undefined,
       to: hasExplicitTarget ? to : undefined,

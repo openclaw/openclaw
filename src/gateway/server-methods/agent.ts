@@ -582,8 +582,13 @@ export const agentHandlers: GatewayRequestHandlers = {
           resolvedAccountId,
         };
       } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
-        return;
+        if (!bestEffortDeliver) {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
+          return;
+        }
+        // bestEffortDeliver: proceed without external delivery – the agent
+        // still runs and its output reaches webchat subscribers through the
+        // session transcript stream.
       }
     }
 
@@ -600,7 +605,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
     }
 
-    if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
+    if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL && !bestEffortDeliver) {
       respond(
         false,
         undefined,
