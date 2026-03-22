@@ -272,6 +272,27 @@ describe("sendMessageDiscord", () => {
     );
   });
 
+  it("prefers the caller-provided filename for media attachments", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock.mockResolvedValue({ id: "msg", channel_id: "789" });
+
+    await sendMessageDiscord("channel:789", "photo", {
+      rest,
+      token: "t",
+      mediaUrl: "file:///tmp/generated-image",
+      filename: "renderable.png",
+    });
+
+    expect(postMock).toHaveBeenCalledWith(
+      Routes.channelMessages("789"),
+      expect.objectContaining({
+        body: expect.objectContaining({
+          files: [expect.objectContaining({ name: "renderable.png" })],
+        }),
+      }),
+    );
+  });
+
   it("uses configured discord mediaMaxMb for uploads", async () => {
     const { rest, postMock } = makeDiscordRest();
     postMock.mockResolvedValue({ id: "msg", channel_id: "789" });
