@@ -1,4 +1,38 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { definePluginEntry, type AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
+
+type CaptureParams = {
+  content?: unknown;
+  category?: unknown;
+  tags?: unknown;
+  source?: unknown;
+};
+
+type SearchParams = {
+  query?: unknown;
+  limit?: unknown;
+  threshold?: unknown;
+};
+
+type ListParams = {
+  limit?: unknown;
+  type?: unknown;
+  topic?: unknown;
+  person?: unknown;
+  days?: unknown;
+};
+
+type PluginConfig = {
+  url: string;
+  apiKey?: string;
+  headers?: Record<string, string>;
+  searchToolName: string;
+  captureToolName: string;
+  listToolName: string;
+  defaultLimit: number;
+  timeoutMs: number;
+  envelopeMode: boolean;
+};
 
 function normalizeTags(raw: unknown): string[] {
   if (!raw) return [];
@@ -26,45 +60,22 @@ function wrapContentWithEnvelope(content: string, metadata: { category?: string;
   return lines.join("\n");
 }
 
-function toErrorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
-}
-
 function extractTextFromMcpResult(payload: unknown): string {
-  if (!payload || typeof payload !== "object") {
+  const result = (payload as { result?: { content?: Array<{ text?: string }> } })?.result;
+  if (!result) {
     return JSON.stringify(payload);
   }
-
-  const result = (payload as { result?: unknown }).result;
-  if (!result || typeof result !== "object") {
-    return JSON.stringify(payload);
-  }
-
-  const content = Array.isArray((result as { content?: unknown }).content)
-    ? ((result as { content?: unknown[] }).content ?? [])
-    : [];
-
+  const content = Array.isArray(result.content) ? result.content : [];
   const textBlocks = content
-    .map((item) => {
-      if (!item || typeof item !== "object") return "";
-      const text = (item as { text?: unknown }).text;
-      return typeof text === "string" ? text : "";
-    })
+    .map((item) => (typeof item?.text === "string" ? item.text : ""))
     .filter(Boolean);
-
-  if (textBlocks.length > 0) {
-    return textBlocks.join("\n\n");
-  }
-
+  if (textBlocks.length > 0) return textBlocks.join("\n\n");
   return JSON.stringify(result, null, 2);
 }
 
 function parseMcpPayload(raw: string): unknown {
-  const trimmed = (raw || "").trim();
-  if (!trimmed) {
-    throw new Error("OpenBrain MCP returned empty payload");
-  }
+  const trimmed = raw.trim();
+  if (!trimmed) throw new Error("OpenBrain MCP returned empty payload");
 
   if (trimmed.startsWith("{")) {
     return JSON.parse(trimmed);
@@ -83,17 +94,12 @@ function parseMcpPayload(raw: string): unknown {
     try {
       return JSON.parse(chunk);
     } catch {
-      // continue
+      // keep trying older frames
     }
   }
 
   throw new Error(`OpenBrain MCP returned non-JSON payload: ${trimmed.slice(0, 400)}`);
 }
-
-type McpPayload = {
-  result?: unknown;
-  error?: unknown;
-};
 
 async function callMcpTool({
   url,
@@ -109,7 +115,7 @@ async function callMcpTool({
   timeoutMs: number;
   toolName: string;
   args: Record<string, unknown>;
-}): Promise<McpPayload> {
+}): Promise<unknown> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -145,20 +151,30 @@ async function callMcpTool({
       throw new Error(`OpenBrain MCP HTTP ${response.status}: ${raw.slice(0, 400)}`);
     }
 
-    const payload = parseMcpPayload(raw);
-    if (!payload || typeof payload !== "object") {
-      throw new Error(`OpenBrain MCP parse failure: ${raw.slice(0, 400)}`);
+    const payload = parseMcpPayload(raw) as { error?: unknown; result?: unknown };
+    if (payload?.error) {
+      throw new Error(`OpenBrain MCP tool error: ${JSON.stringify(payload.error)}`);
     }
 
-    const typedPayload = payload as McpPayload;
-    if (typedPayload.error) {
-      throw new Error(`OpenBrain MCP tool error: ${JSON.stringify(typedPayload.error)}`);
-    }
-
-    return typedPayload;
+    return payload;
   } finally {
     clearTimeout(timer);
   }
+}
+
+function parseConfig(api: OpenClawPluginApi): PluginConfig {
+  const raw = (api.pluginConfig || {}) as Partial<PluginConfig>;
+  return {
+    url: String(raw.url || ""),
+    apiKey: typeof raw.apiKey === "string" ? raw.apiKey : undefined,
+    headers: raw.headers && typeof raw.headers === "object" ? raw.headers : undefined,
+    searchToolName: String(raw.searchToolName || "search_thoughts"),
+    captureToolName: String(raw.captureToolName || "capture_thought"),
+    listToolName: String(raw.listToolName || "list_thoughts"),
+    defaultLimit: Number.isFinite(raw.defaultLimit) ? Number(raw.defaultLimit) : 8,
+    timeoutMs: Number.isFinite(raw.timeoutMs) ? Number(raw.timeoutMs) : 25000,
+    envelopeMode: raw.envelopeMode !== false,
+  };
 }
 
 export default definePluginEntry({
@@ -181,18 +197,8 @@ export default definePluginEntry({
     },
     required: ["url"],
   },
-
   register(api) {
-    const cfg = {
-      searchToolName: "search_thoughts",
-      captureToolName: "capture_thought",
-      listToolName: "list_thoughts",
-      defaultLimit: 8,
-      timeoutMs: 25000,
-      envelopeMode: true,
-      ...(api.pluginConfig || {}),
-    };
-
+    const cfg = parseConfig(api);
     api.logger.info?.("openbrain-native: registering tools");
 
     api.registerTool(
@@ -209,39 +215,31 @@ export default definePluginEntry({
           },
           required: ["query"],
         },
-        async execute(_toolCallId: string, params: Record<string, unknown>) {
+        async execute(_toolCallId: string, params: SearchParams) {
           const query = String(params?.query || "").trim();
-          if (!query) {
-            return { content: [{ type: "text", text: "query is required" }] };
-          }
+          if (!query) return { content: [{ type: "text", text: "query is required" }] };
 
           const args: Record<string, unknown> = {
             query,
-            limit: Number.isFinite(params?.limit) ? Number(params.limit) : cfg.defaultLimit,
+            limit: Number.isFinite(params?.limit as number) ? Number(params?.limit) : cfg.defaultLimit,
           };
-          if (Number.isFinite(params?.threshold)) {
-            args.threshold = Number(params.threshold);
-          }
+          if (Number.isFinite(params?.threshold as number)) args.threshold = Number(params?.threshold);
 
           try {
             const payload = await callMcpTool({
               url: cfg.url,
               apiKey: cfg.apiKey,
               headers: cfg.headers,
-              timeoutMs: Number(cfg.timeoutMs),
-              toolName: String(cfg.searchToolName),
+              timeoutMs: cfg.timeoutMs,
+              toolName: cfg.searchToolName,
               args,
             });
-
-            return {
-              content: [{ type: "text", text: extractTextFromMcpResult(payload) }],
-              details: payload.result ?? null,
-            };
-          } catch (err: unknown) {
-            return { content: [{ type: "text", text: `openbrain_search failed: ${toErrorMessage(err)}` }] };
+            return { content: [{ type: "text", text: extractTextFromMcpResult(payload) }], details: (payload as { result?: unknown })?.result ?? null };
+          } catch (err) {
+            return { content: [{ type: "text", text: `openbrain_search failed: ${err instanceof Error ? err.message : String(err)}` }] };
           }
         },
-      },
+      } as AnyAgentTool,
       { optional: true },
     );
 
@@ -255,48 +253,43 @@ export default definePluginEntry({
           properties: {
             content: { type: "string", description: "Thought content to capture" },
             category: { type: "string", description: "Optional category label" },
-            tags: {
-              type: "string",
-              description: "Comma-separated tags",
-            },
+            tags: { type: "array", items: { type: "string" }, description: "Tag array" },
             source: { type: "string", description: "Optional source label" },
           },
           required: ["content"],
         },
-        async execute(_toolCallId: string, params: Record<string, unknown>) {
+        async execute(_toolCallId: string, params: CaptureParams) {
           const base = String(params?.content || "").trim();
-          if (!base) {
-            return { content: [{ type: "text", text: "content is required" }] };
-          }
+          if (!base) return { content: [{ type: "text", text: "content is required" }] };
 
           const category = typeof params?.category === "string" ? params.category.trim() : "";
           const tags = normalizeTags(params?.tags);
           const source = typeof params?.source === "string" ? params.source.trim() : "";
 
-          const finalContent =
-            cfg.envelopeMode && (category || tags.length > 0 || source)
-              ? wrapContentWithEnvelope(base, { category, tags, source })
-              : base;
+          const args: Record<string, unknown> = cfg.envelopeMode
+            ? { content: wrapContentWithEnvelope(base, { category, tags, source }) }
+            : {
+                content: base,
+                ...(category ? { category } : {}),
+                ...(tags.length > 0 ? { tags } : {}),
+                ...(source ? { source } : {}),
+              };
 
           try {
             const payload = await callMcpTool({
               url: cfg.url,
               apiKey: cfg.apiKey,
               headers: cfg.headers,
-              timeoutMs: Number(cfg.timeoutMs),
-              toolName: String(cfg.captureToolName),
-              args: { content: finalContent },
+              timeoutMs: cfg.timeoutMs,
+              toolName: cfg.captureToolName,
+              args,
             });
-
-            return {
-              content: [{ type: "text", text: extractTextFromMcpResult(payload) }],
-              details: payload.result ?? null,
-            };
-          } catch (err: unknown) {
-            return { content: [{ type: "text", text: `openbrain_capture failed: ${toErrorMessage(err)}` }] };
+            return { content: [{ type: "text", text: extractTextFromMcpResult(payload) }], details: (payload as { result?: unknown })?.result ?? null };
+          } catch (err) {
+            return { content: [{ type: "text", text: `openbrain_capture failed: ${err instanceof Error ? err.message : String(err)}` }] };
           }
         },
-      },
+      } as AnyAgentTool,
       { optional: true },
     );
 
@@ -315,12 +308,11 @@ export default definePluginEntry({
             days: { type: "number" },
           },
         },
-        async execute(_toolCallId: string, params: Record<string, unknown>) {
+        async execute(_toolCallId: string, params: ListParams) {
           const args: Record<string, unknown> = {};
-          for (const key of ["limit", "type", "topic", "person", "days"]) {
-            if (params && params[key] !== undefined && params[key] !== null && params[key] !== "") {
-              args[key] = params[key];
-            }
+          for (const key of ["limit", "type", "topic", "person", "days"] as const) {
+            const value = params?.[key];
+            if (value !== undefined && value !== null && value !== "") args[key] = value;
           }
           if (args.limit === undefined) args.limit = cfg.defaultLimit;
 
@@ -329,20 +321,16 @@ export default definePluginEntry({
               url: cfg.url,
               apiKey: cfg.apiKey,
               headers: cfg.headers,
-              timeoutMs: Number(cfg.timeoutMs),
-              toolName: String(cfg.listToolName),
+              timeoutMs: cfg.timeoutMs,
+              toolName: cfg.listToolName,
               args,
             });
-
-            return {
-              content: [{ type: "text", text: extractTextFromMcpResult(payload) }],
-              details: payload.result ?? null,
-            };
-          } catch (err: unknown) {
-            return { content: [{ type: "text", text: `openbrain_list_recent failed: ${toErrorMessage(err)}` }] };
+            return { content: [{ type: "text", text: extractTextFromMcpResult(payload) }], details: (payload as { result?: unknown })?.result ?? null };
+          } catch (err) {
+            return { content: [{ type: "text", text: `openbrain_list_recent failed: ${err instanceof Error ? err.message : String(err)}` }] };
           }
         },
-      },
+      } as AnyAgentTool,
       { optional: true },
     );
   },
