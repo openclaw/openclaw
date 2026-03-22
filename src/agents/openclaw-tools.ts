@@ -29,21 +29,44 @@ import { createTtsTool } from "./tools/tts-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
-function coerceFiniteNumber(value: unknown): number | undefined {
+/**
+ * Value to inject into plugin tools that declare `messageThreadId` in their schema.
+ * Integer strings outside IEEE-754 safe integer range stay as strings so IDs like
+ * Discord snowflakes are not rounded by `Number(...)`.
+ */
+function normalizeMessageThreadIdForInjection(value: unknown): string | number | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
   }
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return undefined;
-    }
-    const parsed = Number(trimmed);
-    if (Number.isFinite(parsed)) {
-      return parsed;
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  // Pure integer strings: avoid Number() precision loss for large IDs (e.g. snowflakes).
+  if (/^-?\d+$/.test(trimmed)) {
+    try {
+      const asBigInt = BigInt(trimmed);
+      const maxSafe = BigInt(Number.MAX_SAFE_INTEGER);
+      const minSafe = BigInt(Number.MIN_SAFE_INTEGER);
+      if (asBigInt > maxSafe || asBigInt < minSafe) {
+        return trimmed;
+      }
+      return Number(trimmed);
+    } catch {
+      return trimmed;
     }
   }
-  return undefined;
+  const parsed = Number(trimmed);
+  if (Number.isFinite(parsed)) {
+    return parsed;
+  }
+  return trimmed;
 }
 
 function toolParametersSupportsMessageThreadId(tool: AnyAgentTool): boolean {
@@ -283,7 +306,7 @@ export function createOpenClawTools(
     allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
   });
 
-  const normalizedMessageThreadId = coerceFiniteNumber(options?.agentThreadId);
+  const normalizedMessageThreadId = normalizeMessageThreadIdForInjection(options?.agentThreadId);
   if (normalizedMessageThreadId === undefined) {
     return [...tools, ...pluginTools];
   }
