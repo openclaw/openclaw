@@ -32027,6 +32027,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.accounts.*.documentBatchWindowMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.accounts.*.draftChunk",
       "kind": "channel",
       "type": "object",
@@ -34060,6 +34070,16 @@
     },
     {
       "path": "channels.telegram.dms.*.historyLimit",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.documentBatchWindowMs",
       "kind": "channel",
       "type": "integer",
       "required": false,
