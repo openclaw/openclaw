@@ -35,6 +35,12 @@ openclaw plugins install clawhub:<package>
 openclaw plugins update --all
 ```
 
+Bare npm-safe plugin specs are also tried against ClawHub before npm:
+
+```bash
+openclaw plugins install openclaw-codex-app-server
+```
+
 Native `openclaw` commands install into your active workspace and persist source
 metadata so later `update` calls can stay on ClawHub.
 
