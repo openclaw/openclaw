@@ -1884,6 +1884,38 @@ describe("applyExtraParamsToAgent", () => {
     expect(resolvedModelId).toBe("MiniMax-M2.7-highspeed");
   });
 
+  it("maps xAI /fast to the current Grok fast model", () => {
+    const resolvedModelId = runResolvedModelIdCase({
+      applyProvider: "xai",
+      applyModelId: "grok-4",
+      extraParamsOverride: { fastMode: true },
+      model: {
+        api: "openai-completions",
+        provider: "xai",
+        id: "grok-4",
+        baseUrl: "https://api.x.ai/v1",
+      } as Model<"openai-completions">,
+    });
+
+    expect(resolvedModelId).toBe("grok-4-fast");
+  });
+
+  it("keeps explicit xAI fast models unchanged when /fast is off", () => {
+    const resolvedModelId = runResolvedModelIdCase({
+      applyProvider: "xai",
+      applyModelId: "grok-4-1-fast",
+      extraParamsOverride: { fastMode: false },
+      model: {
+        api: "openai-completions",
+        provider: "xai",
+        id: "grok-4-1-fast",
+        baseUrl: "https://api.x.ai/v1",
+      } as Model<"openai-completions">,
+    });
+
+    expect(resolvedModelId).toBe("grok-4-1-fast");
+  });
+
   it("injects service_tier=auto for Anthropic fast mode on direct API-key models", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "anthropic",
