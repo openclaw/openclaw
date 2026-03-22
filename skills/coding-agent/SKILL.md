@@ -1,9 +1,9 @@
 ---
 name: coding-agent
-description: 'Delegate coding tasks to Codex, Claude Code, or Pi agents via background process. Use when: (1) building/creating new features or apps, (2) reviewing PRs (spawn in temp dir), (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-liner fixes (just edit), reading code (use read tool), thread-bound ACP harness requests in chat (for example spawn/run Codex or Claude Code in a Discord thread; use sessions_spawn with runtime:"acp"), or any work in ~/clawd workspace (never spawn agents here). Claude Code: use --print --permission-mode bypassPermissions (no PTY). Codex/Pi/OpenCode: pty:true required.'
+description: 'Delegate coding tasks to Codex, Claude Code, Kiro, or Pi agents via background process. Use when: (1) building/creating new features or apps, (2) reviewing PRs (spawn in temp dir), (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-liner fixes (just edit), reading code (use read tool), thread-bound ACP harness requests in chat (for example spawn/run Codex or Claude Code in a Discord thread; use sessions_spawn with runtime:"acp"), or any work in ~/clawd workspace (never spawn agents here). Claude Code: use --print --permission-mode bypassPermissions (no PTY). Kiro: use --no-interactive --trust-all-tools (no PTY). Codex/Pi/OpenCode: pty:true required.'
 metadata:
   {
-    "openclaw": { "emoji": "🧩", "requires": { "anyBins": ["claude", "codex", "opencode", "pi"] } },
+    "openclaw": { "emoji": "🧩", "requires": { "anyBins": ["claude", "codex", "opencode", "pi", "kiro-cli"] } },
   }
 ---
 
@@ -11,7 +11,7 @@ metadata:
 
 Use **bash** (with optional background mode) for all coding agent work. Simple and effective.
 
-## ⚠️ PTY Mode: Codex/Pi/OpenCode yes, Claude Code no
+## ⚠️ PTY Mode: Codex/Pi/OpenCode yes, Claude Code & Kiro no
 
 For **Codex, Pi, and OpenCode**, PTY is still required (interactive terminal apps):
 
@@ -32,6 +32,19 @@ cd /path/to/project && claude --permission-mode bypassPermissions --print 'Your 
 
 # ❌ Wrong for Claude Code
 bash pty:true command:"claude --dangerously-skip-permissions 'task'"
+```
+
+For **Kiro** (`kiro-cli`), use `--no-interactive --trust-all-tools` instead.
+Like Claude Code, Kiro does NOT need PTY — it runs cleanly in non-interactive mode:
+
+```bash
+# ✅ Correct for Kiro (no PTY needed)
+cd /path/to/project && kiro-cli chat --no-interactive --trust-all-tools 'Your task'
+
+# For background execution: use background:true on the exec tool
+
+# ❌ Wrong for Kiro
+bash pty:true command:"kiro-cli chat 'task'"
 ```
 
 ### Bash Tool Parameters
@@ -70,9 +83,12 @@ SCRATCH=$(mktemp -d) && cd $SCRATCH && git init && codex exec "Your prompt here"
 
 # Or in a real project - with PTY!
 bash pty:true workdir:~/Projects/myproject command:"codex exec 'Add error handling to the API calls'"
+
+# Kiro — no git init required, no PTY needed
+bash workdir:~/Projects/myproject command:"kiro-cli chat --no-interactive --trust-all-tools 'Add error handling to the API calls'"
 ```
 
-**Why git init?** Codex refuses to run outside a trusted git directory. Creating a temp repo solves this for scratch work.
+**Why git init?** Codex refuses to run outside a trusted git directory. Creating a temp repo solves this for scratch work. Kiro and Claude Code don't have this requirement.
 
 ---
 
@@ -176,6 +192,114 @@ bash workdir:~/project background:true command:"claude --permission-mode bypassP
 
 ---
 
+## Kiro
+
+**Binary:** `kiro-cli` (at `~/.local/bin/kiro-cli`)
+
+**Key flags:** `--no-interactive --trust-all-tools` (required for agent-driven execution — without them Kiro enters TUI or pauses for permission prompts).
+
+**No PTY needed.** No git init required.
+
+### One-Shot (foreground)
+
+```bash
+# Quick task
+bash workdir:~/project command:"kiro-cli chat --no-interactive --trust-all-tools 'Your task'"
+
+# With a specific Kiro custom agent
+bash workdir:~/project command:"kiro-cli chat --agent backend-specialist --no-interactive --trust-all-tools 'Your task'"
+
+# With a specific model
+bash workdir:~/project command:"kiro-cli chat --model claude-sonnet-4 --no-interactive --trust-all-tools 'Your task'"
+```
+
+### Background Execution
+
+```bash
+bash workdir:~/project background:true command:"kiro-cli chat --no-interactive --trust-all-tools 'Refactor the auth module to use middleware pattern'"
+# Returns sessionId → monitor with process action:log/poll/kill
+```
+
+### Background + Auto-Notify
+
+For long tasks, append a notification trigger so you get pinged immediately on completion:
+
+```bash
+bash workdir:~/project background:true command:"kiro-cli chat --no-interactive --trust-all-tools 'Build a REST API for todos.
+
+When completely finished, run this command to notify:
+openclaw system event --text \"Done: Built todos REST API\" --mode now'"
+```
+
+### Kiro vs other agents — key differences
+
+| Aspect | Kiro | Codex | Claude Code |
+| --- | --- | --- | --- |
+| PTY required | No | Yes | No |
+| Git repo required | No | Yes | No |
+| Non-interactive flag | `--no-interactive` | `exec` subcommand | `--print` |
+| Auto-approve flag | `--trust-all-tools` | `--full-auto` / `--yolo` | `--permission-mode bypassPermissions` |
+| Custom agent support | `--agent NAME` | N/A | N/A |
+| Model override | `--model MODEL` | config-based | `--model MODEL` |
+| Review command | Use prompt-based review | `codex review --base` | Use prompt-based review |
+
+### Kiro PR Review
+
+```bash
+REVIEW_DIR=$(mktemp -d)
+git clone https://github.com/user/repo.git $REVIEW_DIR
+cd $REVIEW_DIR && gh pr checkout 130
+bash workdir:$REVIEW_DIR command:"kiro-cli chat --no-interactive --trust-all-tools 'Review this PR. Summarize changes, flag issues, suggest improvements.'"
+```
+
+### Kiro Parallel with git worktrees
+
+```bash
+git worktree add -b fix/issue-78 /tmp/issue-78 main
+git worktree add -b fix/issue-99 /tmp/issue-99 main
+
+bash workdir:/tmp/issue-78 background:true command:"kiro-cli chat --no-interactive --trust-all-tools 'Fix issue #78: <description>. Commit when done.'"
+bash workdir:/tmp/issue-99 background:true command:"kiro-cli chat --no-interactive --trust-all-tools 'Fix issue #99: <description>. Commit when done.'"
+
+process action:list
+
+# Create PRs after fixes
+cd /tmp/issue-78 && git push -u origin fix/issue-78
+gh pr create --title "fix: ..." --body "..."
+
+# Cleanup
+git worktree remove /tmp/issue-78
+git worktree remove /tmp/issue-99
+```
+
+### Kiro Progress Updates
+
+When Kiro runs in background:
+- 1 short message when started (what + where)
+- Update only when something changes: milestone completes, error/blocker, task finishes (include what changed)
+- If you kill a session, say so immediately and why
+- Don't spam routine logs — surface meaningful events only
+
+### Kiro-Specific Rules
+
+1. **One-shot first.** Default to `--no-interactive --trust-all-tools`. Only use background for genuinely long tasks.
+2. **Respect tool choice.** If user says Kiro, use Kiro. Don't silently swap in another agent.
+3. **Be patient.** Don't kill sessions because they seem slow.
+4. **Use workdir.** Keep Kiro scoped to the right directory.
+5. **NEVER start Kiro in ~/.openclaw/.** It'll read workspace docs and get confused.
+6. **Parallel is OK.** Run multiple Kiro processes for batch work.
+
+### Kiro Learnings
+
+- `--no-interactive` is essential. Without it, Kiro enters TUI mode and hangs.
+- `--trust-all-tools` pre-approves tool use. Without it, Kiro may pause for permission prompts that nobody answers.
+- Kiro respects `workdir` context — files outside the working directory are less likely to be touched.
+- For scratch work, `mktemp -d && cd` + run works fine (no git init required, unlike Codex).
+
+> **Note:** For Kiro ACP multi-turn orchestration, session/agent/settings management, or advanced delegation modes (manual/semi-auto/full-auto), use the dedicated `kiro-agent` skill instead. This section covers coding-agent-style process-first usage only.
+
+---
+
 ## OpenCode
 
 ```bash
@@ -234,6 +358,7 @@ git worktree remove /tmp/issue-99
 1. **Use the right execution mode per agent**:
    - Codex/Pi/OpenCode: `pty:true`
    - Claude Code: `--print --permission-mode bypassPermissions` (no PTY required)
+   - Kiro: `--no-interactive --trust-all-tools` (no PTY required)
 2. **Respect tool choice** - if user asks for Codex, use Codex.
    - Orchestrator mode: do NOT hand-code patches yourself.
    - If an agent fails/hangs, respawn it or ask the user for direction, but don't silently take over.
@@ -288,8 +413,10 @@ This triggers an immediate wake event — Skippy gets pinged in seconds, not 10 
 
 ## Learnings (Jan 2026)
 
-- **PTY is essential:** Coding agents are interactive terminal apps. Without `pty:true`, output breaks or agent hangs.
-- **Git repo required:** Codex won't run outside a git directory. Use `mktemp -d && git init` for scratch work.
+- **PTY is essential for Codex/Pi/OpenCode:** These are interactive terminal apps. Without `pty:true`, output breaks or agent hangs.
+- **No PTY for Claude Code & Kiro:** Both use non-interactive print modes that work cleanly without PTY.
+- **Git repo required for Codex only:** Codex won't run outside a git directory. Use `mktemp -d && git init` for scratch work. Kiro and Claude Code don't need this.
+- **Kiro flags:** `--no-interactive` prevents TUI mode; `--trust-all-tools` pre-approves tool use. Both are required for agent-driven execution.
 - **exec is your friend:** `codex exec "prompt"` runs and exits cleanly - perfect for one-shots.
 - **submit vs write:** Use `submit` to send input + Enter, `write` for raw data without newline.
 - **Sass works:** Codex responds well to playful prompts. Asked it to write a haiku about being second fiddle to a space lobster, got: _"Second chair, I code / Space lobster sets the tempo / Keys glow, I follow"_ 🦞
