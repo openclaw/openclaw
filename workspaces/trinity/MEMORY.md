@@ -1,5 +1,12 @@
 # Trinity — Finance Memory
 
+## Recent Work (2026-03-22)
+
+| Project   | Task                         | Finding                 | Report                       |
+| --------- | ---------------------------- | ----------------------- | ---------------------------- |
+| operator1 | Cost review & analysis       | ✅ Excellent ($4.20/mo) | `memory/2026-03-22.md`       |
+| operator1 | Cost tracking implementation | ✅ Operational          | Daily monitoring established |
+
 ## Recent Work (2026-03-17)
 
 | Project   | Task                          | Recommendation               | Report                                                                                                       |
