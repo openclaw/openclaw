@@ -15,6 +15,7 @@ import { buildServiceEnvironment } from "../daemon/service-env.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
+  normalizeEnvVarKey,
 } from "../infra/host-env-security.js";
 import {
   emitDaemonInstallRuntimeWarning,
@@ -49,8 +50,12 @@ export function readStateDirDotEnvVars(
 
   const parsed = dotenv.parse(content);
   const entries: Record<string, string> = {};
-  for (const [key, value] of Object.entries(parsed)) {
-    if (!key || !value?.trim()) {
+  for (const [rawKey, value] of Object.entries(parsed)) {
+    if (!value?.trim()) {
+      continue;
+    }
+    const key = normalizeEnvVarKey(rawKey, { portable: true });
+    if (!key) {
       continue;
     }
     if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {

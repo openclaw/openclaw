@@ -86,11 +86,21 @@ function mockNodeGatewayPlanFixture(
 }
 
 describe("buildGatewayInstallPlan", () => {
+  // Prevent tests from reading the developer's real ~/.openclaw/.env when
+  // passing `env: {}` (which falls back to os.homedir for state-dir resolution).
+  let isolatedHome: string;
+  beforeEach(() => {
+    isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "oc-plan-test-"));
+  });
+  afterEach(() => {
+    fs.rmSync(isolatedHome, { recursive: true, force: true });
+  });
+
   it("uses provided nodePath and returns plan", async () => {
     mockNodeGatewayPlanFixture();
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: { HOME: isolatedHome },
       port: 3000,
       runtime: "node",
       nodePath: "/custom/node",
@@ -102,7 +112,7 @@ describe("buildGatewayInstallPlan", () => {
     expect(mocks.resolvePreferredNodePath).not.toHaveBeenCalled();
     expect(mocks.buildServiceEnvironment).toHaveBeenCalledWith(
       expect.objectContaining({
-        env: {},
+        env: { HOME: isolatedHome },
         port: 3000,
         extraPathDirs: ["/custom"],
       }),
@@ -113,7 +123,7 @@ describe("buildGatewayInstallPlan", () => {
     mockNodeGatewayPlanFixture();
 
     await buildGatewayInstallPlan({
-      env: {},
+      env: { HOME: isolatedHome },
       port: 3000,
       runtime: "node",
       nodePath: "node",
