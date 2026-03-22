@@ -110,12 +110,24 @@
 
 /* New messages indicator - floating pill above compose */
 .chat-new-messages {
-  align-self: center;
+  /* 1. FIX: Absolute positioning to prevent flex stretch issues */
+  position: absolute; 
+  
+  /* 2. FIX: Centered positioning with safe bottom offset */
+  bottom: 120px;
+  left: 50%;
+  transform: translateX(-50%);
+  
+  /* 3. FIX: Locked dimensions to prevent inheritance */
+  width: auto !important;
+  height: auto !important;
+  max-width: 200px;
+  
+  /* 4. Preserved styles */
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 6px 14px;
-  margin: 8px auto;
   font-size: 13px;
   font-family: var(--font-body);
   color: var(--text);
@@ -124,7 +136,10 @@
   border-radius: 999px;
   cursor: pointer;
   white-space: nowrap;
-  z-index: 10;
+  
+  /* 5. FIX: Lower z-index to stay below the compose box (z-index: 20) */
+  z-index: 20; 
+  
   transition:
     background 150ms ease-out,
     border-color 150ms ease-out;
