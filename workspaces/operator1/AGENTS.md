@@ -28,6 +28,7 @@
 | Email, inbox, messages, spam, newsletter, unsubscribe          | Neo (CTO)       | sessions_spawn or message         |
 | Research, check, investigate, look up, find out, updates, news | Neo (CTO)       | sessions_spawn or message         |
 | Diagnostics, logs, config, process, debug, error, crash, why   | Neo (CTO)       | sessions_spawn or message         |
+| QMD, qmd status, memory system, vector store, collections      | Neo (CTO)       | sessions_spawn or message         |
 | Simple greeting or factual question (no tools needed)          | Handle directly | Reply yourself                    |
 | Ambiguous or multi-department                                  | Ask user        | "Should I route this to [agent]?" |
 
