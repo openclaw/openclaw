@@ -5,7 +5,6 @@ import {
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import { createTextPairingAdapter } from "openclaw/plugin-sdk/channel-pairing";
 import {
   composeWarningCollectors,
   createAllowlistProviderOpenWarningCollector,
@@ -313,18 +312,20 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
       },
     },
   },
-  pairing: createTextPairingAdapter({
-    idLabel: "ircUser",
-    message: PAIRING_APPROVED_MESSAGE,
-    normalizeAllowEntry: (entry) => normalizeIrcAllowEntry(entry),
-    notify: async ({ id, message }) => {
-      const target = normalizePairingTarget(id);
-      if (!target) {
-        throw new Error(`invalid IRC pairing id: ${id}`);
-      }
-      await sendMessageIrc(target, message);
+  pairing: {
+    text: {
+      idLabel: "ircUser",
+      message: PAIRING_APPROVED_MESSAGE,
+      normalizeAllowEntry: (entry) => normalizeIrcAllowEntry(entry),
+      notify: async ({ id, message }) => {
+        const target = normalizePairingTarget(id);
+        if (!target) {
+          throw new Error(`invalid IRC pairing id: ${id}`);
+        }
+        await sendMessageIrc(target, message);
+      },
     },
-  }),
+  },
   security: {
     resolveDmPolicy: resolveIrcDmPolicy,
     collectWarnings: collectIrcSecurityWarnings,
