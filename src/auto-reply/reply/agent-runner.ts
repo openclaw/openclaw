@@ -109,7 +109,7 @@ export async function runReplyAgent(params: {
   shouldInjectGroupIntro: boolean;
   typingMode: TypingMode;
 }): Promise<ReplyPayload | ReplyPayload[] | undefined> {
-  const {
+  let {
     commandBody,
     followupRun,
     queueKey,
@@ -257,6 +257,19 @@ export async function runReplyAgent(params: {
     storePath,
     isHeartbeat,
   });
+
+  // Check if compaction happened (session was reset to a new ID) and inject a
+  // channel reminder so the agent re-orients after losing conversation context.
+  const compactionOccurred = activeSessionEntry?.sessionId !== sessionEntry?.sessionId;
+  if (compactionOccurred && sessionCtx.Surface) {
+    const channelReminder = [
+      "[Post-compaction channel reminder]",
+      `Channel: ${sessionCtx.Surface ?? sessionCtx.Provider ?? "unknown"}`,
+      `Topic: ${sessionCtx.MessageThreadId ?? "main"}`,
+      "Continue responding only to this channel.",
+    ].join("\n");
+    commandBody = `${channelReminder}\n\n${commandBody}`;
+  }
 
   // Pre-fetch memory when the user message references prior context, injecting
   // results as a system event so the agent sees them even if it skips memory_search.
