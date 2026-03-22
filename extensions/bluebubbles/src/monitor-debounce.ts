@@ -112,6 +112,21 @@ function resolveBlueBubblesDebounceMs(
   return core.channel.debounce.resolveInboundDebounceMs({ cfg: config, channel: "bluebubbles" });
 }
 
+function resolveBlueBubblesFallbackChatKey(message: NormalizedWebhookMessage): string {
+  return (
+    message.chatGuid?.trim() ??
+    message.chatIdentifier?.trim() ??
+    (message.chatId ? String(message.chatId) : "dm")
+  );
+}
+
+function resolveBlueBubblesFallbackDebounceKey(
+  accountId: string,
+  message: NormalizedWebhookMessage,
+): string {
+  return `bluebubbles:${accountId}:${resolveBlueBubblesFallbackChatKey(message)}:${message.senderId}`;
+}
+
 export function createBlueBubblesDebounceRegistry(params: {
   processMessage: (message: NormalizedWebhookMessage, target: WebhookTarget) => Promise<void>;
 }): BlueBubblesDebounceRegistry {
@@ -166,12 +181,7 @@ export function createBlueBubblesDebounceRegistry(params: {
           if (messageId) {
             return `bluebubbles:${account.accountId}:msg:${messageId}`;
           }
-
-          const chatKey =
-            msg.chatGuid?.trim() ??
-            msg.chatIdentifier?.trim() ??
-            (msg.chatId ? String(msg.chatId) : "dm");
-          return `bluebubbles:${account.accountId}:${chatKey}:${msg.senderId}`;
+          return resolveBlueBubblesFallbackDebounceKey(account.accountId, msg);
         },
         shouldDebounce: (entry) => {
           const msg = entry.message;
@@ -248,6 +258,9 @@ export function createBlueBubblesDebounceRegistry(params: {
                 `bluebubbles:${account.accountId}:balloon:${associatedMessageGuid}`,
               );
             }
+            await debouncer.flushKey(
+              resolveBlueBubblesFallbackDebounceKey(account.accountId, entry.message),
+            );
           }
           await debouncer.enqueue(entry);
         },

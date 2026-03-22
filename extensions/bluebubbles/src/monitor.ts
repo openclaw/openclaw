@@ -241,7 +241,7 @@ function buildInboundReplayKey(params: {
   eventType: string;
   message: NormalizedWebhookMessage;
 }): string | undefined {
-  const { target, eventType, message } = params;
+  const { target, message } = params;
   const messageId = message.messageId?.trim();
   if (!messageId) {
     return undefined;
@@ -277,7 +277,6 @@ function buildInboundReplayKey(params: {
   return [
     "bluebubbles",
     target.account.accountId,
-    eventType,
     message.senderId,
     chatKey,
     messageId,
