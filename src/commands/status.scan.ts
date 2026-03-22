@@ -10,6 +10,7 @@ import { resolveConfigPath } from "../config/paths.js";
 import { callGateway } from "../gateway/call.js";
 import type { collectChannelStatusIssues as collectChannelStatusIssuesFn } from "../infra/channels-status-issues.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
+import { loggingState } from "../logging/state.js";
 import {
   buildPluginCompatibilityNotices,
   type PluginCompatibilityNotice,
@@ -166,7 +167,14 @@ async function scanStatusJsonFast(opts: {
   const hasConfiguredChannels = hasPotentialConfiguredChannels(cfg);
   if (hasConfiguredChannels) {
     const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
-    ensurePluginRegistryLoaded({ scope: "configured-channels" });
+    // Route plugin registration logs to stderr so they don't corrupt JSON on stdout.
+    const prev = loggingState.forceConsoleToStderr;
+    loggingState.forceConsoleToStderr = true;
+    try {
+      ensurePluginRegistryLoaded({ scope: "configured-channels" });
+    } finally {
+      loggingState.forceConsoleToStderr = prev;
+    }
   }
   const osSummary = resolveOsSummary();
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";

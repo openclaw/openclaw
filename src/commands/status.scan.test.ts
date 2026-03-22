@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loggingState } from "../logging/state.js";
 
 const mocks = vi.hoisted(() => ({
   resolveConfigPath: vi.fn(() => `/tmp/openclaw-status-scan-missing-${process.pid}.json`),
@@ -18,9 +19,17 @@ const mocks = vi.hoisted(() => ({
   buildPluginCompatibilityNotices: vi.fn(() => []),
 }));
 
+let originalForceStderr: boolean;
+
 beforeEach(() => {
   vi.clearAllMocks();
+  originalForceStderr = loggingState.forceConsoleToStderr;
+  loggingState.forceConsoleToStderr = false;
   mocks.hasPotentialConfiguredChannels.mockReturnValue(false);
+});
+
+afterEach(() => {
+  loggingState.forceConsoleToStderr = originalForceStderr;
 });
 
 vi.mock("../channels/config-presence.js", () => ({
@@ -503,6 +512,8 @@ describe("scanStatus", () => {
     expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith({
       scope: "configured-channels",
     });
+    // Verify plugin logs were routed to stderr during loading and restored after
+    expect(loggingState.forceConsoleToStderr).toBe(false);
     expect(mocks.probeGateway).toHaveBeenCalledWith(
       expect.objectContaining({ detailLevel: "presence" }),
     );
