@@ -3,7 +3,7 @@ import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
 import { setLastActiveSessionKey } from "./app-settings.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
 import type { OpenClawApp } from "./app.ts";
-import { executeSlashCommand } from "./chat/slash-command-executor.ts";
+import { executeSlashCommand, type SlashCommandResult } from "./chat/slash-command-executor.ts";
 import { parseSlashCommand } from "./chat/slash-commands.ts";
 import { abortChatRun, loadChatHistory, sendChatMessage } from "./controllers/chat.ts";
 import { loadModels } from "./controllers/models.ts";
@@ -301,11 +301,20 @@ async function dispatchSlashCommand(
   }
 
   if (!host.client) {
+    injectCommandResult(host, `Cannot execute \`/${name}\`: not connected to gateway.`);
+    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
     return;
   }
 
   const targetSessionKey = host.sessionKey;
-  const result = await executeSlashCommand(host.client, targetSessionKey, name, args);
+  let result: SlashCommandResult;
+  try {
+    result = await executeSlashCommand(host.client, targetSessionKey, name, args);
+  } catch (err) {
+    injectCommandResult(host, `Command \`/${name}\` failed: ${String(err)}`);
+    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+    return;
+  }
 
   if (result.content) {
     injectCommandResult(host, result.content);
