@@ -305,6 +305,14 @@ describe("buildServiceEnvironment", () => {
     expect(env.TMPDIR).toBe("/var/folders/xw/abc123/T/");
   });
 
+  it("forwards OPENCLAW_HOME into the installed service environment", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user", OPENCLAW_HOME: "/srv/openclaw-home" },
+      port: 18789,
+    });
+    expect(env.OPENCLAW_HOME).toBe("/srv/openclaw-home");
+  });
+
   it("falls back to os.tmpdir when TMPDIR is not set", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user" },

@@ -318,6 +318,7 @@ function buildCommonServiceEnvironment(
 ): Record<string, string | undefined> {
   const serviceEnv: Record<string, string | undefined> = {
     HOME: env.HOME,
+    OPENCLAW_HOME: env.OPENCLAW_HOME,
     TMPDIR: sharedEnv.tmpDir,
     ...sharedEnv.proxyEnv,
     NODE_EXTRA_CA_CERTS: sharedEnv.nodeCaCerts,
