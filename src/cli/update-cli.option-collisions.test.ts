@@ -9,6 +9,12 @@ const updateWizardCommand = vi.fn(async (_opts: unknown) => {});
 const defaultRuntime = {
   log: vi.fn(),
   error: vi.fn(),
+  writeStdout: vi.fn((value: string) => {
+    defaultRuntime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
+  }),
+  writeJson: vi.fn((value: unknown, space = 2) => {
+    defaultRuntime.log(JSON.stringify(value, null, space));
+  }),
   exit: vi.fn(),
 };
 
@@ -41,6 +47,8 @@ describe("update cli option collisions", () => {
     updateWizardCommand.mockClear();
     defaultRuntime.log.mockClear();
     defaultRuntime.error.mockClear();
+    defaultRuntime.writeStdout.mockClear();
+    defaultRuntime.writeJson.mockClear();
     defaultRuntime.exit.mockClear();
   });
 
