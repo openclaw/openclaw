@@ -415,7 +415,9 @@ function resolveTaskConfigEnvironment(
     if (!sourcePath) {
       return env;
     }
-    return inferTaskStateDirFromScriptPath(env, sourcePath, { preserveCurrentPathMatch: false });
+    return inferTaskStateDirFromScriptPath(env, sourcePath, {
+      preserveCurrentPathMatch: Boolean(env.OPENCLAW_TASK_SCRIPT?.trim()),
+    });
   }
   const mergedEnvironment = { ...env, ...taskEnvironment };
   const hasTaskConfigRoot = TASK_CONFIG_ROOT_ENV_KEYS.some((key) => taskEnvironment[key]?.trim());

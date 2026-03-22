@@ -451,6 +451,105 @@ describe("Scheduled Task stop/restart cleanup", () => {
     });
   });
 
+  it("keeps explicit OPENCLAW_TASK_SCRIPT shell config roots when the task script lives outside the state dir", async () => {
+    await withWindowsEnv("openclaw-win-stop-", async ({ env, tmpDir }) => {
+      const shellState = path.join(tmpDir, "shell-state");
+      const scriptDir = path.join(tmpDir, "task-scripts");
+      const taskScriptPath = path.join(scriptDir, "gateway.cmd");
+      const shellConfigPath = await writeGatewayConfig(
+        { ...env, OPENCLAW_STATE_DIR: shellState },
+        GATEWAY_PORT,
+      );
+      await writeGatewayScript(
+        {
+          ...env,
+          OPENCLAW_TASK_SCRIPT: taskScriptPath,
+        },
+        GATEWAY_PORT,
+        {
+          includePortEnv: false,
+          includePortFlag: false,
+        },
+      );
+      await fs.mkdir(scriptDir, { recursive: true });
+      await fs.writeFile(
+        path.join(scriptDir, "openclaw.json"),
+        JSON.stringify({ gateway: { port: 29999 } }, null, 2),
+        "utf8",
+      );
+      const shellEnv = {
+        ...env,
+        OPENCLAW_CONFIG_PATH: shellConfigPath,
+        OPENCLAW_TASK_SCRIPT: taskScriptPath,
+      };
+      const stdout = new PassThrough();
+      const envWithoutPort: Record<string, string> = { ...shellEnv };
+      delete envWithoutPort.OPENCLAW_GATEWAY_PORT;
+      pushSuccessfulSchtasksResponses(3);
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([9393]);
+      inspectPortUsage
+        .mockResolvedValueOnce(busyPortUsage(9393))
+        .mockResolvedValueOnce(freePortUsage());
+
+      await stopScheduledTask({ env: envWithoutPort, stdout });
+
+      expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
+      expect(inspectPortUsage).not.toHaveBeenCalledWith(29999);
+      expectGatewayTermination(9393);
+    });
+  });
+
+  it("keeps explicit OPENCLAW_TASK_SCRIPT shell config roots during restart when the task script lives outside the state dir", async () => {
+    await withWindowsEnv("openclaw-win-stop-", async ({ env, tmpDir }) => {
+      const shellState = path.join(tmpDir, "shell-state");
+      const scriptDir = path.join(tmpDir, "task-scripts");
+      const taskScriptPath = path.join(scriptDir, "gateway.cmd");
+      const shellConfigPath = await writeGatewayConfig(
+        { ...env, OPENCLAW_STATE_DIR: shellState },
+        GATEWAY_PORT,
+      );
+      await writeGatewayScript(
+        {
+          ...env,
+          OPENCLAW_TASK_SCRIPT: taskScriptPath,
+        },
+        GATEWAY_PORT,
+        {
+          includePortEnv: false,
+          includePortFlag: false,
+        },
+      );
+      await fs.mkdir(scriptDir, { recursive: true });
+      await fs.writeFile(
+        path.join(scriptDir, "openclaw.json"),
+        JSON.stringify({ gateway: { port: 29999 } }, null, 2),
+        "utf8",
+      );
+      const shellEnv = {
+        ...env,
+        OPENCLAW_CONFIG_PATH: shellConfigPath,
+        OPENCLAW_TASK_SCRIPT: taskScriptPath,
+      };
+      const stdout = new PassThrough();
+      const envWithoutPort: Record<string, string> = { ...shellEnv };
+      delete envWithoutPort.OPENCLAW_GATEWAY_PORT;
+      pushSuccessfulSchtasksResponses(4);
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([9292]);
+      inspectPortUsage
+        .mockResolvedValueOnce(busyPortUsage(9292))
+        .mockResolvedValueOnce(freePortUsage());
+
+      await expect(restartScheduledTask({ env: envWithoutPort, stdout })).resolves.toEqual({
+        outcome: "completed",
+      });
+
+      expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
+      expect(inspectPortUsage).not.toHaveBeenCalledWith(29999);
+      expectGatewayTermination(9292);
+      expect(schtasksCalls.at(-1)).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+    });
+  });
+
   it("discovers legacy default state-dir configs when the task omits explicit port settings", async () => {
     await withWindowsEnv("openclaw-win-stop-", async ({ env, tmpDir }) => {
       const legacyStateDir = path.join(tmpDir, ".clawdbot");
