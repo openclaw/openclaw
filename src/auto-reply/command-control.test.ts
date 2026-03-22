@@ -566,6 +566,9 @@ describe("control command parsing", () => {
     expect(hasInlineCommandTokens("plain text")).toBe(false);
     expect(hasInlineCommandTokens("http://example.com/path")).toBe(false);
     expect(hasInlineCommandTokens("stop")).toBe(false);
+    expect(hasInlineCommandTokens("![image](https://example.com/img.png)")).toBe(false);
+    expect(hasInlineCommandTokens("![](url)")).toBe(false);
+    expect(hasInlineCommandTokens("text ![a]")).toBe(false);
   });
 
   it("ignores telegram commands addressed to other bots", () => {

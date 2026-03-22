@@ -12,6 +12,7 @@ import type { ReplyPayload } from "../types.js";
 import { buildDisabledCommandReply } from "./command-gates.js";
 import { formatElevatedUnavailableMessage } from "./elevated-unavailable.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { isMarkdownImage } from "./text-patterns.js";
 
 const CHAT_BASH_SCOPE_KEY = "chat:bash";
 const DEFAULT_FOREGROUND_MS = 2000;
@@ -68,7 +69,7 @@ function parseBashRequest(raw: string): BashRequest | null {
       return null;
     }
     restSource = match[1] ?? "";
-  } else if (trimmed.startsWith("!")) {
+  } else if (trimmed.startsWith("!") && !isMarkdownImage(trimmed)) {
     restSource = trimmed.slice(1);
     if (restSource.trimStart().startsWith(":")) {
       restSource = restSource.trimStart().slice(1);

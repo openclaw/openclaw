@@ -9,6 +9,7 @@ import {
   TUI,
 } from "@mariozechner/pi-tui";
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { isMarkdownImage } from "../auto-reply/reply/text-patterns.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import {
   buildAgentMainSessionKey,
@@ -61,7 +62,7 @@ export function createEditorSubmitHandler(params: {
     // Bash mode: only if the very first character is '!' and it's not just '!'.
     // IMPORTANT: use the raw (untrimmed) text so leading spaces do NOT trigger.
     // Per requirement: a lone '!' should be treated as a normal message.
-    if (raw.startsWith("!") && raw !== "!") {
+    if (raw.startsWith("!") && raw !== "!" && !isMarkdownImage(raw)) {
       params.editor.addToHistory(raw);
       void params.handleBangLine(raw);
       return;

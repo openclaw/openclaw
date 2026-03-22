@@ -1,6 +1,7 @@
 import { handleBashChatCommand } from "./bash-command.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
+import { isMarkdownImage } from "./text-patterns.js";
 
 export const handleBashCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
@@ -9,7 +10,9 @@ export const handleBashCommand: CommandHandler = async (params, allowTextCommand
   const { command } = params;
   const bashSlashRequested =
     command.commandBodyNormalized === "/bash" || command.commandBodyNormalized.startsWith("/bash ");
-  const bashBangRequested = command.commandBodyNormalized.startsWith("!");
+  const bashBangRequested =
+    command.commandBodyNormalized.startsWith("!") &&
+    !isMarkdownImage(command.commandBodyNormalized);
   if (!bashSlashRequested && !(bashBangRequested && command.isAuthorizedSender)) {
     return null;
   }
