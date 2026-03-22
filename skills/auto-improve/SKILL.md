@@ -191,6 +191,72 @@ A text echo appears as:
 
 The model generates the second when it fails to invoke the tool API. Count these as `text_tool_echoes`.
 
+### 7. Memory Write-Back Rate (per agent)
+
+Measured for ALL 4 agents individually. Checks if the agent writes to memory after substantive sessions.
+
+```
+For each session with >5 messages:
+  has_memory_write = any toolCall where:
+    (name == "write" OR name == "edit") AND
+    (arguments.path contains "memory/" OR arguments.path contains "MEMORY.md")
+
+writeback_rate = sessions_with_memory_write / total_qualifying_sessions
+```
+
+Score: `writeback_rate` (0.0 to 1.0, higher is better)
+
+If no qualifying sessions exist (all <5 messages), score is `-` (no data).
+
+**What counts as a memory write:**
+
+- `write` tool with path containing `memory/2026-` (daily note)
+- `write` or `edit` tool with path containing `MEMORY.md` (long-term memory)
+- `edit` tool with path containing `memory/` (updating existing notes)
+
+**What does NOT count:**
+
+- Writing to non-memory paths (project files, reports, etc.)
+- Reading memory files (that's retrieval, not write-back)
+
+### 8. Memory Retrieval Rate (per agent)
+
+Same formula as Metric 2 (Memory Usage Rate) but computed for ALL 4 agents individually, not just Operator1.
+
+```
+context_trigger_pattern = /\b(remember|last time|before|earlier|yesterday|previous|we discussed|you said|I told you|what was|did we|pending|todo|remind me|what happened)\b/i
+
+context_messages = count of user messages matching context_trigger_pattern
+memory_searches = count of toolCalls where name === "memory_search"
+
+retrieval_rate = memory_searches / max(context_messages, 1)
+```
+
+Score: `min(retrieval_rate, 1.0)` (0.0 to 1.0, higher is better)
+
+If no context messages exist, score is 1.0 (nothing to search for).
+
+### 9. Memory Richness (per agent — diagnostic only)
+
+Measures the overall health of each agent's memory store. Not in composite score — purely tracks growth.
+
+```
+memory_md_words = word count of the agent's MEMORY.md file
+daily_note_count = count of memory/YYYY-MM-DD.md files in the agent's workspace
+
+richness = (min(memory_md_words, 200) / 200) * 0.5 + (min(daily_note_count, 10) / 10) * 0.5
+```
+
+Score: 0.0 (empty memory) to 1.0 (rich memory). Higher is better.
+
+To compute, read the workspace files directly:
+
+```bash
+# For agent "neo":
+wc -w ~/dev/operator1/workspaces/neo/MEMORY.md
+ls ~/dev/operator1/workspaces/neo/memory/2026-*.md | wc -l
+```
+
 ## Composite Score (Operator1 only)
 
 ```
@@ -261,15 +327,20 @@ File: `~/dev/operator1/workspaces/operator1/auto-improve/results.tsv`
 Header row (tab-separated):
 
 ```
-commit	score	delegation	memory	conciseness	silent_reply	error_rate	neo_exec	morpheus_exec	trinity_exec	status	description
+commit	score	delegation	memory	conciseness	silent_reply	error_rate	neo_exec	morpheus_exec	trinity_exec	op1_wb	neo_wb	morpheus_wb	trinity_wb	op1_rich	neo_rich	morpheus_rich	trinity_rich	status	description
 ```
 
 - `commit`: git short SHA (7 chars), or "baseline" for first entry
 - `score`: composite score (e.g., 0.650)
 - `delegation` through `error_rate`: individual Operator1 metric scores
-- `neo_exec`, `morpheus_exec`, `trinity_exec`: per-agent tool_execution_rate (diagnostic, not in composite). Use `-` if no sessions available for that agent.
+- `*_exec`: per-agent tool_execution_rate
+- `*_wb`: per-agent memory write-back rate
+- `*_rich`: per-agent memory richness score
+- Use `-` if no sessions available for that agent
 - `status`: `baseline`, `keep`, or `discard`
 - `description`: short text of what was changed
+
+Note: Memory retrieval rate per agent is tracked in the agent's individual `memory` column (for Operator1) or noted in the description (for subagents). The existing `memory` column in the composite score already captures Operator1's retrieval rate.
 
 ## Session Selection
 

@@ -117,11 +117,28 @@ Make exactly ONE change to ONE file. Target the weakest metric:
 
 **Subagent weaknesses → edit that agent's workspace files:**
 
-| Agent Issue                 | Workspace                              | What to Change                                                            |
-| --------------------------- | -------------------------------------- | ------------------------------------------------------------------------- |
-| Neo low tool exec rate      | `~/dev/operator1/workspaces/neo/`      | Simplify TOOLS.md, make tool call instructions more explicit in AGENTS.md |
-| Morpheus low tool exec rate | `~/dev/operator1/workspaces/morpheus/` | Same — simplify tool instructions for GLM-5                               |
-| Trinity low tool exec rate  | `~/dev/operator1/workspaces/trinity/`  | Same — simplify tool instructions for GLM-5                               |
+| Agent Issue           | Workspace             | File                | What to Change                                                                                              |
+| --------------------- | --------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Low tool exec rate    | `workspaces/{agent}/` | AGENTS.md, TOOLS.md | Simplify tool instructions for GLM-5                                                                        |
+| Low memory write-back | `workspaces/{agent}/` | AGENTS.md           | Add memory write-back protocol: "After completing a task, write key decisions to memory/YYYY-MM-DD.md"      |
+| Low memory retrieval  | `workspaces/{agent}/` | AGENTS.md           | Add memory search protocol: "Before starting work, search memory for relevant context"                      |
+| Low memory richness   | `workspaces/{agent}/` | HEARTBEAT.md        | Add memory consolidation: "During heartbeats, review daily notes and update MEMORY.md with important items" |
+| No memory protocol    | `workspaces/{agent}/` | AGENTS.md           | Add full memory section (search before work, write after work, consolidate during heartbeats)               |
+
+**Memory-specific improvement strategies:**
+
+When targeting memory write-back for a subagent:
+
+1. Read the agent's current AGENTS.md
+2. Check if it has a "Memory Protocol" section — if not, add one
+3. The protocol should include: search before starting, write after completing, daily note format
+4. Keep it short and explicit for GLM-5 — numbered steps, not prose
+
+When targeting memory consolidation via heartbeat:
+
+1. Read the agent's HEARTBEAT.md
+2. Add: "Every 3rd heartbeat, review memory/YYYY-MM-DD.md files from the last 3 days. Update MEMORY.md with important decisions, remove outdated info."
+3. Keep the heartbeat file under 20 lines to limit token burn
 
 ### 7. Edit and Commit
 
