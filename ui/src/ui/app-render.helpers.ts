@@ -597,9 +597,7 @@ async function createNewChatSession(state: AppViewState) {
     if (result?.key) {
       const composerUnchanged = areComposerSnapshotsEqual(state, composerSnapshot);
       const safeToAutoSwitch =
-        state.sessionKey === originSessionKey &&
-        !startedWithComposerContent &&
-        composerUnchanged;
+        state.sessionKey === originSessionKey && !startedWithComposerContent && composerUnchanged;
       if (safeToAutoSwitch) {
         state.chatAttachments = [];
         switchChatSession(state, result.key);

@@ -36,10 +36,7 @@ export async function subscribeSessions(state: SessionsState) {
   }
 }
 
-export async function loadSessions(
-  state: SessionsState,
-  overrides?: SessionsReloadOverrides,
-) {
+export async function loadSessions(state: SessionsState, overrides?: SessionsReloadOverrides) {
   const trackedState = state as SessionsTrackedState;
   if (!state.client || !state.connected) {
     return;

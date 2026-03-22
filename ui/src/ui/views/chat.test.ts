@@ -10,7 +10,6 @@ import { loadSessions } from "../controllers/sessions.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelCatalogEntry } from "../types.ts";
 import type { SessionsListResult } from "../types.ts";
-import type { ChatAttachment } from "../ui-types.ts";
 import { renderChat, type ChatProps } from "./chat.ts";
 import { renderOverview, type OverviewProps } from "./overview.ts";
 
@@ -174,14 +173,6 @@ async function withPromptStub(run: () => Promise<void>) {
   } finally {
     vi.unstubAllGlobals();
   }
-}
-
-function createAttachment(id: string): ChatAttachment {
-  return {
-    id,
-    dataUrl: `data:text/plain;base64,${id}`,
-    mimeType: "text/plain",
-  };
 }
 
 function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
