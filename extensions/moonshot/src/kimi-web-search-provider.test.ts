@@ -14,10 +14,7 @@ describe("kimi web search provider", () => {
   it("extracts unique citations from search results and tool call arguments", () => {
     expect(
       __testing.extractKimiCitations({
-        search_results: [
-          { url: "https://a.test" },
-          { url: "https://b.test" },
-        ],
+        search_results: [{ url: "https://a.test" }, { url: "https://b.test" }],
         choices: [
           {
             message: {
