@@ -48,7 +48,10 @@ function ttsUsage(): ReplyPayload {
       `🔊 **TTS (Text-to-Speech) Help**\n\n` +
       `**Commands:**\n` +
       `• /tts on — Enable automatic TTS for replies\n` +
+      `• /tts always — Enable automatic TTS for replies (alias for on)\n` +
       `• /tts off — Disable TTS\n` +
+      `• /tts inbound — Only reply with audio when you send a voice note\n` +
+      `• /tts tagged — Only reply with audio when reply includes [[tts]] tags\n` +
       `• /tts status — Show current settings\n` +
       `• /tts provider [name] — View/change provider\n` +
       `• /tts limit [number] — View/change text limit\n` +
