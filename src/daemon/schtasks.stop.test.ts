@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -374,6 +375,47 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
       expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
       expectGatewayTermination(9595);
+    });
+  });
+
+  it("discovers legacy default state-dir configs when the task omits explicit port settings", async () => {
+    await withWindowsEnv("openclaw-win-stop-", async ({ env, tmpDir }) => {
+      const legacyStateDir = path.join(tmpDir, ".clawdbot");
+      const shellEnv = {
+        ...env,
+        OPENCLAW_TASK_SCRIPT: path.join(legacyStateDir, "gateway.cmd"),
+      };
+      await writeGatewayScript(shellEnv, GATEWAY_PORT, {
+        includePortEnv: false,
+        includePortFlag: false,
+      });
+      await fs.mkdir(legacyStateDir, { recursive: true });
+      await fs.writeFile(
+        path.join(legacyStateDir, "clawdbot.json"),
+        JSON.stringify(
+          {
+            gateway: {
+              port: GATEWAY_PORT,
+            },
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+      const stdout = new PassThrough();
+      const envWithoutPort: Record<string, string> = { ...shellEnv };
+      delete envWithoutPort.OPENCLAW_GATEWAY_PORT;
+      pushSuccessfulSchtasksResponses(3);
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([9696]);
+      inspectPortUsage
+        .mockResolvedValueOnce(busyPortUsage(9696))
+        .mockResolvedValueOnce(freePortUsage());
+
+      await stopScheduledTask({ env: envWithoutPort, stdout });
+
+      expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
+      expectGatewayTermination(9696);
     });
   });
 });
