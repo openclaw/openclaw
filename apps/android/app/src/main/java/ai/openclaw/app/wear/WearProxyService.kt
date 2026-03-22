@@ -37,7 +37,11 @@ class WearProxyService : WearableListenerService() {
   private var eventForwardingJob: Job? = null
   private var forwardingNodeId: String? = null
 
-  private val runtime get() = (application as NodeApp).runtime
+  private val nodeApp: NodeApp
+    get() = application as NodeApp
+
+  private val runtime
+    get() = nodeApp.ensureRuntime()
 
   override fun onMessageReceived(event: MessageEvent) {
     Log.i(TAG, "onMessageReceived: path=${event.path} from=${event.sourceNodeId}")
