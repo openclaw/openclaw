@@ -183,6 +183,8 @@ Docker 安装和容器化 Gateway 网关在此：
 
 ## 相关文档
 
-- [沙箱配置](/gateway/configuration#agentsdefaults-sandbox)
-- [多智能体沙箱与工具](/tools/multi-agent-sandbox-tools)
+- [OpenShell](/gateway/openshell) — 托管沙箱后端设置、工作区模式和配置参考
+- [沙箱配置](/gateway/configuration-reference#agents-defaults-sandbox)
+- [沙箱 vs 工具策略 vs 提权](/gateway/sandbox-vs-tool-policy-vs-elevated) — 调试"为什么被阻止？"
+- [多智能体沙箱与工具](/tools/multi-agent-sandbox-tools) — 每智能体覆盖与优先级
 - [安全](/gateway/security)
