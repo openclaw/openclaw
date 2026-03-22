@@ -2,6 +2,16 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
 vi.mock("../../config/sessions.js", () => ({
+  canonicalizeMainSessionAlias: vi.fn(
+    (params: { cfg?: { session?: { mainKey?: string } }; agentId: string; sessionKey: string }) => {
+      const raw = params.sessionKey.trim();
+      const mainKey = params.cfg?.session?.mainKey?.trim().toLowerCase() || "main";
+      const canonical = `agent:${params.agentId}:${mainKey}`;
+      return raw === "main" || raw === canonical || raw === `agent:${params.agentId}:main`
+        ? canonical
+        : raw;
+    },
+  ),
   loadSessionStore: vi.fn().mockReturnValue({}),
   resolveAgentMainSessionKey: vi.fn().mockReturnValue("agent:test:main"),
   resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),

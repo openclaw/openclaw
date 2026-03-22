@@ -2,6 +2,7 @@ import { resolveWhatsAppAccount } from "../../../extensions/whatsapp/api.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  canonicalizeMainSessionAlias,
   loadSessionStore,
   resolveAgentMainSessionKey,
   resolveStorePath,
@@ -15,7 +16,12 @@ import {
 } from "../../infra/outbound/targets.js";
 import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
-import { normalizeAccountId, normalizeAgentId } from "../../routing/session-key.js";
+import {
+  normalizeAccountId,
+  normalizeAgentId,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.js";
 import { normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 
@@ -54,18 +60,35 @@ export async function resolveDeliveryTarget(
   const allowMismatchedLastTo = requestedChannel === "last";
 
   const sessionCfg = cfg.session;
-  const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
-  const storePath = resolveStorePath(sessionCfg?.store, { agentId });
+  const threadSessionKeyRaw = jobPayload.sessionKey?.trim();
+  const requestedSessionStoreKey = threadSessionKeyRaw
+    ? resolveCronAgentSessionKey({ sessionKey: threadSessionKeyRaw, agentId })
+    : undefined;
+  const threadSessionKey = requestedSessionStoreKey
+    ? canonicalizeMainSessionAlias({
+        cfg,
+        agentId: resolveAgentIdFromSessionKey(requestedSessionStoreKey),
+        sessionKey: requestedSessionStoreKey,
+      })
+    : undefined;
+  // Bound session keys may belong to another agent store. Resolve the routed
+  // store before looking up "last" delivery context so session-bound crons
+  // follow the actual target transcript instead of the current agent's store.
+  const storeAgentId = threadSessionKey ? resolveAgentIdFromSessionKey(threadSessionKey) : agentId;
+  const bindingAgentId = normalizeAgentId(storeAgentId);
+  const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId: storeAgentId });
+  const storePath = resolveStorePath(sessionCfg?.store, { agentId: storeAgentId });
   const store = loadSessionStore(storePath);
 
   // Look up thread-specific session first (e.g. agent:main:main:thread:1234),
   // then fall back to the main session entry.
-  const threadSessionKeyRaw = jobPayload.sessionKey?.trim();
-  const threadSessionKey = threadSessionKeyRaw
-    ? resolveCronAgentSessionKey({ sessionKey: threadSessionKeyRaw, agentId })
-    : undefined;
   const threadEntry = threadSessionKey ? store[threadSessionKey] : undefined;
-  const main = threadEntry ?? store[mainSessionKey];
+  const main =
+    (deliveryContextFromSession(threadEntry as Parameters<typeof deliveryContextFromSession>[0])
+      ? threadEntry
+      : undefined) ??
+    store[mainSessionKey] ??
+    threadEntry;
 
   const preliminary = resolveSessionDeliveryTarget({
     entry: main,
@@ -118,7 +141,7 @@ export async function resolveDeliveryTarget(
   if (!accountId && channel) {
     const bindings = buildChannelAccountBindings(cfg);
     const byAgent = bindings.get(channel);
-    const boundAccounts = byAgent?.get(normalizeAgentId(agentId));
+    const boundAccounts = byAgent?.get(bindingAgentId);
     if (boundAccounts && boundAccounts.length > 0) {
       accountId = boundAccounts[0];
     }

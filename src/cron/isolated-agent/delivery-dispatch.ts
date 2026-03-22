@@ -1,11 +1,14 @@
 import { randomUUID } from "node:crypto";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  canonicalizeMainSessionAlias,
   loadSessionStore,
+  resolveMainSessionKey,
   resolveAgentMainSessionKey,
   resolveStorePath,
   updateSessionStore,
@@ -19,7 +22,8 @@ import {
 import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { logWarn } from "../../logger.js";
-import { isCronSessionKey } from "../../routing/session-key.js";
+import { isCronSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickSummaryFromOutput } from "./helpers.js";
@@ -255,17 +259,28 @@ function resolveCronAwarenessSessionKey(params: {
   if (!agentId) {
     return undefined;
   }
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
-  const store = loadSessionStore(storePath);
   const requestedSessionKey = params.sessionKey?.trim();
-  const canonicalRequestedSessionKey = requestedSessionKey
+  const requestedSessionStoreKey = requestedSessionKey
     ? resolveCronAgentSessionKey({ sessionKey: requestedSessionKey, agentId })
     : undefined;
+  const canonicalRequestedSessionKey = requestedSessionStoreKey
+    ? canonicalizeMainSessionAlias({
+        cfg: params.cfg,
+        agentId: resolveAgentIdFromSessionKey(requestedSessionStoreKey),
+        sessionKey: requestedSessionStoreKey,
+      })
+    : undefined;
+  const requestedStorePath = canonicalRequestedSessionKey
+    ? resolveStorePath(params.cfg.session?.store, {
+        agentId: resolveAgentIdFromSessionKey(canonicalRequestedSessionKey),
+      })
+    : undefined;
+  const requestedStore = requestedStorePath ? loadSessionStore(requestedStorePath) : undefined;
   const requestedIsCronScratch =
     Boolean(requestedSessionKey && requestedSessionKey.toLowerCase().startsWith("cron:")) ||
     Boolean(canonicalRequestedSessionKey && isCronSessionKey(canonicalRequestedSessionKey));
   const requestedEntry = canonicalRequestedSessionKey
-    ? store[canonicalRequestedSessionKey]
+    ? requestedStore?.[canonicalRequestedSessionKey]
     : undefined;
   if (
     !requestedIsCronScratch &&
@@ -275,7 +290,10 @@ function resolveCronAwarenessSessionKey(params: {
   ) {
     return canonicalRequestedSessionKey;
   }
-  const mainSessionKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId });
+  const mainSessionKey =
+    params.cfg.session?.scope === "global"
+      ? resolveMainSessionKey(params.cfg)
+      : resolveAgentMainSessionKey({ cfg: params.cfg, agentId });
   if (!requestedIsCronScratch && canonicalRequestedSessionKey) {
     return canonicalRequestedSessionKey;
   }
@@ -284,17 +302,38 @@ function resolveCronAwarenessSessionKey(params: {
 
 async function ensureCronAwarenessSessionEntry(params: {
   cfg: OpenClawConfig;
-  agentId: string;
   sessionKey: string;
 }): Promise<void> {
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
+  const normalizedSessionKey = params.sessionKey.trim().toLowerCase();
+  const storeAgentId =
+    normalizedSessionKey === "global" || normalizedSessionKey === "unknown"
+      ? resolveDefaultAgentId(params.cfg)
+      : resolveAgentIdFromSessionKey(params.sessionKey);
+  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: storeAgentId });
+  const mainSessionKey =
+    normalizedSessionKey === "global"
+      ? resolveMainSessionKey(params.cfg)
+      : resolveAgentMainSessionKey({ cfg: params.cfg, agentId: storeAgentId });
   const now = Date.now();
   await updateSessionStore(storePath, (store) => {
     const existing = store[params.sessionKey];
+    const mainEntry = store[mainSessionKey];
+    const seededDeliveryContext = deliveryContextFromSession(mainEntry);
+    const existingDeliveryContext = deliveryContextFromSession(existing);
     if (typeof existing?.sessionId === "string" && existing.sessionId.trim()) {
-      if ((existing.updatedAt ?? 0) < now) {
+      const needsDeliverySeed = !existingDeliveryContext && Boolean(seededDeliveryContext);
+      if (needsDeliverySeed || (existing.updatedAt ?? 0) < now) {
         store[params.sessionKey] = {
           ...existing,
+          ...(needsDeliverySeed
+            ? {
+                lastChannel: existing.lastChannel ?? seededDeliveryContext?.channel,
+                lastTo: existing.lastTo ?? seededDeliveryContext?.to,
+                lastAccountId: existing.lastAccountId ?? seededDeliveryContext?.accountId,
+                lastThreadId: existing.lastThreadId ?? seededDeliveryContext?.threadId,
+                deliveryContext: existing.deliveryContext ?? seededDeliveryContext,
+              }
+            : {}),
           updatedAt: now,
         };
       }
@@ -302,8 +341,15 @@ async function ensureCronAwarenessSessionEntry(params: {
     }
     store[params.sessionKey] = {
       ...existing,
+      // Seed routing from the main session without aliasing its transcript.
       sessionId: existing?.sessionId?.trim() || randomUUID(),
+      sessionFile: existing?.sessionId?.trim() ? existing.sessionFile : undefined,
       updatedAt: Math.max(existing?.updatedAt ?? 0, now),
+      lastChannel: existing?.lastChannel ?? seededDeliveryContext?.channel,
+      lastTo: existing?.lastTo ?? seededDeliveryContext?.to,
+      lastAccountId: existing?.lastAccountId ?? seededDeliveryContext?.accountId,
+      lastThreadId: existing?.lastThreadId ?? seededDeliveryContext?.threadId,
+      deliveryContext: existing?.deliveryContext ?? seededDeliveryContext,
     };
   });
 }
@@ -335,7 +381,6 @@ async function injectCronDeliveryAwareness(params: {
   try {
     await ensureCronAwarenessSessionEntry({
       cfg: params.cfg,
-      agentId: params.agentId,
       sessionKey: awarenessSessionKey,
     });
     await callGateway({

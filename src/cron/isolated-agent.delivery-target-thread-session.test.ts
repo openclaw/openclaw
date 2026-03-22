@@ -10,11 +10,27 @@ let resolveDeliveryTarget: DeliveryTargetModule["resolveDeliveryTarget"];
 
 beforeAll(async () => {
   vi.doMock("../config/sessions.js", () => ({
+    canonicalizeMainSessionAlias: vi.fn(
+      (params: {
+        cfg?: { session?: { mainKey?: string } };
+        agentId: string;
+        sessionKey: string;
+      }) => {
+        const raw = params.sessionKey.trim();
+        const mainKey = params.cfg?.session?.mainKey?.trim().toLowerCase() || "main";
+        const canonical = `agent:${params.agentId}:${mainKey}`;
+        return raw === "main" || raw === canonical || raw === `agent:${params.agentId}:main`
+          ? canonical
+          : raw;
+      },
+    ),
     loadSessionStore: vi.fn((storePath: string) => mockStore[storePath] ?? {}),
     resolveAgentMainSessionKey: vi.fn(
       ({ agentId }: { agentId: string }) => `agent:${agentId}:main`,
     ),
-    resolveStorePath: vi.fn((_store: unknown, _opts: unknown) => "/mock/store.json"),
+    resolveStorePath: vi.fn(
+      (_store: unknown, opts?: { agentId?: string }) => `/mock/${opts?.agentId ?? "main"}.json`,
+    ),
   }));
   vi.doMock("../infra/outbound/channel-selection.js", () => ({
     resolveMessageChannelSelection: vi.fn(async () => ({ channel: "telegram" })),
@@ -54,7 +70,7 @@ describe("resolveDeliveryTarget thread session lookup", () => {
   const cfg: OpenClawConfig = {};
 
   it("uses thread session entry when sessionKey is provided and entry exists", async () => {
-    mockStore["/mock/store.json"] = {
+    mockStore["/mock/main.json"] = {
       "agent:main:main": {
         sessionId: "s1",
         updatedAt: 1,
@@ -81,7 +97,7 @@ describe("resolveDeliveryTarget thread session lookup", () => {
   });
 
   it("falls back to main session when sessionKey entry does not exist", async () => {
-    mockStore["/mock/store.json"] = {
+    mockStore["/mock/main.json"] = {
       "agent:main:main": {
         sessionId: "s1",
         updatedAt: 1,
@@ -100,8 +116,32 @@ describe("resolveDeliveryTarget thread session lookup", () => {
     expect(result.channel).toBe("telegram");
   });
 
+  it("falls back to main session when the routed entry has no delivery context", async () => {
+    mockStore["/mock/main.json"] = {
+      "agent:main:main": {
+        sessionId: "s1",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "-100444",
+      },
+      "agent:main:main:thread:empty": {
+        sessionId: "s2",
+        updatedAt: 2,
+      },
+    };
+
+    const result = await resolveDeliveryTarget(cfg, "main", {
+      channel: "last",
+      sessionKey: "agent:main:main:thread:empty",
+    });
+
+    expect(result.to).toBe("-100444");
+    expect(result.threadId).toBeUndefined();
+    expect(result.channel).toBe("telegram");
+  });
+
   it("normalizes unscoped session keys before looking up routed session state", async () => {
-    mockStore["/mock/store.json"] = {
+    mockStore["/mock/main.json"] = {
       "agent:main:main": {
         sessionId: "s1",
         updatedAt: 1,
@@ -126,8 +166,78 @@ describe("resolveDeliveryTarget thread session lookup", () => {
     expect(result.channel).toBe("telegram");
   });
 
+  it("loads routed delivery context from the bound session's agent store", async () => {
+    mockStore["/mock/main.json"] = {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "-100222",
+      },
+    };
+    mockStore["/mock/ops.json"] = {
+      "agent:ops:main": {
+        sessionId: "ops-session",
+        updatedAt: 2,
+        lastChannel: "telegram",
+        lastTo: "-100777",
+      },
+    };
+
+    const result = await resolveDeliveryTarget(cfg, "main", {
+      channel: "last",
+      sessionKey: "agent:ops:main",
+    });
+
+    expect(result.to).toBe("-100777");
+    expect(result.threadId).toBeUndefined();
+    expect(result.channel).toBe("telegram");
+  });
+
+  it("uses the routed session agent's bound account when lastAccountId is missing", async () => {
+    mockStore["/mock/main.json"] = {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "-100222",
+      },
+    };
+    mockStore["/mock/ops.json"] = {
+      "agent:ops:main": {
+        sessionId: "ops-session",
+        updatedAt: 2,
+        lastChannel: "telegram",
+        lastTo: "-100777",
+      },
+    };
+
+    const result = await resolveDeliveryTarget(
+      {
+        bindings: [
+          {
+            agentId: "main",
+            match: { channel: "telegram", accountId: "main-account" },
+          },
+          {
+            agentId: "ops",
+            match: { channel: "telegram", accountId: "ops-account" },
+          },
+        ],
+      },
+      "main",
+      {
+        channel: "last",
+        sessionKey: "agent:ops:main",
+      },
+    );
+
+    expect(result.to).toBe("-100777");
+    expect(result.accountId).toBe("ops-account");
+  });
+
   it("falls back to main session when no sessionKey is provided", async () => {
-    mockStore["/mock/store.json"] = {
+    mockStore["/mock/main.json"] = {
       "agent:main:main": {
         sessionId: "s1",
         updatedAt: 1,
@@ -145,7 +255,7 @@ describe("resolveDeliveryTarget thread session lookup", () => {
   });
 
   it("preserves threadId from :topic: in delivery.to on first run (no session history)", async () => {
-    mockStore["/mock/store.json"] = {};
+    mockStore["/mock/main.json"] = {};
 
     const result = await resolveDeliveryTarget(cfg, "main", {
       channel: "telegram",
@@ -158,7 +268,7 @@ describe("resolveDeliveryTarget thread session lookup", () => {
   });
 
   it("explicit accountId overrides session lastAccountId", async () => {
-    mockStore["/mock/store.json"] = {
+    mockStore["/mock/main.json"] = {
       "agent:main:main": {
         sessionId: "s1",
         updatedAt: 1,
@@ -179,7 +289,7 @@ describe("resolveDeliveryTarget thread session lookup", () => {
   });
 
   it("preserves threadId from :topic: when lastTo differs", async () => {
-    mockStore["/mock/store.json"] = {
+    mockStore["/mock/main.json"] = {
       "agent:main:main": {
         sessionId: "s1",
         updatedAt: 1,
