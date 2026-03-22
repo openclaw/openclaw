@@ -57,33 +57,46 @@ afterEach(() => {
 });
 
 describe("scripts/committer", () => {
-  it("keeps plain argv paths working", () => {
-    const repo = createRepo();
-    writeRepoFile(repo, "alpha.txt", "alpha\n");
-    writeRepoFile(repo, "nested/file with spaces.txt", "beta\n");
+  it("accepts supported path argument shapes", () => {
+    const cases = [
+      {
+        commitMessage: "test: plain argv",
+        files: [
+          ["alpha.txt", "alpha\n"],
+          ["nested/file with spaces.txt", "beta\n"],
+        ] as const,
+        args: ["alpha.txt", "nested/file with spaces.txt"],
+        expected: ["alpha.txt", "nested/file with spaces.txt"],
+      },
+      {
+        commitMessage: "test: space blob",
+        files: [
+          ["alpha.txt", "alpha\n"],
+          ["beta.txt", "beta\n"],
+        ] as const,
+        args: ["alpha.txt beta.txt"],
+        expected: ["alpha.txt", "beta.txt"],
+      },
+      {
+        commitMessage: "test: newline blob",
+        files: [
+          ["alpha.txt", "alpha\n"],
+          ["nested/file with spaces.txt", "beta\n"],
+        ] as const,
+        args: ["alpha.txt\nnested/file with spaces.txt"],
+        expected: ["alpha.txt", "nested/file with spaces.txt"],
+      },
+    ] as const;
 
-    commitWithHelper(repo, "test: plain argv", "alpha.txt", "nested/file with spaces.txt");
+    for (const testCase of cases) {
+      const repo = createRepo();
+      for (const [file, contents] of testCase.files) {
+        writeRepoFile(repo, file, contents);
+      }
 
-    expect(committedPaths(repo)).toEqual(["alpha.txt", "nested/file with spaces.txt"]);
-  });
+      commitWithHelper(repo, testCase.commitMessage, ...testCase.args);
 
-  it("accepts a single space-delimited path blob", () => {
-    const repo = createRepo();
-    writeRepoFile(repo, "alpha.txt", "alpha\n");
-    writeRepoFile(repo, "beta.txt", "beta\n");
-
-    commitWithHelper(repo, "test: space blob", "alpha.txt beta.txt");
-
-    expect(committedPaths(repo)).toEqual(["alpha.txt", "beta.txt"]);
-  });
-
-  it("accepts a single newline-delimited path blob", () => {
-    const repo = createRepo();
-    writeRepoFile(repo, "alpha.txt", "alpha\n");
-    writeRepoFile(repo, "nested/file with spaces.txt", "beta\n");
-
-    commitWithHelper(repo, "test: newline blob", "alpha.txt\nnested/file with spaces.txt");
-
-    expect(committedPaths(repo)).toEqual(["alpha.txt", "nested/file with spaces.txt"]);
+      expect(committedPaths(repo)).toEqual(testCase.expected);
+    }
   });
 });
