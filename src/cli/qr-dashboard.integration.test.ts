@@ -35,8 +35,8 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
-const { registerQrCli } = await import("./qr-cli.js");
-const { registerMaintenanceCommands } = await import("./program/register.maintenance.js");
+let registerQrCli: typeof import("./qr-cli.js").registerQrCli;
+let registerMaintenanceCommands: typeof import("./program/register.maintenance.js").registerMaintenanceCommands;
 
 function createGatewayTokenRefFixture() {
   return {
@@ -98,6 +98,12 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
       "OPENCLAW_GATEWAY_PASSWORD",
       "CLAWDBOT_GATEWAY_PASSWORD",
     ]);
+  });
+
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ registerQrCli } = await import("./qr-cli.js"));
+    ({ registerMaintenanceCommands } = await import("./program/register.maintenance.js"));
   });
 
   afterAll(() => {

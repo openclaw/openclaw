@@ -34,10 +34,16 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
-vi.mock("@mariozechner/pi-ai/oauth", () => ({
-  getOAuthApiKey: () => "",
-  getOAuthProviders: () => [],
-}));
+vi.mock("@mariozechner/pi-ai/oauth", async () => {
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
+    "@mariozechner/pi-ai/oauth",
+  );
+  return {
+    ...actual,
+    getOAuthApiKey: () => "",
+    getOAuthProviders: () => [],
+  };
+});
 
 vi.mock("./subagent-registry.js", () => ({
   countActiveRunsForSession: () => 0,
