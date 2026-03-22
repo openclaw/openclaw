@@ -90,3 +90,46 @@ describe("normalizeUsage", () => {
     ).toBe(65_000);
   });
 });
+
+describe("null-guard: malformed API response with null totalTokens", () => {
+  it("normalizeUsage returns undefined when totalTokens is null and no other fields present", () => {
+    // Anthropic API may return null for token fields during degraded service windows.
+    // Simulates: { totalTokens: null } as the entire usage payload.
+    const result = normalizeUsage({ totalTokens: null });
+    expect(result).toBeUndefined();
+  });
+
+  it("normalizeUsage ignores null totalTokens and uses component fields when available", () => {
+    // When the API returns null for totalTokens but provides input/output, those are used.
+    const result = normalizeUsage({
+      input_tokens: 500,
+      output_tokens: 150,
+      totalTokens: null,
+    });
+    expect(result).toEqual({
+      input: 500,
+      output: 150,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: undefined,
+    });
+  });
+
+  it("normalizeUsage returns undefined when all token fields are null", () => {
+    // All-null payload (maximally malformed) must not crash or produce NaN.
+    const result = normalizeUsage({
+      input_tokens: null,
+      output_tokens: null,
+      totalTokens: null,
+      total_tokens: null,
+    });
+    expect(result).toBeUndefined();
+  });
+
+  it("deriveSessionTotalTokens returns undefined for all-null usage", () => {
+    // Feeding a null-normalized usage must not produce NaN or throw.
+    const normalized = normalizeUsage({ input_tokens: null, output_tokens: null });
+    const total = deriveSessionTotalTokens({ usage: normalized ?? undefined });
+    expect(total).toBeUndefined();
+  });
+});

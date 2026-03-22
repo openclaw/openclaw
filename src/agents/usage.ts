@@ -1,29 +1,33 @@
 export type UsageLike = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  total?: number;
+  input?: number | null;
+  output?: number | null;
+  cacheRead?: number | null;
+  cacheWrite?: number | null;
+  total?: number | null;
   // Common alternates across providers/SDKs.
-  inputTokens?: number;
-  outputTokens?: number;
-  promptTokens?: number;
-  completionTokens?: number;
-  input_tokens?: number;
-  output_tokens?: number;
-  prompt_tokens?: number;
-  completion_tokens?: number;
-  cache_read_input_tokens?: number;
-  cache_creation_input_tokens?: number;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  promptTokens?: number | null;
+  completionTokens?: number | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
+  cache_read_input_tokens?: number | null;
+  cache_creation_input_tokens?: number | null;
   // Moonshot/Kimi uses cached_tokens for cache read count (explicit caching API).
-  cached_tokens?: number;
+  cached_tokens?: number | null;
   // Kimi K2 uses prompt_tokens_details.cached_tokens for automatic prefix caching.
-  prompt_tokens_details?: { cached_tokens?: number };
+  prompt_tokens_details?: { cached_tokens?: number | null };
   // Some agents/logs emit alternate naming.
-  totalTokens?: number;
-  total_tokens?: number;
-  cache_read?: number;
-  cache_write?: number;
+  // NOTE: totalTokens may arrive as null from the Anthropic API during degraded
+  // service windows. The normalizeUsage function guards against this via
+  // asFiniteNumber, but the type must reflect the runtime reality so callers
+  // do not silently treat null as a valid number.
+  totalTokens?: number | null;
+  total_tokens?: number | null;
+  cache_read?: number | null;
+  cache_write?: number | null;
 };
 
 export type NormalizedUsage = {
