@@ -4,7 +4,6 @@ import { createMessageToolButtonsSchema } from "openclaw/plugin-sdk/channel-acti
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
-  createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import type {
   ChannelMessageActionAdapter,
@@ -12,7 +11,7 @@ import type {
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createLoggedPairingApprovalNotifier } from "openclaw/plugin-sdk/channel-pairing";
-import { createAllowlistProviderRestrictSendersWarningCollector } from "openclaw/plugin-sdk/channel-policy";
+import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
 import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { createScopedAccountReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
@@ -50,15 +49,18 @@ import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
 import { mattermostSetupAdapter } from "./setup-core.js";
 import { mattermostSetupWizard } from "./setup-surface.js";
 
-const collectMattermostSecurityWarnings =
-  createAllowlistProviderRestrictSendersWarningCollector<ResolvedMattermostAccount>({
-    providerConfigPresent: (cfg) => cfg.channels?.mattermost !== undefined,
-    resolveGroupPolicy: (account) => account.config.groupPolicy,
-    surface: "Mattermost channels",
-    openScope: "any member",
-    groupPolicyPath: "channels.mattermost.groupPolicy",
-    groupAllowFromPath: "channels.mattermost.groupAllowFrom",
-  });
+const mattermostSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedMattermostAccount>({
+  channelKey: "mattermost",
+  resolveDmPolicy: (account) => account.config.dmPolicy,
+  resolveDmAllowFrom: (account) => account.config.allowFrom,
+  resolveGroupPolicy: (account) => account.config.groupPolicy,
+  surface: "Mattermost channels",
+  openScope: "any member",
+  groupPolicyPath: "channels.mattermost.groupPolicy",
+  groupAllowFromPath: "channels.mattermost.groupAllowFrom",
+  policyPathSuffix: "dmPolicy",
+  normalizeDmEntry: (raw) => normalizeAllowEntry(raw),
+});
 
 function describeMattermostMessageTool({
   cfg,
@@ -279,14 +281,6 @@ const mattermostConfigAdapter = createScopedChannelConfigAdapter<ResolvedMatterm
     }),
 });
 
-const resolveMattermostDmPolicy = createScopedDmSecurityResolver<ResolvedMattermostAccount>({
-  channelKey: "mattermost",
-  resolvePolicy: (account) => account.config.dmPolicy,
-  resolveAllowFrom: (account) => account.config.allowFrom,
-  policyPathSuffix: "dmPolicy",
-  normalizeEntry: (raw) => normalizeAllowEntry(raw),
-});
-
 export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   id: "mattermost",
   meta: {
@@ -339,10 +333,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
         },
       }),
   },
-  security: {
-    resolveDmPolicy: resolveMattermostDmPolicy,
-    collectWarnings: collectMattermostSecurityWarnings,
-  },
+  security: mattermostSecurityAdapter,
   groups: {
     resolveRequireMention: resolveMattermostGroupRequireMention,
   },
