@@ -189,8 +189,9 @@ openclaw hooks disable command-logger
 ## Install Hook Packs
 
 ```bash
-openclaw plugins install <path-or-spec>
-openclaw plugins install <npm-spec> --pin
+openclaw plugins install <package>        # ClawHub first, then npm
+openclaw plugins install <package> --pin  # pin version
+openclaw plugins install <path>           # local path
 ```
 
 Install hook packs through the unified plugins installer.
