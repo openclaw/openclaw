@@ -18,8 +18,8 @@ vi.mock("./probe.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./monitor.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./monitor.js")>();
+vi.mock("./monitor/provider.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./monitor/provider.runtime.js")>();
   return {
     ...actual,
     monitorDiscordProvider: monitorDiscordProviderMock,
