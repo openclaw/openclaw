@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS documents (
   file_path VARCHAR NOT NULL UNIQUE,
   parent_id VARCHAR REFERENCES documents(id),
   parent_object_id VARCHAR REFERENCES objects(id),
+  entry_id VARCHAR REFERENCES entries(id),
   sort_order INTEGER DEFAULT 0,
   is_published BOOLEAN DEFAULT false,
   created_at TIMESTAMPTZ DEFAULT now(),
@@ -121,6 +122,8 @@ CREATE TABLE IF NOT EXISTS action_runs (
 ### ID Generation
 
 All ID columns default to `gen_random_uuid()::VARCHAR`. You can also use `nanoid32()` if the macro is loaded. When inserting manually, always generate an ID — never use a placeholder.
+
+For entry detail markdown pages, `documents.entry_id` links a document row to a specific CRM entry while `file_path` stores the human-readable markdown path (for example `marketing/influencer/yt-mikemurphy-001.md`).
 
 ---
 

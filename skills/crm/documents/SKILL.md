@@ -1,6 +1,6 @@
 ---
 name: documents
-description: Document management with markdown files, cross-nesting between documents and objects, and optional per-entry detail pages.
+description: Document management with markdown files, cross-nesting between documents and objects, and human-readable entry detail pages linked through the documents table.
 metadata: { "openclaw": { "inject": true, "always": true, "emoji": "📄" } }
 ---
 
@@ -31,34 +31,225 @@ VALUES ('Roadmap', 'map', 'projects/roadmap.md', '<parent_doc_id>', 0);
 
 ---
 
-## Entry Detail Pages (Optional Markdown Files)
+## Notes Field vs Entry Documents
 
-Each entry in an object can have an optional markdown file that acts as a detail page (like a Notion row page). The file is stored inside the object's directory at `{{WORKSPACE_PATH}}/{object_name}/{entry_id}.md`.
+These are **not the same thing**:
 
-**Key rules:**
+- **`Notes` field**: a `richtext` value stored in DuckDB `entry_fields`
+- **Entry document**: a standalone `.md` file on disk, linked to the entry through the `documents` table
 
-- Entry `.md` files are **optional** — they are only created when the user writes content via the entry detail panel in the UI.
-- You do NOT need to create `.md` files for every entry during seeding. Only create them when you want to add detailed notes, descriptions, or documentation for a specific entry.
-- The UI automatically shows an empty markdown editor for entries without a `.md` file, and creates the file on first write.
-- Entry `.md` files are plain markdown (no frontmatter required). The filename must be exactly `{entry_id}.md`.
+When the user says:
 
-**When to create entry `.md` files during seeding:**
+- "fill in notes for each entry"
+- "write descriptions for all rows"
+- "add detailed writeups"
+- "put the outreach draft into each influencer notes page"
+- "create entry docs"
 
-- For entries that have rich descriptions or meeting notes
-- For entries that need SOPs, playbooks, or documentation attached
-- For key entries like important leads, major projects, or critical tasks
+default to **entry documents** unless they explicitly say "update the Notes column/field".
 
-**Example:**
+If the user truly means the `Notes` field, they will usually talk about:
+
+- a table column
+- richtext field values
+- filtering/sorting by Notes
+- SQL updates to `entry_fields`
+
+If they mean entry documents, they are talking about:
+
+- markdown pages
+- the entry detail panel
+- prose content, drafts, meeting notes, SOPs, long-form notes
+- files visible under the object in the sidebar
+
+---
+
+## Entry Detail Pages
+
+Each entry in an object can have an optional markdown file that acts as its detail page in the entry panel.
+
+**CRITICAL:** New entry documents should use **human-readable filenames**, not raw UUID filenames. The file must also be registered in DuckDB `documents` with `entry_id`, `parent_object_id`, and `file_path`.
+
+### Required storage model
+
+For every entry document:
+
+1. Write a human-readable markdown file inside the object directory
+2. Insert/update a row in `documents` linking the entry to that file
+
+```sql
+INSERT INTO documents (title, file_path, parent_object_id, entry_id)
+VALUES (
+  'Mike Murphy',
+  'marketing/influencer/yt-mikemurphy-001.md',
+  (SELECT id FROM objects WHERE name = 'influencer'),
+  'yt-mikemurphy-001'
+);
+```
+
+### Naming convention (MANDATORY)
+
+Use this filename structure for entry documents:
+
+`{human_readable_slug}-{sequence}.md`
+
+Examples:
+
+- `acme-corp-001.md`
+- `jane-smith-001.md`
+- `q2-renewal-deal-001.md`
+
+If the entry clearly belongs to a source/domain where a prefix helps, include it:
+
+- `yt-mikemurphy-001.md` for YouTube creators
+- `x-somehandle-001.md` for X/Twitter creators
+
+### How to choose the slug
+
+Use the first strong human-readable identifier available:
+
+1. `Document Slug`, `Slug`, or `File Slug` field if it exists
+2. For YouTube creators: extract the handle from `YouTube URL` and prefix `yt-`
+3. Otherwise use the primary text label, such as:
+   - `Title`
+   - `Channel Name`
+   - `Creator Name`
+   - `Full Name`
+   - `Name`
+   - `Company Name`
+   - `Deal Name`
+   - `Case Number`
+   - `Invoice Number`
+
+Examples:
+
+- `https://www.youtube.com/@MikeMurphy` -> `yt-mikemurphy-001.md`
+- `Creator Name = Jane Smith` -> `jane-smith-001.md`
+- `Company Name = Acme Corp` -> `acme-corp-001.md`
+
+### NEVER do these
+
+- Do **NOT** default to `{entry_id}.md` for new documents
+- Do **NOT** confuse entry documents with the `Notes` richtext field
+- Do **NOT** create a markdown file without also inserting/updating the `documents` table row
+- Do **NOT** write human-readable files and leave them orphaned from metadata
+
+### Backward compatibility
+
+Older workspaces may still have legacy `{entry_id}.md` files. Those can continue to work, but **new** entry documents should follow the human-readable naming convention above.
+
+---
+
+## Creating One Entry Document
+
+Only create entry `.md` files when the user wants detailed prose for a specific entry or group of entries.
+
+Example:
 
 ```bash
-# Only if you want to add detailed notes for this specific entry
-cat > {{WORKSPACE_PATH}}/lead/abc123.md << 'MD'
-# Meeting Notes - Acme Corp
+cat > {{WORKSPACE_PATH}}/marketing/influencer/yt-mikemurphy-001.md << 'MD'
+# Draft Outreach Email
 
-Met with John on 2026-03-15. Key takeaways:
+To: hello@mikemurphy.co
+Subject: Partnership idea
 
-- Interested in enterprise plan
-- Budget approved for Q2
-- Follow up next week with pricing proposal
+Hi Mike,
+
+I loved your AI Handyman breakdowns. DenchClaw is launching a workflow-native AI platform for builders who want serious control over execution, memory, and automation.
+
+Would you be open to testing it and discussing a possible sponsorship?
 MD
 ```
+
+Then register it:
+
+```sql
+INSERT INTO documents (title, file_path, parent_object_id, entry_id)
+VALUES (
+  'Mike Murphy',
+  'marketing/influencer/yt-mikemurphy-001.md',
+  (SELECT id FROM objects WHERE name = 'influencer'),
+  'yt-mikemurphy-001'
+)
+ON CONFLICT (file_path) DO UPDATE
+SET title = excluded.title,
+    parent_object_id = excluded.parent_object_id,
+    entry_id = excluded.entry_id,
+    updated_at = now();
+```
+
+---
+
+## Batch Creating Entry Documents
+
+When the user asks for docs for many entries, do **not** update the `Notes` field in SQL. Create markdown files plus `documents` rows.
+
+### Workflow
+
+1. Query entries and the fields needed to build filenames/titles
+2. Derive a human-readable filename for each entry
+3. Write one `.md` file per entry under the object directory
+4. Insert/update one `documents` row per file
+
+### Example: create docs for every influencer
+
+```bash
+duckdb {{WORKSPACE_PATH}}/workspace.duckdb -json "
+SELECT
+  entry_id,
+  \"Creator Name\",
+  \"Channel Name\",
+  \"YouTube URL\"
+FROM v_influencer
+ORDER BY \"Creator Name\"
+"
+```
+
+Then for each row:
+
+```bash
+# Example row:
+# entry_id = yt-mikemurphy-001
+# youtube url = https://www.youtube.com/@MikeMurphy
+
+cat > {{WORKSPACE_PATH}}/marketing/influencer/yt-mikemurphy-001.md << 'MD'
+# Influencer Notes
+
+## Outreach draft
+
+...
+MD
+```
+
+Register each file:
+
+```sql
+INSERT INTO documents (title, file_path, parent_object_id, entry_id)
+VALUES (
+  'Mike Murphy',
+  'marketing/influencer/yt-mikemurphy-001.md',
+  (SELECT id FROM objects WHERE name = 'influencer'),
+  'yt-mikemurphy-001'
+)
+ON CONFLICT (file_path) DO UPDATE
+SET title = excluded.title,
+    parent_object_id = excluded.parent_object_id,
+    entry_id = excluded.entry_id,
+    updated_at = now();
+```
+
+---
+
+## Standalone Documents vs Entry Documents
+
+Not every markdown file under an object directory is automatically an entry document.
+
+- **Entry document**: has a corresponding `documents` row with `entry_id` set
+- **Standalone document under an object**: has no `entry_id` link; it is just a nested document in that folder
+
+Examples:
+
+- `marketing/influencer/yt-mikemurphy-001.md` with `documents.entry_id = 'yt-mikemurphy-001'` -> entry document
+- `marketing/influencer/outreach-playbook.md` with no `entry_id` -> standalone object-level document
+
+If a markdown file is meant to be the entry page, always register it in `documents`.

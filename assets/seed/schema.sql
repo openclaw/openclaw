@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS documents (
   file_path VARCHAR NOT NULL UNIQUE,
   parent_id VARCHAR REFERENCES documents(id),
   parent_object_id VARCHAR REFERENCES objects(id),
+  entry_id VARCHAR REFERENCES entries(id),
   sort_order INTEGER DEFAULT 0,
   is_published BOOLEAN DEFAULT false,
   created_at TIMESTAMPTZ DEFAULT now(),
