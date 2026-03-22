@@ -1,8 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
-import { setMatrixRuntime } from "../runtime.js";
-import { voteMatrixPoll } from "./actions/polls.js";
-import { sendMessageMatrix, sendTypingMatrix } from "./send.js";
 
 const loadWebMediaMock = vi.fn().mockResolvedValue({
   buffer: Buffer.from("media"),
@@ -46,6 +43,18 @@ const runtimeStub = {
   },
 } as unknown as PluginRuntime;
 
+let sendMessageMatrix: typeof import("./send.js").sendMessageMatrix;
+let sendTypingMatrix: typeof import("./send.js").sendTypingMatrix;
+let voteMatrixPoll: typeof import("./actions/polls.js").voteMatrixPoll;
+
+async function loadMatrixSendModules() {
+  vi.resetModules();
+  const runtimeModule = await import("../runtime.js");
+  runtimeModule.setMatrixRuntime(runtimeStub);
+  ({ sendMessageMatrix } = await import("./send.js"));
+  ({ sendTypingMatrix } = await import("./send.js"));
+  ({ voteMatrixPoll } = await import("./actions/polls.js"));
+}
 const makeClient = () => {
   const sendMessage = vi.fn().mockResolvedValue("evt1");
   const sendEvent = vi.fn().mockResolvedValue("evt-poll-vote");
@@ -66,7 +75,11 @@ const makeClient = () => {
 };
 
 describe("sendMessageMatrix media", () => {
-  beforeEach(() => {
+  beforeAll(async () => {
+    await loadMatrixSendModules();
+  });
+
+  beforeEach(async () => {
     loadWebMediaMock.mockReset().mockResolvedValue({
       buffer: Buffer.from("media"),
       fileName: "photo.png",
@@ -79,7 +92,7 @@ describe("sendMessageMatrix media", () => {
     mediaKindFromMimeMock.mockReset().mockReturnValue("image");
     isVoiceCompatibleAudioMock.mockReset().mockReturnValue(false);
     resolveTextChunkLimitMock.mockReset().mockReturnValue(4000);
-    setMatrixRuntime(runtimeStub);
+    await loadMatrixSendModules();
   });
 
   it("uploads media with url payloads", async () => {
@@ -317,12 +330,12 @@ describe("sendMessageMatrix media", () => {
 });
 
 describe("sendMessageMatrix threads", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     loadConfigMock.mockReset().mockReturnValue({});
     mediaKindFromMimeMock.mockReset().mockReturnValue("image");
     isVoiceCompatibleAudioMock.mockReset().mockReturnValue(false);
-    setMatrixRuntime(runtimeStub);
+    await loadMatrixSendModules();
   });
 
   it("includes thread relation metadata when threadId is set", async () => {
@@ -361,12 +374,16 @@ describe("sendMessageMatrix threads", () => {
 });
 
 describe("voteMatrixPoll", () => {
-  beforeEach(() => {
+  beforeAll(async () => {
+    await loadMatrixSendModules();
+  });
+
+  beforeEach(async () => {
     vi.clearAllMocks();
     loadConfigMock.mockReset().mockReturnValue({});
     mediaKindFromMimeMock.mockReset().mockReturnValue("image");
     isVoiceCompatibleAudioMock.mockReset().mockReturnValue(false);
-    setMatrixRuntime(runtimeStub);
+    await loadMatrixSendModules();
   });
 
   it("maps 1-based option indexes to Matrix poll answer ids", async () => {
@@ -502,12 +519,16 @@ describe("voteMatrixPoll", () => {
 });
 
 describe("sendTypingMatrix", () => {
-  beforeEach(() => {
+  beforeAll(async () => {
+    await loadMatrixSendModules();
+  });
+
+  beforeEach(async () => {
     vi.clearAllMocks();
     loadConfigMock.mockReset().mockReturnValue({});
     mediaKindFromMimeMock.mockReset().mockReturnValue("image");
     isVoiceCompatibleAudioMock.mockReset().mockReturnValue(false);
-    setMatrixRuntime(runtimeStub);
+    await loadMatrixSendModules();
   });
 
   it("normalizes room-prefixed targets before sending typing state", async () => {
