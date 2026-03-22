@@ -222,13 +222,6 @@ RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
 
 ENV NODE_ENV=production
 
-# V8 heap limit: Node auto-detects available memory and caps the heap
-# accordingly, but on PaaS containers (Railway, Render, Fly) the detected
-# limit is often too low for the gateway's startup peak (~800 MB).
-# Default to 1536 MB so startup succeeds comfortably.
-# Override via OPENCLAW_DEFAULT_MAX_OLD_SPACE_SIZE env var on your platform.
-ENV OPENCLAW_DEFAULT_MAX_OLD_SPACE_SIZE=1536
-
 # Security hardening: Run as non-root user
 # The node:24-bookworm image includes a 'node' user (uid 1000)
 # This reduces the attack surface by preventing container escape via root privileges
@@ -243,7 +236,7 @@ USER node
 #   - aliases: /health and /ready
 HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
   CMD node -e "const p=process.env.PORT||18789;fetch('http://127.0.0.1:'+p+'/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-# Apply heap limit as a direct CLI flag so it always takes effect, even when
-# the platform injects its own NODE_OPTIONS.  V8 uses the last value seen,
-# and CLI args come after NODE_OPTIONS, so this wins.
-CMD ["sh", "-c", "exec node --max-old-space-size=${OPENCLAW_DEFAULT_MAX_OLD_SPACE_SIZE:-768} openclaw.mjs gateway --bind lan --allow-unconfigured"]
+# Let Node use all available container memory.  Pass --max-semi-space-size=0
+# to disable V8's conservative auto-detection on PaaS containers, which often
+# caps the heap too low for the gateway's startup peak.
+CMD ["sh", "-c", "exec node --max-old-space-size=4096 openclaw.mjs gateway --bind lan --allow-unconfigured"]
