@@ -89,13 +89,22 @@ describe("plugin-sdk exports", () => {
   it("keeps the root runtime surface intentionally small", async () => {
     const runtimeExports = await collectRuntimeExports(path.join(import.meta.dirname, "index.ts"));
     expect([...runtimeExports].toSorted()).toEqual([
+      "DEFAULT_ACCOUNT_ID",
+      "buildChannelConfigSchema",
       "buildFalImageGenerationProvider",
       "buildGoogleImageGenerationProvider",
       "buildOpenAIImageGenerationProvider",
+      "createTypingCallbacks",
       "delegateCompactionToRuntime",
       "emptyPluginConfigSchema",
+      "normalizeAccountId",
       "onDiagnosticEvent",
       "registerContextEngine",
+      "resolveDirectDmAuthorizationOutcome",
+      "resolvePreferredOpenClawTmpDir",
+      "resolveSenderCommandAuthorizationWithRuntime",
+      "stripMarkdown",
+      "withFileLock",
     ]);
   });
 
