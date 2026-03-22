@@ -15,7 +15,7 @@ import type {
 import {
   extractMessagingToolSend,
   extractToolErrorMessage,
-  extractToolResultMediaPaths,
+  extractToolResultMediaPathsWithStartArgs,
   extractToolResultText,
   filterToolResultMediaUrls,
   isToolResultError,
@@ -224,8 +224,9 @@ async function emitToolResultOutput(params: {
   isToolError: boolean;
   result: unknown;
   sanitizedResult: unknown;
+  startArgs?: unknown;
 }) {
-  const { ctx, toolName, meta, isToolError, result, sanitizedResult } = params;
+  const { ctx, toolName, meta, isToolError, result, sanitizedResult, startArgs } = params;
   if (!ctx.params.onToolResult) {
     return;
   }
@@ -284,7 +285,10 @@ async function emitToolResultOutput(params: {
 
   // emitToolOutput() already handles MEDIA: directives when enabled; this path
   // only sends raw media URLs for non-verbose delivery mode.
-  const mediaPaths = filterToolResultMediaUrls(toolName, extractToolResultMediaPaths(result));
+  const mediaPaths = filterToolResultMediaUrls(
+    toolName,
+    extractToolResultMediaPathsWithStartArgs(result, startArgs),
+  );
   if (mediaPaths.length === 0) {
     return;
   }
@@ -545,7 +549,15 @@ export async function handleToolExecutionEnd(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
 
-  await emitToolResultOutput({ ctx, toolName, meta, isToolError, result, sanitizedResult });
+  await emitToolResultOutput({
+    ctx,
+    toolName,
+    meta,
+    isToolError,
+    result,
+    sanitizedResult,
+    startArgs: startData?.args,
+  });
 
   // Run after_tool_call plugin hook (fire-and-forget)
   const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();

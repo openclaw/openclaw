@@ -195,6 +195,27 @@ export function filterToolResultMediaUrls(
  * path like saving to a temp file).
  */
 export function extractToolResultMediaPaths(result: unknown): string[] {
+  return extractToolResultMediaPathsWithStartArgs(result);
+}
+
+function readToolMediaPathFromArgs(args: unknown): string | undefined {
+  if (!args || typeof args !== "object") {
+    return undefined;
+  }
+  const record = args as Record<string, unknown>;
+  const directCandidates = [record.path, record.file_path, record.filePath];
+  for (const candidate of directCandidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  return undefined;
+}
+
+export function extractToolResultMediaPathsWithStartArgs(
+  result: unknown,
+  startArgs?: unknown,
+): string[] {
   if (!result || typeof result !== "object") {
     return [];
   }
@@ -235,6 +256,10 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
     const p = typeof details?.path === "string" ? details.path.trim() : "";
     if (p) {
       return [p];
+    }
+    const argsPath = readToolMediaPathFromArgs(startArgs);
+    if (argsPath) {
+      return [argsPath];
     }
   }
 
