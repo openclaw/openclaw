@@ -1486,6 +1486,62 @@
                 ]
               }
             ]
+          },
+          {
+            "tab": "Help",
+            "groups": [
+              {
+                "group": "Help",
+                "pages": [
+                  "help/index",
+                  "help/troubleshooting",
+                  "help/faq"
+                ]
+              },
+              {
+                "group": "Community",
+                "pages": [
+                  "start/lore"
+                ]
+              },
+              {
+                "group": "Environment and debugging",
+                "pages": [
+                  "help/environment",
+                  "help/debugging",
+                  "help/testing",
+                  "help/scripts",
+                  "debug/node-issue",
+                  "diagnostics/flags"
+                ]
+              },
+              {
+                "group": "Compaction internals",
+                "pages": [
+                  "reference/session-management-compaction"
+                ]
+              },
+              {
+                "group": "Developer setup",
+                "pages": [
+                  "start/setup",
+                  "pi-dev"
+                ]
+              },
+              {
+                "group": "Contributing",
+                "pages": [
+                  "ci"
+                ]
+              },
+              {
+                "group": "Docs meta",
+                "pages": [
+                  "start/hubs",
+                  "start/docs-directory"
+                ]
+              }
+            ]
           }
         ]
       },
@@ -2135,65 +2191,7 @@
         ]
       },
       {
-        "language": "vi",
-        "tabs": [
-          {
-            "tab": "Help",
-            "groups": [
-              {
-                "group": "Help",
-                "pages": [
-                  "help/index",
-                  "help/troubleshooting",
-                  "help/faq"
-                ]
-              },
-              {
-                "group": "Community",
-                "pages": [
-                  "start/lore"
-                ]
-              },
-              {
-                "group": "Environment and debugging",
-                "pages": [
-                  "help/environment",
-                  "help/debugging",
-                  "help/testing",
-                  "help/scripts",
-                  "debug/node-issue",
-                  "diagnostics/flags"
-                ]
-              },
-              {
-                "group": "Compaction internals",
-                "pages": [
-                  "reference/session-management-compaction"
-                ]
-              },
-              {
-                "group": "Developer setup",
-                "pages": [
-                  "start/setup",
-                  "pi-dev"
-                ]
-              },
-              {
-                "group": "Contributing",
-                "pages": [
-                  "ci"
-                ]
-              },
-              {
-                "group": "Docs meta",
-                "pages": [
-                  "start/hubs",
-                  "start/docs-directory"
-                ]
-              }
-            ]
-          }
-        ]
+        "language": "vi"
       }
     ]
   }
