@@ -1,3 +1,5 @@
+import { stripHeartbeatToken } from "../../../auto-reply/heartbeat.js";
+import { HEARTBEAT_TOKEN } from "../../../auto-reply/tokens.js";
 import type { OutboundIdentity } from "../../../infra/outbound/identity.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { sendMessageSlack, type SlackSendIdentity } from "../../../slack/send.js";
@@ -77,8 +79,23 @@ async function sendSlackOutboundMessage(params: {
     };
   }
 
+  // Safety-net: strip stray HEARTBEAT_OK tokens that escaped upstream normalization.
+  let finalText = hookResult.text;
+  if (finalText.includes(HEARTBEAT_TOKEN)) {
+    const stripped = stripHeartbeatToken(finalText, { mode: "message" });
+    if (stripped.shouldSkip && !params.mediaUrl) {
+      return {
+        channel: "slack" as const,
+        messageId: "heartbeat-stripped",
+        channelId: params.to,
+        meta: { heartbeatStripped: true },
+      };
+    }
+    finalText = stripped.text;
+  }
+
   const slackIdentity = resolveSlackSendIdentity(params.identity);
-  const result = await send(params.to, hookResult.text, {
+  const result = await send(params.to, finalText, {
     threadTs,
     accountId: params.accountId ?? undefined,
     ...(params.mediaUrl

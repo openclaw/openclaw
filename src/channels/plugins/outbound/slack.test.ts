@@ -169,3 +169,45 @@ describe("slack outbound hook wiring", () => {
     expect(sendMessageSlack).toHaveBeenCalled();
   });
 });
+
+describe("slack outbound HEARTBEAT_OK safety-net", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getGlobalHookRunner).mockReturnValue(null);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("strips messages that are exactly 'HEARTBEAT_OK'", async () => {
+    const result = await sendSlackTextWithDefaults({ text: "HEARTBEAT_OK" });
+    expect(sendMessageSlack).not.toHaveBeenCalled();
+    expect(result.channel).toBe("slack");
+  });
+
+  it("strips messages that are 'HEARTBEAT_OK' with surrounding whitespace", async () => {
+    const result = await sendSlackTextWithDefaults({ text: "  HEARTBEAT_OK  " });
+    expect(sendMessageSlack).not.toHaveBeenCalled();
+    expect(result.channel).toBe("slack");
+  });
+
+  it("strips HEARTBEAT_OK from messages with surrounding content", async () => {
+    await sendSlackTextWithDefaults({ text: "HEARTBEAT_OK Here is some other text" });
+    expect(sendMessageSlack).toHaveBeenCalledWith(
+      "C123",
+      expect.not.stringContaining("HEARTBEAT_OK"),
+      expect.any(Object),
+    );
+  });
+
+  it("does NOT strip normal messages containing the word 'heartbeat'", async () => {
+    await sendSlackTextWithDefaults({ text: "The heartbeat check passed successfully" });
+    expectSlackSendCalledWith("The heartbeat check passed successfully");
+  });
+
+  it("does NOT strip normal messages", async () => {
+    await sendSlackTextWithDefaults({ text: "Hello, how can I help?" });
+    expectSlackSendCalledWith("Hello, how can I help?");
+  });
+});

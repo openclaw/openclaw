@@ -1,7 +1,8 @@
 import type { ChunkMode } from "../../auto-reply/chunk.js";
 import { chunkMarkdownTextWithMode } from "../../auto-reply/chunk.js";
+import { stripHeartbeatToken } from "../../auto-reply/heartbeat.js";
 import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-reference.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -24,7 +25,17 @@ export async function deliverReplies(params: {
     const inlineReplyToId = params.replyToMode === "off" ? undefined : payload.replyToId;
     const threadTs = inlineReplyToId ?? params.replyThreadTs;
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-    const text = payload.text ?? "";
+    let text = payload.text ?? "";
+
+    // Safety-net: strip stray HEARTBEAT_OK tokens that escaped upstream normalization.
+    if (text.includes(HEARTBEAT_TOKEN)) {
+      const stripped = stripHeartbeatToken(text, { mode: "message" });
+      if (stripped.shouldSkip && mediaList.length === 0) {
+        continue;
+      }
+      text = stripped.text;
+    }
+
     if (!text && mediaList.length === 0) {
       continue;
     }
