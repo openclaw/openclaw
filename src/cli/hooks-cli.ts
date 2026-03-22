@@ -16,6 +16,7 @@ import {
   resolveHookInstallDir,
 } from "../hooks/install.js";
 import { recordHookInstall } from "../hooks/installs.js";
+import { resolveHookEntries } from "../hooks/policy.js";
 import type { HookEntry } from "../hooks/types.js";
 import { loadWorkspaceHookEntries } from "../hooks/workspace.js";
 import { resolveArchiveKind } from "../infra/archive.js";
@@ -53,14 +54,7 @@ export type HooksUpdateOptions = {
 };
 
 function mergeHookEntries(pluginEntries: HookEntry[], workspaceEntries: HookEntry[]): HookEntry[] {
-  const merged = new Map<string, HookEntry>();
-  for (const entry of pluginEntries) {
-    merged.set(entry.hook.name, entry);
-  }
-  for (const entry of workspaceEntries) {
-    merged.set(entry.hook.name, entry);
-  }
-  return Array.from(merged.values());
+  return resolveHookEntries([...pluginEntries, ...workspaceEntries]);
 }
 
 function buildHooksReport(config: OpenClawConfig): HookStatusReport {
@@ -86,10 +80,7 @@ function resolveHookForToggle(
       `Hook "${hookName}" is managed by plugin "${hook.pluginId ?? "unknown"}" and cannot be enabled/disabled.`,
     );
   }
-  if (opts?.requireEligible && !hook.eligible) {
-    if (hook.disabled && hook.requirementsSatisfied) {
-      return hook;
-    }
+  if (opts?.requireEligible && !hook.requirementsSatisfied) {
     throw new Error(`Hook "${hookName}" is not eligible (missing requirements)`);
   }
   return hook;
@@ -120,10 +111,10 @@ function buildConfigWithHookEnabled(params: {
 }
 
 function formatHookStatus(hook: HookStatusEntry): string {
-  if (hook.eligible) {
+  if (hook.loadable) {
     return theme.success("✓ ready");
   }
-  if (hook.disabled) {
+  if (!hook.enabledByConfig) {
     return theme.warn("⏸ disabled");
   }
   return theme.error("✗ missing");
@@ -245,7 +236,7 @@ function enableInternalHookEntries(config: OpenClawConfig, hookNames: string[]):
  * Format the hooks list output
  */
 export function formatHooksList(report: HookStatusReport, opts: HooksListOptions): string {
-  const hooks = opts.eligible ? report.hooks.filter((h) => h.eligible) : report.hooks;
+  const hooks = opts.eligible ? report.hooks.filter((h) => h.loadable) : report.hooks;
 
   if (opts.json) {
     const jsonReport = {
@@ -255,8 +246,12 @@ export function formatHooksList(report: HookStatusReport, opts: HooksListOptions
         name: h.name,
         description: h.description,
         emoji: h.emoji,
-        eligible: h.eligible,
-        disabled: h.disabled,
+        eligible: h.loadable,
+        disabled: !h.enabledByConfig,
+        enabledByConfig: h.enabledByConfig,
+        requirementsSatisfied: h.requirementsSatisfied,
+        loadable: h.loadable,
+        blockedReason: h.blockedReason,
         source: h.source,
         pluginId: h.pluginId,
         events: h.events,
@@ -275,7 +270,7 @@ export function formatHooksList(report: HookStatusReport, opts: HooksListOptions
     return message;
   }
 
-  const eligible = hooks.filter((h) => h.eligible);
+  const eligible = hooks.filter((h) => h.loadable);
   const tableWidth = getTerminalTableWidth();
   const rows = hooks.map((hook) => {
     const missing = formatHookMissingSummary(hook);
@@ -330,14 +325,22 @@ export function formatHookInfo(
   }
 
   if (opts.json) {
-    return JSON.stringify(hook, null, 2);
+    return JSON.stringify(
+      {
+        ...hook,
+        eligible: hook.loadable,
+        disabled: !hook.enabledByConfig,
+      },
+      null,
+      2,
+    );
   }
 
   const lines: string[] = [];
   const emoji = hook.emoji ?? "🔗";
-  const status = hook.eligible
+  const status = hook.loadable
     ? theme.success("✓ Ready")
-    : hook.disabled
+    : !hook.enabledByConfig
       ? theme.warn("⏸ Disabled")
       : theme.error("✗ Missing requirements");
 
@@ -363,6 +366,9 @@ export function formatHookInfo(
   }
   if (hook.managedByPlugin) {
     lines.push(theme.muted("  Managed by plugin; enable/disable via hooks CLI not available."));
+  }
+  if (hook.blockedReason) {
+    lines.push(`${theme.muted("  Blocked reason:")} ${hook.blockedReason}`);
   }
 
   // Requirements
@@ -420,8 +426,8 @@ export function formatHookInfo(
  */
 export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptions): string {
   if (opts.json) {
-    const eligible = report.hooks.filter((h) => h.eligible);
-    const notEligible = report.hooks.filter((h) => !h.eligible);
+    const eligible = report.hooks.filter((h) => h.loadable);
+    const notEligible = report.hooks.filter((h) => !h.loadable);
     return JSON.stringify(
       {
         total: report.hooks.length,
@@ -431,6 +437,7 @@ export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptio
           eligible: eligible.map((h) => h.name),
           notEligible: notEligible.map((h) => ({
             name: h.name,
+            blockedReason: h.blockedReason,
             missing: h.missing,
           })),
         },
@@ -440,8 +447,8 @@ export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptio
     );
   }
 
-  const eligible = report.hooks.filter((h) => h.eligible);
-  const notEligible = report.hooks.filter((h) => !h.eligible);
+  const eligible = report.hooks.filter((h) => h.loadable);
+  const notEligible = report.hooks.filter((h) => !h.loadable);
 
   const lines: string[] = [];
   lines.push(theme.heading("Hooks Status"));
@@ -455,8 +462,8 @@ export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptio
     lines.push(theme.heading("Hooks not ready:"));
     for (const hook of notEligible) {
       const reasons = [];
-      if (hook.disabled) {
-        reasons.push("disabled");
+      if (hook.blockedReason && hook.blockedReason !== "missing requirements") {
+        reasons.push(hook.blockedReason);
       }
       if (hook.missing.bins.length > 0) {
         reasons.push(`bins: ${hook.missing.bins.join(", ")}`);
