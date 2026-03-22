@@ -1,7 +1,4 @@
-import {
-  createPairingPrefixStripper,
-  createTextPairingAdapter,
-} from "openclaw/plugin-sdk/channel-pairing";
+import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
 import {
   createAttachedChannelResultAdapter,
@@ -283,22 +280,24 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
       ],
     },
   },
-  pairing: createTextPairingAdapter({
-    idLabel: "lineUserId",
-    message: "OpenClaw: your access has been approved.",
-    // LINE IDs are case-sensitive; only strip prefix variants (line: / line:user:).
-    normalizeAllowEntry: createPairingPrefixStripper(/^line:(?:user:)?/i),
-    notify: async ({ cfg, id, message }) => {
-      const line = getLineRuntime().channel.line;
-      const account = line.resolveLineAccount({ cfg });
-      if (!account.channelAccessToken) {
-        throw new Error("LINE channel access token not configured");
-      }
-      await line.pushMessageLine(id, message, {
-        channelAccessToken: account.channelAccessToken,
-      });
+  pairing: {
+    text: {
+      idLabel: "lineUserId",
+      message: "OpenClaw: your access has been approved.",
+      // LINE IDs are case-sensitive; only strip prefix variants (line: / line:user:).
+      normalizeAllowEntry: createPairingPrefixStripper(/^line:(?:user:)?/i),
+      notify: async ({ cfg, id, message }) => {
+        const line = getLineRuntime().channel.line;
+        const account = line.resolveLineAccount({ cfg });
+        if (!account.channelAccessToken) {
+          throw new Error("LINE channel access token not configured");
+        }
+        await line.pushMessageLine(id, message, {
+          channelAccessToken: account.channelAccessToken,
+        });
+      },
     },
-  }),
+  },
   security: lineSecurityAdapter,
   outbound: {
     deliveryMode: "direct",
