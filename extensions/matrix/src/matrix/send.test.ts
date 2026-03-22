@@ -1,6 +1,8 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
 import { setMatrixRuntime } from "../runtime.js";
+import { voteMatrixPoll } from "./actions/polls.js";
+import { sendMessageMatrix, sendTypingMatrix } from "./send.js";
 
 const loadWebMediaMock = vi.fn().mockResolvedValue({
   buffer: Buffer.from("media"),
@@ -44,10 +46,6 @@ const runtimeStub = {
   },
 } as unknown as PluginRuntime;
 
-let sendMessageMatrix: typeof import("./send.js").sendMessageMatrix;
-let sendTypingMatrix: typeof import("./send.js").sendTypingMatrix;
-let voteMatrixPoll: typeof import("./actions/polls.js").voteMatrixPoll;
-
 const makeClient = () => {
   const sendMessage = vi.fn().mockResolvedValue("evt1");
   const sendEvent = vi.fn().mockResolvedValue("evt-poll-vote");
@@ -68,13 +66,6 @@ const makeClient = () => {
 };
 
 describe("sendMessageMatrix media", () => {
-  beforeAll(async () => {
-    setMatrixRuntime(runtimeStub);
-    ({ sendMessageMatrix } = await import("./send.js"));
-    ({ sendTypingMatrix } = await import("./send.js"));
-    ({ voteMatrixPoll } = await import("./actions/polls.js"));
-  });
-
   beforeEach(() => {
     loadWebMediaMock.mockReset().mockResolvedValue({
       buffer: Buffer.from("media"),
@@ -326,13 +317,6 @@ describe("sendMessageMatrix media", () => {
 });
 
 describe("sendMessageMatrix threads", () => {
-  beforeAll(async () => {
-    setMatrixRuntime(runtimeStub);
-    ({ sendMessageMatrix } = await import("./send.js"));
-    ({ sendTypingMatrix } = await import("./send.js"));
-    ({ voteMatrixPoll } = await import("./actions/polls.js"));
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
     loadConfigMock.mockReset().mockReturnValue({});
@@ -377,11 +361,6 @@ describe("sendMessageMatrix threads", () => {
 });
 
 describe("voteMatrixPoll", () => {
-  beforeAll(async () => {
-    setMatrixRuntime(runtimeStub);
-    ({ voteMatrixPoll } = await import("./actions/polls.js"));
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
     loadConfigMock.mockReset().mockReturnValue({});
@@ -523,11 +502,6 @@ describe("voteMatrixPoll", () => {
 });
 
 describe("sendTypingMatrix", () => {
-  beforeAll(async () => {
-    setMatrixRuntime(runtimeStub);
-    ({ sendTypingMatrix } = await import("./send.js"));
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
     loadConfigMock.mockReset().mockReturnValue({});
