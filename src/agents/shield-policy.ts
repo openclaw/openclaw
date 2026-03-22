@@ -15,7 +15,7 @@ export type ShieldPolicy = {
   deny: string[];
 };
 
-const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---/;
+const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---/;
 
 export function parseShieldPolicy(content: string | undefined): ShieldPolicy | undefined {
   if (!content?.trim()) {

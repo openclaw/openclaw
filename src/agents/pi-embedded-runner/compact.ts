@@ -76,6 +76,7 @@ import {
   resolveSessionLockMaxHoldFromTimeout,
 } from "../session-write-lock.js";
 import { detectRuntimeShell } from "../shell-utils.js";
+import { parseShieldPolicy } from "../shield-policy.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
@@ -83,6 +84,7 @@ import {
   type SkillSnapshot,
 } from "../skills.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
+import { DEFAULT_SHIELD_FILENAME } from "../workspace.js";
 import {
   compactWithSafetyTimeout,
   resolveCompactionTimeoutMs,
@@ -552,13 +554,16 @@ export async function compactEmbeddedPiSessionDirect(
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
-    const { contextFiles } = await resolveBootstrapContextForRun({
+    const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
       workspaceDir: effectiveWorkspace,
       config: params.config,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
       warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
     });
+    const shieldPolicy = parseShieldPolicy(
+      bootstrapFiles.find((f) => f.name === DEFAULT_SHIELD_FILENAME)?.content,
+    );
     // Apply contextTokens cap to model so pi-coding-agent's auto-compaction
     // threshold uses the effective limit, not the native context window.
     const ctxInfo = resolveContextWindowInfo({
@@ -601,6 +606,7 @@ export async function compactEmbeddedPiSessionDirect(
       modelCompat: effectiveModel.compat,
       modelContextWindowTokens: ctxInfo.tokens,
       modelAuthMode: resolveModelAuthMode(model.provider, params.config),
+      shieldPolicy,
     });
     const toolsEnabled = supportsModelTools(runtimeModel);
     const tools = sanitizeToolsForGoogle({
