@@ -46,6 +46,19 @@ vi.mock("../../src/memory/read-file.js", () => ({
   readAgentMemoryFile: readAgentMemoryFileMock,
 }));
 
+vi.mock("../../src/agents/tools/memory-tool.runtime.js", () => ({
+  resolveMemoryBackendConfig: ({
+    cfg,
+  }: {
+    cfg?: { memory?: { backend?: string; qmd?: unknown } };
+  }) => ({
+    backend,
+    qmd: cfg?.memory?.qmd,
+  }),
+  getMemorySearchManager: getMemorySearchManagerMock,
+  readAgentMemoryFile: readAgentMemoryFileMock,
+}));
+
 export function setMemoryBackend(next: MemoryBackend): void {
   backend = next;
 }
