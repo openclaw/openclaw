@@ -41,7 +41,7 @@ import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeTtsAutoMode, resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { FinalizedMsgContext } from "../templating.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { BlockReplyContext, GetReplyOptions, ReplyPayload } from "../types.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
@@ -151,7 +151,7 @@ export async function dispatchReplyFromConfig(params: {
   cfg: OpenClawConfig;
   dispatcher: ReplyDispatcher;
   replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
-  replyResolver?: typeof getReplyFromConfig;
+  replyResolver?: typeof import("./get-reply-from-config.runtime.js").getReplyFromConfig;
 }): Promise<DispatchFromConfigResult> {
   const { ctx, cfg, dispatcher } = params;
   const diagnosticsEnabled = isDiagnosticsEnabled(cfg);
@@ -606,7 +606,7 @@ export async function dispatchReplyFromConfig(params: {
           };
           return run();
         },
-        onBlockReply: (payload: ReplyPayload, context) => {
+        onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => {
           const run = async () => {
             // Suppress reasoning payloads — channels using this generic dispatch
             // path (WhatsApp, web, etc.) do not have a dedicated reasoning lane.
