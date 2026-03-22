@@ -1827,14 +1827,21 @@ export async function runEmbeddedAttempt(
           ],
         })
       : undefined;
+    // Final SHIELD.md deny enforcement — single chokepoint for ALL tool sources
+    // (core, MCP, LSP, client). Earlier per-source checks (pipeline step,
+    // reservedToolNames) are belt-and-suspenders; this is the definitive gate.
+    const shieldDenySet = shieldDenyNames.length > 0 ? new Set(shieldDenyNames) : undefined;
     const effectiveTools = [
       ...tools,
       ...(bundleMcpRuntime?.tools ?? []),
       ...(bundleLspRuntime?.tools ?? []),
-    ];
+    ].filter((tool) => !shieldDenySet?.has(tool.name));
+    const filteredClientTools = shieldDenySet
+      ? clientTools?.filter((tool) => !shieldDenySet.has(tool.function.name))
+      : clientTools;
     const allowedToolNames = collectAllowedToolNames({
       tools: effectiveTools,
-      clientTools,
+      clientTools: filteredClientTools,
     });
     logToolSchemasForGoogle({ tools: effectiveTools, provider: params.provider });
 
@@ -2128,9 +2135,9 @@ export async function runEmbeddedAttempt(
         cfg: params.config,
         agentId: sessionAgentId,
       });
-      const clientToolDefs = clientTools
+      const clientToolDefs = filteredClientTools
         ? toClientToolDefinitions(
-            clientTools,
+            filteredClientTools,
             (toolName, toolParams) => {
               clientToolCallDetected = { name: toolName, params: toolParams };
             },

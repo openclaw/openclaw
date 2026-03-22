@@ -630,11 +630,13 @@ export async function compactEmbeddedPiSessionDirect(
           ],
         })
       : undefined;
+    // Final SHIELD.md deny enforcement — single chokepoint for all tool sources.
+    const shieldDenySet = shieldDenyNames.length > 0 ? new Set(shieldDenyNames) : undefined;
     const effectiveTools = [
       ...tools,
       ...(bundleMcpRuntime?.tools ?? []),
       ...(bundleLspRuntime?.tools ?? []),
-    ];
+    ].filter((tool) => !shieldDenySet?.has(tool.name));
     const allowedToolNames = collectAllowedToolNames({ tools: effectiveTools });
     logToolSchemasForGoogle({ tools: effectiveTools, provider });
     const machineName = await getMachineDisplayName();
