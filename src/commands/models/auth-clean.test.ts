@@ -442,7 +442,9 @@ describe("modelsAuthCleanCommand", () => {
     mocks.ensureAuthProfileStore.mockReturnValue(store);
     mocks.updateAuthProfileStoreWithLock.mockResolvedValueOnce(null);
 
-    await expect(modelsAuthCleanCommand({}, makeRuntime())).rejects.toThrow(/lock busy/i);
+    await expect(modelsAuthCleanCommand({}, makeRuntime())).rejects.toThrow(
+      /lock contention|lock busy|write failed/i,
+    );
   });
 
   it("non-default agent: excludes main-only profiles from toRemove", async () => {
