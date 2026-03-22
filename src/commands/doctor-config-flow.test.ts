@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveMatrixAccountStorageRoot } from "../../extensions/matrix/runtime-api.js";
 import { withTempHome } from "../../test/helpers/temp-home.js";
+import * as commandSecretGatewayModule from "../cli/command-secret-gateway.js";
 import * as noteModule from "../terminal/note.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import { runDoctorConfigWithInput } from "./doctor-config-flow.test-utils.js";
@@ -106,6 +107,66 @@ describe("doctor config flow", () => {
         (line) => line.includes('groupPolicy is "allowlist"') && line.includes("groupAllowFrom"),
       ),
     ).toBe(false);
+  });
+
+  it("shows first-time Telegram guidance without the old groupAllowFrom warning", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        telegram: {
+          botToken: "123:abc",
+          groupPolicy: "allowlist",
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes('channels.telegram.groupPolicy is "allowlist"') &&
+          line.includes("groupAllowFrom"),
+      ),
+    ).toBe(false);
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes("channels.telegram: Telegram is in first-time setup mode.") &&
+          line.includes("DMs use pairing mode") &&
+          line.includes("channels.telegram.groups"),
+      ),
+    ).toBe(true);
+  });
+
+  it("shows account-scoped first-time Telegram guidance without the old groupAllowFrom warning", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        telegram: {
+          accounts: {
+            default: {
+              botToken: "123:abc",
+              groupPolicy: "allowlist",
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes('channels.telegram.accounts.default.groupPolicy is "allowlist"') &&
+          line.includes("groupAllowFrom"),
+      ),
+    ).toBe(false);
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes(
+            "channels.telegram.accounts.default: Telegram is in first-time setup mode.",
+          ) &&
+          line.includes("DMs use pairing mode") &&
+          line.includes("channels.telegram.accounts.default.groups"),
+      ),
+    ).toBe(true);
   });
 
   it("warns on mutable Zalouser group entries when dangerous name matching is disabled", async () => {
@@ -516,8 +577,11 @@ describe("doctor config flow", () => {
   });
 
   it("resolves Telegram @username allowFrom entries to numeric IDs on repair", async () => {
-    const fetchSpy = vi.fn(async (url: string) => {
-      const u = String(url);
+    const globalFetch = vi.fn(async () => {
+      throw new Error("global fetch should not be called");
+    });
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+      const u = input instanceof URL ? input.href : typeof input === "string" ? input : input.url;
       const chatId = new URL(u).searchParams.get("chat_id") ?? "";
       const id =
         chatId.toLowerCase() === "@testuser"
@@ -534,7 +598,12 @@ describe("doctor config flow", () => {
         json: async () => (id != null ? { ok: true, result: { id } } : { ok: false }),
       } as unknown as Response;
     });
-    vi.stubGlobal("fetch", fetchSpy);
+    vi.stubGlobal("fetch", globalFetch);
+    const telegramFetchModule = await import("../../extensions/telegram/src/fetch.js");
+    const telegramProxyModule = await import("../../extensions/telegram/src/proxy.js");
+    const resolveTelegramFetch = vi.spyOn(telegramFetchModule, "resolveTelegramFetch");
+    const makeProxyFetch = vi.spyOn(telegramProxyModule, "makeProxyFetch");
+    resolveTelegramFetch.mockReturnValue(fetchSpy as unknown as typeof fetch);
     try {
       const result = await runDoctorConfigWithInput({
         repair: true,
@@ -580,6 +649,8 @@ describe("doctor config flow", () => {
       expect(cfg.channels.telegram.accounts.default.allowFrom).toEqual(["111"]);
       expect(cfg.channels.telegram.accounts.default.groupAllowFrom).toEqual(["222"]);
     } finally {
+      makeProxyFetch.mockRestore();
+      resolveTelegramFetch.mockRestore();
       vi.unstubAllGlobals();
     }
   });
@@ -627,6 +698,170 @@ describe("doctor config flow", () => {
         ),
       ).toBe(true);
     } finally {
+      noteSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("ignores custom Telegram apiRoot and proxy when repairing allowFrom usernames", async () => {
+    const globalFetch = vi.fn(async () => {
+      throw new Error("global fetch should not be called");
+    });
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+      const url = input instanceof URL ? input.href : typeof input === "string" ? input : input.url;
+      expect(url).toBe("https://api.telegram.org/bottok/getChat?chat_id=%40testuser");
+      return {
+        ok: true,
+        json: async () => ({ ok: true, result: { id: 12345 } }),
+      };
+    });
+    vi.stubGlobal("fetch", globalFetch);
+    const proxyFetch = vi.fn();
+    const telegramFetchModule = await import("../../extensions/telegram/src/fetch.js");
+    const telegramProxyModule = await import("../../extensions/telegram/src/proxy.js");
+    const resolveTelegramFetch = vi.spyOn(telegramFetchModule, "resolveTelegramFetch");
+    const makeProxyFetch = vi.spyOn(telegramProxyModule, "makeProxyFetch");
+    makeProxyFetch.mockReturnValue(proxyFetch as unknown as typeof fetch);
+    resolveTelegramFetch.mockReturnValue(fetchSpy as unknown as typeof fetch);
+    const resolveSecretsSpy = vi
+      .spyOn(commandSecretGatewayModule, "resolveCommandSecretRefsViaGateway")
+      .mockResolvedValue({
+        diagnostics: [],
+        targetStatesByPath: {},
+        hadUnresolvedTargets: false,
+        resolvedConfig: {
+          channels: {
+            telegram: {
+              accounts: {
+                work: {
+                  botToken: "tok",
+                  apiRoot: "https://custom.telegram.test/root/",
+                  proxy: "http://127.0.0.1:8888",
+                  network: { autoSelectFamily: false, dnsResultOrder: "ipv4first" },
+                  allowFrom: ["@testuser"],
+                },
+              },
+            },
+          },
+        },
+      });
+
+    try {
+      const result = await runDoctorConfigWithInput({
+        repair: true,
+        config: {
+          channels: {
+            telegram: {
+              accounts: {
+                work: {
+                  botToken: "tok",
+                  allowFrom: ["@testuser"],
+                },
+              },
+            },
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      const cfg = result.cfg as {
+        channels?: {
+          telegram?: {
+            accounts?: Record<string, { allowFrom?: string[] }>;
+          };
+        };
+      };
+      expect(cfg.channels?.telegram?.accounts?.work?.allowFrom).toEqual(["12345"]);
+      expect(makeProxyFetch).not.toHaveBeenCalled();
+      expect(resolveTelegramFetch).toHaveBeenCalledWith(undefined, {
+        network: { autoSelectFamily: false, dnsResultOrder: "ipv4first" },
+      });
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      makeProxyFetch.mockRestore();
+      resolveTelegramFetch.mockRestore();
+      resolveSecretsSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("sanitizes config-derived doctor warnings and changes before logging", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    const globalFetch = vi.fn(async () => {
+      throw new Error("global fetch should not be called");
+    });
+    const fetchSpy = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ ok: true, result: { id: 12345 } }),
+    }));
+    vi.stubGlobal("fetch", globalFetch);
+    const telegramFetchModule = await import("../../extensions/telegram/src/fetch.js");
+    const resolveTelegramFetch = vi.spyOn(telegramFetchModule, "resolveTelegramFetch");
+    resolveTelegramFetch.mockReturnValue(fetchSpy as unknown as typeof fetch);
+    try {
+      await runDoctorConfigWithInput({
+        repair: true,
+        config: {
+          channels: {
+            telegram: {
+              accounts: {
+                work: {
+                  botToken: "tok",
+                  allowFrom: ["@\u001b[31mtestuser"],
+                },
+              },
+            },
+            slack: {
+              accounts: {
+                work: {
+                  allowFrom: ["alice\u001b[31m\nforged"],
+                },
+                "ops\u001b[31m\nopen": {
+                  dmPolicy: "open",
+                },
+              },
+            },
+            whatsapp: {
+              accounts: {
+                "ops\u001b[31m\nempty": {
+                  groupPolicy: "allowlist",
+                },
+              },
+            },
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      const outputs = noteSpy.mock.calls
+        .filter((call) => call[1] === "Doctor warnings" || call[1] === "Doctor changes")
+        .map((call) => String(call[0]));
+      expect(outputs.filter((line) => line.includes("\u001b"))).toEqual([]);
+      expect(outputs.filter((line) => line.includes("\nforged"))).toEqual([]);
+      expect(outputs.some((line) => line.includes("resolved @testuser -> 12345"))).toBe(true);
+      expect(
+        outputs.some(
+          (line) =>
+            line.includes("channels.slack.accounts.work.allowFrom: aliceforged") &&
+            line.includes("mutable allowlist"),
+        ),
+      ).toBe(true);
+      expect(
+        outputs.some(
+          (line) =>
+            line.includes('channels.slack.accounts.opsopen.allowFrom: set to ["*"]') &&
+            line.includes('required by dmPolicy="open"'),
+        ),
+      ).toBe(true);
+      expect(
+        outputs.some(
+          (line) =>
+            line.includes('channels.whatsapp.accounts.opsempty.groupPolicy is "allowlist"') &&
+            line.includes("groupAllowFrom"),
+        ),
+      ).toBe(true);
+    } finally {
+      resolveTelegramFetch.mockRestore();
       noteSpy.mockRestore();
       vi.unstubAllGlobals();
     }

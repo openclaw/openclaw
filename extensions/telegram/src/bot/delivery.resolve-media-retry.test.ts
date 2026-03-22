@@ -360,6 +360,38 @@ describe("resolveMedia getFile retry", () => {
       }),
     );
   });
+
+  it("uses local absolute file paths directly for media downloads", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "/var/lib/telegram-bot-api/file.pdf" });
+
+    const result = await resolveMedia(makeCtx("document", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+
+    expect(fetchRemoteMedia).not.toHaveBeenCalled();
+    expect(saveMediaBuffer).not.toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({
+        path: "/var/lib/telegram-bot-api/file.pdf",
+        placeholder: "<media:document>",
+      }),
+    );
+  });
+
+  it("uses local absolute file paths directly for sticker downloads", async () => {
+    const getFile = vi
+      .fn()
+      .mockResolvedValue({ file_path: "/var/lib/telegram-bot-api/sticker.webp" });
+
+    const result = await resolveMedia(makeCtx("sticker", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+
+    expect(fetchRemoteMedia).not.toHaveBeenCalled();
+    expect(saveMediaBuffer).not.toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({
+        path: "/var/lib/telegram-bot-api/sticker.webp",
+        placeholder: "<media:sticker>",
+      }),
+    );
+  });
 });
 
 describe("resolveMedia original filename preservation", () => {

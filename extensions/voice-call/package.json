@@ -6,13 +6,27 @@
   "dependencies": {
     "@sinclair/typebox": "0.34.48",
     "commander": "^14.0.3",
-    "ws": "^8.19.0",
+    "ws": "^8.20.0",
     "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.14"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
   },
   "openclaw": {
     "extensions": [
       "./index.ts"
     ],
+    "install": {
+      "minHostVersion": ">=2026.3.14"
+    },
     "release": {
       "publishToNpm": true
     }

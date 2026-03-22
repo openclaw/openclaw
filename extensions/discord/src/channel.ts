@@ -5,20 +5,29 @@ import {
   createNestedAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
-import { createOpenProviderConfiguredRouteWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import {
-  createAttachedChannelResultAdapter,
-  createChannelDirectoryAdapter,
   createPairingPrefixStripper,
-  createTopLevelChannelReplyToModeResolver,
-  createRuntimeDirectoryLiveAdapter,
   createTextPairingAdapter,
-  normalizeMessageChannel,
+} from "openclaw/plugin-sdk/channel-pairing";
+import { createOpenProviderConfiguredRouteWarningCollector } from "openclaw/plugin-sdk/channel-policy";
+import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import { resolveTargetsWithOptionalToken } from "openclaw/plugin-sdk/channel-targets";
+import { createTopLevelChannelReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
+import {
+  createChannelDirectoryAdapter,
+  createRuntimeDirectoryLiveAdapter,
+} from "openclaw/plugin-sdk/directory-runtime";
+import {
+  createRuntimeOutboundDelegates,
   resolveOutboundSendDep,
-  resolveTargetsWithOptionalToken,
-} from "openclaw/plugin-sdk/channel-runtime";
-import { buildOutboundBaseSessionKey, normalizeOutboundThreadId } from "openclaw/plugin-sdk/core";
-import { resolveThreadSessionKeys, type RoutePeer } from "openclaw/plugin-sdk/routing";
+} from "openclaw/plugin-sdk/infra-runtime";
+import {
+  buildOutboundBaseSessionKey,
+  normalizeMessageChannel,
+  normalizeOutboundThreadId,
+  resolveThreadSessionKeys,
+  type RoutePeer,
+} from "openclaw/plugin-sdk/routing";
 import {
   listDiscordAccountIds,
   resolveDiscordAccount,
@@ -37,7 +46,6 @@ import {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
 } from "./group-policy.js";
-import { monitorDiscordProvider } from "./monitor.js";
 import {
   looksLikeDiscordTargetId,
   normalizeDiscordMessagingTarget,
@@ -69,6 +77,15 @@ type DiscordSendFn = ReturnType<
   typeof getDiscordRuntime
 >["channel"]["discord"]["sendMessageDiscord"];
 
+let discordProviderRuntimePromise:
+  | Promise<typeof import("./monitor/provider.runtime.js")>
+  | undefined;
+
+async function loadDiscordProviderRuntime() {
+  discordProviderRuntimePromise ??= import("./monitor/provider.runtime.js");
+  return await discordProviderRuntimePromise;
+}
+
 const meta = getChatChannelMeta("discord");
 const REQUIRED_DISCORD_PERMISSIONS = ["ViewChannel", "SendMessages"] as const;
 
@@ -77,7 +94,11 @@ const resolveDiscordDmPolicy = createScopedDmSecurityResolver<ResolvedDiscordAcc
   resolvePolicy: (account) => account.config.dm?.policy,
   resolveAllowFrom: (account) => account.config.dm?.allowFrom,
   allowFromPathSuffix: "dm.",
-  normalizeEntry: (raw) => raw.replace(/^(discord|user):/i, "").replace(/^<@!?(\d+)>$/, "$1"),
+  normalizeEntry: (raw) =>
+    raw
+      .trim()
+      .replace(/^(discord|user):/i, "")
+      .replace(/^<@!?(\d+)>$/, "$1"),
 });
 
 function formatDiscordIntents(intents?: {
@@ -670,7 +691,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
         }
       }
       ctx.log?.info(`[${account.accountId}] starting provider${discordBotLabel}`);
-      return monitorDiscordProvider({
+      return (await loadDiscordProviderRuntime()).monitorDiscordProvider({
         token,
         accountId: account.accountId,
         config: ctx.cfg,
