@@ -2,254 +2,64 @@ import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AcpRuntimeError } from "../../../../src/acp/runtime/errors.js";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
-import type { RuntimeEnv } from "../../../../src/runtime.js";
-
-type NativeCommandSpecMock = {
-  name: string;
-  description: string;
-  acceptsArgs: boolean;
-};
-
-type PluginCommandSpecMock = {
-  name: string;
-  description: string;
-  acceptsArgs: boolean;
-};
-
-function baseDiscordAccountConfig() {
-  return {
-    commands: { native: true, nativeSkills: false },
-    voice: { enabled: false },
-    agentComponents: { enabled: false },
-    execApprovals: { enabled: false },
-  };
-}
+import {
+  baseConfig,
+  baseRuntime,
+  getFirstDiscordMessageHandlerParams,
+  getProviderMonitorTestMocks,
+  resetDiscordProviderMonitorMocks,
+} from "../../../../test/helpers/extensions/discord-provider.test-support.js";
 
 const {
-  clientHandleDeployRequestMock,
+  clientConstructorOptionsMock,
   clientFetchUserMock,
   clientGetPluginMock,
-  clientConstructorOptionsMock,
+  clientHandleDeployRequestMock,
   createDiscordAutoPresenceControllerMock,
-  createDiscordNativeCommandMock,
   createDiscordMessageHandlerMock,
+  createDiscordNativeCommandMock,
+  createdBindingManagers,
   createNoopThreadBindingManagerMock,
   createThreadBindingManagerMock,
-  reconcileAcpThreadBindingsOnStartupMock,
-  createdBindingManagers,
   getAcpSessionStatusMock,
   getPluginCommandSpecsMock,
+  isVerboseMock,
   listNativeCommandSpecsForConfigMock,
   listSkillCommandsForAgentsMock,
   monitorLifecycleMock,
-  resolveDiscordAccountMock,
+  reconcileAcpThreadBindingsOnStartupMock,
   resolveDiscordAllowlistConfigMock,
+  resolveDiscordAccountMock,
   resolveNativeCommandsEnabledMock,
   resolveNativeSkillsEnabledMock,
+  shouldLogVerboseMock,
   voiceRuntimeModuleLoadedMock,
-} = vi.hoisted(() => {
-  const createdBindingManagers: Array<{ stop: ReturnType<typeof vi.fn> }> = [];
+} = getProviderMonitorTestMocks();
+
+function createConfigWithDiscordAccount(overrides: Record<string, unknown> = {}): OpenClawConfig {
   return {
-    clientHandleDeployRequestMock: vi.fn(async () => undefined),
-    clientConstructorOptionsMock: vi.fn(),
-    createDiscordAutoPresenceControllerMock: vi.fn(() => ({
-      enabled: false,
-      start: vi.fn(),
-      stop: vi.fn(),
-      refresh: vi.fn(),
-      runNow: vi.fn(),
-    })),
-    clientFetchUserMock: vi.fn(async (_target: string) => ({ id: "bot-1" })),
-    clientGetPluginMock: vi.fn<(_name: string) => unknown>(() => undefined),
-    createDiscordNativeCommandMock: vi.fn(() => ({ name: "mock-command" })),
-    createDiscordMessageHandlerMock: vi.fn(() =>
-      Object.assign(
-        vi.fn(async () => undefined),
-        {
-          deactivate: vi.fn(),
+    channels: {
+      discord: {
+        accounts: {
+          default: {
+            token: "MTIz.abc.def",
+            ...overrides,
+          },
         },
-      ),
-    ),
-    createNoopThreadBindingManagerMock: vi.fn(() => {
-      const manager = { stop: vi.fn() };
-      createdBindingManagers.push(manager);
-      return manager;
-    }),
-    createThreadBindingManagerMock: vi.fn(() => {
-      const manager = { stop: vi.fn() };
-      createdBindingManagers.push(manager);
-      return manager;
-    }),
-    reconcileAcpThreadBindingsOnStartupMock: vi.fn(() => ({
-      checked: 0,
-      removed: 0,
-      staleSessionKeys: [],
-    })),
-    createdBindingManagers,
-    getAcpSessionStatusMock: vi.fn(
-      async (_params: { cfg: OpenClawConfig; sessionKey: string; signal?: AbortSignal }) => ({
-        state: "idle",
-      }),
-    ),
-    getPluginCommandSpecsMock: vi.fn<() => PluginCommandSpecMock[]>(() => []),
-    listNativeCommandSpecsForConfigMock: vi.fn<() => NativeCommandSpecMock[]>(() => [
-      { name: "cmd", description: "built-in", acceptsArgs: false },
-    ]),
-    listSkillCommandsForAgentsMock: vi.fn(() => []),
-    monitorLifecycleMock: vi.fn(async (params: { threadBindings: { stop: () => void } }) => {
-      params.threadBindings.stop();
-    }),
-    resolveDiscordAccountMock: vi.fn(() => ({
-      accountId: "default",
-      token: "cfg-token",
-      config: baseDiscordAccountConfig(),
-    })),
-    resolveDiscordAllowlistConfigMock: vi.fn(async () => ({
-      guildEntries: undefined,
-      allowFrom: undefined,
-    })),
-    resolveNativeCommandsEnabledMock: vi.fn(() => true),
-    resolveNativeSkillsEnabledMock: vi.fn(() => false),
-    voiceRuntimeModuleLoadedMock: vi.fn(),
+      },
+    },
+  } as OpenClawConfig;
+}
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-runtime")>(
+    "openclaw/plugin-sdk/plugin-runtime",
+  );
+  return {
+    ...actual,
+    getPluginCommandSpecs: getPluginCommandSpecsMock,
   };
 });
-
-function mockResolvedDiscordAccountConfig(overrides: Record<string, unknown>) {
-  resolveDiscordAccountMock.mockImplementation(() => ({
-    accountId: "default",
-    token: "cfg-token",
-    config: {
-      ...baseDiscordAccountConfig(),
-      ...overrides,
-    },
-  }));
-}
-
-function getFirstDiscordMessageHandlerParams<T extends object>() {
-  expect(createDiscordMessageHandlerMock).toHaveBeenCalledTimes(1);
-  const firstCall = createDiscordMessageHandlerMock.mock.calls.at(0) as [T] | undefined;
-  return firstCall?.[0];
-}
-
-vi.mock("@buape/carbon", () => {
-  class ReadyListener {}
-  class RateLimitError extends Error {
-    status = 429;
-    discordCode?: number;
-    retryAfter: number;
-    scope: string | null;
-    bucket: string | null;
-    constructor(
-      response: Response,
-      body: { message: string; retry_after: number; global: boolean },
-    ) {
-      super(body.message);
-      this.retryAfter = body.retry_after;
-      this.scope = body.global ? "global" : response.headers.get("X-RateLimit-Scope");
-      this.bucket = response.headers.get("X-RateLimit-Bucket");
-    }
-  }
-  class Client {
-    listeners: unknown[];
-    rest: { put: ReturnType<typeof vi.fn> };
-    options: unknown;
-    constructor(options: unknown, handlers: { listeners?: unknown[] }) {
-      this.options = options;
-      this.listeners = handlers.listeners ?? [];
-      this.rest = { put: vi.fn(async () => undefined) };
-      clientConstructorOptionsMock(options);
-    }
-    async handleDeployRequest() {
-      return await clientHandleDeployRequestMock();
-    }
-    async fetchUser(target: string) {
-      return await clientFetchUserMock(target);
-    }
-    getPlugin(name: string) {
-      return clientGetPluginMock(name);
-    }
-  }
-  return { Client, RateLimitError, ReadyListener };
-});
-
-vi.mock("@buape/carbon/gateway", () => ({
-  GatewayCloseCodes: { DisallowedIntents: 4014 },
-}));
-
-vi.mock("@buape/carbon/voice", () => ({
-  VoicePlugin: class VoicePlugin {},
-}));
-
-vi.mock("../../../../src/auto-reply/chunk.js", () => ({
-  resolveTextChunkLimit: () => 2000,
-}));
-
-vi.mock("../../../../src/acp/control-plane/manager.js", () => ({
-  getAcpSessionManager: () => ({
-    getSessionStatus: getAcpSessionStatusMock,
-  }),
-}));
-
-vi.mock("../../../../src/auto-reply/commands-registry.js", () => ({
-  listNativeCommandSpecsForConfig: listNativeCommandSpecsForConfigMock,
-}));
-
-vi.mock("../../../../src/auto-reply/skill-commands.js", () => ({
-  listSkillCommandsForAgents: listSkillCommandsForAgentsMock,
-}));
-
-vi.mock("../../../../src/config/commands.js", () => ({
-  isNativeCommandsExplicitlyDisabled: () => false,
-  resolveNativeCommandsEnabled: resolveNativeCommandsEnabledMock,
-  resolveNativeSkillsEnabled: resolveNativeSkillsEnabledMock,
-}));
-
-vi.mock("../../../../src/config/config.js", () => ({
-  loadConfig: () => ({}),
-}));
-
-vi.mock("../../../../src/globals.js", () => ({
-  danger: (v: string) => v,
-  logVerbose: vi.fn(),
-  shouldLogVerbose: () => false,
-  warn: (v: string) => v,
-}));
-
-vi.mock("../../../../src/infra/errors.js", () => ({
-  formatErrorMessage: (err: unknown) => String(err),
-}));
-
-vi.mock("../../../../src/infra/retry-policy.js", () => ({
-  createDiscordRetryRunner: () => async (run: () => Promise<unknown>) => run(),
-}));
-
-vi.mock("../../../../src/logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({ info: vi.fn(), error: vi.fn() }),
-}));
-
-vi.mock("../../../../src/plugins/commands.js", () => ({
-  getPluginCommandSpecs: getPluginCommandSpecsMock,
-}));
-
-vi.mock("../../../../src/runtime.js", () => ({
-  createNonExitingRuntime: () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() }),
-}));
-
-vi.mock("../accounts.js", () => ({
-  resolveDiscordAccount: resolveDiscordAccountMock,
-}));
-
-vi.mock("../probe.js", () => ({
-  fetchDiscordApplicationId: async () => "app-1",
-}));
-
-vi.mock("../token.js", () => ({
-  normalizeDiscordToken: (value?: string) => value,
-}));
-
-vi.mock("../voice/command.js", () => ({
-  createDiscordVoiceCommand: () => ({ name: "voice-command" }),
-}));
 
 vi.mock("../voice/manager.runtime.js", () => {
   voiceRuntimeModuleLoadedMock();
@@ -258,84 +68,6 @@ vi.mock("../voice/manager.runtime.js", () => {
     DiscordVoiceReadyListener: class DiscordVoiceReadyListener {},
   };
 });
-
-vi.mock("./agent-components.js", () => ({
-  createAgentComponentButton: () => ({ id: "btn" }),
-  createAgentSelectMenu: () => ({ id: "menu" }),
-  createDiscordComponentButton: () => ({ id: "btn2" }),
-  createDiscordComponentChannelSelect: () => ({ id: "channel" }),
-  createDiscordComponentMentionableSelect: () => ({ id: "mentionable" }),
-  createDiscordComponentModal: () => ({ id: "modal" }),
-  createDiscordComponentRoleSelect: () => ({ id: "role" }),
-  createDiscordComponentStringSelect: () => ({ id: "string" }),
-  createDiscordComponentUserSelect: () => ({ id: "user" }),
-}));
-
-vi.mock("./commands.js", () => ({
-  resolveDiscordSlashCommandConfig: () => ({ ephemeral: false }),
-}));
-
-vi.mock("./exec-approvals.js", () => ({
-  createExecApprovalButton: () => ({ id: "exec-approval" }),
-  DiscordExecApprovalHandler: class DiscordExecApprovalHandler {
-    async start() {
-      return undefined;
-    }
-    async stop() {
-      return undefined;
-    }
-  },
-}));
-
-vi.mock("./gateway-plugin.js", () => ({
-  createDiscordGatewayPlugin: () => ({ id: "gateway-plugin" }),
-}));
-
-vi.mock("./listeners.js", () => ({
-  DiscordMessageListener: class DiscordMessageListener {},
-  DiscordPresenceListener: class DiscordPresenceListener {},
-  DiscordReactionListener: class DiscordReactionListener {},
-  DiscordReactionRemoveListener: class DiscordReactionRemoveListener {},
-  DiscordThreadUpdateListener: class DiscordThreadUpdateListener {},
-  registerDiscordListener: vi.fn(),
-}));
-
-vi.mock("./message-handler.js", () => ({
-  createDiscordMessageHandler: createDiscordMessageHandlerMock,
-}));
-
-vi.mock("./native-command.js", () => ({
-  createDiscordCommandArgFallbackButton: () => ({ id: "arg-fallback" }),
-  createDiscordModelPickerFallbackButton: () => ({ id: "model-fallback-btn" }),
-  createDiscordModelPickerFallbackSelect: () => ({ id: "model-fallback-select" }),
-  createDiscordNativeCommand: createDiscordNativeCommandMock,
-}));
-
-vi.mock("./presence.js", () => ({
-  resolveDiscordPresenceUpdate: () => undefined,
-}));
-
-vi.mock("./auto-presence.js", () => ({
-  createDiscordAutoPresenceController: createDiscordAutoPresenceControllerMock,
-}));
-
-vi.mock("./provider.allowlist.js", () => ({
-  resolveDiscordAllowlistConfig: resolveDiscordAllowlistConfigMock,
-}));
-
-vi.mock("./provider.lifecycle.js", () => ({
-  runDiscordGatewayLifecycle: monitorLifecycleMock,
-}));
-
-vi.mock("./rest-fetch.js", () => ({
-  resolveDiscordRestFetch: () => async () => undefined,
-}));
-
-vi.mock("./thread-bindings.js", () => ({
-  createNoopThreadBindingManager: createNoopThreadBindingManagerMock,
-  createThreadBindingManager: createThreadBindingManagerMock,
-  reconcileAcpThreadBindingsOnStartup: reconcileAcpThreadBindingsOnStartupMock,
-}));
 
 describe("monitorDiscordProvider", () => {
   type ReconcileHealthProbeParams = {
@@ -353,25 +85,6 @@ describe("monitorDiscordProvider", () => {
     ) => Promise<{ status: string; reason?: string }>;
   };
 
-  const baseRuntime = (): RuntimeEnv => {
-    return {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-  };
-
-  const baseConfig = (): OpenClawConfig =>
-    ({
-      channels: {
-        discord: {
-          accounts: {
-            default: {},
-          },
-        },
-      },
-    }) as OpenClawConfig;
-
   const getConstructedEventQueue = (): { listenerTimeout?: number } | undefined => {
     expect(clientConstructorOptionsMock).toHaveBeenCalledTimes(1);
     const opts = clientConstructorOptionsMock.mock.calls[0]?.[0] as {
@@ -380,62 +93,42 @@ describe("monitorDiscordProvider", () => {
     return opts.eventQueue;
   };
 
+  const getConstructedClientOptions = (): {
+    eventQueue?: { listenerTimeout?: number };
+  } => {
+    expect(clientConstructorOptionsMock).toHaveBeenCalledTimes(1);
+    return (
+      (clientConstructorOptionsMock.mock.calls[0]?.[0] as {
+        eventQueue?: { listenerTimeout?: number };
+      }) ?? {}
+    );
+  };
+
   const getHealthProbe = () => {
     expect(reconcileAcpThreadBindingsOnStartupMock).toHaveBeenCalledTimes(1);
     const firstCall = reconcileAcpThreadBindingsOnStartupMock.mock.calls.at(0) as
       | [ReconcileStartupParams]
       | undefined;
     const reconcileParams = firstCall?.[0];
-    expect(typeof reconcileParams?.healthProbe).toBe("function");
-    return reconcileParams?.healthProbe as NonNullable<ReconcileStartupParams["healthProbe"]>;
+    if (!reconcileParams?.healthProbe) {
+      throw new Error("healthProbe was not wired into ACP startup reconciliation");
+    }
+    return reconcileParams.healthProbe as NonNullable<ReconcileStartupParams["healthProbe"]>;
   };
 
   beforeEach(() => {
-    clientHandleDeployRequestMock.mockClear().mockResolvedValue(undefined);
-    clientConstructorOptionsMock.mockClear();
-    createDiscordAutoPresenceControllerMock.mockClear().mockImplementation(() => ({
-      enabled: false,
-      start: vi.fn(),
-      stop: vi.fn(),
-      refresh: vi.fn(),
-      runNow: vi.fn(),
+    vi.resetModules();
+    resetDiscordProviderMonitorMocks();
+    vi.doMock("../accounts.js", () => ({
+      resolveDiscordAccount: (...args: Parameters<typeof resolveDiscordAccountMock>) =>
+        resolveDiscordAccountMock(...args),
     }));
-    createDiscordMessageHandlerMock.mockClear().mockImplementation(() =>
-      Object.assign(
-        vi.fn(async () => undefined),
-        {
-          deactivate: vi.fn(),
-        },
-      ),
-    );
-    clientFetchUserMock.mockClear().mockResolvedValue({ id: "bot-1" });
-    clientGetPluginMock.mockClear().mockReturnValue(undefined);
-    createDiscordNativeCommandMock.mockClear().mockReturnValue({ name: "mock-command" });
-    createNoopThreadBindingManagerMock.mockClear();
-    createThreadBindingManagerMock.mockClear();
-    reconcileAcpThreadBindingsOnStartupMock.mockClear().mockReturnValue({
-      checked: 0,
-      removed: 0,
-      staleSessionKeys: [],
-    });
-    getAcpSessionStatusMock.mockClear().mockResolvedValue({ state: "idle" });
-    createdBindingManagers.length = 0;
-    getPluginCommandSpecsMock.mockClear().mockReturnValue([]);
-    listNativeCommandSpecsForConfigMock
-      .mockClear()
-      .mockReturnValue([{ name: "cmd", description: "built-in", acceptsArgs: false }]);
-    listSkillCommandsForAgentsMock.mockClear().mockReturnValue([]);
-    monitorLifecycleMock.mockClear().mockImplementation(async (params) => {
-      params.threadBindings.stop();
-    });
-    resolveDiscordAccountMock.mockClear();
-    resolveDiscordAllowlistConfigMock.mockClear().mockResolvedValue({
-      guildEntries: undefined,
-      allowFrom: undefined,
-    });
-    resolveNativeCommandsEnabledMock.mockClear().mockReturnValue(true);
-    resolveNativeSkillsEnabledMock.mockClear().mockReturnValue(false);
-    voiceRuntimeModuleLoadedMock.mockClear();
+    vi.doMock("../probe.js", () => ({
+      fetchDiscordApplicationId: async () => "app-1",
+    }));
+    vi.doMock("../token.js", () => ({
+      normalizeDiscordToken: (value?: string) => value,
+    }));
   });
 
   it("stops thread bindings when startup fails before lifecycle begins", async () => {
@@ -484,7 +177,7 @@ describe("monitorDiscordProvider", () => {
   it("loads the Discord voice runtime only when voice is enabled", async () => {
     resolveDiscordAccountMock.mockReturnValue({
       accountId: "default",
-      token: "cfg-token",
+      token: "MTIz.abc.def",
       config: {
         commands: { native: true, nativeSkills: false },
         voice: { enabled: true },
@@ -628,8 +321,10 @@ describe("monitorDiscordProvider", () => {
       const firstCall = getAcpSessionStatusMock.mock.calls[0]?.[0] as
         | { signal?: AbortSignal }
         | undefined;
-      expect(firstCall?.signal).toBeDefined();
-      expect(firstCall?.signal?.aborted).toBe(true);
+      if (!firstCall?.signal) {
+        throw new Error("ACP status check did not receive an abort signal");
+      }
+      expect(firstCall.signal.aborted).toBe(true);
     } finally {
       vi.useRealTimers();
     }
@@ -696,16 +391,22 @@ describe("monitorDiscordProvider", () => {
     });
 
     const eventQueue = getConstructedEventQueue();
-    expect(eventQueue).toBeDefined();
-    expect(eventQueue?.listenerTimeout).toBe(120_000);
+    expect(eventQueue).toEqual({ listenerTimeout: 120_000 });
   });
 
   it("forwards custom eventQueue config from discord config to Carbon Client", async () => {
-    const { monitorDiscordProvider } = await import("./provider.js");
-
-    mockResolvedDiscordAccountConfig({
-      eventQueue: { listenerTimeout: 300_000 },
+    resolveDiscordAccountMock.mockReturnValue({
+      accountId: "default",
+      token: "MTIz.abc.def",
+      config: {
+        commands: { native: true, nativeSkills: false },
+        voice: { enabled: false },
+        agentComponents: { enabled: false },
+        execApprovals: { enabled: false },
+        eventQueue: { listenerTimeout: 300_000 },
+      },
     });
+    const { monitorDiscordProvider } = await import("./provider.js");
 
     await monitorDiscordProvider({
       config: baseConfig(),
@@ -719,12 +420,10 @@ describe("monitorDiscordProvider", () => {
   it("does not reuse eventQueue.listenerTimeout as the queued inbound worker timeout", async () => {
     const { monitorDiscordProvider } = await import("./provider.js");
 
-    mockResolvedDiscordAccountConfig({
-      eventQueue: { listenerTimeout: 50_000 },
-    });
-
     await monitorDiscordProvider({
-      config: baseConfig(),
+      config: createConfigWithDiscordAccount({
+        eventQueue: { listenerTimeout: 50_000 },
+      }),
       runtime: baseRuntime(),
     });
 
@@ -737,11 +436,18 @@ describe("monitorDiscordProvider", () => {
   });
 
   it("forwards inbound worker timeout config to the Discord message handler", async () => {
-    const { monitorDiscordProvider } = await import("./provider.js");
-
-    mockResolvedDiscordAccountConfig({
-      inboundWorker: { runTimeoutMs: 300_000 },
+    resolveDiscordAccountMock.mockReturnValue({
+      accountId: "default",
+      token: "MTIz.abc.def",
+      config: {
+        commands: { native: true, nativeSkills: false },
+        voice: { enabled: false },
+        agentComponents: { enabled: false },
+        execApprovals: { enabled: false },
+        inboundWorker: { runTimeoutMs: 300_000 },
+      },
     });
+    const { monitorDiscordProvider } = await import("./provider.js");
 
     await monitorDiscordProvider({
       config: baseConfig(),
@@ -774,6 +480,43 @@ describe("monitorDiscordProvider", () => {
     expect(getPluginCommandSpecsMock).toHaveBeenCalledWith("discord");
     expect(commandNames).toContain("cmd");
     expect(commandNames).toContain("cron_jobs");
+  });
+
+  it("registers plugin commands from the real registry as native Discord commands", async () => {
+    const { clearPluginCommands, getPluginCommandSpecs, registerPluginCommand } =
+      await import("../../../../src/plugins/commands.js");
+    clearPluginCommands();
+    const { monitorDiscordProvider } = await import("./provider.js");
+    listNativeCommandSpecsForConfigMock.mockReturnValue([
+      { name: "status", description: "Status", acceptsArgs: false },
+    ]);
+    getPluginCommandSpecsMock.mockImplementation((provider?: string) =>
+      getPluginCommandSpecs(provider),
+    );
+
+    expect(
+      registerPluginCommand("demo-plugin", {
+        name: "pair",
+        description: "Pair device",
+        acceptsArgs: true,
+        requireAuth: false,
+        handler: async ({ args }) => ({ text: `paired:${args ?? ""}` }),
+      }),
+    ).toEqual({ ok: true });
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    const commandNames = (createDiscordNativeCommandMock.mock.calls as Array<unknown[]>)
+      .map((call) => (call[0] as { command?: { name?: string } } | undefined)?.command?.name)
+      .filter((value): value is string => typeof value === "string");
+
+    expect(commandNames).toContain("status");
+    expect(commandNames).toContain("pair");
+    expect(clientHandleDeployRequestMock).toHaveBeenCalledTimes(1);
+    expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
   });
 
   it("continues startup when Discord daily slash-command create quota is exhausted", async () => {
@@ -810,6 +553,18 @@ describe("monitorDiscordProvider", () => {
     );
   });
 
+  it("configures Carbon native deploy by default", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    expect(clientHandleDeployRequestMock).toHaveBeenCalledTimes(1);
+    expect(getConstructedClientOptions().eventQueue?.listenerTimeout).toBe(120_000);
+  });
+
   it("reports connected status on startup and shutdown", async () => {
     const { monitorDiscordProvider } = await import("./provider.js");
     const setStatus = vi.fn();
@@ -823,10 +578,53 @@ describe("monitorDiscordProvider", () => {
       setStatus,
     });
 
-    const connectedTrue = setStatus.mock.calls.find((call) => call[0]?.connected === true);
-    const connectedFalse = setStatus.mock.calls.find((call) => call[0]?.connected === false);
+    expect(setStatus.mock.calls).toContainEqual([expect.objectContaining({ connected: true })]);
+    expect(setStatus.mock.calls).toContainEqual([expect.objectContaining({ connected: false })]);
+  });
 
-    expect(connectedTrue).toBeDefined();
-    expect(connectedFalse).toBeDefined();
+  it("logs Discord startup phases and early gateway debug events", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    const runtime = baseRuntime();
+    const emitter = new EventEmitter();
+    const gateway = { emitter, isConnected: true, reconnectAttempts: 0 };
+    clientGetPluginMock.mockImplementation((name: string) =>
+      name === "gateway" ? gateway : undefined,
+    );
+    clientFetchUserMock.mockImplementationOnce(async () => {
+      emitter.emit("debug", "WebSocket connection opened");
+      return { id: "bot-1", username: "Molty" };
+    });
+    isVerboseMock.mockReturnValue(true);
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime,
+    });
+
+    const messages = vi.mocked(runtime.log).mock.calls.map((call) => String(call[0]));
+    expect(messages.some((msg) => msg.includes("fetch-application-id:start"))).toBe(true);
+    expect(messages.some((msg) => msg.includes("fetch-application-id:done"))).toBe(true);
+    expect(messages.some((msg) => msg.includes("deploy-commands:start"))).toBe(true);
+    expect(messages.some((msg) => msg.includes("deploy-commands:done"))).toBe(true);
+    expect(messages.some((msg) => msg.includes("fetch-bot-identity:start"))).toBe(true);
+    expect(messages.some((msg) => msg.includes("fetch-bot-identity:done"))).toBe(true);
+    expect(
+      messages.some(
+        (msg) => msg.includes("gateway-debug") && msg.includes("WebSocket connection opened"),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps Discord startup chatter quiet by default", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    const runtime = baseRuntime();
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime,
+    });
+
+    const messages = vi.mocked(runtime.log).mock.calls.map((call) => String(call[0]));
+    expect(messages.some((msg) => msg.includes("discord startup ["))).toBe(false);
   });
 });

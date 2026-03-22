@@ -2,62 +2,21 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
+import { pluginSdkSubpaths } from "./scripts/lib/plugin-sdk-entries.mjs";
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
 const isWindows = process.platform === "win32";
 const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
 const ciWorkers = isWindows ? 2 : 3;
-const pluginSdkSubpaths = [
-  "account-id",
-  "core",
-  "compat",
-  "telegram",
-  "discord",
-  "slack",
-  "signal",
-  "imessage",
-  "whatsapp",
-  "line",
-  "msteams",
-  "acpx",
-  "bluebubbles",
-  "copilot-proxy",
-  "device-pair",
-  "diagnostics-otel",
-  "diffs",
-  "feishu",
-  "google-gemini-cli-auth",
-  "googlechat",
-  "irc",
-  "llm-task",
-  "lobster",
-  "matrix",
-  "mattermost",
-  "memory-core",
-  "memory-lancedb",
-  "minimax-portal-auth",
-  "nextcloud-talk",
-  "nostr",
-  "open-prose",
-  "phone-control",
-  "qwen-portal-auth",
-  "synology-chat",
-  "talk-voice",
-  "test-utils",
-  "thread-ownership",
-  "tlon",
-  "twitch",
-  "voice-call",
-  "zalo",
-  "zalouser",
-  "keyed-async-queue",
-] as const;
-
 export default defineConfig({
   resolve: {
     // Keep this ordered: the base `openclaw/plugin-sdk` alias is a prefix match.
     alias: [
+      {
+        find: "openclaw/extension-api",
+        replacement: path.join(repoRoot, "src", "extensionAPI.ts"),
+      },
       ...pluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),
@@ -85,9 +44,13 @@ export default defineConfig({
       "ui/src/ui/app-chat.test.ts",
       "ui/src/ui/views/agents-utils.test.ts",
       "ui/src/ui/views/chat.test.ts",
+      "ui/src/ui/views/nodes.devices.test.ts",
       "ui/src/ui/views/usage-render-details.test.ts",
       "ui/src/ui/controllers/agents.test.ts",
       "ui/src/ui/controllers/chat.test.ts",
+      "ui/src/ui/controllers/sessions.test.ts",
+      "ui/src/ui/views/sessions.test.ts",
+      "ui/src/ui/app-gateway.sessions.node.test.ts",
     ],
     setupFiles: ["test/setup.ts"],
     exclude: [
@@ -127,7 +90,6 @@ export default defineConfig({
         "src/index.ts",
         "src/runtime.ts",
         "src/channel-web.ts",
-        "src/extensionAPI.ts",
         "src/logging.ts",
         "src/cli/**",
         "src/commands/**",

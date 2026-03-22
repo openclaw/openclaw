@@ -1,4 +1,4 @@
-import { normalizeExplicitDiscordSessionKey } from "../../../extensions/discord/src/session-key-normalization.js";
+import { normalizeExplicitDiscordSessionKey } from "../../../extensions/discord/session-key-api.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 
 type ExplicitSessionKeyNormalizer = (sessionKey: string, ctx: MsgContext) => string;

@@ -1,13 +1,12 @@
 import type { AnyMessageContent, proto, WAMessage } from "@whiskeysockets/baileys";
 import { DisconnectReason, isJidGroup } from "@whiskeysockets/baileys";
-import { createInboundDebouncer } from "../../../../src/auto-reply/inbound-debounce.js";
-import { formatLocationText } from "../../../../src/channels/location.js";
-import { logVerbose, shouldLogVerbose } from "../../../../src/globals.js";
-import { recordChannelActivity } from "../../../../src/infra/channel-activity.js";
-import { getChildLogger } from "../../../../src/logging/logger.js";
-import { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
-import { saveMediaBuffer } from "../../../../src/media/store.js";
-import { jidToE164, resolveJidToE164 } from "../../../../src/utils.js";
+import { createInboundDebouncer, formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
+import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
+import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
+import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
+import { jidToE164, resolveJidToE164 } from "openclaw/plugin-sdk/text-runtime";
 import { createWaSocket, getStatusCode, waitForWaConnection } from "../session.js";
 import { checkInboundAccessControl } from "./access-control.js";
 import { isRecentInboundMessage } from "./dedupe.js";
@@ -413,7 +412,13 @@ export async function monitorWebInbox(options: {
 
       // If this is history/offline catch-up, mark read above but skip auto-reply.
       if (upsert.type === "append") {
-        continue;
+        const APPEND_RECENT_GRACE_MS = 60_000;
+        const msgTsRaw = msg.messageTimestamp;
+        const msgTsNum = msgTsRaw != null ? Number(msgTsRaw) : NaN;
+        const msgTsMs = Number.isFinite(msgTsNum) ? msgTsNum * 1000 : 0;
+        if (msgTsMs < connectedAtMs - APPEND_RECENT_GRACE_MS) {
+          continue;
+        }
       }
 
       const enriched = await enrichInboundMessage(msg);

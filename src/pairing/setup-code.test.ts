@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SecretInput } from "../config/types.secrets.js";
-import { encodePairingSetupCode, resolvePairingSetupFromConfig } from "./setup-code.js";
 
 vi.mock("../infra/device-bootstrap.js", () => ({
   issueDeviceBootstrapToken: vi.fn(async () => ({
@@ -8,6 +7,9 @@ vi.mock("../infra/device-bootstrap.js", () => ({
     expiresAtMs: 123,
   })),
 }));
+
+let encodePairingSetupCode: typeof import("./setup-code.js").encodePairingSetupCode;
+let resolvePairingSetupFromConfig: typeof import("./setup-code.js").resolvePairingSetupFromConfig;
 
 describe("pairing setup code", () => {
   type ResolvedSetup = Awaited<ReturnType<typeof resolvePairingSetupFromConfig>>;
@@ -68,10 +70,17 @@ describe("pairing setup code", () => {
   }
 
   beforeEach(() => {
+    vi.resetModules();
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
     vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "");
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
     vi.stubEnv("CLAWDBOT_GATEWAY_PASSWORD", "");
+    vi.stubEnv("OPENCLAW_GATEWAY_PORT", "");
+    vi.stubEnv("CLAWDBOT_GATEWAY_PORT", "");
+  });
+
+  beforeEach(async () => {
+    ({ encodePairingSetupCode, resolvePairingSetupFromConfig } = await import("./setup-code.js"));
   });
 
   afterEach(() => {

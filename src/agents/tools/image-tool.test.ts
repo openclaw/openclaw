@@ -32,6 +32,7 @@ async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promi
 const ONE_PIXEL_PNG_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
 const ONE_PIXEL_GIF_B64 = "R0lGODlhAQABAIABAP///wAAACwAAAAAAQABAAACAkQBADs=";
+const ONE_PIXEL_JPEG_B64 = "QUJDRA==";
 
 async function withTempWorkspacePng(
   cb: (args: { workspaceDir: string; imagePath: string }) => Promise<void>,
@@ -141,7 +142,7 @@ function createMinimaxImageConfig(): OpenClawConfig {
   return {
     agents: {
       defaults: {
-        model: { primary: "minimax/MiniMax-M2.5" },
+        model: { primary: "minimax/MiniMax-M2.7" },
         imageModel: { primary: "minimax/MiniMax-VL-01" },
       },
     },
@@ -271,7 +272,7 @@ describe("image tool implicit imageModel config", () => {
       vi.stubEnv("OPENAI_API_KEY", "openai-test");
       vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
       const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "minimax/MiniMax-M2.5" } } },
+        agents: { defaults: { model: { primary: "minimax/MiniMax-M2.7" } } },
       };
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual(
         createDefaultImageFallbackExpectation("minimax/MiniMax-VL-01"),
@@ -297,7 +298,7 @@ describe("image tool implicit imageModel config", () => {
       vi.stubEnv("OPENAI_API_KEY", "openai-test");
       vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
       const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "minimax-portal/MiniMax-M2.5" } } },
+        agents: { defaults: { model: { primary: "minimax-portal/MiniMax-M2.7" } } },
       };
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual(
         createDefaultImageFallbackExpectation("minimax-portal/MiniMax-VL-01"),
@@ -355,7 +356,7 @@ describe("image tool implicit imageModel config", () => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
-            model: { primary: "minimax/MiniMax-M2.5" },
+            model: { primary: "minimax/MiniMax-M2.7" },
             imageModel: { primary: "openai/gpt-5-mini" },
           },
         },
@@ -583,7 +584,7 @@ describe("image tool implicit imageModel config", () => {
 
       vi.stubEnv("OPENAI_API_KEY", "openai-test");
       const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "minimax/MiniMax-M2.5" } } },
+        agents: { defaults: { model: { primary: "minimax/MiniMax-M2.7" } } },
       };
       const tool = createRequiredImageTool({ config: cfg, agentDir, sandbox });
 
@@ -650,7 +651,7 @@ describe("image tool implicit imageModel config", () => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
-            model: { primary: "minimax/MiniMax-M2.5" },
+            model: { primary: "minimax/MiniMax-M2.7" },
             imageModel: { primary: "minimax/MiniMax-VL-01" },
           },
         },
@@ -703,7 +704,7 @@ describe("image tool MiniMax VLM routing", () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-minimax-vlm-"));
     vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
     const cfg: OpenClawConfig = {
-      agents: { defaults: { model: { primary: "minimax/MiniMax-M2.5" } } },
+      agents: { defaults: { model: { primary: "minimax/MiniMax-M2.7" } } },
     };
     const tool = createRequiredImageTool({ config: cfg, agentDir });
     return { fetch, tool };
@@ -736,10 +737,10 @@ describe("image tool MiniMax VLM routing", () => {
 
     const res = await tool.execute("t1", {
       prompt: "Compare these images.",
-      images: [`data:image/png;base64,${pngB64}`, `data:image/gif;base64,${ONE_PIXEL_GIF_B64}`],
+      images: [`data:image/png;base64,${pngB64}`, `data:image/jpeg;base64,${ONE_PIXEL_JPEG_B64}`],
     });
 
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
     const details = res.details as
       | {
           images?: Array<{ image: string }>;
@@ -756,12 +757,12 @@ describe("image tool MiniMax VLM routing", () => {
       image: `data:image/png;base64,${pngB64}`,
       images: [
         `data:image/png;base64,${pngB64}`,
-        `data:image/gif;base64,${ONE_PIXEL_GIF_B64}`,
-        `data:image/gif;base64,${ONE_PIXEL_GIF_B64}`,
+        `data:image/jpeg;base64,${ONE_PIXEL_JPEG_B64}`,
+        `data:image/jpeg;base64,${ONE_PIXEL_JPEG_B64}`,
       ],
     });
 
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
     const dedupedDetails = deduped.details as
       | {
           images?: Array<{ image: string }>;
@@ -776,7 +777,7 @@ describe("image tool MiniMax VLM routing", () => {
       maxImages: 1,
     });
 
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
     expect(tooMany.details).toMatchObject({
       error: "too_many_images",
       count: 2,

@@ -180,7 +180,7 @@ enum RemoteGatewayProbe {
         }
 
         do {
-            _ = try await GatewayConnection.shared.healthSnapshot(timeoutMs: 10_000)
+            _ = try await GatewayConnection.shared.healthSnapshot(timeoutMs: 10000)
             let authSource = await GatewayConnection.shared.authSource()
             return .ready(RemoteGatewayProbeSuccess(authSource: authSource))
         } catch {

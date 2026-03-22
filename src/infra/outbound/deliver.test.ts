@@ -1,9 +1,11 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { markdownToSignalTextChunks } from "../../../extensions/signal/src/format.js";
-import { signalOutbound } from "../../channels/plugins/outbound/signal.js";
-import { telegramOutbound } from "../../channels/plugins/outbound/telegram.js";
-import { whatsappOutbound } from "../../channels/plugins/outbound/whatsapp.js";
+import {
+  signalOutbound,
+  telegramOutbound,
+  whatsappOutbound,
+} from "../../../test/channel-outbounds.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { STATE_DIR } from "../../config/paths.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -78,7 +80,10 @@ vi.mock("../../logging/subsystem.js", () => ({
   },
 }));
 
-const { deliverOutboundPayloads, normalizeOutboundPayloads } = await import("./deliver.js");
+type DeliverModule = typeof import("./deliver.js");
+
+let deliverOutboundPayloads: DeliverModule["deliverOutboundPayloads"];
+let normalizeOutboundPayloads: DeliverModule["normalizeOutboundPayloads"];
 
 const telegramChunkConfig: OpenClawConfig = {
   channels: { telegram: { botToken: "tok-1", textChunkLimit: 2 } },
@@ -88,13 +93,13 @@ const whatsappChunkConfig: OpenClawConfig = {
   channels: { whatsapp: { textChunkLimit: 4000 } },
 };
 
-type DeliverOutboundArgs = Parameters<typeof deliverOutboundPayloads>[0];
+type DeliverOutboundArgs = Parameters<DeliverModule["deliverOutboundPayloads"]>[0];
 type DeliverOutboundPayload = DeliverOutboundArgs["payloads"][number];
 type DeliverSession = DeliverOutboundArgs["session"];
 
 async function deliverWhatsAppPayload(params: {
   sendWhatsApp: NonNullable<
-    NonNullable<Parameters<typeof deliverOutboundPayloads>[0]["deps"]>["sendWhatsApp"]
+    NonNullable<Parameters<DeliverModule["deliverOutboundPayloads"]>[0]["deps"]>["sendWhatsApp"]
   >;
   payload: DeliverOutboundPayload;
   cfg?: OpenClawConfig;
@@ -196,6 +201,10 @@ function expectSuccessfulWhatsAppInternalHookPayload(
 }
 
 describe("deliverOutboundPayloads", () => {
+  beforeAll(async () => {
+    ({ deliverOutboundPayloads, normalizeOutboundPayloads } = await import("./deliver.js"));
+  });
+
   beforeEach(() => {
     setActivePluginRegistry(defaultRegistry);
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
@@ -404,6 +413,38 @@ describe("deliverOutboundPayloads", () => {
     ]);
   });
 
+  it("renders shared interactive payloads into telegram buttons", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+
+    await deliverTelegramPayload({
+      sendTelegram,
+      payload: {
+        text: "Approval required",
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Allow once", value: "allow-once", style: "success" },
+                { label: "Always allow", value: "allow-always", style: "primary" },
+                { label: "Deny", value: "deny", style: "danger" },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    const sendOpts = sendTelegram.mock.calls[0]?.[2] as { buttons?: unknown } | undefined;
+    expect(sendOpts?.buttons).toEqual([
+      [
+        { text: "Allow once", callback_data: "allow-once", style: "success" },
+        { text: "Always allow", callback_data: "allow-always", style: "primary" },
+        { text: "Deny", callback_data: "deny", style: "danger" },
+      ],
+    ]);
+  });
+
   it("scopes media local roots to the active agent workspace when agentId is provided", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
 
@@ -456,6 +497,49 @@ describe("deliverOutboundPayloads", () => {
       "hi",
       expect.objectContaining({
         mediaLocalRoots: expect.arrayContaining([resolvePreferredOpenClawTmpDir()]),
+      }),
+    );
+  });
+
+  it("forwards audioAsVoice through generic plugin media delivery", async () => {
+    const sendMedia = vi.fn(async () => ({
+      channel: "matrix" as const,
+      messageId: "mx-1",
+      roomId: "!room:example",
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: async ({ to, text }) => ({
+                channel: "matrix",
+                messageId: `${to}:${text}`,
+              }),
+              sendMedia,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: { channels: { matrix: {} } } as OpenClawConfig,
+      channel: "matrix",
+      to: "room:!room:example",
+      payloads: [{ text: "voice caption", mediaUrl: "file:///tmp/clip.mp3", audioAsVoice: true }],
+    });
+
+    expect(sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "room:!room:example",
+        text: "voice caption",
+        mediaUrl: "file:///tmp/clip.mp3",
+        audioAsVoice: true,
       }),
     );
   });

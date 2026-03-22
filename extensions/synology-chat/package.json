@@ -10,6 +10,7 @@
     "extensions": [
       "./index.ts"
     ],
+    "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "synology-chat",
       "label": "Synology Chat",
@@ -22,7 +23,8 @@
     "install": {
       "npmSpec": "@openclaw/synology-chat",
       "localPath": "extensions/synology-chat",
-      "defaultChoice": "npm"
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.3.14"
     }
   }
 }

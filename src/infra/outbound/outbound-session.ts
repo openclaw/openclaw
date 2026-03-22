@@ -1,25 +1,23 @@
-import {
-  parseDiscordTarget,
-  type DiscordTargetKind,
-} from "../../../extensions/discord/src/targets.js";
-import {
-  parseIMessageTarget,
-  normalizeIMessageHandle,
-} from "../../../extensions/imessage/src/targets.js";
+import { parseDiscordTarget } from "../../../extensions/discord/api.js";
+import { normalizeIMessageHandle, parseIMessageTarget } from "../../../extensions/imessage/api.js";
 import {
   looksLikeUuid,
   resolveSignalPeerId,
   resolveSignalRecipient,
   resolveSignalSender,
-} from "../../../extensions/signal/src/identity.js";
-import { resolveSlackAccount } from "../../../extensions/slack/src/accounts.js";
-import { createSlackWebClient } from "../../../extensions/slack/src/client.js";
-import { normalizeAllowListLower } from "../../../extensions/slack/src/monitor/allow-list.js";
-import { parseSlackTarget } from "../../../extensions/slack/src/targets.js";
-import { buildTelegramGroupPeerId } from "../../../extensions/telegram/src/bot/helpers.js";
-import { resolveTelegramTargetChatType } from "../../../extensions/telegram/src/inline-buttons.js";
-import { parseTelegramThreadId } from "../../../extensions/telegram/src/outbound-params.js";
-import { parseTelegramTarget } from "../../../extensions/telegram/src/targets.js";
+} from "../../../extensions/signal/api.js";
+import {
+  createSlackWebClient,
+  normalizeAllowListLower,
+  parseSlackTarget,
+  resolveSlackAccount,
+} from "../../../extensions/slack/api.js";
+import {
+  buildTelegramGroupPeerId,
+  parseTelegramTarget,
+  parseTelegramThreadId,
+  resolveTelegramTargetChatType,
+} from "../../../extensions/telegram/api.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
@@ -284,7 +282,7 @@ function resolveDiscordSession(
 
 function resolveDiscordOutboundTargetKindHint(
   params: ResolveOutboundSessionRouteParams,
-): DiscordTargetKind | undefined {
+): "user" | "channel" | undefined {
   const resolvedKind = params.resolvedTarget?.kind;
   if (resolvedKind === "user") {
     return "user";
@@ -538,21 +536,6 @@ function resolveMatrixSession(
   };
 }
 
-function buildSimpleBaseSession(params: {
-  route: ResolveOutboundSessionRouteParams;
-  channel: string;
-  peer: RoutePeer;
-}) {
-  const baseSessionKey = buildBaseSessionKey({
-    cfg: params.route.cfg,
-    agentId: params.route.agentId,
-    channel: params.channel,
-    accountId: params.route.accountId,
-    peer: params.peer,
-  });
-  return { baseSessionKey, peer: params.peer };
-}
-
 function resolveMSTeamsSession(
   params: ResolveOutboundSessionRouteParams,
 ): OutboundSessionRoute | null {
@@ -617,10 +600,13 @@ function resolveMattermostSession(
   if (!rawId) {
     return null;
   }
-  const { baseSessionKey, peer } = buildSimpleBaseSession({
-    route: params,
+  const peer: RoutePeer = { kind: isUser ? "direct" : "channel", id: rawId };
+  const baseSessionKey = buildBaseSessionKey({
+    cfg: params.cfg,
+    agentId: params.agentId,
     channel: "mattermost",
-    peer: { kind: isUser ? "direct" : "channel", id: rawId },
+    accountId: params.accountId,
+    peer,
   });
   const threadId = normalizeThreadId(params.replyToId ?? params.threadId);
   const threadKeys = resolveThreadSessionKeys({

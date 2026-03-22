@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { createWindowsCmdShimFixture } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createWindowsCmdShimFixture } from "../../../shared/windows-cmd-shim-test-fixtures.js";
 import {
   resolveSpawnCommand,
   spawnAndCollect,
@@ -61,6 +61,58 @@ describe("resolveSpawnCommand", () => {
     expect(resolved).toEqual({
       command: "acpx",
       args: ["--help"],
+    });
+  });
+
+  it("routes node shebang wrappers through the current node runtime on posix", async () => {
+    const dir = await createTempDir();
+    const scriptPath = path.join(dir, "acpx");
+    await writeFile(scriptPath, "#!/usr/bin/env node\nconsole.log('ok')\n", "utf8");
+    await chmod(scriptPath, 0o755);
+
+    const resolved = resolveSpawnCommand(
+      {
+        command: scriptPath,
+        args: ["--help"],
+      },
+      undefined,
+      {
+        platform: "linux",
+        env: {},
+        execPath: "/custom/node",
+      },
+    );
+
+    expect(resolved).toEqual({
+      command: "/custom/node",
+      args: [scriptPath, "--help"],
+    });
+  });
+
+  it("routes PATH-resolved node shebang wrappers through the current node runtime on posix", async () => {
+    const dir = await createTempDir();
+    const binDir = path.join(dir, "bin");
+    const scriptPath = path.join(binDir, "acpx");
+    await mkdir(binDir, { recursive: true });
+    await writeFile(scriptPath, "#!/usr/bin/env node\nconsole.log('ok')\n", "utf8");
+    await chmod(scriptPath, 0o755);
+
+    const resolved = resolveSpawnCommand(
+      {
+        command: "acpx",
+        args: ["--help"],
+      },
+      undefined,
+      {
+        platform: "linux",
+        env: { PATH: binDir },
+        execPath: "/custom/node",
+      },
+    );
+
+    expect(resolved).toEqual({
+      command: "/custom/node",
+      args: [scriptPath, "--help"],
     });
   });
 

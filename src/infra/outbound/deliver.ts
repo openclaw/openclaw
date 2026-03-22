@@ -1,8 +1,7 @@
 import {
-  markdownToSignalTextChunks,
-  type SignalTextStyleRange,
-} from "../../../extensions/signal/src/format.js";
-import { sendMessageSignal } from "../../../extensions/signal/src/send.js";
+  resolveSendableOutboundReplyParts,
+  sendMediaWithLeadingCaption,
+} from "openclaw/plugin-sdk/reply-payload";
 import {
   chunkByParagraph,
   chunkMarkdownTextWithMode,
@@ -10,14 +9,12 @@ import {
   resolveTextChunkLimit,
 } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import { resolveChannelMediaMaxBytes } from "../../channels/plugins/media-limits.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import type {
   ChannelOutboundAdapter,
   ChannelOutboundContext,
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import {
   appendAssistantMessageToSessionTranscript,
   resolveMirroredTranscriptText,
@@ -30,66 +27,27 @@ import {
   toPluginMessageContext,
   toPluginMessageSentEvent,
 } from "../../hooks/message-hook-mappers.js";
+import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { throwIfAborted } from "./abort.js";
+import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { DeliveryMirror } from "./mirror.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
 import { isPlainTextSurface, sanitizeForPlainText } from "./sanitize-text.js";
+import { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
 import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
 
 export type { NormalizedOutboundPayload } from "./payloads.js";
 export { normalizeOutboundPayloads } from "./payloads.js";
+export { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
 
 const log = createSubsystemLogger("outbound/deliver");
-const TELEGRAM_TEXT_LIMIT = 4096;
-
-type LegacyOutboundSendDeps = {
-  sendWhatsApp?: unknown;
-  sendTelegram?: unknown;
-  sendDiscord?: unknown;
-  sendSlack?: unknown;
-  sendSignal?: unknown;
-  sendIMessage?: unknown;
-  sendMatrix?: unknown;
-  sendMSTeams?: unknown;
-};
-
-/**
- * Dynamic bag of per-channel send functions, keyed by channel ID.
- * Each outbound adapter resolves its own function from this record and
- * falls back to a direct import when the key is absent.
- */
-export type OutboundSendDeps = LegacyOutboundSendDeps & { [channelId: string]: unknown };
-
-const LEGACY_SEND_DEP_KEYS = {
-  whatsapp: "sendWhatsApp",
-  telegram: "sendTelegram",
-  discord: "sendDiscord",
-  slack: "sendSlack",
-  signal: "sendSignal",
-  imessage: "sendIMessage",
-  matrix: "sendMatrix",
-  msteams: "sendMSTeams",
-} as const satisfies Record<string, keyof LegacyOutboundSendDeps>;
-
-export function resolveOutboundSendDep<T>(
-  deps: OutboundSendDeps | null | undefined,
-  channelId: keyof typeof LEGACY_SEND_DEP_KEYS,
-): T | undefined {
-  const dynamic = deps?.[channelId];
-  if (dynamic !== undefined) {
-    return dynamic as T;
-  }
-  const legacyKey = LEGACY_SEND_DEP_KEYS[channelId];
-  const legacy = deps?.[legacyKey];
-  return legacy as T | undefined;
-}
 
 export type OutboundDeliveryResult = {
   channel: Exclude<OutboundChannel, "none">;
@@ -112,11 +70,32 @@ type ChannelHandler = {
   chunkerMode?: "text" | "markdown";
   textChunkLimit?: number;
   supportsMedia: boolean;
+  normalizePayload?: (payload: ReplyPayload) => ReplyPayload | null;
+  shouldSkipPlainTextSanitization?: (payload: ReplyPayload) => boolean;
+  resolveEffectiveTextChunkLimit?: (fallbackLimit?: number) => number | undefined;
   sendPayload?: (
     payload: ReplyPayload,
     overrides?: {
       replyToId?: string | null;
       threadId?: string | number | null;
+      audioAsVoice?: boolean;
+    },
+  ) => Promise<OutboundDeliveryResult>;
+  sendFormattedText?: (
+    text: string,
+    overrides?: {
+      replyToId?: string | null;
+      threadId?: string | number | null;
+      audioAsVoice?: boolean;
+    },
+  ) => Promise<OutboundDeliveryResult[]>;
+  sendFormattedMedia?: (
+    caption: string,
+    mediaUrl: string,
+    overrides?: {
+      replyToId?: string | null;
+      threadId?: string | number | null;
+      audioAsVoice?: boolean;
     },
   ) => Promise<OutboundDeliveryResult>;
   sendText: (
@@ -124,6 +103,7 @@ type ChannelHandler = {
     overrides?: {
       replyToId?: string | null;
       threadId?: string | number | null;
+      audioAsVoice?: boolean;
     },
   ) => Promise<OutboundDeliveryResult>;
   sendMedia: (
@@ -132,6 +112,7 @@ type ChannelHandler = {
     overrides?: {
       replyToId?: string | null;
       threadId?: string | number | null;
+      audioAsVoice?: boolean;
     },
   ) => Promise<OutboundDeliveryResult>;
 };
@@ -153,6 +134,13 @@ type ChannelHandlerParams = {
 
 // Channel docking: outbound delivery delegates to plugin.outbound adapters.
 async function createChannelHandler(params: ChannelHandlerParams): Promise<ChannelHandler> {
+  // Recover channel plugins the same way target resolution does so direct cron
+  // delivery still works when a prior test or lazy path left the active plugin
+  // registry empty.
+  resolveOutboundChannelPlugin({
+    channel: params.channel,
+    cfg: params.cfg,
+  });
   const outbound = await loadChannelOutboundAdapter(params.channel);
   const handler = createPluginHandler({ ...params, outbound });
   if (!handler) {
@@ -176,16 +164,32 @@ function createPluginHandler(
   const resolveCtx = (overrides?: {
     replyToId?: string | null;
     threadId?: string | number | null;
+    audioAsVoice?: boolean;
   }): Omit<ChannelOutboundContext, "text" | "mediaUrl"> => ({
     ...baseCtx,
     replyToId: overrides?.replyToId ?? baseCtx.replyToId,
     threadId: overrides?.threadId ?? baseCtx.threadId,
+    audioAsVoice: overrides?.audioAsVoice,
   });
   return {
     chunker,
     chunkerMode,
     textChunkLimit: outbound.textChunkLimit,
     supportsMedia: Boolean(sendMedia),
+    normalizePayload: outbound.normalizePayload
+      ? (payload) => outbound.normalizePayload!({ payload })
+      : undefined,
+    shouldSkipPlainTextSanitization: outbound.shouldSkipPlainTextSanitization
+      ? (payload) => outbound.shouldSkipPlainTextSanitization!({ payload })
+      : undefined,
+    resolveEffectiveTextChunkLimit: outbound.resolveEffectiveTextChunkLimit
+      ? (fallbackLimit) =>
+          outbound.resolveEffectiveTextChunkLimit!({
+            cfg: params.cfg,
+            accountId: params.accountId ?? undefined,
+            fallbackLimit,
+          })
+      : undefined,
     sendPayload: outbound.sendPayload
       ? async (payload, overrides) =>
           outbound.sendPayload!({
@@ -193,6 +197,21 @@ function createPluginHandler(
             text: payload.text ?? "",
             mediaUrl: payload.mediaUrl,
             payload,
+          })
+      : undefined,
+    sendFormattedText: outbound.sendFormattedText
+      ? async (text, overrides) =>
+          outbound.sendFormattedText!({
+            ...resolveCtx(overrides),
+            text,
+          })
+      : undefined,
+    sendFormattedMedia: outbound.sendFormattedMedia
+      ? async (caption, mediaUrl, overrides) =>
+          outbound.sendFormattedMedia!({
+            ...resolveCtx(overrides),
+            text: caption,
+            mediaUrl,
           })
       : undefined,
     sendText: async (text, overrides) =>
@@ -270,47 +289,26 @@ type MessageSentEvent = {
   messageId?: string;
 };
 
-function hasMediaPayload(payload: ReplyPayload): boolean {
-  return Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-}
-
-function hasChannelDataPayload(payload: ReplyPayload): boolean {
-  return Boolean(payload.channelData && Object.keys(payload.channelData).length > 0);
-}
-
-function normalizePayloadForChannelDelivery(
-  payload: ReplyPayload,
-  channelId: string,
-): ReplyPayload | null {
-  const hasMedia = hasMediaPayload(payload);
-  const hasChannelData = hasChannelDataPayload(payload);
-  const rawText = typeof payload.text === "string" ? payload.text : "";
-  const normalizedText =
-    channelId === "whatsapp" ? rawText.replace(/^(?:[ \t]*\r?\n)+/, "") : rawText;
-  if (!normalizedText.trim()) {
-    if (!hasMedia && !hasChannelData) {
+function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPayload | null {
+  const text = typeof payload.text === "string" ? payload.text : "";
+  if (!text.trim()) {
+    if (!hasReplyPayloadContent({ ...payload, text })) {
       return null;
     }
-    return {
-      ...payload,
-      text: "",
-    };
+    if (text) {
+      return {
+        ...payload,
+        text: "",
+      };
+    }
   }
-  if (normalizedText === rawText) {
-    return payload;
-  }
-  return {
-    ...payload,
-    text: normalizedText,
-  };
+  return payload;
 }
 
 function normalizePayloadsForChannelDelivery(
   payloads: ReplyPayload[],
   channel: Exclude<OutboundChannel, "none">,
-  _cfg: OpenClawConfig,
-  _to: string,
-  _accountId?: string,
+  handler: ChannelHandler,
 ): ReplyPayload[] {
   const normalizedPayloads: ReplyPayload[] = [];
   for (const payload of normalizeReplyPayloadsForDelivery(payloads)) {
@@ -319,15 +317,19 @@ function normalizePayloadsForChannelDelivery(
     // Models occasionally produce <br>, <b>, etc. that render as literal text.
     // See https://github.com/openclaw/openclaw/issues/31884
     if (isPlainTextSurface(channel) && sanitizedPayload.text) {
-      // Telegram sendPayload uses textMode:"html". Preserve raw HTML in this path.
-      if (!(channel === "telegram" && sanitizedPayload.channelData)) {
+      if (!handler.shouldSkipPlainTextSanitization?.(sanitizedPayload)) {
         sanitizedPayload = {
           ...sanitizedPayload,
           text: sanitizeForPlainText(sanitizedPayload.text),
         };
       }
     }
-    const normalized = normalizePayloadForChannelDelivery(sanitizedPayload, channel);
+    const normalizedPayload = handler.normalizePayload
+      ? handler.normalizePayload(sanitizedPayload)
+      : sanitizedPayload;
+    const normalized = normalizedPayload
+      ? normalizeEmptyPayloadForDelivery(normalizedPayload)
+      : null;
     if (normalized) {
       normalizedPayloads.push(normalized);
     }
@@ -336,9 +338,12 @@ function normalizePayloadsForChannelDelivery(
 }
 
 function buildPayloadSummary(payload: ReplyPayload): NormalizedOutboundPayload {
+  const parts = resolveSendableOutboundReplyParts(payload);
   return {
-    text: payload.text ?? "",
-    mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
+    text: parts.text,
+    mediaUrls: parts.mediaUrls,
+    audioAsVoice: payload.audioAsVoice === true ? true : undefined,
+    interactive: payload.interactive,
     channelData: payload.channelData,
   };
 }
@@ -544,8 +549,6 @@ async function deliverOutboundPayloadsCore(
   const accountId = params.accountId;
   const deps = params.deps;
   const abortSignal = params.abortSignal;
-  const sendSignal =
-    resolveOutboundSendDep<typeof sendMessageSignal>(params.deps, "signal") ?? sendMessageSignal;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(
     cfg,
     params.session?.agentId ?? params.mirror?.agentId,
@@ -570,28 +573,18 @@ async function deliverOutboundPayloadsCore(
         fallbackLimit: handler.textChunkLimit,
       })
     : undefined;
-  const textLimit =
-    channel === "telegram" && typeof configuredTextLimit === "number"
-      ? Math.min(configuredTextLimit, TELEGRAM_TEXT_LIMIT)
-      : configuredTextLimit;
+  const textLimit = handler.resolveEffectiveTextChunkLimit
+    ? handler.resolveEffectiveTextChunkLimit(configuredTextLimit)
+    : configuredTextLimit;
   const chunkMode = handler.chunker ? resolveChunkMode(cfg, channel, accountId) : "length";
-  const isSignalChannel = channel === "signal";
-  const signalTableMode = isSignalChannel
-    ? resolveMarkdownTableMode({ cfg, channel: "signal", accountId })
-    : "code";
-  const signalMaxBytes = isSignalChannel
-    ? resolveChannelMediaMaxBytes({
-        cfg,
-        resolveChannelLimitMb: ({ cfg, accountId }) =>
-          cfg.channels?.signal?.accounts?.[accountId]?.mediaMaxMb ??
-          cfg.channels?.signal?.mediaMaxMb,
-        accountId,
-      })
-    : undefined;
 
   const sendTextChunks = async (
     text: string,
-    overrides?: { replyToId?: string | null; threadId?: string | number | null },
+    overrides?: {
+      replyToId?: string | null;
+      threadId?: string | number | null;
+      audioAsVoice?: boolean;
+    },
   ) => {
     throwIfAborted(abortSignal);
     if (!handler.chunker || textLimit === undefined) {
@@ -626,66 +619,7 @@ async function deliverOutboundPayloadsCore(
       results.push(await handler.sendText(chunk, overrides));
     }
   };
-
-  const sendSignalText = async (text: string, styles: SignalTextStyleRange[]) => {
-    throwIfAborted(abortSignal);
-    return {
-      channel: "signal" as const,
-      ...(await sendSignal(to, text, {
-        cfg,
-        maxBytes: signalMaxBytes,
-        accountId: accountId ?? undefined,
-        textMode: "plain",
-        textStyles: styles,
-      })),
-    };
-  };
-
-  const sendSignalTextChunks = async (text: string) => {
-    throwIfAborted(abortSignal);
-    let signalChunks =
-      textLimit === undefined
-        ? markdownToSignalTextChunks(text, Number.POSITIVE_INFINITY, {
-            tableMode: signalTableMode,
-          })
-        : markdownToSignalTextChunks(text, textLimit, { tableMode: signalTableMode });
-    if (signalChunks.length === 0 && text) {
-      signalChunks = [{ text, styles: [] }];
-    }
-    for (const chunk of signalChunks) {
-      throwIfAborted(abortSignal);
-      results.push(await sendSignalText(chunk.text, chunk.styles));
-    }
-  };
-
-  const sendSignalMedia = async (caption: string, mediaUrl: string) => {
-    throwIfAborted(abortSignal);
-    const formatted = markdownToSignalTextChunks(caption, Number.POSITIVE_INFINITY, {
-      tableMode: signalTableMode,
-    })[0] ?? {
-      text: caption,
-      styles: [],
-    };
-    return {
-      channel: "signal" as const,
-      ...(await sendSignal(to, formatted.text, {
-        cfg,
-        mediaUrl,
-        maxBytes: signalMaxBytes,
-        accountId: accountId ?? undefined,
-        textMode: "plain",
-        textStyles: formatted.styles,
-        mediaLocalRoots,
-      })),
-    };
-  };
-  const normalizedPayloads = normalizePayloadsForChannelDelivery(
-    payloads,
-    channel,
-    cfg,
-    to,
-    accountId,
-  );
+  const normalizedPayloads = normalizePayloadsForChannelDelivery(payloads, channel, handler);
   const hookRunner = getGlobalHookRunner();
   const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
   const mirrorIsGroup = params.mirror?.isGroup;
@@ -735,8 +669,16 @@ async function deliverOutboundPayloadsCore(
       const sendOverrides = {
         replyToId: effectivePayload.replyToId ?? params.replyToId ?? undefined,
         threadId: params.threadId ?? undefined,
+        audioAsVoice: effectivePayload.audioAsVoice === true ? true : undefined,
+        forceDocument: params.forceDocument,
       };
-      if (handler.sendPayload && effectivePayload.channelData) {
+      if (
+        handler.sendPayload &&
+        hasReplyPayloadContent({
+          interactive: effectivePayload.interactive,
+          channelData: effectivePayload.channelData,
+        })
+      ) {
         const delivery = await handler.sendPayload(effectivePayload, sendOverrides);
         results.push(delivery);
         emitMessageSent({
@@ -748,8 +690,8 @@ async function deliverOutboundPayloadsCore(
       }
       if (payloadSummary.mediaUrls.length === 0) {
         const beforeCount = results.length;
-        if (isSignalChannel) {
-          await sendSignalTextChunks(payloadSummary.text);
+        if (handler.sendFormattedText) {
+          results.push(...(await handler.sendFormattedText(payloadSummary.text, sendOverrides)));
         } else {
           await sendTextChunks(payloadSummary.text, sendOverrides);
         }
@@ -788,22 +730,27 @@ async function deliverOutboundPayloadsCore(
         continue;
       }
 
-      let first = true;
       let lastMessageId: string | undefined;
-      for (const url of payloadSummary.mediaUrls) {
-        throwIfAborted(abortSignal);
-        const caption = first ? payloadSummary.text : "";
-        first = false;
-        if (isSignalChannel) {
-          const delivery = await sendSignalMedia(caption, url);
+      await sendMediaWithLeadingCaption({
+        mediaUrls: payloadSummary.mediaUrls,
+        caption: payloadSummary.text,
+        send: async ({ mediaUrl, caption }) => {
+          throwIfAborted(abortSignal);
+          if (handler.sendFormattedMedia) {
+            const delivery = await handler.sendFormattedMedia(
+              caption ?? "",
+              mediaUrl,
+              sendOverrides,
+            );
+            results.push(delivery);
+            lastMessageId = delivery.messageId;
+            return;
+          }
+          const delivery = await handler.sendMedia(caption ?? "", mediaUrl, sendOverrides);
           results.push(delivery);
           lastMessageId = delivery.messageId;
-        } else {
-          const delivery = await handler.sendMedia(caption, url, sendOverrides);
-          results.push(delivery);
-          lastMessageId = delivery.messageId;
-        }
-      }
+        },
+      });
       emitMessageSent({
         success: true,
         content: payloadSummary.text,

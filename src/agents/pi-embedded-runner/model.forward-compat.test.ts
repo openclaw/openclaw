@@ -7,14 +7,12 @@ vi.mock("../pi-model-discovery.js", () => ({
 
 import { buildInlineProviderModels, resolveModel } from "./model.js";
 import {
-  buildOpenAICodexForwardCompatExpectation,
   GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
   GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL,
   makeModel,
   mockDiscoveredModel,
   mockGoogleGeminiCliFlashTemplateModel,
   mockGoogleGeminiCliProTemplateModel,
-  mockOpenAICodexTemplateModel,
   resetMockDiscoverModels,
 } from "./model.test-harness.js";
 
@@ -40,32 +38,6 @@ describe("pi embedded model e2e smoke", () => {
         api: undefined,
       },
     ]);
-  });
-
-  it("builds an openai-codex forward-compat fallback for gpt-5.3-codex", () => {
-    mockOpenAICodexTemplateModel();
-
-    const result = resolveModel("openai-codex", "gpt-5.3-codex", "/tmp/agent");
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex"));
-  });
-
-  it("builds an openai-codex forward-compat fallback for gpt-5.4", () => {
-    mockOpenAICodexTemplateModel();
-
-    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent");
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
-  });
-
-  it("builds an openai-codex forward-compat fallback for gpt-5.3-codex-spark", () => {
-    mockOpenAICodexTemplateModel();
-
-    const result = resolveModel("openai-codex", "gpt-5.3-codex-spark", "/tmp/agent");
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject(
-      buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex-spark"),
-    );
   });
 
   it("keeps unknown-model errors for non-forward-compat IDs", () => {
@@ -159,6 +131,29 @@ describe("pi embedded model e2e smoke", () => {
       name: "gemini-3.1-flash-lite-preview",
       reasoning: true,
     });
+  });
+
+  it("builds an xai forward-compat fallback for Grok 4.1 fast reasoning", () => {
+    const result = resolveModel("xai", "grok-4-1-fast-reasoning", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "xai",
+      api: "openai-completions",
+      baseUrl: "https://api.x.ai/v1",
+      id: "grok-4-1-fast-reasoning",
+      reasoning: true,
+      contextWindow: 2_000_000,
+    });
+  });
+
+  it("keeps unknown-model errors for xai multi-agent-only ids", () => {
+    const result = resolveModel(
+      "xai",
+      "grok-4.20-multi-agent-experimental-beta-0304",
+      "/tmp/agent",
+    );
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe("Unknown model: xai/grok-4.20-multi-agent-experimental-beta-0304");
   });
 
   it("keeps unknown-model errors for unrecognized google-gemini-cli model IDs", () => {

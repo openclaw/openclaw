@@ -12,6 +12,19 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "install": {
+      "minHostVersion": ">=2026.3.14"
+    },
+    "channel": {
+      "id": "twitch",
+      "label": "Twitch",
+      "selectionLabel": "Twitch (Chat)",
+      "docsPath": "/channels/twitch",
+      "blurb": "Twitch chat integration",
+      "aliases": [
+        "twitch-chat"
+      ]
+    }
   }
 }

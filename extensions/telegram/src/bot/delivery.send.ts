@@ -1,6 +1,6 @@
 import { type Bot, GrammyError } from "grammy";
-import { formatErrorMessage } from "../../../../src/infra/errors.js";
-import type { RuntimeEnv } from "../../../../src/runtime.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
 import { markdownToTelegramHtml } from "../format.js";
 import { buildInlineKeyboard } from "../send.js";
@@ -76,6 +76,7 @@ export async function sendTelegramWithThreadFallback<T>(params: {
 export function buildTelegramSendParams(opts?: {
   replyToMessageId?: number;
   thread?: TelegramThreadSpec | null;
+  silent?: boolean;
 }): Record<string, unknown> {
   const threadParams = buildTelegramThreadParams(opts?.thread);
   const params: Record<string, unknown> = {};
@@ -84,6 +85,9 @@ export function buildTelegramSendParams(opts?: {
   }
   if (threadParams) {
     params.message_thread_id = threadParams.message_thread_id;
+  }
+  if (opts?.silent === true) {
+    params.disable_notification = true;
   }
   return params;
 }
@@ -100,12 +104,14 @@ export async function sendTelegramText(
     textMode?: "markdown" | "html";
     plainText?: string;
     linkPreview?: boolean;
+    silent?: boolean;
     replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   },
 ): Promise<number> {
   const baseParams = buildTelegramSendParams({
     replyToMessageId: opts?.replyToMessageId,
     thread: opts?.thread,
+    silent: opts?.silent,
   });
   // Add link_preview_options when link preview is disabled.
   const linkPreviewEnabled = opts?.linkPreview ?? true;

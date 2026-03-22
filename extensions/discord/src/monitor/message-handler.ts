@@ -2,9 +2,10 @@ import type { Client } from "@buape/carbon";
 import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
-} from "../../../../src/channels/inbound-debounce-policy.js";
-import { resolveOpenProviderRuntimeGroupPolicy } from "../../../../src/config/runtime-group-policy.js";
-import { danger } from "../../../../src/globals.js";
+} from "openclaw/plugin-sdk/channel-inbound";
+import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
+import { createDedupeCache } from "openclaw/plugin-sdk/infra-runtime";
+import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { buildDiscordInboundJob } from "./inbound-job.js";
 import { createDiscordInboundWorker } from "./inbound-worker.js";
 import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
@@ -30,6 +31,27 @@ export type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
   deactivate: () => void;
 };
 
+const RECENT_DISCORD_MESSAGE_TTL_MS = 5 * 60_000;
+const RECENT_DISCORD_MESSAGE_MAX = 5000;
+
+function buildDiscordInboundDedupeKey(params: {
+  accountId: string;
+  data: DiscordMessageEvent;
+}): string | null {
+  const messageId = params.data.message?.id?.trim();
+  if (!messageId) {
+    return null;
+  }
+  const channelId = resolveDiscordMessageChannelId({
+    message: params.data.message,
+    eventChannelId: params.data.channel_id,
+  });
+  if (!channelId) {
+    return null;
+  }
+  return `${params.accountId}:${channelId}:${messageId}`;
+}
+
 export function createDiscordMessageHandler(
   params: DiscordMessageHandlerParams,
 ): DiscordMessageHandlerWithLifecycle {
@@ -47,6 +69,10 @@ export function createDiscordMessageHandler(
     setStatus: params.setStatus,
     abortSignal: params.abortSignal,
     runTimeoutMs: params.workerRunTimeoutMs,
+  });
+  const recentInboundMessages = createDedupeCache({
+    ttlMs: RECENT_DISCORD_MESSAGE_TTL_MS,
+    maxSize: RECENT_DISCORD_MESSAGE_MAX,
   });
 
   const { debouncer } = createChannelInboundDebouncer<{
@@ -171,6 +197,13 @@ export function createDiscordMessageHandler(
       // slowdown (see #15874).
       const msgAuthorId = data.message?.author?.id ?? data.author?.id;
       if (params.botUserId && msgAuthorId === params.botUserId) {
+        return;
+      }
+      const dedupeKey = buildDiscordInboundDedupeKey({
+        accountId: params.accountId,
+        data,
+      });
+      if (dedupeKey && recentInboundMessages.check(dedupeKey)) {
         return;
       }
 

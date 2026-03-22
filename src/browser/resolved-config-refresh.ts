@@ -22,6 +22,9 @@ function changedProfileInvariants(
   if (current.cdpIsLoopback !== next.cdpIsLoopback) {
     changed.push("cdpIsLoopback");
   }
+  if ((current.userDataDir ?? "") !== (next.userDataDir ?? "")) {
+    changed.push("userDataDir");
+  }
   return changed;
 }
 

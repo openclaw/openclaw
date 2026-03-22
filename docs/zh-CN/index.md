@@ -40,7 +40,7 @@ x-i18n:
   <Card title="入门指南" href="/start/getting-started" icon="rocket">
     安装 OpenClaw 并在几分钟内启动 Gateway 网关。
   </Card>
-  <Card title="运行向导" href="/start/wizard" icon="sparkles">
+  <Card title="运行新手引导" href="/start/wizard" icon="sparkles">
     通过 `openclaw onboard` 和配对流程进行引导式设置。
   </Card>
   <Card title="打开控制界面" href="/web/control-ui" icon="layout-dashboard">

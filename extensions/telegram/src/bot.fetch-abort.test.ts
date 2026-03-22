@@ -1,7 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
-import { botCtorSpy } from "./bot.create-telegram-bot.test-harness.js";
-import { createTelegramBot } from "./bot.js";
 import { getTelegramNetworkErrorOrigin } from "./network-errors.js";
+
+const { botCtorSpy, telegramBotDepsForTest } =
+  await import("./bot.create-telegram-bot.test-harness.js");
+const { telegramBotRuntimeForTest } = await import("./bot.create-telegram-bot.test-harness.js");
+const { createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest } =
+  await import("./bot.js");
+setTelegramBotRuntimeForTest(
+  telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
+);
+const createTelegramBot = (opts: Parameters<typeof createTelegramBotBase>[0]) =>
+  createTelegramBotBase({
+    ...opts,
+    telegramDeps: telegramBotDepsForTest,
+  });
 
 function createWrappedTelegramClientFetch(proxyFetch: typeof fetch) {
   const shutdown = new AbortController();
@@ -56,6 +68,26 @@ describe("createTelegramBot fetch abort", () => {
       method: "getupdates",
       url: "https://api.telegram.org/bot123456:ABC/getUpdates",
     });
+  });
+
+  it("aborts wrapped getUpdates fetch after the hard polling timeout", async () => {
+    vi.useFakeTimers();
+    const fetchSpy = vi.fn(
+      (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<AbortSignal>((resolve) => {
+          const signal = init?.signal as AbortSignal;
+          signal.addEventListener("abort", () => resolve(signal), { once: true });
+        }),
+    );
+    const { clientFetch } = createWrappedTelegramClientFetch(fetchSpy as unknown as typeof fetch);
+
+    const observedSignalPromise = clientFetch("https://api.telegram.org/bot123456:ABC/getUpdates");
+    await vi.advanceTimersByTimeAsync(45_000);
+    const observedSignal = (await observedSignalPromise) as AbortSignal;
+
+    expect(observedSignal).toBeInstanceOf(AbortSignal);
+    expect(observedSignal.aborted).toBe(true);
+    vi.useRealTimers();
   });
 
   it("preserves the original fetch error when tagging cannot attach metadata", async () => {

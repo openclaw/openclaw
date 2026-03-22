@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import { setDefaultChannelPluginRegistryForTests } from "../../commands/channel-test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
 import {
   ackDelivery,
@@ -38,6 +41,10 @@ import {
   normalizeOutboundPayloadsForJson,
 } from "./payloads.js";
 import { runResolveOutboundTargetCoreTests } from "./targets.shared-test.js";
+
+beforeEach(() => {
+  setActivePluginRegistry(createTestRegistry([]));
+});
 
 describe("delivery-queue", () => {
   let tmpDir: string;
@@ -879,6 +886,10 @@ const discordConfig = {
 } as OpenClawConfig;
 
 describe("outbound policy", () => {
+  beforeEach(() => {
+    setDefaultChannelPluginRegistryForTests();
+  });
+
   it("allows cross-provider sends when enabled", () => {
     const cfg = {
       ...slackConfig,
@@ -921,6 +932,10 @@ describe("outbound policy", () => {
 });
 
 describe("resolveOutboundSessionRoute", () => {
+  beforeEach(() => {
+    setDefaultChannelPluginRegistryForTests();
+  });
+
   const baseConfig = {} as OpenClawConfig;
 
   it("resolves provider-specific session routes", async () => {
@@ -954,9 +969,45 @@ describe("resolveOutboundSessionRoute", () => {
         from?: string;
         to?: string;
         threadId?: string | number;
-        chatType?: "direct" | "group";
+        chatType?: "channel" | "direct" | "group";
       };
     }> = [
+      {
+        name: "WhatsApp group jid",
+        cfg: baseConfig,
+        channel: "whatsapp",
+        target: "120363040000000000@g.us",
+        expected: {
+          sessionKey: "agent:main:whatsapp:group:120363040000000000@g.us",
+          from: "120363040000000000@g.us",
+          to: "120363040000000000@g.us",
+          chatType: "group",
+        },
+      },
+      {
+        name: "Matrix room target",
+        cfg: baseConfig,
+        channel: "matrix",
+        target: "room:!ops:matrix.example",
+        expected: {
+          sessionKey: "agent:main:matrix:channel:!ops:matrix.example",
+          from: "matrix:channel:!ops:matrix.example",
+          to: "room:!ops:matrix.example",
+          chatType: "channel",
+        },
+      },
+      {
+        name: "MSTeams conversation target",
+        cfg: baseConfig,
+        channel: "msteams",
+        target: "conversation:19:meeting_abc@thread.tacv2",
+        expected: {
+          sessionKey: "agent:main:msteams:channel:19:meeting_abc@thread.tacv2",
+          from: "msteams:channel:19:meeting_abc@thread.tacv2",
+          to: "conversation:19:meeting_abc@thread.tacv2",
+          chatType: "channel",
+        },
+      },
       {
         name: "Slack thread",
         cfg: baseConfig,
@@ -1029,6 +1080,18 @@ describe("resolveOutboundSessionRoute", () => {
         },
       },
       {
+        name: "Nextcloud Talk room target",
+        cfg: baseConfig,
+        channel: "nextcloud-talk",
+        target: "room:opsroom42",
+        expected: {
+          sessionKey: "agent:main:nextcloud-talk:group:opsroom42",
+          from: "nextcloud-talk:room:opsroom42",
+          to: "nextcloud-talk:opsroom42",
+          chatType: "group",
+        },
+      },
+      {
         name: "BlueBubbles chat_* prefix stripping",
         cfg: baseConfig,
         channel: "bluebubbles",
@@ -1039,6 +1102,18 @@ describe("resolveOutboundSessionRoute", () => {
         },
       },
       {
+        name: "Zalo direct target",
+        cfg: perChannelPeerCfg,
+        channel: "zalo",
+        target: "zl:123456",
+        expected: {
+          sessionKey: "agent:main:zalo:direct:123456",
+          from: "zalo:123456",
+          to: "zalo:123456",
+          chatType: "direct",
+        },
+      },
+      {
         name: "Zalo Personal DM target",
         cfg: perChannelPeerCfg,
         channel: "zalouser",
@@ -1046,6 +1121,30 @@ describe("resolveOutboundSessionRoute", () => {
         expected: {
           sessionKey: "agent:main:zalouser:direct:123456",
           chatType: "direct",
+        },
+      },
+      {
+        name: "Nostr prefixed target",
+        cfg: perChannelPeerCfg,
+        channel: "nostr",
+        target: "nostr:npub1example",
+        expected: {
+          sessionKey: "agent:main:nostr:direct:npub1example",
+          from: "nostr:npub1example",
+          to: "nostr:npub1example",
+          chatType: "direct",
+        },
+      },
+      {
+        name: "Tlon group target",
+        cfg: baseConfig,
+        channel: "tlon",
+        target: "group:~zod/main",
+        expected: {
+          sessionKey: "agent:main:tlon:group:chat/~zod/main",
+          from: "tlon:group:chat/~zod/main",
+          to: "tlon:chat/~zod/main",
+          chatType: "group",
         },
       },
       {
@@ -1092,6 +1191,30 @@ describe("resolveOutboundSessionRoute", () => {
           from: "feishu:oc_ambiguous_chat",
           to: "oc_ambiguous_chat",
           chatType: "direct",
+        },
+      },
+      {
+        name: "Slack user DM target",
+        cfg: perChannelPeerCfg,
+        channel: "slack",
+        target: "user:U12345ABC",
+        expected: {
+          sessionKey: "agent:main:slack:direct:u12345abc",
+          from: "slack:U12345ABC",
+          to: "user:U12345ABC",
+          chatType: "direct",
+        },
+      },
+      {
+        name: "Slack channel target without thread",
+        cfg: baseConfig,
+        channel: "slack",
+        target: "channel:C999XYZ",
+        expected: {
+          sessionKey: "agent:main:slack:channel:c999xyz",
+          from: "slack:channel:C999XYZ",
+          to: "channel:C999XYZ",
+          chatType: "channel",
         },
       },
     ];
@@ -1185,21 +1308,29 @@ describe("normalizeOutboundPayloadsForJson", () => {
       {
         input: [
           { text: "hi" },
-          { text: "photo", mediaUrl: "https://x.test/a.jpg" },
+          { text: "photo", mediaUrl: "https://x.test/a.jpg", audioAsVoice: true },
           { text: "multi", mediaUrls: ["https://x.test/1.png"] },
         ],
         expected: [
-          { text: "hi", mediaUrl: null, mediaUrls: undefined, channelData: undefined },
+          {
+            text: "hi",
+            mediaUrl: null,
+            mediaUrls: undefined,
+            audioAsVoice: undefined,
+            channelData: undefined,
+          },
           {
             text: "photo",
             mediaUrl: "https://x.test/a.jpg",
             mediaUrls: ["https://x.test/a.jpg"],
+            audioAsVoice: true,
             channelData: undefined,
           },
           {
             text: "multi",
             mediaUrl: null,
             mediaUrls: ["https://x.test/1.png"],
+            audioAsVoice: undefined,
             channelData: undefined,
           },
         ],
@@ -1215,6 +1346,7 @@ describe("normalizeOutboundPayloadsForJson", () => {
             text: "",
             mediaUrl: null,
             mediaUrls: ["https://x.test/a.png", "https://x.test/b.png"],
+            audioAsVoice: undefined,
             channelData: undefined,
           },
         ],
@@ -1239,7 +1371,9 @@ describe("normalizeOutboundPayloadsForJson", () => {
       { text: "Reasoning:\n_step_", isReasoning: true },
       { text: "final answer" },
     ]);
-    expect(normalized).toEqual([{ text: "final answer", mediaUrl: null, mediaUrls: undefined }]);
+    expect(normalized).toEqual([
+      { text: "final answer", mediaUrl: null, mediaUrls: undefined, audioAsVoice: undefined },
+    ]);
   });
 });
 

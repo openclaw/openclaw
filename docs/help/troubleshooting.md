@@ -3,7 +3,7 @@ summary: "Symptom first troubleshooting hub for OpenClaw"
 read_when:
   - OpenClaw is not working and you need the fastest path to a fix
   - You want a triage flow before diving into deep runbooks
-title: "Troubleshooting"
+title: "General Troubleshooting"
 ---
 
 # Troubleshooting
@@ -63,7 +63,7 @@ Example:
 }
 ```
 
-Reference: [/tools/plugin#distribution-npm](/tools/plugin#distribution-npm)
+Reference: [Plugin architecture](/plugins/architecture)
 
 ## Decision tree
 
@@ -278,13 +278,13 @@ flowchart TD
     Good output looks like:
 
     - Browser status shows `running: true` and a chosen browser/profile.
-    - `openclaw` profile starts or `chrome` relay has an attached tab.
+    - `openclaw` starts, or `user` can see local Chrome tabs.
 
     Common log signatures:
 
     - `Failed to start Chrome CDP on port` → local browser launch failed.
     - `browser.executablePath not found` → configured binary path is wrong.
-    - `Chrome extension relay is running, but no tab is connected` → extension not attached.
+    - `No Chrome tabs found for profile="user"` → the Chrome MCP attach profile has no open local Chrome tabs.
     - `Browser attachOnly is enabled ... not reachable` → attach-only profile has no live CDP target.
 
     Deep pages:
@@ -292,7 +292,6 @@ flowchart TD
     - [/gateway/troubleshooting#browser-tool-fails](/gateway/troubleshooting#browser-tool-fails)
     - [/tools/browser-linux-troubleshooting](/tools/browser-linux-troubleshooting)
     - [/tools/browser-wsl2-windows-remote-cdp-troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting)
-    - [/tools/chrome-extension](/tools/chrome-extension)
 
   </Accordion>
 </AccordionGroup>

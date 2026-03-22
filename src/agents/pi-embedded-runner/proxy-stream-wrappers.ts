@@ -1,11 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-
-const OPENROUTER_APP_HEADERS: Record<string, string> = {
-  "HTTP-Referer": "https://openclaw.ai",
-  "X-Title": "OpenClaw",
-};
+import { resolveProviderAttributionHeaders } from "../provider-attribution.js";
 const KILOCODE_FEATURE_HEADER = "X-KILOCODE-FEATURE";
 const KILOCODE_FEATURE_DEFAULT = "openclaw";
 const KILOCODE_FEATURE_ENV_VAR = "KILOCODE_FEATURE";
@@ -105,10 +101,11 @@ export function createOpenRouterWrapper(
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const onPayload = options?.onPayload;
+    const attributionHeaders = resolveProviderAttributionHeaders("openrouter");
     return underlying(model, context, {
       ...options,
       headers: {
-        ...OPENROUTER_APP_HEADERS,
+        ...attributionHeaders,
         ...options?.headers,
       },
       onPayload: (payload) => {

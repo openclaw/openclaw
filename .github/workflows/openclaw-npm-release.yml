@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to publish (for example v2026.3.14 or v2026.3.14-beta.1)
+        description: Release tag to publish (for example v2026.3.14, v2026.3.14-beta.1, or fallback v2026.3.14-1)
         required: true
         type: string
 
@@ -47,9 +47,18 @@ jobs:
           set -euo pipefail
           RELEASE_SHA=$(git rev-parse HEAD)
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          if [[ "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*-[1-9][0-9]*$ ]]; then
+            TAG_KIND="fallback correction"
+          else
+            TAG_KIND="standard"
+          fi
           echo "Release plan for ${RELEASE_TAG}:"
           echo "Resolved release SHA: ${RELEASE_SHA}"
           echo "Resolved package version: ${PACKAGE_VERSION}"
+          echo "Resolved tag kind: ${TAG_KIND}"
+          if [[ "${TAG_KIND}" == "fallback correction" ]]; then
+            echo "Correction tag note: npm version remains ${PACKAGE_VERSION}"
+          fi
           echo "Would run: git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main"
           echo "Would run with env: RELEASE_SHA=${RELEASE_SHA} RELEASE_TAG=${RELEASE_TAG} RELEASE_MAIN_REF=origin/main pnpm release:openclaw:npm:check"
           echo "Would run: npm view openclaw@${PACKAGE_VERSION} version"
@@ -71,16 +80,31 @@ jobs:
           pnpm release:openclaw:npm:check
 
       - name: Ensure version is not already published
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euxo pipefail
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          IS_CORRECTION_TAG=0
+          if [[ "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*-[1-9][0-9]*$ ]]; then
+            IS_CORRECTION_TAG=1
+          fi
 
           if npm view "openclaw@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
+            if [[ "${IS_CORRECTION_TAG}" == "1" ]]; then
+              echo "openclaw@${PACKAGE_VERSION} is already published on npm."
+              echo "Correction tag ${RELEASE_TAG} is allowed as a fallback release tag, so preview will continue without treating this as an error."
+              exit 0
+            fi
             echo "openclaw@${PACKAGE_VERSION} is already published on npm."
             exit 1
           fi
 
-          echo "Previewing openclaw@${PACKAGE_VERSION}"
+          if [[ "${IS_CORRECTION_TAG}" == "1" ]]; then
+            echo "Previewing fallback correction tag ${RELEASE_TAG} for npm version openclaw@${PACKAGE_VERSION}"
+          else
+            echo "Previewing openclaw@${PACKAGE_VERSION}"
+          fi
 
       - name: Check
         run: |
@@ -114,7 +138,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-beta\.[1-9][0-9]*)?$ ]]; then
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
             echo "Invalid release tag format: ${RELEASE_TAG}"
             exit 1
           fi

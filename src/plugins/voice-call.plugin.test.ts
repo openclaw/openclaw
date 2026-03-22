@@ -45,7 +45,7 @@ type RegisterCliContext = {
 function setup(config: Record<string, unknown>): Registered {
   const methods = new Map<string, unknown>();
   const tools: unknown[] = [];
-  plugin.register({
+  void plugin.register({
     id: "voice-call",
     name: "Voice Call",
     description: "test",

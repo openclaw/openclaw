@@ -1,8 +1,8 @@
 import type {
   ChannelThreadingContext,
   ChannelThreadingToolContext,
-} from "../../../src/channels/plugins/types.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
+} from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveSlackAccount, resolveSlackReplyToMode } from "./accounts.js";
 
 export function buildSlackThreadingToolContext(params: {
