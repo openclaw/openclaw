@@ -7,6 +7,8 @@ import { noteOpencodeProviderOverrides } from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
+import { emitDoctorNotes } from "./doctor/emit-notes.js";
+import { finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
 import { runMatrixDoctorSequence } from "./doctor/providers/matrix.js";
 import { runDoctorRepairSequence } from "./doctor/repair-sequencing.js";
 import {
@@ -35,7 +37,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let cfg: OpenClawConfig = baseCfg;
   let candidate = structuredClone(baseCfg);
   let pendingChanges = false;
-  let shouldWriteConfig = false;
   let fixHints: string[] = [];
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
 
@@ -80,12 +81,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     env: process.env,
     shouldRepair,
   });
-  for (const change of matrixSequence.changeNotes) {
-    note(change, "Doctor changes");
-  }
-  for (const warning of matrixSequence.warningNotes) {
-    note(warning, "Doctor warnings");
-  }
+  emitDoctorNotes({
+    note,
+    changeNotes: matrixSequence.changeNotes,
+    warningNotes: matrixSequence.warningNotes,
+  });
 
   const missingDefaultAccountBindingWarnings =
     collectMissingDefaultAccountBindingWarnings(candidate);
@@ -103,19 +103,19 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       doctorFixCommand,
     });
     ({ cfg, candidate, pendingChanges, fixHints } = repairSequence.state);
-    for (const change of repairSequence.changeNotes) {
-      note(change, "Doctor changes");
-    }
-    for (const warning of repairSequence.warningNotes) {
-      note(warning, "Doctor warnings");
-    }
+    emitDoctorNotes({
+      note,
+      changeNotes: repairSequence.changeNotes,
+      warningNotes: repairSequence.warningNotes,
+    });
   } else {
-    for (const warning of collectDoctorPreviewWarnings({
-      cfg: candidate,
-      doctorFixCommand,
-    })) {
-      note(warning, "Doctor warnings");
-    }
+    emitDoctorNotes({
+      note,
+      warningNotes: collectDoctorPreviewWarnings({
+        cfg: candidate,
+        doctorFixCommand,
+      }),
+    });
   }
 
   const mutableAllowlistHits = scanMutableAllowlistEntries(candidate);
@@ -134,29 +134,23 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note(lines, shouldRepair ? "Doctor changes" : "Unknown config keys");
   }
 
-  if (!shouldRepair && pendingChanges) {
-    const shouldApply = await params.confirm({
-      message: "Apply recommended config repairs now?",
-      initialValue: true,
-    });
-    if (shouldApply) {
-      cfg = candidate;
-      shouldWriteConfig = true;
-    } else if (fixHints.length > 0) {
-      note(fixHints.join("\n"), "Doctor");
-    }
-  }
-
-  if (shouldRepair && pendingChanges) {
-    shouldWriteConfig = true;
-  }
+  const finalized = await finalizeDoctorConfigFlow({
+    cfg,
+    candidate,
+    pendingChanges,
+    shouldRepair,
+    fixHints,
+    confirm: params.confirm,
+    note,
+  });
+  cfg = finalized.cfg;
 
   noteOpencodeProviderOverrides(cfg);
 
   return {
     cfg,
     path: snapshot.path ?? CONFIG_PATH,
-    shouldWriteConfig,
+    shouldWriteConfig: finalized.shouldWriteConfig,
     sourceConfigValid: snapshot.valid,
   };
 }
