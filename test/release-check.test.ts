@@ -53,6 +53,53 @@ describe("collectBundledExtensionManifestErrors", () => {
       "bundled extension 'broken' manifest invalid | openclaw.install.npmSpec must be a non-empty string",
     ]);
   });
+
+  it("flags invalid bundled extension minHostVersion metadata", () => {
+    expect(
+      collectBundledExtensionManifestErrors([
+        {
+          id: "broken",
+          packageJson: {
+            openclaw: {
+              install: { npmSpec: "@openclaw/broken", minHostVersion: "2026.3.14" },
+            },
+          },
+        },
+      ]),
+    ).toEqual([
+      "bundled extension 'broken' manifest invalid | openclaw.install.minHostVersion must use a semver floor in the form \">=x.y.z\"",
+    ]);
+  });
+
+  it("allows install metadata without npmSpec when only non-publish metadata is present", () => {
+    expect(
+      collectBundledExtensionManifestErrors([
+        {
+          id: "irc",
+          packageJson: {
+            openclaw: {
+              install: { minHostVersion: ">=2026.3.14" },
+            },
+          },
+        },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("flags non-object install metadata instead of throwing", () => {
+    expect(
+      collectBundledExtensionManifestErrors([
+        {
+          id: "broken",
+          packageJson: {
+            openclaw: {
+              install: 123,
+            },
+          },
+        },
+      ]),
+    ).toEqual(["bundled extension 'broken' manifest invalid | openclaw.install must be an object"]);
+  });
 });
 
 describe("collectForbiddenPackPaths", () => {
