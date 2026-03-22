@@ -1,5 +1,5 @@
 import type { z } from "zod";
-import { runPassiveAccountLifecycle } from "./channel-runtime.js";
+import { runPassiveAccountLifecycle } from "./channel-lifecycle.js";
 import { createLoggerBackedRuntime } from "./runtime.js";
 
 type PassiveChannelStatusSnapshot = {

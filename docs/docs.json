@@ -65,6 +65,18 @@
       "destination": "/install/raspberry-pi"
     },
     {
+      "source": "/plugins/building-extensions",
+      "destination": "/plugins/building-plugins"
+    },
+    {
+      "source": "/plugins/agent-tools",
+      "destination": "/plugins/building-plugins#registering-agent-tools"
+    },
+    {
+      "source": "/tools/capability-cookbook",
+      "destination": "/plugins/architecture"
+    },
+    {
       "source": "/brave-search",
       "destination": "/tools/brave-search"
     },
@@ -801,10 +813,6 @@
       "destination": "/install/azure"
     },
     {
-      "source": "/install/azure/azure",
-      "destination": "/install/azure"
-    },
-    {
       "source": "/platforms/fly",
       "destination": "/install/fly"
     },
@@ -952,6 +960,7 @@
                   "channels/telegram",
                   "channels/tlon",
                   "channels/twitch",
+                  "plugins/voice-call",
                   "channels/whatsapp",
                   "channels/zalo",
                   "channels/zalouser"
@@ -1000,7 +1009,11 @@
               },
               {
                 "group": "Multi-agent",
-                "pages": ["concepts/multi-agent", "concepts/presence"]
+                "pages": [
+                  "concepts/multi-agent",
+                  "concepts/presence",
+                  "concepts/delegate-architecture"
+                ]
               },
               {
                 "group": "Messages and delivery",
@@ -1014,82 +1027,40 @@
             ]
           },
           {
-            "tab": "Tools",
+            "tab": "Tools & Plugins",
             "groups": [
               {
                 "group": "Overview",
                 "pages": ["tools/index"]
               },
               {
-                "group": "Built-in tools",
+                "group": "Plugins",
                 "pages": [
-                  "tools/apply-patch",
-                  "tools/brave-search",
-                  "tools/btw",
-                  "tools/diffs",
-                  "tools/elevated",
-                  "tools/exec",
-                  "tools/exec-approvals",
-                  "tools/firecrawl",
-                  "tools/tavily",
-                  "tools/llm-task",
-                  "tools/lobster",
-                  "tools/loop-detection",
-                  "tools/pdf",
-                  "tools/perplexity-search",
-                  "tools/reactions",
-                  "tools/thinking",
-                  "tools/web"
-                ]
-              },
-              {
-                "group": "Browser",
-                "pages": [
-                  "tools/browser",
-                  "tools/browser-login",
-                  "tools/browser-linux-troubleshooting",
-                  "tools/browser-wsl2-windows-remote-cdp-troubleshooting"
-                ]
-              },
-              {
-                "group": "Agent coordination",
-                "pages": [
-                  "tools/agent-send",
-                  "tools/subagents",
-                  "tools/acp-agents",
-                  "tools/multi-agent-sandbox-tools"
+                  "tools/plugin",
+                  "plugins/building-plugins",
+                  "plugins/community",
+                  "plugins/bundles",
+                  "plugins/manifest",
+                  "plugins/sdk-migration",
+                  "plugins/architecture"
                 ]
               },
               {
                 "group": "Skills",
                 "pages": [
-                  "tools/creating-skills",
-                  "tools/slash-commands",
                   "tools/skills",
+                  "tools/creating-skills",
                   "tools/skills-config",
+                  "tools/slash-commands",
                   "tools/clawhub",
-                  "tools/plugin",
                   "prose"
-                ]
-              },
-              {
-                "group": "Extensions",
-                "pages": [
-                  "plugins/building-extensions",
-                  "plugins/architecture",
-                  "plugins/community",
-                  "plugins/bundles",
-                  "plugins/voice-call",
-                  "plugins/zalouser",
-                  "plugins/manifest",
-                  "plugins/agent-tools",
-                  "tools/capability-cookbook"
                 ]
               },
               {
                 "group": "Automation",
                 "pages": [
                   "automation/hooks",
+                  "automation/standing-orders",
                   "automation/cron-jobs",
                   "automation/cron-vs-heartbeat",
                   "automation/troubleshooting",
@@ -1100,18 +1071,48 @@
                 ]
               },
               {
-                "group": "Media and devices",
+                "group": "Tools",
                 "pages": [
-                  "nodes/index",
-                  "nodes/troubleshooting",
-                  "nodes/media-understanding",
-                  "nodes/images",
-                  "nodes/audio",
-                  "nodes/camera",
-                  "nodes/talk",
-                  "nodes/voicewake",
-                  "nodes/location-command",
-                  "tools/tts"
+                  "tools/apply-patch",
+                  {
+                    "group": "Browser",
+                    "pages": [
+                      "tools/browser",
+                      "tools/browser-login",
+                      "tools/browser-linux-troubleshooting",
+                      "tools/browser-wsl2-windows-remote-cdp-troubleshooting"
+                    ]
+                  },
+                  "tools/btw",
+                  "tools/diffs",
+                  "tools/elevated",
+                  "tools/exec",
+                  "tools/exec-approvals",
+                  "tools/llm-task",
+                  "tools/lobster",
+                  "tools/loop-detection",
+                  "tools/pdf",
+                  "tools/reactions",
+                  "tools/thinking",
+                  {
+                    "group": "Web and search",
+                    "pages": [
+                      "tools/web",
+                      "tools/brave-search",
+                      "tools/firecrawl",
+                      "tools/perplexity-search",
+                      "tools/tavily"
+                    ]
+                  }
+                ]
+              },
+              {
+                "group": "Agent coordination",
+                "pages": [
+                  "tools/agent-send",
+                  "tools/subagents",
+                  "tools/acp-agents",
+                  "tools/multi-agent-sandbox-tools"
                 ]
               }
             ]
@@ -1279,6 +1280,21 @@
                   "security/formal-verification",
                   "security/THREAT-MODEL-ATLAS",
                   "security/CONTRIBUTING-THREAT-MODEL"
+                ]
+              },
+              {
+                "group": "Nodes and devices",
+                "pages": [
+                  "nodes/index",
+                  "nodes/troubleshooting",
+                  "nodes/media-understanding",
+                  "nodes/images",
+                  "nodes/audio",
+                  "nodes/camera",
+                  "nodes/talk",
+                  "nodes/voicewake",
+                  "nodes/location-command",
+                  "tools/tts"
                 ]
               },
               {

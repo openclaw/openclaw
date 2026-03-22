@@ -248,7 +248,7 @@
 }
 
 .chat-attachment__remove:hover {
-  background: rgba(220, 38, 38, 0.9);
+  background: color-mix(in srgb, var(--danger) 90%, black);
 }
 
 .chat-attachment__remove svg {

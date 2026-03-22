@@ -140,10 +140,6 @@
         "reason": "One-shot cron service coverage retained a top shared unit-fast heap spike in the March 19, 2026 Linux Node 22 OOM lane."
       },
       {
-        "file": "src/cron/isolated-agent/run.sandbox-config-preserved.test.ts",
-        "reason": "Isolated-agent sandbox config coverage retained a large shared unit-fast heap spike on Linux CI."
-      },
-      {
         "file": "src/cron/isolated-agent.direct-delivery-core-channels.test.ts",
         "reason": "Direct-delivery isolated-agent coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 OOM lane."
       },
@@ -318,6 +314,14 @@
         "reason": "Terminates cleanly under threads, but not process forks on this host."
       },
       {
+        "file": "src/plugin-sdk/subpaths.test.ts",
+        "reason": "Measured ~23% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/plugins/install.test.ts",
+        "reason": "Measured ~18% faster under threads than forks on this host while keeping the file green."
+      },
+      {
         "file": "src/infra/outbound/deliver.test.ts",
         "reason": "Terminates cleanly under threads, but not process forks on this host."
       },
@@ -332,6 +336,14 @@
       {
         "file": "src/infra/outbound/message-action-runner.poll.test.ts",
         "reason": "Terminates cleanly under threads, but not process forks on this host."
+      },
+      {
+        "file": "src/infra/outbound/message-action-runner.context.test.ts",
+        "reason": "Terminates cleanly under threads, but not process forks on this host."
+      },
+      {
+        "file": "src/infra/provider-usage.test.ts",
+        "reason": "Measured ~17% faster under threads than forks on this host while keeping the file green."
       },
       {
         "file": "src/tts/tts.test.ts",

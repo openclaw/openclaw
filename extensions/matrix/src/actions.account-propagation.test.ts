@@ -1,5 +1,5 @@
-import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/matrix";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelMessageActionContext } from "../runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
 const mocks = vi.hoisted(() => ({

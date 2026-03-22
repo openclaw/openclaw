@@ -1,16 +1,17 @@
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import {
-  attachChannelToResult,
-  createAttachedChannelResultAdapter,
   createPairingPrefixStripper,
   createTextPairingAdapter,
-  resolveOutboundSendDep,
-} from "openclaw/plugin-sdk/channel-runtime";
-import { attachChannelToResults } from "openclaw/plugin-sdk/channel-send-result";
+} from "openclaw/plugin-sdk/channel-pairing";
+import {
+  attachChannelToResult,
+  attachChannelToResults,
+  createAttachedChannelResultAdapter,
+} from "openclaw/plugin-sdk/channel-send-result";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { buildOutboundBaseSessionKey } from "openclaw/plugin-sdk/core";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
-import { type RoutePeer } from "openclaw/plugin-sdk/routing";
+import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js";
 import { markdownToSignalTextChunks } from "./format.js";
 import {

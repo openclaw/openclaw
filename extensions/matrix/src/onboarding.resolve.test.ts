@@ -1,5 +1,8 @@
-import type { RuntimeEnv, WizardPrompter } from "openclaw/plugin-sdk/matrix";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createNonExitingTypedRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import type { RuntimeEnv, WizardPrompter } from "../runtime-api.js";
+import { matrixOnboardingAdapter } from "./onboarding.js";
+import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
 const resolveMatrixTargetsMock = vi.hoisted(() =>
@@ -10,20 +13,9 @@ vi.mock("./resolve-targets.js", () => ({
   resolveMatrixTargets: resolveMatrixTargetsMock,
 }));
 
-import { matrixOnboardingAdapter } from "./onboarding.js";
-import { setMatrixRuntime } from "./runtime.js";
-
 describe("matrix onboarding account-scoped resolution", () => {
   beforeEach(() => {
-    setMatrixRuntime({
-      state: {
-        resolveStateDir: (_env: NodeJS.ProcessEnv, homeDir?: () => string) =>
-          (homeDir ?? (() => "/tmp"))(),
-      },
-      config: {
-        loadConfig: () => ({}),
-      },
-    } as never);
+    installMatrixTestRuntime();
     resolveMatrixTargetsMock.mockClear();
   });
 
@@ -91,7 +83,7 @@ describe("matrix onboarding account-scoped resolution", () => {
           },
         },
       } as CoreConfig,
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as unknown as RuntimeEnv,
+      runtime: createNonExitingTypedRuntimeEnv<RuntimeEnv>(),
       prompter,
       options: undefined,
       accountOverrides: {},
