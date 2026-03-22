@@ -3,7 +3,10 @@ import {
   createAccountScopedAllowlistNameResolver,
   createFlatAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
-import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
+import {
+  adaptScopedAccountAccessor,
+  createScopedDmSecurityResolver,
+} from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   createPairingPrefixStripper,
   createTextPairingAdapter,
@@ -389,8 +392,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     resolveToolPolicy: resolveSlackGroupToolPolicy,
   },
   threading: {
-    resolveReplyToMode: createScopedAccountReplyToModeResolver({
-      resolveAccount: (cfg, accountId) => resolveSlackAccount({ cfg, accountId }),
+    resolveReplyToMode: createScopedAccountReplyToModeResolver<ResolvedSlackAccount>({
+      resolveAccount: adaptScopedAccountAccessor(resolveSlackAccount),
       resolveReplyToMode: (account, chatType) => resolveSlackReplyToMode(account, chatType),
     }),
     allowExplicitReplyTagsWhenOff: false,

@@ -1,4 +1,5 @@
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
+import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import {
@@ -29,8 +30,8 @@ export const discordSetupWizard = createDiscordSetupWizardProxy(
 export const discordConfigAdapter = createScopedChannelConfigAdapter<ResolvedDiscordAccount>({
   sectionKey: DISCORD_CHANNEL,
   listAccountIds: listDiscordAccountIds,
-  resolveAccount: (cfg, accountId) => resolveDiscordAccount({ cfg, accountId }),
-  inspectAccount: (cfg, accountId) => inspectDiscordAccount({ cfg, accountId }),
+  resolveAccount: adaptScopedAccountAccessor(resolveDiscordAccount),
+  inspectAccount: adaptScopedAccountAccessor(inspectDiscordAccount),
   defaultAccountId: resolveDefaultDiscordAccountId,
   clearBaseFields: ["token", "name"],
   resolveAllowFrom: (account: ResolvedDiscordAccount) => account.config.dm?.allowFrom,
