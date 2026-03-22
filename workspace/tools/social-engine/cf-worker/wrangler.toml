@@ -1,0 +1,7 @@
+name = "threads-patrol"
+main = "src/index.ts"
+compatibility_date = "2026-03-19"
+compatibility_flags = ["nodejs_compat"]
+
+[browser]
+binding = "BROWSER"

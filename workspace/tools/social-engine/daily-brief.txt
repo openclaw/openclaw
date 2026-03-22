@@ -1,0 +1,39 @@
+Content Brain Daily Brief
+2026-03-22 12:26 TW
+----------------------------------------
+
+Pipeline: 497 entries
+  posted: 497
+
+Top 5 candidates:
+  1. [geopolitics] 71pts — 一架無人機兩萬美元。
+攔截它的飛彈八百五十四萬。
+
+成本比 1:427。
+
+你花一塊，對方花四百二十
+  2. [geopolitics] 68pts — 如果你在台灣跑 Telegram Bot，一定遇過 API timeout。
+
+原因：HiNet →
+  3. [geopolitics] 68pts — 台海已經輸了
+
+不是還沒打。是不用打了。
+
+美國國債 38 兆。
+2025 年光利息 9,700 億
+  4. [geopolitics] 68pts — 「AI 並不是在幫助我們…
+它是在慢慢取代人類，
+但第一批被取代的，不是工作，
+而是我們『投資外在的
+  5. [geopolitics] 66pts — 真正的戰爭勝敗，從來不是由武器或士兵的多寡與強弱所決定，而是誰能成功地強迫對方進入自己設定的「戰略劇
+
+Trend analysis (100 posts):
+  + geopolitics: avg 417 (+2759%)
+  + other: avg 7 (+293%)
+  = personal: avg 0 (+0%)
+  - local: avg 4 (-50%)
+  - ai: avg 11 (-86%)
+  - thought: avg 0 (-100%)
+
+Next optimal post time: 2026-03-22 20:00 TW
+Best hours (TW): 20:00(0.98), 21:00(0.48), 07:00(0.47), 12:00(0.44), 13:00(0.44)

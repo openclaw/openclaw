@@ -1,0 +1,81 @@
+# world_facts.yaml — 絕對數字 fact-check 資料庫
+# thinker-news AI 可用此校驗輸出
+# 來源標注必填。過期數字標 ~approx
+# 更新頻率：每週或重大事件後
+
+taiwan:
+  population: 23_400_000 # 2024 內政部
+  gdp_usd_billion: 790 # 2024 IMF ~approx
+  military:
+    active_personnel: 188_000 # 2024 國防報告
+    reserve: 2_300_000 # 含後備動員
+    defense_budget_usd_billion: 19.2 # 2025 預算案
+    defense_pct_gdp: 2.5 # 2025 目標
+  energy:
+    lng_reserve_days: 11 # 2024 台灣中油，安全存量目標 14 天
+    electricity_import_pct: 0 # 島嶼，無進口電力
+    nuclear_pct: 0 # 2025 核三停機後
+    renewable_pct: 10 # 2024 ~approx
+  semiconductors:
+    tsmc_global_foundry_share_pct: 62 # 2024 TrendForce
+    tsmc_advanced_node_share_pct: 92 # 7nm 以下
+    tsmc_revenue_usd_billion: 87.1 # 2024 年報
+
+china:
+  population: 1_410_000_000 # 2024 NBS
+  military:
+    active_personnel: 2_035_000 # 2024 IISS
+    defense_budget_usd_billion: 296 # 2025 官方（實際估計 460+）
+    aircraft_carriers: 3 # 遼寧/山東/福建
+  taiwan_strait:
+    width_km: 130 # 最窄處
+    daily_ship_traffic: 240 # ~approx 商船
+    pla_aircraft_incursions_2024: 1709 # 國防部統計
+    pla_naval_vessels_around_taiwan_2024: 900 # ~approx 國防部
+  south_china_sea:
+    antelope_reef:
+      status: "active_reclamation_unprecedented_scale" # CSIS 2026-03-19
+      significance: "可能成為南海最大人工島。軍事基建擴張直接信號"
+      taiwan_relevance: "南海控制力越強，封鎖台海能力越大"
+      source: "CSIS 2026-03-19"
+    artificial_islands_total: 7 # 南沙群島 7 座人工島
+    military_installations: ["airstrip", "radar", "missile_battery", "naval_port"]
+
+usa:
+  population: 335_000_000
+  military:
+    defense_budget_usd_billion: 886 # FY2025
+    aircraft_carriers: 11
+  ai_defense:
+    pentagon_ai_budget_usd_billion: 1.8 # FY2025 ~approx
+    project_maven_contractor: palantir # 2024 確認
+    anthropic_pentagon_status: "negotiations_halted_by_trump_2026_03" # TechCrunch 2026-03-20
+
+global:
+  chip_market:
+    total_usd_billion: 620 # 2024 SIA
+    taiwan_share_pct: 68 # 先進製程
+  trade:
+    taiwan_strait_trade_value_usd_trillion: 5.3 # 每年經過台海的貿易額 ~approx
+  ev:
+    china_ev_sales_million: 10.3 # 2024 中汽協
+    global_ev_sales_million: 17.1 # 2024 IEA
+
+# 核電重啟（2026-03 時事）
+taiwan_nuclear:
+  plants:
+    nuclear_1:
+      status: decommissioned
+      location: 新北石門
+    nuclear_2:
+      status: "restart_under_review" # 2026-03 行政院要求核安會審查
+      location: 新北萬里
+      shutdown_date: "2025-03"
+    nuclear_3:
+      status: "restart_under_review"
+      location: 屏東恆春
+      shutdown_date: "2025-05"
+    nuclear_4:
+      status: "sealed_not_operational"
+      location: 新北貢寮
+  policy_shift: "非核→核綠並行" # 2026-03 賴政府

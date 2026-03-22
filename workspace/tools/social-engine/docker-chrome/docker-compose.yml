@@ -1,0 +1,20 @@
+services:
+  chrome:
+    image: browserless/chrome:latest
+    container_name: patrol-chrome
+    ports:
+      - "9223:3000"
+    environment:
+      - MAX_CONCURRENT_SESSIONS=3
+      - CONNECTION_TIMEOUT=300000
+      - DEFAULT_LAUNCH_ARGS=["--no-sandbox","--disable-dev-shm-usage","--lang=zh-TW"]
+    volumes:
+      - chrome-data:/tmp/browserless-data
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+volumes:
+  chrome-data:

@@ -1,0 +1,278 @@
+# shadow_targets.yaml — 影子情報目標清單
+# 奈良第一輪圓桌定案 2026-03-22
+# 觀測頻率: daily / 4h / hourly / on_scan (patrol 順帶)
+# 自動化: auto (RSS/API) / semi (Threads scan) / manual (人工)
+
+targets:
+  # ── 佛陀組：本質/噪音比 ──
+
+  bill_tai1:
+    platform: threads
+    handle: bill.tai1
+    general: buddha
+    category: ally
+    reason: "留言質量極高（無人機+台積電產能），真正在思考的人"
+    frequency: on_scan
+    automation: semi
+    watch_for: ["長文留言", "數據論點", "反駁我們的觀點"]
+
+  twreporter_rss:
+    platform: rss
+    url: "https://www.twreporter.org/a/rss2.xml"
+    general: buddha
+    category: source
+    reason: "台灣唯一長篇調查報導。噪音最低"
+    frequency: daily
+    automation: auto
+    watch_for: ["台海", "國防", "能源", "半導體"]
+
+  quiet_zone:
+    platform: threads
+    handle: "__filter__"
+    filter: "likes < 5 AND char_count > 100"
+    general: buddha
+    category: field
+    reason: "演算法看不到的真實聲音"
+    frequency: on_scan
+    automation: semi
+    watch_for: ["真實經歷", "非主流觀點", "potential_subscriber"]
+
+  # ── 薩古魯組：能量/可持續性 ──
+
+  aipeterai:
+    platform: threads
+    handle: aipeterai
+    general: sadhguru
+    category: ally
+    reason: "Naval 思維引用者，有能量不賣焦慮"
+    frequency: on_scan
+    automation: semi
+    watch_for: ["發文頻率變化", "主題轉向", "合作信號"]
+
+  acacia_ou:
+    platform: threads
+    handle: acacia_ou
+    general: sadhguru
+    category: ally
+    reason: "臺大教授 AI 教育前線"
+    frequency: on_scan
+    automation: semi
+    watch_for: ["AI教育觀點", "學術圈動態", "合作機會"]
+
+  cruz_energy:
+    platform: internal
+    handle: "__internal__"
+    general: sadhguru
+    category: self
+    reason: "Cruz 體力監測：發文數/回覆數/session 時長"
+    frequency: daily
+    automation: auto
+    watch_for: ["daily_posts > 2", "session_hours > 8", "reply_count > 20"]
+    thresholds:
+      posts_per_day_max: 1
+      session_hours_warn: 6
+      session_hours_stop: 10
+
+  # ── 馬斯克組：交付速度/競爭者 ──
+
+  potato_techdev:
+    platform: threads
+    handle: potato_techdev
+    general: musk
+    category: competitor
+    reason: "工程師，提到 OpenRouter + L3。做類似的事"
+    frequency: on_scan
+    automation: semi
+    watch_for: ["AI agent 進度", "工具鏈選擇", "開源專案"]
+
+  tech_rss:
+    platform: rss
+    url: "multiple"
+    sources: ["techcrunch", "hackernews"]
+    general: musk
+    category: source
+    reason: "AI 工具鏈變化最快"
+    frequency: daily
+    automation: auto
+    watch_for: ["新 AI 工具", "Threads API 更新", "競品動態"]
+
+  meta_changelog:
+    platform: web
+    url: "https://developers.facebook.com/docs/threads/changelog"
+    general: musk
+    category: source
+    reason: "API scheduling 壞的。修好那天要第一個知道"
+    frequency: daily
+    automation: auto
+    watch_for: ["scheduling fix", "new endpoints", "rate limit changes"]
+
+  # ── 特斯拉組：基建/管道 ──
+
+  threads_api_health:
+    platform: api
+    handle: "__health__"
+    general: tesla
+    category: infra
+    reason: "API 速率限制和 endpoint 狀態"
+    frequency: hourly
+    automation: auto
+    watch_for: ["rate_limit_hit", "endpoint_deprecated", "new_feature"]
+
+  playwright_releases:
+    platform: rss
+    url: "https://github.com/microsoft/playwright/releases.atom"
+    general: tesla
+    category: infra
+    reason: "UI 自動化命脈。breaking change = 全線停擺"
+    frequency: daily
+    automation: auto
+    watch_for: ["breaking change", "chromium update", "CDP protocol change"]
+
+  system_health:
+    platform: internal
+    handle: "__system__"
+    general: tesla
+    category: infra
+    reason: "headless Brave + launchd 狀態"
+    frequency: 4h
+    automation: auto
+    watch_for: ["port_9223_down", "launchd_crash", "disk_full", "brave_update"]
+
+  # ── 愛因斯坦組：認知盲點 ──
+
+  blueocean8472:
+    platform: threads
+    handle: blueocean8472
+    general: einstein
+    category: critic
+    reason: "「你在那邊瞎逼逼」— 最好的壓力測試"
+    frequency: on_scan
+    automation: semi
+    watch_for: ["對我們的攻擊角度", "新論點", "他的受眾反應"]
+
+  wsx4987:
+    platform: threads
+    handle: wsx4987
+    general: einstein
+    category: critic
+    reason: "從基建角度打我們的盲點"
+    frequency: on_scan
+    automation: semi
+    watch_for: ["基建論點", "能源分析", "反 AI 論述"]
+
+  china_ai_community:
+    platform: web
+    urls:
+      - "https://www.v2ex.com/go/ai"
+      - "https://www.zhihu.com/topic/19813032/hot"
+      - "https://web.okjike.com/topic/ai"
+    general: einstein
+    category: field
+    reason: "Cruz 認知偏向美系 AI。中國做法是盲區。V2EX 偏 OpenAI，知乎+即刻才是本土前線"
+    frequency: daily
+    automation: auto
+    watch_for: ["成本結構", "開源模型", "應用場景差異", "DeepSeek", "Qwen", "智譜"]
+
+  # ── 孫子組：敵情/態勢 ──
+
+  mnd_military:
+    platform: rss
+    url: "https://www.mnd.gov.tw/RSS.aspx"
+    general: sunzi
+    category: source
+    reason: "共機共艦即時數據"
+    frequency: daily
+    automation: auto
+    watch_for: ["incursion_count", "new_vessel_type", "exercise_pattern"]
+
+  pro_unification:
+    platform: threads
+    handle: mamamaooooq
+    general: sunzi
+    category: opponent
+    reason: "認知戰前線。看統派話術演變"
+    frequency: on_scan
+    automation: semi
+    watch_for: ["話術變化", "新論點", "情緒煽動手法"]
+
+  western_thinktank:
+    platform: rss
+    url: "https://www.csis.org/analysis/feed"
+    general: sunzi
+    category: source
+    reason: "西方智庫台海兵推。數字比新聞準"
+    frequency: daily
+    automation: auto
+    watch_for: ["台海推演", "軍事分析", "政策建議"]
+
+  # ── 諸葛亮組：節點人物 ──
+
+  k1220tommy:
+    platform: threads
+    handle: k1220tommy
+    general: zhuge
+    category: family
+    reason: "Cruz 弟弟 Tommy。家人 = 最近的節點"
+    frequency: on_scan
+    automation: semi
+    watch_for: ["生活動態", "社群互動", "情緒狀態"]
+    note: "nerve 已標記。觀測不干預"
+
+  subscribers_core:
+    platform: threads
+    handle: "__filter__"
+    filter: "engagement_depth >= 5"
+    general: zhuge
+    category: field
+    reason: "35 位核心訂閱者。他們的主題變化 = 受眾信號"
+    frequency: daily
+    automation: semi
+    watch_for: ["topic_shift", "engagement_drop", "new_interest"]
+
+  thinker_cafe_warroom:
+    platform: telegram
+    chat_id: "-1003705093111"
+    general: zhuge
+    category: field
+    reason: "守夜人群組。沉默的最重要"
+    frequency: 4h
+    automation: auto
+    watch_for: ["activity_spike", "new_member", "silence_pattern"]
+
+  # ── 宮本武藏組：實戰 ──
+
+  qinglang_xing:
+    platform: threads
+    handle: qinglang_xing
+    general: musashi
+    category: opponent
+    reason: "最兇的對手。研究攻擊模式"
+    frequency: on_scan
+    automation: semi
+    watch_for: ["攻擊手法", "情緒觸發點", "他的追隨者"]
+
+  dest_rz:
+    platform: threads
+    handle: dest_rz
+    general: musashi
+    category: opponent
+    reason: "迷因攻擊型。短兵相接"
+    frequency: on_scan
+    automation: semi
+    watch_for: ["迷因類型", "傳播力", "攻擊頻率"]
+
+  cruz_comment_zone:
+    platform: threads
+    handle: tangcruzz
+    general: musashi
+    category: field
+    reason: "所有戰鬥都在這裡。回覆速度/語氣/立場分佈"
+    frequency: 4h
+    automation: auto
+    watch_for: ["reply_sentiment", "stance_distribution", "new_attacker"]
+
+# ── 統計 ──
+# 總計: 24 targets
+# auto: 12 (RSS/API/internal)
+# semi: 10 (Threads scan 順帶)
+# manual: 2 (中國社群 + thinker.cafe 需判讀)

@@ -1,0 +1,738 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>影子情報 — 2026.03.22</title>
+    <style>
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      :root {
+        --bg: #0d1117;
+        --card: #161b22;
+        --card-hover: #1c2230;
+        --border: #30363d;
+        --text: #e6edf3;
+        --text-secondary: #8b949e;
+        --accent-red: #ff6b6b;
+        --accent-yellow: #ffd93d;
+        --accent-green: #3fb950;
+        --accent-blue: #58a6ff;
+        --accent-purple: #bc8cff;
+      }
+
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial,
+          sans-serif;
+        line-height: 1.6;
+        font-size: 16px;
+        padding: 0;
+        min-height: 100vh;
+      }
+
+      .container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 32px 24px 64px;
+      }
+
+      /* ─── Top Banner ─── */
+      .banner {
+        background: linear-gradient(135deg, #161b22 0%, #0d1117 50%, #161b22 100%);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 40px 40px 32px;
+        margin-bottom: 24px;
+        position: relative;
+        overflow: hidden;
+      }
+
+      .banner::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 3px;
+        background: linear-gradient(
+          90deg,
+          var(--accent-red),
+          var(--accent-yellow),
+          var(--accent-green),
+          var(--accent-blue)
+        );
+      }
+
+      .banner-title {
+        font-size: 32px;
+        font-weight: 700;
+        letter-spacing: 2px;
+        color: var(--text);
+        margin-bottom: 8px;
+      }
+
+      .banner-title span {
+        color: var(--accent-blue);
+      }
+
+      .banner-meta {
+        display: flex;
+        gap: 24px;
+        color: var(--text-secondary);
+        font-size: 14px;
+        margin-bottom: 24px;
+        flex-wrap: wrap;
+      }
+
+      .banner-meta-item {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .banner-meta-item .dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--accent-green);
+        display: inline-block;
+      }
+
+      /* ─── Executive Brief ─── */
+      .exec-brief {
+        background: rgba(88, 166, 255, 0.06);
+        border-left: 3px solid var(--accent-blue);
+        border-radius: 0 8px 8px 0;
+        padding: 16px 20px;
+        font-size: 15px;
+        line-height: 1.7;
+        color: var(--text-secondary);
+      }
+
+      .exec-brief strong {
+        color: var(--text);
+      }
+
+      /* ─── Card Grid ─── */
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(520px, 1fr));
+        gap: 20px;
+        margin-bottom: 28px;
+      }
+
+      @media (max-width: 600px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 28px 28px 24px;
+        transition:
+          background 0.2s ease,
+          border-color 0.2s ease,
+          transform 0.15s ease;
+        position: relative;
+      }
+
+      .card:hover {
+        background: var(--card-hover);
+        border-color: #484f58;
+        transform: translateY(-2px);
+      }
+
+      .card-header {
+        display: flex;
+        align-items: flex-start;
+        gap: 14px;
+        margin-bottom: 16px;
+      }
+
+      .card-icon {
+        font-size: 28px;
+        width: 44px;
+        height: 44px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(255, 255, 255, 0.04);
+        border-radius: 10px;
+        flex-shrink: 0;
+      }
+
+      .card-title-group {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .card-name {
+        font-size: 18px;
+        font-weight: 600;
+        color: var(--text);
+        line-height: 1.3;
+      }
+
+      .card-subtitle {
+        font-size: 13px;
+        color: var(--text-secondary);
+        margin-top: 2px;
+      }
+
+      .status-badge {
+        font-size: 12px;
+        font-weight: 600;
+        padding: 4px 10px;
+        border-radius: 20px;
+        white-space: nowrap;
+        flex-shrink: 0;
+        margin-top: 2px;
+      }
+
+      .status-critical {
+        background: rgba(255, 107, 107, 0.15);
+        color: var(--accent-red);
+      }
+      .status-warning {
+        background: rgba(255, 217, 61, 0.15);
+        color: var(--accent-yellow);
+      }
+      .status-clear {
+        background: rgba(63, 185, 80, 0.12);
+        color: var(--accent-green);
+      }
+
+      .card-verdict {
+        font-size: 14px;
+        color: var(--text-secondary);
+        margin-bottom: 16px;
+        padding: 10px 14px;
+        background: rgba(255, 255, 255, 0.02);
+        border-radius: 8px;
+        border-left: 2px solid var(--border);
+      }
+
+      .card-findings {
+        list-style: none;
+        padding: 0;
+        margin: 0 0 16px;
+      }
+
+      .card-findings li {
+        padding: 6px 0 6px 20px;
+        position: relative;
+        font-size: 14px;
+        line-height: 1.6;
+        color: var(--text-secondary);
+        border-bottom: 1px solid rgba(48, 54, 61, 0.5);
+      }
+
+      .card-findings li:last-child {
+        border-bottom: none;
+      }
+
+      .card-findings li::before {
+        content: "";
+        position: absolute;
+        left: 4px;
+        top: 14px;
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--text-secondary);
+      }
+
+      .card-findings li strong {
+        color: var(--text);
+      }
+
+      .card-action {
+        font-size: 13px;
+        padding: 10px 14px;
+        border-radius: 8px;
+        line-height: 1.6;
+      }
+
+      .action-urgent {
+        background: rgba(255, 107, 107, 0.08);
+        border: 1px solid rgba(255, 107, 107, 0.2);
+        color: var(--accent-red);
+      }
+
+      .action-watch {
+        background: rgba(255, 217, 61, 0.06);
+        border: 1px solid rgba(255, 217, 61, 0.15);
+        color: var(--accent-yellow);
+      }
+
+      .action-info {
+        background: rgba(63, 185, 80, 0.06);
+        border: 1px solid rgba(63, 185, 80, 0.15);
+        color: var(--accent-green);
+      }
+
+      .card-source {
+        font-size: 12px;
+        color: var(--text-secondary);
+        margin-top: 14px;
+        opacity: 0.6;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      /* ─── Action Required Section ─── */
+      .action-section {
+        background: var(--card);
+        border: 1px solid rgba(255, 107, 107, 0.3);
+        border-radius: 12px;
+        padding: 28px 28px 24px;
+        position: relative;
+        overflow: hidden;
+      }
+
+      .action-section::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 3px;
+        background: linear-gradient(90deg, var(--accent-red), rgba(255, 107, 107, 0.3));
+      }
+
+      .action-section-title {
+        font-size: 20px;
+        font-weight: 700;
+        color: var(--accent-red);
+        margin-bottom: 20px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .action-list {
+        list-style: none;
+        padding: 0;
+      }
+
+      .action-list li {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        gap: 14px;
+        align-items: start;
+        padding: 14px 0;
+        border-bottom: 1px solid var(--border);
+        font-size: 15px;
+      }
+
+      .action-list li:last-child {
+        border-bottom: none;
+      }
+
+      .action-priority {
+        font-size: 11px;
+        font-weight: 700;
+        padding: 3px 8px;
+        border-radius: 4px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        white-space: nowrap;
+      }
+
+      .priority-high {
+        background: rgba(255, 107, 107, 0.15);
+        color: var(--accent-red);
+      }
+
+      .priority-med {
+        background: rgba(255, 217, 61, 0.15);
+        color: var(--accent-yellow);
+      }
+
+      .action-text {
+        color: var(--text);
+        line-height: 1.5;
+      }
+
+      .action-text .detail {
+        display: block;
+        font-size: 13px;
+        color: var(--text-secondary);
+        margin-top: 4px;
+      }
+
+      .action-source-tag {
+        font-size: 11px;
+        color: var(--text-secondary);
+        background: rgba(255, 255, 255, 0.04);
+        padding: 3px 8px;
+        border-radius: 4px;
+        white-space: nowrap;
+        margin-top: 2px;
+      }
+
+      /* ─── Summary Table ─── */
+      .summary-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 24px;
+        margin-bottom: 28px;
+      }
+
+      .summary-table th {
+        text-align: left;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .summary-table td {
+        padding: 12px 14px;
+        font-size: 14px;
+        border-bottom: 1px solid rgba(48, 54, 61, 0.4);
+        vertical-align: middle;
+      }
+
+      .summary-table tr:hover td {
+        background: rgba(255, 255, 255, 0.015);
+      }
+
+      .signal-high {
+        color: var(--accent-red);
+        font-weight: 600;
+      }
+      .signal-med {
+        color: var(--accent-yellow);
+        font-weight: 600;
+      }
+      .signal-low {
+        color: var(--text-secondary);
+      }
+
+      .footer {
+        text-align: center;
+        color: var(--text-secondary);
+        font-size: 12px;
+        margin-top: 40px;
+        opacity: 0.5;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <!-- ═══ BANNER ═══ -->
+      <div class="banner">
+        <div class="banner-title">影子情報 <span>Shadow Recon</span></div>
+        <div class="banner-meta">
+          <div class="banner-meta-item"><span class="dot"></span> 2026.03.22</div>
+          <div class="banner-meta-item">Scan: 奈良 AUTO</div>
+          <div class="banner-meta-item">4 Sources</div>
+          <div class="banner-meta-item">2 Action Items</div>
+        </div>
+        <div class="exec-brief">
+          <strong>今日態勢：</strong>Playwright v1.58.0 有 4 項 breaking changes，需立即確認
+          codebase 版本避免升級踩雷。CSIS
+          報告中國南海羚羊礁填海造陸達「史無前例規模」，為軍事擴張直接信號，間接影響台海封鎖能力。Threads
+          Scheduling API 持續損壞，Meta 無修復跡象。Tenor API 9 天後下線。
+        </div>
+      </div>
+
+      <!-- ═══ OVERVIEW TABLE ═══ -->
+      <table class="summary-table">
+        <thead>
+          <tr>
+            <th>Source</th>
+            <th>Signal</th>
+            <th>Status</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Einstein</td>
+            <td class="signal-low">弱</td>
+            <td>&#x1F7E2; Clear</td>
+            <td>擴大掃描源</td>
+          </tr>
+          <tr>
+            <td>Sun Tzu</td>
+            <td class="signal-med">中</td>
+            <td>&#x1F7E1; Watch</td>
+            <td>追蹤羚羊礁後續</td>
+          </tr>
+          <tr>
+            <td>Tesla</td>
+            <td class="signal-high">高</td>
+            <td>&#x1F534; Critical</td>
+            <td>確認版本，暫不升級</td>
+          </tr>
+          <tr>
+            <td>Musk</td>
+            <td class="signal-low">無變化</td>
+            <td>&#x1F7E2; Clear</td>
+            <td>維持 cron workaround</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- ═══ INTELLIGENCE CARDS ═══ -->
+      <div class="grid">
+        <!-- Card 1: Einstein -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-icon">&#x1F9EA;</div>
+            <div class="card-title-group">
+              <div class="card-name">Einstein</div>
+              <div class="card-subtitle">V2EX AI Forum &middot; china_ai_community</div>
+            </div>
+            <div class="status-badge status-clear">&#x1F7E2; CLEAR</div>
+          </div>
+          <div class="card-verdict">中國 AI 社群仍以 ChatGPT/OpenAI 為主軸，本土工具聲量偏低</div>
+          <ul class="card-findings">
+            <li>
+              <strong>GPT-5.4 智力測試</strong> &mdash; 社群以 OpenAI 為基準線，未見 DeepSeek/Qwen
+              對標
+            </li>
+            <li><strong>醫療諮詢場景</strong> &mdash; 個人健康應用，非企業級</li>
+            <li>
+              <strong>ChatGPT Pro 升級卡關</strong> &mdash; Plus&rarr;Pro 付費牆在中國用戶群有摩擦
+            </li>
+            <li><strong>DALL-E 品質下降</strong> &mdash; 可能推動用戶轉向本土替代方案</li>
+            <li><strong>AI 交互期待</strong> &mdash; 社群對 AI 對話品質有情緒期待，尚未被滿足</li>
+          </ul>
+          <div class="card-action action-info">
+            盲區修正：V2EX 偏 OpenAI 生態，真正前線在即刻、小紅書、知乎。下次擴大掃描。
+          </div>
+          <div class="card-source">v2ex.com/go/ai</div>
+        </div>
+
+        <!-- Card 2: Sun Tzu -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-icon">&#x2694;&#xFE0F;</div>
+            <div class="card-title-group">
+              <div class="card-name">Sun Tzu</div>
+              <div class="card-subtitle">CSIS Analysis Feed &middot; western_thinktank</div>
+            </div>
+            <div class="status-badge status-warning">&#x1F7E1; WATCH</div>
+          </div>
+          <div class="card-verdict">本週焦點在伊朗衝突，南海有一條重要情報</div>
+          <ul class="card-findings">
+            <li>
+              <strong>Iran Conflict &rarr; Japan</strong> &mdash; 日本安保連動台海（中度相關）
+            </li>
+            <li><strong>Iranian Cyber Ops</strong> &mdash; 低相關，但網路戰框架可參考</li>
+            <li><strong>South Korea Cyber Defense</strong> &mdash; 東亞網路戰整合防禦</li>
+            <li style="color: var(--accent-yellow)">
+              <strong style="color: var(--accent-yellow)">Antelope Reef（羚羊礁）</strong> &mdash;
+              中國南海填海造陸「史無前例規模」，高度台海相關
+            </li>
+            <li><strong>Iran vs. Gulf Desalination</strong> &mdash; 低相關</li>
+          </ul>
+          <div class="card-action action-watch">
+            關鍵：南海控制力越強，封鎖台灣海峽的能力越大。需追蹤 Antelope Reef 後續衛星影像與報告。
+          </div>
+          <div class="card-source">csis.org/analysis</div>
+        </div>
+
+        <!-- Card 3: Tesla -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-icon">&#x26A1;</div>
+            <div class="card-title-group">
+              <div class="card-name">Tesla</div>
+              <div class="card-subtitle">Playwright Releases &middot; playwright_releases</div>
+            </div>
+            <div class="status-badge status-critical">&#x1F534; CRITICAL</div>
+          </div>
+          <div class="card-verdict">v1.58.0 有 BREAKING CHANGES，需確認 codebase 是否受影響</div>
+          <ul class="card-findings">
+            <li>
+              <strong>v1.58.2</strong> (2/6) &mdash; trace viewer + macOS SwiftShader 修復 (LOW)
+            </li>
+            <li>
+              <strong>v1.58.1</strong> (1/30) &mdash; Edge 權限 + Chrome download 路徑更新 (LOW)
+            </li>
+            <li style="color: var(--accent-red)">
+              <strong style="color: var(--accent-red)">v1.58.0</strong> (1/23) &mdash; 4 項 breaking
+              changes (HIGH)
+            </li>
+          </ul>
+          <div
+            style="
+              margin-bottom: 16px;
+              padding: 12px 16px;
+              background: rgba(255, 107, 107, 0.06);
+              border-radius: 8px;
+              font-size: 13px;
+              line-height: 1.8;
+            "
+          >
+            <div style="font-weight: 600; color: var(--accent-red); margin-bottom: 6px">
+              Breaking Changes:
+            </div>
+            <div style="color: var(--text-secondary)">
+              1.
+              <code
+                style="
+                  background: rgba(255, 255, 255, 0.06);
+                  padding: 1px 5px;
+                  border-radius: 3px;
+                  font-size: 12px;
+                "
+                >_react</code
+              >
+              /
+              <code
+                style="
+                  background: rgba(255, 255, 255, 0.06);
+                  padding: 1px 5px;
+                  border-radius: 3px;
+                  font-size: 12px;
+                "
+                >_vue</code
+              >
+              selectors 移除
+            </div>
+            <div style="color: var(--text-secondary)">
+              2.
+              <code
+                style="
+                  background: rgba(255, 255, 255, 0.06);
+                  padding: 1px 5px;
+                  border-radius: 3px;
+                  font-size: 12px;
+                "
+                >:light</code
+              >
+              selector suffix 移除
+            </div>
+            <div style="color: var(--text-secondary)">
+              3.
+              <code
+                style="
+                  background: rgba(255, 255, 255, 0.06);
+                  padding: 1px 5px;
+                  border-radius: 3px;
+                  font-size: 12px;
+                "
+                >devtools</code
+              >
+              launch option 移除
+            </div>
+            <div style="color: var(--text-secondary)">4. macOS 13 WebKit 支援終止</div>
+          </div>
+          <div class="card-action action-urgent">
+            立即確認 browser-hand / stealth 模組是否使用 devtools launch option。若仍在 v1.57.x
+            暫不升級。
+          </div>
+          <div class="card-source">
+            github.com/microsoft/playwright/releases &middot; Chromium 145 / Firefox 146 / WebKit 26
+          </div>
+        </div>
+
+        <!-- Card 4: Musk -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-icon">&#x1F4F1;</div>
+            <div class="card-title-group">
+              <div class="card-name">Musk</div>
+              <div class="card-subtitle">Threads API Changelog &middot; meta_changelog</div>
+            </div>
+            <div class="status-badge status-clear">&#x1F7E2; CLEAR</div>
+          </div>
+          <div class="card-verdict">Scheduling API 仍未修復，Meta 無修復跡象</div>
+          <ul class="card-findings">
+            <li><strong>3/19</strong> &mdash; Reply + quote post intent 新增參數</li>
+            <li><strong>3/3</strong> &mdash; oEmbed API 不再需要 access token</li>
+            <li><strong>2/27</strong> &mdash; GIPHY 支援上線，Tenor 3/31 下線</li>
+            <li><strong>2/17</strong> &mdash; App ads for Threads</li>
+            <li><strong>2/13</strong> &mdash; Reply approvals + pending reply 管理</li>
+          </ul>
+          <div class="card-action action-watch">
+            Tenor API 2026-03-31 下線（9 天內）。如有使用 Tenor GIF 功能需遷移至 GIPHY。Scheduling
+            持續以 cron workaround 替代。
+          </div>
+          <div class="card-source">developers.facebook.com/docs/threads/changelog</div>
+        </div>
+      </div>
+
+      <!-- ═══ ACTION REQUIRED ═══ -->
+      <div class="action-section">
+        <div class="action-section-title">&#x26A0;&#xFE0F; 需要行動</div>
+        <ul class="action-list">
+          <li>
+            <span class="action-priority priority-high">HIGH</span>
+            <div class="action-text">
+              確認 Playwright codebase 版本，檢查
+              <code
+                style="
+                  background: rgba(255, 255, 255, 0.06);
+                  padding: 1px 5px;
+                  border-radius: 3px;
+                  font-size: 13px;
+                "
+                >devtools</code
+              >
+              launch option 使用情況
+              <span class="detail"
+                >browser-hand 和 stealth 模組可能受 v1.58.0 breaking changes 影響。若仍在 v1.57.x
+                則暫不升級。</span
+              >
+            </div>
+            <span class="action-source-tag">Tesla</span>
+          </li>
+          <li>
+            <span class="action-priority priority-med">MED</span>
+            <div class="action-text">
+              Tenor API 3/31 下線，9 天內遷移至 GIPHY
+              <span class="detail"
+                >如有任何功能依賴 Tenor GIF API，需在 2026-03-31 前完成切換。</span
+              >
+            </div>
+            <span class="action-source-tag">Musk</span>
+          </li>
+          <li>
+            <span class="action-priority priority-med">MED</span>
+            <div class="action-text">
+              追蹤南海羚羊礁 (Antelope Reef) 填海造陸後續
+              <span class="detail"
+                >CSIS 報告中國正建造南海最大人工島。軍事基建擴張信號，間接影響台海態勢。</span
+              >
+            </div>
+            <span class="action-source-tag">Sun Tzu</span>
+          </li>
+          <li>
+            <span class="action-priority priority-med">MED</span>
+            <div class="action-text">
+              擴大中國 AI 社群掃描範圍
+              <span class="detail"
+                >V2EX 偏 OpenAI 生態，不代表中國 AI 前線。下次加入知乎、即刻、小紅書。</span
+              >
+            </div>
+            <span class="action-source-tag">Einstein</span>
+          </li>
+        </ul>
+      </div>
+
+      <div class="footer">Shadow Recon &middot; 奈良 AUTO &middot; 無極系統</div>
+    </div>
+  </body>
+</html>
