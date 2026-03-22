@@ -20,6 +20,12 @@ const mocks = vi.hoisted(() => {
     runtime: {
       log: runtimeLog,
       error: runtimeError,
+      writeStdout: vi.fn((value: string) =>
+        runtimeLog(value.endsWith("\n") ? value.slice(0, -1) : value),
+      ),
+      writeJson: vi.fn((value: unknown, space = 2) =>
+        runtimeLog(JSON.stringify(value, null, space)),
+      ),
       exit: runtimeExit,
     },
   };

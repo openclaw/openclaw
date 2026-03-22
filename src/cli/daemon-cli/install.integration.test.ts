@@ -28,8 +28,12 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: {
     log: (message: string) => runtimeLogs.push(message),
     error: (message: string) => runtimeErrors.push(message),
-    writeJson: (value: unknown, space = 2) =>
-      runtimeLogs.push(JSON.stringify(value, null, space > 0 ? space : undefined)),
+    writeStdout: (value: string) => {
+      runtimeLogs.push(value.endsWith("\n") ? value.slice(0, -1) : value);
+    },
+    writeJson: (value: unknown, space = 2) => {
+      runtimeLogs.push(JSON.stringify(value, null, space > 0 ? space : undefined));
+    },
     exit: (code: number) => {
       throw new Error(`__exit__:${code}`);
     },

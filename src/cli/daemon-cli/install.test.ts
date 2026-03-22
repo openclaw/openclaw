@@ -129,6 +129,12 @@ const runtimeLogs: string[] = [];
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: {
     log: (message: string) => runtimeLogs.push(message),
+    writeStdout: (value: string) => {
+      runtimeLogs.push(value.endsWith("\n") ? value.slice(0, -1) : value);
+    },
+    writeJson: (value: unknown, space = 2) => {
+      runtimeLogs.push(JSON.stringify(value, null, space));
+    },
     error: vi.fn(),
     exit: vi.fn(),
   },
