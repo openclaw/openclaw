@@ -4,6 +4,7 @@ export { createAccountActionGate } from "../channels/plugins/account-action-gate
 export {
   createAccountListHelpers,
   mergeAccountConfig,
+  resolveMergedAccountConfig,
 } from "../channels/plugins/account-helpers.js";
 export { normalizeChatType } from "../channels/chat-type.js";
 export { resolveAccountEntry, resolveNormalizedAccountEntry } from "../routing/account-lookup.js";

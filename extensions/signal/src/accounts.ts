@@ -1,8 +1,7 @@
 import {
   createAccountListHelpers,
-  mergeAccountConfig,
   normalizeAccountId,
-  resolveAccountEntry,
+  resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import type { SignalAccountConfig } from "./runtime-api.js";
@@ -20,17 +19,13 @@ const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("si
 export const listSignalAccountIds = listAccountIds;
 export const resolveDefaultSignalAccountId = resolveDefaultAccountId;
 
-function resolveAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): SignalAccountConfig | undefined {
-  return resolveAccountEntry(cfg.channels?.signal?.accounts, accountId);
-}
-
 function mergeSignalAccountConfig(cfg: OpenClawConfig, accountId: string): SignalAccountConfig {
-  return mergeAccountConfig<SignalAccountConfig>({
+  return resolveMergedAccountConfig<SignalAccountConfig>({
     channelConfig: cfg.channels?.signal as SignalAccountConfig | undefined,
-    accountConfig: resolveAccountConfig(cfg, accountId),
+    accounts: cfg.channels?.signal?.accounts as
+      | Record<string, Partial<SignalAccountConfig>>
+      | undefined,
+    accountId,
   });
 }
 
