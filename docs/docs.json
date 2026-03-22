@@ -2191,7 +2191,8 @@
         ]
       },
       {
-        "language": "vi"
+        "language": "vi",
+        "default": true
       }
     ]
   }
