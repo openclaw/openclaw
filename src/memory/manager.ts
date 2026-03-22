@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { type FSWatcher } from "chokidar";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
@@ -10,6 +8,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
+  type EmbeddingProviderRequest,
   type EmbeddingProviderResult,
   type GeminiEmbeddingClient,
   type MistralEmbeddingClient,
@@ -17,12 +16,11 @@ import {
   type OpenAiEmbeddingClient,
   type VoyageEmbeddingClient,
 } from "./embeddings.js";
-import { isFileMissingError, statRegularFile } from "./fs-utils.js";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
-import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
 import { extractKeywords } from "./query-expansion.js";
+import { readMemoryFile } from "./read-file.js";
 import type {
   MemoryEmbeddingProbeResult,
   MemoryProviderStatus,
@@ -83,17 +81,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected readonly workspaceDir: string;
   protected readonly settings: ResolvedMemorySearchConfig;
   protected provider: EmbeddingProvider | null;
-  private readonly requestedProvider:
-    | "openai"
-    | "local"
-    | "gemini"
-    | "voyage"
-    | "mistral"
-    | "ollama"
-    | "auto";
+  private readonly requestedProvider: EmbeddingProviderRequest;
+  private providerInitPromise: Promise<void> | null = null;
+  private providerInitialized = false;
   protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
   protected fallbackReason?: string;
-  private readonly providerUnavailableReason?: string;
+  private providerUnavailableReason?: string;
   protected openAi?: OpenAiEmbeddingClient;
   protected gemini?: GeminiEmbeddingClient;
   protected voyage?: VoyageEmbeddingClient;
@@ -150,6 +143,23 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private readonlyRecoveryFailures = 0;
   private readonlyRecoveryLastError?: string;
 
+  private static async loadProviderResult(params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    settings: ResolvedMemorySearchConfig;
+  }): Promise<EmbeddingProviderResult> {
+    return await createEmbeddingProvider({
+      config: params.cfg,
+      agentDir: resolveAgentDir(params.cfg, params.agentId),
+      provider: params.settings.provider,
+      remote: params.settings.remote,
+      model: params.settings.model,
+      outputDimensionality: params.settings.outputDimensionality,
+      fallback: params.settings.fallback,
+      local: params.settings.local,
+    });
+  }
+
   static async get(params: {
     cfg: OpenClawConfig;
     agentId: string;
@@ -161,7 +171,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return null;
     }
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-    const key = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}`;
+    const purpose = params.purpose === "status" ? "status" : "default";
+    const key = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}:${purpose}`;
+    const statusOnly = params.purpose === "status";
     const existing = INDEX_CACHE.get(key);
     if (existing) {
       return existing;
@@ -170,16 +182,23 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (pending) {
       return pending;
     }
+    if (statusOnly) {
+      const manager = new MemoryIndexManager({
+        cacheKey: key,
+        cfg,
+        agentId,
+        workspaceDir,
+        settings,
+        purpose: params.purpose,
+      });
+      INDEX_CACHE.set(key, manager);
+      return manager;
+    }
     const createPromise = (async () => {
-      const providerResult = await createEmbeddingProvider({
-        config: cfg,
-        agentDir: resolveAgentDir(cfg, agentId),
-        provider: settings.provider,
-        remote: settings.remote,
-        model: settings.model,
-        outputDimensionality: settings.outputDimensionality,
-        fallback: settings.fallback,
-        local: settings.local,
+      const providerResult = await MemoryIndexManager.loadProviderResult({
+        cfg,
+        agentId,
+        settings,
       });
       const refreshed = INDEX_CACHE.get(key);
       if (refreshed) {
@@ -213,7 +232,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     agentId: string;
     workspaceDir: string;
     settings: ResolvedMemorySearchConfig;
-    providerResult: EmbeddingProviderResult;
+    providerResult?: EmbeddingProviderResult;
     purpose?: "default" | "status";
   }) {
     super();
@@ -222,16 +241,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.agentId = params.agentId;
     this.workspaceDir = params.workspaceDir;
     this.settings = params.settings;
-    this.provider = params.providerResult.provider;
-    this.requestedProvider = params.providerResult.requestedProvider;
-    this.fallbackFrom = params.providerResult.fallbackFrom;
-    this.fallbackReason = params.providerResult.fallbackReason;
-    this.providerUnavailableReason = params.providerResult.providerUnavailableReason;
-    this.openAi = params.providerResult.openAi;
-    this.gemini = params.providerResult.gemini;
-    this.voyage = params.providerResult.voyage;
-    this.mistral = params.providerResult.mistral;
-    this.ollama = params.providerResult.ollama;
+    this.provider = null;
+    this.requestedProvider = params.settings.provider;
+    if (params.providerResult) {
+      this.applyProviderResult(params.providerResult);
+    }
     this.sources = new Set(params.settings.sources);
     this.db = this.openDatabase();
     this.providerKey = this.computeProviderKey();
@@ -250,12 +264,52 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (meta?.vectorDims) {
       this.vector.dims = meta.vectorDims;
     }
-    this.ensureWatcher();
-    this.ensureSessionListener();
-    this.ensureIntervalSync();
     const statusOnly = params.purpose === "status";
+    if (!statusOnly) {
+      this.ensureWatcher();
+      this.ensureSessionListener();
+      this.ensureIntervalSync();
+    }
     this.dirty = this.sources.has("memory") && (statusOnly ? !meta : true);
     this.batch = this.resolveBatchConfig();
+  }
+
+  private applyProviderResult(providerResult: EmbeddingProviderResult): void {
+    this.provider = providerResult.provider;
+    this.fallbackFrom = providerResult.fallbackFrom;
+    this.fallbackReason = providerResult.fallbackReason;
+    this.providerUnavailableReason = providerResult.providerUnavailableReason;
+    this.openAi = providerResult.openAi;
+    this.gemini = providerResult.gemini;
+    this.voyage = providerResult.voyage;
+    this.mistral = providerResult.mistral;
+    this.ollama = providerResult.ollama;
+    this.providerInitialized = true;
+  }
+
+  private async ensureProviderInitialized(): Promise<void> {
+    if (this.providerInitialized) {
+      return;
+    }
+    if (!this.providerInitPromise) {
+      this.providerInitPromise = (async () => {
+        const providerResult = await MemoryIndexManager.loadProviderResult({
+          cfg: this.cfg,
+          agentId: this.agentId,
+          settings: this.settings,
+        });
+        this.applyProviderResult(providerResult);
+        this.providerKey = this.computeProviderKey();
+        this.batch = this.resolveBatchConfig();
+      })();
+    }
+    try {
+      await this.providerInitPromise;
+    } finally {
+      if (this.providerInitialized) {
+        this.providerInitPromise = null;
+      }
+    }
   }
 
   async warmSession(sessionKey?: string): Promise<void> {
@@ -282,6 +336,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       sessionKey?: string;
     },
   ): Promise<MemorySearchResult[]> {
+    await this.ensureProviderInitialized();
     void this.warmSession(opts?.sessionKey);
     if (this.settings.sync.onSearch && (this.dirty || this.sessionsDirty)) {
       void this.sync({ reason: "search" }).catch((err) => {
@@ -478,6 +533,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (this.closed) {
       return;
     }
+    await this.ensureProviderInitialized();
     if (this.syncing) {
       if (params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
         return this.enqueueTargetedSessionSync(params.sessionFiles);
@@ -611,72 +667,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     from?: number;
     lines?: number;
   }): Promise<{ text: string; path: string }> {
-    const rawPath = params.relPath.trim();
-    if (!rawPath) {
-      throw new Error("path required");
-    }
-    const absPath = path.isAbsolute(rawPath)
-      ? path.resolve(rawPath)
-      : path.resolve(this.workspaceDir, rawPath);
-    const relPath = path.relative(this.workspaceDir, absPath).replace(/\\/g, "/");
-    const inWorkspace =
-      relPath.length > 0 && !relPath.startsWith("..") && !path.isAbsolute(relPath);
-    const allowedWorkspace = inWorkspace && isMemoryPath(relPath);
-    let allowedAdditional = false;
-    if (!allowedWorkspace && this.settings.extraPaths.length > 0) {
-      const additionalPaths = normalizeExtraMemoryPaths(
-        this.workspaceDir,
-        this.settings.extraPaths,
-      );
-      for (const additionalPath of additionalPaths) {
-        try {
-          const stat = await fs.lstat(additionalPath);
-          if (stat.isSymbolicLink()) {
-            continue;
-          }
-          if (stat.isDirectory()) {
-            if (absPath === additionalPath || absPath.startsWith(`${additionalPath}${path.sep}`)) {
-              allowedAdditional = true;
-              break;
-            }
-            continue;
-          }
-          if (stat.isFile()) {
-            if (absPath === additionalPath && absPath.endsWith(".md")) {
-              allowedAdditional = true;
-              break;
-            }
-          }
-        } catch {}
-      }
-    }
-    if (!allowedWorkspace && !allowedAdditional) {
-      throw new Error("path required");
-    }
-    if (!absPath.endsWith(".md")) {
-      throw new Error("path required");
-    }
-    const statResult = await statRegularFile(absPath);
-    if (statResult.missing) {
-      return { text: "", path: relPath };
-    }
-    let content: string;
-    try {
-      content = await fs.readFile(absPath, "utf-8");
-    } catch (err) {
-      if (isFileMissingError(err)) {
-        return { text: "", path: relPath };
-      }
-      throw err;
-    }
-    if (!params.from && !params.lines) {
-      return { text: content, path: relPath };
-    }
-    const lines = content.split("\n");
-    const start = Math.max(1, params.from ?? 1);
-    const count = Math.max(1, params.lines ?? lines.length);
-    const slice = lines.slice(start - 1, start - 1 + count);
-    return { text: slice.join("\n"), path: relPath };
+    return await readMemoryFile({
+      workspaceDir: this.workspaceDir,
+      extraPaths: this.settings.extraPaths,
+      relPath: params.relPath,
+      from: params.from,
+      lines: params.lines,
+    });
   }
 
   status(): MemoryProviderStatus {
@@ -723,11 +720,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return sources.map((source) => Object.assign({ source }, bySource.get(source)!));
     })();
 
-    // Determine search mode: "fts-only" if no provider, "hybrid" otherwise
-    const searchMode = this.provider ? "hybrid" : "fts-only";
+    const searchMode = this.provider || !this.providerInitialized ? "hybrid" : "fts-only";
     const providerInfo = this.provider
       ? { provider: this.provider.id, model: this.provider.model }
-      : { provider: "none", model: undefined };
+      : this.providerInitialized
+        ? { provider: "none", model: undefined }
+        : { provider: this.requestedProvider, model: this.settings.model || undefined };
 
     return {
       backend: "builtin",
@@ -794,17 +792,19 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   async probeVectorAvailability(): Promise<boolean> {
-    // FTS-only mode: vector search not available
-    if (!this.provider) {
+    if (!this.vector.enabled) {
       return false;
     }
-    if (!this.vector.enabled) {
+    await this.ensureProviderInitialized();
+    // FTS-only mode: vector search not available
+    if (!this.provider) {
       return false;
     }
     return this.ensureVectorReady();
   }
 
   async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
+    await this.ensureProviderInitialized();
     // FTS-only mode: embeddings not available but search still works
     if (!this.provider) {
       return {
@@ -827,6 +827,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     this.closed = true;
     const pendingSync = this.syncing;
+    const pendingProviderInit = this.providerInitPromise;
     if (this.watchTimer) {
       clearTimeout(this.watchTimer);
       this.watchTimer = null;
@@ -850,6 +851,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (pendingSync) {
       try {
         await pendingSync;
+      } catch {}
+    }
+    if (pendingProviderInit) {
+      try {
+        await pendingProviderInit;
       } catch {}
     }
     this.db.close();

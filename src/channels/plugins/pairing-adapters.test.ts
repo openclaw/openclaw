@@ -11,7 +11,9 @@ describe("pairing adapters", () => {
     const lower = createPairingPrefixStripper(/^nextcloud:/i, (entry) => entry.toLowerCase());
     expect(strip("telegram:123")).toBe("123");
     expect(strip("tg:123")).toBe("123");
+    expect(strip("  telegram:123  ")).toBe("123");
     expect(lower("nextcloud:USER")).toBe("user");
+    expect(lower("  nextcloud:USER  ")).toBe("user");
   });
 
   it("builds text pairing adapters", async () => {

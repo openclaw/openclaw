@@ -205,6 +205,7 @@ export function resolvePluginSdkAliasFile(params: {
 }
 
 const cachedPluginSdkExportedSubpaths = new Map<string, string[]>();
+const cachedPluginSdkScopedAliasMaps = new Map<string, Record<string, string>>();
 
 export function listPluginSdkExportedSubpaths(params: { modulePath?: string } = {}): string[] {
   const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
@@ -224,18 +225,109 @@ export function listPluginSdkExportedSubpaths(params: { modulePath?: string } = 
 export function resolvePluginSdkScopedAliasMap(
   params: { modulePath?: string } = {},
 ): Record<string, string> {
+  const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
+  const packageRoot = resolveLoaderPluginSdkPackageRoot({ modulePath });
+  if (!packageRoot) {
+    return {};
+  }
+  const orderedKinds = resolvePluginSdkAliasCandidateOrder({
+    modulePath,
+    isProduction: process.env.NODE_ENV === "production",
+  });
+  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}`;
+  const cached = cachedPluginSdkScopedAliasMaps.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
   const aliasMap: Record<string, string> = {};
-  for (const subpath of listPluginSdkExportedSubpaths(params)) {
-    const resolved = resolvePluginSdkAliasFile({
-      srcFile: `${subpath}.ts`,
-      distFile: `${subpath}.js`,
-      modulePath: params.modulePath,
-    });
-    if (resolved) {
-      aliasMap[`openclaw/plugin-sdk/${subpath}`] = resolved;
+  for (const subpath of listPluginSdkExportedSubpaths({ modulePath })) {
+    const candidateMap = {
+      src: path.join(packageRoot, "src", "plugin-sdk", `${subpath}.ts`),
+      dist: path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`),
+    } as const;
+    for (const kind of orderedKinds) {
+      const candidate = candidateMap[kind];
+      if (fs.existsSync(candidate)) {
+        aliasMap[`openclaw/plugin-sdk/${subpath}`] = candidate;
+        break;
+      }
     }
   }
+  cachedPluginSdkScopedAliasMaps.set(cacheKey, aliasMap);
   return aliasMap;
+}
+
+export function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {}): string | null {
+  try {
+    const modulePath = resolveLoaderModulePath(params);
+    const packageRoot = resolveLoaderPackageRoot({ ...params, modulePath });
+    if (!packageRoot) {
+      return null;
+    }
+
+    const orderedKinds = resolvePluginSdkAliasCandidateOrder({
+      modulePath,
+      isProduction: process.env.NODE_ENV === "production",
+    });
+    const candidateMap = {
+      src: path.join(packageRoot, "src", "extensionAPI.ts"),
+      dist: path.join(packageRoot, "dist", "extensionAPI.js"),
+    } as const;
+    for (const kind of orderedKinds) {
+      const candidate = candidateMap[kind];
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+export function buildPluginLoaderAliasMap(modulePath: string): Record<string, string> {
+  const pluginSdkAlias = resolvePluginSdkAliasFile({
+    srcFile: "root-alias.cjs",
+    distFile: "root-alias.cjs",
+    modulePath,
+  });
+  const extensionApiAlias = resolveExtensionApiAlias({ modulePath });
+  return {
+    ...(extensionApiAlias ? { "openclaw/extension-api": extensionApiAlias } : {}),
+    ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
+    ...resolvePluginSdkScopedAliasMap({ modulePath }),
+  };
+}
+
+export function resolvePluginRuntimeModulePath(
+  params: LoaderModuleResolveParams = {},
+): string | null {
+  try {
+    const modulePath = resolveLoaderModulePath(params);
+    const orderedKinds = resolvePluginSdkAliasCandidateOrder({
+      modulePath,
+      isProduction: process.env.NODE_ENV === "production",
+    });
+    const packageRoot = resolveLoaderPackageRoot({ ...params, modulePath });
+    const candidates = packageRoot
+      ? orderedKinds.map((kind) =>
+          kind === "src"
+            ? path.join(packageRoot, "src", "plugins", "runtime", "index.ts")
+            : path.join(packageRoot, "dist", "plugins", "runtime", "index.js"),
+        )
+      : [
+          path.join(path.dirname(modulePath), "runtime", "index.ts"),
+          path.join(path.dirname(modulePath), "runtime", "index.js"),
+        ];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
 }
 
 export function buildPluginLoaderJitiOptions(aliasMap: Record<string, string>) {
