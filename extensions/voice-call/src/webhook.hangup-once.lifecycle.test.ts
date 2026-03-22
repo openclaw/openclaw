@@ -118,7 +118,12 @@ describe("Voice-call webhook hangup-once lifecycle", () => {
       expect(first.status).toBe(200);
       expect(second.status).toBe(200);
       expect(provider.hangupCalls).toHaveLength(1);
-      expect(provider.hangupCalls[0]?.providerCallId).toBe("provider-inbound-1");
+      expect(provider.hangupCalls[0]).toEqual(
+        expect.objectContaining({
+          providerCallId: "provider-inbound-1",
+          reason: "hangup-bot",
+        }),
+      );
       expect(manager.getCallByProviderCallId("provider-inbound-1")).toBeUndefined();
     } finally {
       await server.stop();

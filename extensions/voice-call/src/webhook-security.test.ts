@@ -92,7 +92,9 @@ function expectReplayResultPair(
 ) {
   expect(first.ok).toBe(true);
   expect(first.isReplay).toBeFalsy();
-  expect(first.verifiedRequestKey).toBeTruthy();
+  if (!first.verifiedRequestKey) {
+    throw new Error("verified webhook request did not produce a request key");
+  }
   expect(second.ok).toBe(true);
   expect(second.isReplay).toBe(true);
   expect(second.verifiedRequestKey).toBe(first.verifiedRequestKey);
