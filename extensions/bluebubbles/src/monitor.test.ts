@@ -251,7 +251,6 @@ describe("BlueBubbles webhook monitor", () => {
     _resetBlueBubblesShortIdState();
     _resetBlueBubblesWebhookReplayState();
     resetBlueBubblesSelfChatCache();
-    resetBlueBubblesSelfChatCache();
     mockFetchBlueBubblesHistory.mockResolvedValue({ entries: [], resolved: true });
     mockReadAllowFromStore.mockResolvedValue([]);
     mockUpsertPairingRequest.mockResolvedValue({ code: "TESTCODE", created: true });

@@ -239,7 +239,20 @@ export function createBlueBubblesDebounceRegistry(params: {
       });
 
       targetDebouncers.set(target, debouncer);
-      return debouncer;
+      return {
+        enqueue: async (entry) => {
+          if (entry.eventType === "updated-message") {
+            const associatedMessageGuid = entry.message.associatedMessageGuid?.trim();
+            if (associatedMessageGuid) {
+              await debouncer.flushKey(
+                `bluebubbles:${account.accountId}:balloon:${associatedMessageGuid}`,
+              );
+            }
+          }
+          await debouncer.enqueue(entry);
+        },
+        flushKey: (key) => debouncer.flushKey(key),
+      };
     },
     removeDebouncer: (target) => {
       targetDebouncers.delete(target);
