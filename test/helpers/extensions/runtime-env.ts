@@ -1,7 +1,9 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk/testing";
 import { vi } from "vitest";
 
-export function createRuntimeEnv(options?: { throwOnExit?: boolean }): RuntimeEnv {
+export function createRuntimeEnv<TRuntime = RuntimeEnv>(options?: {
+  throwOnExit?: boolean;
+}): RuntimeEnv {
   const throwOnExit = options?.throwOnExit ?? true;
   return {
     log: vi.fn(),
@@ -12,4 +14,16 @@ export function createRuntimeEnv(options?: { throwOnExit?: boolean }): RuntimeEn
         })
       : vi.fn(),
   };
+}
+
+export function createTypedRuntimeEnv<TRuntime>(options?: { throwOnExit?: boolean }): TRuntime {
+  return createRuntimeEnv(options) as TRuntime;
+}
+
+export function createNonExitingRuntimeEnv(): RuntimeEnv {
+  return createRuntimeEnv({ throwOnExit: false });
+}
+
+export function createNonExitingTypedRuntimeEnv<TRuntime>(): TRuntime {
+  return createTypedRuntimeEnv<TRuntime>({ throwOnExit: false });
 }

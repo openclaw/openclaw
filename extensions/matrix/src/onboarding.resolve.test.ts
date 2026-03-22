@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import { createNonExitingTypedRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import type { RuntimeEnv, WizardPrompter } from "../runtime-api.js";
 import { matrixOnboardingAdapter } from "./onboarding.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
@@ -83,7 +83,7 @@ describe("matrix onboarding account-scoped resolution", () => {
           },
         },
       } as CoreConfig,
-      runtime: createRuntimeEnv({ throwOnExit: false }) as unknown as RuntimeEnv,
+      runtime: createNonExitingTypedRuntimeEnv<RuntimeEnv>(),
       prompter,
       options: undefined,
       accountOverrides: {},
