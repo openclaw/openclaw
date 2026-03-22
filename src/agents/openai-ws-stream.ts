@@ -901,8 +901,10 @@ export function createOpenAIWebSocketStreamFn(
       });
     };
 
-    queueMicrotask(() =>
-      run().catch((err) => {
+    queueMicrotask(async () => {
+      try {
+        await run();
+      } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
         log.warn(`[ws-stream] session=${sessionId} run error: ${errorMessage}`);
         eventStream.push({
@@ -913,9 +915,10 @@ export function createOpenAIWebSocketStreamFn(
             errorMessage,
           }),
         });
+      } finally {
         eventStream.end();
-      }),
-    );
+      }
+    });
 
     return eventStream;
   };
