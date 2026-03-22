@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import {
   buildAllowedModelSet,
   buildModelAliasIndex,
@@ -16,9 +17,9 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
 import { createChannelReplyPipeline } from "../../plugin-sdk/channel-reply-pipeline.js";
@@ -88,14 +89,13 @@ function filterFallbacksByAllowlist(params: {
   fallbacks: string[];
   cfg: OpenClawConfig;
   agentId?: string;
-  defaultProvider: string;
   aliasIndex: ReturnType<typeof buildModelAliasIndex>;
 }): string[] {
-  const { fallbacks, cfg, agentId, defaultProvider, aliasIndex } = params;
+  const { fallbacks, cfg, agentId, aliasIndex } = params;
   const { allowAny, allowedKeys } = buildAllowedModelSet({
     cfg,
     catalog: [],
-    defaultProvider,
+    defaultProvider: DEFAULT_PROVIDER,
     defaultModel: undefined,
     agentId,
   });
@@ -108,14 +108,16 @@ function filterFallbacksByAllowlist(params: {
     }
     const resolved = resolveModelRefFromString({
       raw: fb.trim(),
-      defaultProvider,
+      defaultProvider: DEFAULT_PROVIDER,
       aliasIndex,
     });
     if (!resolved) {
-      return false;
+      // If can't resolve, try matching raw string directly
+      return allowedKeys.has(fb.trim());
     }
     const key = modelKey(resolved.ref.provider, resolved.ref.model);
-    return allowedKeys.has(key);
+    // Check both full key and raw string
+    return allowedKeys.has(key) || allowedKeys.has(fb.trim());
   });
 }
 
@@ -1369,7 +1371,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       const imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
       if (imageModelPrimary) {
         // Build alias index for resolving model aliases (used for checking and filtering)
-        const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "" });
+        const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: DEFAULT_PROVIDER });
 
         // Check if user has a stored model override that is already an image model
         // If so, respect user's choice and don't switch
@@ -1383,7 +1385,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           const addResolvedModelKey = (rawModel: string) => {
             const resolved = resolveModelRefFromString({
               raw: rawModel.trim(),
-              defaultProvider: "",
+              defaultProvider: DEFAULT_PROVIDER,
               aliasIndex,
             });
             if (resolved) {
@@ -1411,14 +1413,16 @@ export const chatHandlers: GatewayRequestHandlers = {
             : sessionModelOverride;
           const userResolved = resolveModelRefFromString({
             raw: userRawModel,
-            defaultProvider: "",
+            defaultProvider: DEFAULT_PROVIDER,
             aliasIndex,
           });
           const userModelKey = userResolved
             ? `${userResolved.ref.provider}/${userResolved.ref.model}`
             : userRawModel;
 
-          if (imageModelKeys.has(userModelKey)) {
+          // Check if user's stored model is an image model
+          // Check both full key (provider/model) and raw string for providerless configs
+          if (imageModelKeys.has(userModelKey) || imageModelKeys.has(sessionModelOverride)) {
             context.logGateway.info(
               `[image-model-switch] User's stored model ${userModelKey} is already an image model, respecting user choice`,
             );
@@ -1432,7 +1436,6 @@ export const chatHandlers: GatewayRequestHandlers = {
                 fallbacks: imageModelConfig.fallbacks,
                 cfg,
                 agentId,
-                defaultProvider: "",
                 aliasIndex,
               });
             } else {
@@ -1451,7 +1454,6 @@ export const chatHandlers: GatewayRequestHandlers = {
               fallbacks: imageModelConfig.fallbacks,
               cfg,
               agentId,
-              defaultProvider: "",
               aliasIndex,
             });
           } else {
