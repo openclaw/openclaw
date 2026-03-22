@@ -15,9 +15,9 @@ describe("perplexity web search provider", () => {
     expect(__testing.resolvePerplexityBaseUrl(undefined, "openrouter_env")).toBe(
       "https://openrouter.ai/api/v1",
     );
-    expect(__testing.resolvePerplexityRequestModel("https://api.perplexity.ai", "perplexity/sonar-pro")).toBe(
-      "sonar-pro",
-    );
+    expect(
+      __testing.resolvePerplexityRequestModel("https://api.perplexity.ai", "perplexity/sonar-pro"),
+    ).toBe("sonar-pro");
     expect(
       __testing.resolvePerplexityRequestModel(
         "https://openrouter.ai/api/v1",
