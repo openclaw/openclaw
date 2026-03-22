@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # install.sh — One-line installer for OpenClaw VM
-# Usage: curl -sSL https://raw.githubusercontent.com/openclaw/openclaw-vm/main/install.sh | bash
+# Usage: curl -sSL https://raw.githubusercontent.com/openclaw/openclaw/main/scripts/virtualbox/install.sh | bash
+# Or run locally from this repo: ./install.sh
 set -euo pipefail
 
 # ── Colours ───────────────────────────────────────────────────
@@ -12,7 +13,6 @@ log()  { echo -e "  ${CYAN}→${NC} $1"; }
 ok()   { echo -e "  ${GREEN}✓${NC} $1"; }
 fail() { echo -e "  ${RED}✗${NC} $1"; exit 1; }
 
-REPO_URL="https://github.com/DaevMithran/openclaw-vm.git"
 INSTALL_DIR="${OPENCLAW_VM_DIR:-$HOME/.openclaw-vm}"
 VERSION="0.1.0"
 
@@ -145,15 +145,8 @@ if [[ -n "$LOCAL_DIR" ]]; then
   # Running locally from inside the repo — use it directly
   INSTALL_DIR="$LOCAL_DIR"
   ok "Using local repo at $INSTALL_DIR"
-elif [[ -d "$INSTALL_DIR/.git" ]]; then
-  log "Updating existing installation..."
-  cd "$INSTALL_DIR"
-  git pull --quiet
-  ok "Updated to latest version"
 else
-  log "Cloning OpenClaw VM..."
-  git clone --quiet "$REPO_URL" "$INSTALL_DIR"
-  ok "Cloned to $INSTALL_DIR"
+  fail "openclaw-vm must be run from the openclaw repository. Clone openclaw and run install.sh from scripts/virtualbox/"
 fi
 
 # ── Make executable ───────────────────────────────────────────

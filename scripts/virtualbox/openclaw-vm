@@ -137,7 +137,7 @@ detect_total_cpus() {
 ensure_vagrant() {
   if ! command -v vagrant &>/dev/null; then
     fail "Vagrant is not installed."
-    echo -e "  Install with: ${BOLD}curl -sSL https://raw.githubusercontent.com/openclaw/openclaw-vm/main/install.sh | bash${NC}"
+    echo -e "  Install with: ${BOLD}curl -sSL https://raw.githubusercontent.com/openclaw/openclaw/main/scripts/virtualbox/install.sh | bash${NC}"
     exit 1
   fi
 }
@@ -145,7 +145,7 @@ ensure_vagrant() {
 ensure_virtualbox() {
   if ! command -v VBoxManage &>/dev/null; then
     fail "VirtualBox is not installed."
-    echo -e "  Install with: ${BOLD}curl -sSL https://raw.githubusercontent.com/openclaw/openclaw-vm/main/install.sh | bash${NC}"
+    echo -e "  Install with: ${BOLD}curl -sSL https://raw.githubusercontent.com/openclaw/openclaw/main/scripts/virtualbox/install.sh | bash${NC}"
     exit 1
   fi
 }
@@ -304,15 +304,27 @@ cmd_start() {
           *"Machine already booted"*)             progress 80 "VM ready" ;;
         esac
       done
+      local vagrant_status=${PIPESTATUS[0]}
       progress 100 "Done"
       progress_done
+      if [[ $vagrant_status -ne 0 ]]; then
+        echo ""
+        fail "VM failed to start (exit $vagrant_status). Run 'vagrant up --no-provision' for details."
+        exit 1
+      fi
       ;;
     *)
       log "Creating and provisioning OpenClaw VM..."
       echo ""
       progress 0 "Starting..."
-      { vagrant up 2>&1 || true; } | track_provision_progress
+      local vagrant_status
+      vagrant up 2>&1 | track_provision_progress || vagrant_status=$?
       progress_done
+      if [[ -n "$vagrant_status" ]] && [[ $vagrant_status -ne 0 ]]; then
+        echo ""
+        fail "VM provisioning failed (exit $vagrant_status). Run 'vagrant up' for details."
+        exit 1
+      fi
       ;;
   esac
 
@@ -340,7 +352,13 @@ cmd_stop() {
   cd "$SCRIPT_DIR"
   header
   log "Stopping VM..."
-  { vagrant halt 2>&1 || true; } | grep -v "^$" | head -5
+  local halt_status
+  vagrant halt 2>&1 | grep -v "^$" | head -5 || halt_status=$?
+  if [[ -n "$halt_status" ]] && [[ $halt_status -ne 0 ]]; then
+    fail "Failed to stop VM (exit $halt_status)"
+    echo ""
+    return 1
+  fi
   ok "VM stopped"
   echo ""
 }
@@ -354,7 +372,7 @@ cmd_ssh() {
     fail "VM is not running. Start it with: openclaw-vm start"
     exit 1
   fi
-  vagrant ssh
+  vagrant ssh "$@"
 }
 
 cmd_status() {

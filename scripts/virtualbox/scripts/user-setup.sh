@@ -44,13 +44,6 @@ cat > "$WORKSPACE/IDENTITY.md" << 'IDENTITY'
 You are a helpful AI assistant running inside an isolated OpenClaw VM.
 IDENTITY
 
-cat > "$WORKSPACE/USER.md" << 'USER'
-# User
-
-Name: Dave
-Preferences: Concise answers, technical depth when needed.
-USER
-
 echo ""
 echo "══════════════════════════════════════════════════"
 echo "  ✓ Setup complete!"
