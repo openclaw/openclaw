@@ -285,10 +285,53 @@ export function resetAllLanes(): void {
   }
 }
 
+export function markGatewayDraining(): void {
+  gatewayDraining = true;
+}
+
 export function setGatewayDraining(draining: boolean): void {
   gatewayDraining = draining;
 }
 
 export function isGatewayDraining(): boolean {
   return gatewayDraining;
+}
+
+export function getActiveTaskCount(): number {
+  let total = 0;
+  for (const s of lanes.values()) {
+    total += s.activeTaskIds.size;
+  }
+  return total;
+}
+
+/**
+ * Wait for all currently active tasks across all lanes to finish.
+ * Polls at a short interval; resolves when no tasks are active or
+ * when `timeoutMs` elapses (whichever comes first).
+ */
+export async function waitForActiveTasks(timeoutMs: number): Promise<{ drained: boolean }> {
+  const POLL_INTERVAL_MS = 50;
+  const deadline = Date.now() + timeoutMs;
+  const activeAtStart = new Set<number>();
+  for (const state of lanes.values()) {
+    for (const taskId of state.activeTaskIds) {
+      activeAtStart.add(taskId);
+    }
+  }
+
+  return new Promise((resolve) => {
+    const check = () => {
+      if (activeAtStart.size === 0) {
+        resolve({ drained: true });
+        return;
+      }
+      if (Date.now() >= deadline) {
+        resolve({ drained: false });
+        return;
+      }
+      setTimeout(check, POLL_INTERVAL_MS);
+    };
+    check();
+  });
 }
