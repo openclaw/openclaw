@@ -11,6 +11,9 @@ const pluginSdkInternalInventoryPromise =
 const relativeOutsidePackageInventoryPromise = collectExtensionPluginSdkBoundaryInventory(
   "relative-outside-package",
 );
+const srcOutsideJsonOutputPromise = getJsonOutput("src-outside-plugin-sdk");
+const pluginSdkInternalJsonOutputPromise = getJsonOutput("plugin-sdk-internal");
+const relativeOutsidePackageJsonOutputPromise = getJsonOutput("relative-outside-package");
 
 async function getJsonOutput(
   mode: Parameters<typeof collectExtensionPluginSdkBoundaryInventory>[0],
@@ -71,7 +74,7 @@ describe("extension src outside plugin-sdk boundary inventory", () => {
   });
 
   it("script json output is empty", async () => {
-    const result = await getJsonOutput("src-outside-plugin-sdk");
+    const result = await srcOutsideJsonOutputPromise;
 
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe("");
@@ -87,7 +90,7 @@ describe("extension plugin-sdk-internal boundary inventory", () => {
   });
 
   it("script json output is empty", async () => {
-    const result = await getJsonOutput("plugin-sdk-internal");
+    const result = await pluginSdkInternalJsonOutputPromise;
 
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe("");
@@ -103,7 +106,7 @@ describe("extension relative-outside-package boundary inventory", () => {
   });
 
   it("script json output is empty", async () => {
-    const result = await getJsonOutput("relative-outside-package");
+    const result = await relativeOutsidePackageJsonOutputPromise;
 
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe("");
