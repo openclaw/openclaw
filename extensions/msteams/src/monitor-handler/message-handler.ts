@@ -716,6 +716,20 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       conversationId && replyToId && wasMSTeamsMessageSent(conversationId, replyToId),
     );
 
+    if (attachments.length > 0) {
+      log.info("inbound attachments debug", {
+        count: attachments.length,
+        types: attachments.map((a) => ({
+          contentType: a.contentType,
+          hasContentUrl: Boolean(a.contentUrl),
+          contentUrlPrefix:
+            typeof a.contentUrl === "string" ? a.contentUrl.slice(0, 80) : undefined,
+          hasContent: Boolean(a.content),
+          name: a.name,
+        })),
+      });
+    }
+
     await inboundDebouncer.enqueue({
       context,
       rawText,
