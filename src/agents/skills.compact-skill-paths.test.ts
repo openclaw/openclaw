@@ -59,11 +59,10 @@ describe("compactSkillPaths", () => {
         managedSkillsDir: path.join(workspaceDir, ".managed-empty"),
       });
 
-      // The prompt should never contain backslashes in skill paths
+      // The prompt should contain a location tag with no backslashes
       const locationMatch = prompt.match(/<location>([^<]+)<\/location>/);
-      if (locationMatch) {
-        expect(locationMatch[1]).not.toContain("\\");
-      }
+      expect(locationMatch).not.toBeNull();
+      expect(locationMatch![1]).not.toContain("\\");
     });
   });
 
