@@ -718,10 +718,9 @@ description: test skill
     await Promise.all(
       cases.map(async (testCase) => {
         const res = await audit(testCase.cfg);
-        expect(
-          hasFinding(res, "tools.exec.safe_bins_broad_behavior", "warn"),
-          testCase.name,
-        ).toBe(testCase.expected);
+        expect(hasFinding(res, "tools.exec.safe_bins_broad_behavior", "warn"), testCase.name).toBe(
+          testCase.expected,
+        );
       }),
     );
   });

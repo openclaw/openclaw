@@ -1,10 +1,10 @@
 import { parseExecArgvToken } from "./exec-approvals-analysis.js";
-import { validateSafeBinSemantics } from "./exec-safe-bin-semantics.js";
 import {
   buildLongFlagPrefixMap,
   collectKnownLongFlags,
   type SafeBinProfile,
 } from "./exec-safe-bin-policy-profiles.js";
+import { validateSafeBinSemantics } from "./exec-safe-bin-semantics.js";
 
 function isPathLikeToken(value: string): boolean {
   const trimmed = value.trim();
@@ -160,7 +160,7 @@ function collectPositionalTokens(args: string[], profile: SafeBinProfile): strin
           continue;
         }
         if (!consumePositionalToken(rest, positional)) {
-          return false;
+          return null;
         }
       }
       break;
@@ -168,7 +168,7 @@ function collectPositionalTokens(args: string[], profile: SafeBinProfile): strin
 
     if (token.kind === "positional") {
       if (!consumePositionalToken(token.raw, positional)) {
-        return false;
+        return null;
       }
       i += 1;
       continue;
