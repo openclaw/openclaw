@@ -454,4 +454,86 @@ describe("TelegramPollingSession", () => {
     );
     expect(setStatus).toHaveBeenLastCalledWith({ connected: false });
   });
+
+  it("keeps channel marked connected while recoverable poll retries back off", async () => {
+    const abort = new AbortController();
+    const recoverableError = new Error("recoverable polling error");
+    const runnerStop = vi.fn(async () => undefined);
+    const setStatus = vi.fn();
+    const apiConfigUse = vi.fn();
+    const bot = {
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        getUpdates: vi.fn(async () => []),
+        config: {
+          use: apiConfigUse,
+        },
+      },
+      stop: vi.fn(async () => undefined),
+    };
+    createTelegramBotMock.mockReturnValue(bot);
+
+    let firstCycle = true;
+    runMock.mockImplementation(() => {
+      if (firstCycle) {
+        firstCycle = false;
+        return {
+          task: async () => {
+            const middleware = apiConfigUse.mock.calls[0]?.[0] as
+              | ((
+                  prev: (
+                    method: string,
+                    payload: unknown,
+                    signal: AbortSignal | undefined,
+                  ) => Promise<unknown>,
+                  method: string,
+                  payload: unknown,
+                  signal: AbortSignal | undefined,
+                ) => Promise<unknown>)
+              | undefined;
+            await middleware?.(async () => [], "getUpdates", {}, undefined);
+            throw recoverableError;
+          },
+          stop: runnerStop,
+          isRunning: () => false,
+        };
+      }
+      return {
+        task: async () => {
+          abort.abort();
+        },
+        stop: runnerStop,
+        isRunning: () => false,
+      };
+    });
+
+    const session = new TelegramPollingSession({
+      token: "tok",
+      config: {},
+      accountId: "default",
+      runtime: undefined,
+      proxyFetch: undefined,
+      abortSignal: abort.signal,
+      runnerOptions: {},
+      getLastUpdateId: () => null,
+      persistUpdateId: async () => undefined,
+      log: () => undefined,
+      setStatus,
+      telegramTransport: undefined,
+    });
+
+    await session.runUntilAbort();
+
+    expect(setStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connected: true,
+        mode: "polling",
+      }),
+    );
+    expect(
+      setStatus.mock.calls.filter(
+        ([patch]) => (patch as { connected?: boolean }).connected === false,
+      ),
+    ).toHaveLength(1);
+  });
 });

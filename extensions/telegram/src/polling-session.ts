@@ -265,6 +265,7 @@ export class TelegramPollingSession {
     }
     let stopPromise: Promise<void> | undefined;
     let stalledRestart = false;
+    let shouldClearConnected = true;
     let forceCycleTimer: ReturnType<typeof setTimeout> | undefined;
     let forceCycleResolve: (() => void) | undefined;
     const forceCyclePromise = new Promise<void>((resolve) => {
@@ -354,6 +355,7 @@ export class TelegramPollingSession {
       const shouldRestart = await this.#waitBeforeRestart(
         (delay) => `Telegram polling runner stopped (${reason}); restarting in ${delay}.`,
       );
+      shouldClearConnected = !shouldRestart;
       return shouldRestart ? "continue" : "exit";
     } catch (err) {
       this.#forceRestarted = false;
@@ -379,9 +381,12 @@ export class TelegramPollingSession {
       const shouldRestart = await this.#waitBeforeRestart(
         (delay) => `Telegram ${reason}: ${errMsg}; retrying in ${delay}.`,
       );
+      shouldClearConnected = !shouldRestart;
       return shouldRestart ? "continue" : "exit";
     } finally {
-      this.opts.setStatus?.({ connected: false });
+      if (shouldClearConnected) {
+        this.opts.setStatus?.({ connected: false });
+      }
       clearInterval(watchdog);
       if (forceCycleTimer) {
         clearTimeout(forceCycleTimer);
