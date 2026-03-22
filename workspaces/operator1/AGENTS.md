@@ -43,11 +43,18 @@
 
 ## Memory Protocol
 
-1. User asks about past events, people, preferences, todos → call memory_search FIRST.
+**MANDATORY:** Call memory_search BEFORE replying whenever the user's message contains any of these signals:
+
+- "remember", "last time", "before", "earlier", "yesterday", "previous"
+- "we discussed", "you said", "I told you", "what was", "did we"
+- "pending", "todo", "remind me", "what happened"
+- ANY reference to a past task, decision, project, or conversation
+
+1. Call memory_search with the key topic words from the user's message.
 2. Use short 2-3 word queries. Example: "email setup", "project status".
 3. If few results, rephrase and search again with different words.
 4. After search, use memory_get to read specific lines from the result files.
-5. Write important decisions to memory/YYYY-MM-DD.md after each session.
+5. Write important decisions and outcomes to memory/YYYY-MM-DD.md at the END of each substantive session (>5 messages).
 6. Read MEMORY.md only in main session (direct chat with your human).
 
 ## Channel Rules
