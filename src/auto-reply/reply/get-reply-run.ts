@@ -18,7 +18,7 @@ import { updateSessionStore } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
-import { normalizeMainKey } from "../../routing/session-key.js";
+import { normalizeAgentId, normalizeMainKey } from "../../routing/session-key.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
@@ -570,8 +570,10 @@ export async function runPreparedReply(
   });
 }
 
-function resolveConfigSystemPrompt(cfg: OpenClawConfig, agentId: string): string {
-  const agentEntry = cfg.agents?.list?.find((e) => e.id?.toLowerCase() === agentId?.toLowerCase());
+export function resolveConfigSystemPrompt(cfg: OpenClawConfig, agentId: string): string {
+  const agentEntry = cfg.agents?.list?.find(
+    (e) => normalizeAgentId(e.id) === normalizeAgentId(agentId),
+  );
   // Per-agent fields override defaults (not merge).
   const systemPrompt = agentEntry?.systemPrompt ?? cfg.agents?.defaults?.systemPrompt;
   const rules = agentEntry?.rules ?? cfg.agents?.defaults?.rules;

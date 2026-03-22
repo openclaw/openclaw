@@ -42,8 +42,6 @@ type ResolvedAgentConfig = {
   subagents?: AgentEntry["subagents"];
   sandbox?: AgentEntry["sandbox"];
   tools?: AgentEntry["tools"];
-  systemPrompt?: string;
-  rules?: string[];
 };
 
 let defaultAgentWarned = false;
@@ -149,8 +147,6 @@ export function resolveAgentConfig(
     subagents: typeof entry.subagents === "object" && entry.subagents ? entry.subagents : undefined,
     sandbox: entry.sandbox,
     tools: entry.tools,
-    systemPrompt: typeof entry.systemPrompt === "string" ? entry.systemPrompt : undefined,
-    rules: Array.isArray(entry.rules) ? entry.rules : undefined,
   };
 }
 
