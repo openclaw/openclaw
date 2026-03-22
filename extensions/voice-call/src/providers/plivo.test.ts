@@ -8,6 +8,13 @@ function requireEvent<T>(event: T | undefined, message: string): T {
   return event;
 }
 
+function requireResponseBody(body: string | undefined): string {
+  if (!body) {
+    throw new Error("Plivo provider did not return a response body");
+  }
+  return body;
+}
+
 describe("PlivoProvider", () => {
   it("parses answer callback into call.answered and returns keep-alive XML", () => {
     const provider = new PlivoProvider({
@@ -29,8 +36,9 @@ describe("PlivoProvider", () => {
     expect(event.type).toBe("call.answered");
     expect(event.callId).toBe("internal-call-id");
     expect(event.providerCallId).toBe("call-uuid");
-    expect(result.providerResponseBody).toContain("<Wait");
-    expect(result.providerResponseBody).toContain('length="300"');
+    const responseBody = requireResponseBody(result.providerResponseBody);
+    expect(responseBody).toContain("<Wait");
+    expect(responseBody).toContain('length="300"');
   });
 
   it("uses verified request key when provided", () => {

@@ -27,6 +27,12 @@ function expectStreamingTwiml(body: string) {
   expect(body).toContain("<Connect>");
 }
 
+function expectQueueTwiml(body: string) {
+  expect(body).toContain("Please hold while we connect you.");
+  expect(body).toContain("<Enqueue");
+  expect(body).toContain("hold-queue");
+}
+
 function requireResponseBody(body: string | undefined): string {
   if (!body) {
     throw new Error("Twilio provider did not return a response body");
@@ -84,10 +90,8 @@ describe("TwilioProvider", () => {
     const firstResult = provider.parseWebhookEvent(firstInbound);
     const secondResult = provider.parseWebhookEvent(secondInbound);
 
-    expect(firstResult.providerResponseBody).toContain("<Connect>");
-    expect(secondResult.providerResponseBody).toContain("Please hold while we connect you.");
-    expect(secondResult.providerResponseBody).toContain("<Enqueue");
-    expect(secondResult.providerResponseBody).toContain("hold-queue");
+    expectStreamingTwiml(requireResponseBody(firstResult.providerResponseBody));
+    expectQueueTwiml(requireResponseBody(secondResult.providerResponseBody));
   });
 
   it("connects next inbound call after unregisterCallStream cleanup", () => {
@@ -99,8 +103,9 @@ describe("TwilioProvider", () => {
     provider.unregisterCallStream("CA311");
     const secondResult = provider.parseWebhookEvent(secondInbound);
 
-    expect(secondResult.providerResponseBody).toContain("<Connect>");
-    expect(secondResult.providerResponseBody).not.toContain("hold-queue");
+    const secondBody = requireResponseBody(secondResult.providerResponseBody);
+    expectStreamingTwiml(secondBody);
+    expect(secondBody).not.toContain("hold-queue");
   });
 
   it("cleans up active inbound call on completed status callback", () => {
@@ -115,8 +120,9 @@ describe("TwilioProvider", () => {
     provider.parseWebhookEvent(completed);
     const nextResult = provider.parseWebhookEvent(nextInbound);
 
-    expect(nextResult.providerResponseBody).toContain("<Connect>");
-    expect(nextResult.providerResponseBody).not.toContain("hold-queue");
+    const nextBody = requireResponseBody(nextResult.providerResponseBody);
+    expectStreamingTwiml(nextBody);
+    expect(nextBody).not.toContain("hold-queue");
   });
 
   it("cleans up active inbound call on canceled status callback", () => {
@@ -131,8 +137,9 @@ describe("TwilioProvider", () => {
     provider.parseWebhookEvent(canceled);
     const nextResult = provider.parseWebhookEvent(nextInbound);
 
-    expect(nextResult.providerResponseBody).toContain("<Connect>");
-    expect(nextResult.providerResponseBody).not.toContain("hold-queue");
+    const nextBody = requireResponseBody(nextResult.providerResponseBody);
+    expectStreamingTwiml(nextBody);
+    expect(nextBody).not.toContain("hold-queue");
   });
 
   it("QUEUE_TWIML references /voice/hold-music waitUrl", () => {
@@ -143,7 +150,9 @@ describe("TwilioProvider", () => {
     provider.parseWebhookEvent(firstInbound);
     const result = provider.parseWebhookEvent(secondInbound);
 
-    expect(result.providerResponseBody).toContain('waitUrl="/voice/hold-music"');
+    expect(requireResponseBody(result.providerResponseBody)).toContain(
+      'waitUrl="/voice/hold-music"',
+    );
   });
 
   it("uses a stable fallback dedupeKey for identical request payloads", () => {
