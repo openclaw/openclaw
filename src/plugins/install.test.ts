@@ -781,7 +781,7 @@ describe("installPluginFromDir", () => {
   });
 
   it("rejects plugins whose minHostVersion is newer than the current host", async () => {
-    vi.stubEnv("OPENCLAW_VERSION", "2026.3.13");
+    vi.stubEnv("OPENCLAW_VERSION", "2026.3.21");
     const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
     const packageJsonPath = path.join(pluginDir, "package.json");
     const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
@@ -791,7 +791,7 @@ describe("installPluginFromDir", () => {
       ...manifest.openclaw,
       install: {
         ...manifest.openclaw?.install,
-        minHostVersion: ">=2026.3.14",
+        minHostVersion: ">=2026.3.22",
       },
     };
     fs.writeFileSync(packageJsonPath, JSON.stringify(manifest), "utf-8");
@@ -806,7 +806,7 @@ describe("installPluginFromDir", () => {
       return;
     }
     expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_HOST_VERSION);
-    expect(result.error).toContain("requires OpenClaw >=2026.3.14, but this host is 2026.3.13");
+    expect(result.error).toContain("requires OpenClaw >=2026.3.22, but this host is 2026.3.21");
     expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
   });
 
@@ -820,7 +820,7 @@ describe("installPluginFromDir", () => {
       ...manifest.openclaw,
       install: {
         ...manifest.openclaw?.install,
-        minHostVersion: "2026.3.14",
+        minHostVersion: "2026.3.22",
       },
     };
     fs.writeFileSync(packageJsonPath, JSON.stringify(manifest), "utf-8");
@@ -850,7 +850,7 @@ describe("installPluginFromDir", () => {
       ...manifest.openclaw,
       install: {
         ...manifest.openclaw?.install,
-        minHostVersion: ">=2026.3.14",
+        minHostVersion: ">=2026.3.22",
       },
     };
     fs.writeFileSync(packageJsonPath, JSON.stringify(manifest), "utf-8");

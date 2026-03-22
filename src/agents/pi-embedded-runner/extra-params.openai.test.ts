@@ -31,7 +31,7 @@ describe("extra-params: OpenAI attribution", () => {
   });
 
   it("injects originator and release-based user agent for native OpenAI", () => {
-    process.env.OPENCLAW_VERSION = "2026.3.14";
+    process.env.OPENCLAW_VERSION = "2026.3.22";
 
     const { headers } = applyAndCapture({
       provider: "openai",
@@ -41,12 +41,12 @@ describe("extra-params: OpenAI attribution", () => {
 
     expect(headers).toEqual({
       originator: "openclaw",
-      "User-Agent": "openclaw/2026.3.14",
+      "User-Agent": "openclaw/2026.3.22",
     });
   });
 
   it("overrides caller-supplied OpenAI attribution headers", () => {
-    process.env.OPENCLAW_VERSION = "2026.3.14";
+    process.env.OPENCLAW_VERSION = "2026.3.22";
 
     const { headers } = applyAndCapture({
       provider: "openai",
@@ -61,13 +61,13 @@ describe("extra-params: OpenAI attribution", () => {
 
     expect(headers).toEqual({
       originator: "openclaw",
-      "User-Agent": "openclaw/2026.3.14",
+      "User-Agent": "openclaw/2026.3.22",
       "X-Custom": "1",
     });
   });
 
   it("does not inject attribution on non-native OpenAI-compatible base URLs", () => {
-    process.env.OPENCLAW_VERSION = "2026.3.14";
+    process.env.OPENCLAW_VERSION = "2026.3.22";
 
     const { headers } = applyAndCapture({
       provider: "openai",
@@ -79,7 +79,7 @@ describe("extra-params: OpenAI attribution", () => {
   });
 
   it("injects attribution for ChatGPT-backed OpenAI Codex traffic", () => {
-    process.env.OPENCLAW_VERSION = "2026.3.14";
+    process.env.OPENCLAW_VERSION = "2026.3.22";
 
     const { headers } = applyAndCapture({
       provider: "openai-codex",
@@ -89,7 +89,7 @@ describe("extra-params: OpenAI attribution", () => {
 
     expect(headers).toEqual({
       originator: "openclaw",
-      "User-Agent": "openclaw/2026.3.14",
+      "User-Agent": "openclaw/2026.3.22",
     });
   });
 });
