@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -23,12 +22,14 @@ function buildBundledCoverageEntrySources() {
 
 describe("plugin-sdk bundled exports", () => {
   it("emits importable bundled subpath entries", { timeout: 120_000 }, async () => {
-    const outDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-sdk-build-"));
+    const bundleTempRoot = path.join(process.cwd(), ".tmp");
+    await fs.mkdir(bundleTempRoot, { recursive: true });
+    const outDir = await fs.mkdtemp(path.join(bundleTempRoot, "openclaw-plugin-sdk-build-"));
 
     try {
       const { build } = await import(tsdownModuleUrl);
       await build({
-        clean: true,
+        clean: false,
         config: false,
         dts: false,
         // Full plugin-sdk coverage belongs to `pnpm build`, package contract
@@ -41,11 +42,6 @@ describe("plugin-sdk bundled exports", () => {
         outDir,
         platform: "node",
       });
-      await fs.symlink(
-        path.join(process.cwd(), "node_modules"),
-        path.join(outDir, "node_modules"),
-        "dir",
-      );
 
       expect(pluginSdkEntrypoints.length).toBeGreaterThan(bundledRepresentativeEntrypoints.length);
       await Promise.all(
