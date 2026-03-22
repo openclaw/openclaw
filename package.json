@@ -449,6 +449,10 @@
       "types": "./dist/plugin-sdk/provider-web-search.d.ts",
       "default": "./dist/plugin-sdk/provider-web-search.js"
     },
+    "./plugin-sdk/param-readers": {
+      "types": "./dist/plugin-sdk/param-readers.d.ts",
+      "default": "./dist/plugin-sdk/param-readers.js"
+    },
     "./plugin-sdk/provider-zai-endpoint": {
       "types": "./dist/plugin-sdk/provider-zai-endpoint.d.ts",
       "default": "./dist/plugin-sdk/provider-zai-endpoint.js"
@@ -461,6 +465,10 @@
       "types": "./dist/plugin-sdk/signal.d.ts",
       "default": "./dist/plugin-sdk/signal.js"
     },
+    "./plugin-sdk/channel-status": {
+      "types": "./dist/plugin-sdk/channel-status.d.ts",
+      "default": "./dist/plugin-sdk/channel-status.js"
+    },
     "./plugin-sdk/slack": {
       "types": "./dist/plugin-sdk/slack.d.ts",
       "default": "./dist/plugin-sdk/slack.js"
@@ -468,6 +476,10 @@
     "./plugin-sdk/slack-core": {
       "types": "./dist/plugin-sdk/slack-core.d.ts",
       "default": "./dist/plugin-sdk/slack-core.js"
+    },
+    "./plugin-sdk/slack-targets": {
+      "types": "./dist/plugin-sdk/slack-targets.d.ts",
+      "default": "./dist/plugin-sdk/slack-targets.js"
     },
     "./plugin-sdk/status-helpers": {
       "types": "./dist/plugin-sdk/status-helpers.d.ts",

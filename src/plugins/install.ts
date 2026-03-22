@@ -28,11 +28,11 @@ import {
   installFromNpmSpecArchiveWithInstaller,
 } from "../infra/npm-pack-install.js";
 import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
-import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
-import * as skillScanner from "../security/skill-scanner.js";
+import { isPathInside } from "../security/scan-paths.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
+import { scanBundleInstallSource, scanPackageInstallSource } from "./install-security-scan.js";
 import {
   getPackageManifestMetadata,
   loadPluginManifest,
@@ -385,20 +385,11 @@ async function installBundleFromSourceDir(
   }
 
   try {
-    const scanSummary = await skillScanner.scanDirectoryWithSummary(params.sourceDir);
-    if (scanSummary.critical > 0) {
-      const criticalDetails = scanSummary.findings
-        .filter((f) => f.severity === "critical")
-        .map((f) => `${f.message} (${f.file}:${f.line})`)
-        .join("; ");
-      logger.warn?.(
-        `WARNING: Bundle "${pluginId}" contains dangerous code patterns: ${criticalDetails}`,
-      );
-    } else if (scanSummary.warn > 0) {
-      logger.warn?.(
-        `Bundle "${pluginId}" has ${scanSummary.warn} suspicious code pattern(s). Run "openclaw security audit --deep" for details.`,
-      );
-    }
+    await scanBundleInstallSource({
+      sourceDir: params.sourceDir,
+      pluginId,
+      logger,
+    });
   } catch (err) {
     logger.warn?.(
       `Bundle "${pluginId}" code safety scan failed (${String(err)}). Installation continues; run "openclaw security audit --deep" after install.`,
@@ -557,41 +548,13 @@ async function installPluginFromPackageDir(
       code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_HOST_VERSION,
     };
   }
-
-  const packageDir = path.resolve(params.packageDir);
-  const forcedScanEntries: string[] = [];
-  for (const entry of extensions) {
-    const resolvedEntry = path.resolve(packageDir, entry);
-    if (!isPathInside(packageDir, resolvedEntry)) {
-      logger.warn?.(`extension entry escapes plugin directory and will not be scanned: ${entry}`);
-      continue;
-    }
-    if (extensionUsesSkippedScannerPath(entry)) {
-      logger.warn?.(
-        `extension entry is in a hidden/node_modules path and will receive targeted scan coverage: ${entry}`,
-      );
-    }
-    forcedScanEntries.push(resolvedEntry);
-  }
-
-  // Scan plugin source for dangerous code patterns (warn-only; never blocks install)
   try {
-    const scanSummary = await skillScanner.scanDirectoryWithSummary(params.packageDir, {
-      includeFiles: forcedScanEntries,
+    await scanPackageInstallSource({
+      packageDir: params.packageDir,
+      pluginId,
+      logger,
+      extensions,
     });
-    if (scanSummary.critical > 0) {
-      const criticalDetails = scanSummary.findings
-        .filter((f) => f.severity === "critical")
-        .map((f) => `${f.message} (${f.file}:${f.line})`)
-        .join("; ");
-      logger.warn?.(
-        `WARNING: Plugin "${pluginId}" contains dangerous code patterns: ${criticalDetails}`,
-      );
-    } else if (scanSummary.warn > 0) {
-      logger.warn?.(
-        `Plugin "${pluginId}" has ${scanSummary.warn} suspicious code pattern(s). Run "openclaw security audit --deep" for details.`,
-      );
-    }
   } catch (err) {
     logger.warn?.(
       `Plugin "${pluginId}" code safety scan failed (${String(err)}). Installation continues; run "openclaw security audit --deep" after install.`,
