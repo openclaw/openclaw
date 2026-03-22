@@ -25,6 +25,7 @@ import {
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isGatewayCliClient,
+  isInternalMessageChannel,
   isWebchatClient,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
@@ -1616,6 +1617,34 @@ export const chatHandlers: GatewayRequestHandlers = {
                     stopReason: "stop",
                     usage: { input: 0, output: 0, totalTokens: 0 },
                   };
+                }
+              }
+              // Mirror webchat reply to last external channel if configured.
+              if (combinedReply && cfg.session?.mirrorWebchatToLastExternalChannel === true) {
+                const { entry: mirrorEntry } = loadSessionEntry(sessionKey);
+                const lastCh = mirrorEntry?.lastChannel;
+                const lastTo = mirrorEntry?.lastTo;
+                if (lastCh && lastTo && !isInternalMessageChannel(lastCh)) {
+                  try {
+                    const { routeReply } = await import("../../auto-reply/reply/route-reply.js");
+                    const mirrorResult = await routeReply({
+                      payload: { text: combinedReply },
+                      channel: lastCh,
+                      to: lastTo,
+                      sessionKey,
+                      accountId: mirrorEntry?.lastAccountId ?? undefined,
+                      threadId: mirrorEntry?.lastThreadId ?? undefined,
+                      cfg,
+                      mirror: false,
+                    });
+                    if (!mirrorResult.ok) {
+                      context.logGateway.warn(
+                        `webchat mirror to ${lastCh} failed: ${mirrorResult.error ?? "unknown"}`,
+                      );
+                    }
+                  } catch (err: unknown) {
+                    context.logGateway.warn(`webchat mirror to ${lastCh} failed: ${String(err)}`);
+                  }
                 }
               }
               broadcastChatFinal({
