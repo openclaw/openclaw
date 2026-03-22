@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+const callGatewayMock = vi.fn();
+vi.mock("../../gateway/call.js", () => ({
+  callGateway: (opts: unknown) => callGatewayMock(opts),
+}));
 import {
   isResolvedSessionVisibleToRequester,
   looksLikeSessionId,
@@ -7,9 +11,14 @@ import {
   resolveDisplaySessionKey,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
+  resolveSessionReference,
   shouldVerifyRequesterSpawnedSessionVisibility,
   shouldResolveSessionIdInput,
 } from "./sessions-resolution.js";
+
+beforeEach(() => {
+  callGatewayMock.mockReset();
+});
 
 describe("resolveMainSessionAlias", () => {
   it("uses normalized main key and global alias for global scope", () => {
@@ -163,5 +172,69 @@ describe("resolved session visibility checks", () => {
         resolvedViaSessionId: false,
       }),
     ).resolves.toBe(true);
+  });
+});
+
+describe("resolveSessionReference", () => {
+  it("prefers a literal current session key before alias fallback", async () => {
+    callGatewayMock.mockResolvedValueOnce({ key: "current" });
+
+    await expect(
+      resolveSessionReference({
+        sessionKey: "current",
+        alias: "main",
+        mainKey: "main",
+        requesterInternalKey: "agent:main:subagent:child",
+        restrictToSpawned: false,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      key: "current",
+      displayKey: "current",
+      resolvedViaSessionId: false,
+    });
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "sessions.resolve",
+      params: {
+        key: "current",
+        spawnedBy: undefined,
+      },
+    });
+  });
+
+  it("prefers a literal current sessionId before alias fallback", async () => {
+    callGatewayMock.mockResolvedValueOnce({});
+    callGatewayMock.mockResolvedValueOnce({ key: "agent:ops:main" });
+
+    await expect(
+      resolveSessionReference({
+        sessionKey: "current",
+        alias: "main",
+        mainKey: "main",
+        requesterInternalKey: "agent:main:subagent:child",
+        restrictToSpawned: false,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      key: "agent:ops:main",
+      displayKey: "agent:ops:main",
+      resolvedViaSessionId: true,
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
+      method: "sessions.resolve",
+      params: {
+        key: "current",
+        spawnedBy: undefined,
+      },
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(2, {
+      method: "sessions.resolve",
+      params: {
+        sessionId: "current",
+        spawnedBy: undefined,
+        includeGlobal: true,
+        includeUnknown: true,
+      },
+    });
   });
 });

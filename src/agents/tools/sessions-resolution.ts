@@ -266,6 +266,42 @@ async function resolveSessionKeyFromKey(params: {
   }
 }
 
+async function tryResolveSessionKeyFromSessionId(params: {
+  sessionId: string;
+  alias: string;
+  mainKey: string;
+  requesterInternalKey?: string;
+  restrictToSpawned: boolean;
+}): Promise<Extract<SessionReferenceResolution, { ok: true }> | null> {
+  try {
+    const result = await callGateway<{ key?: string }>({
+      method: "sessions.resolve",
+      params: {
+        sessionId: params.sessionId,
+        spawnedBy: params.restrictToSpawned ? params.requesterInternalKey : undefined,
+        includeGlobal: !params.restrictToSpawned,
+        includeUnknown: !params.restrictToSpawned,
+      },
+    });
+    const key = typeof result?.key === "string" ? result.key.trim() : "";
+    if (!key) {
+      return null;
+    }
+    return {
+      ok: true,
+      key,
+      displayKey: resolveDisplaySessionKey({
+        key,
+        alias: params.alias,
+        mainKey: params.mainKey,
+      }),
+      resolvedViaSessionId: true,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function resolveSessionReference(params: {
   sessionKey: string;
   alias: string;
@@ -274,8 +310,28 @@ export async function resolveSessionReference(params: {
   restrictToSpawned: boolean;
 }): Promise<SessionReferenceResolution> {
   const rawInput = params.sessionKey.trim();
-  // Normalize "current" to the requester's own session key so every session
-  // tool resolves it consistently without per-tool special-casing.
+  if (rawInput === "current") {
+    const resolvedByKey = await resolveSessionKeyFromKey({
+      key: rawInput,
+      alias: params.alias,
+      mainKey: params.mainKey,
+      requesterInternalKey: params.requesterInternalKey,
+      restrictToSpawned: params.restrictToSpawned,
+    });
+    if (resolvedByKey) {
+      return resolvedByKey;
+    }
+    const resolvedBySessionId = await tryResolveSessionKeyFromSessionId({
+      sessionId: rawInput,
+      alias: params.alias,
+      mainKey: params.mainKey,
+      requesterInternalKey: params.requesterInternalKey,
+      restrictToSpawned: params.restrictToSpawned,
+    });
+    if (resolvedBySessionId) {
+      return resolvedBySessionId;
+    }
+  }
   const raw =
     rawInput === "current" && params.requesterInternalKey ? params.requesterInternalKey : rawInput;
   if (shouldResolveSessionIdInput(raw)) {
