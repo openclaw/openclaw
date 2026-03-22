@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveSessionFilePath, type SessionEntry } from "../../config/sessions.js";
+import { resolveSessionFilePath } from "../../config/sessions/paths.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 
 /**
  * Default max parent token count beyond which thread/session parent forking is skipped.
