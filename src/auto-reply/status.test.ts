@@ -125,7 +125,9 @@ describe("buildStatusMessage", () => {
         cacheRead: 180_000,
         cacheWrite: 500,
         totalTokens: 180_550,
-        estimatedCostUsd: 0.060525,
+        // Accumulated session total (two identical turns) — differs from component sum
+        // to prove the total is derived from components, not from storedCost.
+        estimatedCostUsd: 0.121050,
       },
       sessionKey: "agent:main:main",
       queue: { mode: "collect", depth: 0 },
@@ -133,10 +135,12 @@ describe("buildStatusMessage", () => {
     });
     const normalized = normalizeTestText(text);
 
-    // Per-component costs in consistent 4-decimal precision, parts add up
+    // Per-component costs in consistent 4-decimal precision, parts add up.
+    // storedCost (0.1210) is intentionally different — total must equal component sum (0.0605).
     expect(normalized).toMatch(/Tokens:.*\$0\.0046/);
     expect(normalized).toMatch(/Cache:.*\$0\.0559/);
     expect(normalized).toContain("Cost: $0.0605");
+    expect(normalized).not.toContain("$0.1210");
   });
 
   it("sums per-component costs when estimatedCostUsd is absent", () => {
@@ -185,6 +189,43 @@ describe("buildStatusMessage", () => {
     expect(normalized).toMatch(/Tokens:.*\$0\.0046/);
     expect(normalized).toMatch(/Cache:.*\$0\.0559/);
     expect(normalized).toContain("Cost: $0.0605");
+  });
+
+  it("uses accumulated estimatedCostUsd for total when no cache tokens", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            anthropic: {
+              apiKey: "test-key",
+              models: [
+                {
+                  id: "claude-sonnet",
+                  cost: { input: 3, output: 15 },
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: { model: "anthropic/claude-sonnet", contextTokens: 200_000 },
+      sessionEntry: {
+        sessionId: "cost-no-cache",
+        updatedAt: 0,
+        inputTokens: 50,
+        outputTokens: 300,
+        // No cacheRead/cacheWrite — no-cache path should prefer storedCost
+        estimatedCostUsd: 0.042,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+    const normalized = normalizeTestText(text);
+
+    // No cache breakdown — single cost line uses accumulated storedCost, not recalculation
+    expect(normalized).toContain("Cost: $0.04");
+    expect(normalized).not.toMatch(/Cache:/);
   });
 
   it("falls back to sessionEntry levels when resolved levels are not passed", () => {
