@@ -5,8 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const ROOT = process.cwd();
-const GLOSSARY_PATH = path.join(ROOT, "docs", ".i18n", "glossary.zh-CN.json");
-const DOC_FILE_RE = /^docs\/(?!zh-CN\/).+\.(md|mdx)$/i;
+const I18N_DIR = path.join(ROOT, "docs", ".i18n");
 const LIST_ITEM_LINK_RE = /^\s*(?:[-*]|\d+\.)\s+\[([^\]]+)\]\((\/[^)]+)\)/;
 const MAX_TITLE_WORDS = 8;
 const MAX_LABEL_WORDS = 6;
@@ -22,8 +21,8 @@ const MAX_TERM_LENGTH = 80;
  */
 
 function parseArgs(argv) {
-  /** @type {{ base: string; head: string }} */
-  const args = { base: "", head: "" };
+  /** @type {{ base: string; head: string; langs: string[] }} */
+  const args = { base: "", head: "", langs: [] };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === "--base") {
       args.base = argv[i + 1] ?? "";
@@ -33,9 +32,33 @@ function parseArgs(argv) {
     if (argv[i] === "--head") {
       args.head = argv[i + 1] ?? "";
       i += 1;
+      continue;
+    }
+    if (argv[i] === "--lang") {
+      args.langs.push(
+        ...(argv[i + 1] ?? "")
+          .split(",")
+          .map((l) => l.trim())
+          .filter(Boolean),
+      );
+      i += 1;
     }
   }
   return args;
+}
+
+/** Auto-detect languages from glossary.<lang>.json files in docs/.i18n/. */
+function detectLangs() {
+  return fs
+    .readdirSync(I18N_DIR)
+    .map((f) => f.match(/^glossary\.(.+)\.json$/)?.[1])
+    .filter(Boolean);
+}
+
+/** Build a regex that matches English doc paths and excludes translated subdirs. */
+function buildDocFileRe(langs) {
+  const exclude = langs.map((l) => `(?!${l.replace("-", "\\-")}\\/)`).join("");
+  return new RegExp(`^docs\\/${exclude}.+\\.(md|mdx)$`, "i");
 }
 
 function runGit(args) {
@@ -67,7 +90,7 @@ function resolveBase(explicitBase) {
   return "";
 }
 
-function listChangedDocs(base, head) {
+function listChangedDocs(base, head, docFileRe) {
   const args = ["diff", "--name-only", "--diff-filter=ACMR", base];
   if (head) {
     args.push(head);
@@ -77,11 +100,12 @@ function listChangedDocs(base, head) {
   return runGit(args)
     .split("\n")
     .map((line) => line.trim())
-    .filter((line) => DOC_FILE_RE.test(line));
+    .filter((line) => docFileRe.test(line));
 }
 
-function loadGlossarySources() {
-  const data = fs.readFileSync(GLOSSARY_PATH, "utf8");
+function loadGlossarySources(lang) {
+  const glossaryPath = path.join(I18N_DIR, `glossary.${lang}.json`);
+  const data = fs.readFileSync(glossaryPath, "utf8");
   const entries = JSON.parse(data);
   return new Set(entries.map((entry) => String(entry.source || "").trim()).filter(Boolean));
 }
@@ -180,6 +204,13 @@ function extractTerms(file, text) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
+  const langs = args.langs.length > 0 ? args.langs : detectLangs();
+
+  if (langs.length === 0) {
+    console.warn("docs:check-i18n-glossary: no glossary files found; skipping.");
+    process.exit(0);
+  }
+
   const base = resolveBase(args.base);
 
   if (!base) {
@@ -189,47 +220,72 @@ function main() {
     process.exit(0);
   }
 
-  const changedDocs = listChangedDocs(base, args.head);
+  const docFileRe = buildDocFileRe(langs);
+  const changedDocs = listChangedDocs(base, args.head, docFileRe);
   if (changedDocs.length === 0) {
     process.exit(0);
   }
 
-  const glossary = loadGlossarySources();
-  /** @type {TermMatch[]} */
-  const missing = [];
-
+  // Collect new terms across all changed docs (terms added since base).
+  /** @type {Map<string, TermMatch>} */
+  const newTerms = new Map();
   for (const relPath of changedDocs) {
     const absPath = path.join(ROOT, relPath);
     if (!fs.existsSync(absPath)) {
       continue;
     }
-
     const currentTerms = extractTerms(relPath, fs.readFileSync(absPath, "utf8"));
     const baseTerms = extractTerms(relPath, readGitFile(base, relPath));
-
     for (const [term, match] of currentTerms) {
-      if (baseTerms.has(term)) {
-        continue;
+      if (!baseTerms.has(term) && !newTerms.has(term)) {
+        newTerms.set(term, match);
       }
-      if (glossary.has(term)) {
-        continue;
-      }
-      missing.push(match);
     }
   }
 
-  if (missing.length === 0) {
+  if (newTerms.size === 0) {
     process.exit(0);
   }
 
-  console.error("docs:check-i18n-glossary: missing zh-CN glossary entries for changed doc labels:");
-  for (const match of missing) {
-    console.error(`- ${match.file}:${match.line} ${match.kind} "${match.term}"`);
+  // Check each language's glossary independently.
+  /** @type {Map<string, TermMatch[]>} */
+  const missingByLang = new Map();
+  for (const lang of langs) {
+    let glossary;
+    try {
+      glossary = loadGlossarySources(lang);
+    } catch {
+      console.warn(`docs:check-i18n-glossary: glossary.${lang}.json not found; skipping ${lang}.`);
+      continue;
+    }
+
+    const missing = [];
+    for (const [term, match] of newTerms) {
+      if (!glossary.has(term)) {
+        missing.push(match);
+      }
+    }
+    if (missing.length > 0) {
+      missingByLang.set(lang, missing);
+    }
   }
-  console.error("");
-  console.error(
-    "Add exact source terms to docs/.i18n/glossary.zh-CN.json before rerunning docs-i18n.",
-  );
+
+  if (missingByLang.size === 0) {
+    process.exit(0);
+  }
+
+  for (const [lang, missing] of missingByLang) {
+    console.error(
+      `docs:check-i18n-glossary: missing ${lang} glossary entries for changed doc labels:`,
+    );
+    for (const match of missing) {
+      console.error(`- ${match.file}:${match.line} ${match.kind} "${match.term}"`);
+    }
+    console.error("");
+    console.error(
+      `Add exact source terms to docs/.i18n/glossary.${lang}.json before rerunning docs-i18n.`,
+    );
+  }
   console.error(`Checked changed English docs relative to ${base}.`);
   process.exit(1);
 }
