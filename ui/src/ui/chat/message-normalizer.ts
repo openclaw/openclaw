@@ -5,6 +5,12 @@
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import type { NormalizedMessage, MessageContentItem } from "../types/chat-types.ts";
 
+function normalizeContentItemType(type: unknown): MessageContentItem["type"] {
+  return type === "input_text" || type === "output_text"
+    ? "text"
+    : ((type as MessageContentItem["type"]) || "text");
+}
+
 /**
  * Normalize a raw message object into a consistent structure.
  */
@@ -39,7 +45,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     content = [{ type: "text", text: m.content }];
   } else if (Array.isArray(m.content)) {
     content = m.content.map((item: Record<string, unknown>) => ({
-      type: (item.type as MessageContentItem["type"]) || "text",
+      type: normalizeContentItemType(item.type),
       text: item.text as string | undefined,
       name: item.name as string | undefined,
       args: item.args || item.arguments,

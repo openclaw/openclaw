@@ -59,6 +59,31 @@ describe("message-normalizer", () => {
       });
     });
 
+    it("normalizes input_text and output_text blocks as renderable text", () => {
+      const result = normalizeMessage({
+        role: "user",
+        content: [
+          { type: "input_text", text: "Input schema text" },
+          { type: "output_text", text: "Output schema text" },
+        ],
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "text",
+          text: "Input schema text",
+          name: undefined,
+          args: undefined,
+        },
+        {
+          type: "text",
+          text: "Output schema text",
+          name: undefined,
+          args: undefined,
+        },
+      ]);
+    });
+
     it("normalizes message with text field (alternative format)", () => {
       const result = normalizeMessage({
         role: "user",

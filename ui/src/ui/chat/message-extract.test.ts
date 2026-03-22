@@ -42,6 +42,19 @@ describe("extractTextCached", () => {
     expect(extractText(message)).toBe("Final user answer");
     expect(extractTextCached(message)).toBe("Final user answer");
   });
+
+  it("extracts text from input_text and output_text content blocks", () => {
+    const message = {
+      role: "user",
+      content: [
+        { type: "input_text", text: "First prompt" },
+        { type: "output_text", text: "Second prompt" },
+      ],
+    };
+
+    expect(extractText(message)).toBe("First prompt\nSecond prompt");
+    expect(extractTextCached(message)).toBe("First prompt\nSecond prompt");
+  });
 });
 
 describe("extractThinkingCached", () => {
