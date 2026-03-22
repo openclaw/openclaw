@@ -148,6 +148,119 @@ export class OpenAITTSProvider {
     // Encode to mu-law
     return pcmToMulaw(pcm8k);
   }
+
+  /**
+   * Stream speech audio as an async generator.
+   * Yields mu-law chunks as they become available from OpenAI.
+   * This enables real-time playback without waiting for full audio generation.
+   */
+  async *synthesizeStreaming(
+    text: string,
+    instructions?: string,
+  ): AsyncGenerator<Buffer> {
+    // Build request body
+    const body: Record<string, unknown> = {
+      model: this.model,
+      input: text,
+      voice: this.voice,
+      response_format: "pcm", // Raw PCM audio (24kHz, mono, 16-bit signed LE)
+      speed: this.speed,
+    };
+
+    // Add instructions if using gpt-4o-mini-tts model
+    const effectiveInstructions = trimToUndefined(instructions) ?? this.instructions;
+    if (effectiveInstructions && this.model.includes("gpt-4o-mini-tts")) {
+      body.instructions = effectiveInstructions;
+    }
+
+    const response = await fetch("https://api.openai.com/v1/audio/speech", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`OpenAI TTS streaming failed: ${response.status} - ${error}`);
+    }
+
+    // Stream the audio data as it arrives
+    if (!response.body) {
+      throw new Error("OpenAI TTS streaming failed: no response body");
+    }
+
+    const reader = response.body.getReader();
+    let buffer = new Uint8Array(0);
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        // Append new data to buffer
+        const newBuffer = new Uint8Array(buffer.length + value.length);
+        newBuffer.set(buffer);
+        newBuffer.set(value, buffer.length);
+        buffer = newBuffer;
+
+        // Process complete samples (2 bytes per 16-bit sample)
+        // At 24kHz, we need to buffer enough for meaningful resampling
+        while (buffer.length >= 6) {
+          // Process 3 samples (6 bytes) at 24kHz, output 1 sample at 8kHz
+          const pcm24k = buffer.subarray(0, 6);
+          const pcm8k = resample24kTo8kSingleSample(pcm24k);
+          const muLaw = Buffer.from([linearToMulaw(pcm8k)]);
+
+          yield muLaw;
+
+          // Remove processed bytes (move forward 2 samples = 4 bytes at 24kHz)
+          buffer = buffer.subarray(4);
+        }
+      }
+
+      // Process remaining bytes in buffer
+      if (buffer.length >= 2) {
+        // Pad to 6 bytes for resampling function
+        const padded = new Uint8Array(6);
+        padded.set(buffer);
+        const pcm8k = resample24kTo8kSingleSample(padded);
+        const muLaw = Buffer.from([linearToMulaw(pcm8k)]);
+        yield muLaw;
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  /**
+   * Synthesize speech and stream mu-law audio to a callback.
+   * Converts from 24kHz PCM to 8kHz mu-law in real-time.
+   */
+  async synthesizeForTelephonyStreaming(
+    text: string,
+    onChunk: (muLawChunk: Buffer) => void | Promise<void>,
+  ): Promise<void> {
+    for await (const muLawChunk of this.synthesizeStreaming(text)) {
+      await onChunk(muLawChunk);
+    }
+  }
+}
+
+/**
+ * Resample a single 24kHz sample to 8kHz.
+ * Input: 3 samples (6 bytes) at 24kHz
+ * Output: 1 sample (2 bytes) at 8kHz
+ */
+function resample24kTo8kSingleSample(pcm24k: Uint8Array): number {
+  if (pcm24k.length < 6) {
+    return 0;
+  }
+
+  // Read middle sample from 24kHz (sample 1 at 8kHz = sample 3 at 24kHz)
+  return pcm24k.readInt16LE(2);
 }
 
 /**

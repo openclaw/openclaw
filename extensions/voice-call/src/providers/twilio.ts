@@ -599,6 +599,9 @@ export class TwilioProvider implements VoiceCallProvider {
    * Play TTS via core TTS and Twilio Media Streams.
    * Generates audio with core TTS, converts to mu-law, and streams via WebSocket.
    * Uses a queue to serialize playback and prevent overlapping audio.
+   *
+   * Uses streaming TTS if available for real-time audio generation/playback.
+   * Falls back to batch TTS if streaming is not supported.
    */
   private async playTtsViaStream(text: string, streamSid: string): Promise<void> {
     if (!this.ttsProvider || !this.mediaStreamHandler) {
@@ -611,19 +614,42 @@ export class TwilioProvider implements VoiceCallProvider {
 
     const handler = this.mediaStreamHandler;
     const ttsProvider = this.ttsProvider;
-    await handler.queueTts(streamSid, async (signal) => {
-      // Generate audio with core TTS (returns mu-law at 8kHz)
-      const muLawAudio = await ttsProvider.synthesizeForTelephony(text);
-      for (const chunk of chunkAudio(muLawAudio, CHUNK_SIZE)) {
-        if (signal.aborted) {
-          break;
-        }
-        handler.sendAudio(streamSid, chunk);
 
-        // Pace the audio to match real-time playback
-        await new Promise((resolve) => setTimeout(resolve, CHUNK_DELAY_MS));
-        if (signal.aborted) {
-          break;
+    // Check if streaming TTS is available
+    const supportsStreaming = typeof ttsProvider.synthesizeForTelephonyStreaming === "function";
+
+    await handler.queueTts(streamSid, async (signal) => {
+      if (supportsStreaming) {
+        // Use streaming TTS - audio is generated and sent in real-time
+        // This prevents multi-second gaps while waiting for full audio generation
+        // IMPORTANT: Do NOT add any delay here - streaming TTS already sends chunks
+        // at the correct rate. Adding delays would cause audio to play extremely slowly.
+        await ttsProvider.synthesizeForTelephonyStreaming!(
+          text,
+          async (muLawChunk: Buffer) => {
+            if (signal.aborted) {
+              return;
+            }
+            // Send audio chunks immediately as they become available
+            // No delay needed - Twilio buffers and plays at the correct rate
+            handler.sendAudio(streamSid, muLawChunk);
+          },
+        );
+      } else {
+        // Fall back to batch TTS (original behavior)
+        // Generate full audio first, then stream it
+        // Send chunks as fast as possible - Twilio will buffer and play at correct rate
+        const muLawAudio = await ttsProvider.synthesizeForTelephony(text);
+        for (const chunk of chunkAudio(muLawAudio, CHUNK_SIZE)) {
+          if (signal.aborted) {
+            break;
+          }
+          handler.sendAudio(streamSid, chunk);
+          // No artificial delay needed - Twilio buffers and plays at 8kHz rate
+          // Adding delays causes gaps due to timer imprecision
+          if (signal.aborted) {
+            break;
+          }
         }
       }
 
