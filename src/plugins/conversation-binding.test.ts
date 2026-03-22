@@ -7,7 +7,7 @@ import type {
   SessionBindingAdapter,
   SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
-import { createEmptyPluginRegistry } from "./registry.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { setActivePluginRegistry } from "./runtime.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-binding-"));

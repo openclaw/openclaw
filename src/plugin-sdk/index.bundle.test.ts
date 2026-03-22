@@ -9,10 +9,7 @@ import { buildPluginSdkEntrySources, pluginSdkEntrypoints } from "./entrypoints.
 const require = createRequire(import.meta.url);
 const tsdownModuleUrl = pathToFileURL(require.resolve("tsdown")).href;
 const bundledRepresentativeEntrypoints = [
-  "index",
-  "runtime",
   "channel-runtime",
-  "provider-setup",
   "matrix-runtime-heavy",
   "windows-spawn",
 ] as const;
