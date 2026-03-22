@@ -517,6 +517,7 @@ export async function runPreparedReply(
         cfg,
         provider,
         model,
+        agentId,
         sessionEntry,
       }).enabled,
       verboseLevel: resolvedVerboseLevel,

@@ -1,3 +1,4 @@
+import { listAgentEntries } from "../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
@@ -5,6 +6,7 @@ import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
@@ -167,6 +169,9 @@ export async function resolveReplyDirectives(params: {
     opts,
     skillFilter,
   } = params;
+  const agentEntry = listAgentEntries(cfg).find(
+    (entry) => normalizeAgentId(entry.id) === normalizeAgentId(agentId),
+  );
   let provider = initialProvider;
   let model = initialModel;
 
@@ -387,6 +392,7 @@ export async function resolveReplyDirectives(params: {
       cfg,
       provider,
       model,
+      agentId,
       sessionEntry,
     }).enabled;
 
@@ -398,6 +404,8 @@ export async function resolveReplyDirectives(params: {
     directives.reasoningLevel ??
     (sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ??
     "off";
+  const agentReasoningDefault = agentEntry?.reasoningDefault as ReasoningLevel | undefined;
+  const hasAgentReasoningDefault = agentReasoningDefault !== undefined;
   const resolvedElevatedLevel = elevatedAllowed
     ? (directives.elevatedLevel ??
       (sessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??
@@ -458,7 +466,11 @@ export async function resolveReplyDirectives(params: {
     (sessionEntry?.reasoningLevel !== undefined && sessionEntry?.reasoningLevel !== null);
   const thinkingActive = resolvedThinkLevelWithDefault !== "off";
   if (!reasoningExplicitlySet && resolvedReasoningLevel === "off" && !thinkingActive) {
-    resolvedReasoningLevel = await modelState.resolveDefaultReasoningLevel();
+    if (hasAgentReasoningDefault) {
+      resolvedReasoningLevel = agentReasoningDefault;
+    } else {
+      resolvedReasoningLevel = await modelState.resolveDefaultReasoningLevel();
+    }
   }
   logDirectiveStage("reasoning-default-resolved", `reasoning=${resolvedReasoningLevel}`);
 
@@ -483,6 +495,7 @@ export async function resolveReplyDirectives(params: {
     agentId,
     agentDir,
     agentCfg,
+    agentEntry,
     sessionEntry,
     sessionStore,
     sessionKey,

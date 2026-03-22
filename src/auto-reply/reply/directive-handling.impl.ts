@@ -137,6 +137,7 @@ export async function handleDirectiveOnly(
     cfg: params.cfg,
     provider: resolvedProvider,
     model: resolvedModel,
+    agentId: activeAgentId,
     sessionEntry,
   });
   const effectiveFastMode = directives.fastMode ?? currentFastMode ?? fastModeState.enabled;

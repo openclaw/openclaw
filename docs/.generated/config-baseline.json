@@ -4112,6 +4112,20 @@
       "hasChildren": false
     },
     {
+      "path": "agents.list.*.fastModeDefault",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Agent Fast Mode Default",
+      "help": "Optional per-agent default for fast mode. Applies when no per-message or session fast-mode override is set.",
+      "hasChildren": false
+    },
+    {
       "path": "agents.list.*.groupChat",
       "kind": "core",
       "type": "object",
@@ -5227,6 +5241,25 @@
       "hasChildren": false
     },
     {
+      "path": "agents.list.*.reasoningDefault",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "on",
+        "off",
+        "stream"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Agent Reasoning Default",
+      "help": "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
+      "hasChildren": false
+    },
+    {
       "path": "agents.list.*.runtime",
       "kind": "core",
       "type": "object",
@@ -6285,6 +6318,29 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.thinkingDefault",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "adaptive"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Agent Thinking Default",
+      "help": "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
       "hasChildren": false
     },
     {
