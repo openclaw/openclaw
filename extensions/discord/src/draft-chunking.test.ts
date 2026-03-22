@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { describe, expect, it } from "vitest";
 import { resolveDiscordDraftStreamingChunking } from "./draft-chunking.js";
 
 describe("resolveDiscordDraftStreamingChunking", () => {
