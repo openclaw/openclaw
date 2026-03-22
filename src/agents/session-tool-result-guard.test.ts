@@ -519,3 +519,117 @@ describe("installSessionToolResultGuard", () => {
     expect(syntheticForError).toHaveLength(0);
   });
 });
+
+describe("concurrent append race condition", () => {
+  it("does not synthesize when toolResult arrives concurrently with next assistant message", async () => {
+    // Simulate the exact race: tool_calls appended, then toolResult and a
+    // completion message are dispatched concurrently (both microtasks queued).
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "race_1", name: "read", arguments: {} }],
+      }),
+    );
+
+    // Fire both concurrently — do NOT await between them
+    const p1 = Promise.resolve().then(() =>
+      sm.appendMessage(
+        asAppendMessage({
+          role: "toolResult",
+          toolCallId: "race_1",
+          content: [{ type: "text", text: "real result" }],
+          isError: false,
+        }),
+      ),
+    );
+    const p2 = Promise.resolve().then(() =>
+      sm.appendMessage(
+        asAppendMessage({
+          role: "assistant",
+          content: [{ type: "text", text: "completion" }],
+          stopReason: "endTurn",
+        }),
+      ),
+    );
+
+    await Promise.all([p1, p2]);
+
+    const messages = expectPersistedRoles(sm, ["assistant", "toolResult", "assistant"]);
+    // The toolResult must be the real one, not synthetic
+    const tr = messages[1] as { isError?: boolean; content?: Array<{ text?: string }> };
+    expect(tr.isError).toBe(false);
+    expect(tr.content?.[0]?.text).toBe("real result");
+  });
+
+  it("serializes multiple concurrent appends without duplicating messages", async () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "c1", name: "a", arguments: {} },
+          { type: "toolCall", id: "c2", name: "b", arguments: {} },
+        ],
+      }),
+    );
+
+    // Fire all results concurrently
+    await Promise.all([
+      Promise.resolve().then(() =>
+        sm.appendMessage(
+          asAppendMessage({
+            role: "toolResult",
+            toolCallId: "c1",
+            content: [{ type: "text", text: "r1" }],
+            isError: false,
+          }),
+        ),
+      ),
+      Promise.resolve().then(() =>
+        sm.appendMessage(
+          asAppendMessage({
+            role: "toolResult",
+            toolCallId: "c2",
+            content: [{ type: "text", text: "r2" }],
+            isError: false,
+          }),
+        ),
+      ),
+    ]);
+
+    const messages = expectPersistedRoles(sm, ["assistant", "toolResult", "toolResult"]);
+    // Both results must be the real ones, not synthetic
+    const results = messages.slice(1) as Array<{ isError?: boolean }>;
+    expect(results.every((r) => r.isError === false)).toBe(true);
+  });
+
+  it("getPendingIds() returns empty after concurrent resolution", async () => {
+    const sm = SessionManager.inMemory();
+    const guard = installSessionToolResultGuard(sm);
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "drain_1", name: "x", arguments: {} }],
+      }),
+    );
+
+    await Promise.resolve().then(() =>
+      sm.appendMessage(
+        asAppendMessage({
+          role: "toolResult",
+          toolCallId: "drain_1",
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+        }),
+      ),
+    );
+
+    expect(guard.getPendingIds()).toEqual([]);
+  });
+});
