@@ -35,7 +35,7 @@ export DEEPINFRA_API_KEY="<your-deepinfra-api-key>" # pragma: allowlist secret
   env: { DEEPINFRA_API_KEY: "<your-deepinfra-api-key>" }, // pragma: allowlist secret
   agents: {
     defaults: {
-      model: { primary: "deepinfra/openai/gpt-oss-120b" },
+      model: { primary: "deepinfra/zai-org/GLM-5" },
     },
   },
 }
@@ -58,5 +58,5 @@ deepinfra/moonshotai/Kimi-K2.5
 ## Notes
 
 - Model refs are `deepinfra/<provider>/<model>` (e.g., `deepinfra/Qwen/Qwen3-Max`).
-- Default model: `deepinfra/openai/gpt-oss-120b`
+- Default model: `deepinfra/zai-org/GLM-5`
 - Base URL: `https://api.deepinfra.com/v1/openai/`
