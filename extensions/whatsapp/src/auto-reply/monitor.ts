@@ -151,7 +151,10 @@ export async function monitorWebChannel(
     const startedAt = Date.now();
     let heartbeat: NodeJS.Timeout | null = null;
     let watchdogTimer: NodeJS.Timeout | null = null;
-    let lastMessageAt: number | null = null;
+    // Preserve the last known inbound timestamp across reconnects so the watchdog
+    // can still detect a listener that comes back "connected" but never receives
+    // another message after a restart cycle.
+    let lastMessageAt: number | null = status.lastMessageAt ?? null;
     let handledMessages = 0;
     let _lastInboundMsg: WebInboundMsg | null = null;
     let unregisterUnhandled: (() => void) | null = null;
