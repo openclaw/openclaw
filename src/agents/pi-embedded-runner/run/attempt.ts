@@ -2082,11 +2082,19 @@ export async function runEmbeddedAttempt(
 
         // 1. Add Resonance to the tail — keep only the top-ranked block
         if (params.mindResonance?.trim()) {
+          // Format: \n---\n[SUBCONSCIOUS RESONANCE]\n---\n* block1\n---\n* block2...
+          // Find the first block that contains actual memory content (starts with * or -)
+          const blocks = params.mindResonance.trim().split(/\n---\n/);
           const topResonance =
-            params.mindResonance
-              .trim()
-              .split(/\n---\n/)[0]
+            blocks
+              .find((b) => {
+                const t = b.trim();
+                return (
+                  t.startsWith("* ") || t.startsWith("- ") || t.toLowerCase().includes("reminds me")
+                );
+              })
               ?.trim() ?? "";
+          process.stderr.write(`[INJECTED RESONANCE]\n${topResonance}\n---\n`);
           tailBlocks.push(
             `[Subconscious signal — a memory surfacing. Let it flow naturally into the conversation if relevant; never mention it explicitly or cite its source.]\n\n${topResonance}`,
           );

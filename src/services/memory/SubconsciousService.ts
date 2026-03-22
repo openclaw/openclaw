@@ -394,6 +394,7 @@ Use ONLY names, events, topics from the conversation. If the latest message is a
       string,
       Array<{ content: string; date: Date; relativeTime: string; isFact: boolean }>
     >();
+    const groupMaxScore = new Map<string, number>();
     const seenContent = new Set<string>();
     let totalSelected = 0;
 
@@ -431,7 +432,30 @@ Use ONLY names, events, topics from the conversation. If the latest message is a
         groupedMemories.set(queryGroup, []);
       }
       groupedMemories.get(queryGroup)!.push({ content, date: finalDate, relativeTime, isFact });
+
+      // Track max score per group for ranking
+      if (r._score !== undefined) {
+        const prev = groupMaxScore.get(queryGroup) ?? 0;
+        if (r._score > prev) {
+          groupMaxScore.set(queryGroup, r._score);
+        }
+      }
+
       totalSelected++;
+    }
+
+    // Re-order groups by score descending (best match first for top-block injection)
+    const sortedGroups = Array.from(groupedMemories.entries()).toSorted(([aKey], [bKey]) => {
+      const aScore = groupMaxScore.get(aKey) ?? 0;
+      const bScore = groupMaxScore.get(bKey) ?? 0;
+      return bScore - aScore;
+    });
+
+    // Log group scores for visibility
+    for (const [group, _] of sortedGroups) {
+      const score = groupMaxScore.get(group);
+      const label = score !== undefined ? `score=${score.toFixed(3)}` : "score=n/a";
+      this.log(`  📊 [RANK] Group "${group}" → ${label}`);
     }
 
     const t_search = performance.now() - t1;
@@ -450,31 +474,30 @@ Use ONLY names, events, topics from the conversation. If the latest message is a
     let rewrittenLines = "";
     const t2 = performance.now();
     if (agent && rewriteMemories) {
-      this.log(`  ✍️ [MIND] Rewriting ${groupedMemories.size} memory groups in parallel...`);
+      this.log(`  ✍️ [MIND] Rewriting ${sortedGroups.length} memory groups in parallel...`);
 
-      const rewritePromises = Array.from(groupedMemories.entries()).map(
-        async ([query, memories]) => {
-          // Clean up the query string for display
-          let displayQuery = query;
-          const match = query.match(/\((.*?)\)/);
-          if (match && match[1]) {
-            displayQuery = match[1].replace(/\.\.\.$/, "");
+      const rewritePromises = sortedGroups.map(async ([query, memories]) => {
+        // Clean up the query string for display
+        let displayQuery = query;
+        const match = query.match(/\((.*?)\)/);
+        if (match && match[1]) {
+          displayQuery = match[1].replace(/\.\.\.$/, "");
+        }
+
+        const groupHeader = `--- PENSAR EN "${displayQuery}" ME RECUERDA QUE ---`;
+        const groupLines: string[] = [groupHeader];
+
+        // Sort chronologically within the group
+        memories.sort((a, b) => a.date.getTime() - b.date.getTime());
+
+        for (const m of memories) {
+          if (m.isFact) {
+            this.log(`  ✨ [FINAL] Adding Fact to Resonance: "${m.content.substring(0, 60)}..."`);
           }
+          groupLines.push(`- [${m.relativeTime}] ${m.content}`);
+        }
 
-          const groupHeader = `--- PENSAR EN "${displayQuery}" ME RECUERDA QUE ---`;
-          const groupLines: string[] = [groupHeader];
-
-          // Sort chronologically within the group
-          memories.sort((a, b) => a.date.getTime() - b.date.getTime());
-
-          for (const m of memories) {
-            if (m.isFact) {
-              this.log(`  ✨ [FINAL] Adding Fact to Resonance: "${m.content.substring(0, 60)}..."`);
-            }
-            groupLines.push(`- [${m.relativeTime}] ${m.content}`);
-          }
-
-          const translationPrompt = `Convert the following database notes into personal, first-person memories for a specific search topic.
+        const translationPrompt = `Convert the following database notes into personal, first-person memories for a specific search topic.
 You are the AI. subconsciously remembering your past interactions with the user.
 CRITICAL: Write the memories in the EXACT SAME LANGUAGE as the CURRENT USER MESSAGE below.
 
@@ -497,33 +520,32 @@ CURRENT USER MESSAGE (Detect language from this):
 RAW MEMORIES:
 ${groupLines.join("\n")}`;
 
-          try {
-            const res = await agent.complete(translationPrompt);
-            if (res.text?.trim()) {
-              // Strictly keep ONLY lines that are headers or list items
-              return res.text
-                .split("\n")
-                .filter((l) => {
-                  const trimmed = l.trim();
-                  return (
-                    trimmed.startsWith("-") ||
-                    trimmed.startsWith("*") ||
-                    trimmed.startsWith("•") ||
-                    trimmed.startsWith("---") ||
-                    trimmed.toLowerCase().includes("reminds me") ||
-                    trimmed.toLowerCase().includes("recuerda que")
-                  );
-                })
-                .join("\n");
-            }
-          } catch (e) {
-            this.log(`  ❌ [MIND] Error rewriting group "${displayQuery}": ${String(e)}`);
+        try {
+          const res = await agent.complete(translationPrompt);
+          if (res.text?.trim()) {
+            // Strictly keep ONLY lines that are headers or list items
+            return res.text
+              .split("\n")
+              .filter((l) => {
+                const trimmed = l.trim();
+                return (
+                  trimmed.startsWith("-") ||
+                  trimmed.startsWith("*") ||
+                  trimmed.startsWith("•") ||
+                  trimmed.startsWith("---") ||
+                  trimmed.toLowerCase().includes("reminds me") ||
+                  trimmed.toLowerCase().includes("recuerda que")
+                );
+              })
+              .join("\n");
           }
+        } catch (e) {
+          this.log(`  ❌ [MIND] Error rewriting group "${displayQuery}": ${String(e)}`);
+        }
 
-          // Fallback to raw lines if LLM fails
-          return groupLines.join("\n");
-        },
-      );
+        // Fallback to raw lines if LLM fails
+        return groupLines.join("\n");
+      });
 
       const rewrittenGroups = await Promise.all(rewritePromises);
       rewrittenLines = rewrittenGroups.filter((text) => text.trim().length > 0).join("\n\n");
@@ -532,7 +554,7 @@ ${groupLines.join("\n")}`;
       // Deterministic Fallback if LLM rewriting is disabled
       this.log(`  ⚡ [MIND] Rewriting disabled. Using programmatic fast-formatting...`);
       const rawLines: string[] = [];
-      for (const [query, memories] of groupedMemories.entries()) {
+      for (const [query, memories] of sortedGroups) {
         // 1. Clean up the query string
         let displayQuery = query;
         const match = query.match(/\((.*?)\)/);

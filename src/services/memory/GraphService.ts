@@ -17,6 +17,7 @@ export interface MemoryResult {
   timestamp: string;
   _sourceQuery?: string;
   _boosted?: boolean;
+  _score?: number;
   uuid?: string;
   fact?: string;
   message?: {
@@ -47,6 +48,7 @@ interface GraphFact {
   target_name?: string;
   created_at?: string;
   episodes?: string[];
+  score?: number;
 }
 
 interface GraphEpisode {
@@ -523,12 +525,19 @@ export class GraphService {
       });
 
       // Collect raw fact entries first, then resolve episode valid_at in parallel
-      const rawFacts: Array<{ content: string; fallbackTs: string; episodeUuid?: string }> = [];
+      const rawFacts: Array<{
+        content: string;
+        fallbackTs: string;
+        episodeUuid?: string;
+        score?: number;
+      }> = [];
       for (const c of filteredResults) {
+        // score may be at top level (single-fact item) or inside parsed.facts[i].score
+        const topScore = typeof c.score === "number" ? c.score : undefined;
         try {
           const cText = c.text as string | undefined;
           if (cText) {
-            const parsed = JSON.parse(cText) as { facts?: GraphFact[] };
+            const parsed = JSON.parse(cText) as { facts?: GraphFact[]; message?: string };
             if (parsed.facts && Array.isArray(parsed.facts)) {
               for (const f of parsed.facts) {
                 rawFacts.push({
@@ -537,6 +546,8 @@ export class GraphService {
                     "Unknown fact",
                   fallbackTs: String(f.created_at || c.created_at),
                   episodeUuid: f.episodes?.[0],
+                  // score lives inside the fact dict when returned via _search
+                  score: typeof f.score === "number" ? f.score : topScore,
                 });
               }
               continue;
@@ -548,11 +559,13 @@ export class GraphService {
               (c.fact as string) ||
               (cText ?? (typeof c === "string" ? c : JSON.stringify(c))),
             fallbackTs: String(c.created_at),
+            score: topScore,
           });
         } catch {
           rawFacts.push({
             content: typeof c === "string" ? c : JSON.stringify(c),
             fallbackTs: String(c.created_at),
+            score: topScore,
           });
         }
       }
@@ -569,6 +582,7 @@ export class GraphService {
         timestamp: resolvedTimestamps[i] ?? f.fallbackTs,
         _sourceQuery: `Graph Facts (${query})`,
         _boosted: true,
+        _score: f.score,
       }));
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError") {
