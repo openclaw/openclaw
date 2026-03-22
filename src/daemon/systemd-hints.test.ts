@@ -12,6 +12,9 @@ describe("isSystemdUnavailableDetail", () => {
         "systemctl not available; systemd user services are required on Linux.",
       ),
     ).toBe(true);
+    expect(
+      isSystemdUnavailableDetail("Failed to connect to bus: Transport endpoint is not connected"),
+    ).toBe(true);
     expect(isSystemdUnavailableDetail("permission denied")).toBe(false);
   });
 });

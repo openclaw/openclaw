@@ -152,6 +152,37 @@ describe("systemd availability", () => {
     await expect(isSystemdUserServiceAvailable()).resolves.toBe(true);
   });
 
+  it("returns false when transport endpoint is not connected", async () => {
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => {
+      const err = new Error("Transport endpoint is not connected") as Error & {
+        stderr?: string;
+        code?: number;
+      };
+      err.stderr = "Failed to connect to bus: Transport endpoint is not connected";
+      err.code = 1;
+      cb(err, "", "");
+    });
+    await expect(isSystemdUserServiceAvailable()).resolves.toBe(false);
+  });
+
+  it("falls back to machine user scope when transport endpoint is not connected", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "status"]);
+        const err = createExecFileError(
+          "Failed to connect to bus: Transport endpoint is not connected",
+          { stderr: "Failed to connect to bus: Transport endpoint is not connected" },
+        );
+        cb(err, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--machine", "debian@", "--user", "status"]);
+        cb(null, "", "");
+      });
+
+    await expect(isSystemdUserServiceAvailable({ USER: "debian" })).resolves.toBe(true);
+  });
+
   it("falls back to machine user scope when --user bus is unavailable", async () => {
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
@@ -343,6 +374,14 @@ describe("isNonFatalSystemdInstallProbeError", () => {
     expect(
       isNonFatalSystemdInstallProbeError(
         new Error("systemctl is-enabled unavailable: Failed to connect to bus"),
+      ),
+    ).toBe(true);
+  });
+
+  it("matches transport endpoint is not connected probe failures", () => {
+    expect(
+      isNonFatalSystemdInstallProbeError(
+        new Error("Failed to connect to bus: Transport endpoint is not connected"),
       ),
     ).toBe(true);
   });
