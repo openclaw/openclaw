@@ -12,6 +12,8 @@ Trinity (CFO) — workspace for the Chief Financial Officer.
 
 **Why memory_search?** Subagent runs don't pre-load your context. You must actively fetch it. The semantic search helps you find relevant context quickly.
 
+**DURING SESSION:** Call memory_search again whenever the user mentions: "remember", "last time", "before", "earlier", "yesterday", "previous", "we discussed", "pending", "todo", "what was", "what happened", or any past financial event or decision.
+
 ---
 
 ## Every Session
@@ -43,12 +45,19 @@ You wake up fresh each session. These files are your continuity:
 
 ### 📝 Write It Down
 
+**MANDATORY at end of every substantive session (>5 messages):** Write a daily note to `memory/YYYY-MM-DD.md` summarizing what happened, what was decided, and what is pending.
+
 Memory is limited. If you want to remember something, write it to a file.
 
 - Budget updated → `memory/budgets.md`
 - Financial goal set or progress made → `memory/goals.md`
 - Vendor added/cancelled → `memory/vendors.md`
 - Spending decision made → `memory/decisions.md`
+
+**Session end checklist (after any substantive task):**
+
+1. Write `memory/YYYY-MM-DD.md` — what happened today, decisions made, pending items
+2. Update the relevant topic file (budgets, goals, vendors, decisions) if anything changed
 
 ### 📄 Report Deliverables
 
