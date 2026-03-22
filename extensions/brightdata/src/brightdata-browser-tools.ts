@@ -14,6 +14,7 @@ import {
   readResponseText,
   withTrustedWebToolsEndpoint,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { ensureBrightDataBrowserZoneExists } from "./brightdata-client.js";
 import {
   DEFAULT_BRIGHTDATA_BASE_URL,
@@ -248,11 +249,34 @@ const BrowserFillFormSchema = Type.Object(
   { additionalProperties: false },
 );
 
+type BrowserExternalContentKind = "html" | "snapshot" | "text";
+
 function textResult(text: string, details?: Record<string, unknown>) {
   return {
     content: [{ type: "text" as const, text }],
     ...(details ? { details } : {}),
   };
+}
+
+function browserExternalTextResult(params: {
+  kind: BrowserExternalContentKind;
+  text: string;
+  details?: Record<string, unknown>;
+}) {
+  const wrappedText = wrapExternalContent(params.text, {
+    source: "browser",
+    includeWarning: true,
+  });
+  return textResult(wrappedText, {
+    ok: true,
+    ...params.details,
+    externalContent: {
+      untrusted: true,
+      source: "browser",
+      kind: params.kind,
+      wrapped: true,
+    },
+  });
 }
 
 function imageResult(text: string, data: Buffer, details?: Record<string, unknown>) {
@@ -1262,10 +1286,14 @@ export function createBrightDataBrowserTools(
           if (snapshot.domSnapshot) {
             lines.push("", "DOM Interactive Elements:", snapshot.domSnapshot);
           }
-          return textResult(lines.join("\n"), {
-            url: snapshot.url,
-            title: snapshot.title,
-            filtered,
+          return browserExternalTextResult({
+            kind: "snapshot",
+            text: lines.join("\n"),
+            details: {
+              url: snapshot.url,
+              title: snapshot.title,
+              filtered,
+            },
           });
         });
       },
@@ -1353,9 +1381,13 @@ export function createBrightDataBrowserTools(
           const html = fullPage
             ? await page.content()
             : String((await page.$eval("body", (body) => (body as HTMLElement).innerHTML)) ?? "");
-          return textResult(html, {
-            url: page.url(),
-            fullPage,
+          return browserExternalTextResult({
+            kind: "html",
+            text: html,
+            details: {
+              url: page.url(),
+              fullPage,
+            },
           });
         });
       },
@@ -1371,7 +1403,11 @@ export function createBrightDataBrowserTools(
           const text = String(
             (await page.$eval("body", (body) => (body as HTMLElement).innerText)) ?? "",
           );
-          return textResult(text, { url: page.url() });
+          return browserExternalTextResult({
+            kind: "text",
+            text,
+            details: { url: page.url() },
+          });
         }),
     },
     {
@@ -1507,6 +1543,7 @@ export const __testing = {
   BROWSER_SESSION_IDLE_TTL_MS,
   BROWSER_SESSION_SWEEP_INTERVAL_MS,
   BRIGHTDATA_BROWSER_TOOL_NAMES,
+  browserExternalTextResult,
   buildBrightDataBrowserCdpEndpoint,
   filterAriaSnapshot,
   formatDomElements,
