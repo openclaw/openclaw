@@ -31,6 +31,19 @@ describe("pickSummaryFromPayloads", () => {
     ];
     expect(pickSummaryFromPayloads(payloads)).toBe("normal text");
   });
+
+  it("skips reasoning payloads in first pass", () => {
+    const payloads = [
+      { text: "Final answer" },
+      { text: "Reasoning:\n_thinking step_", isReasoning: true },
+    ];
+    expect(pickSummaryFromPayloads(payloads)).toBe("Final answer");
+  });
+
+  it("never falls back to reasoning payloads", () => {
+    const payloads = [{ text: "Reasoning:\n_thinking step_", isReasoning: true }];
+    expect(pickSummaryFromPayloads(payloads)).toBeUndefined();
+  });
 });
 
 describe("pickLastNonEmptyTextFromPayloads", () => {
@@ -54,6 +67,19 @@ describe("pickLastNonEmptyTextFromPayloads", () => {
       { text: "bad", isError: true },
     ];
     expect(pickLastNonEmptyTextFromPayloads(payloads)).toBe("good");
+  });
+
+  it("skips reasoning payloads in first pass", () => {
+    const payloads = [
+      { text: "Actual output" },
+      { text: "Reasoning:\n_thinking..._", isReasoning: true },
+    ];
+    expect(pickLastNonEmptyTextFromPayloads(payloads)).toBe("Actual output");
+  });
+
+  it("never falls back to reasoning payloads", () => {
+    const payloads = [{ text: "Reasoning:\n_thinking..._", isReasoning: true }];
+    expect(pickLastNonEmptyTextFromPayloads(payloads)).toBeUndefined();
   });
 });
 
@@ -83,6 +109,17 @@ describe("pickLastDeliverablePayload", () => {
     const normal = { text: "ok", isError: undefined };
     const error = { text: "bad", isError: true as const };
     expect(pickLastDeliverablePayload([normal, error])).toBe(normal);
+  });
+
+  it("skips reasoning payloads in first pass", () => {
+    const real = { text: "Delivered content" };
+    const reasoning = { text: "Reasoning:\n_thinking..._", isReasoning: true as const };
+    expect(pickLastDeliverablePayload([real, reasoning])).toBe(real);
+  });
+
+  it("never falls back to reasoning payloads", () => {
+    const reasoning = { text: "Reasoning:\n_thinking..._", isReasoning: true as const };
+    expect(pickLastDeliverablePayload([reasoning])).toBeUndefined();
   });
 });
 

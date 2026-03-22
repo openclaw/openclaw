@@ -772,7 +772,7 @@ export async function runCronIsolatedAgentTurn(params: {
   if (isAborted()) {
     return withRunSession({ status: "error", error: abortReason(), ...telemetry });
   }
-  const firstText = payloads[0]?.text ?? "";
+  const firstText = payloads.find((p) => !p.isReasoning)?.text ?? "";
   let summary = pickSummaryFromPayloads(payloads) ?? pickSummaryFromOutput(firstText);
   let outputText = pickLastNonEmptyTextFromPayloads(payloads);
   let synthesizedText = outputText?.trim() || summary?.trim() || undefined;
@@ -795,7 +795,12 @@ export async function runCronIsolatedAgentTurn(params: {
     lastErrorPayloadIndex >= 0 &&
     payloads
       .slice(lastErrorPayloadIndex + 1)
-      .some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
+      .some(
+        (payload) =>
+          payload?.isError !== true &&
+          payload?.isReasoning !== true &&
+          Boolean(payload?.text?.trim()),
+      );
   // Tool wrappers can emit transient/false-positive error payloads before a valid final
   // assistant payload.  Only treat payload errors as recoverable when (a) the run itself
   // did not report a model/context-level error and (b) a non-error payload follows.
