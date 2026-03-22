@@ -7,11 +7,25 @@ import type {
   SessionBindingAdapter,
   SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
-import { createEmptyPluginRegistry } from "./registry-empty.js";
-import { setActivePluginRegistry } from "./runtime.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-binding-"));
 const approvalsPath = path.join(tempRoot, "plugin-binding-approvals.json");
+
+type PluginBindingRegistryStub = {
+  conversationBindingResolvedHandlers: Array<{
+    pluginId: string;
+    pluginRoot?: string;
+    handler: (event: unknown) => void | Promise<void>;
+    source: string;
+    rootDir?: string;
+  }>;
+};
+
+function createEmptyPluginRegistry(): PluginBindingRegistryStub {
+  return {
+    conversationBindingResolvedHandlers: [],
+  };
+}
 
 const sessionBindingState = vi.hoisted(() => {
   const records = new Map<string, SessionBindingRecord>();
@@ -83,6 +97,10 @@ const sessionBindingState = vi.hoisted(() => {
   };
 });
 
+const pluginRuntimeState = vi.hoisted(() => ({
+  registry: createEmptyPluginRegistry() as PluginBindingRegistryStub,
+}));
+
 vi.mock("../infra/home-dir.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/home-dir.js")>();
   return {
@@ -96,6 +114,13 @@ vi.mock("../infra/home-dir.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./runtime.js", () => ({
+  getActivePluginRegistry: () => pluginRuntimeState.registry,
+  setActivePluginRegistry: (registry: PluginBindingRegistryStub) => {
+    pluginRuntimeState.registry = registry;
+  },
+}));
+
 const {
   __testing,
   buildPluginBindingApprovalCustomId,
@@ -107,6 +132,7 @@ const {
 } = await import("./conversation-binding.js");
 const { registerSessionBindingAdapter, unregisterSessionBindingAdapter } =
   await import("../infra/outbound/session-binding-service.js");
+const { setActivePluginRegistry } = await import("./runtime.js");
 
 type PluginBindingRequest = Awaited<ReturnType<typeof requestPluginConversationBinding>>;
 type ConversationBindingModule = typeof import("./conversation-binding.js");
