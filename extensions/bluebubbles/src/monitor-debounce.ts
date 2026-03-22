@@ -9,6 +9,11 @@ import type { OpenClawConfig } from "./runtime-api.js";
 type BlueBubblesDebounceEntry = {
   message: NormalizedWebhookMessage;
   target: WebhookTarget;
+  eventType?: string;
+  replayLifecycle?: {
+    onFlushSuccess: () => void;
+    onFlushFailure: (err: unknown) => void;
+  };
 };
 
 export type BlueBubblesDebouncer = {
@@ -111,6 +116,27 @@ export function createBlueBubblesDebounceRegistry(params: {
   processMessage: (message: NormalizedWebhookMessage, target: WebhookTarget) => Promise<void>;
 }): BlueBubblesDebounceRegistry {
   const targetDebouncers = new Map<WebhookTarget, BlueBubblesDebouncer>();
+  const settleReplayLifecycle = (
+    entries: BlueBubblesDebounceEntry[],
+    result: "success" | "failure",
+    err?: unknown,
+  ) => {
+    for (const entry of entries) {
+      const lifecycle = entry.replayLifecycle;
+      if (!lifecycle) {
+        continue;
+      }
+      try {
+        if (result === "success") {
+          lifecycle.onFlushSuccess();
+        } else {
+          lifecycle.onFlushFailure(err);
+        }
+      } catch {
+        // Keep debounce flush resilient even if replay bookkeeping throws.
+      }
+    }
+  };
 
   return {
     getOrCreateDebouncer: (target) => {
@@ -149,6 +175,11 @@ export function createBlueBubblesDebounceRegistry(params: {
         },
         shouldDebounce: (entry) => {
           const msg = entry.message;
+          if (entry.eventType === "updated-message") {
+            // Process edits immediately and flush any pending same-key buffer first.
+            // This avoids synthesizing "old text + edited text" merged bodies.
+            return false;
+          }
           // Skip debouncing for from-me messages (they're just cached, not processed)
           if (msg.fromMe) {
             return false;
@@ -170,9 +201,15 @@ export function createBlueBubblesDebounceRegistry(params: {
           const flushTarget = entries[0].target;
 
           if (entries.length === 1) {
-            // Single message - process normally
-            await params.processMessage(entries[0].message, flushTarget);
-            return;
+            try {
+              // Single message - process normally
+              await params.processMessage(entries[0].message, flushTarget);
+              settleReplayLifecycle(entries, "success");
+              return;
+            } catch (err) {
+              settleReplayLifecycle(entries, "failure", err);
+              throw err;
+            }
           }
 
           // Multiple messages - combine and process
@@ -186,7 +223,13 @@ export function createBlueBubblesDebounceRegistry(params: {
             );
           }
 
-          await params.processMessage(combined, flushTarget);
+          try {
+            await params.processMessage(combined, flushTarget);
+            settleReplayLifecycle(entries, "success");
+          } catch (err) {
+            settleReplayLifecycle(entries, "failure", err);
+            throw err;
+          }
         },
         onError: (err) => {
           runtime.error?.(
