@@ -1123,10 +1123,10 @@
                   "tools/pdf",
                   "tools/reactions",
                   "tools/thinking",
+                  "tools/web",
                   {
                     "group": "Web Search",
                     "pages": [
-                      "tools/web",
                       "tools/brave-search",
                       "tools/firecrawl",
                       "tools/gemini-search",
