@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   collectAllowlistProviderGroupPolicyWarnings,
   collectAllowlistProviderRestrictSendersWarnings,
+  composeAccountWarningCollectors,
   composeWarningCollectors,
   createAllowlistProviderGroupPolicyWarningCollector,
   createConditionalWarningCollector,
@@ -111,6 +112,25 @@ describe("group policy warning builders", () => {
 
     expect(collect({ open: true })).toEqual(["open", "missing token", "cannot send replies"]);
     expect(collect({ open: false, token: "x" })).toEqual([]);
+  });
+
+  it("composes account-scoped warning collectors", () => {
+    const collect = composeAccountWarningCollectors<
+      { enabled: boolean },
+      { account: { enabled: boolean } }
+    >(
+      () => ["base"],
+      (account) => (account.enabled ? "enabled" : undefined),
+      () => ["extra-a", "extra-b"],
+    );
+
+    expect(collect({ account: { enabled: true } })).toEqual([
+      "base",
+      "enabled",
+      "extra-a",
+      "extra-b",
+    ]);
+    expect(collect({ account: { enabled: false } })).toEqual(["base", "extra-a", "extra-b"]);
   });
 
   it("builds base open-policy warning", () => {
