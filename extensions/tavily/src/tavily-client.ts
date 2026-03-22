@@ -92,6 +92,7 @@ export async function runTavilySearch(
       topic: params.topic,
       includeAnswer: params.includeAnswer,
       timeRange: params.timeRange,
+      days: params.days,
       includeDomains: params.includeDomains,
       excludeDomains: params.excludeDomains,
     }),

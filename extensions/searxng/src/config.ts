@@ -9,6 +9,7 @@ type SearXNGSearchConfig =
   | {
       apiKey?: unknown;
       baseUrl?: string;
+      allowPrivateNetwork?: boolean;
     }
   | undefined;
 
@@ -20,10 +21,21 @@ type PluginEntryConfig = {
 };
 
 export function resolveSearXNGSearchConfig(cfg?: OpenClawConfig): SearXNGSearchConfig {
+  const toolsConfig = cfg?.tools?.web?.search;
+  const toolsSearXNG = toolsConfig?.searxng as SearXNGSearchConfig;
   const pluginConfig = cfg?.plugins?.entries?.searxng?.config as PluginEntryConfig;
   const pluginWebSearch = pluginConfig?.webSearch;
-  if (pluginWebSearch && typeof pluginWebSearch === "object" && !Array.isArray(pluginWebSearch)) {
-    return pluginWebSearch;
+
+  const merged = {
+    ...(pluginWebSearch && typeof pluginWebSearch === "object" ? pluginWebSearch : {}),
+    ...(toolsSearXNG && typeof toolsSearXNG === "object" ? toolsSearXNG : {}),
+  } as SearXNGSearchConfig;
+
+  if (merged && typeof merged === "object" && Object.keys(merged).length > 0) {
+    return {
+      ...merged,
+      allowPrivateNetwork: merged.allowPrivateNetwork ?? toolsConfig?.allowPrivateNetwork,
+    };
   }
   return undefined;
 }
@@ -53,6 +65,11 @@ export function resolveSearXNGBaseUrl(cfg?: OpenClawConfig): string {
     normalizeSecretInput(process.env.SEARXNG_BASE_URL) ||
     "";
   return configured || DEFAULT_SEARXNG_BASE_URL;
+}
+
+export function resolveSearXNGAllowPrivateNetwork(cfg?: OpenClawConfig): boolean {
+  const search = resolveSearXNGSearchConfig(cfg);
+  return search?.allowPrivateNetwork === true;
 }
 
 export function resolveSearXNGTimeoutSeconds(override?: number): number {

@@ -480,6 +480,8 @@ export type ToolsConfig = {
       timeoutSeconds?: number;
       /** Cache TTL in minutes for search results. */
       cacheTtlMinutes?: number;
+      /** Allow web search requests to RFC1918 private networks (e.g. for self-hosted SearXNG). */
+      allowPrivateNetwork?: boolean;
       /** @deprecated Legacy Brave scoped config. */
       brave?: WebSearchLegacyProviderConfig;
       /** @deprecated Legacy Firecrawl scoped config. */

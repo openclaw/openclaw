@@ -39,7 +39,11 @@ export {
 } from "../agents/tools/web-search-provider-config.js";
 export type { SearchConfigRecord } from "../agents/tools/web-search-provider-common.js";
 export { resolveWebSearchProviderCredential } from "../agents/tools/web-search-provider-credentials.js";
-export { withTrustedWebToolsEndpoint } from "../agents/tools/web-guarded-fetch.js";
+export {
+  fetchWithWebToolsNetworkGuard,
+  withTrustedWebToolsEndpoint,
+  withWebToolsNetworkGuard,
+} from "../agents/tools/web-guarded-fetch.js";
 export {
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_TIMEOUT_SECONDS,
