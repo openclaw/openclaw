@@ -178,7 +178,7 @@ async function shouldMarkTelegramNetworkHealthy(
   // For getUpdates, defer to grammY's own body-consumption path: a proxy may
   // still drop a 200 JSON stream mid-read, and we should not clear outage
   // streaks before that parse succeeds.
-  if (method === "getUpdates" && typed.status >= 200 && typed.status < 300) {
+  if (method === "getupdates" && typed.status >= 200 && typed.status < 300) {
     return false;
   }
 
@@ -373,12 +373,6 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       : undefined;
 
   const bot = new botRuntime.Bot(opts.token, client ? { client } : undefined);
-  if (noteTelegramNetworkHealthy) {
-    Object.defineProperty(bot, TELEGRAM_NOTE_NETWORK_HEALTHY, {
-      value: noteTelegramNetworkHealthy,
-      configurable: true,
-    });
-  }
   bot.api.config.use(botRuntime.apiThrottler());
   // Catch all errors from bot middleware to prevent unhandled rejections
   bot.catch((err) => {
@@ -626,6 +620,10 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   noteTelegramNetworkHealthy = () => {
     sendChatActionHandler.noteNetworkHealthy();
   };
+  Object.defineProperty(bot, TELEGRAM_NOTE_NETWORK_HEALTHY, {
+    value: noteTelegramNetworkHealthy,
+    configurable: true,
+  });
 
   const processMessage = createTelegramMessageProcessor({
     bot,

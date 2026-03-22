@@ -2233,11 +2233,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockRejectedValue(new Error("dispatcher exploded"));
     deliverReplies.mockResolvedValue({ delivered: true });
-    const abortController = new AbortController();
-
     await dispatchWithContext({
       context: createContext(),
-      opts: { fetchAbortSignal: abortController.signal },
+      opts: { fetchAbortSignal: new AbortController().signal },
     });
 
     expect(draftStream.stop).toHaveBeenCalledTimes(1);
@@ -2246,7 +2244,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).toHaveBeenCalledTimes(1);
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
-        abortSignal: abortController.signal,
         replies: [
           { text: "Something went wrong while processing your request. Please try again." },
         ],
