@@ -7,6 +7,10 @@ import {
   type Event,
 } from "nostr-tools";
 import { decrypt, encrypt } from "nostr-tools/nip04";
+import {
+  createDirectDmPreCryptoGuardPolicy,
+  type DirectDmPreCryptoGuardPolicyOverrides,
+} from "../runtime-api.js";
 import type { NostrProfile } from "./config-schema.js";
 import { DEFAULT_RELAYS } from "./default-relays.js";
 import {
@@ -33,13 +37,7 @@ import { createSeenTracker, type SeenTracker } from "./seen-tracker.js";
 const STARTUP_LOOKBACK_SEC = 120; // tolerate relay lag / clock skew
 const MAX_PERSISTED_EVENT_IDS = 5000;
 const STATE_PERSIST_DEBOUNCE_MS = 5000; // Debounce state writes
-const MAX_EVENT_FUTURE_SKEW_SEC = 120;
-const MAX_CIPHERTEXT_BYTES = 16 * 1024;
-const MAX_PLAINTEXT_BYTES = 8 * 1024;
-const RATE_LIMIT_WINDOW_MS = 60_000;
-const MAX_EVENTS_PER_SENDER_PER_WINDOW = 20;
-const MAX_EVENTS_GLOBAL_PER_WINDOW = 200;
-const MAX_TRACKED_RATE_LIMIT_KEYS = 4096;
+const DEFAULT_INBOUND_GUARD_POLICY = createDirectDmPreCryptoGuardPolicy();
 
 // Circuit breaker configuration
 const CIRCUIT_BREAKER_THRESHOLD = 5; // failures before opening
@@ -71,6 +69,8 @@ export interface NostrBusOptions {
     senderPubkey: string;
     reply: (text: string) => Promise<void>;
   }) => Promise<"allow" | "block" | "pairing">;
+  /** Override pre-crypto DM guardrails for tests or future channel tuning (optional) */
+  guardPolicy?: DirectDmPreCryptoGuardPolicyOverrides;
   /** Called on errors (optional) */
   onError?: (error: Error, context: string) => void;
   /** Called on connection status changes (optional) */
@@ -404,6 +404,14 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
   const pool = new SimplePool();
   const accountId = options.accountId ?? pk.slice(0, 16);
   const gatewayStartedAt = Math.floor(Date.now() / 1000);
+  const guardPolicy = createDirectDmPreCryptoGuardPolicy({
+    ...DEFAULT_INBOUND_GUARD_POLICY,
+    ...options.guardPolicy,
+    rateLimit: {
+      ...DEFAULT_INBOUND_GUARD_POLICY.rateLimit,
+      ...options.guardPolicy?.rateLimit,
+    },
+  });
 
   // Initialize metrics
   const metrics = onMetric ? createMetrics(onMetric) : createNoopMetrics();
@@ -467,13 +475,13 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
 
   const inflight = new Set<string>();
   const perSenderRateLimiter = createFixedWindowRateLimiter({
-    windowMs: RATE_LIMIT_WINDOW_MS,
-    maxRequests: MAX_EVENTS_PER_SENDER_PER_WINDOW,
-    maxTrackedKeys: MAX_TRACKED_RATE_LIMIT_KEYS,
+    windowMs: guardPolicy.rateLimit.windowMs,
+    maxRequests: guardPolicy.rateLimit.maxPerSenderPerWindow,
+    maxTrackedKeys: guardPolicy.rateLimit.maxTrackedSenderKeys,
   });
   const globalRateLimiter = createFixedWindowRateLimiter({
-    windowMs: RATE_LIMIT_WINDOW_MS,
-    maxRequests: MAX_EVENTS_GLOBAL_PER_WINDOW,
+    windowMs: guardPolicy.rateLimit.windowMs,
+    maxRequests: guardPolicy.rateLimit.maxGlobalPerWindow,
     maxTrackedKeys: 1,
   });
 
@@ -508,12 +516,12 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         return;
       }
 
-      if (event.created_at > Math.floor(Date.now() / 1000) + MAX_EVENT_FUTURE_SKEW_SEC) {
+      if (event.created_at > Math.floor(Date.now() / 1000) + guardPolicy.maxFutureSkewSec) {
         metrics.emit("event.rejected.future");
         return;
       }
 
-      if (event.kind !== 4) {
+      if (!guardPolicy.allowedKinds.includes(event.kind)) {
         metrics.emit("event.rejected.wrong_kind");
         return;
       }
@@ -570,7 +578,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       }
       updateRateLimiterSizeMetric();
 
-      if (Buffer.byteLength(event.content, "utf8") > MAX_CIPHERTEXT_BYTES) {
+      if (Buffer.byteLength(event.content, "utf8") > guardPolicy.maxCiphertextBytes) {
         metrics.emit("event.rejected.oversized_ciphertext");
         return;
       }
@@ -598,7 +606,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         return;
       }
 
-      if (Buffer.byteLength(plaintext, "utf8") > MAX_PLAINTEXT_BYTES) {
+      if (Buffer.byteLength(plaintext, "utf8") > guardPolicy.maxPlaintextBytes) {
         metrics.emit("event.rejected.oversized_plaintext");
         return;
       }
