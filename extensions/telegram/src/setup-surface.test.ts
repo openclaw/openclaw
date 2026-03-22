@@ -17,6 +17,16 @@ async function runPrepare(cfg: OpenClawConfig, accountId: string) {
   });
 }
 
+function expectPreparedResult(prepared: unknown): asserts prepared is { cfg: OpenClawConfig } {
+  if (
+    typeof prepared !== "object" ||
+    prepared === null ||
+    !("cfg" in (prepared as Record<string, unknown>))
+  ) {
+    throw new Error("Expected prepare result with cfg");
+  }
+}
+
 async function runFinalize(cfg: OpenClawConfig, accountId: string) {
   const note = vi.fn(async () => undefined);
 

@@ -807,7 +807,15 @@ export async function startGatewayServer(
       nodeSendToAllSubscribed,
       getPresenceVersion,
       getHealthVersion,
-      refreshGatewayHealthSnapshot,
+      refreshGatewayHealthSnapshot: (opts) => {
+        let runtimeSnapshot: Awaited<ReturnType<typeof getRuntimeSnapshot>> | undefined;
+        try {
+          runtimeSnapshot = getRuntimeSnapshot();
+        } catch (err) {
+          log.warn("getRuntimeSnapshot() failed during health refresh", { error: err });
+        }
+        return refreshGatewayHealthSnapshot({ ...opts, runtimeSnapshot });
+      },
       logHealth,
       dedupe,
       chatAbortControllers,
@@ -1069,7 +1077,15 @@ export async function startGatewayServer(
     execApprovalManager,
     loadGatewayModelCatalog,
     getHealthCache,
-    refreshHealthSnapshot: refreshGatewayHealthSnapshot,
+    refreshHealthSnapshot: (opts) => {
+      let runtimeSnapshot: Awaited<ReturnType<typeof getRuntimeSnapshot>> | undefined;
+      try {
+        runtimeSnapshot = getRuntimeSnapshot();
+      } catch (err) {
+        log.warn("getRuntimeSnapshot() failed during health refresh", { error: err });
+      }
+      return refreshGatewayHealthSnapshot({ ...opts, runtimeSnapshot });
+    },
     logHealth,
     logGateway: log,
     incrementPresenceVersion,

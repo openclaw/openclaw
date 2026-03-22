@@ -231,6 +231,77 @@ describe("getHealthSnapshot", () => {
     expect(telegram.probe?.error).toMatch(/unauthorized/i);
   });
 
+  it("includes runtime channel state when provided by the gateway", async () => {
+    testConfig = {
+      channels: {
+        telegram: { botToken: "t-1" },
+      },
+    };
+    testStore = {};
+    vi.stubEnv("DISCORD_BOT_TOKEN", "");
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/getMe")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ ok: true, result: { id: 1, username: "bot" } }),
+          } as unknown as Response;
+        }
+        if (url.includes("/getWebhookInfo")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ ok: true, result: { url: "https://example.com/h" } }),
+          } as unknown as Response;
+        }
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({ ok: false, description: "nope" }),
+        } as unknown as Response;
+      }),
+    );
+
+    const snap = await getHealthSnapshot({
+      timeoutMs: 25,
+      runtimeSnapshot: {
+        channels: {
+          telegram: {
+            accountId: "default",
+            running: true,
+            connected: true,
+            lastConnectedAt: 123,
+            lastEventAt: 456,
+          },
+        },
+        channelAccounts: {
+          telegram: {
+            default: {
+              accountId: "default",
+              running: true,
+              connected: true,
+              lastConnectedAt: 123,
+              lastEventAt: 456,
+            },
+          },
+        },
+      },
+    });
+    const telegram = snap.channels.telegram as {
+      running?: boolean;
+      connected?: boolean;
+      lastConnectedAt?: number;
+      lastEventAt?: number;
+    };
+    expect(telegram.running).toBe(true);
+    expect(telegram.connected).toBe(true);
+    expect(telegram.lastConnectedAt).toBe(123);
+    expect(telegram.lastEventAt).toBe(456);
+  });
+
   it("captures unexpected probe exceptions as errors", async () => {
     testConfig = { channels: { telegram: { botToken: "t-err" } } };
     testStore = {};
@@ -251,6 +322,70 @@ describe("getHealthSnapshot", () => {
     expect(telegram.configured).toBe(true);
     expect(telegram.probe?.ok).toBe(false);
     expect(telegram.probe?.error).toMatch(/network down/i);
+  });
+
+  it("preserves runtime fields when buildChannelSummary omits them", async () => {
+    // Stub a plugin whose buildChannelSummary returns only { configured: true } and
+    // does NOT forward connected/lastConnectedAt/lastEventAt from the snapshot.
+    const stubPlugin = {
+      ...createChannelTestPluginBase({
+        id: "telegram",
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({}),
+          isConfigured: async () => true,
+        },
+      }),
+      status: {
+        buildChannelSummary: async () => ({ configured: true }),
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", plugin: stubPlugin, source: "test" }]),
+    );
+    testConfig = {};
+    testStore = {};
+    vi.stubEnv("DISCORD_BOT_TOKEN", "");
+
+    const snap = await getHealthSnapshot({
+      timeoutMs: 10,
+      probe: false,
+      runtimeSnapshot: {
+        channels: {
+          telegram: {
+            accountId: "default",
+            running: true,
+            connected: true,
+            lastConnectedAt: 777,
+            lastEventAt: 888,
+          },
+        },
+        channelAccounts: {
+          telegram: {
+            default: {
+              accountId: "default",
+              running: true,
+              connected: true,
+              lastConnectedAt: 777,
+              lastEventAt: 888,
+            },
+          },
+        },
+      },
+    });
+    const ch = snap.channels.telegram as {
+      configured?: boolean;
+      running?: boolean;
+      connected?: boolean;
+      lastConnectedAt?: number;
+      lastEventAt?: number;
+    };
+    // buildChannelSummary returned { configured: true }; runtime fields must be merged in.
+    expect(ch.configured).toBe(true);
+    expect(ch.connected).toBe(true);
+    expect(ch.running).toBe(true);
+    expect(ch.lastConnectedAt).toBe(777);
+    expect(ch.lastEventAt).toBe(888);
   });
 
   it("disables heartbeat for agents without heartbeat blocks", async () => {

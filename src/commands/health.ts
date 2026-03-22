@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig, readBestEffortConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
+import type { ChannelRuntimeSnapshot } from "../gateway/server-channels.js";
 import { info } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -419,6 +420,7 @@ export const formatHealthChannelLines = (
 export async function getHealthSnapshot(params?: {
   timeoutMs?: number;
   probe?: boolean;
+  runtimeSnapshot?: ChannelRuntimeSnapshot;
 }): Promise<HealthSummary> {
   const timeoutMs = params?.timeoutMs;
   const cfg = loadConfig();
@@ -449,6 +451,7 @@ export async function getHealthSnapshot(params?: {
   const cappedTimeout = timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : Math.max(50, timeoutMs);
   const doProbe = params?.probe !== false;
   const channels: Record<string, ChannelHealthSummary> = {};
+  const runtimeSnapshot = params?.runtimeSnapshot;
   const channelOrder = listChannelPlugins().map((plugin) => plugin.id);
   const channelLabels: Record<string, string> = {};
 
@@ -522,7 +525,12 @@ export async function getHealthSnapshot(params?: {
         debugHealth("probe.bot", { channel: plugin.id, accountId, username: bot.username });
       }
 
+      const defaultRuntime = runtimeSnapshot?.channels[plugin.id];
+      const runtimeAccount = runtimeSnapshot?.channelAccounts[plugin.id]?.[accountId];
+      const runtimeForAccount =
+        runtimeAccount ?? (accountId === defaultAccountId ? defaultRuntime : undefined);
       const snapshot: ChannelAccountSnapshot = {
+        ...runtimeForAccount,
         accountId,
         enabled,
         configured,
@@ -558,6 +566,15 @@ export async function getHealthSnapshot(params?: {
         record.lastProbeAt = lastProbeAt;
       }
       record.accountId = accountId;
+      // Preserve runtime-backed fields (connected, lastConnectedAt, lastEventAt, etc.) that
+      // buildChannelSummary may not include in its return value.
+      if (runtimeForAccount) {
+        for (const [key, value] of Object.entries(runtimeForAccount)) {
+          if (record[key] === undefined) {
+            record[key] = value;
+          }
+        }
+      }
       accountSummaries[accountId] = record;
     }
 
