@@ -102,7 +102,15 @@ function resolveAnthropicVertexProjectIdFromAdc(
   }
 
   try {
-    const parsed = JSON.parse(readFileSync(credentialsPath, "utf8")) as AdcProjectFile;
+    const raw = JSON.parse(readFileSync(credentialsPath, "utf8"));
+    // Guard against ADC files containing literal null or non-object values.
+    // JSON.parse("null") returns null, which would crash on property access
+    // in the google-auth import chain with "Cannot convert undefined or null
+    // to object". See issue #32245.
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return undefined;
+    }
+    const parsed = raw as AdcProjectFile;
     return (
       normalizeOptionalSecretInput(parsed.project_id) ||
       normalizeOptionalSecretInput(parsed.quota_project_id)
