@@ -3,7 +3,7 @@ import type { Server } from "node:http";
 import { createConnection, type AddressInfo } from "node:net";
 import express from "express";
 import { describe, expect, it } from "vitest";
-import { applyMSTeamsWebhookTimeouts } from "./monitor.js";
+import { applyMSTeamsWebhookTimeouts } from "./webhook-timeouts.js";
 
 async function closeServer(server: Server): Promise<void> {
   await new Promise<void>((resolve) => {
