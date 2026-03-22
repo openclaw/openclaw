@@ -3,11 +3,14 @@ import {
   type ChannelOutboundAdapter,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
-import { resolveOutboundSendDep, type OutboundIdentity } from "openclaw/plugin-sdk/infra-runtime";
 import {
   resolveInteractiveTextFallback,
   type InteractiveReply,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  resolveOutboundSendDep,
+  type OutboundIdentity,
+} from "openclaw/plugin-sdk/outbound-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   resolvePayloadMediaUrls,

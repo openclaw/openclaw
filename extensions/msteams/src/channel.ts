@@ -18,8 +18,8 @@ import {
   createRuntimeDirectoryLiveAdapter,
   listDirectoryEntriesFromSources,
 } from "openclaw/plugin-sdk/directory-runtime";
-import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/infra-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import type { ChannelMessageActionName, ChannelPlugin, OpenClawConfig } from "../runtime-api.js";
 import {
   buildProbeChannelStatusSummary,

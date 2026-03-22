@@ -17,8 +17,8 @@ import {
   createChannelDirectoryAdapter,
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
-import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/infra-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "../runtime-api.js";
 import {
   buildChannelConfigSchema,
