@@ -5,6 +5,7 @@ import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
+import { loggingState } from "../logging/state.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getAgentLocalStatuses } from "./status.agent-local.js";
@@ -159,7 +160,14 @@ export async function scanStatusJsonFast(
   const hasConfiguredChannels = hasPotentialConfiguredChannels(cfg);
   if (hasConfiguredChannels) {
     const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
-    ensurePluginRegistryLoaded({ scope: "configured-channels" });
+    // Route plugin registration logs to stderr so they don't corrupt JSON on stdout.
+    const prev = loggingState.forceConsoleToStderr;
+    loggingState.forceConsoleToStderr = true;
+    try {
+      ensurePluginRegistryLoaded({ scope: "configured-channels" });
+    } finally {
+      loggingState.forceConsoleToStderr = prev;
+    }
   }
   const osSummary = resolveOsSummary();
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
