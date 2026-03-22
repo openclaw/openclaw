@@ -1084,17 +1084,6 @@ export async function runEmbeddedPiAgent(
             );
             const isCompactionFailure = isCompactionFailureError(errorText);
             const hadAttemptLevelCompaction = attemptCompactionCount > 0;
-            // Pre-read AGENTS.md refresh and cache the content for injection
-            // into the retry's system prompt (avoids reading the file twice).
-            let cachedPostCompactionCtx: string | null = null;
-            try {
-              cachedPostCompactionCtx = await readPostCompactionContext(
-                resolvedWorkspace,
-                params.config,
-              );
-            } catch {
-              // best-effort
-            }
             // If this attempt already compacted (SDK auto-compaction), avoid immediately
             // running another explicit compaction for the same overflow trigger.
             if (
@@ -1103,13 +1092,21 @@ export async function runEmbeddedPiAgent(
               overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
             ) {
               overflowCompactionAttempts++;
-              // Inject cached AGENTS.md critical sections into the retry's
-              // system prompt after SDK auto-compaction.
-              if (cachedPostCompactionCtx) {
-                effectiveExtraSystemPrompt = params.extraSystemPrompt
-                  ? `${params.extraSystemPrompt}\n\n${cachedPostCompactionCtx}`
-                  : cachedPostCompactionCtx;
-                postCompactionContextInjected = true;
+              // Inject AGENTS.md critical sections into the retry's system
+              // prompt so the agent regains its grounding after SDK auto-compaction.
+              try {
+                const postCompactionCtx = await readPostCompactionContext(
+                  resolvedWorkspace,
+                  params.config,
+                );
+                if (postCompactionCtx) {
+                  effectiveExtraSystemPrompt = params.extraSystemPrompt
+                    ? `${params.extraSystemPrompt}\n\n${postCompactionCtx}`
+                    : postCompactionCtx;
+                  postCompactionContextInjected = true;
+                }
+              } catch {
+                // Silent failure — post-compaction context is best-effort
               }
               log.warn(
                 `context overflow persisted after in-attempt compaction (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); retrying prompt without additional compaction for ${provider}/${modelId}`,
@@ -1238,13 +1235,21 @@ export async function runEmbeddedPiAgent(
               }
               if (compactResult.compacted) {
                 autoCompactionCount += 1;
-                // Inject cached AGENTS.md critical sections into the retry's
-                // system prompt after explicit overflow compaction.
-                if (cachedPostCompactionCtx) {
-                  effectiveExtraSystemPrompt = params.extraSystemPrompt
-                    ? `${params.extraSystemPrompt}\n\n${cachedPostCompactionCtx}`
-                    : cachedPostCompactionCtx;
-                  postCompactionContextInjected = true;
+                // Inject AGENTS.md critical sections into the retry's system
+                // prompt after explicit overflow compaction.
+                try {
+                  const postCompactionCtx = await readPostCompactionContext(
+                    resolvedWorkspace,
+                    params.config,
+                  );
+                  if (postCompactionCtx) {
+                    effectiveExtraSystemPrompt = params.extraSystemPrompt
+                      ? `${params.extraSystemPrompt}\n\n${postCompactionCtx}`
+                      : postCompactionCtx;
+                    postCompactionContextInjected = true;
+                  }
+                } catch {
+                  // Silent failure — post-compaction context is best-effort
                 }
                 log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
                 continue;
