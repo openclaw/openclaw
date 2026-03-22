@@ -522,12 +522,27 @@ export function buildStatusMessage(args: StatusArgs): string {
     typeof args.runtimeContextTokens === "number" && args.runtimeContextTokens > 0
       ? args.runtimeContextTokens
       : undefined;
+  const explicitConfiguredContextTokens =
+    typeof args.agent?.contextTokens === "number" && args.agent.contextTokens > 0
+      ? args.agent.contextTokens
+      : undefined;
   // When a fallback model is active, the selected-model context limit that
   // callers keep on the agent config is often stale. Prefer an explicit runtime
-  // snapshot when available, otherwise keep a persisted runtime snapshot unless
-  // it still matches the selected-model window and the active runtime window differs.
+  // snapshot when available. If the caller passed an explicit context cap that
+  // differs from the selected-model window, keep that too; otherwise preserve a
+  // persisted runtime snapshot unless it still matches the selected-model
+  // window and the active runtime window differs.
   const contextTokens = runtimeDiffersFromSelected
     ? (explicitRuntimeContextTokens ??
+      (() => {
+        if (
+          explicitConfiguredContextTokens !== undefined &&
+          explicitConfiguredContextTokens !== selectedContextTokens
+        ) {
+          return explicitConfiguredContextTokens;
+        }
+        return undefined;
+      })() ??
       (() => {
         if (persistedContextTokens === undefined) {
           return activeContextTokens ?? DEFAULT_CONTEXT_TOKENS;
