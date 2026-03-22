@@ -11,6 +11,9 @@ import { resolveMemorySearchConfig } from "../memory-search.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 
+/** Hard timeout for the entire memory_search tool execution (manager init + search). */
+const MEMORY_SEARCH_TIMEOUT_MS = 30_000;
+
 const MemorySearchSchema = Type.Object({
   query: Type.String(),
   maxResults: Type.Optional(Type.Number()),
@@ -110,36 +113,38 @@ export function createMemorySearchTool(options: {
         const query = readStringParam(params, "query", { required: true });
         const maxResults = readNumberParam(params, "maxResults");
         const minScore = readNumberParam(params, "minScore");
-        const memory = await getMemoryManagerContext({ cfg, agentId });
-        if ("error" in memory) {
-          return jsonResult(buildMemorySearchUnavailableResult(memory.error));
-        }
         try {
-          const citationsMode = resolveMemoryCitationsMode(cfg);
-          const includeCitations = shouldIncludeCitations({
-            mode: citationsMode,
-            sessionKey: options.agentSessionKey,
-          });
-          const rawResults = await memory.manager.search(query, {
-            maxResults,
-            minScore,
-            sessionKey: options.agentSessionKey,
-          });
-          const status = memory.manager.status();
-          const decorated = decorateCitations(rawResults, includeCitations);
-          const resolved = resolveMemoryBackendConfig({ cfg, agentId });
-          const results =
-            status.backend === "qmd"
-              ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
-              : decorated;
-          const searchMode = (status.custom as { searchMode?: string } | undefined)?.searchMode;
-          return jsonResult({
-            results,
-            provider: status.provider,
-            model: status.model,
-            fallback: status.fallback,
-            citations: citationsMode,
-            mode: searchMode,
+          return await withMemoryTimeout(async () => {
+            const memory = await getMemoryManagerContext({ cfg, agentId });
+            if ("error" in memory) {
+              return jsonResult(buildMemorySearchUnavailableResult(memory.error));
+            }
+            const citationsMode = resolveMemoryCitationsMode(cfg);
+            const includeCitations = shouldIncludeCitations({
+              mode: citationsMode,
+              sessionKey: options.agentSessionKey,
+            });
+            const rawResults = await memory.manager.search(query, {
+              maxResults,
+              minScore,
+              sessionKey: options.agentSessionKey,
+            });
+            const status = memory.manager.status();
+            const decorated = decorateCitations(rawResults, includeCitations);
+            const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+            const results =
+              status.backend === "qmd"
+                ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
+                : decorated;
+            const searchMode = (status.custom as { searchMode?: string } | undefined)?.searchMode;
+            return jsonResult({
+              results,
+              provider: status.provider,
+              model: status.model,
+              fallback: status.fallback,
+              citations: citationsMode,
+              mode: searchMode,
+            });
           });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -261,12 +266,17 @@ function clampResultsByInjectedChars(
 function buildMemorySearchUnavailableResult(error: string | undefined) {
   const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
   const isQuotaError = /insufficient_quota|quota|429/.test(reason.toLowerCase());
+  const isTimeoutError = /memory_search timed out/i.test(reason);
   const warning = isQuotaError
     ? "Memory search is unavailable because the embedding provider quota is exhausted."
-    : "Memory search is unavailable due to an embedding/provider error.";
+    : isTimeoutError
+      ? "Memory search timed out."
+      : "Memory search is unavailable due to an embedding/provider error.";
   const action = isQuotaError
     ? "Top up or switch embedding provider, then retry memory_search."
-    : "Check embedding provider configuration and retry memory_search.";
+    : isTimeoutError
+      ? "Retry memory_search. If this persists, check embedding provider latency."
+      : "Check embedding provider configuration and retry memory_search.";
   return {
     results: [],
     disabled: true,
@@ -305,4 +315,26 @@ function deriveChatTypeFromSessionKey(sessionKey?: string): "direct" | "group" |
     return "group";
   }
   return "direct";
+}
+
+/**
+ * Wraps a memory operation with a hard timeout so a stalled manager init or
+ * search cannot wedge the entire agent turn. On timeout the caller's catch
+ * block returns an "unavailable" tool result and the turn continues.
+ */
+async function withMemoryTimeout<T>(fn: () => Promise<T>): Promise<T> {
+  let timer: NodeJS.Timeout | null = null;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error("memory_search timed out")),
+      MEMORY_SEARCH_TIMEOUT_MS,
+    );
+  });
+  try {
+    return await Promise.race([fn(), timeout]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
 }

@@ -1,4 +1,4 @@
-import { beforeEach, describe, it } from "vitest";
+import { beforeEach, describe, it, vi } from "vitest";
 import {
   resetMemoryToolMockState,
   setMemorySearchImpl,
@@ -39,5 +39,27 @@ describe("memory_search unavailable payloads", () => {
       warning: "Memory search is unavailable due to an embedding/provider error.",
       action: "Check embedding provider configuration and retry memory_search.",
     });
+  });
+
+  it("returns unavailable result when search stalls past the timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      setMemorySearchImpl(() => new Promise(() => {})); // never resolves
+
+      const tool = createMemorySearchToolOrThrow();
+      const resultPromise = tool.execute("stall", { query: "hello" });
+
+      // Advance past the 30s timeout
+      await vi.advanceTimersByTimeAsync(31_000);
+
+      const result = await resultPromise;
+      expectUnavailableMemorySearchDetails(result.details, {
+        error: "memory_search timed out",
+        warning: "Memory search timed out.",
+        action: "Retry memory_search. If this persists, check embedding provider latency.",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
