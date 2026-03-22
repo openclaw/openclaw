@@ -1,5 +1,5 @@
 Content Brain Daily Brief
-2026-03-22 12:26 TW
+2026-03-22 20:47 TW
 ----------------------------------------
 
 Pipeline: 497 entries
@@ -28,12 +28,12 @@ Top 5 candidates:
   5. [geopolitics] 66pts — 真正的戰爭勝敗，從來不是由武器或士兵的多寡與強弱所決定，而是誰能成功地強迫對方進入自己設定的「戰略劇
 
 Trend analysis (100 posts):
-  + geopolitics: avg 417 (+2759%)
-  + other: avg 7 (+293%)
+  + geopolitics: avg 469 (+1672%)
+  + other: avg 7 (+260%)
+  + local: avg 4 (+100%)
   = personal: avg 0 (+0%)
-  - local: avg 4 (-50%)
-  - ai: avg 11 (-86%)
+  - ai: avg 11 (-85%)
   - thought: avg 0 (-100%)
 
-Next optimal post time: 2026-03-22 20:00 TW
-Best hours (TW): 20:00(0.98), 21:00(0.48), 07:00(0.47), 12:00(0.44), 13:00(0.44)
+Next optimal post time: 2026-03-23 20:00 TW
+Best hours (TW): 20:00(0.98), 21:00(0.48), 07:00(0.47), 13:00(0.45), 12:00(0.45)
