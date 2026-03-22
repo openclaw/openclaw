@@ -101,7 +101,7 @@ export async function handleAcpDoctorAction(
     lines.push(formatAcpRuntimeErrorText(acpError));
     lines.push(`next: ${installHint}`);
     lines.push(`next: openclaw config set plugins.entries.${backendId}.enabled true`);
-    if (backendId.toLowerCase() === "acpx") {
+    if (backendId.toLowerCase() === "acpx-plugin") {
       lines.push("next: verify acpx is installed (`acpx --help`).");
     }
     return stopWithText(lines.join("\n"));

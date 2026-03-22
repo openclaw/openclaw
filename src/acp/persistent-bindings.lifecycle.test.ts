@@ -67,7 +67,7 @@ describe("resetConfiguredBindingTargetInPlace", () => {
       acp: {
         agent: "claude",
         mode: "persistent",
-        backend: "acpx",
+        backend: "acpx-plugin",
         runtimeOptions: { cwd: "/home/bob/clawd" },
       },
     });
@@ -93,7 +93,7 @@ describe("resetConfiguredBindingTargetInPlace", () => {
       expect.objectContaining({
         sessionKey,
         agent: "claude",
-        backendId: "acpx",
+        backendId: "acpx-plugin",
       }),
     );
   });

@@ -1066,7 +1066,7 @@ describe("thread binding lifecycle", () => {
           sessionKey,
           storeSessionKey: sessionKey,
           acp: {
-            backend: "acpx",
+            backend: "acpx-plugin",
             agent: "codex",
             runtimeSessionName: "runtime:healthy",
             mode: "persistent",
@@ -1213,7 +1213,7 @@ describe("thread binding lifecycle", () => {
       sessionKey: "agent:codex:acp:running",
       storeSessionKey: "agent:codex:acp:running",
       acp: {
-        backend: "acpx",
+        backend: "acpx-plugin",
         agent: "codex",
         runtimeSessionName: "runtime:running",
         mode: "persistent",
@@ -1257,7 +1257,7 @@ describe("thread binding lifecycle", () => {
       sessionKey: "agent:codex:acp:running-uncertain",
       storeSessionKey: "agent:codex:acp:running-uncertain",
       acp: {
-        backend: "acpx",
+        backend: "acpx-plugin",
         agent: "codex",
         runtimeSessionName: "runtime:running-uncertain",
         mode: "persistent",
@@ -1305,7 +1305,7 @@ describe("thread binding lifecycle", () => {
       sessionKey: "agent:codex:acp:error",
       storeSessionKey: "agent:codex:acp:error",
       acp: {
-        backend: "acpx",
+        backend: "acpx-plugin",
         agent: "codex",
         runtimeSessionName: "runtime:error",
         mode: "persistent",
@@ -1363,7 +1363,7 @@ describe("thread binding lifecycle", () => {
         sessionKey,
         storeSessionKey: sessionKey,
         acp: {
-          backend: "acpx",
+          backend: "acpx-plugin",
           agent: "codex",
           runtimeSessionName: `runtime:${sessionKey}`,
           mode: "persistent",
@@ -1433,7 +1433,7 @@ describe("thread binding lifecycle", () => {
         sessionKey,
         storeSessionKey: sessionKey,
         acp: {
-          backend: "acpx",
+          backend: "acpx-plugin",
           agent: "codex",
           runtimeSessionName: `runtime:${sessionKey}`,
           mode: "persistent",

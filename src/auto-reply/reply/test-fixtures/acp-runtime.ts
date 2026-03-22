@@ -16,7 +16,7 @@ export function createAcpTestConfig(overrides?: Partial<OpenClawConfig>): OpenCl
 
 export function createAcpSessionMeta(overrides?: Partial<SessionAcpMeta>): SessionAcpMeta {
   return {
-    backend: "acpx",
+    backend: "acpx-plugin",
     agent: "codex",
     runtimeSessionName: "runtime:1",
     mode: "persistent",

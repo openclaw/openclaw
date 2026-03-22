@@ -23,7 +23,7 @@ function createDefaultSpawnConfig(): OpenClawConfig {
   return {
     acp: {
       enabled: true,
-      backend: "acpx",
+      backend: "acpx-plugin",
       allowedAgents: ["codex"],
     },
     session: {
@@ -202,14 +202,14 @@ describe("spawnAcpDirect", () => {
         },
         handle: {
           sessionKey: args.sessionKey,
-          backend: "acpx",
+          backend: "acpx-plugin",
           runtimeSessionName,
           ...(cwd ? { cwd } : {}),
           agentSessionId: "codex-inner-1",
           backendSessionId: "acpx-1",
         },
         meta: {
-          backend: "acpx",
+          backend: "acpx-plugin",
           agent: args.agent,
           runtimeSessionName,
           ...(cwd ? { runtimeOptions: { cwd }, cwd } : {}),
@@ -554,7 +554,7 @@ describe("spawnAcpDirect", () => {
       ...hoisted.state.cfg,
       acp: {
         enabled: true,
-        backend: "acpx",
+        backend: "acpx-plugin",
         allowedAgents: ["claudecode"],
       },
     });

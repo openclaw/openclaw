@@ -10,7 +10,7 @@ describe("session identifier helpers", () => {
     const lines = resolveAcpThreadSessionDetailLines({
       sessionKey: "agent:codex:acp:pending-1",
       meta: {
-        backend: "acpx",
+        backend: "acpx-plugin",
         agent: "codex",
         runtimeSessionName: "runtime-1",
         identity: {
@@ -33,7 +33,7 @@ describe("session identifier helpers", () => {
     const lines = resolveAcpThreadSessionDetailLines({
       sessionKey: "agent:codex:acp:resolved-1",
       meta: {
-        backend: "acpx",
+        backend: "acpx-plugin",
         agent: "codex",
         runtimeSessionName: "runtime-1",
         identity: {
@@ -50,7 +50,7 @@ describe("session identifier helpers", () => {
     });
 
     expect(lines).toContain("agent session id: inner-123");
-    expect(lines).toContain("acpx session id: acpx-123");
+    expect(lines).toContain("acpx-plugin session id: acpx-123");
     expect(lines).toContain(
       "resume in Codex CLI: `codex resume inner-123` (continues this conversation).",
     );
@@ -60,7 +60,7 @@ describe("session identifier helpers", () => {
     const lines = resolveAcpThreadSessionDetailLines({
       sessionKey: "agent:kimi:acp:resolved-1",
       meta: {
-        backend: "acpx",
+        backend: "acpx-plugin",
         agent: "kimi",
         runtimeSessionName: "runtime-1",
         identity: {
@@ -77,7 +77,7 @@ describe("session identifier helpers", () => {
     });
 
     expect(lines).toContain("agent session id: kimi-inner-123");
-    expect(lines).toContain("acpx session id: acpx-kimi-123");
+    expect(lines).toContain("acpx-plugin session id: acpx-kimi-123");
     expect(lines).toContain(
       "resume in Kimi CLI: `kimi resume kimi-inner-123` (continues this conversation).",
     );
@@ -85,7 +85,7 @@ describe("session identifier helpers", () => {
 
   it("shows pending identity text for status rendering", () => {
     const lines = resolveAcpSessionIdentifierLinesFromIdentity({
-      backend: "acpx",
+      backend: "acpx-plugin",
       mode: "status",
       identity: {
         state: "pending",
@@ -100,7 +100,7 @@ describe("session identifier helpers", () => {
 
   it("prefers runtimeOptions.cwd over legacy meta.cwd", () => {
     const cwd = resolveAcpSessionCwd({
-      backend: "acpx",
+      backend: "acpx-plugin",
       agent: "codex",
       runtimeSessionName: "runtime-1",
       mode: "persistent",

@@ -32,7 +32,7 @@ function createAcpEnabledConfig(home: string, storePath: string): OpenClawConfig
   return {
     acp: {
       enabled: true,
-      backend: "acpx",
+      backend: "acpx-plugin",
       allowedAgents: ["codex", "kimi"],
       dispatch: { enabled: true },
     },
@@ -75,7 +75,7 @@ function writeAcpSessionStore(storePath: string, agent = "codex") {
           sessionId: "acp-session-1",
           updatedAt: Date.now(),
           acp: {
-            backend: "acpx",
+            backend: "acpx-plugin",
             agent,
             runtimeSessionName: sessionKey,
             mode: "oneshot",
@@ -98,7 +98,7 @@ function resolveReadySession(
     kind: "ready",
     sessionKey,
     meta: {
-      backend: "acpx",
+      backend: "acpx-plugin",
       agent,
       runtimeSessionName: sessionKey,
       mode: "oneshot",

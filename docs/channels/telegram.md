@@ -519,7 +519,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
               type: "acp",
               acp: {
                 agent: "codex",
-                backend: "acpx",
+                backend: "acpx-plugin",
                 mode: "persistent",
                 cwd: "/workspace/openclaw",
               },

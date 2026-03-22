@@ -1,5 +1,5 @@
 export const optionalBundledClusters = [
-  "acpx",
+  "acpx-plugin",
   "diagnostics-otel",
   "diffs",
   "googlechat",

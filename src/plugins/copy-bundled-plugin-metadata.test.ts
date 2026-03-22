@@ -38,7 +38,7 @@ describe("rewritePackageExtensions", () => {
 describe("copyBundledPluginMetadata", () => {
   it("copies plugin manifests, package metadata, and local skill directories", () => {
     const repoRoot = makeRepoRoot("openclaw-bundled-plugin-meta-");
-    const pluginDir = path.join(repoRoot, "extensions", "acpx");
+    const pluginDir = path.join(repoRoot, "extensions", "acpx-plugin");
     fs.mkdirSync(path.join(pluginDir, "skills", "acp-router"), { recursive: true });
     fs.writeFileSync(
       path.join(pluginDir, "skills", "acp-router", "SKILL.md"),
@@ -46,7 +46,7 @@ describe("copyBundledPluginMetadata", () => {
       "utf8",
     );
     writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
-      id: "acpx",
+      id: "acpx-plugin",
       configSchema: { type: "object" },
       skills: ["./skills"],
     });
@@ -58,23 +58,36 @@ describe("copyBundledPluginMetadata", () => {
     copyBundledPluginMetadata({ repoRoot });
 
     expect(
-      fs.existsSync(path.join(repoRoot, "dist", "extensions", "acpx", "openclaw.plugin.json")),
+      fs.existsSync(
+        path.join(repoRoot, "dist", "extensions", "acpx-plugin", "openclaw.plugin.json"),
+      ),
     ).toBe(true);
     expect(
       fs.readFileSync(
-        path.join(repoRoot, "dist", "extensions", "acpx", "skills", "acp-router", "SKILL.md"),
+        path.join(
+          repoRoot,
+          "dist",
+          "extensions",
+          "acpx-plugin",
+          "skills",
+          "acp-router",
+          "SKILL.md",
+        ),
         "utf8",
       ),
     ).toContain("ACP Router");
     const bundledManifest = JSON.parse(
       fs.readFileSync(
-        path.join(repoRoot, "dist", "extensions", "acpx", "openclaw.plugin.json"),
+        path.join(repoRoot, "dist", "extensions", "acpx-plugin", "openclaw.plugin.json"),
         "utf8",
       ),
     ) as { skills?: string[] };
     expect(bundledManifest.skills).toEqual(["./skills"]);
     const packageJson = JSON.parse(
-      fs.readFileSync(path.join(repoRoot, "dist", "extensions", "acpx", "package.json"), "utf8"),
+      fs.readFileSync(
+        path.join(repoRoot, "dist", "extensions", "acpx-plugin", "package.json"),
+        "utf8",
+      ),
     ) as { openclaw?: { extensions?: string[] } };
     expect(packageJson.openclaw?.extensions).toEqual(["./index.js"]);
   });

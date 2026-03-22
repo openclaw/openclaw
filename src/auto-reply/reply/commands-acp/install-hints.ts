@@ -3,7 +3,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../../../config/config.js";
 
 export function resolveConfiguredAcpBackendId(cfg: OpenClawConfig): string {
-  return cfg.acp?.backend?.trim() || "acpx";
+  return cfg.acp?.backend?.trim() || "acpx-plugin";
 }
 
 export function resolveAcpInstallCommandHint(cfg: OpenClawConfig): string {
@@ -12,8 +12,8 @@ export function resolveAcpInstallCommandHint(cfg: OpenClawConfig): string {
     return configured;
   }
   const backendId = resolveConfiguredAcpBackendId(cfg).toLowerCase();
-  if (backendId === "acpx") {
-    const localPath = path.resolve(process.cwd(), "extensions/acpx");
+  if (backendId === "acpx-plugin") {
+    const localPath = path.resolve(process.cwd(), "extensions/acpx-plugin");
     if (existsSync(localPath)) {
       return `openclaw plugins install ${localPath}`;
     }

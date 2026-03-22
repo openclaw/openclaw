@@ -48,7 +48,7 @@ function createConfig(options?: { bindingAgentId?: string; accountId?: string })
           },
         },
         acp: {
-          backend: "acpx",
+          backend: "acpx-plugin",
         },
       },
     ],
@@ -118,7 +118,7 @@ describe("configured binding registry", () => {
     });
 
     expect(resolved?.record.conversation.channel).toBe("discord");
-    expect(resolved?.record.metadata?.backend).toBe("acpx");
+    expect(resolved?.record.metadata?.backend).toBe("acpx-plugin");
     expect(plugin.bindings?.compileConfiguredBinding).toHaveBeenCalledTimes(1);
   });
 
@@ -197,13 +197,13 @@ describe("configured binding registry", () => {
         conversationId: "1479098716916023408",
         agentId: "codex",
         mode: "persistent",
-        backend: "acpx",
+        backend: "acpx-plugin",
       }),
     });
 
     expect(resolved?.record.conversation.channel).toBe("discord");
     expect(resolved?.record.conversation.accountId).toBe("work");
-    expect(resolved?.record.metadata?.backend).toBe("acpx");
+    expect(resolved?.record.metadata?.backend).toBe("acpx-plugin");
   });
 
   it("does not perform late plugin discovery when a channel plugin is unavailable", async () => {

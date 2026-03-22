@@ -8,7 +8,7 @@ function mockState(sessionKey: string): CachedRuntimeState {
   const runtime = {
     ensureSession: vi.fn(async () => ({
       sessionKey,
-      backend: "acpx",
+      backend: "acpx-plugin",
       runtimeSessionName: `runtime:${sessionKey}`,
     })),
     runTurn: vi.fn(async function* () {
@@ -21,10 +21,10 @@ function mockState(sessionKey: string): CachedRuntimeState {
     runtime,
     handle: {
       sessionKey,
-      backend: "acpx",
+      backend: "acpx-plugin",
       runtimeSessionName: `runtime:${sessionKey}`,
     } as AcpRuntimeHandle,
-    backend: "acpx",
+    backend: "acpx-plugin",
     agent: "codex",
     mode: "persistent",
   };
