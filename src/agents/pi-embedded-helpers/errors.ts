@@ -439,6 +439,14 @@ export function classifyFailoverReasonFromHttpStatus(
   if (status === 408) {
     return "timeout";
   }
+  if (status === 500) {
+    // Some providers (e.g. MiniMax) return billing/balance errors under HTTP 500;
+    // check the message before falling through to default handling.
+    if (message && isBillingErrorMessage(message)) {
+      return "billing";
+    }
+    return "timeout";
+  }
   if (status === 503) {
     if (message && isOverloadedErrorMessage(message)) {
       return "overloaded";
@@ -886,6 +894,11 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
     const status = extractLeadingHttpStatus(raw.trim());
     if (status?.code === 529) {
       return "overloaded";
+    }
+    // Some providers (e.g. MiniMax) return billing/balance errors under HTTP 500;
+    // do not let the transient-5xx fallback mask an explicit billing signal.
+    if (isBillingErrorMessage(raw)) {
+      return "billing";
     }
     // Treat remaining transient 5xx provider failures as retryable transport issues.
     return "timeout";
