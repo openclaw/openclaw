@@ -884,6 +884,13 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		const [mounted, setMounted] = useState(false);
 		useEffect(() => { setMounted(true); }, []);
 
+		useEffect(() => {
+			const timer = setTimeout(() => {
+				editorRef.current?.focus();
+			}, 150);
+			return () => clearTimeout(timer);
+		}, []);
+
 		// ── Reconnection state ──
 		const [isReconnecting, setIsReconnecting] = useState(false);
 		const reconnectAbortRef = useRef<AbortController | null>(null);
