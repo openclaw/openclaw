@@ -44,6 +44,8 @@ interface OllamaChatRequest {
   stream: boolean;
   tools?: OllamaTool[];
   options?: Record<string, unknown>;
+  /** Ollama-native thinking toggle (≥0.8). `false` disables thinking output. */
+  think?: boolean;
 }
 
 interface OllamaChatMessage {
@@ -459,10 +461,18 @@ export function createOllamaStreamFn(
           ollamaOptions.num_predict = options.maxTokens;
         }
 
+        // Map pi-ai reasoning level to Ollama-native `think` parameter.
+        // When reasoning is explicitly set (any ThinkingLevel value), enable thinking.
+        // When reasoning is undefined (thinkingLevel=off), disable thinking to prevent
+        // thinking-capable models (qwen3.5, deepseek-r1, etc.) from spending tokens on
+        // internal reasoning output that wastes context window. See openclaw/openclaw#46680.
+        const think = options?.reasoning != null ? true : false;
+
         const body: OllamaChatRequest = {
           model: model.id,
           messages: ollamaMessages,
           stream: true,
+          think,
           ...(ollamaTools.length > 0 ? { tools: ollamaTools } : {}),
           options: ollamaOptions,
         };

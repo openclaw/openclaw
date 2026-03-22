@@ -544,6 +544,61 @@ describe("createOllamaStreamFn", () => {
       [{ type: "text", text: "final answer" }],
     );
   });
+
+  it("sends think: false when reasoning option is not set (thinkingLevel=off)", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          options: {},
+        });
+
+        await collectStreamEvents(stream);
+
+        const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        const requestBody = JSON.parse(requestInit.body as string) as {
+          think?: boolean;
+        };
+        expect(requestBody.think).toBe(false);
+      },
+    );
+  });
+
+  it("sends think: true when reasoning option is set (thinkingLevel=high)", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const streamFn = createOllamaStreamFn("http://ollama-host:11434");
+        const stream = await streamFn(
+          {
+            id: "qwen3:32b",
+            api: "ollama",
+            provider: "custom-ollama",
+            contextWindow: 131072,
+          } as unknown as Parameters<typeof streamFn>[0],
+          {
+            messages: [{ role: "user", content: "hello" }],
+          } as unknown as Parameters<typeof streamFn>[1],
+          { reasoning: "high" } as unknown as Parameters<typeof streamFn>[2],
+        );
+
+        await collectStreamEvents(stream);
+
+        const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        const requestBody = JSON.parse(requestInit.body as string) as {
+          think?: boolean;
+        };
+        expect(requestBody.think).toBe(true);
+      },
+    );
+  });
 });
 
 describe("resolveOllamaBaseUrlForRun", () => {
