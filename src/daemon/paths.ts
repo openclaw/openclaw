@@ -20,6 +20,14 @@ export function resolveHomeDir(env: Record<string, string | undefined>): string 
   return home;
 }
 
+export function resolveOsHomeDir(env: Record<string, string | undefined>): string {
+  const home = env.HOME?.trim() || env.USERPROFILE?.trim();
+  if (!home) {
+    throw new Error("Missing HOME");
+  }
+  return home;
+}
+
 export function resolveUserPathWithHome(input: string, home?: string): string {
   const trimmed = input.trim();
   if (!trimmed) {

@@ -421,6 +421,14 @@ describe("resolveSystemdUserUnitPath", () => {
       },
       expected: "/home/test/.config/systemd/user/custom-unit.service",
     },
+    {
+      name: "roots systemd user units in the OS home even when OPENCLAW_HOME is set",
+      env: {
+        HOME: "/home/test",
+        OPENCLAW_HOME: "/srv/openclaw-home",
+      },
+      expected: "/home/test/.config/systemd/user/openclaw-gateway.service",
+    },
   ])("$name", ({ env, expected }) => {
     expect(resolveSystemdUserUnitPath(env)).toBe(expected);
   });

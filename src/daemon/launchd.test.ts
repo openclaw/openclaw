@@ -506,6 +506,14 @@ describe("resolveLaunchAgentPlistPath", () => {
       },
       expected: "/Users/test/Library/LaunchAgents/ai.openclaw.myprofile.plist",
     },
+    {
+      name: "roots launch agent paths in the OS home even when OPENCLAW_HOME is set",
+      env: {
+        HOME: "/Users/test",
+        OPENCLAW_HOME: "/srv/openclaw-home",
+      },
+      expected: "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist",
+    },
   ])("$name", ({ env, expected }) => {
     expect(resolveLaunchAgentPlistPath(env)).toBe(expected);
   });

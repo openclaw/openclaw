@@ -10,7 +10,7 @@ import {
 } from "./constants.js";
 import { execFileUtf8 } from "./exec-file.js";
 import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
-import { resolveHomeDir } from "./paths.js";
+import { resolveOsHomeDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
@@ -34,7 +34,7 @@ import {
 } from "./systemd-unit.js";
 
 function resolveSystemdUnitPathForName(env: GatewayServiceEnv, name: string): string {
-  const home = toPosixPath(resolveHomeDir(env));
+  const home = toPosixPath(resolveOsHomeDir(env));
   return path.posix.join(home, ".config", "systemd", "user", `${name}.service`);
 }
 
@@ -131,7 +131,7 @@ function buildEnvironmentValueSources(
 
 function expandSystemdSpecifier(input: string, env: GatewayServiceEnv): string {
   // Support the common unit-specifier used in user services.
-  return input.replaceAll("%h", toPosixPath(resolveHomeDir(env)));
+  return input.replaceAll("%h", toPosixPath(resolveOsHomeDir(env)));
 }
 
 function parseEnvironmentFileSpecs(raw: string): string[] {
