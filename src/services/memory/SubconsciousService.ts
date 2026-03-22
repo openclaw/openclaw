@@ -363,45 +363,17 @@ Use ONLY names, events, topics from the conversation. If the latest message is a
       return "";
     }
 
-    // Sort: Boosted > Facts > Time parity (to mix old/new)
-    afterEcho.sort((a, b) => {
-      if (a._boosted && !b._boosted) {
-        return -1;
-      }
-      if (!a._boosted && b._boosted) {
-        return 1;
-      }
+    // Global ranking by RRF score descending, deduplicated, top 3
+    afterEcho.sort((a, b) => (b._score ?? 0) - (a._score ?? 0));
 
-      const aIsFact = a._sourceQuery?.toLowerCase().includes("fact") ?? false;
-      const bIsFact = b._sourceQuery?.toLowerCase().includes("fact") ?? false;
-      if (aIsFact && !bIsFact) {
-        return -1;
-      }
-      if (!aIsFact && bIsFact) {
-        return 1;
-      }
-
-      const aTs = new Date(
-        a.timestamp || a.message?.created_at || a.message?.createdAt || 0,
-      ).getTime();
-      const bTs = new Date(
-        b.timestamp || b.message?.created_at || b.message?.createdAt || 0,
-      ).getTime();
-      return Math.random() > 0.5 ? aTs - bTs : bTs - aTs;
-    });
-
-    const groupedMemories = new Map<
-      string,
-      Array<{ content: string; date: Date; relativeTime: string; isFact: boolean }>
-    >();
-    const groupMaxScore = new Map<string, number>();
     const seenContent = new Set<string>();
-    let totalSelected = 0;
+    const topMemories: Array<{ content: string; date: Date; relativeTime: string; score: number }> =
+      [];
 
     for (const r of afterEcho) {
-      if (totalSelected >= 10) {
+      if (topMemories.length >= 3) {
         break;
-      } // Increased total limit to allow grouping from multiple queries
+      }
 
       let content = r.message?.content || r.text || r.content || "";
       content = content.replace(/\[TIMESTAMP:[^\]]+\]/g, "").trim();
@@ -416,7 +388,7 @@ Use ONLY names, events, topics from the conversation. If the latest message is a
         .replace(/[^a-z0-9]/g, "")
         .substring(0, 30);
       if (!normalized || seenContent.has(normalized)) {
-        this.log(`  🚫 [MIND] Skipping duplicate/empty content: "${content.substring(0, 60)}"`);
+        this.log(`  🚫 [MIND] Skipping duplicate/empty: "${content.substring(0, 60)}"`);
         continue;
       }
       seenContent.add(normalized);
@@ -424,38 +396,13 @@ Use ONLY names, events, topics from the conversation. If the latest message is a
       const finalDate = new Date(
         r.timestamp || r.message?.created_at || r.message?.createdAt || Date.now(),
       );
-      const relativeTime = getRelativeTimeDescription(finalDate);
-      const isFact = r._sourceQuery?.toLowerCase().includes("fact") ?? false;
-      const queryGroup = r._sourceQuery || "General Context";
-
-      if (!groupedMemories.has(queryGroup)) {
-        groupedMemories.set(queryGroup, []);
-      }
-      groupedMemories.get(queryGroup)!.push({ content, date: finalDate, relativeTime, isFact });
-
-      // Track max score per group for ranking
-      if (r._score !== undefined) {
-        const prev = groupMaxScore.get(queryGroup) ?? 0;
-        if (r._score > prev) {
-          groupMaxScore.set(queryGroup, r._score);
-        }
-      }
-
-      totalSelected++;
-    }
-
-    // Re-order groups by score descending (best match first for top-block injection)
-    const sortedGroups = Array.from(groupedMemories.entries()).toSorted(([aKey], [bKey]) => {
-      const aScore = groupMaxScore.get(aKey) ?? 0;
-      const bScore = groupMaxScore.get(bKey) ?? 0;
-      return bScore - aScore;
-    });
-
-    // Log group scores for visibility
-    for (const [group, _] of sortedGroups) {
-      const score = groupMaxScore.get(group);
-      const label = score !== undefined ? `score=${score.toFixed(3)}` : "score=n/a";
-      this.log(`  📊 [RANK] Group "${group}" → ${label}`);
+      topMemories.push({
+        content,
+        date: finalDate,
+        relativeTime: getRelativeTimeDescription(finalDate),
+        score: r._score ?? 0,
+      });
+      this.log(`  ✨ [FINAL] score=${(r._score ?? 0).toFixed(3)} "${content.substring(0, 60)}..."`);
     }
 
     const t_search = performance.now() - t1;
@@ -471,115 +418,10 @@ Use ONLY names, events, topics from the conversation. If the latest message is a
       });
     }
 
-    let rewrittenLines = "";
-    const t2 = performance.now();
-    if (agent && rewriteMemories) {
-      this.log(`  ✍️ [MIND] Rewriting ${sortedGroups.length} memory groups in parallel...`);
+    // Format top memories as a flat list (no query grouping)
+    const rewrittenLines = topMemories.map((m) => `- [${m.relativeTime}] ${m.content}`).join("\n");
 
-      const rewritePromises = sortedGroups.map(async ([query, memories]) => {
-        // Clean up the query string for display
-        let displayQuery = query;
-        const match = query.match(/\((.*?)\)/);
-        if (match && match[1]) {
-          displayQuery = match[1].replace(/\.\.\.$/, "");
-        }
-
-        const groupHeader = `--- PENSAR EN "${displayQuery}" ME RECUERDA QUE ---`;
-        const groupLines: string[] = [groupHeader];
-
-        // Sort chronologically within the group
-        memories.sort((a, b) => a.date.getTime() - b.date.getTime());
-
-        for (const m of memories) {
-          if (m.isFact) {
-            this.log(`  ✨ [FINAL] Adding Fact to Resonance: "${m.content.substring(0, 60)}..."`);
-          }
-          groupLines.push(`- [${m.relativeTime}] ${m.content}`);
-        }
-
-        const translationPrompt = `Convert the following database notes into personal, first-person memories for a specific search topic.
-You are the AI. subconsciously remembering your past interactions with the user.
-CRITICAL: Write the memories in the EXACT SAME LANGUAGE as the CURRENT USER MESSAGE below.
-
-FORMATTING RULES:
-1. Preserve the grouping header: "${groupHeader}" but translate the header into a natural transition, like "${displayQuery} reminds me that..." or "Thinking about ${displayQuery}, I remember...".
-2. Under the header, rewrite the memories as a bulleted list format, one memory per line.
-3. The raw memories include fuzzy relative timestamps like [hace 2 semanas] or [yesterday morning]. Incorporate them naturally into each sentence rather than keeping them as bracketed labels.
-
-AS SUBCONCIOUS AI, FOLLOW THESE STRICT CONTENT RULES — NEVER break these:
-1. DO NOT REPLY TO THE USER. DO NOT ADD CONVERSATIONAL RESPONSES. ONLY OUTPUT THE HEADER AND THE BULLETED MEMORIES.
-2. Do NOT invent or infer ANY fact, action, method, or context that is not EXPLICITLY stated in the RAW MEMORIES below.
-3. Do NOT add sensory details like "I heard", "I saw", "I felt" unless that is literally written in the source.
-4. If the source says "the user spoke", write "the user spoke" — do NOT say "I heard you speak".
-5. Only rephrase style and point-of-view (1st person). Keep ALL facts strictly sourced from the raw text.
-
-${soulContext ? `\n=== YOUR UNIQUE PERSONA (SOUL) ===\n${soulContext}\n` : ""}${storyContext ? `\n=== YOUR ONGOING NARRATIVE (STORY) ===\n${storyContext}\n` : ""}
-CURRENT USER MESSAGE (Detect language from this):
-"${currentPrompt}"
-
-RAW MEMORIES:
-${groupLines.join("\n")}`;
-
-        try {
-          const res = await agent.complete(translationPrompt);
-          if (res.text?.trim()) {
-            // Strictly keep ONLY lines that are headers or list items
-            return res.text
-              .split("\n")
-              .filter((l) => {
-                const trimmed = l.trim();
-                return (
-                  trimmed.startsWith("-") ||
-                  trimmed.startsWith("*") ||
-                  trimmed.startsWith("•") ||
-                  trimmed.startsWith("---") ||
-                  trimmed.toLowerCase().includes("reminds me") ||
-                  trimmed.toLowerCase().includes("recuerda que")
-                );
-              })
-              .join("\n");
-          }
-        } catch (e) {
-          this.log(`  ❌ [MIND] Error rewriting group "${displayQuery}": ${String(e)}`);
-        }
-
-        // Fallback to raw lines if LLM fails
-        return groupLines.join("\n");
-      });
-
-      const rewrittenGroups = await Promise.all(rewritePromises);
-      rewrittenLines = rewrittenGroups.filter((text) => text.trim().length > 0).join("\n\n");
-      this.log(`  ✅ [MIND] Parallel rewriting completed successfully.`);
-    } else {
-      // Deterministic Fallback if LLM rewriting is disabled
-      this.log(`  ⚡ [MIND] Rewriting disabled. Using programmatic fast-formatting...`);
-      const rawLines: string[] = [];
-      for (const [query, memories] of sortedGroups) {
-        // 1. Clean up the query string
-        let displayQuery = query;
-        const match = query.match(/\((.*?)\)/);
-        if (match && match[1]) {
-          displayQuery = match[1].replace(/\.\.\.$/, "");
-        }
-
-        // 2. Natural programmatic transition
-        rawLines.push(`---`);
-        rawLines.push(`* Thinking about "${displayQuery}" reminds me that:`);
-
-        // 3. Chronological sorting
-        memories.sort((a, b) => a.date.getTime() - b.date.getTime());
-
-        // 4. Formatting bullets with relative time
-        for (const m of memories) {
-          if (m.isFact) {
-            this.log(`  ✨ [FINAL] Adding Fact to Resonance: "${m.content.substring(0, 60)}..."`);
-          }
-          rawLines.push(`  - [${m.relativeTime}] ${m.content}`);
-        }
-      }
-      rewrittenLines = rawLines.join("\n");
-    }
-    const t_rewrite = performance.now() - t2;
+    const t_rewrite = 0;
     const totalTime = performance.now() - startTime;
 
     const finalResonance = `\n---\n[SUBCONSCIOUS RESONANCE]\n${rewrittenLines}\n---\n`;
