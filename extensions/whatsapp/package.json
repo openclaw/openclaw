@@ -35,7 +35,8 @@
     "install": {
       "npmSpec": "@openclaw/whatsapp",
       "localPath": "extensions/whatsapp",
-      "defaultChoice": "npm"
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.3.14"
     },
     "release": {
       "publishToNpm": true
