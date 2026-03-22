@@ -228,8 +228,18 @@ def cmd_prepare(limit=5):
 
 
 def cmd_send():
-    """發送已審批的回覆（從 shadow-clone-results.json 讀取）。"""
+    """發送已審批的回覆（從 shadow-clone-results.json 讀取）。
+
+    影子模式：SHADOW_MODE=True 時只記錄不發送，累積品質數據。
+    品質門檻：連續 CONSECUTIVE_REQUIRED 篇 >= QUALITY_GATE 才解鎖真實發文。
+    """
+    SHADOW_MODE = True
+    QUALITY_GATE = 8.0
+    CONSECUTIVE_REQUIRED = 100
+
     results_path = Path(__file__).parent / 'shadow-clone-results.json'
+    shadow_log_path = Path(__file__).parent / 'shadow-quality-log.jsonl'
+
     if not results_path.exists():
         print("No results file. Run prepare first, then have agents write replies.")
         return
@@ -240,12 +250,70 @@ def cmd_send():
     conn.execute('PRAGMA journal_mode=WAL')
     sent = 0
 
+    # Check shadow mode quality gate
+    if SHADOW_MODE:
+        consecutive = 0
+        if shadow_log_path.exists():
+            scores = []
+            for line in shadow_log_path.read_text().strip().split('\n'):
+                try:
+                    entry = json.loads(line)
+                    scores.append(entry.get('score', 0))
+                except Exception:
+                    pass
+            # Count consecutive >= QUALITY_GATE from the end
+            for s in reversed(scores):
+                if s >= QUALITY_GATE:
+                    consecutive += 1
+                else:
+                    break
+        print(f"  影子模式: {consecutive}/{CONSECUTIVE_REQUIRED} consecutive >= {QUALITY_GATE}")
+        if consecutive >= CONSECUTIVE_REQUIRED:
+            print(f"  🎯 品質門檻達成！解鎖真實發文。")
+            SHADOW_MODE = False
+
     for r in results:
         comment_id = r['comment_id']
         post_id = r['post_id']
         reply_text = r['reply']
 
         if not reply_text:
+            continue
+
+        # Score the reply for shadow tracking
+        quality = 0
+        try:
+            import subprocess, os
+            env = {k: v for k, v in os.environ.items() if k != 'ANTHROPIC_API_KEY'}
+            score_prompt = f"""Score this Threads reply 1-10. Calibration: good replies are 7-8. 9-10 exceptional. 5-6 mediocre.
+
+Reply to @{r.get('username','?')}: "{reply_text}"
+
+Consider: matches their tone? specific not generic? would they want to continue the conversation?
+
+Just the number:"""
+            score_result = subprocess.run(
+                ['claude', '--print', '--model', 'opus'],
+                input=score_prompt, capture_output=True, text=True, timeout=60,
+                env=env, cwd='/tmp',
+            )
+            if score_result.returncode == 0:
+                quality = float(score_result.stdout.strip().split('\n')[0].split('/')[0])
+        except Exception:
+            quality = 5.0
+
+        # Log to shadow quality tracker
+        with open(shadow_log_path, 'a') as f:
+            f.write(json.dumps({
+                'ts': time.strftime('%Y-%m-%dT%H:%M:%S'),
+                'username': r.get('username', '?'),
+                'reply': reply_text[:100],
+                'score': quality,
+            }, ensure_ascii=False) + '\n')
+
+        if SHADOW_MODE:
+            status = '✅' if quality >= QUALITY_GATE else '⚠️'
+            print(f"  {status} SHADOW @{r.get('username','?')}: q={quality:.1f} | {reply_text[:40]}")
             continue
 
         # Check not already replied
