@@ -117,7 +117,10 @@ export async function start(state: CronServiceState) {
   await runMissedJobs(state, { skipJobIds: startupInterruptedJobIds });
 
   await locked(state, async () => {
-    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    // Startup catch-up already persisted the latest in-memory store state, and
+    // this path runs before the scheduler begins servicing regular timer ticks.
+    // Avoid an extra reload/write cycle on startup.
+    await ensureLoaded(state, { skipRecompute: true });
     const changed = recomputeNextRuns(state);
     if (changed) {
       await persist(state);
