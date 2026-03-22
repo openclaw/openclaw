@@ -1,6 +1,6 @@
 # Browser Spike Results (Week 1)
 
-Last updated: 2026-03-21
+Last updated: 2026-03-22
 Owner: consumer execution team
 Status: In progress
 
@@ -18,8 +18,8 @@ Status: In progress
 - Browser priority order:
   1. `user` (existing-session / Chrome MCP)
   2. `openclaw` (managed browser profile)
-  3. Claude-in-Chrome investigation
-  4. Browserbase (remote CDP fallback; credentials now verified)
+  3. Claude for Chrome extension investigation
+  4. Remote browser infra fallback (`Kernel` / `Steel` before paid Browserbase)
 
 ## Scoring rubric (fixed)
 
@@ -39,8 +39,8 @@ Legend:
 | ------------------------- | ------------------------------------------------------ | -------------------- | --------------------------------------------------- | -------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `user` (existing-session) | PASS (median `121.0s`; `r1`: `107.2s`, `r2`: `134.9s`) | PASS (`r1`: `63.1s`) | PASS (median `39.0s`; `r1`: `49.2s`, `r2`: `28.7s`) | FAIL (`r1`: `40.3s`) | FAIL (`r1`: `59.3s`)  | Control lane passes when Chrome exposes standard CDP endpoint (example: launch with `--remote-debugging-port=9333` and attach via browser URL); heavier social/travel flows still time out early                                                                                                           |
 | `openclaw` (managed)      | PASS (median `69.9s`; `r1`: `85.4s`, `r2`: `54.5s`)    | PASS (`r1`: `78.8s`) | PASS (median `33.9s`; `r1`: `29.1s`, `r2`: `38.6s`) | PASS (`r1`: `66.5s`) | FAIL (`r1`: `126.2s`) | Control lane passes on clean direct-built gateway (`start`, `status`, `tabs`, `open`); survives more sites than `user` but still times out in long multi-step travel workflows. On Emirates `DPS -> DXB` for `2026-03-22`, this lane failed to keep the booking widget stable long enough to load results. |
-| Claude-in-Chrome          | PENDING                                                | PENDING              | PENDING                                             | PENDING              | PENDING               | Investigation/adaptation track                                                                                                                                                                                                                                                                             |
-| Browserbase               | FAIL (`r1`: `12.2s`)                                   | PENDING              | FAIL (`r1`: `24.0s`, `r2`: `41.6s`, `r3`: `83.6s`)  | PENDING              | PENDING               | Transport is healthy only with fresh `keepAlive: true` sessions; direct Browserbase CLI smoke passes and a minimal local-agent browser task now passes, but real benchmark tasks still fail on either early remote-CDP reachability or later browser-tool inspection timeouts                              |
+| Claude for Chrome         | PENDING                                                | PENDING              | PENDING                                             | PENDING              | PENDING               | Separate category from Anthropic computer-use. It is Chrome-integrated browser control, not generic desktop control, and should be evaluated on its own terms if we can get access and a reproducible test path.                                                                                           |
+| Browserbase               | FAIL (`r1`: `12.2s`)                                   | PENDING              | FAIL (`r1`: `24.0s`, `r2`: `41.6s`, `r3`: `83.6s`)  | PENDING              | PENDING               | Still relevant for anti-bot/CAPTCHA/Cloudflare, but now a later paid comparison lane because cheaper/free infra lanes should be tested first. Transport is healthy only with fresh `keepAlive: true` sessions; real benchmark tasks still fail deeper in the stack.                                        |
 
 ## Current blocker summary
 
@@ -78,15 +78,66 @@ Legend:
     - The latest Browserbase Task 3 rerun no longer fails at remote-CDP reachability; it opens the target article and then times out later when the browser tool tries to inspect page contents for summarization.
     - Browserbase Task 1 split rerun shows the same pattern: on a fresh `keepAlive: true` session, direct `status` and `open https://www.google.com/travel/flights` pass first, and the next concrete failure moves downstream to Google Flights field interaction (`locator.fill` timeout) rather than initial remote-CDP attachment.
     - A fresh Browserbase Task 1 rerun on this worktree still fails much earlier on Google Flights with `Remote CDP ... not reachable`, even though a tiny same-session smoke (`open https://example.com`) still passes.
-- Browser Use findings on 2026-03-21:
+- Browser Use findings on 2026-03-22:
   - Side-lane setup is now complete enough to benchmark without more local environment work:
     - repo-local Browser Use venv created at `.venv-browser-use`
     - pinned Browser Use CLI installed and runnable
     - cloned real-Chrome profile prepared at `/tmp/browser-use-profile4-clone`
     - Browser Use `doctor` passes `4/5` checks
-  - The only honest blocker is secrets:
-    - this machine does not expose any of the plain model/API keys Browser Use expects (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `BROWSER_USE_API_KEY`, or related fallbacks)
-    - Browser Use config dir `~/.browser-use` is absent, so there is no preexisting login to reuse
+  - Local secrets are no longer the main blocker:
+    - local Browser Use `open` now works with `OPENAI_API_KEY` on a fresh profile name
+    - Browser Use does not appear to attach directly to the live Chrome root the way OpenClaw's cloned real-Chrome lane does
+  - Corrected behavior model:
+    - Browser Use local real-browser mode launches Chrome with its own temp `--user-data-dir`
+    - the provided `--profile` value becomes the profile directory name inside that temp browser root
+    - this means the current CLI path is not a true "use my existing Profile 4 state directly" lane
+  - Fresh proof:
+    - `browser-use --session fresh1 -b real --headed --profile BrowserUseFresh open https://example.com`
+    - result: `PASS`
+  - Current blocker split:
+    - `Profile 4` still fails early in Browser Use local real-browser mode with `BrowserStartEvent ... timed out after 30.0s`
+    - fresh-profile `run` gets further, but the Emirates task currently fails differently: the CLI times out on its local socket wait, and the session is left without a usable root CDP client (`Root CDP client not initialized`)
+  - Interpretation:
+    - Browser Use itself is not dead; simple local real-browser control works
+    - but the current CLI/local-session path is not yet trustworthy for the Emirates benchmark
+    - and it should not be described as "cloned real-profile state" because that is not what the local CLI is actually running
+
+- Claude for Chrome findings / correction on 2026-03-22:
+  - This should be treated as a separate lane from Anthropic's generic computer-use API.
+  - The user is specifically referring to the Chrome extension / Chrome connector path, where Claude operates inside Google Chrome with browser-specific integration.
+  - That matters because it is closer to "control Chrome directly" than to generic desktop screenshot+mouse automation.
+  - Official references:
+    - Anthropic launch note: `https://www.anthropic.com/news/claude-for-chrome/`
+    - Claude for Chrome landing page: `https://claude.com/chrome`
+
+- Remote browser infra prioritization update on 2026-03-22:
+  - Browserbase should no longer be the first remote infra lane we reach for, because it currently requires paid credits to continue useful testing on this account.
+  - Cheaper/free remote infra candidates should be tested before paying for more Browserbase minutes:
+    - `Kernel` first if we want to evaluate non-CDP computer-controls + managed auth claims
+    - `Steel` first if we want to evaluate session/auth persistence and credentials handling
+  - Browserbase still matters if we explicitly want to test Cloudflare Signed Agents / CAPTCHA / anti-bot claims.
+
+## Recommended next benchmark set
+
+- Gmail read on a sacrificial test account
+  - purpose: signed-in mail UI, auth persistence, hostile/high-value state
+- Reddit DM / reply task
+  - purpose: hostile logged-in consumer UI, popups, composer behavior, policy constraints
+- Google Sign-In on a throwaway account
+  - purpose: SSO friction, popup/tab handling, anti-bot/login challenge behavior
+- Emirates baseline
+  - purpose: keep the already-proven hostile travel benchmark as the reference lane
+
+## Current recommendation
+
+- Primary lane for MVP:
+  - OpenClaw real-browser / cloned-real-Chrome state for signed-in and hostile tasks
+- Reliability fallback:
+  - OpenClaw managed browser
+- Side lane only:
+  - Browser Use
+- Later remote infra comparison:
+  - `Kernel` or `Steel` before paying to continue Browserbase
 - Real-Chrome findings on 2026-03-21:
   - Chrome will not allow CDP on the user's live default data dir/profile directly; it requires a non-default `--user-data-dir`.
   - The workable compromise is a cloned real-profile lane:

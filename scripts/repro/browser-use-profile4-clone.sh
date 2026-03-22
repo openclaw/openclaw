@@ -6,14 +6,16 @@ set -euo pipefail
 # 1) creates a repo-local Python 3.12 venv
 # 2) installs Browser Use into that venv
 # 3) optionally clones the user's real Chrome profile for future experiments
-# 4) runs the current CLI-supported benchmark path against the user's named
-#    Chrome profile in local "real browser" mode using an OpenAI key
+# 4) runs the current CLI-supported benchmark path against Browser Use's local
+#    real-browser mode using an OpenAI key
 #
 # Important limitation:
 # The currently installed Browser Use CLI (0.12.x) does not expose a
-# --user-data-dir flag for local real-browser runs. That means the practical
-# benchmark path today uses the named local Chrome profile directly, even though
-# we still keep the clone helper around for future Python-level experiments.
+# --user-data-dir flag for local real-browser runs. In practice, it launches
+# Chrome with its own temp user-data-dir and then uses the provided
+# --profile-directory name inside that temp browser root. So this helper's
+# clone step is only for future Python-level experiments; the CLI run path
+# does not currently consume the cloned profile data directly.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VENV_DIR="${BROWSER_USE_VENV_DIR:-$ROOT_DIR/.venv-browser-use}"
@@ -21,6 +23,7 @@ PYTHON_VERSION="${BROWSER_USE_PYTHON_VERSION:-3.12}"
 SOURCE_CHROME_DIR="${OPENCLAW_SOURCE_CHROME_DIR:-$HOME/Library/Application Support/Google/Chrome}"
 SOURCE_PROFILE_NAME="${OPENCLAW_SOURCE_PROFILE_NAME:-Profile 4}"
 CLONE_CHROME_DIR="${BROWSER_USE_CLONE_CHROME_DIR:-/tmp/browser-use-profile4-clone}"
+BROWSER_USE_SESSION_NAME="${BROWSER_USE_SESSION_NAME:-bu-emirates-$(date +%Y%m%d-%H%M%S)}"
 
 usage() {
   cat <<'EOF'
@@ -42,12 +45,13 @@ Commands:
   prepare-profile
     Clone the user's real Chrome profile into a throwaway user-data-dir for
     future Browser Use experiments. The current CLI benchmark path does not
-    consume this clone directly because local real-browser mode does not expose
-    a custom user-data-dir flag.
+    consume this clone directly because Browser Use local real-browser mode
+    uses its own temp user-data-dir.
 
   run-emirates
-    Run the March 22 Emirates benchmark against the named local Chrome profile
-    in Browser Use real-browser mode. Requires OPENAI_API_KEY to be set in the
+    Run the March 22 Emirates benchmark in Browser Use real-browser mode.
+    Uses a unique Browser Use session name by default so stale default-session
+    state does not poison reruns. Requires OPENAI_API_KEY to be set in the
     environment.
 EOF
 }
@@ -64,9 +68,9 @@ ensure_setup() {
 prepare_profile() {
   cd "$ROOT_DIR"
 
-  # Browser Use can point at a local Chrome profile dir directly. We still use
-  # a clone so we can preserve the user's real session state without letting the
-  # benchmark mutate their day-to-day browser files.
+  # Keep this clone path around because it is still useful for future direct
+  # Browser Use Python experiments, even though the current CLI benchmark path
+  # does not read from it.
   rm -rf "$CLONE_CHROME_DIR"
   mkdir -p "$CLONE_CHROME_DIR"
   cp "${SOURCE_CHROME_DIR}/Local State" "${CLONE_CHROME_DIR}/Local State"
@@ -105,11 +109,11 @@ run_emirates() {
     exit 1
   fi
 
-  # The current Browser Use CLI real-browser mode launches Chrome from the
-  # standard user-data root plus a profile name. It does not currently let us
-  # override the user-data-dir from the CLI, so this benchmark uses the named
-  # local profile directly.
+  # Use a unique session name by default. Browser Use's CLI reuses named local
+  # sessions aggressively, and stale session reuse was one source of false
+  # debugging loops during benchmarking.
   "$VENV_DIR/bin/browser-use" \
+    --session "$BROWSER_USE_SESSION_NAME" \
     -b real \
     --headed \
     --profile "$SOURCE_PROFILE_NAME" \

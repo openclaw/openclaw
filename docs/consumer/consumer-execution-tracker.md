@@ -1,6 +1,6 @@
 # OpenClaw Consumer Execution Tracker
 
-Last updated: 2026-03-21
+Last updated: 2026-03-22
 Owner: consumer execution team
 Status: Active
 
@@ -20,13 +20,15 @@ Use these documents in this order when there is any ambiguity:
 - Browser strategy is split into core decision lanes and side experiments:
   1. Core lane: `browser profile=openclaw` (managed isolated browser, reliability baseline)
   2. Core lane: `browser profile=user` (existing-session / Chrome MCP, ideal signed-in browser path)
-  3. Core lane: Browserbase (official remote CDP fallback; run when creds arrive)
-  4. Side experiment: Browser Use (direct-CDP external comparison lane)
-  5. Side experiment: Agent S3 (later computer-use comparison lane)
+  3. Side investigation: Claude for Chrome extension (Chrome-specific control path, separate from generic desktop computer use)
+  4. Core remote-infra fallback: `Kernel` / `Steel` before paid Browserbase
+  5. Side experiment: Browser Use (agent-on-agent external comparison lane)
+  6. Side experiment: Agent S3 (later computer-use comparison lane)
 - Benchmark output path is `docs/consumer/browser-spike-results.md`.
 - Benchmark protocol is 2 runs per approach/task, using median time.
 - This tracker is the handoff doc for context compaction. Update it before ending a major debugging block.
-- Use `openai-codex/gpt-5.4` for the next comparison wave so results stay comparable.
+- Use `openai-codex/gpt-5.4` for direct OpenClaw comparison waves so results stay comparable.
+- Do not force external side-lane tools into fake `gpt-5.4` parity when they do not actually support it in the tested path; document the real model instead.
 - For real-Chrome experiments, keep three lanes separate in both notes and code:
   - clean debug-profile Chrome
   - cloned real-profile Chrome
@@ -108,12 +110,30 @@ This file is the only master tracker. Do not create per-worktree tracker copies.
     - Browserbase Task 1 split rerun on this worktree is more precise: `r1` still fails early on Google Flights with `Remote CDP ... not reachable`, but a fresh-session warm-up run (`status` + `open https://www.google.com/travel/flights`) succeeds on the same lane and then moves the next concrete blocker downstream to a Google Flights `locator.fill` timeout.
     - Browserbase account concurrency is currently very tight (`3` concurrent sessions), so leaked probe sessions quickly trigger `429 Too Many Requests`.
     - Browserbase is temporarily blocked again by account credits: fresh session creation now returns HTTP `402 Payment Required` (`Free plan browser minutes limit reached`).
+    - Because Browserbase now requires paid credits to continue useful testing here, it should not be the next remote infra lane by default.
+    - Try `Kernel` or `Steel` first unless the explicit question is Cloudflare / Signed Agents / Browserbase-specific anti-bot behavior.
     - Browser Use local setup is now done:
       - repo-local venv `.venv-browser-use` exists
       - pinned Browser Use CLI is installed and runnable
       - cloned Chrome profile prep works via `scripts/repro/browser-use-profile4-clone.sh prepare-profile`
       - Browser Use `doctor` passes `4/5` checks locally
-    - Browser Use execution is still honestly blocked on missing model/API keys on this machine.
+    - Browser Use no longer appears blocked on local model/API-key setup alone:
+      - simple local real-browser `open https://example.com` now works with `OPENAI_API_KEY`
+      - but the current CLI behavior is more limited than we assumed
+    - Corrected Browser Use local real-browser model:
+      - it launches Chrome with its own temp `--user-data-dir`
+      - the `--profile` flag names the profile directory inside that temp browser root
+      - so this is not the same thing as OpenClaw's cloned real-Chrome lane
+    - Current Browser Use blockers are now more precise:
+      - `--profile 'Profile 4'` still times out during `BrowserStartEvent` after 30s
+      - a fresh profile name can start and open pages successfully
+      - but a longer Emirates `run` on that fresh profile currently times out on Browser Use's local socket response path and leaves the session without a usable root CDP client
+    - Strategic interpretation:
+      - Browser Use should stay a side lane only
+      - it is agent-on-agent and therefore not a clean architectural comparison for OpenClaw browser control
+    - Claude for Chrome correction:
+      - keep this separate from Anthropic's generic computer-use API
+      - the user is specifically interested in Chrome-integrated control behavior, not generic desktop screenshot/mouse automation
   - Real-Chrome execution status (2026-03-21 update):
     - Chrome will not allow CDP on the user's live daily data dir directly; it requires a non-default `--user-data-dir`.
     - The practical "real browser state" lane is therefore a cloned-profile lane:
@@ -146,7 +166,10 @@ Current objective: convert the Chrome/user Emirates flow from "transport works b
 - [ ] Decide whether remaining failures are browser-lane bugs or benchmark-harness bugs
 - [ ] Capture one clean Browserbase Task 1 artifact now that the split rerun has moved the blocker from attach to field interaction
 - [ ] Re-run Browserbase benchmark tasks after clearing leaked provider sessions / avoiding 429 concurrency caps
-- [ ] Run Browser Use as the first external comparison lane once a usable model/API key is available
+- [ ] Decide whether to keep investing in Browser Use CLI local `run`, given that simple `open` works but Emirates `run` currently leaves the session unhealthy even on a fresh profile
+- [ ] Add explicit benchmark rows for Gmail test account, Reddit DM/reply, Google Sign-In throwaway account, and Emirates baseline
+- [ ] Evaluate Claude for Chrome extension as its own browser-control lane if access and reproducible policy boundaries are available
+- [ ] Try `Kernel` or `Steel` before paying to continue Browserbase evaluation
 - [ ] Productize Chrome profile detection/setup so users do not need manual `chrome://version` discovery for cloned-profile lanes
 - [ ] Keep Agent S3 documented as a later experiment, not a week-1 gate
 - [ ] Teach the browser prompt/skill routing which browser lane to prefer by task shape (for example signed-in hostile travel flow vs clean generic browsing)
@@ -157,12 +180,15 @@ Current objective: convert the Chrome/user Emirates flow from "transport works b
 2. Treat cloned real-Chrome state as the current best `profile=user` recipe for hostile travel sites.
 3. Keep `profile=openclaw` as the reliability fallback, but not the current winner on Emirates.
 4. Re-run Browserbase with fresh `keepAlive: true` sessions once credits are restored and isolate the remaining deeper browser-tool inspection timeout on real tasks.
-5. Run Browser Use on the smallest 2-3 task smoke set once a usable model/API key is available, before Agent S3.
-6. Design a user-facing Chrome setup flow that can discover or guide selection of the correct profile instead of relying on manual `chrome://version` inspection.
-7. Decide whether week-1 primary browser recommendation becomes:
-   - cloned real-Chrome state for signed-in travel/browser tasks
-   - `openclaw` managed browser as fallback
-8. Add browser-lane guidance to the system prompt / browser skill layer so the agent chooses the right lane automatically instead of treating all browser tasks as equivalent.
+5. Continue Browser Use only if we can either stabilize the local `run` session lifecycle or move to a lower-level Python path that exposes more control than the current CLI.
+6. Treat Gmail test account, Reddit DM, Google Sign-In throwaway flow, and Emirates as the next practical benchmark set.
+7. Delay Browserbase spend until after we learn whether `Kernel` or `Steel` cover the same anti-bot/session problem space for free or cheaper.
+8. Keep Claude for Chrome extension on the board as a browser-specific control comparison, but do not conflate it with Anthropic desktop computer-use.
+9. Design a user-facing Chrome setup flow that can discover or guide selection of the correct profile instead of relying on manual `chrome://version` inspection.
+10. Decide whether week-1 primary browser recommendation becomes:
+    - cloned real-Chrome state for signed-in travel/browser tasks
+    - `openclaw` managed browser as fallback
+11. Add browser-lane guidance to the system prompt / browser skill layer so the agent chooses the right lane automatically instead of treating all browser tasks as equivalent.
 
 ### Auth and rate-limit sanity checks
 
