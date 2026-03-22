@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  ClawHubRequestError,
   downloadClawHubPackageArchive,
   fetchClawHubPackageDetail,
   fetchClawHubPackageVersion,
@@ -16,6 +17,20 @@ import { resolveRuntimeServiceVersion } from "../version.js";
 import { installPluginFromArchive, type InstallPluginResult } from "./install.js";
 
 export const OPENCLAW_PLUGIN_API_VERSION = "1.2.0";
+export const CLAWHUB_INSTALL_ERROR_CODE = {
+  INVALID_SPEC: "invalid_spec",
+  PACKAGE_NOT_FOUND: "package_not_found",
+  VERSION_NOT_FOUND: "version_not_found",
+  NO_INSTALLABLE_VERSION: "no_installable_version",
+  SKILL_PACKAGE: "skill_package",
+  UNSUPPORTED_FAMILY: "unsupported_family",
+  PRIVATE_PACKAGE: "private_package",
+  INCOMPATIBLE_PLUGIN_API: "incompatible_plugin_api",
+  INCOMPATIBLE_GATEWAY: "incompatible_gateway",
+} as const;
+
+export type ClawHubInstallErrorCode =
+  (typeof CLAWHUB_INSTALL_ERROR_CODE)[keyof typeof CLAWHUB_INSTALL_ERROR_CODE];
 
 type PluginInstallLogger = {
   info?: (message: string) => void;
@@ -34,8 +49,40 @@ export type ClawHubPluginInstallRecordFields = {
   installedAt?: string;
 };
 
+type ClawHubInstallFailure = {
+  ok: false;
+  error: string;
+  code?: ClawHubInstallErrorCode;
+};
+
 export function formatClawHubSpecifier(params: { name: string; version?: string }): string {
   return `clawhub:${params.name}${params.version ? `@${params.version}` : ""}`;
+}
+
+function buildClawHubInstallFailure(
+  error: string,
+  code?: ClawHubInstallErrorCode,
+): ClawHubInstallFailure {
+  return { ok: false, error, code };
+}
+
+function mapClawHubRequestError(
+  error: unknown,
+  context: { stage: "package" | "version"; name: string; version?: string },
+): ClawHubInstallFailure {
+  if (error instanceof ClawHubRequestError && error.status === 404) {
+    if (context.stage === "package") {
+      return buildClawHubInstallFailure(
+        "Package not found on ClawHub.",
+        CLAWHUB_INSTALL_ERROR_CODE.PACKAGE_NOT_FOUND,
+      );
+    }
+    return buildClawHubInstallFailure(
+      `Version not found on ClawHub: ${context.name}@${context.version ?? "unknown"}.`,
+      CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND,
+    );
+  }
+  return buildClawHubInstallFailure(error instanceof Error ? error.message : String(error));
 }
 
 function resolveRequestedVersion(params: {
@@ -53,26 +100,41 @@ async function resolveCompatiblePackageVersion(params: {
   requestedVersion?: string;
   baseUrl?: string;
   token?: string;
-}): Promise<{
-  version: string;
-  compatibility?: {
-    pluginApiRange?: string;
-    minGatewayVersion?: string;
-  } | null;
-}> {
+}): Promise<
+  | {
+      ok: true;
+      version: string;
+      compatibility?: {
+        pluginApiRange?: string;
+        minGatewayVersion?: string;
+      } | null;
+    }
+  | ClawHubInstallFailure
+> {
   const version = resolveRequestedVersion(params);
   if (!version) {
-    throw new Error(
+    return buildClawHubInstallFailure(
       `ClawHub package "${params.detail.package?.name ?? "unknown"}" has no installable version.`,
+      CLAWHUB_INSTALL_ERROR_CODE.NO_INSTALLABLE_VERSION,
     );
   }
-  const versionDetail = await fetchClawHubPackageVersion({
-    name: params.detail.package?.name ?? "",
-    version,
-    baseUrl: params.baseUrl,
-    token: params.token,
-  });
+  let versionDetail;
+  try {
+    versionDetail = await fetchClawHubPackageVersion({
+      name: params.detail.package?.name ?? "",
+      version,
+      baseUrl: params.baseUrl,
+      token: params.token,
+    });
+  } catch (error) {
+    return mapClawHubRequestError(error, {
+      stage: "version",
+      name: params.detail.package?.name ?? "unknown",
+      version,
+    });
+  }
   return {
+    ok: true,
     version,
     compatibility:
       versionDetail.version?.compatibility ?? params.detail.package?.compatibility ?? null,
@@ -85,19 +147,31 @@ function validateClawHubPluginPackage(params: {
     pluginApiRange?: string;
     minGatewayVersion?: string;
   } | null;
-}) {
+}): ClawHubInstallFailure | null {
   const pkg = params.detail.package;
   if (!pkg) {
-    throw new Error("Package not found on ClawHub.");
+    return buildClawHubInstallFailure(
+      "Package not found on ClawHub.",
+      CLAWHUB_INSTALL_ERROR_CODE.PACKAGE_NOT_FOUND,
+    );
   }
   if (pkg.family === "skill") {
-    throw new Error(`"${pkg.name}" is a skill. Use "openclaw skills install ${pkg.name}" instead.`);
+    return buildClawHubInstallFailure(
+      `"${pkg.name}" is a skill. Use "openclaw skills install ${pkg.name}" instead.`,
+      CLAWHUB_INSTALL_ERROR_CODE.SKILL_PACKAGE,
+    );
   }
   if (pkg.family !== "code-plugin" && pkg.family !== "bundle-plugin") {
-    throw new Error(`Unsupported ClawHub package family: ${String(pkg.family)}`);
+    return buildClawHubInstallFailure(
+      `Unsupported ClawHub package family: ${String(pkg.family)}`,
+      CLAWHUB_INSTALL_ERROR_CODE.UNSUPPORTED_FAMILY,
+    );
   }
   if (pkg.channel === "private") {
-    throw new Error(`"${pkg.name}" is private on ClawHub and cannot be installed anonymously.`);
+    return buildClawHubInstallFailure(
+      `"${pkg.name}" is private on ClawHub and cannot be installed anonymously.`,
+      CLAWHUB_INSTALL_ERROR_CODE.PRIVATE_PACKAGE,
+    );
   }
 
   const compatibility = params.compatibility;
@@ -105,8 +179,9 @@ function validateClawHubPluginPackage(params: {
     compatibility?.pluginApiRange &&
     !satisfiesPluginApiRange(OPENCLAW_PLUGIN_API_VERSION, compatibility.pluginApiRange)
   ) {
-    throw new Error(
+    return buildClawHubInstallFailure(
       `Plugin "${pkg.name}" requires plugin API ${compatibility.pluginApiRange}, but this OpenClaw runtime exposes ${OPENCLAW_PLUGIN_API_VERSION}.`,
+      CLAWHUB_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
     );
   }
 
@@ -115,10 +190,12 @@ function validateClawHubPluginPackage(params: {
     compatibility?.minGatewayVersion &&
     !satisfiesGatewayMinimum(runtimeVersion, compatibility.minGatewayVersion)
   ) {
-    throw new Error(
+    return buildClawHubInstallFailure(
       `Plugin "${pkg.name}" requires OpenClaw >=${compatibility.minGatewayVersion}, but this host is ${runtimeVersion}.`,
+      CLAWHUB_INSTALL_ERROR_CODE.INCOMPATIBLE_GATEWAY,
     );
   }
+  return null;
 }
 
 function logClawHubPackageSummary(params: {
@@ -165,44 +242,64 @@ export async function installPluginFromClawHub(params: {
         clawhub: ClawHubPluginInstallRecordFields;
         packageName: string;
       })
+  | ClawHubInstallFailure
   | Extract<InstallPluginResult, { ok: false }>
 > {
   const parsed = parseClawHubPluginSpec(params.spec);
   if (!parsed?.name) {
-    return {
-      ok: false,
-      error: `invalid ClawHub plugin spec: ${params.spec}`,
-    };
+    return buildClawHubInstallFailure(
+      `invalid ClawHub plugin spec: ${params.spec}`,
+      CLAWHUB_INSTALL_ERROR_CODE.INVALID_SPEC,
+    );
   }
 
   params.logger?.info?.(`Resolving ${formatClawHubSpecifier(parsed)}…`);
-  const detail = await fetchClawHubPackageDetail({
-    name: parsed.name,
-    baseUrl: params.baseUrl,
-    token: params.token,
-  });
+  let detail: ClawHubPackageDetail;
+  try {
+    detail = await fetchClawHubPackageDetail({
+      name: parsed.name,
+      baseUrl: params.baseUrl,
+      token: params.token,
+    });
+  } catch (error) {
+    return mapClawHubRequestError(error, {
+      stage: "package",
+      name: parsed.name,
+    });
+  }
   const versionState = await resolveCompatiblePackageVersion({
     detail,
     requestedVersion: parsed.version,
     baseUrl: params.baseUrl,
     token: params.token,
   });
-  validateClawHubPluginPackage({
+  if (!versionState.ok) {
+    return versionState;
+  }
+  const validationFailure = validateClawHubPluginPackage({
     detail,
     compatibility: versionState.compatibility,
   });
+  if (validationFailure) {
+    return validationFailure;
+  }
   logClawHubPackageSummary({
     detail,
     version: versionState.version,
     logger: params.logger,
   });
 
-  const archive = await downloadClawHubPackageArchive({
-    name: parsed.name,
-    version: versionState.version,
-    baseUrl: params.baseUrl,
-    token: params.token,
-  });
+  let archive;
+  try {
+    archive = await downloadClawHubPackageArchive({
+      name: parsed.name,
+      version: versionState.version,
+      baseUrl: params.baseUrl,
+      token: params.token,
+    });
+  } catch (error) {
+    return buildClawHubInstallFailure(error instanceof Error ? error.message : String(error));
+  }
   try {
     params.logger?.info?.(
       `Downloading ${detail.package?.family === "bundle-plugin" ? "bundle" : "plugin"} ${parsed.name}@${versionState.version} from ClawHub…`,
@@ -222,7 +319,10 @@ export async function installPluginFromClawHub(params: {
     const clawhubFamily =
       pkg.family === "code-plugin" || pkg.family === "bundle-plugin" ? pkg.family : null;
     if (!clawhubFamily) {
-      throw new Error(`Unsupported ClawHub package family: ${pkg.family}`);
+      return buildClawHubInstallFailure(
+        `Unsupported ClawHub package family: ${pkg.family}`,
+        CLAWHUB_INSTALL_ERROR_CODE.UNSUPPORTED_FAMILY,
+      );
     }
     return {
       ...installResult,
