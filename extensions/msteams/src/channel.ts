@@ -19,10 +19,10 @@ import {
 } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
+import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
 import type { ChannelMessageActionName, ChannelPlugin, OpenClawConfig } from "../runtime-api.js";
 import {
   buildProbeChannelStatusSummary,
-  buildRuntimeAccountStatusSnapshot,
   buildChannelConfigSchema,
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
@@ -409,7 +409,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           return null as never;
         },
       },
-      status: {
+      status: createComputedAccountStatusAdapter<ResolvedMSTeamsAccount, ProbeMSTeamsResult>({
         defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, { port: null }),
         buildChannelSummary: ({ snapshot }) =>
           buildProbeChannelStatusSummary(snapshot, {
@@ -451,17 +451,15 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           }
           return lines;
         },
-        buildAccountSnapshot: ({ account, runtime, probe }) =>
-          buildRuntimeAccountStatusSnapshot(
-            { runtime, probe },
-            {
-              accountId: account.accountId,
-              enabled: account.enabled,
-              configured: account.configured,
-              port: runtime?.port ?? null,
-            },
-          ),
-      },
+        resolveAccountSnapshot: ({ account, runtime }) => ({
+          accountId: account.accountId,
+          enabled: account.enabled,
+          configured: account.configured,
+          extra: {
+            port: runtime?.port ?? null,
+          },
+        }),
+      }),
       gateway: {
         startAccount: async (ctx) => {
           const { monitorMSTeamsProvider } = await import("./index.js");
