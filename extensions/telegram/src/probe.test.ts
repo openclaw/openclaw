@@ -206,7 +206,6 @@ describe("probeTelegram retry logic", () => {
         autoSelectFamily: false,
         dnsResultOrder: "ipv4first",
       },
-      apiRoot: undefined,
     });
   });
 

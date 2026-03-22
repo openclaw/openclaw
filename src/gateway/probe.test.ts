@@ -4,6 +4,7 @@ const gatewayClientState = vi.hoisted(() => ({
   options: null as Record<string, unknown> | null,
   requests: [] as string[],
   delaysMs: {} as Record<string, number>,
+  errors: {} as Record<string, string>,
 }));
 
 class MockGatewayClient {
@@ -34,6 +35,10 @@ class MockGatewayClient {
     if (typeof delayMs === "number" && delayMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
+    const error = gatewayClientState.errors[method];
+    if (typeof error === "string") {
+      throw new Error(error);
+    }
     if (method === "health") {
       return {};
     }
@@ -52,7 +57,8 @@ const { clampProbeTimeoutMs, probeGateway } = await import("./probe.js");
 
 describe("probeGateway", () => {
   beforeEach(() => {
-    gatewayClientState.delaysMs = { health: 2_000 };
+    gatewayClientState.delaysMs = {};
+    gatewayClientState.errors = {};
   });
 
   it("clamps probe timeout to timer-safe bounds", () => {
@@ -123,17 +129,18 @@ describe("probeGateway", () => {
     expect(result.configSnapshot).toBeNull();
   });
 
-  it("treats reachability as successful when status/presence/config finish before a slow health call", async () => {
+  it("times out when health does not finish within the full-probe budget", async () => {
+    gatewayClientState.delaysMs = { health: 2_000 };
     const result = await probeGateway({
       url: "ws://127.0.0.1:18789",
       auth: { token: "secret" },
       timeoutMs: 100,
     });
 
-    expect(result.ok).toBe(true);
-    expect(result.error).toBeNull();
-    expect(result.status).toEqual({});
-    expect(result.presence).toEqual([]);
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("timeout");
+    expect(result.status).toBeNull();
+    expect(result.presence).toBeNull();
     expect(result.health).toBeNull();
   });
 
@@ -159,5 +166,22 @@ describe("probeGateway", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("fails a full probe when health rejects", async () => {
+    gatewayClientState.errors = { health: "health unavailable" };
+
+    const result = await probeGateway({
+      url: "ws://127.0.0.1:18789",
+      auth: { token: "secret" },
+      timeoutMs: 1_000,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("health unavailable");
+    expect(result.health).toBeNull();
+    expect(result.status).toBeNull();
+    expect(result.presence).toBeNull();
+    expect(result.configSnapshot).toBeNull();
   });
 });
