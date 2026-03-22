@@ -15,6 +15,7 @@ import {
   runMediaUnderstandingFile,
   transcribeAudioFile,
 } from "../../media-understanding/runtime.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { listSpeechVoices, textToSpeech, textToSpeechTelephony } from "../../tts/runtime.js";
 import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
@@ -72,18 +73,12 @@ type GatewaySubagentState = {
   subagent: PluginRuntime["subagent"] | undefined;
 };
 
-const gatewaySubagentState: GatewaySubagentState = (() => {
-  const g = globalThis as typeof globalThis & {
-    [GATEWAY_SUBAGENT_SYMBOL]?: GatewaySubagentState;
-  };
-  const existing = g[GATEWAY_SUBAGENT_SYMBOL];
-  if (existing) {
-    return existing;
-  }
-  const created: GatewaySubagentState = { subagent: undefined };
-  g[GATEWAY_SUBAGENT_SYMBOL] = created;
-  return created;
-})();
+const gatewaySubagentState = resolveGlobalSingleton<GatewaySubagentState>(
+  GATEWAY_SUBAGENT_SYMBOL,
+  () => ({
+    subagent: undefined,
+  }),
+);
 
 /**
  * Set the process-global gateway subagent runtime.
