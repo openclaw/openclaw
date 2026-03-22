@@ -1,156 +1,345 @@
 ---
-title: "Plugin Runtime"
-sidebarTitle: "Runtime"
-summary: "How `api.runtime` works, when to use it, and how to manage plugin runtime state safely"
+title: "Plugin SDK Runtime"
+sidebarTitle: "Runtime Helpers"
+summary: "api.runtime -- the injected runtime helpers available to plugins"
 read_when:
-  - You need to call runtime helpers from a plugin
-  - You are deciding between hooks and injected runtime
-  - You need a safe module-level runtime store
+  - You need to call core helpers from a plugin (TTS, STT, image gen, web search, subagent)
+  - You want to understand what api.runtime exposes
+  - You are accessing config, agent, or media helpers from plugin code
 ---
 
-# Plugin Runtime
+# Plugin Runtime Helpers
 
-Native OpenClaw plugins receive a trusted runtime through `api.runtime`.
+Reference for the `api.runtime` object injected into every plugin during
+registration. Use these helpers instead of importing host internals directly.
 
-Use it for **host-owned operations** that should stay inside OpenClaw’s runtime:
+<Tip>
+  **Looking for a walkthrough?** See [Channel Plugins](/plugins/sdk-channel-plugins)
+  or [Provider Plugins](/plugins/sdk-provider-plugins) for step-by-step guides
+  that show these helpers in context.
+</Tip>
 
-- reading and writing config
-- agent/session helpers
-- system commands with OpenClaw timeouts
-- media, speech, image-generation, and web-search runtime calls
-- channel-owned helpers for bundled channel plugins
-
-## When to use runtime vs focused SDK helpers
-
-- Use focused SDK helpers when a public subpath already models the job.
-- Use `api.runtime.*` when the host owns the operation or state.
-- Prefer hooks for loose integrations that do not need tight in-process access.
+```typescript
+register(api) {
+  const runtime = api.runtime;
+}
+```
 
 ## Runtime namespaces
 
-| Namespace                        | What it covers                                     |
-| -------------------------------- | -------------------------------------------------- |
-| `api.runtime.config`             | Load and persist OpenClaw config                   |
-| `api.runtime.agent`              | Agent workspace, identity, timeouts, session store |
-| `api.runtime.system`             | System events, heartbeats, command execution       |
-| `api.runtime.media`              | File/media loading and transforms                  |
-| `api.runtime.tts`                | Speech synthesis and voice listing                 |
-| `api.runtime.mediaUnderstanding` | Image/audio/video understanding                    |
-| `api.runtime.imageGeneration`    | Image generation providers                         |
-| `api.runtime.webSearch`          | Runtime web-search execution                       |
-| `api.runtime.modelAuth`          | Resolve model/provider credentials                 |
-| `api.runtime.subagent`           | Spawn, wait, inspect, and delete subagent sessions |
-| `api.runtime.channel`            | Channel-heavy helpers for native channel plugins   |
+### `api.runtime.agent`
 
-## Example: read and persist config
+Agent identity, directories, and session management.
 
-```ts
-import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+```typescript
+// Resolve the agent's working directory
+const agentDir = api.runtime.agent.resolveAgentDir(cfg);
 
-export default definePluginEntry({
-  id: "talk-settings",
-  name: "Talk Settings",
-  description: "Example runtime config write",
-  register(api: OpenClawPluginApi) {
-    api.registerCommand({
-      name: "talk-mode",
-      description: "Enable talk mode",
-      handler: async () => {
-        const cfg = api.runtime.config.loadConfig();
-        const nextConfig = {
-          ...cfg,
-          talk: {
-            ...cfg.talk,
-            enabled: true,
-          },
-        };
-        await api.runtime.config.writeConfigFile(nextConfig);
-        return { text: "talk mode enabled" };
-      },
-    });
-  },
+// Resolve agent workspace
+const workspaceDir = api.runtime.agent.resolveAgentWorkspaceDir(cfg);
+
+// Get agent identity
+const identity = api.runtime.agent.resolveAgentIdentity(cfg);
+
+// Get default thinking level
+const thinking = api.runtime.agent.resolveThinkingDefault(cfg, provider, model);
+
+// Get agent timeout
+const timeoutMs = api.runtime.agent.resolveAgentTimeoutMs(cfg);
+
+// Ensure workspace exists
+await api.runtime.agent.ensureAgentWorkspace(cfg);
+
+// Run an embedded Pi agent (requires sessionFile + workspaceDir at minimum)
+const agentDir = api.runtime.agent.resolveAgentDir(cfg);
+const result = await api.runtime.agent.runEmbeddedPiAgent({
+  sessionId: "my-plugin:task-1",
+  sessionFile: path.join(agentDir, "sessions", "my-plugin-task-1.jsonl"),
+  workspaceDir: api.runtime.agent.resolveAgentWorkspaceDir(cfg),
+  prompt: "Summarize the latest changes",
 });
 ```
 
-## Example: use a runtime service owned by OpenClaw
+**Session store helpers** are under `api.runtime.agent.session`:
 
-```ts
-const cfg = api.runtime.config.loadConfig();
+```typescript
+const storePath = api.runtime.agent.session.resolveStorePath(cfg);
+const store = api.runtime.agent.session.loadSessionStore(cfg);
+await api.runtime.agent.session.saveSessionStore(cfg, store);
+const filePath = api.runtime.agent.session.resolveSessionFilePath(cfg, sessionId);
+```
+
+### `api.runtime.agent.defaults`
+
+Default model and provider constants:
+
+```typescript
+const model = api.runtime.agent.defaults.model; // e.g. "anthropic/claude-sonnet-4-6"
+const provider = api.runtime.agent.defaults.provider; // e.g. "anthropic"
+```
+
+### `api.runtime.subagent`
+
+Launch and manage background subagent runs.
+
+```typescript
+// Start a subagent run
+const { runId } = await api.runtime.subagent.run({
+  sessionKey: "agent:main:subagent:search-helper",
+  message: "Expand this query into focused follow-up searches.",
+  provider: "openai", // optional override
+  model: "gpt-4.1-mini", // optional override
+  deliver: false,
+});
+
+// Wait for completion
+const result = await api.runtime.subagent.waitForRun({ runId, timeoutMs: 30000 });
+
+// Read session messages
+const { messages } = await api.runtime.subagent.getSessionMessages({
+  sessionKey: "agent:main:subagent:search-helper",
+  limit: 10,
+});
+
+// Delete a session
+await api.runtime.subagent.deleteSession({
+  sessionKey: "agent:main:subagent:search-helper",
+});
+```
+
+<Warning>
+  Model overrides (`provider`/`model`) require operator opt-in via
+  `plugins.entries.<id>.subagent.allowModelOverride: true` in config.
+  Untrusted plugins can still run subagents, but override requests are rejected.
+</Warning>
+
+### `api.runtime.tts`
+
+Text-to-speech synthesis.
+
+```typescript
+// Standard TTS
+const clip = await api.runtime.tts.textToSpeech({
+  text: "Hello from OpenClaw",
+  cfg: api.config,
+});
+
+// Telephony-optimized TTS
+const telephonyClip = await api.runtime.tts.textToSpeechTelephony({
+  text: "Hello from OpenClaw",
+  cfg: api.config,
+});
+
+// List available voices
 const voices = await api.runtime.tts.listVoices({
+  provider: "elevenlabs",
+  cfg: api.config,
+});
+```
+
+Uses core `messages.tts` configuration and provider selection. Returns PCM audio
+buffer + sample rate.
+
+### `api.runtime.mediaUnderstanding`
+
+Image, audio, and video analysis.
+
+```typescript
+// Describe an image
+const image = await api.runtime.mediaUnderstanding.describeImageFile({
+  filePath: "/tmp/inbound-photo.jpg",
+  cfg: api.config,
+  agentDir: "/tmp/agent",
+});
+
+// Transcribe audio
+const { text } = await api.runtime.mediaUnderstanding.transcribeAudioFile({
+  filePath: "/tmp/inbound-audio.ogg",
+  cfg: api.config,
+  mime: "audio/ogg", // optional, for when MIME cannot be inferred
+});
+
+// Describe a video
+const video = await api.runtime.mediaUnderstanding.describeVideoFile({
+  filePath: "/tmp/inbound-video.mp4",
+  cfg: api.config,
+});
+
+// Generic file analysis
+const result = await api.runtime.mediaUnderstanding.runFile({
+  filePath: "/tmp/inbound-file.pdf",
+  cfg: api.config,
+});
+```
+
+Returns `{ text: undefined }` when no output is produced (e.g. skipped input).
+
+<Info>
+  `api.runtime.stt.transcribeAudioFile(...)` remains as a compatibility alias
+  for `api.runtime.mediaUnderstanding.transcribeAudioFile(...)`.
+</Info>
+
+### `api.runtime.imageGeneration`
+
+Image generation.
+
+```typescript
+const result = await api.runtime.imageGeneration.generate({
+  prompt: "A robot painting a sunset",
+  cfg: api.config,
+});
+
+const providers = api.runtime.imageGeneration.listProviders({ cfg: api.config });
+```
+
+### `api.runtime.webSearch`
+
+Web search.
+
+```typescript
+const providers = api.runtime.webSearch.listProviders({ config: api.config });
+
+const result = await api.runtime.webSearch.search({
+  config: api.config,
+  args: { query: "OpenClaw plugin SDK", count: 5 },
+});
+```
+
+### `api.runtime.media`
+
+Low-level media utilities.
+
+```typescript
+const webMedia = await api.runtime.media.loadWebMedia(url);
+const mime = await api.runtime.media.detectMime(buffer);
+const kind = api.runtime.media.mediaKindFromMime("image/jpeg"); // "image"
+const isVoice = api.runtime.media.isVoiceCompatibleAudio(filePath);
+const metadata = await api.runtime.media.getImageMetadata(filePath);
+const resized = await api.runtime.media.resizeToJpeg(buffer, { maxWidth: 800 });
+```
+
+### `api.runtime.config`
+
+Config load and write.
+
+```typescript
+const cfg = await api.runtime.config.loadConfig();
+await api.runtime.config.writeConfigFile(cfg);
+```
+
+### `api.runtime.system`
+
+System-level utilities.
+
+```typescript
+await api.runtime.system.enqueueSystemEvent(event);
+api.runtime.system.requestHeartbeatNow();
+const output = await api.runtime.system.runCommandWithTimeout(cmd, args, opts);
+const hint = api.runtime.system.formatNativeDependencyHint(pkg);
+```
+
+### `api.runtime.events`
+
+Event subscriptions.
+
+```typescript
+api.runtime.events.onAgentEvent((event) => {
+  /* ... */
+});
+api.runtime.events.onSessionTranscriptUpdate((update) => {
+  /* ... */
+});
+```
+
+### `api.runtime.logging`
+
+Logging.
+
+```typescript
+const verbose = api.runtime.logging.shouldLogVerbose();
+const childLogger = api.runtime.logging.getChildLogger({ plugin: "my-plugin" }, { level: "debug" });
+```
+
+### `api.runtime.modelAuth`
+
+Model and provider auth resolution.
+
+```typescript
+const auth = await api.runtime.modelAuth.getApiKeyForModel({ model, cfg });
+const providerAuth = await api.runtime.modelAuth.resolveApiKeyForProvider({
   provider: "openai",
   cfg,
 });
-
-return {
-  text: voices.map((voice) => `${voice.name ?? voice.id}: ${voice.id}`).join("\n"),
-};
 ```
 
-## `createPluginRuntimeStore(...)`
+### `api.runtime.state`
 
-Plugin modules often need a small mutable slot for runtime-backed helpers. Use
-`plugin-sdk/runtime-store` instead of an unguarded `let runtime`.
+State directory resolution.
 
-```ts
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+```typescript
+const stateDir = api.runtime.state.resolveStateDir();
+```
+
+### `api.runtime.tools`
+
+Memory tool factories and CLI.
+
+```typescript
+const getTool = api.runtime.tools.createMemoryGetTool(/* ... */);
+const searchTool = api.runtime.tools.createMemorySearchTool(/* ... */);
+api.runtime.tools.registerMemoryCli(/* ... */);
+```
+
+### `api.runtime.channel`
+
+Channel-specific runtime helpers (available when a channel plugin is loaded).
+
+## Storing runtime references
+
+Use `createPluginRuntimeStore` to store the runtime reference for use outside
+the `register` callback:
+
+```typescript
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
-import { channelPlugin } from "./src/channel.js";
+import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 
-const runtimeStore = createPluginRuntimeStore<{
-  logger: { info(message: string): void };
-}>("Example Channel runtime not initialized");
+const store = createPluginRuntimeStore<PluginRuntime>("my-plugin runtime not initialized");
 
-export function setExampleRuntime(runtime: { logger: { info(message: string): void } }) {
-  runtimeStore.setRuntime(runtime);
-}
-
-export function getExampleRuntime() {
-  return runtimeStore.getRuntime();
-}
-
+// In your entry point
 export default defineChannelPluginEntry({
-  id: "example-channel",
-  name: "Example Channel",
-  description: "Example runtime store usage",
-  plugin: channelPlugin,
-  setRuntime: setExampleRuntime,
+  id: "my-plugin",
+  name: "My Plugin",
+  description: "Example",
+  plugin: myPlugin,
+  setRuntime: store.setRuntime,
 });
+
+// In other files
+export function getRuntime() {
+  return store.getRuntime(); // throws if not initialized
+}
+
+export function tryGetRuntime() {
+  return store.tryGetRuntime(); // returns null if not initialized
+}
 ```
 
-`createPluginRuntimeStore(...)` gives you:
+## Other top-level `api` fields
 
-- `setRuntime(next)`
-- `clearRuntime()`
-- `tryGetRuntime()`
-- `getRuntime()`
+Beyond `api.runtime`, the API object also provides:
 
-`getRuntime()` throws with your custom message if the runtime was never set.
-
-## Channel runtime note
-
-`api.runtime.channel.*` is the heaviest namespace. It exists for native channel
-plugins that need tight coupling with the OpenClaw messaging stack.
-
-Prefer narrower subpaths such as:
-
-- `plugin-sdk/channel-pairing`
-- `plugin-sdk/channel-actions`
-- `plugin-sdk/channel-feedback`
-- `plugin-sdk/channel-lifecycle`
-
-Use `api.runtime.channel.*` when the operation is clearly host-owned and there
-is no smaller public seam.
-
-## Runtime safety guidelines
-
-- Do not cache config snapshots longer than needed.
-- Prefer `createPluginRuntimeStore(...)` for shared module state.
-- Keep runtime-backed code behind small local helpers.
-- Avoid reaching into runtime namespaces you do not need.
+| Field                    | Type                      | Description                                               |
+| ------------------------ | ------------------------- | --------------------------------------------------------- |
+| `api.id`                 | `string`                  | Plugin id                                                 |
+| `api.name`               | `string`                  | Plugin display name                                       |
+| `api.config`             | `OpenClawConfig`          | Current config snapshot                                   |
+| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config` |
+| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)          |
+| `api.registrationMode`   | `PluginRegistrationMode`  | `"full"`, `"setup-only"`, or `"setup-runtime"`            |
+| `api.resolvePath(input)` | `(string) => string`      | Resolve a path relative to the plugin root                |
 
 ## Related
 
-- [Plugin SDK Overview](/plugins/sdk-overview)
-- [Plugin Entry Points](/plugins/sdk-entrypoints)
-- [Plugin Setup](/plugins/sdk-setup)
-- [Channel Plugin SDK](/plugins/sdk-channel-plugins)
+- [SDK Overview](/plugins/sdk-overview) -- subpath reference
+- [SDK Entry Points](/plugins/sdk-entrypoints) -- `definePluginEntry` options
+- [Plugin Internals](/plugins/architecture) -- capability model and registry
