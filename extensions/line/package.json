@@ -33,7 +33,8 @@
     "install": {
       "npmSpec": "@openclaw/line",
       "localPath": "extensions/line",
-      "defaultChoice": "npm"
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.3.14"
     }
   }
 }
