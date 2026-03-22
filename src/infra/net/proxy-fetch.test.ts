@@ -55,7 +55,6 @@ vi.mock("undici", () => ({
 
 let getProxyUrlFromFetch: typeof import("./proxy-fetch.js").getProxyUrlFromFetch;
 let makeProxyFetch: typeof import("./proxy-fetch.js").makeProxyFetch;
-let PROXY_FETCH_PROXY_URL: typeof import("./proxy-fetch.js").PROXY_FETCH_PROXY_URL;
 let resolveProxyFetchFromEnv: typeof import("./proxy-fetch.js").resolveProxyFetchFromEnv;
 
 function clearProxyEnv(): void {
@@ -78,7 +77,7 @@ describe("makeProxyFetch", () => {
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
-    ({ getProxyUrlFromFetch, makeProxyFetch, PROXY_FETCH_PROXY_URL, resolveProxyFetchFromEnv } =
+    ({ getProxyUrlFromFetch, makeProxyFetch, resolveProxyFetchFromEnv } =
       await import("./proxy-fetch.js"));
   });
 
