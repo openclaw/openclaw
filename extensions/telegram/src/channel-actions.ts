@@ -1,14 +1,15 @@
 import {
-  createMessageToolButtonsSchema,
-  createTelegramPollExtraToolSchemas,
   createUnionActionGate,
   listTokenSourcedAccounts,
   resolveReactionMessageId,
-  type ChannelMessageActionAdapter,
-  type ChannelMessageActionName,
-  type ChannelMessageToolDiscovery,
-  type ChannelMessageToolSchemaContribution,
-} from "openclaw/plugin-sdk/channel-runtime";
+} from "openclaw/plugin-sdk/channel-actions";
+import { createMessageToolButtonsSchema } from "openclaw/plugin-sdk/channel-actions";
+import type {
+  ChannelMessageActionAdapter,
+  ChannelMessageActionName,
+  ChannelMessageToolDiscovery,
+  ChannelMessageToolSchemaContribution,
+} from "openclaw/plugin-sdk/channel-contract";
 import type { TelegramActionConfig } from "openclaw/plugin-sdk/config-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import {
@@ -18,6 +19,7 @@ import {
 } from "./accounts.js";
 import { handleTelegramAction } from "./action-runtime.js";
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
+import { createTelegramPollExtraToolSchemas } from "./message-tool-schema.js";
 
 export const telegramMessageActionRuntime = {
   handleTelegramAction,

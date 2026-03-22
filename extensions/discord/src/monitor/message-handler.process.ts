@@ -1,31 +1,32 @@
 import { ChannelType, type RequestClient } from "@buape/carbon";
 import { resolveAckReaction, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { EmbeddedBlockChunker } from "openclaw/plugin-sdk/agent-runtime";
-import { shouldAckReaction as shouldAckReactionGate } from "openclaw/plugin-sdk/channel-runtime";
-import { logTypingFailure, logAckFailure } from "openclaw/plugin-sdk/channel-runtime";
-import { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-runtime";
-import { recordInboundSession } from "openclaw/plugin-sdk/channel-runtime";
 import {
   createStatusReactionController,
   DEFAULT_TIMING,
+  logAckFailure,
+  logTypingFailure,
+  shouldAckReaction as shouldAckReactionGate,
   type StatusReactionAdapter,
-} from "openclaw/plugin-sdk/channel-runtime";
-import { createTypingCallbacks } from "openclaw/plugin-sdk/channel-runtime";
+} from "openclaw/plugin-sdk/channel-feedback";
+import {
+  formatInboundEnvelope,
+  resolveEnvelopeFormatOptions,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import { resolveDiscordPreviewStreamMode } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
+import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
-import { resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
-import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
-import {
-  formatInboundEnvelope,
-  resolveEnvelopeFormatOptions,
-} from "openclaw/plugin-sdk/reply-runtime";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
-} from "openclaw/plugin-sdk/reply-runtime";
+} from "openclaw/plugin-sdk/reply-history";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
+import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -230,6 +231,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     allowNameMatching: isDangerousNameMatchingEnabled(discordConfig),
     isGuild: isGuildMessage,
     channelTopic: channelInfo?.topic,
+    messageBody: text,
   });
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: route.agentId,
@@ -419,11 +421,24 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     ? deliverTarget.slice("channel:".length)
     : messageChannelId;
 
-  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg,
     agentId: route.agentId,
     channel: "discord",
     accountId: route.accountId,
+    typing: {
+      start: () => sendTyping({ client, channelId: typingChannelId }),
+      onStartError: (err) => {
+        logTypingFailure({
+          log: logVerbose,
+          channel: "discord",
+          target: typingChannelId,
+          error: err,
+        });
+      },
+      // Long tool-heavy runs are expected on Discord; keep heartbeats alive.
+      maxDurationMs: DISCORD_TYPING_MAX_DURATION_MS,
+    },
   });
   const tableMode = resolveMarkdownTableMode({
     cfg,
@@ -436,20 +451,6 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     accountId,
   });
   const chunkMode = resolveChunkMode(cfg, "discord", accountId);
-
-  const typingCallbacks = createTypingCallbacks({
-    start: () => sendTyping({ client, channelId: typingChannelId }),
-    onStartError: (err) => {
-      logTypingFailure({
-        log: logVerbose,
-        channel: "discord",
-        target: typingChannelId,
-        error: err,
-      });
-    },
-    // Long tool-heavy runs are expected on Discord; keep heartbeats alive.
-    maxDurationMs: DISCORD_TYPING_MAX_DURATION_MS,
-  });
 
   // --- Discord draft stream (edit-based preview streaming) ---
   const discordStreamMode = resolveDiscordPreviewStreamMode(discordConfig);
@@ -596,9 +597,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
 
   const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
     createReplyDispatcherWithTyping({
-      ...prefixOptions,
+      ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
-      typingCallbacks,
       deliver: async (payload: ReplyPayload, info) => {
         if (isProcessAborted(abortSignal)) {
           return;
@@ -610,7 +610,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         }
         if (draftStream && isFinal) {
           await flushDraft();
-          const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+          const reply = resolveSendableOutboundReplyParts(payload);
+          const hasMedia = reply.hasMedia;
           const finalText = payload.text;
           const previewFinalText = resolvePreviewFinalText(finalText);
           const previewMessageId = draftStream.messageId();
@@ -713,7 +714,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         if (isProcessAborted(abortSignal)) {
           return;
         }
-        await typingCallbacks.onReplyStart();
+        await replyPipeline.typingCallbacks?.onReplyStart();
         await statusReactions.setThinking();
       },
     });

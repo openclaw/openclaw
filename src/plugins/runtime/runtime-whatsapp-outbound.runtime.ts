@@ -1,7 +1,7 @@
 import {
   sendMessageWhatsApp as sendMessageWhatsAppImpl,
   sendPollWhatsApp as sendPollWhatsAppImpl,
-} from "../../../extensions/whatsapp/runtime-api.js";
+} from "./runtime-whatsapp-boundary.js";
 import type { PluginRuntime } from "./types.js";
 
 type RuntimeWhatsAppOutbound = Pick<

@@ -165,7 +165,10 @@
           - "Dockerfile.*"
           - "docker-compose.yml"
           - "docker-setup.sh"
+          - "setup-podman.sh"
           - ".dockerignore"
+          - "scripts/docker/setup.sh"
+          - "scripts/podman/setup.sh"
           - "scripts/**/*docker*"
           - "scripts/**/Dockerfile*"
           - "scripts/sandbox-*.sh"
@@ -290,6 +293,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/synthetic/**"
+"extensions: tavily":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/tavily/**"
 "extensions: talk-voice":
   - changed-files:
       - any-glob-to-any-file:

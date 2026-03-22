@@ -70,6 +70,7 @@ export type {
   ChannelSetupInput,
   ChannelStatusIssue,
   ChannelStreamingAdapter,
+  ChannelStructuredComponents,
   ChannelThreadingAdapter,
   ChannelThreadingContext,
   ChannelThreadingToolContext,

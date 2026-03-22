@@ -403,9 +403,6 @@ async function buildMissingPackages() {
       continue;
     }
     const meta = packageClusterMeta(relativePackagePath);
-    const rootDependencyMirrorAllowlist = (
-      pkg.openclaw?.releaseChecks?.rootDependencyMirrorAllowlist ?? []
-    ).toSorted(compareStrings);
     const pluginSdkEntries = [...(pluginSdkReachability.get(meta.cluster) ?? new Set())].toSorted(
       compareStrings,
     );
@@ -421,9 +418,6 @@ async function buildMissingPackages() {
       packagePath: relativePackagePath,
       npmSpec: pkg.openclaw?.install?.npmSpec ?? null,
       private: pkg.private === true,
-      rootDependencyMirrorAllowlist,
-      mirrorAllowlistMatchesMissing:
-        missing.join("\n") === rootDependencyMirrorAllowlist.join("\n"),
       pluginSdkReachability:
         pluginSdkEntries.length > 0 ? { staticEntryPoints: pluginSdkEntries } : undefined,
       missing,

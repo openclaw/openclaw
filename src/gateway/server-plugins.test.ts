@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
@@ -6,6 +6,7 @@ import type { PluginDiagnostic } from "../plugins/types.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
 
 const loadOpenClawPlugins = vi.hoisted(() => vi.fn());
+const resolveGatewayStartupPluginIds = vi.hoisted(() => vi.fn(() => ["discord", "telegram"]));
 const primeConfiguredBindingRegistry = vi.hoisted(() =>
   vi.fn(() => ({ bindingCount: 0, channelCount: 0 })),
 );
@@ -18,6 +19,10 @@ const handleGatewayRequest = vi.hoisted(() =>
 
 vi.mock("../plugins/loader.js", () => ({
   loadOpenClawPlugins,
+}));
+
+vi.mock("../plugins/channel-plugin-ids.js", () => ({
+  resolveGatewayStartupPluginIds,
 }));
 
 vi.mock("../channels/plugins/binding-registry.js", () => ({
@@ -63,6 +68,14 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
 });
 
 type ServerPluginsModule = typeof import("./server-plugins.js");
+type PluginRuntimeModule = typeof import("../plugins/runtime/index.js");
+type GatewayRequestScopeModule = typeof import("../plugins/runtime/gateway-request-scope.js");
+type MethodScopesModule = typeof import("./method-scopes.js");
+
+let serverPluginsModule: ServerPluginsModule;
+let runtimeModule: PluginRuntimeModule;
+let gatewayRequestScopeModule: GatewayRequestScopeModule;
+let methodScopesModule: MethodScopesModule;
 
 function createTestContext(label: string): GatewayRequestContext {
   return { label } as unknown as GatewayRequestContext;
@@ -84,8 +97,11 @@ function getLastDispatchedClientScopes(): string[] {
   return Array.isArray(scopes) ? scopes : [];
 }
 
-async function importServerPluginsModule(): Promise<ServerPluginsModule> {
-  return import("./server-plugins.js");
+async function loadTestModules() {
+  serverPluginsModule = await import("./server-plugins.js");
+  runtimeModule = await import("../plugins/runtime/index.js");
+  gatewayRequestScopeModule = await import("../plugins/runtime/gateway-request-scope.js");
+  methodScopesModule = await import("./method-scopes.js");
 }
 
 async function createSubagentRuntime(
@@ -112,15 +128,24 @@ async function createSubagentRuntime(
   if (call?.runtimeOptions?.allowGatewaySubagentBinding !== true) {
     throw new Error("Expected loadGatewayPlugins to opt into gateway subagent binding");
   }
-  const runtimeModule = await import("../plugins/runtime/index.js");
   return runtimeModule.createPluginRuntime({ allowGatewaySubagentBinding: true }).subagent;
 }
 
-beforeEach(async () => {
+async function reloadServerPluginsModule(): Promise<ServerPluginsModule> {
+  vi.resetModules();
+  await loadTestModules();
+  return serverPluginsModule;
+}
+
+beforeAll(async () => {
+  await loadTestModules();
+});
+
+beforeEach(() => {
   loadOpenClawPlugins.mockReset();
+  resolveGatewayStartupPluginIds.mockReset().mockReturnValue(["discord", "telegram"]);
   primeConfiguredBindingRegistry.mockClear().mockReturnValue({ bindingCount: 0, channelCount: 0 });
   handleGatewayRequest.mockReset();
-  const runtimeModule = await import("../plugins/runtime/index.js");
   runtimeModule.clearGatewaySubagentRuntime();
   handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
     switch (opts.req.method) {
@@ -142,15 +167,13 @@ beforeEach(async () => {
   });
 });
 
-afterEach(async () => {
-  const runtimeModule = await import("../plugins/runtime/index.js");
+afterEach(() => {
   runtimeModule.clearGatewaySubagentRuntime();
-  vi.resetModules();
 });
 
 describe("loadGatewayPlugins", () => {
   test("logs plugin errors with details", async () => {
-    const { loadGatewayPlugins } = await importServerPluginsModule();
+    const { loadGatewayPlugins } = serverPluginsModule;
     const diagnostics: PluginDiagnostic[] = [
       {
         level: "error",
@@ -182,8 +205,39 @@ describe("loadGatewayPlugins", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
+  test("loads only gateway startup plugin ids", async () => {
+    const { loadGatewayPlugins } = serverPluginsModule;
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    const log = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
+
+    loadGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log,
+      coreGatewayHandlers: {},
+      baseMethods: [],
+    });
+
+    expect(resolveGatewayStartupPluginIds).toHaveBeenCalledWith({
+      config: {},
+      workspaceDir: "/tmp",
+      env: process.env,
+    });
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["discord", "telegram"],
+      }),
+    );
+  });
+
   test("provides subagent runtime with sessions.get method aliases", async () => {
-    const { loadGatewayPlugins } = await importServerPluginsModule();
+    const { loadGatewayPlugins } = serverPluginsModule;
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
 
     const log = {
@@ -205,7 +259,6 @@ describe("loadGatewayPlugins", () => {
       | { runtimeOptions?: { allowGatewaySubagentBinding?: boolean } }
       | undefined;
     expect(call?.runtimeOptions?.allowGatewaySubagentBinding).toBe(true);
-    const runtimeModule = await import("../plugins/runtime/index.js");
     const subagent = runtimeModule.createPluginRuntime({
       allowGatewaySubagentBinding: true,
     }).subagent;
@@ -214,9 +267,8 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("forwards provider and model overrides when the request scope is authorized", async () => {
-    const serverPlugins = await importServerPluginsModule();
+    const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);
-    const gatewayScopeModule = await import("../plugins/runtime/gateway-request-scope.js");
     const scope = {
       context: createTestContext("request-scope-forward-overrides"),
       client: {
@@ -227,7 +279,7 @@ describe("loadGatewayPlugins", () => {
       isWebchatConnect: () => false,
     } satisfies PluginRuntimeGatewayRequestScope;
 
-    await gatewayScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
+    await gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
       runtime.run({
         sessionKey: "s-override",
         message: "use the override",
@@ -247,7 +299,7 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("rejects provider/model overrides for fallback runs without explicit authorization", async () => {
-    const serverPlugins = await importServerPluginsModule();
+    const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);
     serverPlugins.setFallbackGatewayContext(createTestContext("fallback-deny-overrides"));
 
@@ -265,7 +317,7 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("allows trusted fallback provider/model overrides when plugin config is explicit", async () => {
-    const serverPlugins = await importServerPluginsModule();
+    const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins, {
       plugins: {
         entries: {
@@ -279,9 +331,7 @@ describe("loadGatewayPlugins", () => {
       },
     });
     serverPlugins.setFallbackGatewayContext(createTestContext("fallback-trusted-overrides"));
-    const gatewayScopeModule = await import("../plugins/runtime/gateway-request-scope.js");
-
-    await gatewayScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
+    await gatewayRequestScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
       runtime.run({
         sessionKey: "s-trusted-override",
         message: "use trusted override",
@@ -299,13 +349,12 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("includes docs guidance when a plugin fallback override is not trusted", async () => {
-    const serverPlugins = await importServerPluginsModule();
+    const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);
     serverPlugins.setFallbackGatewayContext(createTestContext("fallback-untrusted-plugin"));
-    const gatewayScopeModule = await import("../plugins/runtime/gateway-request-scope.js");
 
     await expect(
-      gatewayScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
+      gatewayRequestScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
         runtime.run({
           sessionKey: "s-untrusted-override",
           message: "use untrusted override",
@@ -320,7 +369,7 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("allows trusted fallback model-only overrides when the model ref is canonical", async () => {
-    const serverPlugins = await importServerPluginsModule();
+    const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins, {
       plugins: {
         entries: {
@@ -334,9 +383,7 @@ describe("loadGatewayPlugins", () => {
       },
     });
     serverPlugins.setFallbackGatewayContext(createTestContext("fallback-model-only-override"));
-    const gatewayScopeModule = await import("../plugins/runtime/gateway-request-scope.js");
-
-    await gatewayScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
+    await gatewayRequestScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
       runtime.run({
         sessionKey: "s-model-only-override",
         message: "use trusted model-only override",
@@ -353,7 +400,7 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("rejects trusted fallback overrides when the configured allowlist normalizes to empty", async () => {
-    const serverPlugins = await importServerPluginsModule();
+    const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins, {
       plugins: {
         entries: {
@@ -367,10 +414,8 @@ describe("loadGatewayPlugins", () => {
       },
     });
     serverPlugins.setFallbackGatewayContext(createTestContext("fallback-invalid-allowlist"));
-    const gatewayScopeModule = await import("../plugins/runtime/gateway-request-scope.js");
-
     await expect(
-      gatewayScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
+      gatewayRequestScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
         runtime.run({
           sessionKey: "s-invalid-allowlist",
           message: "use trusted override",
@@ -385,7 +430,7 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("uses least-privilege synthetic fallback scopes without admin", async () => {
-    const serverPlugins = await importServerPluginsModule();
+    const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);
     serverPlugins.setFallbackGatewayContext(createTestContext("synthetic-least-privilege"));
 
@@ -400,14 +445,13 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("allows fallback session reads with synthetic write scope", async () => {
-    const serverPlugins = await importServerPluginsModule();
+    const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);
     serverPlugins.setFallbackGatewayContext(createTestContext("synthetic-session-read"));
-    const { authorizeOperatorScopesForMethod } = await import("./method-scopes.js");
 
     handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
       const scopes = Array.isArray(opts.client?.connect?.scopes) ? opts.client.connect.scopes : [];
-      const auth = authorizeOperatorScopesForMethod("sessions.get", scopes);
+      const auth = methodScopesModule.authorizeOperatorScopesForMethod("sessions.get", scopes);
       if (!auth.allowed) {
         opts.respond(false, undefined, {
           code: "INVALID_REQUEST",
@@ -431,7 +475,7 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("keeps admin scope for fallback session deletion", async () => {
-    const serverPlugins = await importServerPluginsModule();
+    const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);
     serverPlugins.setFallbackGatewayContext(createTestContext("synthetic-delete-session"));
 
@@ -444,7 +488,7 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("can prefer setup-runtime channel plugins during startup loads", async () => {
-    const { loadGatewayPlugins } = await importServerPluginsModule();
+    const { loadGatewayPlugins } = serverPluginsModule;
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
 
     const log = {
@@ -471,7 +515,7 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("primes configured bindings during gateway startup", async () => {
-    const { loadGatewayPlugins } = await importServerPluginsModule();
+    const { loadGatewayPlugins } = serverPluginsModule;
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
 
     const log = {
@@ -494,7 +538,7 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("can suppress duplicate diagnostics when reloading full runtime plugins", async () => {
-    const { loadGatewayPlugins } = await importServerPluginsModule();
+    const { loadGatewayPlugins } = serverPluginsModule;
     const diagnostics: PluginDiagnostic[] = [
       {
         level: "error",
@@ -525,7 +569,7 @@ describe("loadGatewayPlugins", () => {
     expect(log.info).not.toHaveBeenCalled();
   });
   test("shares fallback context across module reloads for existing runtimes", async () => {
-    const first = await importServerPluginsModule();
+    const first = serverPluginsModule;
     const runtime = await createSubagentRuntime(first);
 
     const staleContext = createTestContext("stale");
@@ -533,8 +577,7 @@ describe("loadGatewayPlugins", () => {
     await runtime.run({ sessionKey: "s-1", message: "hello" });
     expect(getLastDispatchedContext()).toBe(staleContext);
 
-    vi.resetModules();
-    const reloaded = await importServerPluginsModule();
+    const reloaded = await reloadServerPluginsModule();
     const freshContext = createTestContext("fresh");
     reloaded.setFallbackGatewayContext(freshContext);
 
@@ -543,7 +586,7 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("uses updated fallback context after context replacement", async () => {
-    const serverPlugins = await importServerPluginsModule();
+    const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);
     const firstContext = createTestContext("before-restart");
     const secondContext = createTestContext("after-restart");
@@ -558,7 +601,7 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("reflects fallback context object mutation at dispatch time", async () => {
-    const serverPlugins = await importServerPluginsModule();
+    const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);
     const context = { marker: "before-mutation" } as GatewayRequestContext & {
       marker: string;

@@ -85,7 +85,7 @@ export function resolveMatrixVoiceDecision(opts: {
 
 function isMatrixVoiceCompatibleAudio(opts: { contentType?: string; fileName?: string }): boolean {
   // Matrix currently shares the core voice compatibility policy.
-  // Keep this wrapper as the boundary if Matrix policy diverges later.
+  // Keep this wrapper as the seam if Matrix policy diverges later.
   return getCore().media.isVoiceCompatibleAudio({
     contentType: opts.contentType,
     fileName: opts.fileName,

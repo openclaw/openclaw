@@ -42,17 +42,17 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { ModelApi } from "../config/types.models.js";
-import {
-  MISTRAL_DEFAULT_MODEL_REF,
-  ZAI_CODING_CN_BASE_URL,
-  ZAI_GLOBAL_BASE_URL,
-} from "../plugin-sdk/provider-models.js";
 import { applyAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
 import {
   OPENROUTER_DEFAULT_MODEL_REF,
   setMinimaxApiKey,
   writeOAuthCredentials,
 } from "../plugins/provider-auth-storage.js";
+import {
+  MISTRAL_DEFAULT_MODEL_REF,
+  ZAI_CODING_CN_BASE_URL,
+  ZAI_GLOBAL_BASE_URL,
+} from "../plugins/provider-model-definitions.js";
 import { applyLitellmProviderConfig } from "./onboard-auth.config-litellm.js";
 import {
   createAuthTestLifecycle,
@@ -554,9 +554,14 @@ describe("applyXiaomiConfig", () => {
   it("adds Xiaomi provider with correct settings", () => {
     const cfg = applyXiaomiConfig({});
     expect(cfg.models?.providers?.xiaomi).toMatchObject({
-      baseUrl: "https://api.xiaomimimo.com/anthropic",
-      api: "anthropic-messages",
+      baseUrl: "https://api.xiaomimimo.com/v1",
+      api: "openai-completions",
     });
+    expect(cfg.models?.providers?.xiaomi?.models.map((m) => m.id)).toEqual([
+      "mimo-v2-flash",
+      "mimo-v2-pro",
+      "mimo-v2-omni",
+    ]);
     expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe("xiaomi/mimo-v2-flash");
   });
 
@@ -570,12 +575,14 @@ describe("applyXiaomiConfig", () => {
       }),
     );
 
-    expect(cfg.models?.providers?.xiaomi?.baseUrl).toBe("https://api.xiaomimimo.com/anthropic");
-    expect(cfg.models?.providers?.xiaomi?.api).toBe("anthropic-messages");
+    expect(cfg.models?.providers?.xiaomi?.baseUrl).toBe("https://api.xiaomimimo.com/v1");
+    expect(cfg.models?.providers?.xiaomi?.api).toBe("openai-completions");
     expect(cfg.models?.providers?.xiaomi?.apiKey).toBe("old-key");
     expect(cfg.models?.providers?.xiaomi?.models.map((m) => m.id)).toEqual([
       "custom-model",
       "mimo-v2-flash",
+      "mimo-v2-pro",
+      "mimo-v2-omni",
     ]);
   });
 });

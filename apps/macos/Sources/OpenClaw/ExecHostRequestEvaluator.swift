@@ -3,6 +3,7 @@ import Foundation
 struct ExecHostValidatedRequest {
     let command: [String]
     let displayCommand: String
+    let evaluationRawCommand: String?
 }
 
 enum ExecHostPolicyDecision {
@@ -27,7 +28,10 @@ enum ExecHostRequestEvaluator {
             rawCommand: request.rawCommand)
         switch validatedCommand {
         case let .ok(resolved):
-            return .success(ExecHostValidatedRequest(command: command, displayCommand: resolved.displayCommand))
+            return .success(ExecHostValidatedRequest(
+                command: command,
+                displayCommand: resolved.displayCommand,
+                evaluationRawCommand: resolved.evaluationRawCommand))
         case let .invalid(message):
             return .failure(
                 ExecHostError(

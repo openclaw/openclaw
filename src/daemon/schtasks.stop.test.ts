@@ -13,11 +13,24 @@ import {
 const findVerifiedGatewayListenerPidsOnPortSync = vi.hoisted(() =>
   vi.fn<(port: number) => number[]>(() => []),
 );
+const timeState = vi.hoisted(() => ({ now: 0 }));
+const sleepMock = vi.hoisted(() =>
+  vi.fn(async (ms: number) => {
+    timeState.now += ms;
+  }),
+);
 
 vi.mock("../infra/gateway-processes.js", () => ({
   findVerifiedGatewayListenerPidsOnPortSync: (port: number) =>
     findVerifiedGatewayListenerPidsOnPortSync(port),
 }));
+vi.mock("../utils.js", async () => {
+  const actual = await vi.importActual<typeof import("../utils.js")>("../utils.js");
+  return {
+    ...actual,
+    sleep: (ms: number) => sleepMock(ms),
+  };
+});
 
 const { restartScheduledTask, stopScheduledTask } = await import("./schtasks.js");
 const GATEWAY_PORT = 18789;
@@ -81,6 +94,12 @@ beforeEach(() => {
   resetSchtasksBaseMocks();
   findVerifiedGatewayListenerPidsOnPortSync.mockReset();
   findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
+  timeState.now = 0;
+  vi.spyOn(Date, "now").mockImplementation(() => timeState.now);
+  sleepMock.mockReset();
+  sleepMock.mockImplementation(async (ms: number) => {
+    timeState.now += ms;
+  });
   inspectPortUsage.mockResolvedValue(freePortUsage());
 });
 

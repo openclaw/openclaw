@@ -36,7 +36,7 @@ openclaw pairing list telegram
 openclaw pairing approve telegram <CODE>
 ```
 
-Supported channels: `telegram`, `whatsapp`, `signal`, `imessage`, `discord`, `slack`, `feishu`.
+Supported channels: `telegram`, `whatsapp`, `signal`, `imessage`, `discord`, `slack`, `feishu`, `nostr`.
 
 ### Where the state lives
 
@@ -67,7 +67,7 @@ If you use the `device-pair` plugin, you can do first-time device pairing entire
 2. The bot replies with two messages: an instruction message and a separate **setup code** message (easy to copy/paste in Telegram).
 3. On your phone, open the OpenClaw iOS app → Settings → Gateway.
 4. Paste the setup code and connect.
-5. Back in Telegram: `/pair approve`
+5. Back in Telegram: `/pair pending` (review request IDs, role, and scopes), then approve.
 
 The setup code is a base64-encoded JSON payload that contains:
 
@@ -83,6 +83,10 @@ openclaw devices list
 openclaw devices approve <requestId>
 openclaw devices reject <requestId>
 ```
+
+If the same device retries with different auth details (for example different
+role/scopes/public key), the previous pending request is superseded and a new
+`requestId` is created.
 
 ### Node pairing state storage
 

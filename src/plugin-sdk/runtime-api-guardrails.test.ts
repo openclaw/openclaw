@@ -35,6 +35,15 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { sendMessageIMessage } from "./src/send.js";',
   ],
   "extensions/googlechat/runtime-api.ts": ['export * from "openclaw/plugin-sdk/googlechat";'],
+  "extensions/matrix/runtime-api.ts": [
+    'export * from "./src/auth-precedence.js";',
+    'export * from "./helper-api.js";',
+    'export { assertHttpUrlTargetsPrivateNetwork, closeDispatcher, createPinnedDispatcher, resolvePinnedHostnameWithPolicy, ssrfPolicyFromAllowPrivateNetwork, type LookupFn, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";',
+    'export { setMatrixThreadBindingIdleTimeoutBySessionKey, setMatrixThreadBindingMaxAgeBySessionKey } from "./thread-bindings-runtime.js";',
+    'export { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";',
+    'export type { ChannelDirectoryEntry, ChannelMessageActionContext, OpenClawConfig, PluginRuntime, RuntimeLogger, RuntimeEnv, WizardPrompter } from "openclaw/plugin-sdk/matrix";',
+    'export { formatZonedTimestamp } from "openclaw/plugin-sdk/matrix";',
+  ],
   "extensions/nextcloud-talk/runtime-api.ts": [
     'export * from "openclaw/plugin-sdk/nextcloud-talk";',
   ],
@@ -70,6 +79,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export * from "./src/auto-reply.js";',
     'export * from "./src/inbound.js";',
     'export * from "./src/login.js";',
+    'export * from "./src/login-qr.js";',
     'export * from "./src/media.js";',
     'export * from "./src/send.js";',
     'export * from "./src/session.js";',

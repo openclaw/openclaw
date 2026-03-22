@@ -1,10 +1,7 @@
-// Narrow plugin-sdk surface for the bundled zalouser plugin.
+// Private helper surface for the bundled zalouser plugin.
 // Keep this list additive and scoped to symbols used under extensions/zalouser.
 
-import {
-  createOptionalChannelSetupAdapter,
-  createOptionalChannelSetupWizard,
-} from "./optional-channel-setup.js";
+import { createOptionalChannelSetupSurface } from "./channel-setup.js";
 
 export type { ReplyPayload } from "../auto-reply/types.js";
 export { mergeAllowlist, summarizeMapping } from "../channels/allowlists/resolve-utils.js";
@@ -36,8 +33,7 @@ export type {
   ChannelStatusIssue,
 } from "../channels/plugins/types.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-export { createReplyPrefixOptions } from "../channels/reply-prefix.js";
-export { createTypingCallbacks } from "../channels/typing.js";
+export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
 export {
@@ -63,14 +59,14 @@ export {
   resolveSenderScopedGroupPolicy,
 } from "./group-access.js";
 export { loadOutboundMediaFromUrl } from "./outbound-media.js";
-export { createScopedPairingAccess } from "./pairing-access.js";
-export { issuePairingChallenge } from "../pairing/pairing-challenge.js";
+export { createChannelPairingController } from "./channel-pairing.js";
 export { buildChannelSendResult } from "./channel-send-result.js";
 export type { OutboundReplyPayload } from "./reply-payload.js";
 export {
   deliverTextOrMediaReply,
   isNumericTargetId,
   resolveOutboundMediaUrls,
+  resolveSendableOutboundReplyParts,
   sendMediaWithLeadingCaption,
   sendPayloadWithChunkedTextAndMedia,
 } from "./reply-payload.js";
@@ -78,16 +74,12 @@ export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
 export { buildBaseAccountStatusSnapshot } from "./status-helpers.js";
 export { chunkTextForOutbound } from "./text-chunking.js";
 
-export const zalouserSetupAdapter = createOptionalChannelSetupAdapter({
+const zalouserSetup = createOptionalChannelSetupSurface({
   channel: "zalouser",
   label: "Zalo Personal",
   npmSpec: "@openclaw/zalouser",
   docsPath: "/channels/zalouser",
 });
 
-export const zalouserSetupWizard = createOptionalChannelSetupWizard({
-  channel: "zalouser",
-  label: "Zalo Personal",
-  npmSpec: "@openclaw/zalouser",
-  docsPath: "/channels/zalouser",
-});
+export const zalouserSetupAdapter = zalouserSetup.setupAdapter;
+export const zalouserSetupWizard = zalouserSetup.setupWizard;

@@ -6,6 +6,12 @@ import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
 import { createDelegatedSetupWizardProxy } from "openclaw/plugin-sdk/setup";
 import {
+  listWhatsAppAccountIds,
+  resolveDefaultWhatsAppAccountId,
+  resolveWhatsAppAccount,
+  type ResolvedWhatsAppAccount,
+} from "./accounts.js";
+import {
   buildChannelConfigSchema,
   formatWhatsAppConfigAllowFromEntries,
   getChatChannelMeta,
@@ -15,13 +21,7 @@ import {
   resolveWhatsAppGroupToolPolicy,
   WhatsAppConfigSchema,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/whatsapp-core";
-import {
-  listWhatsAppAccountIds,
-  resolveDefaultWhatsAppAccountId,
-  resolveWhatsAppAccount,
-  type ResolvedWhatsAppAccount,
-} from "./accounts.js";
+} from "./runtime-api.js";
 
 export const WHATSAPP_CHANNEL = "whatsapp" as const;
 
@@ -92,20 +92,7 @@ export function createWhatsAppPluginBase(params: {
   setupWizard: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupWizard"]>;
   setup: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setup"]>;
   isConfigured: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["config"]>["isConfigured"];
-}): Pick<
-  ChannelPlugin<ResolvedWhatsAppAccount>,
-  | "id"
-  | "meta"
-  | "setupWizard"
-  | "capabilities"
-  | "reload"
-  | "gatewayMethods"
-  | "configSchema"
-  | "config"
-  | "security"
-  | "setup"
-  | "groups"
-> {
+}) {
   const collectWhatsAppSecurityWarnings =
     createAllowlistProviderRouteAllowlistWarningCollector<ResolvedWhatsAppAccount>({
       providerConfigPresent: (cfg) => cfg.channels?.whatsapp !== undefined,
@@ -126,7 +113,7 @@ export function createWhatsAppPluginBase(params: {
         groupAllowFromPath: "channels.whatsapp.groupAllowFrom",
       },
     });
-  return createChannelPluginBase({
+  const base = createChannelPluginBase({
     id: WHATSAPP_CHANNEL,
     meta: {
       ...getChatChannelMeta(WHATSAPP_CHANNEL),
@@ -167,7 +154,18 @@ export function createWhatsAppPluginBase(params: {
     },
     setup: params.setup,
     groups: params.groups,
-  }) as Pick<
+  });
+  return {
+    ...base,
+    setupWizard: base.setupWizard!,
+    capabilities: base.capabilities!,
+    reload: base.reload!,
+    gatewayMethods: base.gatewayMethods!,
+    configSchema: base.configSchema!,
+    config: base.config!,
+    security: base.security!,
+    groups: base.groups!,
+  } satisfies Pick<
     ChannelPlugin<ResolvedWhatsAppAccount>,
     | "id"
     | "meta"

@@ -31,7 +31,7 @@ You can optionally specify a different model for compaction summarization via `a
   "agents": {
     "defaults": {
       "compaction": {
-        "model": "openrouter/anthropic/claude-sonnet-4-5"
+        "model": "openrouter/anthropic/claude-sonnet-4-6"
       }
     }
   }

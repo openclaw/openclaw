@@ -1,10 +1,13 @@
-import { sendTextMediaPayload } from "openclaw/plugin-sdk/channel-runtime";
-import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-runtime";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
 import {
+  type ChannelOutboundAdapter,
   createAttachedChannelResultAdapter,
   createEmptyChannelResult,
 } from "openclaw/plugin-sdk/channel-send-result";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
+import {
+  resolveSendableOutboundReplyParts,
+  sendTextMediaPayload,
+} from "openclaw/plugin-sdk/reply-payload";
 import { chunkText } from "openclaw/plugin-sdk/reply-runtime";
 import { shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveWhatsAppOutboundTarget } from "./runtime-api.js";
@@ -24,7 +27,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
     resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
   sendPayload: async (ctx) => {
     const text = trimLeadingWhitespace(ctx.payload.text);
-    const hasMedia = Boolean(ctx.payload.mediaUrl) || (ctx.payload.mediaUrls?.length ?? 0) > 0;
+    const hasMedia = resolveSendableOutboundReplyParts(ctx.payload).hasMedia;
     if (!text && !hasMedia) {
       return createEmptyChannelResult("whatsapp");
     }

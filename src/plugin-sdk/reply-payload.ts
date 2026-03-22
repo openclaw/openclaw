@@ -1,9 +1,31 @@
+import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
+
+export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
+export { buildMediaPayload } from "../channels/plugins/media-payload.js";
+
 export type OutboundReplyPayload = {
   text?: string;
   mediaUrls?: string[];
   mediaUrl?: string;
   replyToId?: string;
 };
+
+export type SendableOutboundReplyParts = {
+  text: string;
+  trimmedText: string;
+  mediaUrls: string[];
+  mediaCount: number;
+  hasText: boolean;
+  hasMedia: boolean;
+  hasContent: boolean;
+};
+
+type SendPayloadContext = Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0];
+type SendPayloadResult = Awaited<ReturnType<NonNullable<ChannelOutboundAdapter["sendPayload"]>>>;
+type SendPayloadAdapter = Pick<
+  ChannelOutboundAdapter,
+  "sendMedia" | "sendText" | "chunker" | "textChunkLimit"
+>;
 
 /** Extract the supported outbound reply fields from loose tool or agent payload objects. */
 export function normalizeOutboundReplyPayload(
@@ -50,6 +72,59 @@ export function resolveOutboundMediaUrls(payload: {
     return [payload.mediaUrl];
   }
   return [];
+}
+
+/** Resolve media URLs from a channel sendPayload context after legacy fallback normalization. */
+export function resolvePayloadMediaUrls(payload: SendPayloadContext["payload"]): string[] {
+  return resolveOutboundMediaUrls(payload);
+}
+
+/** Count outbound media items after legacy single-media fallback normalization. */
+export function countOutboundMedia(payload: { mediaUrls?: string[]; mediaUrl?: string }): number {
+  return resolveOutboundMediaUrls(payload).length;
+}
+
+/** Check whether an outbound payload includes any media after normalization. */
+export function hasOutboundMedia(payload: { mediaUrls?: string[]; mediaUrl?: string }): boolean {
+  return countOutboundMedia(payload) > 0;
+}
+
+/** Check whether an outbound payload includes text, optionally trimming whitespace first. */
+export function hasOutboundText(payload: { text?: string }, options?: { trim?: boolean }): boolean {
+  const text = options?.trim ? payload.text?.trim() : payload.text;
+  return Boolean(text);
+}
+
+/** Check whether an outbound payload includes any sendable text or media. */
+export function hasOutboundReplyContent(
+  payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string },
+  options?: { trimText?: boolean },
+): boolean {
+  return hasOutboundText(payload, { trim: options?.trimText }) || hasOutboundMedia(payload);
+}
+
+/** Normalize reply payload text/media into a trimmed, sendable shape for delivery paths. */
+export function resolveSendableOutboundReplyParts(
+  payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string },
+  options?: { text?: string },
+): SendableOutboundReplyParts {
+  const text = options?.text ?? payload.text ?? "";
+  const trimmedText = text.trim();
+  const mediaUrls = resolveOutboundMediaUrls(payload)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const mediaCount = mediaUrls.length;
+  const hasText = Boolean(trimmedText);
+  const hasMedia = mediaCount > 0;
+  return {
+    text,
+    trimmedText,
+    mediaUrls,
+    mediaCount,
+    hasText,
+    hasMedia,
+    hasContent: hasText || hasMedia,
+  };
 }
 
 /** Preserve caller-provided chunking, but fall back to the full text when chunkers return nothing. */
@@ -101,6 +176,99 @@ export async function sendPayloadWithChunkedTextAndMedia<
   let lastResult: TResult;
   for (const chunk of chunks) {
     lastResult = await params.sendText({ ...params.ctx, text: chunk });
+  }
+  return lastResult!;
+}
+
+export async function sendPayloadMediaSequence<TResult>(params: {
+  text: string;
+  mediaUrls: readonly string[];
+  send: (input: {
+    text: string;
+    mediaUrl: string;
+    index: number;
+    isFirst: boolean;
+  }) => Promise<TResult>;
+}): Promise<TResult | undefined> {
+  let lastResult: TResult | undefined;
+  for (let i = 0; i < params.mediaUrls.length; i += 1) {
+    const mediaUrl = params.mediaUrls[i];
+    if (!mediaUrl) {
+      continue;
+    }
+    lastResult = await params.send({
+      text: i === 0 ? params.text : "",
+      mediaUrl,
+      index: i,
+      isFirst: i === 0,
+    });
+  }
+  return lastResult;
+}
+
+export async function sendPayloadMediaSequenceOrFallback<TResult>(params: {
+  text: string;
+  mediaUrls: readonly string[];
+  send: (input: {
+    text: string;
+    mediaUrl: string;
+    index: number;
+    isFirst: boolean;
+  }) => Promise<TResult>;
+  fallbackResult: TResult;
+  sendNoMedia?: () => Promise<TResult>;
+}): Promise<TResult> {
+  if (params.mediaUrls.length === 0) {
+    return params.sendNoMedia ? await params.sendNoMedia() : params.fallbackResult;
+  }
+  return (await sendPayloadMediaSequence(params)) ?? params.fallbackResult;
+}
+
+export async function sendPayloadMediaSequenceAndFinalize<TMediaResult, TResult>(params: {
+  text: string;
+  mediaUrls: readonly string[];
+  send: (input: {
+    text: string;
+    mediaUrl: string;
+    index: number;
+    isFirst: boolean;
+  }) => Promise<TMediaResult>;
+  finalize: () => Promise<TResult>;
+}): Promise<TResult> {
+  if (params.mediaUrls.length > 0) {
+    await sendPayloadMediaSequence(params);
+  }
+  return await params.finalize();
+}
+
+export async function sendTextMediaPayload(params: {
+  channel: string;
+  ctx: SendPayloadContext;
+  adapter: SendPayloadAdapter;
+}): Promise<SendPayloadResult> {
+  const text = params.ctx.payload.text ?? "";
+  const urls = resolvePayloadMediaUrls(params.ctx.payload);
+  if (!text && urls.length === 0) {
+    return { channel: params.channel, messageId: "" };
+  }
+  if (urls.length > 0) {
+    const lastResult = await sendPayloadMediaSequence({
+      text,
+      mediaUrls: urls,
+      send: async ({ text, mediaUrl }) =>
+        await params.adapter.sendMedia!({
+          ...params.ctx,
+          text,
+          mediaUrl,
+        }),
+    });
+    return lastResult ?? { channel: params.channel, messageId: "" };
+  }
+  const limit = params.adapter.textChunkLimit;
+  const chunks = limit && params.adapter.chunker ? params.adapter.chunker(text, limit) : [text];
+  let lastResult: Awaited<ReturnType<NonNullable<typeof params.adapter.sendText>>>;
+  for (const chunk of chunks) {
+    lastResult = await params.adapter.sendText!({ ...params.ctx, text: chunk });
   }
   return lastResult!;
 }
@@ -188,7 +356,9 @@ export async function deliverTextOrMediaReply(params: {
     isFirst: boolean;
   }) => Promise<void> | void;
 }): Promise<"empty" | "text" | "media"> {
-  const mediaUrls = resolveOutboundMediaUrls(params.payload);
+  const { mediaUrls } = resolveSendableOutboundReplyParts(params.payload, {
+    text: params.text,
+  });
   const sentMedia = await sendMediaWithLeadingCaption({
     mediaUrls,
     caption: params.text,

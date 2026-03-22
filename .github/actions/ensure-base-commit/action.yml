@@ -30,7 +30,9 @@ runs:
 
         for deepen_by in 25 100 300; do
           echo "Base commit missing; deepening $FETCH_REF by $deepen_by."
-          git fetch --no-tags --deepen="$deepen_by" origin "$FETCH_REF" || true
+          if ! git fetch --no-tags --deepen="$deepen_by" origin "$FETCH_REF"; then
+            echo "::warning title=ensure-base-commit fetch failed::Failed to deepen $FETCH_REF by $deepen_by while looking for $BASE_SHA"
+          fi
           if git rev-parse --verify "$BASE_SHA^{commit}" >/dev/null 2>&1; then
             echo "Resolved base commit after deepening: $BASE_SHA"
             exit 0
@@ -38,7 +40,9 @@ runs:
         done
 
         echo "Base commit still missing; fetching full history for $FETCH_REF."
-        git fetch --no-tags origin "$FETCH_REF" || true
+        if ! git fetch --no-tags origin "$FETCH_REF"; then
+          echo "::warning title=ensure-base-commit fetch failed::Failed to fetch full history for $FETCH_REF while looking for $BASE_SHA"
+        fi
         if git rev-parse --verify "$BASE_SHA^{commit}" >/dev/null 2>&1; then
           echo "Resolved base commit after full ref fetch: $BASE_SHA"
           exit 0

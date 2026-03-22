@@ -207,12 +207,16 @@ describe("normalizeVoiceCallConfig", () => {
       },
     });
 
-    expect(normalized.tts?.provider).toBe("elevenlabs");
-    expect(normalized.tts?.elevenlabs?.apiKey).toEqual({
+    const tts = normalized.tts;
+    if (!tts?.elevenlabs) {
+      throw new Error("voice-call config did not preserve nested elevenlabs TTS config");
+    }
+    expect(tts.provider).toBe("elevenlabs");
+    expect(tts.elevenlabs.apiKey).toEqual({
       source: "env",
       provider: "elevenlabs",
       id: "ELEVENLABS_API_KEY",
     });
-    expect(normalized.tts?.elevenlabs?.voiceSettings).toEqual({ speed: 1.1 });
+    expect(tts.elevenlabs.voiceSettings).toEqual({ speed: 1.1 });
   });
 });

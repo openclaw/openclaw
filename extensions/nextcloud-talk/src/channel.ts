@@ -4,13 +4,13 @@ import {
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
-import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import {
-  createAttachedChannelResultAdapter,
   createLoggedPairingApprovalNotifier,
   createPairingPrefixStripper,
-} from "openclaw/plugin-sdk/channel-runtime";
-import { runStoppablePassiveMonitor } from "../../shared/passive-monitor.js";
+} from "openclaw/plugin-sdk/channel-pairing";
+import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
+import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
 import {
   buildBaseChannelStatusSummary,
   buildChannelConfigSchema,
@@ -75,7 +75,12 @@ const resolveNextcloudTalkDmPolicy = createScopedDmSecurityResolver<ResolvedNext
   resolvePolicy: (account) => account.config.dmPolicy,
   resolveAllowFrom: (account) => account.config.allowFrom,
   policyPathSuffix: "dmPolicy",
-  normalizeEntry: (raw) => raw.replace(/^(nextcloud-talk|nc-talk|nc):/i, "").toLowerCase(),
+  normalizeEntry: (raw) =>
+    raw
+      .trim()
+      .replace(/^(nextcloud-talk|nc-talk|nc):/i, "")
+      .trim()
+      .toLowerCase(),
 });
 
 const collectNextcloudTalkSecurityWarnings =

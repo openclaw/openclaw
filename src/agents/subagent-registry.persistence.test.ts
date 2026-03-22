@@ -3,10 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
-import { captureEnv } from "../test-utils/env.js";
+import { captureEnv, withEnv } from "../test-utils/env.js";
 import {
   addSubagentRunForTests,
   clearSubagentRunSteerRestart,
+  getSubagentRunByChildSessionKey,
   initSubagentRegistry,
   listSubagentRunsForRequester,
   registerSubagentRun,
@@ -153,6 +154,7 @@ describe("subagent registry persistence", () => {
   const flushQueuedRegistryWork = async () => {
     await Promise.resolve();
     await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 25));
   };
 
   const restartRegistryAndFlush = async () => {
@@ -174,6 +176,23 @@ describe("subagent registry persistence", () => {
   it("persists runs to disk and resumes after restart", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
+
+    const { callGateway } = await import("../gateway/call.js");
+    let releaseInitialWait:
+      | ((value: { status: "ok"; startedAt: number; endedAt: number }) => void)
+      | undefined;
+    vi.mocked(callGateway)
+      .mockImplementationOnce(
+        async () =>
+          await new Promise((resolve) => {
+            releaseInitialWait = resolve as typeof releaseInitialWait;
+          }),
+      )
+      .mockResolvedValueOnce({
+        status: "ok",
+        startedAt: 111,
+        endedAt: 222,
+      });
 
     registerSubagentRun({
       runId: "run-1",
@@ -210,6 +229,11 @@ describe("subagent registry persistence", () => {
     // and trigger the announce flow once the run resolves.
     resetSubagentRegistryForTests({ persist: false });
     initSubagentRegistry();
+    releaseInitialWait?.({
+      status: "ok",
+      startedAt: 111,
+      endedAt: 222,
+    });
 
     // allow queued async wait/cleanup to execute
     await flushQueuedRegistryWork();
@@ -234,6 +258,45 @@ describe("subagent registry persistence", () => {
     expect(first.childSessionKey).toBe("agent:main:subagent:test");
     expect(first.requesterOrigin?.channel).toBe("whatsapp");
     expect(first.requesterOrigin?.accountId).toBe("acct-main");
+  });
+
+  it("persists completed subagent timing into the child session entry", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+
+    const { callGateway } = await import("../gateway/call.js");
+    const now = Date.now();
+    const startedAt = now;
+    const endedAt = now + 500;
+    vi.mocked(callGateway).mockResolvedValueOnce({
+      status: "ok",
+      startedAt,
+      endedAt,
+    });
+
+    const storePath = await writeChildSessionEntry({
+      sessionKey: "agent:main:subagent:timing",
+      sessionId: "sess-timing",
+      updatedAt: startedAt - 1,
+    });
+    registerSubagentRun({
+      runId: "run-session-timing",
+      childSessionKey: "agent:main:subagent:timing",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "persist timing",
+      cleanup: "keep",
+    });
+
+    await flushQueuedRegistryWork();
+
+    const store = await readSessionStore(storePath);
+    const persisted = store["agent:main:subagent:timing"];
+    expect(persisted?.endedAt).toBe(endedAt);
+    expect(persisted?.runtimeMs).toBe(500);
+    expect(persisted?.status).toBe("done");
+    expect(persisted?.startedAt).toBeGreaterThanOrEqual(startedAt);
+    expect(persisted?.startedAt).toBeLessThanOrEqual(endedAt);
   });
 
   it("skips cleanup when cleanupHandled was persisted", async () => {
@@ -417,6 +480,52 @@ describe("subagent registry persistence", () => {
     };
     expect(after.runs?.["run-orphan-restore"]).toBeUndefined();
     expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
+  });
+
+  it("prefers active runs and can resolve them from persisted registry snapshots", async () => {
+    const childSessionKey = "agent:main:subagent:disk-active";
+    await writePersistedRegistry(
+      {
+        version: 2,
+        runs: {
+          "run-complete": {
+            runId: "run-complete",
+            childSessionKey,
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            task: "completed first",
+            cleanup: "keep",
+            createdAt: 200,
+            startedAt: 210,
+            endedAt: 220,
+            outcome: { status: "ok" },
+          },
+          "run-active": {
+            runId: "run-active",
+            childSessionKey,
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            task: "still running",
+            cleanup: "keep",
+            createdAt: 100,
+            startedAt: 110,
+          },
+        },
+      },
+      { seedChildSessions: false },
+    );
+
+    resetSubagentRegistryForTests({ persist: false });
+
+    const resolved = withEnv({ VITEST: undefined, NODE_ENV: "development" }, () =>
+      getSubagentRunByChildSessionKey(childSessionKey),
+    );
+
+    expect(resolved).toMatchObject({
+      runId: "run-active",
+      childSessionKey,
+    });
+    expect(resolved?.endedAt).toBeUndefined();
   });
 
   it("resume guard prunes orphan runs before announce retry", async () => {

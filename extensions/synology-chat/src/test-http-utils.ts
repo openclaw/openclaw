@@ -1,10 +1,14 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-export function makeReq(method: string, body: string): IncomingMessage {
+export function makeBaseReq(
+  method: string,
+  opts: { headers?: Record<string, string>; url?: string } = {},
+): IncomingMessage & { destroyed: boolean } {
   const req = new EventEmitter() as IncomingMessage & { destroyed: boolean };
   req.method = method;
-  req.headers = {};
+  req.headers = opts.headers ?? {};
+  req.url = opts.url ?? "/webhook/synology";
   req.socket = { remoteAddress: "127.0.0.1" } as unknown as IncomingMessage["socket"];
   req.destroyed = false;
   req.destroy = ((_: Error | undefined) => {
@@ -14,6 +18,15 @@ export function makeReq(method: string, body: string): IncomingMessage {
     req.destroyed = true;
     return req;
   }) as IncomingMessage["destroy"];
+  return req;
+}
+
+export function makeReq(
+  method: string,
+  body: string,
+  opts: { headers?: Record<string, string>; url?: string } = {},
+): IncomingMessage {
+  const req = makeBaseReq(method, opts);
   process.nextTick(() => {
     if (req.destroyed) {
       return;
@@ -22,6 +35,13 @@ export function makeReq(method: string, body: string): IncomingMessage {
     req.emit("end");
   });
   return req;
+}
+
+export function makeStalledReq(
+  method: string,
+  opts: { headers?: Record<string, string>; url?: string } = {},
+): IncomingMessage {
+  return makeBaseReq(method, opts);
 }
 
 export function makeRes(): ServerResponse & { _status: number; _body: string } {

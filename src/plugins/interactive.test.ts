@@ -49,6 +49,14 @@ type InteractiveDispatchParams =
       respond: PluginInteractiveSlackHandlerContext["respond"];
     };
 
+type InteractiveModule = typeof import("./interactive.js");
+
+const interactiveModuleUrl = new URL("./interactive.ts", import.meta.url).href;
+
+async function importInteractiveModule(cacheBust: string): Promise<InteractiveModule> {
+  return (await import(`${interactiveModuleUrl}?t=${cacheBust}`)) as InteractiveModule;
+}
+
 async function expectDedupedInteractiveDispatch(params: {
   baseParams: InteractiveDispatchParams;
   handler: ReturnType<typeof vi.fn>;
@@ -172,6 +180,66 @@ describe("plugin interactive handlers", () => {
     });
   });
 
+  it("shares interactive handlers across duplicate module instances", async () => {
+    const first = await importInteractiveModule(`first-${Date.now()}`);
+    const second = await importInteractiveModule(`second-${Date.now()}`);
+    const handler = vi.fn(async () => ({ handled: true }));
+
+    first.clearPluginInteractiveHandlers();
+
+    expect(
+      first.registerPluginInteractiveHandler("codex-plugin", {
+        channel: "telegram",
+        namespace: "codexapp",
+        handler,
+      }),
+    ).toEqual({ ok: true });
+
+    await expect(
+      second.dispatchPluginInteractiveHandler({
+        channel: "telegram",
+        data: "codexapp:resume:thread-1",
+        callbackId: "cb-shared-1",
+        ctx: {
+          accountId: "default",
+          callbackId: "cb-shared-1",
+          conversationId: "-10099:topic:77",
+          parentConversationId: "-10099",
+          senderId: "user-1",
+          senderUsername: "ada",
+          threadId: 77,
+          isGroup: true,
+          isForum: true,
+          auth: { isAuthorizedSender: true },
+          callbackMessage: {
+            messageId: 55,
+            chatId: "-10099",
+            messageText: "Pick a thread",
+          },
+        },
+        respond: {
+          reply: vi.fn(async () => {}),
+          editMessage: vi.fn(async () => {}),
+          editButtons: vi.fn(async () => {}),
+          clearButtons: vi.fn(async () => {}),
+          deleteMessage: vi.fn(async () => {}),
+        },
+      }),
+    ).resolves.toEqual({ matched: true, handled: true, duplicate: false });
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        callback: expect.objectContaining({
+          namespace: "codexapp",
+          payload: "resume:thread-1",
+        }),
+      }),
+    );
+
+    second.clearPluginInteractiveHandlers();
+  });
+
   it("rejects duplicate namespace registrations", () => {
     const first = registerPluginInteractiveHandler("plugin-a", {
       channel: "telegram",
@@ -242,6 +310,58 @@ describe("plugin interactive handlers", () => {
           values: ["allow"],
         }),
       },
+    });
+  });
+
+  it("acknowledges matched Discord interactions before awaiting plugin handlers", async () => {
+    const callOrder: string[] = [];
+    const handler = vi.fn(async () => {
+      callOrder.push("handler");
+      expect(callOrder).toEqual(["ack", "handler"]);
+      return { handled: true };
+    });
+    expect(
+      registerPluginInteractiveHandler("codex-plugin", {
+        channel: "discord",
+        namespace: "codex",
+        handler,
+      }),
+    ).toEqual({ ok: true });
+
+    await expect(
+      dispatchPluginInteractiveHandler({
+        channel: "discord",
+        data: "codex:approve:thread-1",
+        interactionId: "ix-ack-1",
+        ctx: {
+          accountId: "default",
+          interactionId: "ix-ack-1",
+          conversationId: "channel-1",
+          parentConversationId: "parent-1",
+          guildId: "guild-1",
+          senderId: "user-1",
+          senderUsername: "ada",
+          auth: { isAuthorizedSender: true },
+          interaction: {
+            kind: "button",
+            messageId: "message-1",
+          },
+        },
+        respond: {
+          acknowledge: vi.fn(async () => {}),
+          reply: vi.fn(async () => {}),
+          followUp: vi.fn(async () => {}),
+          editMessage: vi.fn(async () => {}),
+          clearComponents: vi.fn(async () => {}),
+        },
+        onMatched: async () => {
+          callOrder.push("ack");
+        },
+      }),
+    ).resolves.toEqual({
+      matched: true,
+      handled: true,
+      duplicate: false,
     });
   });
 

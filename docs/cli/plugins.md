@@ -48,6 +48,7 @@ capabilities.
 ```bash
 openclaw plugins install <path-or-spec>
 openclaw plugins install <npm-spec> --pin
+openclaw plugins install clawhub:<package>
 openclaw plugins install <plugin>@<marketplace>
 openclaw plugins install <plugin> --marketplace <marketplace>
 ```
@@ -70,6 +71,18 @@ name, use an explicit scoped spec (for example `@scope/diffs`).
 Supported archives: `.zip`, `.tgz`, `.tar.gz`, `.tar`.
 
 Claude marketplace installs are also supported.
+
+ClawHub installs use an explicit `clawhub:<package>` locator:
+
+```bash
+openclaw plugins install clawhub:openclaw-codex-app-server
+openclaw plugins install clawhub:openclaw-codex-app-server@1.2.3
+```
+
+OpenClaw downloads the package archive from ClawHub, checks the advertised
+plugin API / minimum gateway compatibility, then installs it through the normal
+archive path. Recorded installs keep their ClawHub source metadata for later
+updates.
 
 Use `plugin@marketplace` shorthand when the marketplace name exists in Claude's
 local registry cache at `~/.claude/plugins/known_marketplaces.json`:
@@ -138,13 +151,23 @@ state dir extensions root (`$OPENCLAW_STATE_DIR/extensions/<id>`). Use
 ### Update
 
 ```bash
-openclaw plugins update <id>
+openclaw plugins update <id-or-npm-spec>
 openclaw plugins update --all
-openclaw plugins update <id> --dry-run
+openclaw plugins update <id-or-npm-spec> --dry-run
+openclaw plugins update @openclaw/voice-call@beta
 ```
 
-Updates apply to tracked installs in `plugins.installs`, currently npm and
-marketplace installs.
+Updates apply to tracked installs in `plugins.installs`, including npm,
+ClawHub, and marketplace installs.
+
+When you pass a plugin id, OpenClaw reuses the recorded install spec for that
+plugin. That means previously stored dist-tags such as `@beta` and exact pinned
+versions continue to be used on later `update <id>` runs.
+
+For npm installs, you can also pass an explicit npm package spec with a dist-tag
+or exact version. OpenClaw resolves that package name back to the tracked plugin
+record, updates that installed plugin, and records the new npm spec for future
+id-based updates.
 
 When a stored integrity hash exists and the fetched artifact hash changes,
 OpenClaw prints a warning and asks for confirmation before proceeding. Use
@@ -168,7 +191,7 @@ Each plugin is classified by what it actually registers at runtime:
 - **hook-only** — only hooks, no capabilities or surfaces
 - **non-capability** — tools/commands/services but no capabilities
 
-See [Plugins](/tools/plugin#plugin-shapes) for more on the capability model.
+See [Plugin shapes](/plugins/architecture#plugin-shapes) for more on the capability model.
 
 The `--json` flag outputs a machine-readable report suitable for scripting and
 auditing.

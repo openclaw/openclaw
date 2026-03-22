@@ -1,5 +1,5 @@
-import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/msteams";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import {
@@ -42,6 +42,8 @@ function createDeps(): MSTeamsMessageHandlerDeps {
   const adapter: MSTeamsAdapter = {
     continueConversation: async () => {},
     process: async () => {},
+    updateActivity: async () => {},
+    deleteActivity: async () => {},
   };
   const conversationStore: MSTeamsConversationStore = {
     upsert: async () => {},
@@ -82,6 +84,8 @@ function createActivityHandler(): MSTeamsActivityHandler {
   handler = {
     onMessage: () => handler,
     onMembersAdded: () => handler,
+    onReactionsAdded: () => handler,
+    onReactionsRemoved: () => handler,
     run: async () => {},
   };
   return handler;
@@ -143,6 +147,14 @@ function createConsentInvokeHarness(params: {
   return { uploadId, handler, context, sendActivity };
 }
 
+function requirePendingUpload(uploadId: string) {
+  const upload = getPendingUpload(uploadId);
+  if (!upload) {
+    throw new Error(`expected pending upload ${uploadId}`);
+  }
+  return upload;
+}
+
 describe("msteams file consent invoke authz", () => {
   beforeEach(() => {
     setMSTeamsRuntime(runtimeStub);
@@ -157,7 +169,7 @@ describe("msteams file consent invoke authz", () => {
       action: "accept",
     });
 
-    await handler.run?.(context);
+    await handler.run(context);
 
     // invokeResponse should be sent immediately
     expect(sendActivity).toHaveBeenCalledWith(
@@ -182,7 +194,7 @@ describe("msteams file consent invoke authz", () => {
       action: "accept",
     });
 
-    await handler.run?.(context);
+    await handler.run(context);
 
     // invokeResponse should be sent immediately
     expect(sendActivity).toHaveBeenCalledWith(
@@ -196,7 +208,11 @@ describe("msteams file consent invoke authz", () => {
     );
 
     expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
-    expect(getPendingUpload(uploadId)).toBeDefined();
+    expect(requirePendingUpload(uploadId)).toMatchObject({
+      conversationId: "19:victim@thread.v2",
+      filename: "secret.txt",
+      contentType: "text/plain",
+    });
   });
 
   it("ignores cross-conversation decline invoke and keeps pending upload", async () => {
@@ -205,7 +221,7 @@ describe("msteams file consent invoke authz", () => {
       action: "decline",
     });
 
-    await handler.run?.(context);
+    await handler.run(context);
 
     // invokeResponse should be sent immediately
     expect(sendActivity).toHaveBeenCalledWith(
@@ -215,7 +231,11 @@ describe("msteams file consent invoke authz", () => {
     );
 
     expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
-    expect(getPendingUpload(uploadId)).toBeDefined();
+    expect(requirePendingUpload(uploadId)).toMatchObject({
+      conversationId: "19:victim@thread.v2",
+      filename: "secret.txt",
+      contentType: "text/plain",
+    });
     expect(sendActivity).toHaveBeenCalledTimes(1);
   });
 });

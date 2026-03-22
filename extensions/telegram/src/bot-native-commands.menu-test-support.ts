@@ -34,8 +34,8 @@ const deliveryMocks = vi.hoisted(() => ({
 export const listSkillCommandsForAgents = skillCommandMocks.listSkillCommandsForAgents;
 export const deliverReplies = deliveryMocks.deliverReplies;
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+vi.mock("openclaw/plugin-sdk/command-auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/command-auth")>();
   return {
     ...actual,
     listSkillCommandsForAgents,
@@ -96,10 +96,19 @@ export function createNativeCommandTestParams(
     readChannelAllowFromStore: vi.fn(
       async () => [],
     ) as TelegramBotDeps["readChannelAllowFromStore"],
+    upsertChannelPairingRequest: vi.fn(async () => ({
+      code: "PAIRCODE",
+      created: true,
+    })) as TelegramBotDeps["upsertChannelPairingRequest"],
     enqueueSystemEvent: vi.fn() as TelegramBotDeps["enqueueSystemEvent"],
     dispatchReplyWithBufferedBlockDispatcher: vi.fn(
       async () => dispatchResult,
     ) as TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"],
+    buildModelsProviderData: vi.fn(async () => ({
+      byProvider: new Map<string, Set<string>>(),
+      providers: [],
+      resolvedDefault: { provider: "openai", model: "gpt-4.1" },
+    })) as TelegramBotDeps["buildModelsProviderData"],
     listSkillCommandsForAgents,
     wasSentByBot: vi.fn(() => false) as TelegramBotDeps["wasSentByBot"],
   };

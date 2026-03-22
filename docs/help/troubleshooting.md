@@ -63,7 +63,7 @@ Example:
 }
 ```
 
-Reference: [/tools/plugin#distribution-npm](/tools/plugin#distribution-npm)
+Reference: [Plugin architecture](/plugins/architecture)
 
 ## Decision tree
 

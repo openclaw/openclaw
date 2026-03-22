@@ -1,6 +1,5 @@
 ---
 title: "Configuration Reference"
-description: "Complete field-by-field reference for ~/.openclaw/openclaw.json"
 summary: "Complete reference for every OpenClaw config key, defaults, and channel settings"
 read_when:
   - You need exact field-level config semantics or defaults
@@ -865,11 +864,11 @@ Time format in system prompt. Default: `auto` (OS preference).
     defaults: {
       models: {
         "anthropic/claude-opus-4-6": { alias: "opus" },
-        "minimax/MiniMax-M2.5": { alias: "minimax" },
+        "minimax/MiniMax-M2.7": { alias: "minimax" },
       },
       model: {
         primary: "anthropic/claude-opus-4-6",
-        fallbacks: ["minimax/MiniMax-M2.5"],
+        fallbacks: ["minimax/MiniMax-M2.7"],
       },
       imageModel: {
         primary: "openrouter/qwen/qwen-2.5-vl-72b-instruct:free",
@@ -1019,7 +1018,7 @@ Periodic heartbeat runs.
         identifierPolicy: "strict", // strict | off | custom
         identifierInstructions: "Preserve deployment IDs, ticket IDs, and host:port pairs exactly.", // used when identifierPolicy=custom
         postCompactionSections: ["Session Startup", "Red Lines"], // [] disables reinjection
-        model: "openrouter/anthropic/claude-sonnet-4-5", // optional compaction-only model override
+        model: "openrouter/anthropic/claude-sonnet-4-6", // optional compaction-only model override
         memoryFlush: {
           enabled: true,
           softThresholdTokens: 6000,
@@ -1373,6 +1372,9 @@ scripts/sandbox-browser-setup.sh   # optional browser image
         workspace: "~/.openclaw/workspace",
         agentDir: "~/.openclaw/agents/main/agent",
         model: "anthropic/claude-opus-4-6", // or { primary, fallbacks }
+        thinkingDefault: "high", // per-agent thinking level override
+        reasoningDefault: "on", // per-agent reasoning visibility override
+        fastModeDefault: false, // per-agent fast mode override
         params: { cacheRetention: "none" }, // overrides matching defaults.models params by key
         identity: {
           name: "Samantha",
@@ -1408,6 +1410,9 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 - `default`: when multiple are set, first wins (warning logged). If none set, first list entry is default.
 - `model`: string form overrides `primary` only; object form `{ primary, fallbacks }` overrides both (`[]` disables global fallbacks). Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
+- `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set.
+- `reasoningDefault`: optional per-agent default reasoning visibility (`on | off | stream`). Applies when no per-message or session reasoning override is set.
+- `fastModeDefault`: optional per-agent default for fast mode (`true | false`). Applies when no per-message or session fast-mode override is set.
 - `runtime`: optional per-agent runtime descriptor. Use `type: "acp"` with `runtime.acp` defaults (`agent`, `backend`, `mode`, `cwd`) when the agent should default to ACP harness sessions.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
@@ -2059,7 +2064,7 @@ Notes:
   agents: {
     defaults: {
       subagents: {
-        model: "minimax/MiniMax-M2.5",
+        model: "minimax/MiniMax-M2.7",
         maxConcurrent: 1,
         runTimeoutSeconds: 900,
         archiveAfterMinutes: 60,
@@ -2312,15 +2317,15 @@ Base URL should omit `/v1` (Anthropic client appends it). Shortcut: `openclaw on
 
 </Accordion>
 
-<Accordion title="MiniMax M2.5 (direct)">
+<Accordion title="MiniMax M2.7 (direct)">
 
 ```json5
 {
   agents: {
     defaults: {
-      model: { primary: "minimax/MiniMax-M2.5" },
+      model: { primary: "minimax/MiniMax-M2.7" },
       models: {
-        "minimax/MiniMax-M2.5": { alias: "Minimax" },
+        "minimax/MiniMax-M2.7": { alias: "Minimax" },
       },
     },
   },
@@ -2333,11 +2338,11 @@ Base URL should omit `/v1` (Anthropic client appends it). Shortcut: `openclaw on
         api: "anthropic-messages",
         models: [
           {
-            id: "MiniMax-M2.5",
-            name: "MiniMax M2.5",
+            id: "MiniMax-M2.7",
+            name: "MiniMax M2.7",
             reasoning: true,
             input: ["text"],
-            cost: { input: 15, output: 60, cacheRead: 2, cacheWrite: 10 },
+            cost: { input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0.12 },
             contextWindow: 200000,
             maxTokens: 8192,
           },
@@ -2349,6 +2354,7 @@ Base URL should omit `/v1` (Anthropic client appends it). Shortcut: `openclaw on
 ```
 
 Set `MINIMAX_API_KEY`. Shortcut: `openclaw onboard --auth-choice minimax-api`.
+`MiniMax-M2.5` and `MiniMax-M2.5-highspeed` remain available if you prefer the older text models.
 
 </Accordion>
 

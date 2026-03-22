@@ -126,3 +126,9 @@ Fix-it keys (pick one):
 ### "I thought this was main, why is it sandboxed?"
 
 In `"non-main"` mode, group/channel keys are _not_ main. Use the main session key (shown by `sandbox explain`) or switch mode to `"off"`.
+
+## See also
+
+- [Sandboxing](/gateway/sandboxing) -- full sandbox reference (modes, scopes, backends, images)
+- [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) -- per-agent overrides and precedence
+- [Elevated Mode](/tools/elevated)
