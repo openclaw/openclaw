@@ -2,7 +2,7 @@ import type { IncomingMessage } from "node:http";
 import net from "node:net";
 import {
   pickMatchingExternalInterfaceAddress,
-  safeNetworkInterfaces,
+  readNetworkInterfaces,
 } from "../infra/network-interfaces.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 import {
@@ -18,7 +18,7 @@ import {
  * Prefers common interface names (en0, eth0) then falls back to any external IPv4.
  */
 export function pickPrimaryLanIPv4(): string | undefined {
-  return pickMatchingExternalInterfaceAddress(safeNetworkInterfaces(), {
+  return pickMatchingExternalInterfaceAddress(readNetworkInterfaces(), {
     family: "IPv4",
     preferredNames: ["en0", "eth0"],
   });

@@ -20,11 +20,17 @@ function normalizeNetworkInterfaceFamily(
   return undefined;
 }
 
+export function readNetworkInterfaces(
+  networkInterfaces: () => NetworkInterfacesSnapshot = os.networkInterfaces,
+): NetworkInterfacesSnapshot {
+  return networkInterfaces();
+}
+
 export function safeNetworkInterfaces(
   networkInterfaces: () => NetworkInterfacesSnapshot = os.networkInterfaces,
 ): NetworkInterfacesSnapshot | undefined {
   try {
-    return networkInterfaces();
+    return readNetworkInterfaces(networkInterfaces);
   } catch {
     return undefined;
   }

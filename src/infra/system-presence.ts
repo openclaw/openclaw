@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import os from "node:os";
-import { pickPrimaryLanIPv4 } from "../gateway/net.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { pickBestEffortPrimaryLanIPv4 } from "./network-discovery-display.js";
 
 export type SystemPresence = {
   host?: string;
@@ -45,12 +45,7 @@ function normalizePresenceKey(key: string | undefined): string | undefined {
 }
 
 function resolvePrimaryIPv4(): string | undefined {
-  const host = os.hostname();
-  try {
-    return pickPrimaryLanIPv4() ?? host;
-  } catch {
-    return host;
-  }
+  return pickBestEffortPrimaryLanIPv4() ?? os.hostname();
 }
 
 function initSelfPresence() {
