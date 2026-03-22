@@ -103,13 +103,21 @@ $lines[$start..($lines.Length - 1)] -join "`n"
 **Cross-platform (Python — works everywhere):**
 ```python
 import subprocess, sys
-out = subprocess.run(
+proc = subprocess.run(
     ["operon-guard", "test", "path/to/agent.py", "--json"],
     capture_output=True, text=True
-).stdout
-start = next((i for i, l in enumerate(out.splitlines()) if l.startswith("{")), None)
-if start is not None:
-    print("\n".join(out.splitlines()[start:]))
+)
+# Propagate loader/runtime failures — if operon-guard crashed before printing
+# JSON (bad agent path, import error, etc.) stdout will be empty and returncode
+# will be non-zero. Treat that as a failed check, not a silent success.
+if proc.returncode != 0 and not proc.stdout.strip():
+    print(proc.stderr or "operon-guard exited with no output", file=sys.stderr)
+    sys.exit(proc.returncode or 1)
+start = next((i for i, l in enumerate(proc.stdout.splitlines()) if l.startswith("{")), None)
+if start is None:
+    print("operon-guard produced no JSON output — check the agent path and try again", file=sys.stderr)
+    sys.exit(1)
+print("\n".join(proc.stdout.splitlines()[start:]))
 ```
 
 > **Warning: `--json` always exits 0.** `operon-guard test --json` exits 0 even when
@@ -167,13 +175,19 @@ For `src/mypackage/agents/my_agent.py` the entries added are:
 - `.../src/mypackage/` (grandparent)
 
 `src/` and the project root are **not** added, so `import mypackage` still raises
-`ModuleNotFoundError`. **The only reliable fix for `src/` layouts is to install the
-package first:**
+`ModuleNotFoundError`. Fix this with `PYTHONPATH` — it adds `src/` to the import
+path without executing any of the project's code:
 
 ```bash
-pip install -e .
-operon-guard test src/mypackage/agents/my_agent.py:run
+PYTHONPATH=src operon-guard test src/mypackage/agents/my_agent.py:run
 ```
+
+> **Warning: do not use `pip install -e .` to work around this.** In the context
+> of pre-install vetting, `pip install -e .` invokes the target project's build
+> hooks (`setup.py`, `pyproject.toml` build-backend) before operon-guard runs a
+> single check. On an untrusted third-party repo that executes arbitrary code at
+> install time — defeating the security boundary this skill exists to provide.
+> Use `PYTHONPATH` instead: it adjusts module resolution only, with no code execution.
 
 For **flat or one-level layouts** where the package sits directly under the project
 root (e.g. `mypackage/agents/my_agent.py`), running from the project root works because
