@@ -685,10 +685,15 @@ export async function spawnAcpDirect(
     });
   const resolvedDeliveryThreadId = boundDeliveryTarget.threadId ?? deliveryThreadId;
   const hasDeliveryTarget = Boolean(requesterOrigin?.channel && inferredDeliveryTo);
-  // Fresh one-shot ACP runs should bootstrap the worker first, then let higher layers
-  // decide how to relay status. Inline delivery is reserved for thread-bound sessions.
+  // Thread-bound session spawns always deliver inline to their bound thread.
+  // Run-mode spawns use stream-to-parent when the requester is a subagent
+  // orchestrator with an active heartbeat relay route. For all other run-mode
+  // spawns from non-subagent requester sessions, fall back to inline delivery
+  // so the result reaches the originating channel.
   const useInlineDelivery =
-    hasDeliveryTarget && spawnMode === "session" && !effectiveStreamToParent;
+    hasDeliveryTarget &&
+    !effectiveStreamToParent &&
+    (spawnMode === "session" || (!requesterIsSubagentSession && !requestThreadBinding));
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
   const streamLogPath =
