@@ -33,12 +33,17 @@ describe("archive helpers", () => {
   it("resolves packed roots from package dir or single extracted root dir", async () => {
     const directDir = await createTempDir();
     const fallbackDir = await createTempDir();
+    const markerDir = await createTempDir();
     await fs.mkdir(path.join(directDir, "package"), { recursive: true });
     await fs.mkdir(path.join(fallbackDir, "bundle-root"), { recursive: true });
+    await fs.writeFile(path.join(markerDir, "package.json"), "{}", "utf8");
 
     await expect(resolvePackedRootDir(directDir)).resolves.toBe(path.join(directDir, "package"));
     await expect(resolvePackedRootDir(fallbackDir)).resolves.toBe(
       path.join(fallbackDir, "bundle-root"),
+    );
+    await expect(resolvePackedRootDir(markerDir, { rootMarkers: ["package.json"] })).resolves.toBe(
+      markerDir,
     );
   });
 

@@ -86,7 +86,30 @@ export function resolveArchiveKind(filePath: string): ArchiveKind | null {
   return null;
 }
 
-export async function resolvePackedRootDir(extractDir: string): Promise<string> {
+type ResolvePackedRootDirOptions = {
+  rootMarkers?: string[];
+};
+
+async function hasPackedRootMarker(extractDir: string, rootMarkers: string[]): Promise<boolean> {
+  for (const marker of rootMarkers) {
+    const trimmed = marker.trim();
+    if (!trimmed) {
+      continue;
+    }
+    try {
+      await fs.stat(path.join(extractDir, trimmed));
+      return true;
+    } catch {
+      // ignore
+    }
+  }
+  return false;
+}
+
+export async function resolvePackedRootDir(
+  extractDir: string,
+  options?: ResolvePackedRootDirOptions,
+): Promise<string> {
   const direct = path.join(extractDir, "package");
   try {
     const stat = await fs.stat(direct);
@@ -95,6 +118,13 @@ export async function resolvePackedRootDir(extractDir: string): Promise<string> 
     }
   } catch {
     // ignore
+  }
+
+  if ((options?.rootMarkers?.length ?? 0) > 0) {
+    const hasMarker = await hasPackedRootMarker(extractDir, options?.rootMarkers ?? []);
+    if (hasMarker) {
+      return extractDir;
+    }
   }
 
   const entries = await fs.readdir(extractDir, { withFileTypes: true });

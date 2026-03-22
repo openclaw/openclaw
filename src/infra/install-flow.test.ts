@@ -79,6 +79,7 @@ describe("withExtractedArchiveRoot", () => {
       archivePath,
       tempDirPrefix: "openclaw-plugin-",
       timeoutMs: 1000,
+      rootMarkers: ["package.json"],
       onExtracted,
     });
 
@@ -88,7 +89,9 @@ describe("withExtractedArchiveRoot", () => {
         archivePath,
       }),
     );
-    expect(resolveRootSpy).toHaveBeenCalledWith(extractDir);
+    expect(resolveRootSpy).toHaveBeenCalledWith(extractDir, {
+      rootMarkers: ["package.json"],
+    });
     expect(onExtracted).toHaveBeenCalledWith(packageRoot);
     expect(result).toEqual({
       ok: true,
