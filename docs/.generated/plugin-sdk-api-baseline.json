@@ -4680,11 +4680,11 @@
           }
         },
         {
-          "declaration": "export function normalizeResolvedSecretInputString(params: { value: unknown; refValue?: unknown; defaults?: SecretDefaults | undefined; path: string; }): string | undefined;",
+          "declaration": "export function normalizeResolvedSecretInputString(params: { value: unknown; refValue?: unknown; defaults?: SecretDefaults | undefined; path: string; allowExecFailuresInDoctor?: boolean | undefined; }): string | undefined;",
           "exportName": "normalizeResolvedSecretInputString",
           "kind": "function",
           "source": {
-            "line": 144,
+            "line": 159,
             "path": "src/config/types.secrets.ts"
           }
         },

@@ -127,6 +127,7 @@ export function assertSecretInputResolved(params: {
   refValue?: unknown;
   defaults?: SecretDefaults;
   path: string;
+  allowExecFailuresInDoctor?: boolean;
 }): void {
   const { ref } = resolveSecretInputRef({
     value: params.value,
@@ -136,6 +137,20 @@ export function assertSecretInputResolved(params: {
   if (!ref) {
     return;
   }
+
+  // During doctor execution, downgrade exec: SecretRef resolution failures to warnings
+  // since doctor may run before gateway is active and can't resolve these refs
+  const isDoctorContext =
+    params.allowExecFailuresInDoctor ??
+    process.env.OPENCLAW_ALLOW_EXEC_SECRETREF_FAILURES === "true";
+
+  if (isDoctorContext && ref.source === "exec") {
+    console.warn(
+      `Warning: ${params.path}: unresolved SecretRef "${formatSecretRefLabel(ref)}". Resolve this command against an active gateway runtime snapshot before reading it.`,
+    );
+    return;
+  }
+
   throw new Error(
     `${params.path}: unresolved SecretRef "${formatSecretRefLabel(ref)}". Resolve this command against an active gateway runtime snapshot before reading it.`,
   );
@@ -146,6 +161,7 @@ export function normalizeResolvedSecretInputString(params: {
   refValue?: unknown;
   defaults?: SecretDefaults;
   path: string;
+  allowExecFailuresInDoctor?: boolean;
 }): string | undefined {
   const normalized = normalizeSecretInputString(params.value);
   if (normalized) {

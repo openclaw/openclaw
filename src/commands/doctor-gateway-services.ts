@@ -436,7 +436,10 @@ export async function maybeScanExtraGatewayServices(
     }
   }
 
-  const cleanupHints = renderGatewayServiceCleanupHints();
+  // Only show cleanup hints for services that were actually detected as extras,
+  // excluding legacy services that were already processed above
+  const nonLegacyExtraServices = extraServices.filter((svc) => !svc.legacy);
+  const cleanupHints = renderGatewayServiceCleanupHints(nonLegacyExtraServices);
   if (cleanupHints.length > 0) {
     note(cleanupHints.map((hint) => `- ${hint}`).join("\n"), "Cleanup hints");
   }
