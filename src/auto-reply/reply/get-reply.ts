@@ -4,7 +4,11 @@ import {
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
-import { resolveModelRefFromString } from "../../agents/model-selection.js";
+import {
+  modelKey,
+  parseModelRef,
+  resolveModelRefFromString,
+} from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
@@ -146,6 +150,9 @@ export async function getReplyFromConfig(
   let hasResolvedHeartbeatModelOverride = false;
   // Handle modelOverride from Gateway (e.g., image model when images detected)
   let hasAppliedImageModelOverride = false;
+  // Save original provider/model for media understanding (before image model override)
+  const originalProvider = provider;
+  const originalModel = model;
   if (opts?.modelOverride?.trim()) {
     const modelRef = resolveModelRefFromString({
       raw: opts.modelOverride.trim(),
@@ -153,9 +160,32 @@ export async function getReplyFromConfig(
       aliasIndex,
     });
     if (modelRef) {
-      provider = modelRef.ref.provider;
-      model = modelRef.ref.model;
-      hasAppliedImageModelOverride = true;
+      // Check if the model is allowed by the agent's allowlist
+      const rawAllowlist = Object.keys(cfg.agents?.defaults?.models ?? {});
+      if (rawAllowlist.length > 0) {
+        // Build allowed keys from allowlist
+        const allowedKeys = new Set<string>();
+        for (const raw of rawAllowlist) {
+          const parsed = parseModelRef(String(raw), defaultProvider);
+          if (parsed) {
+            allowedKeys.add(modelKey(parsed.provider, parsed.model));
+          }
+        }
+        const modelKeyStr = modelKey(modelRef.ref.provider, modelRef.ref.model);
+        if (!allowedKeys.has(modelKeyStr)) {
+          // Model not in allowlist, skip the override and let default model be used
+          // This prevents Dashboard images from bypassing agent model restrictions
+        } else {
+          provider = modelRef.ref.provider;
+          model = modelRef.ref.model;
+          hasAppliedImageModelOverride = true;
+        }
+      } else {
+        // No allowlist, allow any model
+        provider = modelRef.ref.provider;
+        model = modelRef.ref.model;
+        hasAppliedImageModelOverride = true;
+      }
     }
   } else if (opts?.isHeartbeat) {
     // Prefer the resolved per-agent heartbeat model passed from the heartbeat runner,
@@ -201,11 +231,13 @@ export async function getReplyFromConfig(
   const finalized = finalizeInboundContext(ctx);
 
   if (!isFastTestEnv) {
+    // Use original provider/model for media understanding check, not the image model override.
+    // This ensures media understanding runs even if hooks later switch back to a non-vision model.
     const appliedMediaUnderstanding = await applyMediaUnderstandingIfNeeded({
       ctx: finalized,
       cfg,
       agentDir,
-      activeModel: { provider, model },
+      activeModel: { provider: originalProvider, model: originalModel },
     });
     logIngressStage("media-understanding", `applied=${appliedMediaUnderstanding ? "1" : "0"}`);
     const appliedLinkUnderstanding = await applyLinkUnderstandingIfNeeded({
