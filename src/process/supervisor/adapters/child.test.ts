@@ -1,7 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { spawnWithFallbackMock, killProcessTreeMock } = vi.hoisted(() => ({
   spawnWithFallbackMock: vi.fn(),
@@ -49,22 +49,11 @@ async function createAdapterHarness(params?: {
 }
 
 describe("createChildAdapter", () => {
-  const originalServiceMarker = process.env.OPENCLAW_SERVICE_MARKER;
-
   beforeEach(async () => {
     vi.resetModules();
     ({ createChildAdapter } = await import("./child.js"));
     spawnWithFallbackMock.mockClear();
     killProcessTreeMock.mockClear();
-    delete process.env.OPENCLAW_SERVICE_MARKER;
-  });
-
-  afterAll(() => {
-    if (originalServiceMarker === undefined) {
-      delete process.env.OPENCLAW_SERVICE_MARKER;
-    } else {
-      process.env.OPENCLAW_SERVICE_MARKER = originalServiceMarker;
-    }
   });
 
   it("uses process-tree kill for default SIGKILL", async () => {
@@ -99,17 +88,29 @@ describe("createChildAdapter", () => {
     expect(killMock).toHaveBeenCalledWith("SIGTERM");
   });
 
-  it("disables detached mode in service-managed runtime", async () => {
+  it("uses detached mode even in service-managed runtime for PGID isolation", async () => {
+    const origMarker = process.env.OPENCLAW_SERVICE_MARKER;
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    try {
+      await createAdapterHarness({ pid: 7777 });
 
-    await createAdapterHarness({ pid: 7777 });
-
-    const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
-      options?: { detached?: boolean };
-      fallbacks?: Array<{ options?: { detached?: boolean } }>;
-    };
-    expect(spawnArgs.options?.detached).toBe(false);
-    expect(spawnArgs.fallbacks ?? []).toEqual([]);
+      const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
+        options?: { detached?: boolean };
+        fallbacks?: Array<{ options?: { detached?: boolean } }>;
+      };
+      if (process.platform === "win32") {
+        expect(spawnArgs.options?.detached).toBe(false);
+      } else {
+        expect(spawnArgs.options?.detached).toBe(true);
+        expect(spawnArgs.fallbacks?.[0]?.options?.detached).toBe(false);
+      }
+    } finally {
+      if (origMarker === undefined) {
+        delete process.env.OPENCLAW_SERVICE_MARKER;
+      } else {
+        process.env.OPENCLAW_SERVICE_MARKER = origMarker;
+      }
+    }
   });
 
   it("keeps inherited env when no override env is provided", async () => {
