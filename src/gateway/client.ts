@@ -418,11 +418,14 @@ export class GatewayClient {
     // When reconnecting with a stored device token, honour the scopes that
     // were persisted alongside it so restricted tokens (e.g. operator.read)
     // are not silently upgraded to the operator.admin default.
+    // Note: an explicitly stored empty array (`[]`) is a valid default-deny
+    // session and must be preserved — only fall back to `["operator.admin"]`
+    // when no stored scopes exist at all (`undefined`).
     const usesStoredDeviceToken =
       resolvedDeviceToken != null && resolvedDeviceToken === storedToken;
     const scopes =
       this.opts.scopes ??
-      (usesStoredDeviceToken && storedScopes?.length ? storedScopes : ["operator.admin"]);
+      (usesStoredDeviceToken && storedScopes != null ? storedScopes : ["operator.admin"]);
     const platform = this.opts.platform ?? process.platform;
     const device = (() => {
       if (!this.opts.deviceIdentity) {
