@@ -1,4 +1,5 @@
 import { buildUntrustedChannelMetadata } from "../../security/channel-metadata.js";
+import { wrapExternalContent } from "../../security/external-content.js";
 import {
   resolveDiscordOwnerAllowFrom,
   type DiscordChannelConfigResolved,
@@ -17,16 +18,25 @@ export function buildDiscordGroupSystemPrompt(
 export function buildDiscordUntrustedContext(params: {
   isGuild: boolean;
   channelTopic?: string;
+  messageBody?: string;
 }): string[] | undefined {
   if (!params.isGuild) {
     return undefined;
   }
-  const untrustedChannelMetadata = buildUntrustedChannelMetadata({
-    source: "discord",
-    label: "Discord channel topic",
-    entries: [params.channelTopic],
-  });
-  return untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined;
+  const entries = [
+    buildUntrustedChannelMetadata({
+      source: "discord",
+      label: "Discord channel topic",
+      entries: [params.channelTopic],
+    }),
+    typeof params.messageBody === "string" && params.messageBody.trim().length > 0
+      ? wrapExternalContent(`UNTRUSTED Discord message body\n${params.messageBody.trim()}`, {
+          source: "unknown",
+          includeWarning: false,
+        })
+      : undefined,
+  ].filter((entry): entry is string => Boolean(entry));
+  return entries.length > 0 ? entries : undefined;
 }
 
 export function buildDiscordInboundAccessContext(params: {
@@ -40,6 +50,7 @@ export function buildDiscordInboundAccessContext(params: {
   allowNameMatching?: boolean;
   isGuild: boolean;
   channelTopic?: string;
+  messageBody?: string;
 }) {
   return {
     groupSystemPrompt: params.isGuild
@@ -48,6 +59,7 @@ export function buildDiscordInboundAccessContext(params: {
     untrustedContext: buildDiscordUntrustedContext({
       isGuild: params.isGuild,
       channelTopic: params.channelTopic,
+      messageBody: params.messageBody,
     }),
     ownerAllowFrom: resolveDiscordOwnerAllowFrom({
       channelConfig: params.channelConfig,
