@@ -5,8 +5,15 @@ set -euo pipefail
 # explicit and reproducible instead of trusting global PATH state. This helper:
 # 1) creates a repo-local Python 3.12 venv
 # 2) installs Browser Use into that venv
-# 3) clones the user's real Chrome profile into a throwaway user-data-dir
-# 4) gives us a one-command benchmark path once a Browser Use API key exists
+# 3) optionally clones the user's real Chrome profile for future experiments
+# 4) runs the current CLI-supported benchmark path against the user's named
+#    Chrome profile in local "real browser" mode using an OpenAI key
+#
+# Important limitation:
+# The currently installed Browser Use CLI (0.12.x) does not expose a
+# --user-data-dir flag for local real-browser runs. That means the practical
+# benchmark path today uses the named local Chrome profile directly, even though
+# we still keep the clone helper around for future Python-level experiments.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VENV_DIR="${BROWSER_USE_VENV_DIR:-$ROOT_DIR/.venv-browser-use}"
@@ -34,11 +41,14 @@ Commands:
 
   prepare-profile
     Clone the user's real Chrome profile into a throwaway user-data-dir for
-    Browser Use experiments.
+    future Browser Use experiments. The current CLI benchmark path does not
+    consume this clone directly because local real-browser mode does not expose
+    a custom user-data-dir flag.
 
   run-emirates
-    Run the March 22 Emirates benchmark against the cloned Chrome profile.
-    Requires BROWSER_USE_API_KEY to be set in the environment.
+    Run the March 22 Emirates benchmark against the named local Chrome profile
+    in Browser Use real-browser mode. Requires OPENAI_API_KEY to be set in the
+    environment.
 EOF
 }
 
@@ -90,23 +100,23 @@ run_emirates() {
     exit 1
   fi
 
-  if [ -z "${BROWSER_USE_API_KEY:-}" ]; then
-    echo "BROWSER_USE_API_KEY is missing. Export it first." >&2
+  if [ -z "${OPENAI_API_KEY:-}" ]; then
+    echo "OPENAI_API_KEY is missing. Export it first." >&2
     exit 1
   fi
 
-  if [ ! -d "$CLONE_CHROME_DIR/$SOURCE_PROFILE_NAME" ]; then
-    echo "Clone profile is missing. Run 'prepare-profile' first." >&2
-    exit 1
-  fi
-
-  # We run against the cloned real profile, not the user's live Chrome. This
-  # keeps the comparison apples-to-apples with the OpenClaw cloned-profile lane.
+  # The current Browser Use CLI real-browser mode launches Chrome from the
+  # standard user-data root plus a profile name. It does not currently let us
+  # override the user-data-dir from the CLI, so this benchmark uses the named
+  # local profile directly.
   "$VENV_DIR/bin/browser-use" \
-    --user-data-dir "$CLONE_CHROME_DIR" \
-    --profile-directory "$SOURCE_PROFILE_NAME" \
-    --model bu-latest \
-    -p "Open emirates.com. Search one-way flights from Denpasar (DPS) to Dubai (DXB) for March 22, 2026. Stop as soon as visible flight options load. Report the top visible options and any obvious constraints. Do not purchase anything."
+    -b real \
+    --headed \
+    --profile "$SOURCE_PROFILE_NAME" \
+    run \
+    --llm o3 \
+    --max-steps 25 \
+    "Open emirates.com. Search one-way flights from Denpasar (DPS) to Dubai (DXB) for March 22, 2026. Stop as soon as visible flight options load. Report the top visible options and any obvious constraints. Do not purchase anything."
 }
 
 cmd="${1:-}"
