@@ -494,10 +494,11 @@ export function buildStatusMessage(args: StatusArgs): string {
   const activeModelLabel = formatProviderModelRef(activeProvider, activeModel) || "unknown";
   const runtimeDiffersFromSelected = activeModelLabel !== (modelRefs.selected.label || "unknown");
   const contextTokensOverride = runtimeDiffersFromSelected
-    ? undefined
+    ? args.agent?.contextTokens
     : (entry?.contextTokens ?? args.agent?.contextTokens);
   // When a fallback model is active, persisted session contextTokens can still
-  // reflect the originally selected model. Recompute from the active runtime
+  // reflect the originally selected model. Keep any already-computed live
+  // override from the caller, but otherwise recompute from the active runtime
   // model so /status reports the real window instead of the stale selected one.
   const contextTokens =
     resolveContextTokensForModel({
