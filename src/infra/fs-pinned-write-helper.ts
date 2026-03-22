@@ -87,7 +87,7 @@ const LOCAL_PINNED_WRITE_PYTHON = [
   "    temp_name = None",
   "    os.fsync(parent_fd)",
   "    result_stat = os.stat(basename, dir_fd=parent_fd, follow_symlinks=False)",
-  "    print(f'{result_stat.st_dev}|{result_stat.st_ino}')",
+  "    print(f'{result_stat.st_dev & 0xffffffffffffffff}|{result_stat.st_ino & 0xffffffffffffffff}')",
   "finally:",
   "    if temp_fd is not None:",
   "        os.close(temp_fd)",

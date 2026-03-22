@@ -63,6 +63,20 @@ describe("sameFileIdentity", () => {
       platform: "win32" as const,
       expected: true,
     },
+    {
+      name: "ignores device id on freebsd when inode matches",
+      left: stat(0, 11),
+      right: stat(1, 11),
+      platform: "freebsd" as const,
+      expected: true,
+    },
+    {
+      name: "rejects inode mismatch on freebsd",
+      left: stat(1, 11),
+      right: stat(1, 12),
+      platform: "freebsd" as const,
+      expected: false,
+    },
   ])("$name", ({ left, right, platform, expected }) => {
     expect(sameFileIdentity(left, right, platform)).toBe(expected);
   });

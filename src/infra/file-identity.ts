@@ -16,6 +16,12 @@ export function sameFileIdentity(
     return false;
   }
 
+  // FreeBSD: treat inode match as sufficient.
+  // Ignore st_dev here as a compatibility workaround.
+  if (platform === "freebsd") {
+    return true;
+  }
+
   // On Windows, path-based stat calls can report dev=0 while fd-based stat
   // reports a real volume serial; treat either-side dev=0 as "unknown device".
   if (left.dev === right.dev) {
