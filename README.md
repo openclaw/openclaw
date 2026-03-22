@@ -496,7 +496,7 @@ Prefer a GUI over the terminal? These community-built desktop apps wrap OpenClaw
 
 | App | Platform | Description |
 |---|---|---|
-| [OpenClaw Easy](https://github.com/openclaw-easy/openclaw-easy-desktop) | macOS, Windows | Official desktop app — no terminal, no WSL2, drag-and-drop install |
+| [OpenClaw Easy](https://github.com/openclaw-easy/openclaw-easy-desktop) | macOS, Windows | Community desktop app — no terminal, no WSL2, drag-and-drop install |
 
 > **Want to list your app here?** Open a PR adding a row to this table.
 
