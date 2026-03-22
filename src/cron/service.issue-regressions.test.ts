@@ -39,6 +39,15 @@ const FAST_TIMEOUT_SECONDS = 0.0025;
 describe("Cron issue regressions", () => {
   const { makeStorePath } = setupCronIssueRegressionFixtures();
 
+  afterEach(() => {
+    // Shared-state runs can begin collecting the next file before runner-level
+    // cleanup unwinds this suite's fake timers or command-lane mutations.
+    vi.clearAllTimers();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    clearCommandLane(CommandLane.Cron);
+    setCommandLaneConcurrency(CommandLane.Cron, 1);
+  });
   it("covers schedule updates and payload patching", async () => {
     const store = makeStorePath();
     const cron = await startCronForStore({
@@ -1179,6 +1188,10 @@ describe("Cron issue regressions", () => {
       requestHeartbeatNow: vi.fn(),
       runIsolatedAgentJob: vi.fn(async (params) => {
         const abortSignal = params.abortSignal;
+        if (abortSignal?.aborted) {
+          now += 100;
+          throw new Error("aborted");
+        }
         await new Promise<void>((resolve, reject) => {
           const onAbort = () => {
             abortSignal?.removeEventListener("abort", onAbort);
