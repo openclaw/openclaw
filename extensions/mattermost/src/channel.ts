@@ -410,11 +410,14 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
     },
   },
   pairing: {
-    idLabel: "mattermostUserId",
-    normalizeAllowEntry: (entry) => normalizeAllowEntry(entry),
-    notifyApproval: createLoggedPairingApprovalNotifier(
-      ({ id }) => `[mattermost] User ${id} approved for pairing`,
-    ),
+    text: {
+      idLabel: "mattermostUserId",
+      message: "OpenClaw: your access has been approved.",
+      normalizeAllowEntry: (entry) => normalizeAllowEntry(entry),
+      notify: createLoggedPairingApprovalNotifier(
+        ({ id }) => `[mattermost] User ${id} approved for pairing`,
+      ),
+    },
   },
   threading: {
     scopedAccountReplyToMode: {

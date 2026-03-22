@@ -291,13 +291,17 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
       },
     },
     pairing: {
-      idLabel: "nextcloudUserId",
-      normalizeAllowEntry: createPairingPrefixStripper(/^(nextcloud-talk|nc-talk|nc):/i, (entry) =>
-        entry.toLowerCase(),
-      ),
-      notifyApproval: createLoggedPairingApprovalNotifier(
-        ({ id }) => `[nextcloud-talk] User ${id} approved for pairing`,
-      ),
+      text: {
+        idLabel: "nextcloudUserId",
+        message: "OpenClaw: your access has been approved.",
+        normalizeAllowEntry: createPairingPrefixStripper(
+          /^(nextcloud-talk|nc-talk|nc):/i,
+          (entry) => entry.toLowerCase(),
+        ),
+        notify: createLoggedPairingApprovalNotifier(
+          ({ id }) => `[nextcloud-talk] User ${id} approved for pairing`,
+        ),
+      },
     },
     security: {
       resolveDmPolicy: resolveNextcloudTalkDmPolicy,
