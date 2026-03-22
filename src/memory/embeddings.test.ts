@@ -742,3 +742,45 @@ describe("FTS-only fallback when no provider available", () => {
     }
   });
 });
+
+describe("embedding provider privateMode runtime enforcement", () => {
+  it("skips remote auto-selection providers when privateMode is enabled", async () => {
+    mockPublicPinnedHostname();
+    vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
+      if (provider === "openai") {
+        return { apiKey: "openai-key", source: "env: OPENAI_API_KEY", mode: "api-key" };
+      }
+      throw new Error(`Unexpected provider ${provider}`);
+    });
+
+    const result = await createEmbeddingProvider({
+      config: {
+        privateMode: {
+          enabled: true,
+        },
+      } as never,
+      provider: "auto",
+      model: "text-embedding-3-small",
+      fallback: "none",
+    });
+
+    expect(result.provider).toBeNull();
+    expect(result.providerUnavailableReason).toContain("No embeddings provider available");
+    expect(authModule.resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
+  it("rejects explicit remote providers when privateMode is enabled", async () => {
+    await expect(
+      createEmbeddingProvider({
+        config: {
+          privateMode: {
+            enabled: true,
+          },
+        } as never,
+        provider: "openai",
+        model: "text-embedding-3-small",
+        fallback: "none",
+      }),
+    ).rejects.toThrow(/privateMode: Remote embedding provider "openai" not allowed/i);
+  });
+});

@@ -492,3 +492,35 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 });
+
+describe("applySkillEnvOverrides privateMode", () => {
+  it("blocks skill env injection when privateMode.skills.blockEnvInjection is enabled", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeEnvSkill(workspaceDir);
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
+
+    withClearedEnv(["ENV_KEY"], () => {
+      const restore = applySkillEnvOverrides({
+        skills: entries,
+        config: {
+          privateMode: {
+            enabled: true,
+            skills: {
+              blockEnvInjection: true,
+            },
+          },
+          skills: { entries: { "env-skill": { apiKey: "injected" } } }, // pragma: allowlist secret
+        },
+      });
+
+      try {
+        expect(process.env.ENV_KEY).toBeUndefined();
+        expect(getActiveSkillEnvKeys().has("ENV_KEY")).toBe(false);
+      } finally {
+        restore();
+        expect(process.env.ENV_KEY).toBeUndefined();
+      }
+    });
+  });
+});

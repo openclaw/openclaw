@@ -92,7 +92,18 @@ function isAlwaysBlockedSkillEnvKey(key: string): boolean {
 function sanitizeSkillEnvOverrides(params: {
   overrides: Record<string, string>;
   allowedSensitiveKeys: Set<string>;
+  config?: OpenClawConfig;
 }): SanitizedSkillEnvOverrides {
+  if (
+    params.config?.privateMode?.enabled &&
+    params.config?.privateMode?.skills?.blockEnvInjection
+  ) {
+    return {
+      allowed: {},
+      blocked: Object.keys(params.overrides),
+      warnings: [],
+    };
+  }
   if (Object.keys(params.overrides).length === 0) {
     return { allowed: {}, blocked: [], warnings: [] };
   }
@@ -139,6 +150,7 @@ function applySkillConfigEnvOverrides(params: {
   primaryEnv?: string | null;
   requiredEnv?: string[] | null;
   skillKey: string;
+  config?: OpenClawConfig;
 }) {
   const { updates, skillConfig, primaryEnv, requiredEnv, skillKey } = params;
   const allowedSensitiveKeys = new Set<string>();
@@ -184,6 +196,7 @@ function applySkillConfigEnvOverrides(params: {
   const sanitized = sanitizeSkillEnvOverrides({
     overrides: pendingOverrides,
     allowedSensitiveKeys,
+    config: params.config,
   });
 
   if (sanitized.blocked.length > 0) {
@@ -227,6 +240,7 @@ export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: 
       primaryEnv: entry.metadata?.primaryEnv,
       requiredEnv: entry.metadata?.requires?.env,
       skillKey,
+      config,
     });
   }
 
@@ -255,6 +269,7 @@ export function applySkillEnvOverridesFromSnapshot(params: {
       primaryEnv: skill.primaryEnv,
       requiredEnv: skill.requiredEnv,
       skillKey: skill.name,
+      config,
     });
   }
 

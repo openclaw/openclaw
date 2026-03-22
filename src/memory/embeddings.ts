@@ -3,6 +3,7 @@ import type { Llama, LlamaEmbeddingContext, LlamaModel } from "node-llama-cpp";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { isProviderAllowedInPrivateMode } from "../private-mode/policy.js";
 import { resolveUserPath } from "../utils.js";
 import type { EmbeddingInput } from "./embedding-inputs.js";
 import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
@@ -95,6 +96,32 @@ function canAutoSelectLocal(options: EmbeddingProviderOptions): boolean {
   } catch {
     return false;
   }
+}
+
+function isPrivateModeEnabled(config: OpenClawConfig): boolean {
+  return config.privateMode?.enabled === true;
+}
+
+function isAllowedEmbeddingProviderInPrivateMode(
+  provider: EmbeddingProviderId,
+  config: OpenClawConfig,
+): boolean {
+  if (provider === "local" || provider === "ollama") {
+    return true;
+  }
+  return isProviderAllowedInPrivateMode(provider, config);
+}
+
+function assertPrivateModeEmbeddingProviderAllowed(
+  provider: EmbeddingProviderId,
+  config: OpenClawConfig,
+): void {
+  if (!isPrivateModeEnabled(config) || isAllowedEmbeddingProviderInPrivateMode(provider, config)) {
+    return;
+  }
+  throw new Error(
+    `privateMode: Remote embedding provider "${provider}" not allowed. Use "local" or "ollama".`,
+  );
 }
 
 function isMissingApiKeyError(err: unknown): boolean {
@@ -212,7 +239,11 @@ export async function createEmbeddingProvider(
       }
     }
 
-    for (const provider of REMOTE_EMBEDDING_PROVIDER_IDS) {
+    const remoteProviders = isPrivateModeEnabled(options.config)
+      ? []
+      : REMOTE_EMBEDDING_PROVIDER_IDS;
+
+    for (const provider of remoteProviders) {
       try {
         const result = await createProvider(provider);
         return { ...result, requestedProvider };
@@ -240,11 +271,13 @@ export async function createEmbeddingProvider(
   }
 
   try {
+    assertPrivateModeEmbeddingProviderAllowed(requestedProvider, options.config);
     const primary = await createProvider(requestedProvider);
     return { ...primary, requestedProvider };
   } catch (primaryErr) {
     const reason = formatPrimaryError(primaryErr, requestedProvider);
     if (fallback && fallback !== "none" && fallback !== requestedProvider) {
+      assertPrivateModeEmbeddingProviderAllowed(fallback, options.config);
       try {
         const fallbackResult = await createProvider(fallback);
         return {
