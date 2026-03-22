@@ -142,12 +142,14 @@ COPY --from=runtime-assets --chown=node:node /app/dist ./dist
 COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules
 COPY --from=runtime-assets --chown=node:node /app/package.json .
 COPY --from=runtime-assets --chown=node:node /app/openclaw.mjs .
-# Only copy extensions that work on Fly.io shared-cpu machines.
-# WhatsApp excluded: Baileys native deps hang Jiti compilation for 10+ min.
+# Copy extensions that work on Fly.io shared-cpu machines.
+# WhatsApp: Baileys 7.x is pure JS (no native bindings) — safe to include.
+#   Pre-compiled .js files load without Jiti. Deps installed via OPENCLAW_EXTENSIONS=whatsapp.
 # signal + imessage: not active channels but src/ has hardcoded imports to them.
 COPY --from=runtime-assets --chown=node:node /app/extensions/telegram ./extensions/telegram
 COPY --from=runtime-assets --chown=node:node /app/extensions/discord ./extensions/discord
 COPY --from=runtime-assets --chown=node:node /app/extensions/slack ./extensions/slack
+COPY --from=runtime-assets --chown=node:node /app/extensions/whatsapp ./extensions/whatsapp
 COPY --from=runtime-assets --chown=node:node /app/extensions/signal ./extensions/signal
 COPY --from=runtime-assets --chown=node:node /app/extensions/imessage ./extensions/imessage
 COPY --from=runtime-assets --chown=node:node /app/extensions/shared ./extensions/shared
