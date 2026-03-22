@@ -264,11 +264,11 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
     return null;
   }
   const openRe = /<\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
-  const closeRe = /<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
-  if (!openRe.test(trimmedStart)) {
-    return null;
-  }
-  if (!closeRe.test(text)) {
+
+  // If it has an open tag but it's not closed, we treat it as thinking if it's at the start
+  const hasOpen = openRe.test(trimmedStart);
+
+  if (!hasOpen) {
     return null;
   }
 
@@ -299,14 +299,17 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
     }
   }
 
+  // Handle unclosed thinking tag at the end (stream scenario)
   if (inThinking) {
-    return null;
+    blocks.push({ type: "thinking", thinking: text.slice(thinkingStart).trim() });
+    cursor = text.length;
   }
+
   if (cursor < text.length) {
     blocks.push({ type: "text", text: text.slice(cursor) });
   }
 
-  return blocks;
+  return blocks.length > 0 ? blocks : null;
 }
 
 export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
@@ -507,44 +510,55 @@ export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[]
     const isExplicitWrapper = innerContent !== undefined;
 
     // Case B: Malformed closing tag fallback.
-    // If it's a isolated </minimax:tool_call>, we look for a preceding <invoke> in the LAST block.
+    // If it's a isolated </minimax:tool_call>, we look for ANY preceding <invoke> in the LAST block.
     if (!isExplicitWrapper && blocks.length > 0) {
       const lastBlock = blocks[blocks.length - 1];
       if (lastBlock.type === "text" && /<invoke\b/i.test(lastBlock.text)) {
         const lastText = lastBlock.text;
-        const invokeMatch = Array.from(lastText.matchAll(MINIMAX_INVOKE_RE)).pop();
-        if (invokeMatch) {
-          const iIndex = invokeMatch.index ?? 0;
-          const [iFullMatch, attributes, invokeBody] = invokeMatch;
+        const matchedInvokes = Array.from(lastText.matchAll(MINIMAX_INVOKE_RE));
 
-          // Re-write the last text block to EXCLUDE the raw invoke text.
-          lastBlock.text = lastText.slice(0, iIndex);
-          if (!lastBlock.text) {
-            blocks.pop();
-          }
+        if (matchedInvokes.length > 0) {
+          let lastProcessedIdx = 0;
+          // Temporarily remove the last block to replace it with split parts
+          blocks.pop();
 
-          // Add the formal toolCall block.
-          const nameMatch = /\bname=["']([^"']+)["']/i.exec(attributes);
-          const toolName = nameMatch ? nameMatch[1] : undefined;
-          if (toolName) {
-            const args: Record<string, unknown> = {};
-            for (const pMatch of invokeBody.matchAll(MINIMAX_PARAM_RE)) {
-              const [, pName, pValue] = pMatch;
-              args[pName] = parseXmlParameterValue(pValue);
+          for (const iMatch of matchedInvokes) {
+            const iIndex = iMatch.index ?? 0;
+            const [iFullMatch, attributes, invokeBody] = iMatch;
+
+            // Prose before this specific invoke
+            if (iIndex > lastProcessedIdx) {
+              const subProse = lastText.slice(lastProcessedIdx, iIndex);
+              if (subProse) {
+                blocks.push({ type: "text", text: subProse });
+              }
             }
-            blocks.push({
-              type: "toolCall",
-              id: `mc_${Math.random().toString(36).slice(2, 11)}`,
-              name: normalizeToolName(toolName),
-              arguments: args,
-            });
-            hasToolCall = true;
+
+            const nameMatch = /\bname=["']([^"']+)["']/i.exec(attributes);
+            const toolName = nameMatch ? nameMatch[1] : undefined;
+            if (toolName) {
+              const args: Record<string, unknown> = {};
+              for (const pMatch of invokeBody.matchAll(MINIMAX_PARAM_RE)) {
+                const [, pName, pValue] = pMatch;
+                args[pName] = parseXmlParameterValue(pValue);
+              }
+              blocks.push({
+                type: "toolCall",
+                id: `mc_${Math.random().toString(36).slice(2, 11)}`,
+                name: normalizeToolName(toolName),
+                arguments: args,
+              });
+              hasToolCall = true;
+            }
+            lastProcessedIdx = iIndex + iFullMatch.length;
           }
 
-          // Add any prose that was between <invoke> and </minimax:tool_call>.
-          const remaining = lastText.slice(iIndex + iFullMatch.length);
-          if (remaining) {
-            blocks.push({ type: "text", text: remaining });
+          // Prose after the last invoke
+          if (lastProcessedIdx < lastText.length) {
+            const finalSubProse = lastText.slice(lastProcessedIdx);
+            if (finalSubProse) {
+              blocks.push({ type: "text", text: finalSubProse });
+            }
           }
         }
       }

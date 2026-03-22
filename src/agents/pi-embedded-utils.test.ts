@@ -382,6 +382,42 @@ All done.`;
     );
   });
 
+  it("promotes all sibling invokes before a stray closing tag", () => {
+    const text = `Prefix <invoke name="T1"><parameter name="p">1</parameter></invoke><invoke name="T2"><parameter name="p">2</parameter></invoke></minimax:tool_call> Suffix`;
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    });
+
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    const calls = msg.content.filter((c) => c && typeof c === "object" && c.type === "toolCall");
+    expect(calls.length).toBe(2);
+    expect(calls[0]).toMatchObject({ type: "toolCall", name: "t1", arguments: { p: 1 } });
+    expect(calls[1]).toMatchObject({ type: "toolCall", name: "t2", arguments: { p: 2 } });
+
+    const texts = msg.content.filter((c) => c && typeof c === "object" && c.type === "text");
+    expect(texts[0]).toMatchObject({ type: "text", text: "Prefix " });
+    expect(texts[1]).toMatchObject({ type: "text", text: " Suffix" });
+  });
+
+  it("handles unclosed thinking tags in string-form content (stream scenario)", () => {
+    const text = `<think>Internal thinking... <minimax:tool_call><invoke name="Bash"><parameter name="command">ls</parameter></invoke></minimax:tool_call>`;
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: text as unknown as AssistantMessage["content"],
+      timestamp: Date.now(),
+    });
+
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    // Should result in [thinking, toolCall]
+    expect(msg.content.length).toBe(2);
+    expect(msg.content[0]).toMatchObject({ type: "thinking", thinking: "Internal thinking... " });
+    expect(msg.content[1]).toMatchObject({ type: "toolCall", name: "exec" });
+  });
+
   it("preserves leading/trailing whitespace in arguments", () => {
     const text = `<minimax:tool_call>
   <invoke name="Message">
