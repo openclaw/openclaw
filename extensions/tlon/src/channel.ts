@@ -1,3 +1,4 @@
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { createHybridChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
@@ -45,7 +46,7 @@ const tlonConfigAdapter = createHybridChannelConfigAdapter({
   sectionKey: TLON_CHANNEL_ID,
   listAccountIds: listTlonAccountIds,
   resolveAccount: resolveTlonAccount,
-  defaultAccountId: () => "default",
+  defaultAccountId: () => DEFAULT_ACCOUNT_ID,
   clearBaseFields: ["ship", "code", "url", "name"],
   preserveSectionOnDefaultDelete: true,
   resolveAllowFrom: (account) => account.dmAllowlist,

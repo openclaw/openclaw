@@ -312,7 +312,7 @@ export const telegramPlugin = createChatChannelPlugin({
     }),
     allowlist: buildDmGroupAccountAllowlistAdapter({
       channelId: "telegram",
-      resolveAccount: ({ cfg, accountId }) => resolveTelegramAccount({ cfg, accountId }),
+      resolveAccount: resolveTelegramAccount,
       normalize: ({ cfg, accountId, values }) =>
         telegramConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
       resolveDmAllowFrom: (account) => account.config.allowFrom,
