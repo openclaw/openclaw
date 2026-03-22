@@ -874,5 +874,10 @@ describe("classifyFailoverReason", () => {
     // Plain 500 without billing signal stays timeout
     expect(classifyFailoverReasonFromHttpStatus(500, "internal server error")).toBe("timeout");
     expect(classifyFailoverReason("500 internal server error")).toBe("timeout");
+    // HTTP 500 with overload signal preserves overloaded classification
+    expect(classifyFailoverReasonFromHttpStatus(500, "The model is overloaded")).toBe("overloaded");
+    expect(
+      classifyFailoverReasonFromHttpStatus(500, "service unavailable due to capacity limits"),
+    ).toBe("overloaded");
   });
 });

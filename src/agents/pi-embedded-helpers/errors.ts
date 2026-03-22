@@ -445,6 +445,9 @@ export function classifyFailoverReasonFromHttpStatus(
     if (message && isBillingErrorMessage(message)) {
       return "billing";
     }
+    if (message && isOverloadedErrorMessage(message)) {
+      return "overloaded";
+    }
     return "timeout";
   }
   if (status === 503) {
