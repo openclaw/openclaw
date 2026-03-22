@@ -80,8 +80,7 @@ If score worsened: the previous change hurt. Revert and restart gateway:
 
 ```bash
 cd ~/.openclaw/workspace && git reset --hard HEAD~1
-pkill -9 -f openclaw-gateway || true
-sleep 5
+openclaw gateway restart
 ```
 
 ### 5. Identify Weakest Metric
@@ -114,14 +113,10 @@ git commit -m "auto-improve: <description of change>"
 After every workspace file change, restart the gateway so Operator1 picks up the new prompts:
 
 ```bash
-# Force kill all gateway processes, LaunchAgent KeepAlive auto-respawns
-pkill -9 -f openclaw-gateway || true
-sleep 5
-# Verify it came back
-pgrep -f openclaw-gateway && echo "Gateway restarted" || echo "WARNING: Gateway did not restart — run: launchctl kickstart gui/$(id -u)/ai.openclaw.gateway"
+openclaw gateway restart
 ```
 
-This is MANDATORY after every edit. `openclaw gateway restart` can leave orphan processes — `pkill -9` is more reliable. The LaunchAgent (`ai.openclaw.gateway`) has `KeepAlive` set, so it auto-respawns within seconds. New sessions will use the updated files immediately.
+This is MANDATORY after every edit. Uses graceful restart so WebSocket connections (ui-next, web chat) close cleanly and auto-reconnect. Do NOT use `pkill -9` — it kills connections without close frames, leaving the UI in a "Gateway Offline" state that requires manual reconnect.
 
 ### 9. Log to results.tsv
 
