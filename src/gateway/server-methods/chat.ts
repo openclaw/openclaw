@@ -1310,6 +1310,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     // When images are detected, switch to the configured image model.
     // This ensures non-vision models don't fail when users send images via Dashboard.
     let imageModelOverride: string | undefined;
+    let imageModelFallbacks: string[] | undefined;
     if (parsedImages.length > 0) {
       const imageModelConfig = cfg.agents?.defaults?.imageModel;
       const imageModelPrimary =
@@ -1318,8 +1319,12 @@ export const chatHandlers: GatewayRequestHandlers = {
           : imageModelConfig?.primary?.trim();
       if (imageModelPrimary) {
         imageModelOverride = imageModelPrimary;
+        // Also resolve image model fallbacks for proper failover behavior
+        if (typeof imageModelConfig === "object" && Array.isArray(imageModelConfig.fallbacks)) {
+          imageModelFallbacks = imageModelConfig.fallbacks;
+        }
         context.logGateway.debug(
-          `[image-model-switch] Detected ${parsedImages.length} image(s), switching to model: ${imageModelOverride}`,
+          `[image-model-switch] Detected ${parsedImages.length} image(s), switching to model: ${imageModelOverride}${imageModelFallbacks ? ` with ${imageModelFallbacks.length} fallback(s)` : ""}`,
         );
       }
     }
@@ -1545,6 +1550,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           abortSignal: abortController.signal,
           images: parsedImages.length > 0 ? parsedImages : undefined,
           modelOverride: imageModelOverride,
+          modelOverrideFallbacks: imageModelFallbacks,
           hasAppliedImageModelOverride: imageModelOverride !== undefined,
           onAgentRunStart: (runId) => {
             agentRunStarted = true;

@@ -30,6 +30,8 @@ export type GetReplyOptions = {
   images?: ImageContent[];
   /** Model override for this run (e.g., image model when images detected). */
   modelOverride?: string;
+  /** Fallback models to use when modelOverride is set (e.g., imageModel.fallbacks). */
+  modelOverrideFallbacks?: string[];
   /** If true, session model override should be skipped (images triggered model switch). */
   hasAppliedImageModelOverride?: boolean;
   /** Notifies when an agent run actually starts (useful for webchat command handling). */

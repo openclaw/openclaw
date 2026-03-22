@@ -535,6 +535,8 @@ export async function runPreparedReply(
       inputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
       ...(isReasoningTagProvider(provider) ? { enforceFinalTag: true } : {}),
+      // Pass image model fallbacks when image model override is active
+      ...(opts?.modelOverrideFallbacks ? { imageModelFallbacks: opts.modelOverrideFallbacks } : {}),
     },
   };
 
