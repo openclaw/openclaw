@@ -318,7 +318,7 @@ const resolveSlackAllowlistGroupOverrides = createFlatAllowlistOverrideResolver(
 });
 
 const resolveSlackAllowlistNames = createAccountScopedAllowlistNameResolver({
-  resolveAccount: ({ cfg, accountId }) => resolveSlackAccount({ cfg, accountId }),
+  resolveAccount: resolveSlackAccount,
   resolveToken: (account: ResolvedSlackAccount) =>
     account.config.userToken?.trim() || account.botToken?.trim(),
   resolveNames: ({ token, entries }) => resolveSlackUserAllowlist({ token, entries }),
@@ -374,7 +374,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   allowlist: {
     ...buildLegacyDmAccountAllowlistAdapter({
       channelId: "slack",
-      resolveAccount: ({ cfg, accountId }) => resolveSlackAccount({ cfg, accountId }),
+      resolveAccount: resolveSlackAccount,
       normalize: ({ cfg, accountId, values }) =>
         slackConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
       resolveDmAllowFrom: (account) => account.config.allowFrom ?? account.config.dm?.allowFrom,
