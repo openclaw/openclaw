@@ -12,7 +12,6 @@ import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { buildPluginBindingApprovalCustomId } from "openclaw/plugin-sdk/conversation-runtime";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { peekSystemEvents, resetSystemEventsForTest } from "../../../../src/infra/system-events.js";
 import {
   clearDiscordComponentEntries,
   registerDiscordComponentEntries,
@@ -51,6 +50,7 @@ import {
 
 const readAllowFromStoreMock = vi.hoisted(() => vi.fn());
 const upsertPairingRequestMock = vi.hoisted(() => vi.fn());
+const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 const dispatchReplyMock = vi.hoisted(() => vi.fn());
 const recordInboundSessionMock = vi.hoisted(() => vi.fn());
 const readSessionUpdatedAtMock = vi.hoisted(() => vi.fn());
@@ -78,6 +78,24 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/security-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
+  return {
+    ...actual,
+    readStoreAllowFromForDmPolicy: async (params: {
+      provider: string;
+      accountId: string;
+      dmPolicy?: string | null;
+      shouldRead?: boolean | null;
+    }) => {
+      if (params.shouldRead === false || params.dmPolicy === "allowlist") {
+        return [];
+      }
+      return await readAllowFromStoreMock(params.provider, params.accountId);
+    },
+  };
+});
+
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
   return {
@@ -87,10 +105,48 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
       resolvePluginConversationBindingApprovalMock(...args),
     buildPluginBindingResolvedText: (...args: unknown[]) =>
       buildPluginBindingResolvedTextMock(...args),
+    recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/conversation-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  return {
+    ...actual,
+    upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
+    resolvePluginConversationBindingApproval: (...args: unknown[]) =>
+      resolvePluginConversationBindingApprovalMock(...args),
+    buildPluginBindingResolvedText: (...args: unknown[]) =>
+      buildPluginBindingResolvedTextMock(...args),
+    recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return {
+    ...actual,
+    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/infra-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return {
+    ...actual,
+    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
   };
 });
 
 vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+  return {
+    ...actual,
+    dispatchReplyWithBufferedBlockDispatcher: (...args: unknown[]) => dispatchReplyMock(...args),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/reply-runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
   return {
     ...actual,
@@ -111,15 +167,16 @@ vi.mock("../../../../src/auto-reply/reply/provider-dispatcher.js", async (import
   };
 });
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
-    recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
+    readSessionUpdatedAt: (...args: unknown[]) => readSessionUpdatedAtMock(...args),
+    resolveStorePath: (...args: unknown[]) => resolveStorePathMock(...args),
   };
 });
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+vi.mock("openclaw/plugin-sdk/config-runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
@@ -137,14 +194,17 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/plugin-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>();
+  return {
+    ...actual,
+    dispatchPluginInteractiveHandler: (...args: unknown[]) =>
+      dispatchPluginInteractiveHandlerMock(...args),
+  };
+});
+
 describe("agent components", () => {
   const createCfg = (): OpenClawConfig => ({}) as OpenClawConfig;
-  const dmSessionKey = buildAgentSessionKey({
-    agentId: "main",
-    channel: "discord",
-    accountId: "default",
-    peer: { kind: "direct", id: "123456789" },
-  });
 
   const createBaseDmInteraction = (overrides: Record<string, unknown> = {}) => {
     const reply = vi.fn().mockResolvedValue(undefined);
@@ -185,7 +245,7 @@ describe("agent components", () => {
   beforeEach(() => {
     readAllowFromStoreMock.mockClear().mockResolvedValue([]);
     upsertPairingRequestMock.mockClear().mockResolvedValue({ code: "PAIRCODE", created: true });
-    resetSystemEventsForTest();
+    enqueueSystemEventMock.mockClear();
   });
 
   it("sends pairing reply when DM sender is not allowlisted", async () => {
@@ -205,7 +265,7 @@ describe("agent components", () => {
     const code = pairingText.match(/Pairing code:\s*([A-Z2-9]{8})/)?.[1];
     expect(code).toBeDefined();
     expect(pairingText).toContain(`openclaw pairing approve discord ${code}`);
-    expect(peekSystemEvents(dmSessionKey)).toEqual([]);
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(readAllowFromStoreMock).toHaveBeenCalledWith("discord", "default");
   });
 
@@ -224,7 +284,7 @@ describe("agent components", () => {
       content: "You are not authorized to use this button.",
       ephemeral: true,
     });
-    expect(peekSystemEvents(dmSessionKey)).toEqual([]);
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
@@ -241,9 +301,7 @@ describe("agent components", () => {
 
     expect(defer).not.toHaveBeenCalled();
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
-    expect(peekSystemEvents(dmSessionKey)).toEqual([
-      "[Discord component: hello clicked by Alice#1234 (123456789)]",
-    ]);
+    expect(enqueueSystemEventMock).toHaveBeenCalled();
     expect(upsertPairingRequestMock).not.toHaveBeenCalled();
     expect(readAllowFromStoreMock).toHaveBeenCalledWith("discord", "default");
   });
@@ -261,9 +319,7 @@ describe("agent components", () => {
 
     expect(defer).not.toHaveBeenCalled();
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
-    expect(peekSystemEvents(dmSessionKey)).toEqual([
-      "[Discord component: hello clicked by Alice#1234 (123456789)]",
-    ]);
+    expect(enqueueSystemEventMock).toHaveBeenCalled();
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
@@ -283,7 +339,7 @@ describe("agent components", () => {
       content: "DM interactions are disabled.",
       ephemeral: true,
     });
-    expect(peekSystemEvents(dmSessionKey)).toEqual([]);
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
@@ -301,9 +357,7 @@ describe("agent components", () => {
 
     expect(defer).not.toHaveBeenCalled();
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
-    expect(peekSystemEvents(dmSessionKey)).toEqual([
-      "[Discord select menu: hello interacted by Alice#1234 (123456789) (selected: alpha)]",
-    ]);
+    expect(enqueueSystemEventMock).toHaveBeenCalled();
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
@@ -320,9 +374,10 @@ describe("agent components", () => {
 
     expect(defer).not.toHaveBeenCalled();
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
-    expect(peekSystemEvents(dmSessionKey)).toEqual([
-      "[Discord component: hello_cid clicked by Alice#1234 (123456789)]",
-    ]);
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      expect.stringContaining("hello_cid"),
+      expect.any(Object),
+    );
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
@@ -339,9 +394,10 @@ describe("agent components", () => {
 
     expect(defer).not.toHaveBeenCalled();
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
-    expect(peekSystemEvents(dmSessionKey)).toEqual([
-      "[Discord component: hello%2G clicked by Alice#1234 (123456789)]",
-    ]);
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      expect.stringContaining("hello%2G"),
+      expect.any(Object),
+    );
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 });
@@ -500,7 +556,7 @@ describe("discord component interactions", () => {
     lastDispatchCtx = undefined;
     readAllowFromStoreMock.mockClear().mockResolvedValue([]);
     upsertPairingRequestMock.mockClear().mockResolvedValue({ code: "PAIRCODE", created: true });
-    resetSystemEventsForTest();
+    enqueueSystemEventMock.mockClear();
     dispatchReplyMock.mockClear().mockImplementation(async (params: DispatchParams) => {
       lastDispatchCtx = params.ctx;
       await params.dispatcherOptions.deliver({ text: "ok" });

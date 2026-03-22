@@ -587,6 +587,26 @@ describe("gateway-status command", () => {
     );
   });
 
+  it("uses a 10s default timeout budget when the caller does not override it", async () => {
+    const { runtime } = createRuntimeCapture();
+    probeGateway.mockClear();
+    readBestEffortConfig.mockResolvedValueOnce({
+      gateway: {
+        mode: "local",
+        auth: { mode: "token", token: "ltok" },
+      },
+    } as never);
+
+    await runGatewayStatus(runtime, { timeout: "", json: true });
+
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+        timeoutMs: 10_000,
+      }),
+    );
+  });
+
   it("keeps inactive local loopback probes on the short timeout in remote mode", async () => {
     const { runtime } = createRuntimeCapture();
     probeGateway.mockClear();

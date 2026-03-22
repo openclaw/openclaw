@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { STATE_DIR } from "../../../src/config/paths.js";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 import { withEnvAsync } from "../../../test/helpers/extensions/env.js";
 import { useFrozenTime, useRealTime } from "../../../test/helpers/extensions/frozen-time.js";
@@ -12,7 +13,6 @@ const {
   botCtorSpy,
   commandSpy,
   dispatchReplyWithBufferedBlockDispatcher,
-  getLoadWebMediaMock,
   getLoadConfigMock,
   getOnHandler,
   getReadChannelAllowFromStoreMock,
@@ -1259,39 +1259,40 @@ describe("createTelegramBot", () => {
   });
 
   it("sends GIF replies as animations", async () => {
-    const loadWebMedia = getLoadWebMediaMock();
+    const mediaRoot = path.join(STATE_DIR, "workspace");
+    fs.mkdirSync(mediaRoot, { recursive: true });
+    const gifPath = path.join(mediaRoot, `gif-reply-${process.pid}-${Date.now()}.gif`);
+    fs.writeFileSync(gifPath, Buffer.from("GIF89a"));
     replySpy.mockResolvedValueOnce({
       text: "caption",
-      mediaUrl: "https://example.com/fun",
+      mediaUrl: gifPath,
     });
-    loadWebMedia.mockResolvedValueOnce({
-      buffer: Buffer.from("GIF89a"),
-      contentType: "image/gif",
-      fileName: "fun.gif",
-    });
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
 
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      await handler({
+        message: {
+          chat: { id: 1234, type: "private" },
+          text: "hello world",
+          date: 1736380800,
+          message_id: 5,
+          from: { first_name: "Ada" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
 
-    await handler({
-      message: {
-        chat: { id: 1234, type: "private" },
-        text: "hello world",
-        date: 1736380800,
-        message_id: 5,
-        from: { first_name: "Ada" },
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
-
-    expect(sendAnimationSpy).toHaveBeenCalledTimes(1);
-    expect(sendAnimationSpy).toHaveBeenCalledWith("1234", expect.anything(), {
-      caption: "caption",
-      parse_mode: "HTML",
-      reply_to_message_id: undefined,
-    });
-    expect(sendPhotoSpy).not.toHaveBeenCalled();
+      expect(sendAnimationSpy).toHaveBeenCalledTimes(1);
+      expect(sendAnimationSpy).toHaveBeenCalledWith("1234", expect.anything(), {
+        caption: "caption",
+        parse_mode: "HTML",
+        reply_to_message_id: undefined,
+      });
+      expect(sendPhotoSpy).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(gifPath, { force: true });
+    }
   });
 
   function resetHarnessSpies() {

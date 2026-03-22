@@ -7,6 +7,12 @@ import { makeProxyFetch } from "./proxy.js";
 export type TelegramProbe = BaseProbeResult & {
   status?: number | null;
   elapsedMs: number;
+  timings?: {
+    getMeMs?: number;
+    getWebhookInfoMs?: number;
+    totalMs: number;
+    failedStep?: "getMe" | "getWebhookInfo";
+  };
   bot?: {
     id?: number | null;
     username?: string | null;
@@ -112,11 +118,16 @@ export async function probeTelegram(
     status: null,
     error: null,
     elapsedMs: 0,
+    timings: {
+      totalMs: 0,
+    },
   };
 
   try {
     let meRes: Response | null = null;
     let fetchError: unknown = null;
+    let getMeMs = 0;
+    let getWebhookInfoMs = 0;
 
     // Retry loop for initial connection (handles network/DNS startup races)
     for (let i = 0; i < 3; i++) {
@@ -124,6 +135,7 @@ export async function probeTelegram(
       if (remainingBudgetMs <= 0) {
         break;
       }
+      const getMeStartedAt = Date.now();
       try {
         meRes = await fetchWithTimeout(
           `${base}/getMe`,
@@ -131,8 +143,10 @@ export async function probeTelegram(
           Math.max(1, Math.min(timeoutBudgetMs, remainingBudgetMs)),
           fetcher,
         );
+        getMeMs += Date.now() - getMeStartedAt;
         break;
       } catch (err) {
+        getMeMs += Date.now() - getMeStartedAt;
         fetchError = err;
         if (i < 2) {
           const remainingAfterAttemptMs = resolveRemainingBudgetMs();
@@ -148,6 +162,11 @@ export async function probeTelegram(
     }
 
     if (!meRes) {
+      result.timings = {
+        getMeMs,
+        totalMs: Date.now() - started,
+        failedStep: "getMe",
+      };
       throw fetchError ?? new Error(`probe timed out after ${timeoutBudgetMs}ms`);
     }
 
@@ -165,7 +184,15 @@ export async function probeTelegram(
     if (!meRes.ok || !meJson?.ok) {
       result.status = meRes.status;
       result.error = meJson?.description ?? `getMe failed (${meRes.status})`;
-      return { ...result, elapsedMs: Date.now() - started };
+      return {
+        ...result,
+        elapsedMs: Date.now() - started,
+        timings: {
+          getMeMs,
+          totalMs: Date.now() - started,
+          failedStep: "getMe",
+        },
+      };
     }
 
     result.bot = {
@@ -183,16 +210,19 @@ export async function probeTelegram(
           : null,
     };
 
+    let webhookStartedAt: number | null = null;
     // Try to fetch webhook info, but don't fail health if it errors.
     try {
       const webhookRemainingBudgetMs = resolveRemainingBudgetMs();
       if (webhookRemainingBudgetMs > 0) {
+        webhookStartedAt = Date.now();
         const webhookRes = await fetchWithTimeout(
           `${base}/getWebhookInfo`,
           {},
           Math.max(1, Math.min(timeoutBudgetMs, webhookRemainingBudgetMs)),
           fetcher,
         );
+        getWebhookInfoMs = Date.now() - webhookStartedAt;
         const webhookJson = (await webhookRes.json()) as {
           ok?: boolean;
           result?: { url?: string; has_custom_certificate?: boolean };
@@ -205,6 +235,15 @@ export async function probeTelegram(
         }
       }
     } catch {
+      if (webhookStartedAt != null) {
+        getWebhookInfoMs = Date.now() - webhookStartedAt;
+      }
+      result.timings = {
+        getMeMs,
+        getWebhookInfoMs,
+        totalMs: Date.now() - started,
+        failedStep: "getWebhookInfo",
+      };
       // ignore webhook errors for probe
     }
 
@@ -212,6 +251,12 @@ export async function probeTelegram(
     result.status = null;
     result.error = null;
     result.elapsedMs = Date.now() - started;
+    result.timings = {
+      getMeMs,
+      getWebhookInfoMs,
+      totalMs: result.elapsedMs,
+      failedStep: result.timings?.failedStep,
+    };
     return result;
   } catch (err) {
     return {
@@ -219,6 +264,10 @@ export async function probeTelegram(
       status: err instanceof Response ? err.status : result.status,
       error: err instanceof Error ? err.message : String(err),
       elapsedMs: Date.now() - started,
+      timings: {
+        ...result.timings,
+        totalMs: Date.now() - started,
+      },
     };
   }
 }

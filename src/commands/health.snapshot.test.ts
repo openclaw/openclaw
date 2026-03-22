@@ -182,6 +182,11 @@ describe("getHealthSnapshot", () => {
     expect(telegram.probe?.ok).toBe(true);
     expect(telegram.probe?.bot?.username).toBe("bot");
     expect(telegram.probe?.webhook?.url).toMatch(/^https:/);
+    expect(telegram.probe?.timings).toMatchObject({
+      getMeMs: expect.any(Number),
+      getWebhookInfoMs: expect.any(Number),
+      totalMs: expect.any(Number),
+    });
     expect(calls.some((c) => c.includes("/getMe"))).toBe(true);
     expect(calls.some((c) => c.includes("/getWebhookInfo"))).toBe(true);
   });
@@ -223,12 +228,20 @@ describe("getHealthSnapshot", () => {
     const snap = await getHealthSnapshot({ timeoutMs: 25 });
     const telegram = snap.channels.telegram as {
       configured?: boolean;
-      probe?: { ok?: boolean; status?: number; error?: string };
+      probe?: {
+        ok?: boolean;
+        status?: number;
+        error?: string;
+        timings?: { failedStep?: string; getMeMs?: number; totalMs?: number };
+      };
     };
     expect(telegram.configured).toBe(true);
     expect(telegram.probe?.ok).toBe(false);
     expect(telegram.probe?.status).toBe(401);
     expect(telegram.probe?.error).toMatch(/unauthorized/i);
+    expect(telegram.probe?.timings?.failedStep).toBe("getMe");
+    expect(telegram.probe?.timings?.getMeMs).toEqual(expect.any(Number));
+    expect(telegram.probe?.timings?.totalMs).toEqual(expect.any(Number));
   });
 
   it("captures unexpected probe exceptions as errors", async () => {

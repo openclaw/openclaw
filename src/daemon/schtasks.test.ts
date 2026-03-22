@@ -3,13 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-helpers/schtasks-base-mocks.js";
-import { resetSchtasksBaseMocks, schtasksResponses } from "./test-helpers/schtasks-fixtures.js";
 import {
   deriveScheduledTaskRuntimeStatus,
   parseSchtasksQuery,
   readScheduledTaskCommand,
   resolveTaskScriptPath,
 } from "./schtasks.js";
+import { resetSchtasksBaseMocks, schtasksResponses } from "./test-helpers/schtasks-fixtures.js";
 
 beforeEach(() => {
   resetSchtasksBaseMocks();

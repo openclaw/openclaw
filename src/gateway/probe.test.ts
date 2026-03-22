@@ -29,6 +29,10 @@ class MockGatewayClient {
 
   async request(method: string): Promise<unknown> {
     gatewayClientState.requests.push(method);
+    if (method === "health") {
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      return {};
+    }
     if (method === "system-presence") {
       return [];
     }
@@ -109,5 +113,19 @@ describe("probeGateway", () => {
     expect(result.health).toBeNull();
     expect(result.status).toBeNull();
     expect(result.configSnapshot).toBeNull();
+  });
+
+  it("treats reachability as successful when status/presence finish before a slow health call", async () => {
+    const result = await probeGateway({
+      url: "ws://127.0.0.1:18789",
+      auth: { token: "secret" },
+      timeoutMs: 100,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.error).toBeNull();
+    expect(result.status).toEqual({});
+    expect(result.presence).toEqual([]);
+    expect(result.health).toBeNull();
   });
 });

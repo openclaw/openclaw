@@ -103,9 +103,14 @@ async function readStartupEntryTaskScriptPath(env: GatewayServiceEnv): Promise<s
 }
 
 async function queryInstalledTaskScriptPath(env: GatewayServiceEnv): Promise<string | null> {
-  const res = await execSchtasks(["/Query", "/TN", resolveTaskName(env), "/V", "/FO", "LIST"]).catch(
-    () => null,
-  );
+  const res = await execSchtasks([
+    "/Query",
+    "/TN",
+    resolveTaskName(env),
+    "/V",
+    "/FO",
+    "LIST",
+  ]).catch(() => null);
   if (!res || res.code !== 0) {
     return null;
   }

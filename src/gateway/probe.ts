@@ -32,6 +32,24 @@ export type GatewayProbeResult = {
 export const MIN_PROBE_TIMEOUT_MS = 250;
 export const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
+type SettledState<T> = { settled: false; value: null } | { settled: true; value: T | null };
+
+function trackBestEffort<T>(promise: Promise<T>): () => SettledState<T> {
+  let settled = false;
+  let value: T | null = null;
+  void promise.then(
+    (resolved) => {
+      settled = true;
+      value = resolved;
+    },
+    () => {
+      settled = true;
+      value = null;
+    },
+  );
+  return () => ({ settled, value });
+}
+
 export function clampProbeTimeoutMs(timeoutMs: number): number {
   return Math.min(MAX_TIMER_DELAY_MS, Math.max(MIN_PROBE_TIMEOUT_MS, timeoutMs));
 }
@@ -120,21 +138,22 @@ export async function probeGateway(opts: {
             });
             return;
           }
-          const [health, status, presence, configSnapshot] = await Promise.all([
-            client.request("health"),
-            client.request("status"),
-            client.request("system-presence"),
-            client.request("config.get", {}),
-          ]);
+          const readHealth = trackBestEffort(client.request("health"));
+          const statusPromise = client.request("status");
+          const presencePromise = client.request("system-presence");
+          const readConfigSnapshot = trackBestEffort(client.request("config.get", {}));
+          const [status, presence] = await Promise.all([statusPromise, presencePromise]);
+          const healthState = readHealth();
+          const configSnapshotState = readConfigSnapshot();
           settle({
             ok: true,
             connectLatencyMs,
             error: null,
             close,
-            health,
+            health: healthState.settled ? healthState.value : null,
             status,
             presence: Array.isArray(presence) ? (presence as SystemPresence[]) : null,
-            configSnapshot,
+            configSnapshot: configSnapshotState.settled ? configSnapshotState.value : null,
           });
         } catch (err) {
           settle({
