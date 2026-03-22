@@ -5,7 +5,7 @@ const AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize";
 const TOKEN_URL = "https://auth.openai.com/oauth/token";
 const DEFAULT_SCOPE = "openid profile email offline_access";
 const JWT_CLAIM_PATH = "https://api.openai.com/auth";
-const DEFAULT_PORTAL_CALLBACK_URL = "https://app.mctl.ai/api/oidc-provider/openai-codex/callback";
+const DEFAULT_LOCAL_CALLBACK_URL = "http://localhost:1455/auth/callback";
 
 function createState(): string {
   return crypto.randomUUID().replace(/-/g, "");
@@ -60,38 +60,12 @@ export type OpenAICodexOAuthCredentials = {
   accountId: string;
 };
 
-type OpenAICodexStateEnvelope = {
-  nonce: string;
-  returnTo: string;
-};
-
-function resolvePortalCallbackUrl(env: NodeJS.ProcessEnv = process.env): string {
+function resolveCodexCallbackUrl(env: NodeJS.ProcessEnv = process.env): string {
   const value = env.OPENCLAW_OPENAI_CODEX_PORTAL_CALLBACK_URL?.trim();
   if (value) {
     return value;
   }
-  return DEFAULT_PORTAL_CALLBACK_URL;
-}
-
-function encodeStateEnvelope(envelope: OpenAICodexStateEnvelope): string {
-  return toBase64Url(Buffer.from(JSON.stringify(envelope), "utf8"));
-}
-
-export function decodeOpenAICodexStateEnvelope(
-  encodedState: string,
-): OpenAICodexStateEnvelope | null {
-  try {
-    const json = Buffer.from(encodedState, "base64url").toString("utf8");
-    const parsed = JSON.parse(json) as Partial<OpenAICodexStateEnvelope>;
-    const nonce = typeof parsed.nonce === "string" ? parsed.nonce.trim() : "";
-    const returnTo = typeof parsed.returnTo === "string" ? parsed.returnTo.trim() : "";
-    if (!nonce || !returnTo) {
-      return null;
-    }
-    return { nonce, returnTo };
-  } catch {
-    return null;
-  }
+  return DEFAULT_LOCAL_CALLBACK_URL;
 }
 
 export async function startOpenAICodexAuthorizationFlow(params: {
@@ -99,12 +73,10 @@ export async function startOpenAICodexAuthorizationFlow(params: {
   originator?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<OpenAICodexPendingConnect> {
+  void params.browserReturnTo;
   const { verifier, challenge } = await generatePKCE();
-  const redirectUri = resolvePortalCallbackUrl(params.env);
-  const state = encodeStateEnvelope({
-    nonce: createState(),
-    returnTo: params.browserReturnTo,
-  });
+  const redirectUri = resolveCodexCallbackUrl(params.env);
+  const state = createState();
   const url = new URL(AUTHORIZE_URL);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", CLIENT_ID);

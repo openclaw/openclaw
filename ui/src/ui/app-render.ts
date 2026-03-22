@@ -642,6 +642,7 @@ export function renderApp(state: AppViewState) {
                 codexConnectStatus: state.codexConnectStatus,
                 codexConnectLoading: state.codexConnectLoading,
                 codexConnectError: state.codexConnectError,
+                codexManualInput: state.codexManualInput,
                 showGatewayToken: state.overviewShowGatewayToken,
                 showGatewayPassword: state.overviewShowGatewayPassword,
                 onSettingsChange: (next) => state.applySettings(next),
@@ -670,6 +671,8 @@ export function renderApp(state: AppViewState) {
                 onStartMctlConnect: () => void state.startMctlConnect(),
                 onDisconnectMctl: () => void state.disconnectMctl(),
                 onStartCodexConnect: () => void state.startCodexConnect(),
+                onCodexManualInputChange: (next) => state.updateCodexManualInput(next),
+                onSubmitCodexManualInput: () => void state.submitCodexManualInput(),
                 onDisconnectCodex: () => void state.disconnectCodex(),
               })
             : nothing

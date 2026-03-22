@@ -32,6 +32,40 @@ function readRedirectUri(params: Record<string, unknown>): string | null {
   }
 }
 
+function parseAuthorizationInput(
+  params: Record<string, unknown>,
+): { code: string; state: string | null } | null {
+  const input = typeof params.input === "string" ? params.input.trim() : "";
+  const directCode = typeof params.code === "string" ? params.code.trim() : "";
+  const directState = typeof params.state === "string" ? params.state.trim() : "";
+
+  if (directCode) {
+    return { code: directCode, state: directState || null };
+  }
+  if (!input) {
+    return null;
+  }
+  try {
+    const url = new URL(input);
+    const code = url.searchParams.get("code")?.trim() || "";
+    const state = url.searchParams.get("state")?.trim() || "";
+    if (code) {
+      return { code, state: state || null };
+    }
+  } catch {
+    // fall through
+  }
+  if (input.includes("code=")) {
+    const params = new URLSearchParams(input);
+    const code = params.get("code")?.trim() || "";
+    const state = params.get("state")?.trim() || "";
+    if (code) {
+      return { code, state: state || null };
+    }
+  }
+  return { code: input, state: directState || null };
+}
+
 function requireOwnerScope(client: { connect?: { scopes?: string[] } } | null) {
   if (!canManageOpenAICodex(client)) {
     return errorShape(ErrorCodes.UNAUTHORIZED, "OpenAI Codex connect requires tenant owner access");
@@ -100,18 +134,21 @@ export const codexHandlers: GatewayRequestHandlers = {
       respond(false, undefined, unauthorized);
       return;
     }
-    const code = typeof params.code === "string" ? params.code.trim() : "";
-    const state = typeof params.state === "string" ? params.state.trim() : "";
-    if (!code || !state) {
+    const parsed = parseAuthorizationInput(params);
+    const code = parsed?.code ?? "";
+    const callbackState = parsed?.state ?? "";
+    if (!code) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "code and state are required"),
+        errorShape(ErrorCodes.INVALID_REQUEST, "code or redirect URL is required"),
       );
       return;
     }
     const pending = await readOpenAICodexPendingConnect();
-    if (!pending || pending.state !== state) {
+    const expectedState = pending?.state ?? "";
+    const state = callbackState || expectedState;
+    if (!pending || !state || pending.state !== state) {
       context.logGateway.warn(
         `codex-connect: complete rejected stateMismatch pending=${pending ? "present" : "missing"} callbackState=${state || "n/a"}`,
       );

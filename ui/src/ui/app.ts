@@ -61,6 +61,8 @@ import {
   loadCodexConnectStatus as loadCodexConnectStatusInternal,
   maybeCompleteCodexConnect as maybeCompleteCodexConnectInternal,
   startCodexConnect as startCodexConnectInternal,
+  submitCodexManualInput as submitCodexManualInputInternal,
+  updateCodexManualInput as updateCodexManualInputInternal,
 } from "./controllers/codex-connect.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
@@ -416,6 +418,7 @@ export class OpenClawApp extends LitElement {
   @state() codexConnectLoading = false;
   @state() codexConnectStatus: import("./types.ts").OpenAICodexConnectStatus | null = null;
   @state() codexConnectError: string | null = null;
+  @state() codexManualInput = "";
   @state() codexCallbackCode: string | null = null;
   @state() codexCallbackState: string | null = null;
   @state() codexCallbackError: string | null = null;
@@ -628,6 +631,14 @@ export class OpenClawApp extends LitElement {
 
   async startCodexConnect() {
     await startCodexConnectInternal(this);
+  }
+
+  updateCodexManualInput(next: string) {
+    updateCodexManualInputInternal(this, next);
+  }
+
+  async submitCodexManualInput() {
+    await submitCodexManualInputInternal(this);
   }
 
   async maybeCompleteMctlConnect() {

@@ -53,6 +53,7 @@ export type OverviewProps = {
   codexConnectStatus: OpenAICodexConnectStatus | null;
   codexConnectLoading: boolean;
   codexConnectError: string | null;
+  codexManualInput: string;
   showGatewayToken: boolean;
   showGatewayPassword: boolean;
   onSettingsChange: (next: UiSettings) => void;
@@ -67,6 +68,8 @@ export type OverviewProps = {
   onStartMctlConnect: () => void;
   onDisconnectMctl: () => void;
   onStartCodexConnect: () => void;
+  onCodexManualInputChange: (next: string) => void;
+  onSubmitCodexManualInput: () => void;
   onDisconnectCodex: () => void;
 };
 
@@ -528,6 +531,32 @@ export function renderOverview(props: OverviewProps) {
           </button>
         </div>
         ${
+          codexCanManage && codexStatus?.state === "browser_flow_started"
+            ? html`
+                <div style="margin-top: 14px; display: grid; gap: 8px;">
+                  <label class="field">
+                    <span>Paste localhost redirect URL or code</span>
+                    <input
+                      .value=${props.codexManualInput}
+                      @input=${(e: Event) =>
+                        props.onCodexManualInputChange((e.target as HTMLInputElement).value)}
+                      placeholder="http://localhost:1455/auth/callback?code=... or code"
+                    />
+                  </label>
+                  <div class="row">
+                    <button
+                      class="btn"
+                      ?disabled=${props.codexConnectLoading || !props.codexManualInput.trim()}
+                      @click=${props.onSubmitCodexManualInput}
+                    >
+                      Complete Codex Connect
+                    </button>
+                  </div>
+                </div>
+              `
+            : nothing
+        }
+        ${
           props.codexConnectError
             ? html`<div class="callout danger" style="margin-top: 14px;">${props.codexConnectError}</div>`
             : codexStatus?.lastError
@@ -540,7 +569,7 @@ export function renderOverview(props: OverviewProps) {
                         : codexStatus?.state === "callback_received"
                           ? "OpenClaw received the browser callback and is finalizing token exchange."
                           : codexStatus?.state === "browser_flow_started"
-                            ? "Browser auth has started. If OpenAI never returns here, this request will expire and show a failure."
+                            ? "OpenAI sign-in opened in a separate tab. After it redirects to localhost, copy the full URL from the browser bar and paste it here."
                             : "Owner can connect OpenAI Codex once in the browser. Credentials persist in service state."
                       : "Owner access required to connect or disconnect OpenAI Codex for this service."
                   }
