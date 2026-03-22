@@ -1,3 +1,4 @@
+import type { FallbackOnErrorCodes } from "../config/types.agents-shared.js";
 import { readErrorName } from "../infra/errors.js";
 import {
   classifyFailoverReason,
@@ -320,6 +321,94 @@ export function coerceToFailoverError(
 
   return new FailoverError(message, {
     reason,
+    provider: context?.provider,
+    model: context?.model,
+    profileId: context?.profileId,
+    status,
+    code,
+    cause: err instanceof Error ? err : undefined,
+  });
+}
+
+/**
+ * Check if an error should trigger fallback based on the configured error codes.
+ *
+ * For "default" or undefined, this delegates to resolveFailoverReasonFromError() which
+ * matches the original behavior (no regression).
+ *
+ * @param err - The error to check
+ * @param fallbackOnErrors - Configuration for which errors should trigger fallback
+ *   - "default": Use original behavior (same as no config) - any recognized failover reason
+ *   - "all": All HTTP errors (4xx and 5xx) trigger fallback
+ *   - number[]: Custom list of status codes
+ * @returns true if the error should trigger fallback
+ */
+export function shouldTriggerFallback(
+  err: unknown,
+  fallbackOnErrors?: FallbackOnErrorCodes,
+): boolean {
+  const status = getStatusCode(err);
+  const reason = resolveFailoverReasonFromError(err);
+
+  // For "default" or undefined, match original behavior exactly
+  // This delegates to the existing reason classification logic
+  if (fallbackOnErrors === undefined || fallbackOnErrors === "default") {
+    return reason !== null;
+  }
+
+  // For "all", check if HTTP error (4xx or 5xx)
+  // Also allow non-HTTP errors with recognized reasons
+  if (fallbackOnErrors === "all") {
+    return status !== undefined ? status >= 400 : reason !== null;
+  }
+
+  // For custom array, check specific status codes only
+  // Ignore non-HTTP errors even if they have a recognized reason
+  return status !== undefined && new Set(fallbackOnErrors).has(status);
+}
+
+/**
+ * Coerce an error to FailoverError if it should trigger fallback based on configuration.
+ *
+ * @param err - The error to check
+ * @param fallbackOnErrors - Configuration for which errors should trigger fallback
+ * @param context - Additional context (provider, model, profileId)
+ * @returns FailoverError if the error should trigger fallback, null otherwise
+ */
+export function coerceToFailoverErrorWithConfig(
+  err: unknown,
+  fallbackOnErrors: FallbackOnErrorCodes | undefined,
+  context?: {
+    provider?: string;
+    model?: string;
+    profileId?: string;
+  },
+): FailoverError | null {
+  // First check if it's already a FailoverError
+  if (isFailoverError(err)) {
+    // Still need to check if it should trigger fallback based on config
+    if (!shouldTriggerFallback(err, fallbackOnErrors)) {
+      return null;
+    }
+    return err;
+  }
+
+  // Check if error should trigger fallback
+  if (!shouldTriggerFallback(err, fallbackOnErrors)) {
+    return null;
+  }
+
+  // Coerce to FailoverError
+  const status = getStatusCode(err);
+  const reason = resolveFailoverReasonFromError(err);
+  const message = getErrorMessage(err) || String(err);
+  const code = getErrorCode(err);
+
+  // If we have a status but no reason, create a generic reason
+  const effectiveReason: FailoverReason = reason ?? "unknown";
+
+  return new FailoverError(message, {
+    reason: effectiveReason,
     provider: context?.provider,
     model: context?.model,
     profileId: context?.profileId,

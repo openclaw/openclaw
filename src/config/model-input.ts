@@ -1,4 +1,4 @@
-import type { AgentModelConfig } from "./types.agents-shared.js";
+import type { AgentModelConfig, FallbackOnErrorCodes } from "./types.agents-shared.js";
 
 type AgentModelListLike = {
   primary?: string;
@@ -22,6 +22,21 @@ export function resolveAgentModelFallbackValues(model?: AgentModelConfig): strin
     return [];
   }
   return Array.isArray(model.fallbacks) ? model.fallbacks : [];
+}
+
+/**
+ * Resolve the fallbackOnErrors configuration from an AgentModelConfig.
+ *
+ * @param model - The agent model configuration
+ * @returns The fallbackOnErrors value ("all", "default", number[], or undefined)
+ */
+export function resolveAgentModelFallbackOnErrors(
+  model?: AgentModelConfig,
+): FallbackOnErrorCodes | undefined {
+  if (!model || typeof model !== "object") {
+    return undefined;
+  }
+  return model.fallbackOnErrors;
 }
 
 export function toAgentModelListLike(model?: AgentModelConfig): AgentModelListLike | undefined {

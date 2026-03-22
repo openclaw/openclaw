@@ -1,4 +1,7 @@
-import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
+import {
+  resolveRunModelFallbacksOverride,
+  resolveRunModelFallbackOnErrors,
+} from "../../agents/agent-scope.js";
 import type { NormalizedUsage } from "../../agents/usage.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
@@ -161,6 +164,11 @@ export function resolveModelFallbackOptions(run: FollowupRun["run"]) {
     model: run.model,
     agentDir: run.agentDir,
     fallbacksOverride: resolveRunModelFallbacksOverride({
+      cfg: run.config,
+      agentId: run.agentId,
+      sessionKey: run.sessionKey,
+    }),
+    fallbackOnErrors: resolveRunModelFallbackOnErrors({
       cfg: run.config,
       agentId: run.agentId,
       sessionKey: run.sessionKey,

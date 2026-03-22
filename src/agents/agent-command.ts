@@ -57,6 +57,7 @@ import {
   listAgentIds,
   resolveAgentDir,
   resolveEffectiveModelFallbacks,
+  resolveRunModelFallbackOnErrors,
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
   resolveAgentWorkspaceDir,
@@ -1177,6 +1178,11 @@ async function agentCommandInternal(
         runId,
         agentDir,
         fallbacksOverride: effectiveFallbacksOverride,
+        fallbackOnErrors: resolveRunModelFallbackOnErrors({
+          cfg,
+          agentId: sessionAgentId,
+          sessionKey,
+        }),
         run: (providerOverride, modelOverride, runOptions) => {
           const isFallbackRetry = fallbackAttemptIndex > 0;
           fallbackAttemptIndex += 1;

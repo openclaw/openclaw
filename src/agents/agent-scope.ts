@@ -1,8 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveAgentModelFallbackValues } from "../config/model-input.js";
+import {
+  resolveAgentModelFallbackOnErrors,
+  resolveAgentModelFallbackValues,
+} from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { FallbackOnErrorCodes } from "../config/types.agents-shared.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_AGENT_ID,
@@ -234,6 +238,29 @@ export function resolveRunModelFallbacksOverride(params: {
     params.cfg,
     resolveFallbackAgentId({ agentId: params.agentId, sessionKey: params.sessionKey }),
   );
+}
+
+export function resolveAgentModelFallbackOnErrorsOverride(
+  cfg: OpenClawConfig,
+  agentId: string,
+): FallbackOnErrorCodes | undefined {
+  const raw = resolveAgentConfig(cfg, agentId)?.model;
+  return resolveAgentModelFallbackOnErrors(raw);
+}
+
+export function resolveRunModelFallbackOnErrors(params: {
+  cfg: OpenClawConfig | undefined;
+  agentId?: string | null;
+  sessionKey?: string | null;
+}): FallbackOnErrorCodes | undefined {
+  if (!params.cfg) {
+    return undefined;
+  }
+  const raw = resolveAgentConfig(
+    params.cfg,
+    resolveFallbackAgentId({ agentId: params.agentId, sessionKey: params.sessionKey }),
+  )?.model;
+  return resolveAgentModelFallbackOnErrors(raw);
 }
 
 export function hasConfiguredModelFallbacks(params: {

@@ -3,6 +3,7 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import type { FallbackOnErrorCodes } from "../config/types.agents-shared.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import {
@@ -15,6 +16,7 @@ import {
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
   coerceToFailoverError,
+  coerceToFailoverErrorWithConfig,
   describeFailoverError,
   isFailoverError,
   isTimeoutError,
@@ -130,6 +132,7 @@ async function runFallbackCandidate<T>(params: {
   provider: string;
   model: string;
   options?: ModelFallbackRunOptions;
+  fallbackOnErrors?: FallbackOnErrorCodes;
 }): Promise<{ ok: true; result: T } | { ok: false; error: unknown }> {
   try {
     const result = params.options
@@ -142,10 +145,16 @@ async function runFallbackCandidate<T>(params: {
   } catch (err) {
     // Normalize abort-wrapped rate-limit errors (e.g. Google Vertex RESOURCE_EXHAUSTED)
     // so they become FailoverErrors and continue the fallback loop instead of aborting.
-    const normalizedFailover = coerceToFailoverError(err, {
-      provider: params.provider,
-      model: params.model,
-    });
+    // Use config-aware error coercion if fallbackOnErrors is provided.
+    const normalizedFailover = params.fallbackOnErrors
+      ? coerceToFailoverErrorWithConfig(err, params.fallbackOnErrors, {
+          provider: params.provider,
+          model: params.model,
+        })
+      : coerceToFailoverError(err, {
+          provider: params.provider,
+          model: params.model,
+        });
     if (shouldRethrowAbort(err) && !normalizedFailover) {
       throw err;
     }
@@ -159,12 +168,14 @@ async function runFallbackAttempt<T>(params: {
   model: string;
   attempts: FallbackAttempt[];
   options?: ModelFallbackRunOptions;
+  fallbackOnErrors?: FallbackOnErrorCodes;
 }): Promise<{ success: ModelFallbackRunResult<T> } | { error: unknown }> {
   const runResult = await runFallbackCandidate({
     run: params.run,
     provider: params.provider,
     model: params.model,
     options: params.options,
+    fallbackOnErrors: params.fallbackOnErrors,
   });
   if (runResult.ok) {
     return {
@@ -516,6 +527,8 @@ export async function runWithModelFallback<T>(params: {
   agentDir?: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
+  /** HTTP status codes that should trigger fallback. */
+  fallbackOnErrors?: FallbackOnErrorCodes;
   run: ModelFallbackRunFn<T>;
   onError?: ModelFallbackErrorHandler;
 }): Promise<ModelFallbackRunResult<T>> {
@@ -663,6 +676,7 @@ export async function runWithModelFallback<T>(params: {
       ...candidate,
       attempts,
       options: runOptions,
+      fallbackOnErrors: params.fallbackOnErrors,
     });
     if ("success" in attemptRun) {
       if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
@@ -711,11 +725,15 @@ export async function runWithModelFallback<T>(params: {
       if (isLikelyContextOverflowError(errMessage)) {
         throw err;
       }
-      const normalized =
-        coerceToFailoverError(err, {
-          provider: candidate.provider,
-          model: candidate.model,
-        }) ?? err;
+      const normalized = params.fallbackOnErrors
+        ? (coerceToFailoverErrorWithConfig(err, params.fallbackOnErrors, {
+            provider: candidate.provider,
+            model: candidate.model,
+          }) ?? err)
+        : (coerceToFailoverError(err, {
+            provider: candidate.provider,
+            model: candidate.model,
+          }) ?? err);
 
       // Even unrecognized errors should not abort the fallback loop when
       // there are remaining candidates.  Only abort/context-overflow errors
@@ -779,6 +797,7 @@ export async function runWithImageModelFallback<T>(params: {
   modelOverride?: string;
   run: (provider: string, model: string) => Promise<T>;
   onError?: ModelFallbackErrorHandler;
+  fallbackOnErrors?: FallbackOnErrorCodes;
 }): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveImageFallbackCandidates({
     cfg: params.cfg,
@@ -796,7 +815,12 @@ export async function runWithImageModelFallback<T>(params: {
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
-    const attemptRun = await runFallbackAttempt({ run: params.run, ...candidate, attempts });
+    const attemptRun = await runFallbackAttempt({
+      run: params.run,
+      ...candidate,
+      attempts,
+      fallbackOnErrors: params.fallbackOnErrors,
+    });
     if ("success" in attemptRun) {
       return attemptRun.success;
     }
