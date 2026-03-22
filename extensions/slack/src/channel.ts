@@ -30,6 +30,7 @@ import {
   resolveThreadSessionKeys,
   type RoutePeer,
 } from "openclaw/plugin-sdk/routing";
+import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
 import {
   listEnabledSlackAccounts,
   resolveSlackAccount,
@@ -50,7 +51,6 @@ import { normalizeAllowListLower } from "./monitor/allow-list.js";
 import type { SlackProbe } from "./probe.js";
 import { resolveSlackUserAllowlist } from "./resolve-users.js";
 import {
-  buildComputedAccountStatusSnapshot,
   DEFAULT_ACCOUNT_ID,
   looksLikeSlackTargetId,
   normalizeSlackMessagingTarget,
@@ -556,7 +556,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       },
     }),
   },
-  status: {
+  status: createComputedAccountStatusAdapter<ResolvedSlackAccount, SlackProbe>({
     defaultRuntime: {
       accountId: DEFAULT_ACCOUNT_ID,
       running: false,
@@ -605,7 +605,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       }
       return { lines, details };
     },
-    buildAccountSnapshot: ({ account, runtime, probe }) => {
+    resolveAccountSnapshot: ({ account }) => {
       const mode = account.config.mode ?? "socket";
       const configured =
         (mode === "http"
@@ -617,21 +617,17 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
               "botTokenStatus",
               "appTokenStatus",
             ])) ?? isSlackPluginAccountConfigured(account);
-      return buildComputedAccountStatusSnapshot(
-        {
-          accountId: account.accountId,
-          name: account.name,
-          enabled: account.enabled,
-          configured,
-          runtime,
-          probe,
-        },
-        {
+      return {
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured,
+        extra: {
           ...projectCredentialSnapshotFields(account),
         },
-      );
+      };
     },
-  },
+  }),
   gateway: {
     startAccount: async (ctx) => {
       const account = ctx.account;
