@@ -1,7 +1,7 @@
 import {
   createAccountActionGate,
   createAccountListHelpers,
-  mergeAccountConfig,
+  resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-helpers";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
@@ -32,9 +32,12 @@ export function mergeDiscordAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): DiscordAccountConfig {
-  return mergeAccountConfig<DiscordAccountConfig>({
+  return resolveMergedAccountConfig<DiscordAccountConfig>({
     channelConfig: cfg.channels?.discord as DiscordAccountConfig | undefined,
-    accountConfig: resolveDiscordAccountConfig(cfg, accountId),
+    accounts: cfg.channels?.discord?.accounts as
+      | Record<string, Partial<DiscordAccountConfig>>
+      | undefined,
+    accountId,
   });
 }
 
