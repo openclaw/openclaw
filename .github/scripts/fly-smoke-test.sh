@@ -91,33 +91,40 @@ wait_machine_started() {
   return 1
 }
 
+_GATEWAY_SECS=""  # result variable set by wait_gateway_healthy
+
 wait_gateway_healthy() {
   local mid="$1" label="$2" max_wait="${3:-60}"
   local start; start=$(date +%s)
+  _GATEWAY_SECS=""
   for i in $(seq 1 "$max_wait"); do
-    # Abort if machine crashed (OOM)
     local state; state=$(fly_machine_state "$mid")
     if [ "$state" != "started" ] && [ "$state" != "starting" ]; then
       echo ""
       echo "OOM/CRASH: $label machine entered state=$state!"
+      echo "==> Diagnostic: Fly machine logs:"
+      flyctl logs --app "$TEST_APP" --machine "$mid" --no-tail 2>&1 | tail -30 || true
       return 1
     fi
     local health; health=$(fly_exec_stdout "$mid" 'curl -sf http://127.0.0.1:18789/healthz 2>/dev/null || echo NOTREADY' 10)
     if echo "$health" | grep -q '"ok"'; then
-      echo "$(($(date +%s) - start))s"
+      _GATEWAY_SECS="$(($(date +%s) - start))s"
+      echo ""
+      echo "    $label gateway healthy in ${_GATEWAY_SECS} ✓"
       return 0
     fi
-    printf "."
+    printf "." >&2
     sleep 3
   done
   echo ""
   echo "ERROR: $label gateway not healthy within $((max_wait * 3))s"
-  # Dump diagnostic info
   echo "==> Diagnostic: machine state = $(fly_machine_state "$mid")"
   echo "==> Diagnostic: processes on machine:"
   fly_exec_stdout "$mid" 'ps aux 2>/dev/null | head -10' 15 || true
   echo "==> Diagnostic: memory:"
   fly_exec_stdout "$mid" 'free -m 2>/dev/null' 10 || true
+  echo "==> Diagnostic: Fly machine logs:"
+  flyctl logs --app "$TEST_APP" --machine "$mid" --no-tail 2>&1 | tail -30 || true
   return 1
 }
 
@@ -175,9 +182,8 @@ echo "    Machine A: $MACHINE_A"
 wait_machine_started "$MACHINE_A" "Machine A"
 
 echo "==> Waiting for baseline gateway health..."
-printf "    "
-BASELINE_SECS=$(wait_gateway_healthy "$MACHINE_A" "Machine A" 60)
-echo "    Baseline gateway healthy in ${BASELINE_SECS} ✓"
+wait_gateway_healthy "$MACHINE_A" "Machine A" 60
+BASELINE_SECS="$_GATEWAY_SECS"
 
 BASELINE_MEM=$(get_memory "$MACHINE_A")
 BASELINE_RSS=$(get_process_rss "$MACHINE_A")
@@ -203,12 +209,11 @@ echo "    Machine B: $MACHINE_B"
 
 wait_machine_started "$MACHINE_B" "Machine B"
 
-# WhatsApp/Baileys init takes 90-300s on shared-cpu Fly machines.
-# Jiti compiles TypeScript extensions at first boot — CPU-intensive on shared cores.
-echo "==> Waiting for WhatsApp gateway (Baileys init: 90-300s on shared CPU)..."
-printf "    "
-WA_SECS=$(wait_gateway_healthy "$MACHINE_B" "Machine B" 120)
-echo "    WhatsApp gateway healthy in ${WA_SECS} ✓"
+# With Jiti cache pre-warmed in Docker build, WhatsApp init should be ~10-30s.
+# Without cache, it takes 90-300s on shared CPUs.
+echo "==> Waiting for WhatsApp gateway (should be fast with Jiti cache)..."
+wait_gateway_healthy "$MACHINE_B" "Machine B" 120
+WA_SECS="$_GATEWAY_SECS"
 
 WA_MEM=$(get_memory "$MACHINE_B")
 WA_RSS=$(get_process_rss "$MACHINE_B")
