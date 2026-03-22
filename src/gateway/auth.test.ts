@@ -275,6 +275,35 @@ describe("gateway auth", () => {
     expect(res.reason).toBe("password_missing_config");
   });
 
+
+  it("accepts connectAuth.token as password fallback in password mode (Rabbit R1 compat)", async () => {
+    // Devices like Rabbit R1 send credentials via connectAuth.token in the QR-pairing
+    // flow and have no mechanism to send connectAuth.password. Password mode should
+    // fall back to token when password is absent.
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "password", password: "secret", allowTailscale: false }, // pragma: allowlist secret
+      connectAuth: { token: "secret" }, // pragma: allowlist secret
+    });
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("password");
+
+    // Wrong token in token field should still fail
+    const mismatch = await authorizeGatewayConnect({
+      auth: { mode: "password", password: "secret", allowTailscale: false }, // pragma: allowlist secret
+      connectAuth: { token: "wrong" },
+    });
+    expect(mismatch.ok).toBe(false);
+    expect(mismatch.reason).toBe("password_mismatch");
+
+    // Explicit password takes precedence over token
+    const withBoth = await authorizeGatewayConnect({
+      auth: { mode: "password", password: "right-pw", allowTailscale: false }, // pragma: allowlist secret
+      connectAuth: { password: "right-pw", token: "other-token" }, // pragma: allowlist secret
+    });
+    expect(withBoth.ok).toBe(true);
+  });
+
+
   it("treats local tailscale serve hostnames as direct", async () => {
     const res = await authorizeGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: true },
