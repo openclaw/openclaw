@@ -66,8 +66,11 @@ export function buildCompactionSummarizationInstructions(
   // instructions don't silently drop the directive.
   const needsStandingPreservation = !custom?.includes("standing user instructions");
   const standingLine = needsStandingPreservation ? STANDING_INSTRUCTIONS_PRESERVATION : undefined;
-  if (!identifierPreservation && !custom && !standingLine) {
-    return undefined;
+  if (!identifierPreservation && !custom) {
+    // standingLine is always set when custom is falsy, so this branch is only
+    // reached if the caller explicitly passes custom text containing
+    // "standing user instructions" — return just the standing line in that case.
+    return standingLine ?? undefined;
   }
   const parts = [identifierPreservation, standingLine].filter(Boolean).join("\n");
   if (!custom) {
