@@ -14,6 +14,17 @@ export type SessionsState = {
   sessionsIncludeUnknown: boolean;
 };
 
+type SessionsReloadOverrides = {
+  activeMinutes?: number;
+  limit?: number;
+  includeGlobal?: boolean;
+  includeUnknown?: boolean;
+};
+
+type SessionsTrackedState = SessionsState & {
+  __queuedSessionsReload?: SessionsReloadOverrides | null;
+};
+
 export async function subscribeSessions(state: SessionsState) {
   if (!state.client || !state.connected) {
     return;
@@ -27,17 +38,14 @@ export async function subscribeSessions(state: SessionsState) {
 
 export async function loadSessions(
   state: SessionsState,
-  overrides?: {
-    activeMinutes?: number;
-    limit?: number;
-    includeGlobal?: boolean;
-    includeUnknown?: boolean;
-  },
+  overrides?: SessionsReloadOverrides,
 ) {
+  const trackedState = state as SessionsTrackedState;
   if (!state.client || !state.connected) {
     return;
   }
   if (state.sessionsLoading) {
+    trackedState.__queuedSessionsReload = overrides ?? {};
     return;
   }
   state.sessionsLoading = true;
@@ -65,6 +73,11 @@ export async function loadSessions(
     state.sessionsError = String(err);
   } finally {
     state.sessionsLoading = false;
+    const queuedReload = trackedState.__queuedSessionsReload;
+    if (queuedReload) {
+      trackedState.__queuedSessionsReload = null;
+      await loadSessions(state, queuedReload);
+    }
   }
 }
 

@@ -52,6 +52,11 @@ export type ChatEventPayload = {
   errorMessage?: string;
 };
 
+type ChatHistoryTrackedState = ChatState & {
+  __chatHistoryRequestSeq?: number;
+  __chatHistoryActiveRequestSeq?: number;
+};
+
 function maybeResetToolStream(state: ChatState) {
   const toolHost = state as ChatState & Partial<Parameters<typeof resetToolStream>[0]>;
   if (
@@ -68,7 +73,11 @@ export async function loadChatHistory(state: ChatState) {
   if (!state.client || !state.connected) {
     return;
   }
+  const trackedState = state as ChatHistoryTrackedState;
   const requestedSessionKey = state.sessionKey;
+  const requestSeq = (trackedState.__chatHistoryRequestSeq ?? 0) + 1;
+  trackedState.__chatHistoryRequestSeq = requestSeq;
+  trackedState.__chatHistoryActiveRequestSeq = requestSeq;
   state.chatLoading = true;
   state.lastError = null;
   try {
@@ -79,7 +88,10 @@ export async function loadChatHistory(state: ChatState) {
         limit: 200,
       },
     );
-    if (state.sessionKey !== requestedSessionKey) {
+    if (
+      trackedState.__chatHistoryActiveRequestSeq !== requestSeq ||
+      state.sessionKey !== requestedSessionKey
+    ) {
       return;
     }
     const messages = Array.isArray(res.messages) ? res.messages : [];
@@ -91,9 +103,11 @@ export async function loadChatHistory(state: ChatState) {
     state.chatStream = null;
     state.chatStreamStartedAt = null;
   } catch (err) {
-    state.lastError = String(err);
+    if (trackedState.__chatHistoryActiveRequestSeq === requestSeq) {
+      state.lastError = String(err);
+    }
   } finally {
-    if (state.sessionKey === requestedSessionKey) {
+    if (trackedState.__chatHistoryActiveRequestSeq === requestSeq) {
       state.chatLoading = false;
     }
   }

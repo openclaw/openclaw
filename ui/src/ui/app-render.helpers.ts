@@ -20,11 +20,60 @@ import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 import type { ModelCatalogEntry, SessionsListResult } from "./types.ts";
+import type { ChatAttachment } from "./ui-types.ts";
 
 type SessionDefaultsSnapshot = {
   mainSessionKey?: string;
   mainKey?: string;
 };
+
+type ComposerSnapshot = {
+  message: string;
+  attachments: ChatAttachment[];
+};
+
+function cloneComposerSnapshot(state: AppViewState): ComposerSnapshot {
+  return {
+    message: state.chatMessage,
+    attachments: [...state.chatAttachments],
+  };
+}
+
+function areComposerSnapshotsEqual(state: AppViewState, snapshot: ComposerSnapshot): boolean {
+  if (state.chatMessage !== snapshot.message) {
+    return false;
+  }
+  if (state.chatAttachments.length !== snapshot.attachments.length) {
+    return false;
+  }
+  return state.chatAttachments.every((attachment, index) => {
+    const other = snapshot.attachments[index];
+    return (
+      other !== undefined &&
+      attachment.id === other.id &&
+      attachment.dataUrl === other.dataUrl &&
+      attachment.mimeType === other.mimeType
+    );
+  });
+}
+
+function canCreateNewChatSession(state: AppViewState): boolean {
+  return state.connected && !state.chatRunId && !state.newChatSessionPending;
+}
+
+function renderNewChatSessionButton(state: AppViewState) {
+  return html`
+    <button
+      class="chat-controls__new-chat"
+      title="New chat session"
+      aria-label="New chat session"
+      ?disabled=${!canCreateNewChatSession(state)}
+      @click=${() => createNewChatSession(state)}
+    >
+      ${icons.plus}
+    </button>
+  `;
+}
 
 function resolveSidebarChatSessionKey(state: AppViewState): string {
   const snapshot = state.hello?.snapshot as
@@ -167,15 +216,7 @@ export function renderChatSessionSelect(state: AppViewState) {
           )}
         </select>
       </label>
-      <button
-        class="chat-controls__new-chat"
-        title="New chat session"
-        aria-label="New chat session"
-        ?disabled=${!state.connected || Boolean(state.chatRunId) || state.newChatSessionPending}
-        @click=${() => createNewChatSession(state)}
-      >
-        ${icons.plus}
-      </button>
+      ${renderNewChatSessionButton(state)}
       ${modelSelect}
     </div>
   `;
@@ -417,29 +458,32 @@ export function renderChatMobileToggle(state: AppViewState) {
         e.stopPropagation();
       }}>
         <div class="chat-controls">
-          <label class="field chat-controls__session">
-            <select
-              .value=${state.sessionKey}
-              @change=${(e: Event) => {
-                const next = (e.target as HTMLSelectElement).value;
-                switchChatSession(state, next);
-              }}
-            >
-              ${sessionGroups.map(
-                (group) => html`
-                  <optgroup label=${group.label}>
-                    ${group.options.map(
-                      (opt) => html`
-                        <option value=${opt.key} title=${opt.title}>
-                          ${opt.label}
-                        </option>
-                      `,
-                    )}
-                  </optgroup>
-                `,
-              )}
-            </select>
-          </label>
+          <div class="chat-controls__session-row">
+            <label class="field chat-controls__session">
+              <select
+                .value=${state.sessionKey}
+                @change=${(e: Event) => {
+                  const next = (e.target as HTMLSelectElement).value;
+                  switchChatSession(state, next);
+                }}
+              >
+                ${sessionGroups.map(
+                  (group) => html`
+                    <optgroup label=${group.label}>
+                      ${group.options.map(
+                        (opt) => html`
+                          <option value=${opt.key} title=${opt.title}>
+                            ${opt.label}
+                          </option>
+                        `,
+                      )}
+                    </optgroup>
+                  `,
+                )}
+              </select>
+            </label>
+            ${renderNewChatSessionButton(state)}
+          </div>
           <div class="chat-controls__thinking">
             <button
               class="btn btn--sm btn--icon ${showThinking ? "active" : ""}"
@@ -521,12 +565,6 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
   void refreshSessionOptions(state);
 }
 
-function snapshotChatAttachments(attachments: AppViewState["chatAttachments"]): string {
-  return attachments
-    .map((attachment) => `${attachment.id}\u0000${attachment.mimeType}\u0000${attachment.dataUrl}`)
-    .join("\u0001");
-}
-
 async function createNewChatSession(state: AppViewState) {
   const client = (state as unknown as OpenClawApp).client;
   if (!client || !state.connected) {
@@ -546,8 +584,7 @@ async function createNewChatSession(state: AppViewState) {
   const parsed = parseAgentSessionKey(state.sessionKey);
   const agentId = parsed?.agentId ?? state.agentsList?.defaultId ?? "main";
   const originSessionKey = state.sessionKey;
-  const originDraft = state.chatMessage;
-  const originAttachments = snapshotChatAttachments(state.chatAttachments);
+  const composerSnapshot = cloneComposerSnapshot(state);
   state.newChatSessionPending = true;
   state.lastError = null;
   try {
@@ -556,12 +593,11 @@ async function createNewChatSession(state: AppViewState) {
       ...(label ? { label } : {}),
     });
     if (result?.key) {
-      const draftUnchanged = state.chatMessage === originDraft;
-      const attachmentsUnchanged =
-        snapshotChatAttachments(state.chatAttachments) === originAttachments;
-      if (state.sessionKey === originSessionKey && draftUnchanged && attachmentsUnchanged) {
-        state.chatAttachments = [];
+      const composerUnchanged = areComposerSnapshotsEqual(state, composerSnapshot);
+      if (state.sessionKey === originSessionKey && composerUnchanged) {
         switchChatSession(state, result.key);
+        state.chatMessage = composerSnapshot.message;
+        state.chatAttachments = composerSnapshot.attachments;
       } else {
         void refreshSessionOptions(state);
       }
@@ -577,13 +613,6 @@ async function createNewChatSession(state: AppViewState) {
 }
 
 async function refreshSessionOptions(state: AppViewState) {
-  // loadSessions() bails while another list request is running, so wait briefly
-  // for that fetch to finish before issuing the create-session refresh.
-  let attempts = 0;
-  while (state.sessionsLoading && attempts < 20) {
-    attempts += 1;
-    await new Promise<void>((resolve) => setTimeout(resolve, 10));
-  }
   await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
     activeMinutes: 0,
     limit: 0,
