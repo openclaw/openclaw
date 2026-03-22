@@ -504,50 +504,89 @@ export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[]
       }
     }
 
-    // Determine the content to parse for <invoke> tags.
-    const contentToParse = innerContent !== undefined ? innerContent : text.slice(cursor, index);
+    const isExplicitWrapper = innerContent !== undefined;
 
-    // Parse the inner content, extracting <invoke> blocks AND keeping prose in between.
-    let innerCursor = 0;
-    for (const iMatch of contentToParse.matchAll(MINIMAX_INVOKE_RE)) {
-      const iIndex = iMatch.index ?? 0;
-      const [iFullMatch, attributes, invokeBody] = iMatch;
+    // Case B: Malformed closing tag fallback.
+    // If it's a isolated </minimax:tool_call>, we look for a preceding <invoke> in the LAST block.
+    if (!isExplicitWrapper && blocks.length > 0) {
+      const lastBlock = blocks[blocks.length - 1];
+      if (lastBlock.type === "text" && /<invoke\b/i.test(lastBlock.text)) {
+        const lastText = lastBlock.text;
+        const invokeMatch = Array.from(lastText.matchAll(MINIMAX_INVOKE_RE)).pop();
+        if (invokeMatch) {
+          const iIndex = invokeMatch.index ?? 0;
+          const [iFullMatch, attributes, invokeBody] = invokeMatch;
 
-      // Preserve prose before this <invoke>
-      if (iIndex > innerCursor) {
-        const innerProse = contentToParse.slice(innerCursor, iIndex);
-        if (innerProse) {
-          blocks.push({ type: "text", text: innerProse });
+          // Re-write the last text block to EXCLUDE the raw invoke text.
+          lastBlock.text = lastText.slice(0, iIndex);
+          if (!lastBlock.text) {
+            blocks.pop();
+          }
+
+          // Add the formal toolCall block.
+          const nameMatch = /\bname=["']([^"']+)["']/i.exec(attributes);
+          const toolName = nameMatch ? nameMatch[1] : undefined;
+          if (toolName) {
+            const args: Record<string, unknown> = {};
+            for (const pMatch of invokeBody.matchAll(MINIMAX_PARAM_RE)) {
+              const [, pName, pValue] = pMatch;
+              args[pName] = parseXmlParameterValue(pValue);
+            }
+            blocks.push({
+              type: "toolCall",
+              id: `mc_${Math.random().toString(36).slice(2, 11)}`,
+              name: normalizeToolName(toolName),
+              arguments: args,
+            });
+            hasToolCall = true;
+          }
+
+          // Add any prose that was between <invoke> and </minimax:tool_call>.
+          const remaining = lastText.slice(iIndex + iFullMatch.length);
+          if (remaining) {
+            blocks.push({ type: "text", text: remaining });
+          }
         }
       }
-
-      const nameMatch = /\bname=["']([^"']+)["']/i.exec(attributes);
-      const toolName = nameMatch ? nameMatch[1] : undefined;
-
-      if (toolName) {
-        const args: Record<string, unknown> = {};
-        for (const pMatch of invokeBody.matchAll(MINIMAX_PARAM_RE)) {
-          const [, pName, pValue] = pMatch;
-          args[pName] = parseXmlParameterValue(pValue);
-        }
-
-        blocks.push({
-          type: "toolCall",
-          id: `mc_${Math.random().toString(36).slice(2, 11)}`,
-          name: normalizeToolName(toolName),
-          arguments: args,
-        });
-        hasToolCall = true;
-      }
-
-      innerCursor = iIndex + iFullMatch.length;
     }
 
-    // Preserve prose after the last <invoke> inside the wrapper
-    if (innerCursor < contentToParse.length) {
-      const remainingInnerProse = contentToParse.slice(innerCursor);
-      if (remainingInnerProse) {
-        blocks.push({ type: "text", text: remainingInnerProse });
+    // Case A: Explicit <minimax:tool_call> inner content.
+    if (isExplicitWrapper && innerContent) {
+      let innerCursor = 0;
+      for (const iMatch of innerContent.matchAll(MINIMAX_INVOKE_RE)) {
+        const iIndex = iMatch.index ?? 0;
+        const [iFullMatch, attributes, invokeBody] = iMatch;
+
+        if (iIndex > innerCursor) {
+          const innerProse = innerContent.slice(innerCursor, iIndex);
+          if (innerProse) {
+            blocks.push({ type: "text", text: innerProse });
+          }
+        }
+
+        const nameMatch = /\bname=["']([^"']+)["']/i.exec(attributes);
+        const toolName = nameMatch ? nameMatch[1] : undefined;
+        if (toolName) {
+          const args: Record<string, unknown> = {};
+          for (const pMatch of invokeBody.matchAll(MINIMAX_PARAM_RE)) {
+            const [, pName, pValue] = pMatch;
+            args[pName] = parseXmlParameterValue(pValue);
+          }
+          blocks.push({
+            type: "toolCall",
+            id: `mc_${Math.random().toString(36).slice(2, 11)}`,
+            name: normalizeToolName(toolName),
+            arguments: args,
+          });
+          hasToolCall = true;
+        }
+        innerCursor = iIndex + iFullMatch.length;
+      }
+      if (innerCursor < innerContent.length) {
+        const remainingInnerProse = innerContent.slice(innerCursor);
+        if (remainingInnerProse) {
+          blocks.push({ type: "text", text: remainingInnerProse });
+        }
       }
     }
 
