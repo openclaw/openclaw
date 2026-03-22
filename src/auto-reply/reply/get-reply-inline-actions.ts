@@ -1,5 +1,4 @@
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
-import { createOpenClawTools } from "../../agents/openclaw-tools.js";
 import type { BlockReplyChunking } from "../../agents/pi-embedded-block-chunker.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import { applyOwnerOnlyToolPolicy } from "../../agents/tool-policy.js";
@@ -11,20 +10,18 @@ import { generateSecureToken } from "../../infra/secure-random.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
 import {
   listReservedChatSlashCommandNames,
-  listSkillCommandsForWorkspace,
   resolveSkillCommandInvocation,
-} from "../skill-commands.js";
+} from "../skill-commands-base.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
-  clearAbortCutoffInSession,
   readAbortCutoffFromSessionEntry,
   resolveAbortCutoffFromContext,
   shouldSkipMessageByAbortCutoff,
 } from "./abort-cutoff.js";
-import { getAbortMemory, isAbortRequestText } from "./abort.js";
-import { buildStatusReply, handleCommands } from "./commands.js";
+import { getAbortMemory, isAbortRequestText } from "./abort-primitives.js";
+import type { buildStatusReply, handleCommands } from "./commands.runtime.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { isDirectiveOnly } from "./directive-handling.parse.js";
 import type { createModelSelectionState } from "./model-selection.js";
@@ -191,7 +188,7 @@ export async function handleInlineActions(params: {
     shouldLoadSkillCommands && params.skillCommands
       ? params.skillCommands
       : shouldLoadSkillCommands
-        ? listSkillCommandsForWorkspace({
+        ? (await import("../skill-commands.runtime.js")).listSkillCommandsForWorkspace({
             workspaceDir,
             cfg,
             skillFilter,
@@ -222,6 +219,7 @@ export async function handleInlineActions(params: {
         resolveGatewayMessageChannel(ctx.Provider) ??
         undefined;
 
+      const { createOpenClawTools } = await import("../../agents/openclaw-tools.runtime.js");
       const tools = createOpenClawTools({
         agentSessionKey: sessionKey,
         agentChannel: channel,
@@ -305,7 +303,9 @@ export async function handleInlineActions(params: {
       return { kind: "reply", reply: undefined };
     }
     if (cutoff) {
-      await clearAbortCutoffInSession({
+      await (
+        await import("./abort-cutoff.runtime.js")
+      ).clearAbortCutoffInSessionRuntime({
         sessionEntry,
         sessionStore,
         sessionKey,
@@ -335,6 +335,7 @@ export async function handleInlineActions(params: {
       isGroup,
     }) && inlineStatusRequested;
   if (handleInlineStatus) {
+    const { buildStatusReply } = await import("./commands.runtime.js");
     const inlineStatusReply = await buildStatusReply({
       cfg,
       command,
@@ -358,8 +359,9 @@ export async function handleInlineActions(params: {
     directives = { ...directives, hasStatusDirective: false };
   }
 
-  const runCommands = (commandInput: typeof command) =>
-    handleCommands({
+  const runCommands = async (commandInput: typeof command) => {
+    const { handleCommands } = await import("./commands.runtime.js");
+    return handleCommands({
       // Pass sessionCtx so command handlers can mutate stripped body for same-turn continuation.
       ctx: sessionCtx,
       // Keep original finalized context in sync when command handlers need outer-dispatch side effects.
@@ -397,6 +399,7 @@ export async function handleInlineActions(params: {
       skillCommands,
       typing,
     });
+  };
 
   if (inlineCommand) {
     const inlineCommandContext = {
