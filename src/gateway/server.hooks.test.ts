@@ -234,6 +234,26 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test('treats request sessionTarget "current" as isolated without requiring hooks.allowRequestSessionTarget', async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOkOnce();
+      const allowed = await postHook(port, "/hooks/agent", {
+        message: "Current should isolate",
+        sessionTarget: "current",
+      });
+      expect(allowed.status).toBe(200);
+      await waitForSystemEvent();
+
+      const call = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
+        | { job?: { sessionKey?: string; sessionTarget?: string } }
+        | undefined;
+      expect(call?.job?.sessionKey).toBeUndefined();
+      expect(call?.job?.sessionTarget).toBe("isolated");
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
   test("respects hooks session policy for request + mapping session keys", async () => {
     testState.hooksConfig = {
       enabled: true,
@@ -364,7 +384,7 @@ describe("gateway server hooks", () => {
       const directCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
         | { sessionKey?: string; job?: { sessionKey?: string; sessionTarget?: string } }
         | undefined;
-      expect(directCall?.sessionKey).toBe("main");
+      expect(directCall?.sessionKey).toBe("agent:main:main");
       expect(directCall?.job?.sessionKey).toBe("agent:main:main");
       expect(directCall?.job?.sessionTarget).toBe("main");
       drainSystemEvents(resolveMainKey());
@@ -377,7 +397,7 @@ describe("gateway server hooks", () => {
       const mappedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
         | { sessionKey?: string; job?: { sessionKey?: string; sessionTarget?: string } }
         | undefined;
-      expect(mappedCall?.sessionKey).toBe("main");
+      expect(mappedCall?.sessionKey).toBe("agent:main:main");
       expect(mappedCall?.job?.sessionKey).toBe("agent:main:main");
       expect(mappedCall?.job?.sessionTarget).toBe("main");
       drainSystemEvents(resolveMainKey());

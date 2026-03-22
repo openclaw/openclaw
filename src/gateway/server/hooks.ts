@@ -4,7 +4,7 @@ import type { CliDeps } from "../../cli/deps.js";
 import { loadConfig, type OpenClawConfig } from "../../config/config.js";
 import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
 import { runCronIsolatedAgentTurn } from "../../cron/isolated-agent.js";
-import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
+import { canonicalizeCronSessionKey } from "../../cron/isolated-agent/session-key.js";
 import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -43,10 +43,18 @@ export function createGatewayHooksRequestHandler(params: {
     }
   };
 
-  const resolveHookAgentRunSessionKey = (value: HookAgentDispatchPayload) => {
-    const sessionTarget = value.sessionTarget ?? "isolated";
+  const resolveHookAgentRunSessionKey = (params: {
+    cfg: OpenClawConfig;
+    value: HookAgentDispatchPayload;
+    agentId: string;
+  }) => {
+    const sessionTarget = params.value.sessionTarget ?? "isolated";
     if (sessionTarget === "main") {
-      return "main";
+      return canonicalizeCronSessionKey({
+        cfg: params.cfg,
+        sessionKey: "main",
+        agentId: params.agentId,
+      });
     }
     if (sessionTarget.startsWith("session:")) {
       const customSessionKey = sessionTarget.slice("session:".length).trim();
@@ -55,12 +63,13 @@ export function createGatewayHooksRequestHandler(params: {
       }
     }
     return normalizeHookDispatchSessionKey({
-      sessionKey: value.sessionKey,
-      targetAgentId: value.agentId,
+      sessionKey: params.value.sessionKey,
+      targetAgentId: params.value.agentId,
     });
   };
 
   const resolveHookDeliverySessionKey = (params: {
+    cfg: OpenClawConfig;
     value: HookAgentDispatchPayload;
     sessionKey: string;
     agentId: string;
@@ -69,14 +78,14 @@ export function createGatewayHooksRequestHandler(params: {
     if (sessionTarget === "isolated") {
       return undefined;
     }
-    return resolveCronAgentSessionKey({
+    return canonicalizeCronSessionKey({
+      cfg: params.cfg,
       sessionKey: params.sessionKey,
       agentId: params.agentId,
     });
   };
 
   const dispatchAgentHook = (value: HookAgentDispatchPayload) => {
-    const sessionKey = resolveHookAgentRunSessionKey(value);
     const mainSessionKey = resolveMainSessionKeyFromConfig();
     const jobId = randomUUID();
     const now = Date.now();
@@ -86,6 +95,7 @@ export function createGatewayHooksRequestHandler(params: {
       try {
         const cfg = loadConfig();
         const agentId = value.agentId?.trim() || resolveDefaultAgentId(cfg);
+        const sessionKey = resolveHookAgentRunSessionKey({ cfg, value, agentId });
         const job: CronJob = {
           id: jobId,
           agentId: value.agentId,
@@ -94,7 +104,7 @@ export function createGatewayHooksRequestHandler(params: {
           createdAtMs: now,
           updatedAtMs: now,
           schedule: { kind: "at", at: new Date(now).toISOString() },
-          sessionKey: resolveHookDeliverySessionKey({ value, sessionKey, agentId }),
+          sessionKey: resolveHookDeliverySessionKey({ cfg, value, sessionKey, agentId }),
           sessionTarget: value.sessionTarget ?? "isolated",
           wakeMode: value.wakeMode,
           payload: {

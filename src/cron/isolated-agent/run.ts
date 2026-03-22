@@ -73,7 +73,7 @@ import {
   resolveHeartbeatAckMaxChars,
 } from "./helpers.js";
 import { buildCronAgentDefaultsConfig } from "./run-config.js";
-import { resolveCronAgentSessionKey } from "./session-key.js";
+import { canonicalizeCronSessionKey } from "./session-key.js";
 import { resolveCronSession } from "./session.js";
 import { resolveCronSkillsSnapshot } from "./skills-snapshot.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup.js";
@@ -225,7 +225,11 @@ export async function runCronIsolatedAgentTurn(params: {
   };
 
   const baseSessionKey = (params.sessionKey?.trim() || `cron:${params.job.id}`).trim();
-  const agentSessionKey = resolveCronAgentSessionKey({ sessionKey: baseSessionKey, agentId });
+  const agentSessionKey = canonicalizeCronSessionKey({
+    cfg: params.cfg,
+    sessionKey: baseSessionKey,
+    agentId,
+  });
 
   const workspaceDirRaw = resolveAgentWorkspaceDir(params.cfg, agentId);
   const agentDir = resolveAgentDir(params.cfg, agentId);

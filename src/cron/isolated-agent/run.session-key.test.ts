@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveCronAgentSessionKey } from "./session-key.js";
+import { canonicalizeCronSessionKey, resolveCronAgentSessionKey } from "./session-key.js";
 
 describe("resolveCronAgentSessionKey", () => {
   it("builds an agent-scoped key for legacy aliases", () => {
@@ -24,5 +24,27 @@ describe("resolveCronAgentSessionKey", () => {
     expect(resolveCronAgentSessionKey({ sessionKey: "hook:webhook:42", agentId: "main" })).toBe(
       "agent:main:hook:webhook:42",
     );
+  });
+});
+
+describe("canonicalizeCronSessionKey", () => {
+  it("maps main aliases to the configured main key", () => {
+    expect(
+      canonicalizeCronSessionKey({
+        cfg: { session: { mainKey: "primary" } },
+        sessionKey: "main",
+        agentId: "main",
+      }),
+    ).toBe("agent:main:primary");
+  });
+
+  it("maps main aliases to the global session when global scope is enabled", () => {
+    expect(
+      canonicalizeCronSessionKey({
+        cfg: { session: { scope: "global" } },
+        sessionKey: "main",
+        agentId: "main",
+      }),
+    ).toBe("global");
   });
 });

@@ -363,16 +363,14 @@ export function resolveHookDispatchSessionTarget(params: {
   source: "request" | "mapping";
   sessionTarget?: HookSessionTarget;
 }): { ok: true; value: HookSessionTarget } | { ok: false; error: string } {
-  const sessionTarget = params.sessionTarget ?? "isolated";
+  const requestedSessionTarget = params.sessionTarget ?? "isolated";
+  const sessionTarget = requestedSessionTarget === "current" ? "isolated" : requestedSessionTarget;
   if (
     params.source === "request" &&
     sessionTarget !== "isolated" &&
     !params.hooksConfig.sessionPolicy.allowRequestSessionTarget
   ) {
     return { ok: false, error: getHookSessionTargetRequestPolicyError() };
-  }
-  if (sessionTarget === "current") {
-    return { ok: true, value: "isolated" };
   }
   return { ok: true, value: sessionTarget };
 }
