@@ -241,6 +241,9 @@ export async function handleInlineActions(params: {
 
       const toolCallId = `cmd_${generateSecureToken(8)}`;
       try {
+        // Start typing indicator before tool execution so users see
+        // feedback while the skill is running (e.g. long API calls).
+        await typing.startTypingLoop();
         const result = await tool.execute(toolCallId, {
           command: rawArgs,
           commandName: skillInvocation.command.name,
