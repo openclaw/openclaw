@@ -1489,6 +1489,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const flushPendingPatch = async () => {
       stopPatchInterval();
       if (!blockStreamingClient) return;
+      // Capture the turn sequence before any await so we can detect turn-boundary
+      // crossings that happen while the flush is in flight. A stale flush from
+      // turn A must not write lastSentText for turn B (ID=2970547761).
+      const flushTurnSeq = currentTurnSeq;
       // Await the in-flight promise directly so we never miss a late-resolving
       // POST/PATCH — the busy-wait on patchSending had a race where patchSending
       // could clear before the network request settled (ID=2965256849).
@@ -1509,9 +1513,16 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             accountId: account.accountId,
             replyToId: effectiveReplyToId,
           });
-          streamMessageId = result.messageId;
-          lastSentText = text;
-          runtime.log?.(`stream-patch started ${streamMessageId}`);
+          // Only update state if we are still on the same turn. A boundary that
+          // fired while the POST was in flight will have incremented currentTurnSeq.
+          if (currentTurnSeq === flushTurnSeq) {
+            streamMessageId = result.messageId;
+            lastSentText = text;
+            runtime.log?.(`stream-patch started ${streamMessageId}`);
+          } else {
+            // Stale result — delete the orphaned post best-effort.
+            void deleteMattermostPost(blockStreamingClient, result.messageId).catch(() => {});
+          }
         } catch (err) {
           logVerboseMessage(`mattermost stream-patch flush send failed: ${String(err)}`);
         }
@@ -1521,7 +1532,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             postId: streamMessageId,
             message: text,
           });
-          lastSentText = text;
+          // Only update lastSentText if still on the same turn (ID=2970547761).
+          if (currentTurnSeq === flushTurnSeq) {
+            lastSentText = text;
+          }
           runtime.log?.(`stream-patch flushed ${streamMessageId}`);
         } catch (err) {
           logVerboseMessage(`mattermost stream-patch flush failed: ${String(err)}`);
