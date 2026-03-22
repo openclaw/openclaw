@@ -122,6 +122,49 @@ function filterFallbacksByAllowlist(params: {
   });
 }
 
+/**
+ * Canonicalize fallback model strings by resolving them with the image model's provider.
+ * This ensures fallbacks are resolved in the correct provider context when the image model
+ * lives on a different provider than the global default.
+ */
+function canonicalizeFallbacks(params: {
+  fallbacks: string[];
+  imageModelRaw: string;
+  aliasIndex: ReturnType<typeof buildModelAliasIndex>;
+  agentDefaultProvider: string;
+}): string[] {
+  const { fallbacks, imageModelRaw, aliasIndex, agentDefaultProvider } = params;
+
+  // Resolve the image model to get its provider
+  const imageModelResolved = resolveModelRefFromString({
+    raw: imageModelRaw.trim(),
+    defaultProvider: agentDefaultProvider,
+    aliasIndex,
+  });
+
+  // Use the image model's provider as the default for resolving fallbacks
+  const fallbackDefaultProvider = imageModelResolved?.ref.provider ?? agentDefaultProvider;
+
+  return fallbacks
+    .map((fb) => {
+      if (!fb?.trim()) {
+        return null;
+      }
+      const resolved = resolveModelRefFromString({
+        raw: fb.trim(),
+        defaultProvider: fallbackDefaultProvider,
+        aliasIndex,
+      });
+      if (!resolved) {
+        // Return the raw string if resolution fails
+        return fb.trim();
+      }
+      // Return canonical provider/model format
+      return modelKey(resolved.ref.provider, resolved.ref.model);
+    })
+    .filter((fb): fb is string => fb !== null);
+}
+
 type TranscriptAppendResult = {
   ok: boolean;
   messageId?: string;
@@ -1436,12 +1479,19 @@ export const chatHandlers: GatewayRequestHandlers = {
             imageModelOverride = imageModelPrimary;
             // Filter fallbacks against agent allowlist
             if (typeof imageModelConfig === "object" && Array.isArray(imageModelConfig.fallbacks)) {
-              imageModelFallbacks = filterFallbacksByAllowlist({
+              const filtered = filterFallbacksByAllowlist({
                 fallbacks: imageModelConfig.fallbacks,
                 cfg,
                 agentId,
                 aliasIndex,
                 defaultProvider,
+              });
+              // Canonicalize fallbacks with image model's provider context
+              imageModelFallbacks = canonicalizeFallbacks({
+                fallbacks: filtered,
+                imageModelRaw: imageModelPrimary,
+                aliasIndex,
+                agentDefaultProvider: defaultProvider,
               });
             } else {
               imageModelFallbacks = [];
@@ -1455,12 +1505,19 @@ export const chatHandlers: GatewayRequestHandlers = {
           imageModelOverride = imageModelPrimary;
           // Filter fallbacks against agent allowlist
           if (typeof imageModelConfig === "object" && Array.isArray(imageModelConfig.fallbacks)) {
-            imageModelFallbacks = filterFallbacksByAllowlist({
+            const filtered = filterFallbacksByAllowlist({
               fallbacks: imageModelConfig.fallbacks,
               cfg,
               agentId,
               aliasIndex,
               defaultProvider,
+            });
+            // Canonicalize fallbacks with image model's provider context
+            imageModelFallbacks = canonicalizeFallbacks({
+              fallbacks: filtered,
+              imageModelRaw: imageModelPrimary,
+              aliasIndex,
+              agentDefaultProvider: defaultProvider,
             });
           } else {
             imageModelFallbacks = [];

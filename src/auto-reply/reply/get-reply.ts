@@ -5,6 +5,11 @@ import {
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
 import {
+  findModelInCatalog,
+  loadModelCatalog,
+  modelSupportsVision,
+} from "../../agents/model-catalog.js";
+import {
   buildAllowedModelSet,
   buildModelAliasIndex,
   modelKey,
@@ -325,43 +330,60 @@ export async function getReplyFromConfig(
   // Check if channel model is already a vision model (skip image model switch if so)
   let channelModelIsVisionModel = false;
   if (channelModelOverride) {
-    const imageModelConfig = cfg.agents?.defaults?.imageModel;
-    const imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
-    if (imageModelPrimary) {
-      // Collect all image model keys
-      const imageModelKeys = new Set<string>();
-      const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "" });
+    const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "" });
 
-      const addResolvedModelKey = (rawModel: string) => {
-        imageModelKeys.add(rawModel.trim());
-        const resolved = resolveModelRefFromString({
-          raw: rawModel.trim(),
-          defaultProvider: "",
-          aliasIndex,
-        });
-        if (resolved) {
-          imageModelKeys.add(modelKey(resolved.ref.provider, resolved.ref.model));
+    // Resolve the channel model to get provider/model
+    const channelResolved = resolveModelRefFromString({
+      raw: channelModelOverride.model,
+      defaultProvider,
+      aliasIndex,
+    });
+
+    if (channelResolved) {
+      // First, check if the channel model matches the configured imageModel or its fallbacks
+      const imageModelConfig = cfg.agents?.defaults?.imageModel;
+      const imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
+      if (imageModelPrimary) {
+        const imageModelKeys = new Set<string>();
+        const addResolvedModelKey = (rawModel: string) => {
+          imageModelKeys.add(rawModel.trim());
+          const resolved = resolveModelRefFromString({
+            raw: rawModel.trim(),
+            defaultProvider: "",
+            aliasIndex,
+          });
+          if (resolved) {
+            imageModelKeys.add(modelKey(resolved.ref.provider, resolved.ref.model));
+          }
+        };
+        addResolvedModelKey(imageModelPrimary);
+        const fallbacks = resolveAgentModelFallbackValues(imageModelConfig);
+        for (const fb of fallbacks) {
+          if (fb?.trim()) {
+            addResolvedModelKey(fb);
+          }
         }
-      };
-
-      addResolvedModelKey(imageModelPrimary);
-      const fallbacks = resolveAgentModelFallbackValues(imageModelConfig);
-      for (const fb of fallbacks) {
-        if (fb?.trim()) {
-          addResolvedModelKey(fb);
+        const channelKey = modelKey(channelResolved.ref.provider, channelResolved.ref.model);
+        if (imageModelKeys.has(channelKey) || imageModelKeys.has(channelModelOverride.model)) {
+          channelModelIsVisionModel = true;
         }
       }
 
-      // Check if channel model is a vision model
-      const channelResolved = resolveModelRefFromString({
-        raw: channelModelOverride.model,
-        defaultProvider,
-        aliasIndex,
-      });
-      if (channelResolved) {
-        const channelKey = modelKey(channelResolved.ref.provider, channelResolved.ref.model);
-        channelModelIsVisionModel =
-          imageModelKeys.has(channelKey) || imageModelKeys.has(channelModelOverride.model);
+      // If not found in imageModel list, check catalog for vision capabilities
+      if (!channelModelIsVisionModel) {
+        try {
+          const catalog = await loadModelCatalog({ config: cfg });
+          const catalogEntry = findModelInCatalog(
+            catalog,
+            channelResolved.ref.provider,
+            channelResolved.ref.model,
+          );
+          if (modelSupportsVision(catalogEntry)) {
+            channelModelIsVisionModel = true;
+          }
+        } catch {
+          // Catalog lookup failed; fall back to text-only assumption
+        }
       }
     }
   }
