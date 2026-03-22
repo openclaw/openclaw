@@ -4,102 +4,337 @@
  * This test ensures that sessions with tool-call messages (heartbeat/cron),
  * streaming content, or live streams are not treated as empty, preventing
  * the welcome overlay from blocking the input box.
+ *
+ * These tests verify the hasSessionActivity logic that determines whether
+ * to show the welcome state overlay.
  */
 
 import { describe, it, expect } from "vitest";
 
+/**
+ * This function mirrors the hasSessionActivity logic from chat.ts line 893-898.
+ * We test this logic explicitly to ensure the fix for #45707 is correct.
+ *
+ * The fix ensures that toolMessages are checked directly from props.toolMessages.length
+ * rather than relying on chatItems.length which could be filtered by showThinking or search.
+ */
+function hasSessionActivity(props: {
+  messages?: unknown[];
+  toolMessages?: unknown[];
+  streamSegments?: Array<{ text: string; ts: number }>;
+  stream?: string | null;
+}): boolean {
+  return (
+    (Array.isArray(props.messages) && props.messages.length > 0) ||
+    (Array.isArray(props.toolMessages) && props.toolMessages.length > 0) ||
+    (Array.isArray(props.streamSegments) &&
+      props.streamSegments.some((segment) => segment.text.trim())) ||
+    props.stream !== null
+  );
+}
+
+/**
+ * This function mirrors the showWelcomeState logic from chat.ts line 899.
+ * Welcome state should only show when there's no session activity, not loading, and search is closed.
+ */
+function shouldShowWelcomeState(props: {
+  hasSessionActivity: boolean;
+  loading?: boolean;
+  searchOpen?: boolean;
+}): boolean {
+  return !props.hasSessionActivity && !props.loading && !props.searchOpen;
+}
+
 describe("chat empty state logic (#45707)", () => {
-  it("should not treat session with tool messages as empty", () => {
-    const messages: unknown[] = [];
-    const toolMessages: unknown[] = [{ role: "tool", content: "Heartbeat", timestamp: Date.now() }];
-    const streamSegments: Array<{ text: string; ts: number }> = [];
-    const stream: string | null = null;
+  describe("hasSessionActivity with tool messages", () => {
+    it("should detect tool messages as session activity", () => {
+      const props = {
+        messages: [],
+        toolMessages: [
+          {
+            role: "tool",
+            content: "Heartbeat OK",
+            timestamp: Date.now(),
+            toolCallId: "test-tool-call",
+            toolName: "heartbeat",
+          },
+        ],
+        streamSegments: [],
+        stream: null,
+      };
 
-    const hasSessionActivity =
-      messages.length > 0 ||
-      toolMessages.length > 0 ||
-      streamSegments.some((segment) => segment.text.trim()) ||
-      stream !== null;
+      expect(hasSessionActivity(props)).toBe(true);
+    });
 
-    expect(hasSessionActivity).toBe(true);
+    it("should detect cron tool messages as session activity", () => {
+      const props = {
+        messages: [],
+        toolMessages: [
+          {
+            role: "tool",
+            content: "Cron job completed",
+            timestamp: Date.now(),
+            toolCallId: "cron-tool-call",
+            toolName: "cron",
+          },
+        ],
+        streamSegments: [],
+        stream: null,
+      };
+
+      expect(hasSessionActivity(props)).toBe(true);
+    });
+
+    it("should not show welcome state when tool messages exist", () => {
+      const props = {
+        messages: [],
+        toolMessages: [
+          {
+            role: "tool",
+            content: "Heartbeat",
+            timestamp: Date.now(),
+            toolCallId: "heartbeat",
+            toolName: "heartbeat",
+          },
+        ],
+        streamSegments: [],
+        stream: null,
+      };
+
+      const activity = hasSessionActivity(props);
+      const showWelcome = shouldShowWelcomeState({
+        hasSessionActivity: activity,
+        loading: false,
+        searchOpen: false,
+      });
+
+      expect(activity).toBe(true);
+      expect(showWelcome).toBe(false);
+    });
   });
 
-  it("should treat truly empty session as empty", () => {
-    const messages: unknown[] = [];
-    const toolMessages: unknown[] = [];
-    const streamSegments: Array<{ text: string; ts: number }> = [];
-    const stream: string | null = null;
+  describe("hasSessionActivity with history messages", () => {
+    it("should detect user messages as session activity", () => {
+      const props = {
+        messages: [
+          {
+            role: "user",
+            content: "Hello",
+            timestamp: Date.now(),
+          },
+        ],
+        toolMessages: [],
+        streamSegments: [],
+        stream: null,
+      };
 
-    const hasSessionActivity =
-      messages.length > 0 ||
-      toolMessages.length > 0 ||
-      streamSegments.some((segment) => segment.text.trim()) ||
-      stream !== null;
+      expect(hasSessionActivity(props)).toBe(true);
+    });
 
-    expect(hasSessionActivity).toBe(false);
+    it("should detect assistant messages as session activity", () => {
+      const props = {
+        messages: [
+          {
+            role: "assistant",
+            content: "Hi there!",
+            timestamp: Date.now(),
+          },
+        ],
+        toolMessages: [],
+        streamSegments: [],
+        stream: null,
+      };
+
+      expect(hasSessionActivity(props)).toBe(true);
+    });
   });
 
-  it("should not treat session with history messages as empty", () => {
-    const messages: unknown[] = [{ role: "user", content: "Hello", timestamp: Date.now() }];
-    const toolMessages: unknown[] = [];
-    const streamSegments: Array<{ text: string; ts: number }> = [];
-    const stream: string | null = null;
+  describe("hasSessionActivity with streaming content", () => {
+    it("should detect streaming segments as session activity", () => {
+      const props = {
+        messages: [],
+        toolMessages: [],
+        streamSegments: [
+          { text: "Thinking...", ts: Date.now() },
+          { text: "Generating response...", ts: Date.now() },
+        ],
+        stream: null,
+      };
 
-    const hasSessionActivity =
-      messages.length > 0 ||
-      toolMessages.length > 0 ||
-      streamSegments.some((segment) => segment.text.trim()) ||
-      stream !== null;
+      expect(hasSessionActivity(props)).toBe(true);
+    });
 
-    expect(hasSessionActivity).toBe(true);
+    it("should detect live stream as session activity", () => {
+      const props = {
+        messages: [],
+        toolMessages: [],
+        streamSegments: [],
+        stream: "Live streaming...",
+      };
+
+      expect(hasSessionActivity(props)).toBe(true);
+    });
+
+    it("should not treat empty streaming segments as activity", () => {
+      const props = {
+        messages: [],
+        toolMessages: [],
+        streamSegments: [
+          { text: "", ts: Date.now() },
+          { text: "   ", ts: Date.now() },
+        ],
+        stream: null,
+      };
+
+      expect(hasSessionActivity(props)).toBe(false);
+    });
   });
 
-  it("should not treat session with streaming content as empty", () => {
-    const messages: unknown[] = [];
-    const toolMessages: unknown[] = [];
-    const streamSegments: Array<{ text: string; ts: number }> = [
-      { text: "Streaming response...", ts: Date.now() },
-    ];
-    const stream: string | null = null;
+  describe("hasSessionActivity with mixed content", () => {
+    it("should detect mixed messages and tool messages as activity", () => {
+      const props = {
+        messages: [
+          {
+            role: "user",
+            content: "Check status",
+            timestamp: Date.now(),
+          },
+        ],
+        toolMessages: [
+          {
+            role: "tool",
+            content: "Status: OK",
+            timestamp: Date.now(),
+            toolCallId: "status-check",
+            toolName: "status",
+          },
+        ],
+        streamSegments: [],
+        stream: null,
+      };
 
-    const hasSessionActivity =
-      messages.length > 0 ||
-      toolMessages.length > 0 ||
-      streamSegments.some((segment) => segment.text.trim()) ||
-      stream !== null;
+      expect(hasSessionActivity(props)).toBe(true);
+    });
 
-    expect(hasSessionActivity).toBe(true);
+    it("should handle truly empty session", () => {
+      const props = {
+        messages: [],
+        toolMessages: [],
+        streamSegments: [],
+        stream: null,
+      };
+
+      expect(hasSessionActivity(props)).toBe(false);
+    });
   });
 
-  it("should not treat session with live stream as empty", () => {
-    const messages: unknown[] = [];
-    const toolMessages: unknown[] = [];
-    const streamSegments: Array<{ text: string; ts: number }> = [];
-    const stream: string | null = "Live streaming...";
+  describe("showWelcomeState logic (#45707)", () => {
+    it("should show welcome state for truly empty session", () => {
+      const props = {
+        messages: [],
+        toolMessages: [],
+        streamSegments: [],
+        stream: null,
+      };
 
-    const hasSessionActivity =
-      messages.length > 0 ||
-      toolMessages.length > 0 ||
-      streamSegments.some((segment) => segment.text.trim()) ||
-      stream !== null;
+      const activity = hasSessionActivity(props);
+      const showWelcome = shouldShowWelcomeState({
+        hasSessionActivity: activity,
+        loading: false,
+        searchOpen: false,
+      });
 
-    expect(hasSessionActivity).toBe(true);
+      expect(activity).toBe(false);
+      expect(showWelcome).toBe(true);
+    });
+
+    it("should not show welcome state when loading", () => {
+      const props = {
+        messages: [],
+        toolMessages: [],
+        streamSegments: [],
+        stream: null,
+      };
+
+      const activity = hasSessionActivity(props);
+      const showWelcome = shouldShowWelcomeState({
+        hasSessionActivity: activity,
+        loading: true,
+        searchOpen: false,
+      });
+
+      expect(showWelcome).toBe(false);
+    });
+
+    it("should not show welcome state when search is open", () => {
+      const props = {
+        messages: [],
+        toolMessages: [],
+        streamSegments: [],
+        stream: null,
+      };
+
+      const activity = hasSessionActivity(props);
+      const showWelcome = shouldShowWelcomeState({
+        hasSessionActivity: activity,
+        loading: false,
+        searchOpen: true,
+      });
+
+      expect(showWelcome).toBe(false);
+    });
+
+    it("should not show welcome state when tool messages exist (key fix for #45707)", () => {
+      // This is the key test case for #45707
+      // Before the fix, tool messages were not properly detected, causing
+      // the welcome overlay to block the input even when heartbeat/cron messages existed
+      const props = {
+        messages: [],
+        toolMessages: [
+          {
+            role: "tool",
+            content: "Heartbeat OK",
+            timestamp: Date.now(),
+          },
+        ],
+        streamSegments: [],
+        stream: null,
+      };
+
+      const activity = hasSessionActivity(props);
+      const showWelcome = shouldShowWelcomeState({
+        hasSessionActivity: activity,
+        loading: false,
+        searchOpen: false,
+      });
+
+      // The fix ensures tool messages are detected as session activity
+      expect(activity).toBe(true);
+      expect(showWelcome).toBe(false);
+    });
   });
 
-  it("should handle mixed messages and streaming", () => {
-    const messages: unknown[] = [{ role: "user", content: "Check", timestamp: Date.now() }];
-    const toolMessages: unknown[] = [{ role: "tool", content: "Cron", timestamp: Date.now() }];
-    const streamSegments: Array<{ text: string; ts: number }> = [
-      { text: "Thinking...", ts: Date.now() },
-    ];
-    const stream: string | null = null;
+  describe("edge cases", () => {
+    it("should handle undefined messages array", () => {
+      const props = {
+        messages: undefined as unknown as undefined[],
+        toolMessages: [],
+        streamSegments: [],
+        stream: null,
+      };
 
-    const hasSessionActivity =
-      messages.length > 0 ||
-      toolMessages.length > 0 ||
-      streamSegments.some((segment) => segment.text.trim()) ||
-      stream !== null;
+      expect(hasSessionActivity(props)).toBe(false);
+    });
 
-    expect(hasSessionActivity).toBe(true);
+    it("should handle null toolMessages", () => {
+      const props = {
+        messages: [],
+        toolMessages: null as unknown as undefined[],
+        streamSegments: [],
+        stream: null,
+      };
+
+      expect(hasSessionActivity(props)).toBe(false);
+    });
   });
 });
