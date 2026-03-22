@@ -492,6 +492,15 @@ export type ToolsConfig = {
       kimi?: WebSearchLegacyProviderConfig;
       /** @deprecated Legacy Perplexity scoped config. */
       perplexity?: WebSearchLegacyProviderConfig;
+      /** Tavily configuration. */
+      tavily?: {
+        apiKey?: SecretInput;
+      };
+      /** SearXNG configuration. */
+      searxng?: {
+        baseUrl?: string;
+        apiKey?: SecretInput;
+      };
     } & Record<string, unknown>;
     fetch?: {
       /** Enable web fetch tool (default: true). */

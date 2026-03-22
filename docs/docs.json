@@ -1119,15 +1119,16 @@
                   {
                     "group": "Web Tools",
                     "pages": [
-                      "tools/web-fetch",
-                      "tools/web",
                       "tools/brave-search",
                       "tools/firecrawl",
                       "tools/gemini-search",
                       "tools/grok-search",
                       "tools/kimi-search",
                       "tools/perplexity-search",
-                      "tools/tavily"
+                      "tools/searxng",
+                      "tools/tavily",
+                      "tools/web",
+                      "tools/web-fetch"
                     ]
                   },
                   "tools/btw",
