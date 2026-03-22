@@ -718,8 +718,16 @@
 .chat-controls__session-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   flex-wrap: wrap;
+}
+
+.chat-controls__new-chat {
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
 .chat-controls__model {

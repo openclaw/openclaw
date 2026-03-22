@@ -167,6 +167,15 @@ export function renderChatSessionSelect(state: AppViewState) {
           )}
         </select>
       </label>
+      <button
+        class="btn-ghost chat-controls__new-chat"
+        title="New chat session"
+        aria-label="New chat session"
+        ?disabled=${!state.connected}
+        @click=${() => createNewChatSession(state)}
+      >
+        ${icons.plus}
+      </button>
       ${modelSelect}
     </div>
   `;
@@ -510,6 +519,28 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
   );
   void loadChatHistory(state as unknown as ChatState);
   void refreshSessionOptions(state);
+}
+
+async function createNewChatSession(state: AppViewState) {
+  const client = (state as unknown as OpenClawApp).client;
+  if (!client || !state.connected) {
+    return;
+  }
+  const label = window.prompt("Session name (optional):")?.trim() || undefined;
+  // Resolve the current agent ID from the active session key
+  const parsed = parseAgentSessionKey(state.sessionKey);
+  const agentId = parsed?.agentId ?? state.agentsList?.defaultId ?? "main";
+  try {
+    const result = await client.request<{ ok: boolean; key: string }>("sessions.create", {
+      agentId,
+      ...(label ? { label } : {}),
+    });
+    if (result?.key) {
+      switchChatSession(state, result.key);
+    }
+  } catch (err) {
+    state.lastError = String(err);
+  }
 }
 
 async function refreshSessionOptions(state: AppViewState) {
