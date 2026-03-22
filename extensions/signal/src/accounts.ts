@@ -1,5 +1,6 @@
 import {
   createAccountListHelpers,
+  mergeAccountConfig,
   normalizeAccountId,
   resolveAccountEntry,
   type OpenClawConfig,
@@ -27,11 +28,10 @@ function resolveAccountConfig(
 }
 
 function mergeSignalAccountConfig(cfg: OpenClawConfig, accountId: string): SignalAccountConfig {
-  const { accounts: _ignored, ...base } = (cfg.channels?.signal ?? {}) as SignalAccountConfig & {
-    accounts?: unknown;
-  };
-  const account = resolveAccountConfig(cfg, accountId) ?? {};
-  return { ...base, ...account };
+  return mergeAccountConfig<SignalAccountConfig>({
+    channelConfig: cfg.channels?.signal as SignalAccountConfig | undefined,
+    accountConfig: resolveAccountConfig(cfg, accountId),
+  });
 }
 
 export function resolveSignalAccount(params: {
