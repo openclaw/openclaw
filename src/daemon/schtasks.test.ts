@@ -315,7 +315,12 @@ describe("readScheduledTaskCommand", () => {
         }),
       },
       async (env) => {
-        const legacyScriptPath = path.win32.join(env.USERPROFILE!, ".openclaw", "gateway.cmd");
+        const legacyScriptPath = resolveTaskScriptPath({
+          ...env,
+          OPENCLAW_HOME: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+          CLAWDBOT_STATE_DIR: undefined,
+        });
         await fs.mkdir(path.dirname(legacyScriptPath), { recursive: true });
         await fs.writeFile(
           legacyScriptPath,
