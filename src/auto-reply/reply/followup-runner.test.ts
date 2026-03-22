@@ -16,18 +16,14 @@ vi.mock(
   async () => await import("../../test-utils/model-fallback.mock.js"),
 );
 
-vi.mock("../../agents/pi-embedded.js", () => ({
+vi.mock("../../agents/pi-embedded.runtime.js", () => ({
   runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
 }));
 
-vi.mock("./route-reply.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./route-reply.js")>();
-  return {
-    ...actual,
-    isRoutableChannel: (...args: unknown[]) => isRoutableChannelMock(...args),
-    routeReply: (...args: unknown[]) => routeReplyMock(...args),
-  };
-});
+vi.mock("./route-reply.runtime.js", () => ({
+  isRoutableChannel: (...args: unknown[]) => isRoutableChannelMock(...args),
+  routeReply: (...args: unknown[]) => routeReplyMock(...args),
+}));
 
 import { createFollowupRunner } from "./followup-runner.js";
 
