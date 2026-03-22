@@ -13,6 +13,32 @@ ClawHub is the **public skill registry for OpenClaw**. It is a free service: all
 
 Site: [clawhub.ai](https://clawhub.ai)
 
+## Native OpenClaw flows
+
+Skills:
+
+```bash
+openclaw skills search "calendar"
+openclaw skills install <skill-slug>
+openclaw skills update --all
+```
+
+Plugins:
+
+```bash
+openclaw plugins install clawhub:<package>
+openclaw plugins update --all
+```
+
+Bare npm-safe plugin specs are also tried against ClawHub before npm:
+
+```bash
+openclaw plugins install openclaw-codex-app-server
+```
+
+Native `openclaw` commands install into your active workspace and persist source
+metadata so later `update` calls can stay on ClawHub.
+
 ## What ClawHub is
 
 - A public registry for OpenClaw skills.
