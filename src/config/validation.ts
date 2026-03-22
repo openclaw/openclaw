@@ -238,11 +238,11 @@ function sanitizeInvalidProviders(raw: unknown): unknown {
   if (!isRecord(raw)) {
     return raw;
   }
-  const models = (raw as Record<string, unknown>).models;
+  const models = raw.models;
   if (!isRecord(models)) {
     return raw;
   }
-  const providers = (models as Record<string, unknown>).providers;
+  const providers = models.providers;
   if (!isRecord(providers)) {
     return raw;
   }
@@ -250,7 +250,7 @@ function sanitizeInvalidProviders(raw: unknown): unknown {
   const cleanProviders: Record<string, unknown> = {};
   let dropped = false;
 
-  for (const [key, value] of Object.entries(providers as Record<string, unknown>)) {
+  for (const [key, value] of Object.entries(providers)) {
     const result = ModelProviderSchema.safeParse(value);
     if (result.success) {
       cleanProviders[key] = value;
@@ -271,9 +271,9 @@ function sanitizeInvalidProviders(raw: unknown): unknown {
   }
 
   return {
-    ...(raw as Record<string, unknown>),
+    ...raw,
     models: {
-      ...(models as Record<string, unknown>),
+      ...models,
       providers: Object.keys(cleanProviders).length > 0 ? cleanProviders : undefined,
     },
   };
