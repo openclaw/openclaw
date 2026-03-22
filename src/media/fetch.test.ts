@@ -185,9 +185,17 @@ describe("isMediaFetchError", () => {
     expect(isMediaFetchError(undefined)).toBe(false);
   });
 
-  it("detects errors whose message contains MediaFetchError name", () => {
+  it("returns false for errors whose message only mentions MediaFetchError by name", () => {
+    // String matching is not used — only instanceof and cause chain traversal.
     const err = new Error("MediaFetchError: Failed to fetch media from ...");
-    expect(isMediaFetchError(err)).toBe(true);
+    expect(isMediaFetchError(err)).toBe(false);
+  });
+
+  it("returns true for deeply nested cause chains", () => {
+    const root = new MediaFetchError("fetch_failed", "root cause");
+    const mid = new Error("middle", { cause: root });
+    const outer = new Error("outer", { cause: mid });
+    expect(isMediaFetchError(outer)).toBe(true);
   });
 });
 
