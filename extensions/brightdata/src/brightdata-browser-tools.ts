@@ -821,12 +821,15 @@ class BrightDataBrowserSession {
       const collapse = (text: string | null | undefined) =>
         (text || "").replace(/\s+/g, " ").trim();
 
+      const readElementText = (element: Element | null) =>
+        collapse((element instanceof HTMLElement ? element.innerText : element?.textContent) || "");
+
       const getLabelledBy = (element: Element) => {
         const ids = (element.getAttribute("aria-labelledby") || "").split(/\s+/);
         return ids
           .map((id) => {
             const ref = document.getElementById(id);
-            return ref ? collapse(ref.innerText || ref.textContent) : "";
+            return readElementText(ref);
           })
           .filter(Boolean)
           .join(" ");
@@ -838,7 +841,7 @@ class BrightDataBrowserSession {
           return "";
         }
         const label = document.querySelector(`label[for="${CSS.escape(id)}"]`);
-        return label ? collapse(label.innerText || label.textContent) : "";
+        return readElementText(label);
       };
 
       const isIntrinsic = (element: Element) => {
