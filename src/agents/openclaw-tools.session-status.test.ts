@@ -256,6 +256,42 @@ describe("session_status tool", () => {
     expect(details.sessionKey).toBe("main");
   });
 
+  it("keeps sessionKey=current bound to the requester subagent session", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "s-parent",
+        updatedAt: 10,
+      },
+      "agent:main:subagent:child": {
+        sessionId: "s-child",
+        updatedAt: 20,
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-5",
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:subagent:child");
+
+    const result = await tool.execute("call-current-subagent", {
+      sessionKey: "current",
+      model: "anthropic/claude-sonnet-4-5",
+    });
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:subagent:child");
+    expect(updateSessionStoreMock).toHaveBeenCalledWith(
+      "/tmp/main/sessions.json",
+      expect.objectContaining({
+        "agent:main:main": expect.objectContaining({
+          modelOverride: "claude-opus-4-5",
+        }),
+        "agent:main:subagent:child": expect.objectContaining({
+          modelOverride: "claude-sonnet-4-5",
+        }),
+      }),
+    );
+  });
+
   it("resolves sessionId inputs", async () => {
     const sessionId = "sess-main";
     resetSessionStore({

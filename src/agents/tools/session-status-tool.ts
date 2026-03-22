@@ -253,12 +253,6 @@ export function createSessionStatusTool(opts?: {
       if (!requestedKeyRaw?.trim()) {
         throw new Error("sessionKey required");
       }
-      // Normalize "current" to the requester's own session key. The "main"
-      // alias is already scoped to the requester agent's store, so this gives
-      // every caller their own session regardless of agent identity.
-      if (requestedKeyRaw.trim().toLowerCase() === "current") {
-        requestedKeyRaw = "main";
-      }
       const ensureAgentAccess = (targetAgentId: string) => {
         if (targetAgentId === requesterAgentId) {
           return;
