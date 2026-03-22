@@ -89,7 +89,7 @@ function buildHookProviderCacheKey(params: {
   return `${roots.workspace ?? ""}::${roots.global}::${roots.stock ?? ""}::${JSON.stringify(params.onlyPluginIds ?? [])}`;
 }
 
-export function resetProviderRuntimeHookCacheForTest(): void {
+export function clearProviderRuntimeHookCache(): void {
   cachedHookProvidersWithoutConfig = new WeakMap<
     NodeJS.ProcessEnv,
     Map<string, ProviderPlugin[]>
@@ -98,6 +98,10 @@ export function resetProviderRuntimeHookCacheForTest(): void {
     OpenClawConfig,
     WeakMap<NodeJS.ProcessEnv, Map<string, ProviderPlugin[]>>
   >();
+}
+
+export function resetProviderRuntimeHookCacheForTest(): void {
+  clearProviderRuntimeHookCache();
 }
 
 function resolveProviderPluginsForHooks(params: {
