@@ -725,4 +725,28 @@ openclaw pairing list feishu
 - ✅ 图片
 - ✅ 文件
 - ✅ 音频
-- ⚠️ 富文本（部分支持）
+- ✅ 视频/媒体
+- ✅ 交互式卡片
+- ⚠️ 富文本（post 样式格式和卡片，非任意飞书创作功能）
+
+### 线程和回复
+
+- ✅ 行内回复
+- ✅ 话题线程回复（当飞书暴露 `reply_in_thread` 时）
+- ✅ 媒体回复在回复线程/话题消息时保持线程感知
+
+## 运行时动作接口
+
+飞书当前暴露以下运行时动作：
+
+- `send`
+- `read`
+- `edit`
+- `thread-reply`
+- `pin`
+- `list-pins`
+- `unpin`
+- `member-info`
+- `channel-info`
+- `channel-list`
+- `react` 和 `reactions`（需在配置中启用 reactions）
