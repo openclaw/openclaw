@@ -10,6 +10,14 @@ import {
   resolveBlueBubblesMessageId,
   _resetBlueBubblesShortIdState,
 } from "./monitor.js";
+import {
+  createMockAccount,
+  createMockRequest,
+  createMockResponse,
+  dispatchWebhookPayloadForTest,
+  registerWebhookTargetForTest,
+  registerWebhookTargetsForTest,
+} from "./monitor.webhook.test-helpers.js";
 import type { OpenClawConfig, PluginRuntime } from "./runtime-api.js";
 import { setBlueBubblesRuntime } from "./runtime.js";
 
@@ -157,80 +165,6 @@ function createMockRuntime(): PluginRuntime {
   });
 }
 
-function createMockAccount(
-  overrides: Partial<ResolvedBlueBubblesAccount["config"]> = {},
-): ResolvedBlueBubblesAccount {
-  return {
-    accountId: "default",
-    enabled: true,
-    configured: true,
-    config: {
-      serverUrl: "http://localhost:1234",
-      password: "test-password", // pragma: allowlist secret
-      dmPolicy: "open",
-      groupPolicy: "open",
-      allowFrom: [],
-      groupAllowFrom: [],
-      ...overrides,
-    },
-  };
-}
-
-function createMockRequest(
-  method: string,
-  url: string,
-  body: unknown,
-  headers: Record<string, string> = {},
-): IncomingMessage {
-  if (headers.host === undefined) {
-    headers.host = "localhost";
-  }
-  const parsedUrl = new URL(url, "http://localhost");
-  const hasAuthQuery = parsedUrl.searchParams.has("guid") || parsedUrl.searchParams.has("password");
-  const hasAuthHeader =
-    headers["x-guid"] !== undefined ||
-    headers["x-password"] !== undefined ||
-    headers["x-bluebubbles-guid"] !== undefined ||
-    headers.authorization !== undefined;
-  if (!hasAuthQuery && !hasAuthHeader) {
-    parsedUrl.searchParams.set("password", "test-password");
-  }
-
-  const req = new EventEmitter() as IncomingMessage;
-  req.method = method;
-  req.url = `${parsedUrl.pathname}${parsedUrl.search}`;
-  req.headers = headers;
-  (req as unknown as { socket: { remoteAddress: string } }).socket = { remoteAddress: "127.0.0.1" };
-
-  // Emit body data after a microtask
-  // oxlint-disable-next-line no-floating-promises
-  Promise.resolve().then(() => {
-    const bodyStr = typeof body === "string" ? body : JSON.stringify(body);
-    req.emit("data", Buffer.from(bodyStr));
-    req.emit("end");
-  });
-
-  return req;
-}
-
-function createMockResponse(): ServerResponse & { body: string; statusCode: number } {
-  const res = {
-    statusCode: 200,
-    body: "",
-    setHeader: vi.fn(),
-    end: vi.fn((data?: string) => {
-      res.body = data ?? "";
-    }),
-  } as unknown as ServerResponse & { body: string; statusCode: number };
-  return res;
-}
-
-const flushAsync = async () => {
-  for (let i = 0; i < 2; i += 1) {
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
-};
-
 function getFirstDispatchCall(): DispatchReplyParams {
   const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0];
   if (!callArgs) {
@@ -320,10 +254,8 @@ describe("BlueBubbles webhook monitor", () => {
       params?.url ?? "/bluebubbles-webhook",
       params?.body ?? {},
       params?.headers,
+      params?.remoteAddress,
     );
-    if (params?.remoteAddress) {
-      setRequestRemoteAddress(req, params.remoteAddress);
-    }
     return req;
   }
 
@@ -344,20 +276,11 @@ describe("BlueBubbles webhook monitor", () => {
       statusSink?: (event: unknown) => void;
     }>,
   ) {
-    const config: OpenClawConfig = {};
     const core = createMockRuntime();
-    setBlueBubblesRuntime(core);
-
-    const unregisterFns = params.map(({ account, statusSink }) =>
-      registerBlueBubblesWebhookTarget({
-        account,
-        config,
-        runtime: { log: vi.fn(), error: vi.fn() },
-        core,
-        path: "/bluebubbles-webhook",
-        statusSink,
-      }),
-    );
+    const unregisterFns = registerWebhookTargetsForTest({
+      core,
+      accounts: params,
+    });
 
     unregister = () => {
       for (const unregisterFn of unregisterFns) {
@@ -548,10 +471,9 @@ describe("BlueBubbles webhook monitor", () => {
     });
 
     it("ignores unregistered webhook paths", async () => {
-      const req = createMockRequest("POST", "/unregistered-path", {});
-      const res = createMockResponse();
-
-      const handled = await handleBlueBubblesWebhookRequest(req, res);
+      const { handled } = await dispatchWebhookPayloadForTest({
+        url: "/unregistered-path",
+      });
 
       expect(handled).toBe(false);
     });
@@ -568,11 +490,7 @@ describe("BlueBubbles webhook monitor", () => {
         date: Date.now(),
       });
 
-      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
-      const res = createMockResponse();
-
-      await handleBlueBubblesWebhookRequest(req, res);
-      await flushAsync();
+      await dispatchWebhookPayloadForTest({ body: payload });
 
       expect(resolveChatGuidForTarget).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -599,11 +517,7 @@ describe("BlueBubbles webhook monitor", () => {
         date: Date.now(),
       });
 
-      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
-      const res = createMockResponse();
-
-      await handleBlueBubblesWebhookRequest(req, res);
-      await flushAsync();
+      await dispatchWebhookPayloadForTest({ body: payload });
 
       expect(resolveChatGuidForTarget).not.toHaveBeenCalled();
       expect(sendMessageBlueBubbles).toHaveBeenCalledWith(

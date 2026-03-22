@@ -1,0 +1,150 @@
+import { EventEmitter } from "node:events";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { vi } from "vitest";
+import type { ResolvedBlueBubblesAccount } from "./accounts.js";
+import { handleBlueBubblesWebhookRequest } from "./monitor.js";
+import { registerBlueBubblesWebhookTarget } from "./monitor.js";
+import type { OpenClawConfig, PluginRuntime } from "./runtime-api.js";
+import { setBlueBubblesRuntime } from "./runtime.js";
+
+export function createMockAccount(
+  overrides: Partial<ResolvedBlueBubblesAccount["config"]> = {},
+): ResolvedBlueBubblesAccount {
+  return {
+    accountId: "default",
+    enabled: true,
+    configured: true,
+    config: {
+      serverUrl: "http://localhost:1234",
+      password: "test-password",
+      dmPolicy: "open",
+      groupPolicy: "open",
+      allowFrom: [],
+      groupAllowFrom: [],
+      ...overrides,
+    },
+  };
+}
+
+export function createMockRequest(
+  method: string,
+  url: string,
+  body: unknown,
+  headers: Record<string, string> = {},
+  remoteAddress = "127.0.0.1",
+): IncomingMessage {
+  if (headers.host === undefined) {
+    headers.host = "localhost";
+  }
+  const parsedUrl = new URL(url, "http://localhost");
+  const hasAuthQuery = parsedUrl.searchParams.has("guid") || parsedUrl.searchParams.has("password");
+  const hasAuthHeader =
+    headers["x-guid"] !== undefined ||
+    headers["x-password"] !== undefined ||
+    headers["x-bluebubbles-guid"] !== undefined ||
+    headers.authorization !== undefined;
+  if (!hasAuthQuery && !hasAuthHeader) {
+    parsedUrl.searchParams.set("password", "test-password");
+  }
+
+  const req = new EventEmitter() as IncomingMessage;
+  req.method = method;
+  req.url = `${parsedUrl.pathname}${parsedUrl.search}`;
+  req.headers = headers;
+  (req as unknown as { socket: { remoteAddress: string } }).socket = { remoteAddress };
+
+  // Emit body data after a microtask.
+  void Promise.resolve().then(() => {
+    const bodyStr = typeof body === "string" ? body : JSON.stringify(body);
+    req.emit("data", Buffer.from(bodyStr));
+    req.emit("end");
+  });
+
+  return req;
+}
+
+export function createMockResponse(): ServerResponse & { body: string; statusCode: number } {
+  const res = {
+    statusCode: 200,
+    body: "",
+    setHeader: vi.fn(),
+    end: vi.fn((data?: string) => {
+      res.body = data ?? "";
+    }),
+  } as unknown as ServerResponse & { body: string; statusCode: number };
+  return res;
+}
+
+export async function flushAsync() {
+  for (let i = 0; i < 2; i += 1) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}
+
+export async function dispatchWebhookPayloadForTest(params?: {
+  method?: string;
+  url?: string;
+  body?: unknown;
+  headers?: Record<string, string>;
+  remoteAddress?: string;
+}) {
+  const req = createMockRequest(
+    params?.method ?? "POST",
+    params?.url ?? "/bluebubbles-webhook",
+    params?.body ?? {},
+    params?.headers,
+    params?.remoteAddress,
+  );
+  const res = createMockResponse();
+  const handled = await handleBlueBubblesWebhookRequest(req, res);
+  await flushAsync();
+  return { handled, res };
+}
+
+export function registerWebhookTargetForTest(params: {
+  core: PluginRuntime;
+  account?: ResolvedBlueBubblesAccount;
+  config?: OpenClawConfig;
+  path?: string;
+  statusSink?: (event: unknown) => void;
+  runtime?: {
+    log: (...args: unknown[]) => unknown;
+    error: (...args: unknown[]) => unknown;
+  };
+}) {
+  setBlueBubblesRuntime(params.core);
+
+  return registerBlueBubblesWebhookTarget({
+    account: params.account ?? createMockAccount(),
+    config: params.config ?? {},
+    runtime: params.runtime ?? { log: vi.fn(), error: vi.fn() },
+    core: params.core,
+    path: params.path ?? "/bluebubbles-webhook",
+    statusSink: params.statusSink,
+  });
+}
+
+export function registerWebhookTargetsForTest(params: {
+  core: PluginRuntime;
+  accounts: Array<{
+    account: ResolvedBlueBubblesAccount;
+    statusSink?: (event: unknown) => void;
+  }>;
+  config?: OpenClawConfig;
+  path?: string;
+  runtime?: {
+    log: (...args: unknown[]) => unknown;
+    error: (...args: unknown[]) => unknown;
+  };
+}) {
+  return params.accounts.map(({ account, statusSink }) =>
+    registerWebhookTargetForTest({
+      core: params.core,
+      account,
+      config: params.config,
+      path: params.path,
+      runtime: params.runtime,
+      statusSink,
+    }),
+  );
+}
