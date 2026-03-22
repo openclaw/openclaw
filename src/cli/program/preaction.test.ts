@@ -5,6 +5,7 @@ const setVerboseMock = vi.fn();
 const emitCliBannerMock = vi.fn();
 const ensureConfigReadyMock = vi.fn(async () => {});
 const ensurePluginRegistryLoadedMock = vi.fn();
+const routeLogsToStderrMock = vi.fn();
 
 const runtimeMock = {
   log: vi.fn(),
@@ -22,6 +23,10 @@ vi.mock("../../runtime.js", () => ({
 
 vi.mock("../banner.js", () => ({
   emitCliBanner: emitCliBannerMock,
+}));
+
+vi.mock("../../logging/console.js", () => ({
+  routeLogsToStderr: routeLogsToStderrMock,
 }));
 
 vi.mock("../cli-name.js", () => ({
@@ -268,6 +273,35 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       commandPath: ["config", "set"],
     });
+  });
+
+  it("routes logs to stderr in --json mode so stdout stays clean", async () => {
+    await runPreAction({
+      parseArgv: ["agents"],
+      processArgv: ["node", "openclaw", "agents", "--json"],
+    });
+
+    expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
+
+    vi.clearAllMocks();
+
+    // config set --json is parse-only (not JSON output mode), should not route
+    await runPreAction({
+      parseArgv: ["config", "set", "gateway.auth.mode", "local", "--json"],
+      processArgv: ["node", "openclaw", "config", "set", "gateway.auth.mode", "local", "--json"],
+    });
+
+    expect(routeLogsToStderrMock).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+
+    // non-json command should not route
+    await runPreAction({
+      parseArgv: ["agents"],
+      processArgv: ["node", "openclaw", "agents"],
+    });
+
+    expect(routeLogsToStderrMock).not.toHaveBeenCalled();
   });
 
   it("bypasses config guard for config validate", async () => {
