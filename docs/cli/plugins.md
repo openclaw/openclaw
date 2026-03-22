@@ -79,6 +79,13 @@ openclaw plugins install clawhub:openclaw-codex-app-server
 openclaw plugins install clawhub:openclaw-codex-app-server@1.2.3
 ```
 
+OpenClaw now also prefers ClawHub for bare npm-safe plugin specs. It only falls
+back to npm if ClawHub does not have that package or version:
+
+```bash
+openclaw plugins install openclaw-codex-app-server
+```
+
 OpenClaw downloads the package archive from ClawHub, checks the advertised
 plugin API / minimum gateway compatibility, then installs it through the normal
 archive path. Recorded installs keep their ClawHub source metadata for later
