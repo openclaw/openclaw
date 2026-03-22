@@ -693,6 +693,44 @@ describe("chat view", () => {
     expect(senderLabels).not.toContain("You");
   });
 
+  it("renders history attachments inline for user messages after chat reload", () => {
+    const container = document.createElement("div");
+    const pngBase64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "text", text: "see image" }],
+              attachments: [
+                {
+                  type: "image",
+                  mimeType: "image/png",
+                  fileName: "dot.png",
+                  content: pngBase64,
+                },
+              ],
+              timestamp: 1000,
+            },
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "got it" }],
+              timestamp: 1001,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const image = container.querySelector<HTMLImageElement>(".chat-group.user .chat-message-image");
+    expect(image).not.toBeNull();
+    expect(image?.getAttribute("src")).toBe(`data:image/png;base64,${pngBase64}`);
+    expect(image?.getAttribute("alt")).toBe("dot.png");
+  });
+
   it("keeps consecutive user messages from different senders in separate groups", () => {
     const container = document.createElement("div");
     render(

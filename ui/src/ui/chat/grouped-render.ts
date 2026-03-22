@@ -23,37 +23,106 @@ type ImageBlock = {
   alt?: string;
 };
 
+function normalizeImageDataUrl(data: string, mimeType?: string): string | null {
+  const trimmed = data.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.startsWith("data:")) {
+    return trimmed;
+  }
+  const normalizedMimeType = mimeType?.trim() || "image/png";
+  return `data:${normalizedMimeType};base64,${trimmed}`;
+}
+
+function extractImageUrlFromContentBlock(block: Record<string, unknown>): ImageBlock | null {
+  if (block.type === "image") {
+    const source = block.source as Record<string, unknown> | undefined;
+    if (source?.type === "base64" && typeof source.data === "string") {
+      const url = normalizeImageDataUrl(
+        source.data,
+        typeof source.media_type === "string" ? source.media_type : undefined,
+      );
+      return url ? { url } : null;
+    }
+    if (typeof block.url === "string" && block.url.trim()) {
+      return { url: block.url.trim() };
+    }
+    return null;
+  }
+
+  if (block.type === "image_url") {
+    const imageUrl = block.image_url;
+    if (typeof imageUrl === "string" && imageUrl.trim()) {
+      return { url: imageUrl.trim() };
+    }
+    if (
+      imageUrl &&
+      typeof imageUrl === "object" &&
+      typeof (imageUrl as { url?: unknown }).url === "string" &&
+      (imageUrl as { url: string }).url.trim()
+    ) {
+      return { url: (imageUrl as { url: string }).url.trim() };
+    }
+  }
+
+  return null;
+}
+
+function extractImageUrlFromAttachment(attachment: Record<string, unknown>): ImageBlock | null {
+  const mimeType = typeof attachment.mimeType === "string" ? attachment.mimeType.trim() : undefined;
+  if (mimeType && !mimeType.toLowerCase().startsWith("image/")) {
+    return null;
+  }
+  if (typeof attachment.url === "string" && attachment.url.trim()) {
+    return {
+      url: attachment.url.trim(),
+      alt: typeof attachment.fileName === "string" ? attachment.fileName : undefined,
+    };
+  }
+  if (typeof attachment.content !== "string") {
+    return null;
+  }
+  const url = normalizeImageDataUrl(attachment.content, mimeType);
+  if (!url) {
+    return null;
+  }
+  return {
+    url,
+    alt: typeof attachment.fileName === "string" ? attachment.fileName : undefined,
+  };
+}
+
 function extractImages(message: unknown): ImageBlock[] {
   const m = message as Record<string, unknown>;
   const content = m.content;
   const images: ImageBlock[] = [];
+  const seenUrls = new Set<string>();
+
+  const pushImage = (image: ImageBlock | null) => {
+    if (!image || seenUrls.has(image.url)) {
+      return;
+    }
+    seenUrls.add(image.url);
+    images.push(image);
+  };
 
   if (Array.isArray(content)) {
     for (const block of content) {
       if (typeof block !== "object" || block === null) {
         continue;
       }
-      const b = block as Record<string, unknown>;
+      pushImage(extractImageUrlFromContentBlock(block as Record<string, unknown>));
+    }
+  }
 
-      if (b.type === "image") {
-        // Handle source object format (from sendChatMessage)
-        const source = b.source as Record<string, unknown> | undefined;
-        if (source?.type === "base64" && typeof source.data === "string") {
-          const data = source.data;
-          const mediaType = (source.media_type as string) || "image/png";
-          // If data is already a data URL, use it directly
-          const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
-          images.push({ url });
-        } else if (typeof b.url === "string") {
-          images.push({ url: b.url });
-        }
-      } else if (b.type === "image_url") {
-        // OpenAI format
-        const imageUrl = b.image_url as Record<string, unknown> | undefined;
-        if (typeof imageUrl?.url === "string") {
-          images.push({ url: imageUrl.url });
-        }
+  const attachments = m.attachments;
+  if (Array.isArray(attachments)) {
+    for (const attachment of attachments) {
+      if (typeof attachment !== "object" || attachment === null) {
+        continue;
       }
+      pushImage(extractImageUrlFromAttachment(attachment as Record<string, unknown>));
     }
   }
 
