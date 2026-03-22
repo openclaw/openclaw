@@ -197,7 +197,9 @@ Output one fact per line. No bullets, numbers, or explanations.`;
       try {
         const entries = await fs.readdir(targetDir);
         sessionFiles = entries
-          .filter((f) => f.endsWith(".jsonl") && !f.includes(".deleted") && !f.includes(".reset"))
+          .filter(
+            (f) => !f.includes(".deleted") && (f.endsWith(".jsonl") || f.includes(".jsonl.reset.")),
+          )
           .map((f) => path.join(targetDir, f));
       } catch {
         // no sessions dir
