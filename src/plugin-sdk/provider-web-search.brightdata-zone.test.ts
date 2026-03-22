@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { ensureBrightDataZoneExists, resetEnsuredBrightDataZones } from "./provider-web-search.js";
 
 type ZoneEnsureParams = Parameters<typeof ensureBrightDataZoneExists>[0];
@@ -37,8 +37,8 @@ describe("provider-web-search Bright Data zone bootstrap", () => {
   it("shares the zone bootstrap cache across callers", async () => {
     const firstCalls: string[] = [];
     const secondCalls: string[] = [];
-    const firstRunner = vi.fn(createZoneRunner(firstCalls));
-    const secondRunner = vi.fn(createZoneRunner(secondCalls));
+    const firstRunner = createZoneRunner(firstCalls);
+    const secondRunner = createZoneRunner(secondCalls);
 
     const zoneParams = {
       apiToken: "brightdata-test-token",
@@ -61,8 +61,6 @@ describe("provider-web-search Bright Data zone bootstrap", () => {
 
     expect(first).toBe(true);
     expect(second).toBe(true);
-    expect(firstRunner).toHaveBeenCalledTimes(2);
-    expect(secondRunner).not.toHaveBeenCalled();
     expect(firstCalls).toEqual([
       "https://api.brightdata.com/zone/get_active_zones",
       "https://api.brightdata.com/zone",

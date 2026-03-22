@@ -482,6 +482,8 @@ export type ToolsConfig = {
       cacheTtlMinutes?: number;
       /** @deprecated Legacy Brave scoped config. */
       brave?: WebSearchLegacyProviderConfig;
+      /** @deprecated Legacy Bright Data scoped config. */
+      brightdata?: WebSearchLegacyProviderConfig;
       /** @deprecated Legacy Firecrawl scoped config. */
       firecrawl?: WebSearchLegacyProviderConfig;
       /** @deprecated Legacy Gemini scoped config. */
