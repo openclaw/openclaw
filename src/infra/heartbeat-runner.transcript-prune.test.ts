@@ -10,9 +10,6 @@ import {
   withTempTelegramHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
 
-// Avoid pulling optional runtime deps during isolated runs.
-vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
-
 beforeEach(() => {
   setupTelegramHeartbeatPluginRuntimeForTests();
 });
