@@ -1,6 +1,7 @@
 import * as fsSync from "node:fs";
 import fs from "node:fs/promises";
 import http, { type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createRequire } from "node:module";
 import type { Socket } from "node:net";
 import path from "node:path";
 import type { Duplex } from "node:stream";
@@ -22,6 +23,8 @@ import {
   injectCanvasLiveReload,
 } from "./a2ui.js";
 import { normalizeUrlPath, resolveFileWithinRoot } from "./file-resolver.js";
+
+type ChokidarWatch = typeof import("chokidar").watch;
 
 export type CanvasHostOpts = {
   runtime: RuntimeEnv;
@@ -210,6 +213,25 @@ function resolveDefaultCanvasRoot(): string {
   return existing ?? candidates[0];
 }
 
+function resolveDefaultWatchFactory(): ChokidarWatch {
+  const importedWatch = (chokidar as { watch?: ChokidarWatch } | undefined)?.watch;
+  if (typeof importedWatch === "function") {
+    return importedWatch.bind(chokidar);
+  }
+
+  const require = createRequire(import.meta.url);
+  const runtime = require("chokidar") as
+    | { watch?: ChokidarWatch; default?: { watch?: ChokidarWatch } }
+    | undefined;
+  if (runtime && typeof runtime.watch === "function") {
+    return runtime.watch.bind(runtime);
+  }
+  if (runtime?.default && typeof runtime.default.watch === "function") {
+    return runtime.default.watch.bind(runtime.default);
+  }
+  throw new Error("chokidar.watch unavailable");
+}
+
 export async function createCanvasHostHandler(
   opts: CanvasHostHandlerOpts,
 ): Promise<CanvasHostHandler> {
@@ -267,7 +289,7 @@ export async function createCanvasHostHandler(
   };
 
   let watcherClosed = false;
-  const watchFactory = opts.watchFactory ?? chokidar.watch.bind(chokidar);
+  const watchFactory = opts.watchFactory ?? resolveDefaultWatchFactory();
   const watcher = liveReload
     ? watchFactory(rootReal, {
         ignoreInitial: true,
