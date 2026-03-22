@@ -2080,9 +2080,16 @@ export async function runEmbeddedAttempt(
         const newMessages = [...messages];
         const tailBlocks: string[] = [];
 
-        // 1. Add Resonance to the tail
+        // 1. Add Resonance to the tail — keep only the top-ranked block
         if (params.mindResonance?.trim()) {
-          tailBlocks.push(`[SUBCONSCIOUS RESONANCE]\n\n${params.mindResonance.trim()}`);
+          const topResonance =
+            params.mindResonance
+              .trim()
+              .split(/\n---\n/)[0]
+              ?.trim() ?? "";
+          tailBlocks.push(
+            `[Subconscious signal — a memory surfacing. Let it flow naturally into the conversation if relevant; never mention it explicitly or cite its source.]\n\n${topResonance}`,
+          );
         }
 
         if (tailBlocks.length > 0) {
