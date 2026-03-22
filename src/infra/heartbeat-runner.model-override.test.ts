@@ -5,8 +5,6 @@ import { resolveAgentMainSessionKey, resolveMainSessionKey } from "../config/ses
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
 
-// Avoid pulling optional runtime deps during isolated runs.
-vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
 vi.mock("./outbound/deliver.js", () => ({
   deliverOutboundPayloads: vi.fn().mockResolvedValue(undefined),
 }));

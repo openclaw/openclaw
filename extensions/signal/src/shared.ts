@@ -1,4 +1,5 @@
 import {
+  adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
@@ -32,7 +33,7 @@ export const signalSetupWizard = createSignalSetupWizardProxy(
 export const signalConfigAdapter = createScopedChannelConfigAdapter<ResolvedSignalAccount>({
   sectionKey: SIGNAL_CHANNEL,
   listAccountIds: listSignalAccountIds,
-  resolveAccount: (cfg, accountId) => resolveSignalAccount({ cfg, accountId }),
+  resolveAccount: adaptScopedAccountAccessor(resolveSignalAccount),
   defaultAccountId: resolveDefaultSignalAccountId,
   clearBaseFields: ["account", "httpUrl", "httpHost", "httpPort", "cliPath", "name"],
   resolveAllowFrom: (account: ResolvedSignalAccount) => account.config.allowFrom,

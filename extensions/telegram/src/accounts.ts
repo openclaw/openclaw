@@ -2,10 +2,11 @@ import util from "node:util";
 import {
   createAccountActionGate,
   DEFAULT_ACCOUNT_ID,
-  listConfiguredAccountIds as listConfiguredAccountIdsFromSection,
+  listCombinedAccountIds,
   normalizeAccountId,
   normalizeOptionalAccountId,
   resolveAccountEntry,
+  resolveListedDefaultAccountId,
   resolveAccountWithDefaultFallback,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
@@ -55,21 +56,23 @@ export type ResolvedTelegramAccount = {
 };
 
 function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
-  return listConfiguredAccountIdsFromSection({
-    accounts: cfg.channels?.telegram?.accounts,
-    normalizeAccountId,
-  });
+  const ids = new Set<string>();
+  for (const key of Object.keys(cfg.channels?.telegram?.accounts ?? {})) {
+    if (key) {
+      ids.add(normalizeAccountId(key));
+    }
+  }
+  return [...ids];
 }
 
 export function listTelegramAccountIds(cfg: OpenClawConfig): string[] {
-  const ids = Array.from(
-    new Set([...listConfiguredAccountIds(cfg), ...listBoundAccountIds(cfg, "telegram")]),
-  );
+  const ids = listCombinedAccountIds({
+    configuredAccountIds: listConfiguredAccountIds(cfg),
+    additionalAccountIds: listBoundAccountIds(cfg, "telegram"),
+    fallbackAccountIdWhenEmpty: DEFAULT_ACCOUNT_ID,
+  });
   debugAccounts("listTelegramAccountIds", ids);
-  if (ids.length === 0) {
-    return [DEFAULT_ACCOUNT_ID];
-  }
-  return ids.toSorted((a, b) => a.localeCompare(b));
+  return ids;
 }
 
 let emittedMissingDefaultWarn = false;
@@ -84,16 +87,13 @@ export function resolveDefaultTelegramAccountId(cfg: OpenClawConfig): string {
   if (boundDefault) {
     return boundDefault;
   }
-  const preferred = normalizeOptionalAccountId(cfg.channels?.telegram?.defaultAccount);
-  if (
-    preferred &&
-    listTelegramAccountIds(cfg).some((accountId) => normalizeAccountId(accountId) === preferred)
-  ) {
-    return preferred;
-  }
   const ids = listTelegramAccountIds(cfg);
-  if (ids.includes(DEFAULT_ACCOUNT_ID)) {
-    return DEFAULT_ACCOUNT_ID;
+  const resolved = resolveListedDefaultAccountId({
+    accountIds: ids,
+    configuredDefaultAccountId: normalizeOptionalAccountId(cfg.channels?.telegram?.defaultAccount),
+  });
+  if (resolved !== ids[0] || ids.includes(DEFAULT_ACCOUNT_ID) || ids.length <= 1) {
+    return resolved;
   }
   if (ids.length > 1 && !emittedMissingDefaultWarn) {
     emittedMissingDefaultWarn = true;
@@ -102,7 +102,7 @@ export function resolveDefaultTelegramAccountId(cfg: OpenClawConfig): string {
         `${formatSetExplicitDefaultInstruction("telegram")} to avoid routing surprises in multi-account setups.`,
     );
   }
-  return ids[0] ?? DEFAULT_ACCOUNT_ID;
+  return resolved;
 }
 
 export function resolveTelegramAccountConfig(

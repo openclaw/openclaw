@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   resolveSessionAgentId: vi.fn(() => "agent-from-key"),
-  resolveSessionDeliveryTarget: vi.fn(() => ({
+  deliveryContextFromSession: vi.fn(() => ({
     channel: "whatsapp",
     to: "+15550001",
     accountId: "acct-1",
@@ -50,7 +50,7 @@ describe("deliverSessionMaintenanceWarning", () => {
     process.env.NODE_ENV = "development";
     vi.resetModules();
     mocks.resolveSessionAgentId.mockClear();
-    mocks.resolveSessionDeliveryTarget.mockClear();
+    mocks.deliveryContextFromSession.mockClear();
     mocks.normalizeMessageChannel.mockClear();
     mocks.isDeliverableMessageChannel.mockClear();
     mocks.deliverOutboundPayloads.mockClear();
@@ -62,10 +62,10 @@ describe("deliverSessionMaintenanceWarning", () => {
       normalizeMessageChannel: mocks.normalizeMessageChannel,
       isDeliverableMessageChannel: mocks.isDeliverableMessageChannel,
     }));
-    vi.doMock("./outbound/targets.js", () => ({
-      resolveSessionDeliveryTarget: mocks.resolveSessionDeliveryTarget,
+    vi.doMock("../utils/delivery-context.js", () => ({
+      deliveryContextFromSession: mocks.deliveryContextFromSession,
     }));
-    vi.doMock("./outbound/deliver.js", () => ({
+    vi.doMock("./outbound/deliver-runtime.js", () => ({
       deliverOutboundPayloads: mocks.deliverOutboundPayloads,
     }));
     vi.doMock("./system-events.js", () => ({
@@ -112,7 +112,7 @@ describe("deliverSessionMaintenanceWarning", () => {
   });
 
   it("falls back to a system event when the last target is not deliverable", async () => {
-    mocks.resolveSessionDeliveryTarget.mockReturnValueOnce({
+    mocks.deliveryContextFromSession.mockReturnValueOnce({
       channel: "debug",
       to: "+15550001",
       accountId: "acct-1",
@@ -143,7 +143,7 @@ describe("deliverSessionMaintenanceWarning", () => {
 
     await deliverSessionMaintenanceWarning(createParams());
 
-    expect(mocks.resolveSessionDeliveryTarget).not.toHaveBeenCalled();
+    expect(mocks.deliveryContextFromSession).not.toHaveBeenCalled();
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
   });

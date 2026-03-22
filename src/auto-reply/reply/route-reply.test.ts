@@ -414,6 +414,31 @@ describe("routeReply", () => {
     );
   });
 
+  it("preserves audioAsVoice on routed outbound payloads", async () => {
+    mocks.deliverOutboundPayloads.mockClear();
+    mocks.deliverOutboundPayloads.mockResolvedValue([]);
+    await routeReply({
+      payload: { text: "voice caption", mediaUrl: "file:///tmp/clip.mp3", audioAsVoice: true },
+      channel: "slack",
+      to: "channel:C123",
+      cfg: {} as never,
+    });
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        to: "channel:C123",
+        payloads: [
+          expect.objectContaining({
+            text: "voice caption",
+            mediaUrl: "file:///tmp/clip.mp3",
+            audioAsVoice: true,
+          }),
+        ],
+      }),
+    );
+  });
+
   it("uses replyToId as threadTs for Slack", async () => {
     mocks.sendMessageSlack.mockClear();
     await routeReply({

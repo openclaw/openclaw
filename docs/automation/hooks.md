@@ -8,7 +8,7 @@ title: "Hooks"
 
 # Hooks
 
-Hooks provide an extensible event-driven system for automating actions in response to agent commands and events. Hooks are automatically discovered from directories and can be managed via CLI commands, similar to how skills work in OpenClaw.
+Hooks provide an extensible event-driven system for automating actions in response to agent commands and events. Hooks are automatically discovered from directories and can be inspected with `openclaw hooks`, while hook-pack installation and updates now go through `openclaw plugins`.
 
 ## Getting Oriented
 
@@ -17,7 +17,7 @@ Hooks are small scripts that run when something happens. There are two kinds:
 - **Hooks** (this page): run inside the Gateway when agent events fire, like `/new`, `/reset`, `/stop`, or lifecycle events.
 - **Webhooks**: external HTTP webhooks that let other systems trigger work in OpenClaw. See [Webhook Hooks](/automation/webhook) or use `openclaw webhooks` for Gmail helper commands.
 
-Hooks can also be bundled inside plugins; see [Plugin hooks](/plugins/architecture#provider-runtime-hooks).
+Hooks can also be bundled inside plugins; see [Plugin hooks](/plugins/architecture#provider-runtime-hooks). `openclaw hooks list` shows both standalone hooks and plugin-managed hooks.
 
 Common uses:
 
@@ -26,7 +26,7 @@ Common uses:
 - Trigger follow-up automation when a session starts or ends
 - Write files into the agent workspace or call external APIs when events fire
 
-If you can write a small TypeScript function, you can write a hook. Hooks are discovered automatically, and you enable or disable them via the CLI.
+If you can write a small TypeScript function, you can write a hook. Managed and bundled hooks are trusted local code. Workspace hooks are discovered automatically, but OpenClaw keeps them disabled until you explicitly enable them via the CLI or config.
 
 ## Overview
 
@@ -43,7 +43,7 @@ The hooks system allows you to:
 
 OpenClaw ships with four bundled hooks that are automatically discovered:
 
-- **💾 session-memory**: Saves session context to your agent workspace (default `~/.openclaw/workspace/memory/`) when you issue `/new`
+- **💾 session-memory**: Saves session context to your agent workspace (default `~/.openclaw/workspace/memory/`) when you issue `/new` or `/reset`
 - **📎 bootstrap-extra-files**: Injects additional workspace bootstrap files from configured glob/path patterns during `agent:bootstrap`
 - **📝 command-logger**: Logs all command events to `~/.openclaw/logs/commands.log`
 - **🚀 boot-md**: Runs `BOOT.md` when the gateway starts (requires internal hooks enabled)
@@ -76,13 +76,21 @@ openclaw hooks info session-memory
 
 During onboarding (`openclaw onboard`), you'll be prompted to enable recommended hooks. The wizard automatically discovers eligible hooks and presents them for selection.
 
+### Trust Boundary
+
+Hooks run inside the Gateway process. Treat bundled hooks, managed hooks, and `hooks.internal.load.extraDirs` as trusted local code. Workspace hooks under `<workspace>/hooks/` are repo-local code, so OpenClaw requires an explicit enable step before loading them.
+
 ## Hook Discovery
 
-Hooks are automatically discovered from three directories (in order of precedence):
+Hooks are automatically discovered from these directories:
 
-1. **Workspace hooks**: `<workspace>/hooks/` (per-agent, highest precedence)
-2. **Managed hooks**: `~/.openclaw/hooks/` (user-installed, shared across workspaces)
-3. **Bundled hooks**: `<openclaw>/dist/hooks/bundled/` (shipped with OpenClaw)
+1. **Bundled hooks**: `<openclaw>/dist/hooks/bundled/` (shipped with OpenClaw)
+2. **Plugin hooks**: hooks bundled inside installed plugins (see [Plugin hooks](/plugins/architecture#provider-runtime-hooks))
+3. **Managed hooks**: `~/.openclaw/hooks/` (user-installed, shared across workspaces; can override bundled and plugin hooks)
+4. **Extra hook directories**: `hooks.internal.load.extraDirs` (operator-configured shared hook folders; treated as managed)
+5. **Workspace hooks**: `<workspace>/hooks/` (per-agent, disabled by default until explicitly enabled; cannot override hooks from other sources)
+
+Workspace hooks can add new hook names for a repo, but they cannot override bundled, managed, or plugin-provided hooks with the same name.
 
 Managed hook directories can be either a **single hook** or a **hook pack** (package directory).
 
@@ -100,7 +108,7 @@ Hook packs are standard npm packages that export one or more hooks via `openclaw
 `package.json`. Install them with:
 
 ```bash
-openclaw hooks install <path-or-spec>
+openclaw plugins install <path-or-spec>
 ```
 
 Npm specs are registry-only (package name + optional exact version or dist-tag).
@@ -127,7 +135,7 @@ Hook packs can ship dependencies; they will be installed under `~/.openclaw/hook
 Each `openclaw.hooks` entry must stay inside the package directory after symlink
 resolution; entries that escape are rejected.
 
-Security note: `openclaw hooks install` installs dependencies with `npm install --ignore-scripts`
+Security note: `openclaw plugins install` installs hook-pack dependencies with `npm install --ignore-scripts`
 (no lifecycle scripts). Keep hook pack dependency trees "pure JS/TS" and avoid packages that rely
 on `postinstall` builds.
 
@@ -294,11 +302,13 @@ Message events include rich context about the message:
     to?: string,
     provider?: string,
     surface?: string,
-    threadId?: string,
+    threadId?: string | number,
     senderId?: string,
     senderName?: string,
     senderUsername?: string,
     senderE164?: string,
+    guildId?: string,     // Discord guild / server ID
+    channelName?: string, // Channel name (e.g., Discord channel name)
   }
 }
 
@@ -318,22 +328,42 @@ Message events include rich context about the message:
 
 // message:transcribed context
 {
+  from?: string,          // Sender identifier
+  to?: string,            // Recipient identifier
   body?: string,          // Raw inbound body before enrichment
   bodyForAgent?: string,  // Enriched body visible to the agent
   transcript: string,     // Audio transcript text
+  timestamp?: number,     // Unix timestamp when received
   channelId: string,      // Channel (e.g., "telegram", "whatsapp")
   conversationId?: string,
   messageId?: string,
+  senderId?: string,      // Sender user ID
+  senderName?: string,    // Sender display name
+  senderUsername?: string,
+  provider?: string,      // Provider name
+  surface?: string,       // Surface name
+  mediaPath?: string,     // Path to the media file that was transcribed
+  mediaType?: string,     // MIME type of the media
 }
 
 // message:preprocessed context
 {
+  from?: string,          // Sender identifier
+  to?: string,            // Recipient identifier
   body?: string,          // Raw inbound body
   bodyForAgent?: string,  // Final enriched body after media/link understanding
   transcript?: string,    // Transcript when audio was present
+  timestamp?: number,     // Unix timestamp when received
   channelId: string,      // Channel (e.g., "telegram", "whatsapp")
   conversationId?: string,
   messageId?: string,
+  senderId?: string,      // Sender user ID
+  senderName?: string,    // Sender display name
+  senderUsername?: string,
+  provider?: string,      // Provider name
+  surface?: string,       // Surface name
+  mediaPath?: string,     // Path to the media file
+  mediaType?: string,     // MIME type of the media
   isGroup?: boolean,
   groupId?: string,
 }
@@ -383,8 +413,8 @@ Planned event types:
 
 ### 1. Choose Location
 
-- **Workspace hooks** (`<workspace>/hooks/`): Per-agent, highest precedence
-- **Managed hooks** (`~/.openclaw/hooks/`): Shared across workspaces
+- **Workspace hooks** (`<workspace>/hooks/`): Per-agent; can add new hook names but cannot override bundled, managed, or plugin hooks with the same name
+- **Managed hooks** (`~/.openclaw/hooks/`): Shared across workspaces; can override bundled and plugin hooks
 
 ### 2. Create Directory Structure
 
@@ -571,9 +601,9 @@ openclaw hooks disable command-logger
 
 ### session-memory
 
-Saves session context to memory when you issue `/new`.
+Saves session context to memory when you issue `/new` or `/reset`.
 
-**Events**: `command:new`
+**Events**: `command:new`, `command:reset`
 
 **Requirements**: `workspace.dir` must be configured
 
@@ -582,7 +612,7 @@ Saves session context to memory when you issue `/new`.
 **What it does**:
 
 1. Uses the pre-reset session entry to locate the correct transcript
-2. Extracts the last 15 lines of conversation
+2. Extracts the last 15 user/assistant messages from the conversation (configurable)
 3. Uses LLM to generate a descriptive filename slug
 4. Saves session metadata to a dated memory file
 
@@ -594,6 +624,11 @@ Saves session context to memory when you issue `/new`.
 - **Session Key**: agent:main:main
 - **Session ID**: abc123def456
 - **Source**: telegram
+
+## Conversation Summary
+
+user: Can you help me design the API?
+assistant: Sure! Let's start with the endpoints...
 ```
 
 **Filename examples**:
@@ -640,8 +675,8 @@ Injects additional bootstrap files (for example monorepo-local `AGENTS.md` / `TO
 
 - Paths are resolved relative to workspace.
 - Files must stay inside workspace (realpath-checked).
-- Only recognized bootstrap basenames are loaded.
-- Subagent allowlist is preserved (`AGENTS.md` and `TOOLS.md` only).
+- Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, `MEMORY.md`, `memory.md`).
+- For subagent/cron sessions a narrower allowlist applies (`AGENTS.md`, `TOOLS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`).
 
 **Enable**:
 
