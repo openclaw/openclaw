@@ -151,8 +151,8 @@ def call_llm(prompt, system=""):
     env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
     try:
         result = subprocess.run(
-            ["claude", "--print", "--model", "sonnet"],
-            input=full, capture_output=True, text=True, timeout=60,
+            ["claude", "--print", "--model", "opus"],
+            input=full, capture_output=True, text=True, timeout=90,
             env=env, cwd="/tmp",
         )
         if result.returncode == 0 and result.stdout.strip():
