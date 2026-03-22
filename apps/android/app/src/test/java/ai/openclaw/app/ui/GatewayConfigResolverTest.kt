@@ -31,9 +31,9 @@ class GatewayConfigResolverTest {
     assertEquals(
       GatewayEndpointConfig(
         host = "gateway.example",
-        port = 80,
+        port = 18789,
         tls = false,
-        displayUrl = "http://gateway.example",
+        displayUrl = "http://gateway.example:18789",
       ),
       parsed,
     )
