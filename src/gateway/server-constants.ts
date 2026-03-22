@@ -21,14 +21,27 @@ export const __setMaxChatHistoryMessagesBytesForTest = (value?: number) => {
   }
 };
 export const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10_000;
-export const getHandshakeTimeoutMs = () => {
-  if (process.env.VITEST && process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS) {
-    const parsed = Number(process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS);
+/**
+ * Loopback connections do not incur network RTT, but the event loop can be
+ * busy (e.g. a managed browser session, agent turns, or compaction running
+ * concurrently on the same host).  A generous loopback-specific ceiling lets
+ * the handshake complete under load without falsely declaring the connection
+ * dead.  Remote connections keep the shorter default so security-relevant
+ * timeouts remain tight.
+ */
+export const LOOPBACK_HANDSHAKE_TIMEOUT_MS = 30_000;
+export const getHandshakeTimeoutMs = (opts?: { isLoopback?: boolean }) => {
+  // User-facing env var (works in all environments); test-only var gated behind VITEST
+  const envKey =
+    process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS ||
+    (process.env.VITEST && process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS);
+  if (envKey) {
+    const parsed = Number(envKey);
     if (Number.isFinite(parsed) && parsed > 0) {
       return parsed;
     }
   }
-  return DEFAULT_HANDSHAKE_TIMEOUT_MS;
+  return opts?.isLoopback ? LOOPBACK_HANDSHAKE_TIMEOUT_MS : DEFAULT_HANDSHAKE_TIMEOUT_MS;
 };
 export const TICK_INTERVAL_MS = 30_000;
 export const HEALTH_REFRESH_INTERVAL_MS = 60_000;

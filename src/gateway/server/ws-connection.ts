@@ -264,7 +264,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       close();
     });
 
-    const handshakeTimeoutMs = getHandshakeTimeoutMs();
+    const handshakeTimeoutMs = getHandshakeTimeoutMs({ isLoopback: isLoopbackAddress(remoteAddr) });
     const handshakeTimer = setTimeout(() => {
       if (!client) {
         handshakeState = "failed";
