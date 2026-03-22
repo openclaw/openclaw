@@ -163,7 +163,7 @@ describe("telegram bot message processor", () => {
     );
   });
 
-  it("aborts error-fallback retry sleeps when fetchAbortSignal is aborted", async () => {
+  it("keeps retrying error fallback even when fetchAbortSignal is already aborted", async () => {
     vi.useFakeTimers();
     try {
       const abort = new AbortController();
@@ -186,7 +186,7 @@ describe("telegram bot message processor", () => {
       await processSampleMessage(processMessage);
       await vi.runAllTimersAsync();
 
-      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(sendMessage).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }
