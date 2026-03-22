@@ -9,7 +9,7 @@ import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createOpenGroupPolicyRestrictSendersWarningCollector,
-  projectWarningCollector,
+  projectAccountWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
@@ -282,10 +282,10 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
     },
     security: {
       resolveDmPolicy: resolveBlueBubblesDmPolicy,
-      collectWarnings: projectWarningCollector(
-        ({ account }: { account: ResolvedBlueBubblesAccount }) => account,
-        collectBlueBubblesSecurityWarnings,
-      ),
+      collectWarnings: projectAccountWarningCollector<
+        ResolvedBlueBubblesAccount,
+        { account: ResolvedBlueBubblesAccount }
+      >(collectBlueBubblesSecurityWarnings),
     },
     threading: {
       buildToolContext: ({ context, hasRepliedRef }) => ({
