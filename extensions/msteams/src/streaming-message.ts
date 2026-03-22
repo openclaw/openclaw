@@ -75,6 +75,7 @@ export class TeamsHttpStream {
   private stopped = false;
   private finalized = false;
   private streamFailed = false;
+  private lastStreamedText = "";
   private loop: DraftStreamLoop;
 
   constructor(options: TeamsStreamOptions) {
@@ -156,26 +157,29 @@ export class TeamsHttpStream {
     this.loop.stop();
     await this.loop.waitForInFlight();
 
-    // If no text was streamed but an informative update was sent (streamId exists),
-    // close the stream with an empty final message so Teams clears the progress bar.
+    // If no text was streamed (e.g. agent sent a card via tool instead of
+    // streaming text), just return. Teams auto-clears the informative progress
+    // bar after its streaming timeout. Sending an empty final message fails
+    // with 403.
     if (!this.accumulatedText.trim()) {
+      return;
+    }
+
+    // If streaming failed, close the stream so Teams removes the "Stop" button.
+    // Send the last successfully streamed text as the final message.
+    // The fallback path in deliver() handles delivering the complete response.
+    if (this.streamFailed) {
       if (this.streamId) {
         try {
           await this.sendActivity({
             type: "message",
-            text: "",
-            entities: [buildStreamInfoEntity(this.streamId, "final")],
+            text: this.lastStreamedText || this.accumulatedText,
+            entities: [AI_GENERATED_ENTITY, buildStreamInfoEntity(this.streamId, "final")],
           });
         } catch {
-          // Best effort — just clear the progress bar
+          // Best effort — stream will auto-close after Teams timeout
         }
       }
-      return;
-    }
-
-    // If streaming failed and fell back to normal delivery, don't send
-    // a final stream message — the fallback already delivered the content.
-    if (this.streamFailed) {
       return;
     }
 
@@ -241,6 +245,7 @@ export class TeamsHttpStream {
       if (!this.streamId) {
         this.streamId = extractId(response);
       }
+      this.lastStreamedText = text;
       return true;
     } catch (err) {
       const axiosData = (err as { response?: { data?: unknown; status?: number } })?.response;
