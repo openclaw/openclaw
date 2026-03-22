@@ -6,9 +6,15 @@ import {
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-runtime";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  HEARTBEAT_TOKEN,
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+  stripHeartbeatToken,
+} from "openclaw/plugin-sdk/reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { parseSlackBlocksInput } from "../blocks-input.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { sendMessageSlack, type SlackSendIdentity } from "../send.js";
@@ -36,13 +42,32 @@ export async function deliverReplies(params: {
   replyToMode: "off" | "first" | "all";
   identity?: SlackSendIdentity;
 }) {
+  let didLogHeartbeatStrip = false;
   for (const payload of params.replies) {
     // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
     // must not force threading.
     const inlineReplyToId = params.replyToMode === "off" ? undefined : payload.replyToId;
     const threadTs = inlineReplyToId ?? params.replyThreadTs;
-    const reply = resolveSendableOutboundReplyParts(payload);
-    const slackBlocks = readSlackReplyBlocks(payload);
+    // Safety-net: strip stray HEARTBEAT_OK tokens before delivery, mirroring
+    // the secondary stripping in the web/WhatsApp channel modules. The primary
+    // stripping happens in the reply dispatcher, but concurrent heartbeat runs
+    // can race with active DM sessions and bypass that path.
+    let strippedPayload = payload;
+    if (payload.text?.includes(HEARTBEAT_TOKEN)) {
+      const stripped = stripHeartbeatToken(payload.text, { mode: "message" });
+      if (stripped.didStrip) {
+        if (!didLogHeartbeatStrip) {
+          didLogHeartbeatStrip = true;
+          logVerbose("slack: stripped stray HEARTBEAT_OK token from reply");
+        }
+        if (stripped.shouldSkip && !payload.mediaUrl && !payload.mediaUrls?.length) {
+          continue;
+        }
+        strippedPayload = { ...payload, text: stripped.text };
+      }
+    }
+    const reply = resolveSendableOutboundReplyParts(strippedPayload);
+    const slackBlocks = readSlackReplyBlocks(strippedPayload);
     if (!reply.hasContent && !slackBlocks?.length) {
       continue;
     }
@@ -67,7 +92,7 @@ export async function deliverReplies(params: {
     }
 
     const delivered = await deliverTextOrMediaReply({
-      payload,
+      payload: strippedPayload,
       text: reply.text,
       chunkText: !reply.hasMedia
         ? (value) => {

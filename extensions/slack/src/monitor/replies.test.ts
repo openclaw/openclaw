@@ -5,6 +5,11 @@ vi.mock("../send.js", () => ({
   sendMessageSlack: (...args: unknown[]) => sendMock(...args),
 }));
 
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return { ...actual, logVerbose: vi.fn() };
+});
+
 import { deliverReplies } from "./replies.js";
 
 function baseParams(overrides?: Record<string, unknown>) {
@@ -52,6 +57,24 @@ describe("deliverReplies identity passthrough", () => {
 
     expect(sendMock).toHaveBeenCalledOnce();
     expect(sendMock.mock.calls[0][2]).not.toHaveProperty("identity");
+  });
+
+  it("strips HEARTBEAT_OK-only replies and does not call sendMessageSlack", async () => {
+    sendMock.mockResolvedValue(undefined);
+    await deliverReplies(baseParams({ replies: [{ text: "HEARTBEAT_OK" }] }));
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("strips inline HEARTBEAT_OK from mixed-content replies before delivery", async () => {
+    sendMock.mockResolvedValue(undefined);
+    await deliverReplies(
+      baseParams({ replies: [{ text: "Good morning! HEARTBEAT_OK" }] }),
+    );
+    // The token should be stripped; the remaining text should be sent.
+    expect(sendMock).toHaveBeenCalledOnce();
+    const sentText: string = sendMock.mock.calls[0][1];
+    expect(sentText).not.toContain("HEARTBEAT_OK");
+    expect(sentText.trim().length).toBeGreaterThan(0);
   });
 
   it("delivers block-only replies through to sendMessageSlack", async () => {
