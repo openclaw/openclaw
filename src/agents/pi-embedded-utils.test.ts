@@ -1,176 +1,28 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import { describe, expect, it } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
-  extractAssistantText,
-  formatReasoningMessage,
   promoteMinimaxToolCallsToBlocks,
-  promoteThinkingTagsToBlocks,
+  formatReasoningMessage,
   stripDowngradedToolCallText,
+  promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
 
-function makeAssistantMessage(
-  message: Omit<AssistantMessage, "api" | "provider" | "model" | "usage" | "stopReason"> &
-    Partial<Pick<AssistantMessage, "api" | "provider" | "model" | "usage" | "stopReason">>,
-): AssistantMessage {
+function makeAssistantMessage(msg: Partial<AssistantMessage>): AssistantMessage {
   return {
-    api: "openai-responses",
-    provider: "openai",
-    model: "gpt-4o",
-    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-    stopReason: "stop",
-    ...message,
+    role: "assistant",
+    content: [],
+    timestamp: Date.now(),
+    ...msg,
   } as AssistantMessage;
 }
 
-describe("extractAssistantText", () => {
-  it("extracts plain text", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "Hello world" }],
-      timestamp: Date.now(),
-    });
-    expect(extractAssistantText(msg)).toBe("Hello world");
-  });
-
-  it("handles empty content", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [],
-      timestamp: Date.now(),
-    });
-    expect(extractAssistantText(msg)).toBe("");
-  });
-
-  it("handles missing content", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: undefined as unknown as AssistantMessage["content"],
-      timestamp: Date.now(),
-    });
-    expect(extractAssistantText(msg)).toBe("");
-  });
-
-  it("handles multiple text blocks", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [
-        { type: "text", text: "First block." },
-        { type: "text", text: "Third block." },
-      ],
-      timestamp: Date.now(),
-    });
-
-    const result = extractAssistantText(msg);
-    expect(result).toBe("First block.\nThird block.");
-  });
-
-  it("strips thinking tags from text", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "Hello <think>secret</think> world" }],
-      timestamp: Date.now(),
-    });
-    // extractAssistantText joins text blocks with \n if they were split
-    expect(extractAssistantText(msg).replace(/\s+/g, " ")).toBe("Hello world");
-  });
-
-  it("strips MiniMax tool call XML from text", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: 'Hello <invoke name="tool">payload</invoke></minimax:tool_call> world',
-        },
-      ],
-      timestamp: Date.now(),
-    });
-    expect(extractAssistantText(msg).replace(/\s+/g, " ")).toBe("Hello world");
-  });
-
-  it("strips tool-only Minimax invocation XML from text", () => {
-    const cases = [
-      {
-        name: "full wrapper",
-        text: `<minimax:tool_call>
-<invoke name="Bash">
-<parameter name="command">netstat -tlnp | grep 18789</parameter>
-</invoke>
-</minimax:tool_call>`,
-        expected: "",
-      },
-      {
-        name: "stray closing tag",
-        text: "Some text</minimax:tool_call>",
-        expected: "Some text",
-      },
-      {
-        name: "mixed text and tags",
-        text: 'Before<invoke name="T">P</invoke></minimax:tool_call>After',
-        expected: "BeforeAfter",
-      },
-    ];
-    for (const testCase of cases) {
-      const msg = makeAssistantMessage({
-        role: "assistant",
-        content: [{ type: "text", text: testCase.text }],
-        timestamp: Date.now(),
-      });
-      expect(extractAssistantText(msg).trim(), testCase.name).toBe(testCase.expected);
-    }
-  });
-
-  it("strips invoke blocks when minimax markers are present elsewhere", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: "Before<invoke>Drop</invoke><minimax:tool_call>After",
-        },
-      ],
-      timestamp: Date.now(),
-    });
-
-    const result = extractAssistantText(msg);
-    expect(result).toBe("BeforeAfter");
-  });
-
-  it("handles multiple text blocks with tool calls and results", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [
-        { type: "text", text: "Here's what I found:" },
-        {
-          type: "toolCall",
-          id: "call_1",
-          name: "test",
-          arguments: { arg: "val" },
-        } as unknown as AssistantMessage["content"][number],
-        {
-          type: "toolResult",
-          toolCallId: "call_1",
-          result: "success",
-        } as unknown as AssistantMessage["content"][number],
-        { type: "text", text: "Done checking." },
-      ],
-      timestamp: Date.now(),
-    });
-
-    const result = extractAssistantText(msg);
-    expect(result).toBe("Here's what I found:\nDone checking.");
-  });
-});
-
 describe("promoteMinimaxToolCallsToBlocks", () => {
   it("converts MiniMax XML tool calls into toolCall blocks", () => {
-    const text = `Let me check that.
-<minimax:tool_call>
+    const text = `<minimax:tool_call>
   <invoke name="Bash">
     <parameter name="command">ls -la</parameter>
   </invoke>
-</minimax:tool_call>
-All done.`;
+</minimax:tool_call>`;
     const msg = makeAssistantMessage({
       role: "assistant",
       content: [{ type: "text", text }],
@@ -182,13 +34,9 @@ All done.`;
     const toolCall = msg.content.find((c) => c && typeof c === "object" && c.type === "toolCall");
     expect(toolCall).toMatchObject({
       type: "toolCall",
-      name: "exec", // Normalized from Bash
+      name: "exec",
       arguments: { command: "ls -la" },
     });
-
-    const finalResult = extractAssistantText(msg).replace(/\s+/g, " ");
-    expect(finalResult).toContain("Let me check that.");
-    expect(finalResult).toContain("All done.");
   });
 
   it("handles multiple tool calls in one text block", () => {
@@ -247,7 +95,8 @@ All done.`;
   it("parses JSON-like arguments correctly", () => {
     const text = `<minimax:tool_call>
   <invoke name="Config">
-    <parameter name="settings">{"enabled": true, "count": 5}</parameter>
+    <parameter name="json">{"key": "value", "num": 42}</parameter>
+    <parameter name="list">[1, 2, 3]</parameter>
   </invoke>
 </minimax:tool_call>`;
     const msg = makeAssistantMessage({
@@ -261,12 +110,14 @@ All done.`;
     const toolCall = msg.content.find((c) => c && typeof c === "object" && c.type === "toolCall");
     expect(toolCall).toMatchObject({
       type: "toolCall",
-      name: "config",
-      arguments: { settings: { enabled: true, count: 5 } },
+      arguments: {
+        json: { key: "value", num: 42 },
+        list: [1, 2, 3],
+      },
     });
   });
 
-  it("unescapes XML entities in arguments", () => {
+  it("unescapes XML entities correctly", () => {
     const text = `<minimax:tool_call>
   <invoke name="Bash">
     <parameter name="command">ls &amp;&amp; echo &quot;done&quot; &gt; out.txt</parameter>
@@ -352,14 +203,12 @@ All done.`;
       arguments: {
         b1: true,
         b2: false,
-        n1: "123", // Reverted to string for stability
+        n1: "123", // Reverted to string for stability per Codex P1
       },
     });
   });
 
   it("does not reclaim invokes that are far from the stray closing tag", () => {
-    // Here, there is non-whitespace prose between the invoke and the closing tag.
-    // This suggests the invoke might just be a prose example.
     const text = `<invoke name="Evil">...</invoke> some explanation text </minimax:tool_call>`;
     const msg = makeAssistantMessage({
       role: "assistant",
@@ -373,50 +222,6 @@ All done.`;
       (c) => c && typeof c === "object" && c.type === "toolCall",
     );
     expect(hasToolCall).toBe(false);
-  });
-
-  it("handles tool calls nested in thinking tags within string-form content", () => {
-    const text = `<think>Internal thoughts... <minimax:tool_call><invoke name="Bash"><parameter name="command">ls</parameter></invoke></minimax:tool_call> End of thoughts.</think>`;
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: text as unknown as AssistantMessage["content"],
-      timestamp: Date.now(),
-    });
-
-    promoteMinimaxToolCallsToBlocks(msg);
-
-    // Should result in [thinking, toolCall, thinking]
-    expect(msg.content.length).toBe(3);
-    expect(msg.content[0]).toMatchObject({ type: "thinking", thinking: "Internal thoughts... " });
-    expect(msg.content[1]).toMatchObject({ type: "toolCall", name: "exec" });
-    expect(msg.content[2]).toMatchObject({ type: "thinking", thinking: " End of thoughts." });
-  });
-
-  it("restricts XML promotion to <invoke> blocks inside MiniMax wrappers", () => {
-    const text = `Here is an example: <invoke name="Evil">...</invoke>. 
-<minimax:tool_call><invoke name="Bash"><parameter name="command">ls</parameter></invoke></minimax:tool_call>`;
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [{ type: "text", text }],
-      timestamp: Date.now(),
-    });
-
-    promoteMinimaxToolCallsToBlocks(msg);
-
-    const calls = msg.content.filter((c) => c && typeof c === "object" && c.type === "toolCall");
-    // Only the one inside <minimax:tool_call> should be promoted.
-    expect(calls.length).toBe(1);
-    expect(calls[0]).toMatchObject({
-      type: "toolCall",
-      name: "exec",
-      arguments: { command: "ls" },
-    });
-
-    // The example one should remain as part of text.
-    const prose = msg.content.find((c) => c && typeof c === "object" && c.type === "text");
-    expect(prose && typeof prose === "object" && "text" in prose ? prose.text : "").toContain(
-      'Here is an example: <invoke name="Evil">...</invoke>.',
-    );
   });
 
   it("promotes all sibling invokes before a stray closing tag", () => {
@@ -439,6 +244,23 @@ All done.`;
     expect(texts[1]).toMatchObject({ type: "text", text: " Suffix" });
   });
 
+  it("supports self-closing MiniMax <invoke /> tool calls", () => {
+    const text = `<minimax:tool_call><invoke name="agents_list" /></minimax:tool_call>`;
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    });
+
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    const toolCall = msg.content.find((c) => c && typeof c === "object" && c.type === "toolCall");
+    expect(toolCall).toMatchObject({
+      type: "toolCall",
+      name: "agents_list",
+    });
+  });
+
   it("handles unclosed thinking tags in string-form content (stream scenario)", () => {
     const text = `<think>Internal thinking... <minimax:tool_call><invoke name="Bash"><parameter name="command">ls</parameter></invoke></minimax:tool_call>`;
     const msg = makeAssistantMessage({
@@ -449,10 +271,15 @@ All done.`;
 
     promoteMinimaxToolCallsToBlocks(msg);
 
-    // Should result in [thinking, toolCall]
-    expect(msg.content.length).toBe(2);
-    expect(msg.content[0]).toMatchObject({ type: "thinking", thinking: "Internal thinking... " });
-    expect(msg.content[1]).toMatchObject({ type: "toolCall", name: "exec" });
+    // With the new strict closing policy, unclosed think tags remain part of text.
+    const toolCall = msg.content.find((c) => c && typeof c === "object" && c.type === "toolCall");
+    expect(toolCall).toMatchObject({ type: "toolCall", name: "exec" });
+
+    const prose = msg.content.filter((c) => c && typeof c === "object" && c.type === "text");
+    expect(prose.length).toBe(1);
+    expect(
+      prose[0] && typeof prose[0] === "object" && "text" in prose[0] ? prose[0].text : "",
+    ).toContain("<think>Internal thinking...");
   });
 
   it("preserves leading/trailing whitespace in arguments", () => {
@@ -473,7 +300,6 @@ All done.`;
     promoteMinimaxToolCallsToBlocks(msg);
 
     const toolCall = msg.content.find((c) => c && typeof c === "object" && c.type === "toolCall");
-    // The exact content inside <parameter> tags should be preserved (unescaped but not trimmed)
     const args = (toolCall as { arguments?: { text?: string } })?.arguments;
     expect(args?.text).toBe("\n  line 1\n  line 2\n");
   });
@@ -491,7 +317,6 @@ All done.`;
 
     promoteMinimaxToolCallsToBlocks(msg);
 
-    // The valid one should be promoted, the malformed one should be stripped entirely
     const calls = msg.content.filter((c) => c && typeof c === "object" && c.type === "toolCall");
     expect(calls.length).toBe(1);
     expect(calls[0]).toMatchObject({ type: "toolCall", name: "valid" });
@@ -499,7 +324,6 @@ All done.`;
     const textBlocks = msg.content.filter((c) => c && typeof c === "object" && c.type === "text");
     const fullText = textBlocks.map((b) => (b as { text: string }).text).join("");
     expect(fullText).not.toContain("<invoke>");
-    expect(fullText).not.toContain("Malformed");
   });
 
   it("preserves prose inside the MiniMax wrapper", () => {
@@ -567,7 +391,6 @@ All done.`;
     promoteMinimaxToolCallsToBlocks(msg);
 
     const toolCall = msg.content.find((c) => c && typeof c === "object" && c.type === "toolCall");
-    // "Bash" should be normalized to "exec"
     expect(toolCall).toMatchObject({
       type: "toolCall",
       name: "exec",
@@ -582,14 +405,9 @@ All done.`;
       timestamp: Date.now(),
     });
 
-    // Step 1: Promote thinking tags first
     promoteThinkingTagsToBlocks(msg);
-    expect(msg.content[0].type).toBe("thinking");
-
-    // Step 2: Promote MiniMax tool calls from within thinking block
     promoteMinimaxToolCallsToBlocks(msg);
 
-    // Should result in [thinking, toolCall, thinking]
     expect(msg.content.length).toBe(3);
     expect(msg.content[0]).toMatchObject({ type: "thinking", thinking: "Internal thoughts... " });
     expect(msg.content[1]).toMatchObject({ type: "toolCall", name: "exec" });

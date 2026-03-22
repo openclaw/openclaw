@@ -11,7 +11,8 @@ export function isAssistantMessage(msg: AgentMessage | undefined): msg is Assist
 }
 
 // Share these robust regex patterns across the module.
-const MINIMAX_INVOKE_RE = /<invoke\b([^>]*?)>([\s\S]*?)<\/invoke>/gi;
+// Support both paired <invoke>...</invoke> and self-closing <invoke /> forms.
+const MINIMAX_INVOKE_RE = /<invoke\b([^>]*?)(?:\/>|>([\s\S]*?)<\/invoke>)/gi;
 const MINIMAX_MARKER_RE = /<\/?minimax:tool_call>/gi;
 const MINIMAX_PARAM_RE = /<parameter\b[^>]*name=["']([^"']+)["'][^>]*>([\s\S]*?)<\/parameter>/gi;
 
@@ -264,11 +265,15 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
     return null;
   }
   const openRe = /<\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
+  const closeRe = /<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
 
-  // If it has an open tag but it's not closed, we treat it as thinking if it's at the start
-  const hasOpen = openRe.test(trimmedStart);
-
-  if (!hasOpen) {
+  if (!openRe.test(trimmedStart)) {
+    return null;
+  }
+  // NOTE: We used to support unclosed tags here for streams, but Codex pointed out
+  // that it causes regressions where bare strings like "<think>..." become
+  // hidden reasoning. We now require strict closure for block promotion.
+  if (!closeRe.test(text)) {
     return null;
   }
 
@@ -299,11 +304,9 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
     }
   }
 
-  // Handle unclosed thinking tag at the end (stream scenario)
   if (inThinking) {
-    blocks.push({ type: "thinking", thinking: text.slice(thinkingStart).trim() });
-    cursor = text.length;
-  }
+    return null;
+  } // Must be closed
 
   if (cursor < text.length) {
     blocks.push({ type: "text", text: text.slice(cursor) });
@@ -463,6 +466,10 @@ export function unescapeXmlEntities(text: string): string {
  * Parse a raw XML parameter value into its appropriate type.
  */
 export function parseXmlParameterValue(value: string): unknown {
+  if (value === undefined) {
+    return {};
+  } // For self-closing invoke with no params
+
   const unescaped = unescapeXmlEntities(value);
   const trimmed = unescaped.trim();
 
@@ -472,12 +479,6 @@ export function parseXmlParameterValue(value: string): unknown {
   if (trimmed === "false") {
     return false;
   }
-
-  // NOTE: We used to parse numeric scalars here, but Codex pointed out that
-  // identifiers (sessionId, channelId) frequently look like numbers but
-  // must remain strings to avoid precision loss (64-bit snowflakes) or
-  // tool input validation failures. Most tools handle string-to-number
-  // conversion themselves if needed.
 
   if (
     (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
@@ -537,16 +538,10 @@ export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[]
         // Find ALL invokes in the last text block.
         const matchedInvokes = Array.from(lastText.matchAll(MINIMAX_INVOKE_RE));
 
-        // IMPORTANT: Only recover invokes that are PART OF the malformed sequence
-        // leading up to this closing tag. If there's prose between the last invoke
-        // and the closing tag, we only reclaim if that prose is just whitespace.
         if (matchedInvokes.length > 0) {
           const lastInvoke = matchedInvokes[matchedInvokes.length - 1];
           const trailingProse = lastText.slice((lastInvoke.index ?? 0) + lastInvoke[0].length);
 
-          // If the last invoke is followed by non-whitespace prose, it might be
-          // a prose example rather than a malformed call. We only reclaim if
-          // it's "close enough" (trailing prose is just whitespace).
           if (!trailingProse.trim()) {
             let lastProcessedIdx = 0;
             blocks.pop(); // Replace the last block with split parts
@@ -566,9 +561,11 @@ export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[]
               const toolName = nameMatch ? nameMatch[1] : undefined;
               if (toolName) {
                 const args: Record<string, unknown> = {};
-                for (const pMatch of invokeBody.matchAll(MINIMAX_PARAM_RE)) {
-                  const [, pName, pValue] = pMatch;
-                  args[pName] = parseXmlParameterValue(pValue);
+                if (invokeBody) {
+                  for (const pMatch of invokeBody.matchAll(MINIMAX_PARAM_RE)) {
+                    const [, pName, pValue] = pMatch;
+                    args[pName] = parseXmlParameterValue(pValue);
+                  }
                 }
                 blocks.push({
                   type: "toolCall",
@@ -610,9 +607,11 @@ export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[]
         const toolName = nameMatch ? nameMatch[1] : undefined;
         if (toolName) {
           const args: Record<string, unknown> = {};
-          for (const pMatch of invokeBody.matchAll(MINIMAX_PARAM_RE)) {
-            const [, pName, pValue] = pMatch;
-            args[pName] = parseXmlParameterValue(pValue);
+          if (invokeBody) {
+            for (const pMatch of invokeBody.matchAll(MINIMAX_PARAM_RE)) {
+              const [, pName, pValue] = pMatch;
+              args[pName] = parseXmlParameterValue(pValue);
+            }
           }
           blocks.push({
             type: "toolCall",
