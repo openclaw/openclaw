@@ -7,6 +7,7 @@ import { Type } from "@sinclair/typebox";
 import type { TSchema } from "@sinclair/typebox";
 import { stringEnum } from "../agents/schema/typebox.js";
 
+/** Schema helper for channels that expose button rows on the shared `message` tool. */
 export function createMessageToolButtonsSchema(): TSchema {
   return Type.Array(
     Type.Array(
@@ -22,6 +23,7 @@ export function createMessageToolButtonsSchema(): TSchema {
   );
 }
 
+/** Schema helper for channels that accept provider-native card payloads. */
 export function createMessageToolCardSchema(): TSchema {
   return Type.Object(
     {},
