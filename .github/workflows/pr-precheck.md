@@ -3,22 +3,26 @@
 ## 📋 文档翻译 PR 必查项目
 
 ### 1. 路径检查
+
 - [ ] 所有相对链接路径正确（从 `docs/zh-CN/` 目录解析）
 - [ ] 图片路径使用 `../assets/` 而不是 `docs/assets/`
 - [ ] 根目录文件链接使用 `../../filename.md`
 - [ ] 无本地文件系统路径暴露（如 `/home/admin/...`）
 
 ### 2. 文件检查
+
 - [ ] 不包含 PR 描述模板等提交产物
 - [ ] 只提交实际文档文件
 - [ ] 翻译报告使用仓库相对路径
 
 ### 3. 内容检查
+
 - [ ] 术语列表精简且相关（无网络俚语、加密货币术语等）
 - [ ] 术语翻译一致
 - [ ] 品牌名称保持原文
 
 ### 4. 格式检查
+
 - [ ] Markdown 格式正确
 - [ ] 无格式错误
 
@@ -66,6 +70,7 @@ git push
 ## ⚠️ 常见错误
 
 ### 路径错误
+
 ❌ 错误：`[愿景](VISION.md)`  
 ✅ 正确：`[愿景](../../VISION.md)`
 
@@ -73,14 +78,17 @@ git push
 ✅ 正确：`![Logo](../assets/logo.png)`
 
 ### 本地路径暴露
+
 ❌ 错误：`/home/admin/openclaw/workspace/openclaw-official/README.md`  
 ✅ 正确：`README.md`
 
 ### 提交无关文件
+
 ❌ 错误：提交 `PR_DESCRIPTION.md`、`TRANSLATION_NOTES.md` 等模板文件  
 ✅ 正确：只提交实际文档
 
 ### 术语列表冗长
+
 ❌ 错误：包含数百个无关术语（YOLO、GOAT、DeFi 等）  
 ✅ 正确：只保留与项目相关的核心技术术语
 

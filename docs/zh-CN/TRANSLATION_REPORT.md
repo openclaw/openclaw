@@ -1,17 +1,20 @@
 # OpenClaw 文档翻译报告 - 阶段 2
 
 ## 翻译日期
+
 2026-03-22
 
 ## 翻译内容
 
 ### 1. README.md 中文翻译
+
 - **源文件**: `README.md`
 - **目标文件**: `docs/zh-CN/README.md`
 - **文件大小**: 23,439 字节
 - **状态**: ✅ 完成
 
 ### 2. quickstart.md 状态检查
+
 - **源文件**: `docs/start/quickstart.md`
 - **目标文件**: `docs/zh-CN/start/quickstart.md`
 - **状态**: ✅ 已有翻译（由 AI 自动生成，质量良好）
@@ -19,6 +22,7 @@
 ## 翻译原则
 
 ### 术语处理
+
 - **保留英文的术语** (仅与 OpenClaw 相关的核心技术术语):
   API、PR、Issue、CLI、Gateway、Canvas、Skills、WebChat、Node、DM、OAuth、TTS、PTT、WebSocket、WS、CDP、HTTP、HTTPS、SSH、Docker、Nix、npm、pnpm、bun、TypeScript、JavaScript、macOS、iOS、Android、Windows、Linux、Discord、Slack、Telegram、WhatsApp、Signal、iMessage、BlueBubbles、Matrix、LINE、Mattermost、Nextcloud、Nostr、Synology、Tlon、Twitch、Zalo、Gmail、Pub/Sub、Webhook、Cron、JSON、Markdown、UI、UX、IDE、Git、GitHub、CI/CD、Tailscale、Serve、Funnel、tailnet、launchd、systemd、stdout、stderr、REST、RPC、VPS
 
@@ -47,6 +51,7 @@
   - tailnet → tailnet（保留）
 
 ### 格式保持
+
 - ✅ 保持 Markdown 格式
 - ✅ 保持所有链接（包括相对链接和绝对链接）
 - ✅ 保持代码块和语法高亮
@@ -56,6 +61,7 @@
 - ✅ 保持贡献者头像列表（未翻译，保持原文）
 
 ### 翻译风格
+
 - **语气**: 专业但友好
 - **人称**: 使用"你"而非"您"，保持轻松的技术文档风格
 - **句式**: 尽量保持简洁，避免过长的句子
@@ -64,6 +70,7 @@
 ## 特殊处理
 
 ### 1. 品牌名称
+
 - OpenClaw → OpenClaw（保留）
 - Molty → Molty（保留）
 - Peter Steinberger → Peter Steinberger（保留）
@@ -114,34 +121,41 @@
 - systemd → systemd（保留）
 
 ### 2. 口号和标语
+
 - "EXFOLIATE! EXFOLIATE!" → "去壳！去壳！"（意译，保持双关）
 - 注释说明：这是太空龙虾 Molty 的标志性口号
 
 ### 3. 链接处理
+
 - 所有文档链接保持原样，指向英文原文档
 - 原因：中文文档可能不完整，链接到英文版本确保用户获取完整信息
 - 未来可以将链接指向对应的中文版本（当翻译完成后）
 
 ### 4. 代码示例
+
 - 所有命令和代码示例保持原样
 - 注释和说明文字进行翻译
 
 ### 5. 贡献者列表
+
 - 保持原文，不翻译用户名和头像
 
 ## 翻译质量
 
 ### 准确性
+
 - ✅ 技术术语准确
 - ✅ 上下文理解正确
 - ✅ 无遗漏重要信息
 
 ### 可读性
+
 - ✅ 语句通顺
 - ✅ 符合中文表达习惯
 - ✅ 避免翻译腔
 
 ### 一致性
+
 - ✅ 术语使用一致
 - ✅ 格式风格统一
 - ✅ 与现有中文文档风格一致
@@ -149,19 +163,24 @@
 ## 后续建议
 
 ### 1. 链接更新
+
 当更多文档被翻译后，可以更新 README.md 中的链接指向中文版本：
+
 - 将 `https://docs.openclaw.ai/...` 更新为 `/zh-CN/...` 的相对链接
 
 ### 2. 本地化调整
+
 - 考虑添加中文用户特有的配置示例
 - 添加中文社区链接（如 Discord 中文频道）
 - 考虑添加中国时区相关的示例
 
 ### 3. 文档结构优化
+
 - 可以在 `docs/zh-CN/` 目录下创建独立的导航结构
 - 添加中文文档索引页面
 
 ### 4. 翻译自动化
+
 - 考虑使用 AI 辅助翻译其他文档
 - 建立翻译术语表，确保一致性
 - 使用 GitHub Actions 自动检测文档更新并提示翻译

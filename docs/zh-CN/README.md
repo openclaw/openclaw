@@ -18,7 +18,7 @@
   <a href="../../LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT 许可证"></a>
 </p>
 
-**OpenClaw** 是一个你可以在自己设备上运行的_个人 AI 助手_。
+**OpenClaw** 是一个你可以在自己设备上运行的*个人 AI 助手*。
 它通过你已经在使用的渠道回复你（WhatsApp、Telegram、Slack、Discord、Google Chat、Signal、iMessage、BlueBubbles、IRC、Microsoft Teams、Matrix、飞书、LINE、Mattermost、Nextcloud Talk、Nostr、Synology Chat、Tlon、Twitch、Zalo、Zalo Personal、WebChat）。它可以在 macOS/iOS/Android 上说话和聆听，并且可以渲染一个你可控制的实时 Canvas。Gateway 只是控制平面——产品是助手本身。
 
 如果你想要一个私人的、单用户的助手，感觉本地化、快速且始终在线，这就是它。
@@ -32,8 +32,8 @@ OpenClaw Onboard 逐步引导你设置 Gateway、工作区、渠道和 Skills。
 
 ## 赞助商
 
-| OpenAI                                                            | Vercel                                                            | Blacksmith                                                                   | Convex                                                                |
-| ----------------------------------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| OpenAI                                                          | Vercel                                                          | Blacksmith                                                                 | Convex                                                              |
+| --------------------------------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------- |
 | [![OpenAI](../assets/sponsors/openai.svg)](https://openai.com/) | [![Vercel](../assets/sponsors/vercel.svg)](https://vercel.com/) | [![Blacksmith](../assets/sponsors/blacksmith.svg)](https://blacksmith.sh/) | [![Convex](../assets/sponsors/convex.svg)](https://www.convex.dev/) |
 
 **订阅（OAuth）：**
@@ -233,7 +233,7 @@ OpenClaw 可以自动配置 Tailscale **Serve**（仅限 tailnet）或 **Funnel*
 
 - **Gateway 主机** 默认运行 exec 工具和渠道连接。
 - **设备节点** 通过 `node.invoke` 运行设备本地操作（`system.run`、相机、屏幕录制、通知）。
-简而言之：exec 在 Gateway 所在处运行；设备操作在设备所在处运行。
+  简而言之：exec 在 Gateway 所在处运行；设备操作在设备所在处运行。
 
 详情：[远程访问](../gateway/remote.md) · [节点](../nodes/index.md) · [安全](../gateway/security/index.md)
 
@@ -252,7 +252,7 @@ macOS 应用可以以**节点模式**运行，并通过 Gateway WebSocket（`nod
 
 详情：[节点](../nodes/index.md) · [macOS 应用](../platforms/macos.md) · [Gateway 协议](../concepts/architecture.md)
 
-## Agent to Agent（sessions_* 工具）
+## Agent to Agent（sessions\_\* 工具）
 
 - 使用这些工具在不跳转聊天界面的情况下跨会话协调工作。
 - `sessions_list` — 发现活动会话（智能体）及其元数据。
