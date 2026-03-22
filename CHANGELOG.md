@@ -62,6 +62,7 @@ Docs: https://docs.openclaw.ai
 - Agents/compaction: notify users when followup auto-compaction starts and finishes, keeping those notices out of TTS and preserving reply threading for the real assistant reply. (#38805) Thanks @zidongdesign.
 - Models/OpenAI: switch the default OpenAI setup model to `openai/gpt-5.4`, keep Codex on `openai-codex/gpt-5.4`, and centralize OpenAI chat, image, TTS, transcription, and embedding defaults in one shared module so future default-model updates stay low-churn. Thanks @vincentkoc.
 - Memory/plugins: let the active memory plugin register its own system-prompt section while preserving cache-clear and snapshot-load prompt isolation. (#40126) Thanks @jarimustonen.
+- Control UI/usage: improve usage overview styling, localization, and responsive chat/context-notice presentation, including safer theme color handling and unclipped usage-header menus. (#51951) Thanks @BunsDev.
 
 ### Fixes
 

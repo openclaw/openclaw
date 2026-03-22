@@ -340,6 +340,36 @@ describe("chat view", () => {
     expect(container.textContent).not.toContain("context used");
   });
 
+  it("hides the context notice when totalTokens is marked stale", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          sessions: {
+            ts: 0,
+            path: "",
+            count: 1,
+            defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: 200_000 },
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                updatedAt: null,
+                totalTokens: 190_000,
+                totalTokensFresh: false,
+                contextTokens: 200_000,
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).not.toContain("context used");
+    expect(container.textContent).not.toContain("190k / 200k");
+  });
+
   it("uses the assistant avatar URL for the welcome state when the identity avatar is only initials", () => {
     const container = document.createElement("div");
     render(
