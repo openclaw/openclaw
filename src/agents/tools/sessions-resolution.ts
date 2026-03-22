@@ -32,8 +32,7 @@ export function resolveInternalSessionKey(params: {
   requesterInternalKey?: string;
 }) {
   if (params.key === "current") {
-    // "current" resolves to the requester's own session, falling back to alias.
-    return params.requesterInternalKey ?? params.alias;
+    return params.requesterInternalKey ?? params.key;
   }
   if (params.key === "main") {
     return params.alias;
@@ -311,15 +310,17 @@ export async function resolveSessionReference(params: {
 }): Promise<SessionReferenceResolution> {
   const rawInput = params.sessionKey.trim();
   if (rawInput === "current") {
-    const resolvedByKey = await resolveSessionKeyFromKey({
-      key: rawInput,
-      alias: params.alias,
-      mainKey: params.mainKey,
-      requesterInternalKey: params.requesterInternalKey,
-      restrictToSpawned: params.restrictToSpawned,
-    });
-    if (resolvedByKey) {
-      return resolvedByKey;
+    if (!params.restrictToSpawned) {
+      const resolvedByKey = await resolveSessionKeyFromKey({
+        key: rawInput,
+        alias: params.alias,
+        mainKey: params.mainKey,
+        requesterInternalKey: params.requesterInternalKey,
+        restrictToSpawned: false,
+      });
+      if (resolvedByKey) {
+        return resolvedByKey;
+      }
     }
     const resolvedBySessionId = await tryResolveSessionKeyFromSessionId({
       sessionId: rawInput,

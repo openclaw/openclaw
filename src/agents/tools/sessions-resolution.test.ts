@@ -88,9 +88,9 @@ describe("session key display/internal mapping", () => {
     ).toBe("agent:support:main");
   });
 
-  it("maps current to alias when no requester key is provided", () => {
+  it("preserves literal current when no requester key is provided", () => {
     expect(resolveInternalSessionKey({ key: "current", alias: "global", mainKey: "main" })).toBe(
-      "global",
+      "current",
     );
   });
 });
@@ -236,5 +236,32 @@ describe("resolveSessionReference", () => {
         includeUnknown: true,
       },
     });
+  });
+
+  it("skips literal current key lookup when spawned visibility is restricted", async () => {
+    await expect(
+      resolveSessionReference({
+        sessionKey: "current",
+        alias: "main",
+        mainKey: "main",
+        requesterInternalKey: "agent:main:subagent:child",
+        restrictToSpawned: true,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      key: "agent:main:subagent:child",
+      displayKey: "agent:main:subagent:child",
+      resolvedViaSessionId: false,
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
+      method: "sessions.resolve",
+      params: {
+        sessionId: "current",
+        spawnedBy: "agent:main:subagent:child",
+        includeGlobal: false,
+        includeUnknown: false,
+      },
+    });
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
   });
 });
