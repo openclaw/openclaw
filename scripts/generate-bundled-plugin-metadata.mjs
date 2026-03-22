@@ -129,12 +129,14 @@ function normalizePluginManifest(raw) {
 function formatTypeScriptModule(source, { outputPath }) {
   const formatterPath = path.relative(FORMATTER_CWD, outputPath) || outputPath;
   const formatter = spawnSync(
-    process.platform === "win32" ? "pnpm.cmd" : "pnpm",
+    process.platform === "win32" ? "pnpm" : "pnpm",
     ["exec", "oxfmt", "--stdin-filepath", formatterPath],
     {
       cwd: FORMATTER_CWD,
       input: source,
       encoding: "utf8",
+      // Windows requires a shell to launch package-manager shim scripts reliably.
+      ...(process.platform === "win32" ? { shell: true } : {}),
     },
   );
   if (formatter.status !== 0) {
