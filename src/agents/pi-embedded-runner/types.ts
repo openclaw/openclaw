@@ -74,6 +74,8 @@ export type EmbeddedPiRunResult = {
   messagingToolSentTargets?: MessagingToolSend[];
   // Count of successful cron.add tool calls in this run.
   successfulCronAdds?: number;
+  // Tool call metadata from the run attempt (for post-processing like delegation nudge).
+  toolMetas?: Array<{ toolName: string; meta?: string }>;
 };
 
 export type EmbeddedPiCompactResult = {
