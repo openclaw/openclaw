@@ -1,0 +1,23 @@
+{
+  "entries": [
+    {
+      "name": "@soimy/dingtalk",
+      "openclaw": {
+        "channel": {
+          "id": "dingtalk",
+          "label": "DingTalk",
+          "selectionLabel": "DingTalk (钉钉)",
+          "docsPath": "https://github.com/soimy/openclaw-channel-dingtalk",
+          "docsLabel": "plugin docs",
+          "blurb": "钉钉企业内部机器人，使用 Stream 模式，无需公网 IP。",
+          "order": 70,
+          "aliases": ["dd", "ding"]
+        },
+        "install": {
+          "npmSpec": "@soimy/dingtalk",
+          "defaultChoice": "npm"
+        }
+      }
+    }
+  ]
+}

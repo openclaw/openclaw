@@ -122,6 +122,13 @@ describe("channel plugin catalog", () => {
     expect(entry?.meta.aliases).toContain("teams");
   });
 
+  it("includes the built-in community DingTalk catalog entry", () => {
+    const entry = getChannelPluginCatalogEntry("dingtalk");
+    expect(entry?.install.npmSpec).toBe("@soimy/dingtalk");
+    expect(entry?.meta.selectionLabel).toBe("DingTalk (钉钉)");
+    expect(entry?.meta.docsPath).toBe("https://github.com/soimy/openclaw-channel-dingtalk");
+  });
+
   it("lists plugin catalog entries", () => {
     const ids = listChannelPluginCatalogEntries().map((entry) => entry.id);
     expect(ids).toContain("msteams");
@@ -202,6 +209,62 @@ describe("channel plugin catalog", () => {
     }).find((item) => item.id === "demo-channel");
 
     expect(entry?.pluginId).toBe("@vendor/demo-runtime");
+  });
+
+  it("keeps discovered plugins ahead of the built-in community catalog", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-catalog-state-"));
+    const pluginDir = path.join(stateDir, "extensions", "dingtalk-plugin");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@vendor/dingtalk-custom",
+        openclaw: {
+          extensions: ["./index.js"],
+          channel: {
+            id: "dingtalk",
+            label: "DingTalk Custom",
+            selectionLabel: "DingTalk Custom",
+            docsPath: "/channels/dingtalk-custom",
+            blurb: "Custom discovered DingTalk entry",
+          },
+          install: {
+            npmSpec: "@vendor/dingtalk-custom",
+          },
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "@vendor/dingtalk-runtime",
+        channels: ["dingtalk"],
+        configSchema: {},
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "module.exports = {}", "utf-8");
+
+    const entry = listChannelPluginCatalogEntries({
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        CLAWDBOT_STATE_DIR: undefined,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+        OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+      },
+    }).find((item) => item.id === "dingtalk");
+
+    expect(entry).toMatchObject({
+      id: "dingtalk",
+      pluginId: "@vendor/dingtalk-runtime",
+      meta: {
+        label: "DingTalk Custom",
+        selectionLabel: "DingTalk Custom",
+      },
+      install: {
+        npmSpec: "@vendor/dingtalk-custom",
+      },
+    });
   });
 
   it("uses the provided env for external catalog path resolution", () => {

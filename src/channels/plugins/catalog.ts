@@ -8,6 +8,7 @@ import type { OpenClawPackageManifest } from "../../plugins/manifest.js";
 import type { PackageManifest as PluginPackageManifest } from "../../plugins/manifest.js";
 import type { PluginOrigin } from "../../plugins/types.js";
 import { isRecord, resolveConfigDir, resolveUserPath } from "../../utils.js";
+import COMMUNITY_CHANNEL_CATALOG_JSON from "./community-channel-catalog.json" with { type: "json" };
 import type { ChannelMeta } from "./types.js";
 
 export type ChannelUiMetaEntry = {
@@ -305,6 +306,16 @@ function loadBundledMetadataCatalogEntries(options: CatalogOptions): ChannelPlug
   return entries;
 }
 
+function loadBuiltInCommunityCatalogEntries(): ChannelPluginCatalogEntry[] {
+  try {
+    return parseCatalogEntries(COMMUNITY_CHANNEL_CATALOG_JSON)
+      .map((entry) => buildExternalCatalogEntry(entry))
+      .filter((entry): entry is ChannelPluginCatalogEntry => Boolean(entry));
+  } catch {
+    return [];
+  }
+}
+
 export function buildChannelUiCatalog(
   plugins: Array<{ id: string; meta: ChannelMeta }>,
 ): ChannelUiCatalog {
@@ -359,6 +370,15 @@ export function listChannelPluginCatalogEntries(
     const existing = resolved.get(entry.id);
     if (!existing || priority < existing.priority) {
       resolved.set(entry.id, { entry, priority });
+    }
+  }
+
+  // The official built-in community catalog powers first-run onboarding
+  // discovery without overriding installed, workspace, config, or bundled
+  // plugin metadata when those higher-priority sources already exist.
+  for (const entry of loadBuiltInCommunityCatalogEntries()) {
+    if (!resolved.has(entry.id)) {
+      resolved.set(entry.id, { entry, priority: 99 });
     }
   }
 

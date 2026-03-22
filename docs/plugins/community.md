@@ -123,6 +123,50 @@ We welcome community plugins that are useful, documented, and safe to operate.
   </Step>
 </Steps>
 
+## Built-in onboarding catalog for community channels
+
+OpenClaw also maintains a small built-in catalog for first-run onboarding of
+community-maintained channel plugins.
+
+This catalog is intentionally conservative:
+
+- It is for community **channel** plugins only.
+- It is not a marketplace, ranking system, or remote registry.
+- It only fills discovery gaps during first-run setup when no higher-priority
+  plugin source already provides that channel.
+
+The current source of truth lives in:
+
+```text
+src/channels/plugins/community-channel-catalog.json
+```
+
+DingTalk is the first example entry in that file, but the mechanism is generic.
+Future community channel plugins should follow the same path.
+
+### How to add a new community channel
+
+1. Publish the plugin to npm so `openclaw plugins install <npm-spec>` works.
+2. Keep the source in a public repository with setup and troubleshooting docs.
+3. Expose valid `openclaw.channel` and `openclaw.install` metadata in the plugin package.
+4. Point `docsPath` to plugin-owned docs, not to a page that must live in the
+   main OpenClaw docs repo.
+5. Add one manifest-shaped entry to `src/channels/plugins/community-channel-catalog.json`.
+6. Keep the entry minimal and reviewable: package name, channel metadata, and install metadata only.
+
+### Review bar for built-in onboarding entries
+
+| Requirement              | Why                                                                               |
+| ------------------------ | --------------------------------------------------------------------------------- |
+| Public npm package       | The onboarding flow installs from npm on demand                                   |
+| Public repository        | Maintainers and users need a reviewable source of truth                           |
+| Valid plugin metadata    | The existing channel catalog parser must be able to load it without special cases |
+| Plugin-owned docs        | Community plugin docs should not depend on pages in the main OpenClaw docs repo   |
+| Conservative maintenance | Built-in onboarding discovery should stay curated and low-risk                    |
+
+If a plugin does not meet that bar, it can still be documented on this page as a
+community plugin without being added to the built-in onboarding catalog.
+
 ## Quality bar
 
 | Requirement          | Why                                           |
