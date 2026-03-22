@@ -7,8 +7,24 @@ const gatewayMocks = vi.hoisted(() => ({
 
 const nodeUtilsMocks = vi.hoisted(() => ({
   resolveNodeId: vi.fn(async () => "node-1"),
+  resolveNode: vi.fn(async () => ({ nodeId: "node-1", remoteIp: "127.0.0.1" })),
   listNodes: vi.fn(async () => [] as Array<{ nodeId: string; commands?: string[] }>),
   resolveNodeIdFromList: vi.fn(() => "node-1"),
+}));
+
+const nodesCameraMocks = vi.hoisted(() => ({
+  cameraTempPath: vi.fn(({ facing }: { facing?: string }) =>
+    facing ? `/tmp/camera-${facing}.jpg` : "/tmp/camera.jpg",
+  ),
+  parseCameraClipPayload: vi.fn(),
+  parseCameraSnapPayload: vi.fn(() => ({
+    base64: "ZmFrZQ==",
+    format: "jpg",
+    width: 800,
+    height: 600,
+  })),
+  writeCameraClipPayloadToFile: vi.fn(),
+  writeCameraPayloadToFile: vi.fn(async () => undefined),
 }));
 
 const screenMocks = vi.hoisted(() => ({
@@ -31,8 +47,17 @@ vi.mock("./gateway.js", () => ({
 
 vi.mock("./nodes-utils.js", () => ({
   resolveNodeId: nodeUtilsMocks.resolveNodeId,
+  resolveNode: nodeUtilsMocks.resolveNode,
   listNodes: nodeUtilsMocks.listNodes,
   resolveNodeIdFromList: nodeUtilsMocks.resolveNodeIdFromList,
+}));
+
+vi.mock("../../cli/nodes-camera.js", () => ({
+  cameraTempPath: nodesCameraMocks.cameraTempPath,
+  parseCameraClipPayload: nodesCameraMocks.parseCameraClipPayload,
+  parseCameraSnapPayload: nodesCameraMocks.parseCameraSnapPayload,
+  writeCameraClipPayloadToFile: nodesCameraMocks.writeCameraClipPayloadToFile,
+  writeCameraPayloadToFile: nodesCameraMocks.writeCameraPayloadToFile,
 }));
 
 vi.mock("../../cli/nodes-screen.js", () => ({
@@ -49,8 +74,17 @@ describe("createNodesTool screen_record duration guardrails", () => {
     gatewayMocks.readGatewayCallOptions.mockReset();
     gatewayMocks.readGatewayCallOptions.mockReturnValue({});
     nodeUtilsMocks.resolveNodeId.mockClear();
+    nodeUtilsMocks.resolveNode.mockClear();
     screenMocks.parseScreenRecordPayload.mockClear();
     screenMocks.writeScreenRecordToFile.mockClear();
+    nodesCameraMocks.cameraTempPath.mockClear();
+    nodesCameraMocks.parseCameraSnapPayload.mockClear();
+    nodesCameraMocks.writeCameraPayloadToFile.mockClear();
+  });
+
+  it("marks nodes as owner-only", () => {
+    const tool = createNodesTool();
+    expect(tool.ownerOnly).toBe(true);
   });
 
   it("caps durationMs schema at 300000", () => {
@@ -130,5 +164,85 @@ describe("createNodesTool screen_record duration guardrails", () => {
       agentId: "main",
     });
     expect(prepareCall?.params).not.toHaveProperty("rawCommand");
+  });
+  it("returns camera snaps via details.media.mediaUrls", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    const tool = createNodesTool();
+
+    const result = await tool.execute("call-1", {
+      action: "camera_snap",
+      node: "macbook",
+      facing: "front",
+    });
+
+    expect(result?.details).toEqual({
+      snaps: [
+        {
+          facing: "front",
+          path: "/tmp/camera-front.jpg",
+          width: 800,
+          height: 600,
+        },
+      ],
+      media: {
+        mediaUrls: ["/tmp/camera-front.jpg"],
+      },
+    });
+    expect(JSON.stringify(result?.content ?? [])).not.toContain("MEDIA:");
+  });
+
+  it("returns latest photos via details.media.mediaUrls", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      payload: {
+        photos: [
+          { base64: "ZmFrZQ==", format: "jpg", width: 800, height: 600, createdAt: "now" },
+          { base64: "YmFy", format: "jpg", width: 1024, height: 768 },
+        ],
+      },
+    });
+    nodesCameraMocks.cameraTempPath
+      .mockReturnValueOnce("/tmp/photo-1.jpg")
+      .mockReturnValueOnce("/tmp/photo-2.jpg");
+    nodesCameraMocks.parseCameraSnapPayload
+      .mockReturnValueOnce({
+        base64: "ZmFrZQ==",
+        format: "jpg",
+        width: 800,
+        height: 600,
+      })
+      .mockReturnValueOnce({
+        base64: "YmFy",
+        format: "jpg",
+        width: 1024,
+        height: 768,
+      });
+    const tool = createNodesTool();
+
+    const result = await tool.execute("call-1", {
+      action: "photos_latest",
+      node: "macbook",
+    });
+
+    expect(result?.details).toEqual({
+      photos: [
+        {
+          index: 0,
+          path: "/tmp/photo-1.jpg",
+          width: 800,
+          height: 600,
+          createdAt: "now",
+        },
+        {
+          index: 1,
+          path: "/tmp/photo-2.jpg",
+          width: 1024,
+          height: 768,
+        },
+      ],
+      media: {
+        mediaUrls: ["/tmp/photo-1.jpg", "/tmp/photo-2.jpg"],
+      },
+    });
+    expect(JSON.stringify(result?.content ?? [])).not.toContain("MEDIA:");
   });
 });

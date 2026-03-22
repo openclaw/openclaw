@@ -4,22 +4,27 @@
  */
 
 import type { ModelCatalogEntry } from "../../../../src/agents/model-catalog.js";
-import { resolveThinkingDefault } from "../../../../src/agents/model-selection.js";
 import {
   formatThinkingLevels,
   normalizeThinkLevel,
   normalizeVerboseLevel,
-} from "../../../../src/auto-reply/thinking.js";
-import type { HealthSummary } from "../../../../src/commands/health.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
+  resolveThinkingDefaultForModel,
+} from "../../../../src/auto-reply/thinking.shared.js";
 import {
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "../../../../src/routing/session-key.js";
+import { createChatModelOverride, resolveServerChatModelValue } from "../chat-model-ref.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../types.ts";
+import type {
+  AgentsListResult,
+  ChatModelOverride,
+  GatewaySessionRow,
+  SessionsListResult,
+  SessionsPatchResult,
+} from "../types.ts";
 import { SLASH_COMMANDS } from "./slash-commands.ts";
 
 export type SlashCommandResult = {
@@ -35,6 +40,10 @@ export type SlashCommandResult = {
     | "clear"
     | "toggle-focus"
     | "navigate-usage";
+  /** Optional session-level directive changes that the caller should mirror locally. */
+  sessionPatch?: {
+    modelOverride?: ChatModelOverride | null;
+  };
 };
 
 export async function executeSlashCommand(
@@ -46,8 +55,6 @@ export async function executeSlashCommand(
   switch (commandName) {
     case "help":
       return executeHelp();
-    case "status":
-      return await executeStatus(client);
     case "new":
       return { content: "Starting new session...", action: "new-session" };
     case "reset":
@@ -64,6 +71,8 @@ export async function executeSlashCommand(
       return await executeModel(client, sessionKey, args);
     case "think":
       return await executeThink(client, sessionKey, args);
+    case "fast":
+      return await executeFast(client, sessionKey, args);
     case "verbose":
       return await executeVerbose(client, sessionKey, args);
     case "export":
@@ -98,27 +107,6 @@ function executeHelp(): SlashCommandResult {
 
   lines.push("\nType `/` to open the command menu.");
   return { content: lines.join("\n") };
-}
-
-async function executeStatus(client: GatewayBrowserClient): Promise<SlashCommandResult> {
-  try {
-    const health = await client.request<HealthSummary>("health", {});
-    const status = health.ok ? "Healthy" : "Degraded";
-    const agentCount = health.agents?.length ?? 0;
-    const sessionCount = health.sessions?.count ?? 0;
-    const lines = [
-      `**System Status:** ${status}`,
-      `**Agents:** ${agentCount}`,
-      `**Sessions:** ${sessionCount}`,
-      `**Default Agent:** ${health.defaultAgentId || "none"}`,
-    ];
-    if (health.durationMs) {
-      lines.push(`**Response:** ${health.durationMs}ms`);
-    }
-    return { content: lines.join("\n") };
-  } catch (err) {
-    return { content: `Failed to fetch status: ${String(err)}` };
-  }
 }
 
 async function executeCompact(
@@ -163,8 +151,19 @@ async function executeModel(
   }
 
   try {
-    await client.request("sessions.patch", { key: sessionKey, model: args.trim() });
-    return { content: `Model set to \`${args.trim()}\`.`, action: "refresh" };
+    const patched = await client.request<SessionsPatchResult>("sessions.patch", {
+      key: sessionKey,
+      model: args.trim(),
+    });
+    const resolvedValue = resolveServerChatModelValue(
+      patched.resolved?.model ?? args.trim(),
+      patched.resolved?.modelProvider,
+    );
+    return {
+      content: `Model set to \`${args.trim()}\`.`,
+      action: "refresh",
+      sessionPatch: { modelOverride: createChatModelOverride(resolvedValue) },
+    };
   } catch (err) {
     return { content: `Failed to set model: ${String(err)}` };
   }
@@ -176,6 +175,7 @@ async function executeThink(
   args: string,
 ): Promise<SlashCommandResult> {
   const rawLevel = args.trim();
+
   if (!rawLevel) {
     try {
       const { session, models } = await loadThinkingCommandState(client, sessionKey);
@@ -219,6 +219,7 @@ async function executeVerbose(
   args: string,
 ): Promise<SlashCommandResult> {
   const rawLevel = args.trim();
+
   if (!rawLevel) {
     try {
       const session = await loadCurrentSession(client, sessionKey);
@@ -248,6 +249,44 @@ async function executeVerbose(
     };
   } catch (err) {
     return { content: `Failed to set verbose mode: ${String(err)}` };
+  }
+}
+
+async function executeFast(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  args: string,
+): Promise<SlashCommandResult> {
+  const rawMode = args.trim().toLowerCase();
+
+  if (!rawMode || rawMode === "status") {
+    try {
+      const session = await loadCurrentSession(client, sessionKey);
+      return {
+        content: formatDirectiveOptions(
+          `Current fast mode: ${resolveCurrentFastMode(session)}.`,
+          "status, on, off",
+        ),
+      };
+    } catch (err) {
+      return { content: `Failed to get fast mode: ${String(err)}` };
+    }
+  }
+
+  if (rawMode !== "on" && rawMode !== "off") {
+    return {
+      content: `Unrecognized fast mode "${args.trim()}". Valid levels: status, on, off.`,
+    };
+  }
+
+  try {
+    await client.request("sessions.patch", { key: sessionKey, fastMode: rawMode === "on" });
+    return {
+      content: `Fast mode ${rawMode === "on" ? "enabled" : "disabled"}.`,
+      action: "refresh",
+    };
+  } catch (err) {
+    return { content: `Failed to set fast mode: ${String(err)}` };
   }
 }
 
@@ -526,12 +565,15 @@ function resolveCurrentThinkingLevel(
   if (!session?.modelProvider || !session.model) {
     return "off";
   }
-  return resolveThinkingDefault({
-    cfg: {} as OpenClawConfig,
+  return resolveThinkingDefaultForModel({
     provider: session.modelProvider,
     model: session.model,
     catalog: models,
   });
+}
+
+function resolveCurrentFastMode(session: GatewaySessionRow | undefined): "on" | "off" {
+  return session?.fastMode === true ? "on" : "off";
 }
 
 function fmtTokens(n: number): string {

@@ -46,6 +46,20 @@ function assertResolvedTarget(
   return result.to;
 }
 
+function expectTargetError(
+  resolveTarget: NonNullable<typeof twitchOutbound.resolveTarget>,
+  params: Parameters<NonNullable<typeof twitchOutbound.resolveTarget>>[0],
+  expectedMessage: string,
+) {
+  const result = resolveTarget(params);
+
+  expect(result.ok).toBe(false);
+  if (result.ok) {
+    throw new Error("expected resolveTarget to fail");
+  }
+  expect(result.error.message).toContain(expectedMessage);
+}
+
 describe("outbound", () => {
   const mockAccount = {
     ...BASE_TWITCH_TEST_ACCOUNT,
@@ -65,9 +79,13 @@ describe("outbound", () => {
       expect(twitchOutbound.textChunkLimit).toBe(500);
     });
 
-    it("should have chunker function", () => {
-      expect(twitchOutbound.chunker).toBeDefined();
-      expect(typeof twitchOutbound.chunker).toBe("function");
+    it("should chunk long messages at 500 characters", () => {
+      const chunker = twitchOutbound.chunker;
+      if (!chunker) {
+        throw new Error("twitch outbound.chunker unavailable");
+      }
+
+      expect(chunker("a".repeat(600), 500)).toEqual(["a".repeat(500), "a".repeat(100)]);
     });
   });
 
@@ -106,17 +124,15 @@ describe("outbound", () => {
     });
 
     it("should error when target not in allowlist (implicit mode)", () => {
-      const result = resolveTarget({
-        to: "#notallowed",
-        mode: "implicit",
-        allowFrom: ["#primary", "#secondary"],
-      });
-
-      expect(result.ok).toBe(false);
-      if (result.ok) {
-        throw new Error("expected resolveTarget to fail");
-      }
-      expect(result.error.message).toContain("Twitch");
+      expectTargetError(
+        resolveTarget,
+        {
+          to: "#notallowed",
+          mode: "implicit",
+          allowFrom: ["#primary", "#secondary"],
+        },
+        "Twitch",
+      );
     });
 
     it("should accept any target when allowlist is empty", () => {
@@ -131,59 +147,51 @@ describe("outbound", () => {
     });
 
     it("should error when no target provided with allowlist", () => {
-      const result = resolveTarget({
-        to: undefined,
-        mode: "implicit",
-        allowFrom: ["#fallback", "#other"],
-      });
-
-      expect(result.ok).toBe(false);
-      if (result.ok) {
-        throw new Error("expected resolveTarget to fail");
-      }
-      expect(result.error.message).toContain("Twitch");
+      expectTargetError(
+        resolveTarget,
+        {
+          to: undefined,
+          mode: "implicit",
+          allowFrom: ["#fallback", "#other"],
+        },
+        "Twitch",
+      );
     });
 
     it("should return error when no target and no allowlist", () => {
-      const result = resolveTarget({
-        to: undefined,
-        mode: "explicit",
-        allowFrom: [],
-      });
-
-      expect(result.ok).toBe(false);
-      if (result.ok) {
-        throw new Error("expected resolveTarget to fail");
-      }
-      expect(result.error.message).toContain("Missing target");
+      expectTargetError(
+        resolveTarget,
+        {
+          to: undefined,
+          mode: "explicit",
+          allowFrom: [],
+        },
+        "Missing target",
+      );
     });
 
     it("should handle whitespace-only target", () => {
-      const result = resolveTarget({
-        to: "   ",
-        mode: "explicit",
-        allowFrom: [],
-      });
-
-      expect(result.ok).toBe(false);
-      if (result.ok) {
-        throw new Error("expected resolveTarget to fail");
-      }
-      expect(result.error.message).toContain("Missing target");
+      expectTargetError(
+        resolveTarget,
+        {
+          to: "   ",
+          mode: "explicit",
+          allowFrom: [],
+        },
+        "Missing target",
+      );
     });
 
     it("should error when target normalizes to empty string", () => {
-      const result = resolveTarget({
-        to: "#",
-        mode: "explicit",
-        allowFrom: [],
-      });
-
-      expect(result.ok).toBe(false);
-      if (result.ok) {
-        throw new Error("expected resolveTarget to fail");
-      }
-      expect(result.error.message).toContain("Twitch");
+      expectTargetError(
+        resolveTarget,
+        {
+          to: "#",
+          mode: "explicit",
+          allowFrom: [],
+        },
+        "Twitch",
+      );
     });
 
     it("should filter wildcard from allowlist when checking membership", () => {

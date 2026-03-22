@@ -68,8 +68,8 @@ function resolveValidatedDiscoveredStorePathSync(params: {
     if (stat.isSymbolicLink() || !stat.isFile()) {
       return undefined;
     }
-    const realStorePath = fsSync.realpathSync(storePath);
-    const realAgentsRoot = params.realAgentsRoot ?? fsSync.realpathSync(params.agentsRoot);
+    const realStorePath = fsSync.realpathSync.native(storePath);
+    const realAgentsRoot = params.realAgentsRoot ?? fsSync.realpathSync.native(params.agentsRoot);
     return isWithinRoot(realStorePath, realAgentsRoot) ? realStorePath : undefined;
   } catch (err) {
     if (shouldSkipDiscoveryError(err)) {
@@ -153,7 +153,7 @@ export function resolveAllAgentSessionStoreTargetsSync(
       return cached;
     }
     try {
-      const realAgentsRoot = fsSync.realpathSync(agentsRoot);
+      const realAgentsRoot = fsSync.realpathSync.native(agentsRoot);
       realAgentsRoots.set(agentsRoot, realAgentsRoot);
       return realAgentsRoot;
     } catch (err) {

@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import { resolveMemoryBackendConfig } from "../../memory/backend-config.js";
 import { getMemorySearchManager } from "../../memory/index.js";
+import { readAgentMemoryFile } from "../../memory/read-file.js";
 import type { MemorySearchResult } from "../../memory/types.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -37,106 +38,171 @@ function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessi
   return { cfg, agentId };
 }
 
+async function getMemoryManagerContext(params: { cfg: OpenClawConfig; agentId: string }): Promise<
+  | {
+      manager: NonNullable<Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]>;
+    }
+  | {
+      error: string | undefined;
+    }
+> {
+  return await getMemoryManagerContextWithPurpose({ ...params, purpose: undefined });
+}
+
+async function getMemoryManagerContextWithPurpose(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  purpose?: "default" | "status";
+}): Promise<
+  | {
+      manager: NonNullable<Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]>;
+    }
+  | {
+      error: string | undefined;
+    }
+> {
+  const { manager, error } = await getMemorySearchManager({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    purpose: params.purpose,
+  });
+  return manager ? { manager } : { error };
+}
+
+function createMemoryTool(params: {
+  options: {
+    config?: OpenClawConfig;
+    agentSessionKey?: string;
+  };
+  label: string;
+  name: string;
+  description: string;
+  parameters: typeof MemorySearchSchema | typeof MemoryGetSchema;
+  execute: (ctx: { cfg: OpenClawConfig; agentId: string }) => AnyAgentTool["execute"];
+}): AnyAgentTool | null {
+  const ctx = resolveMemoryToolContext(params.options);
+  if (!ctx) {
+    return null;
+  }
+  return {
+    label: params.label,
+    name: params.name,
+    description: params.description,
+    parameters: params.parameters,
+    execute: params.execute(ctx),
+  };
+}
+
 export function createMemorySearchTool(options: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
 }): AnyAgentTool | null {
-  const ctx = resolveMemoryToolContext(options);
-  if (!ctx) {
-    return null;
-  }
-  const { cfg, agentId } = ctx;
-  return {
+  return createMemoryTool({
+    options,
     label: "Memory Search",
     name: "memory_search",
     description:
       "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos; returns top snippets with path + lines. If response has disabled=true, memory retrieval is unavailable and should be surfaced to the user.",
     parameters: MemorySearchSchema,
-    execute: async (_toolCallId, params) => {
-      const query = readStringParam(params, "query", { required: true });
-      const maxResults = readNumberParam(params, "maxResults");
-      const minScore = readNumberParam(params, "minScore");
-      const { manager, error } = await getMemorySearchManager({
-        cfg,
-        agentId,
-      });
-      if (!manager) {
-        return jsonResult(buildMemorySearchUnavailableResult(error));
-      }
-      try {
-        const citationsMode = resolveMemoryCitationsMode(cfg);
-        const includeCitations = shouldIncludeCitations({
-          mode: citationsMode,
-          sessionKey: options.agentSessionKey,
-        });
-        const rawResults = await manager.search(query, {
-          maxResults,
-          minScore,
-          sessionKey: options.agentSessionKey,
-        });
-        const status = manager.status();
-        const decorated = decorateCitations(rawResults, includeCitations);
-        const resolved = resolveMemoryBackendConfig({ cfg, agentId });
-        const results =
-          status.backend === "qmd"
-            ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
-            : decorated;
-        const searchMode = (status.custom as { searchMode?: string } | undefined)?.searchMode;
-        return jsonResult({
-          results,
-          provider: status.provider,
-          model: status.model,
-          fallback: status.fallback,
-          citations: citationsMode,
-          mode: searchMode,
-        });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return jsonResult(buildMemorySearchUnavailableResult(message));
-      }
-    },
-  };
+    execute:
+      ({ cfg, agentId }) =>
+      async (_toolCallId, params) => {
+        const query = readStringParam(params, "query", { required: true });
+        const maxResults = readNumberParam(params, "maxResults");
+        const minScore = readNumberParam(params, "minScore");
+        const memory = await getMemoryManagerContext({ cfg, agentId });
+        if ("error" in memory) {
+          return jsonResult(buildMemorySearchUnavailableResult(memory.error));
+        }
+        try {
+          const citationsMode = resolveMemoryCitationsMode(cfg);
+          const includeCitations = shouldIncludeCitations({
+            mode: citationsMode,
+            sessionKey: options.agentSessionKey,
+          });
+          const rawResults = await memory.manager.search(query, {
+            maxResults,
+            minScore,
+            sessionKey: options.agentSessionKey,
+          });
+          const status = memory.manager.status();
+          const decorated = decorateCitations(rawResults, includeCitations);
+          const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+          const results =
+            status.backend === "qmd"
+              ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
+              : decorated;
+          const searchMode = (status.custom as { searchMode?: string } | undefined)?.searchMode;
+          return jsonResult({
+            results,
+            provider: status.provider,
+            model: status.model,
+            fallback: status.fallback,
+            citations: citationsMode,
+            mode: searchMode,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          return jsonResult(buildMemorySearchUnavailableResult(message));
+        }
+      },
+  });
 }
 
 export function createMemoryGetTool(options: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
 }): AnyAgentTool | null {
-  const ctx = resolveMemoryToolContext(options);
-  if (!ctx) {
-    return null;
-  }
-  const { cfg, agentId } = ctx;
-  return {
+  return createMemoryTool({
+    options,
     label: "Memory Get",
     name: "memory_get",
     description:
       "Safe snippet read from MEMORY.md or memory/*.md with optional from/lines; use after memory_search to pull only the needed lines and keep context small.",
     parameters: MemoryGetSchema,
-    execute: async (_toolCallId, params) => {
-      const relPath = readStringParam(params, "path", { required: true });
-      const from = readNumberParam(params, "from", { integer: true });
-      const lines = readNumberParam(params, "lines", { integer: true });
-      const { manager, error } = await getMemorySearchManager({
-        cfg,
-        agentId,
-      });
-      if (!manager) {
-        return jsonResult({ path: relPath, text: "", disabled: true, error });
-      }
-      try {
-        const result = await manager.readFile({
-          relPath,
-          from: from ?? undefined,
-          lines: lines ?? undefined,
+    execute:
+      ({ cfg, agentId }) =>
+      async (_toolCallId, params) => {
+        const relPath = readStringParam(params, "path", { required: true });
+        const from = readNumberParam(params, "from", { integer: true });
+        const lines = readNumberParam(params, "lines", { integer: true });
+        const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+        if (resolved.backend === "builtin") {
+          try {
+            const result = await readAgentMemoryFile({
+              cfg,
+              agentId,
+              relPath,
+              from: from ?? undefined,
+              lines: lines ?? undefined,
+            });
+            return jsonResult(result);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            return jsonResult({ path: relPath, text: "", disabled: true, error: message });
+          }
+        }
+        const memory = await getMemoryManagerContextWithPurpose({
+          cfg,
+          agentId,
+          purpose: "status",
         });
-        return jsonResult(result);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return jsonResult({ path: relPath, text: "", disabled: true, error: message });
-      }
-    },
-  };
+        if ("error" in memory) {
+          return jsonResult({ path: relPath, text: "", disabled: true, error: memory.error });
+        }
+        try {
+          const result = await memory.manager.readFile({
+            relPath,
+            from: from ?? undefined,
+            lines: lines ?? undefined,
+          });
+          return jsonResult(result);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          return jsonResult({ path: relPath, text: "", disabled: true, error: message });
+        }
+      },
+  });
 }
 
 function resolveMemoryCitationsMode(cfg: OpenClawConfig): MemoryCitationsMode {

@@ -7,12 +7,14 @@ export async function resolveCanonicalInstallTarget(params: {
   id: string;
   invalidNameMessage: string;
   boundaryLabel: string;
+  nameEncoder?: (id: string) => string;
 }): Promise<{ ok: true; targetDir: string } | { ok: false; error: string }> {
   await fs.mkdir(params.baseDir, { recursive: true });
   const targetDirResult = resolveSafeInstallDir({
     baseDir: params.baseDir,
     id: params.id,
     invalidNameMessage: params.invalidNameMessage,
+    nameEncoder: params.nameEncoder,
   });
   if (!targetDirResult.ok) {
     return { ok: false, error: targetDirResult.error };

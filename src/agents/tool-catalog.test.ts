@@ -7,5 +7,6 @@ describe("tool-catalog", () => {
     expect(policy).toBeDefined();
     expect(policy!.allow).toContain("web_search");
     expect(policy!.allow).toContain("web_fetch");
+    expect(policy!.allow).toContain("image_generate");
   });
 });

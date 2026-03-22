@@ -117,6 +117,27 @@ export async function drainFormattedSystemEvents(params: {
     .join("\n");
 }
 
+async function persistSessionEntryUpdate(params: {
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey?: string;
+  storePath?: string;
+  nextEntry: SessionEntry;
+}) {
+  if (!params.sessionStore || !params.sessionKey) {
+    return;
+  }
+  params.sessionStore[params.sessionKey] = {
+    ...params.sessionStore[params.sessionKey],
+    ...params.nextEntry,
+  };
+  if (!params.storePath) {
+    return;
+  }
+  await updateSessionStore(params.storePath, (store) => {
+    store[params.sessionKey!] = { ...store[params.sessionKey!], ...params.nextEntry };
+  });
+}
+
 export async function ensureSkillSnapshot(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -185,12 +206,7 @@ export async function ensureSkillSnapshot(params: {
       systemSent: true,
       skillsSnapshot: skillSnapshot,
     };
-    sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...nextEntry };
-    if (storePath) {
-      await updateSessionStore(storePath, (store) => {
-        store[sessionKey] = { ...store[sessionKey], ...nextEntry };
-      });
-    }
+    await persistSessionEntryUpdate({ sessionStore, sessionKey, storePath, nextEntry });
     systemSent = true;
   }
 
@@ -227,12 +243,7 @@ export async function ensureSkillSnapshot(params: {
       updatedAt: Date.now(),
       skillsSnapshot,
     };
-    sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...nextEntry };
-    if (storePath) {
-      await updateSessionStore(storePath, (store) => {
-        store[sessionKey] = { ...store[sessionKey], ...nextEntry };
-      });
-    }
+    await persistSessionEntryUpdate({ sessionStore, sessionKey, storePath, nextEntry });
   }
 
   return { sessionEntry: nextEntry, skillsSnapshot, systemSent };
@@ -244,6 +255,7 @@ export async function incrementCompactionCount(params: {
   sessionKey?: string;
   storePath?: string;
   now?: number;
+  amount?: number;
   /** Token count after compaction - if provided, updates session token counts */
   tokensAfter?: number;
 }): Promise<number | undefined> {
@@ -253,6 +265,7 @@ export async function incrementCompactionCount(params: {
     sessionKey,
     storePath,
     now = Date.now(),
+    amount = 1,
     tokensAfter,
   } = params;
   if (!sessionStore || !sessionKey) {
@@ -262,7 +275,8 @@ export async function incrementCompactionCount(params: {
   if (!entry) {
     return undefined;
   }
-  const nextCount = (entry.compactionCount ?? 0) + 1;
+  const incrementBy = Math.max(0, amount);
+  const nextCount = (entry.compactionCount ?? 0) + incrementBy;
   // Build update payload with compaction count and optionally updated token counts
   const updates: Partial<SessionEntry> = {
     compactionCount: nextCount,

@@ -5,7 +5,10 @@ import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-de
 import type { OpenClawConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
-import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
+import {
+  deliverOutboundPayloads,
+  type OutboundDeliveryResult,
+} from "../../infra/outbound/deliver.js";
 import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { logWarn } from "../../logger.js";
@@ -131,6 +134,108 @@ const PERMANENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /outbound not configured for channel/i,
 ];
 
+const STALE_CRON_DELIVERY_MAX_START_DELAY_MS = 3 * 60 * 60_000;
+
+type CompletedDirectCronDelivery = {
+  ts: number;
+  results: OutboundDeliveryResult[];
+};
+
+const COMPLETED_DIRECT_CRON_DELIVERIES = new Map<string, CompletedDirectCronDelivery>();
+
+function cloneDeliveryResults(
+  results: readonly OutboundDeliveryResult[],
+): OutboundDeliveryResult[] {
+  return results.map((result) => ({
+    ...result,
+    ...(result.meta ? { meta: { ...result.meta } } : {}),
+  }));
+}
+
+function pruneCompletedDirectCronDeliveries(now: number) {
+  const ttlMs = process.env.OPENCLAW_TEST_FAST === "1" ? 60_000 : 24 * 60 * 60 * 1000;
+  for (const [key, entry] of COMPLETED_DIRECT_CRON_DELIVERIES) {
+    if (now - entry.ts >= ttlMs) {
+      COMPLETED_DIRECT_CRON_DELIVERIES.delete(key);
+    }
+  }
+  const maxEntries = 2000;
+  if (COMPLETED_DIRECT_CRON_DELIVERIES.size <= maxEntries) {
+    return;
+  }
+  const entries = [...COMPLETED_DIRECT_CRON_DELIVERIES.entries()].toSorted(
+    (a, b) => a[1].ts - b[1].ts,
+  );
+  const toDelete = COMPLETED_DIRECT_CRON_DELIVERIES.size - maxEntries;
+  for (let i = 0; i < toDelete; i += 1) {
+    const oldest = entries[i];
+    if (!oldest) {
+      break;
+    }
+    COMPLETED_DIRECT_CRON_DELIVERIES.delete(oldest[0]);
+  }
+}
+
+function resolveCronDeliveryScheduledAtMs(params: { job: CronJob; runStartedAt: number }): number {
+  const scheduledAt = params.job.state?.nextRunAtMs;
+  return typeof scheduledAt === "number" && Number.isFinite(scheduledAt)
+    ? scheduledAt
+    : params.runStartedAt;
+}
+
+function resolveCronDeliveryStartDelayMs(params: { job: CronJob; runStartedAt: number }): number {
+  return params.runStartedAt - resolveCronDeliveryScheduledAtMs(params);
+}
+
+function isStaleCronDelivery(params: { job: CronJob; runStartedAt: number }): boolean {
+  return resolveCronDeliveryStartDelayMs(params) > STALE_CRON_DELIVERY_MAX_START_DELAY_MS;
+}
+
+function rememberCompletedDirectCronDelivery(
+  idempotencyKey: string,
+  results: readonly OutboundDeliveryResult[],
+) {
+  const now = Date.now();
+  COMPLETED_DIRECT_CRON_DELIVERIES.set(idempotencyKey, {
+    ts: now,
+    results: cloneDeliveryResults(results),
+  });
+  pruneCompletedDirectCronDeliveries(now);
+}
+
+function getCompletedDirectCronDelivery(
+  idempotencyKey: string,
+): OutboundDeliveryResult[] | undefined {
+  const now = Date.now();
+  pruneCompletedDirectCronDeliveries(now);
+  const cached = COMPLETED_DIRECT_CRON_DELIVERIES.get(idempotencyKey);
+  if (!cached) {
+    return undefined;
+  }
+  return cloneDeliveryResults(cached.results);
+}
+
+function buildDirectCronDeliveryIdempotencyKey(params: {
+  runSessionId: string;
+  delivery: SuccessfulDeliveryTarget;
+}): string {
+  const threadId =
+    params.delivery.threadId == null || params.delivery.threadId === ""
+      ? ""
+      : String(params.delivery.threadId);
+  const accountId = params.delivery.accountId?.trim() ?? "";
+  const normalizedTo = normalizeDeliveryTarget(params.delivery.channel, params.delivery.to);
+  return `cron-direct-delivery:v1:${params.runSessionId}:${params.delivery.channel}:${accountId}:${normalizedTo}:${threadId}`;
+}
+
+export function resetCompletedDirectCronDeliveriesForTests() {
+  COMPLETED_DIRECT_CRON_DELIVERIES.clear();
+}
+
+export function getCompletedDirectCronDeliveriesCountForTests(): number {
+  return COMPLETED_DIRECT_CRON_DELIVERIES.size;
+}
+
 function summarizeDirectCronDeliveryError(error: unknown): string {
   if (error instanceof Error) {
     return error.message || "error";
@@ -221,6 +326,10 @@ export async function dispatchCronDelivery(
     options?: { retryTransient?: boolean },
   ): Promise<RunCronAgentTurnResult | null> => {
     const identity = resolveAgentOutboundIdentity(params.cfgWithAgentDefaults, params.agentId);
+    const deliveryIdempotencyKey = buildDirectCronDeliveryIdempotencyKey({
+      runSessionId: params.runSessionId,
+      delivery,
+    });
     try {
       const payloadsForDelivery =
         deliveryPayloads.length > 0
@@ -239,7 +348,42 @@ export async function dispatchCronDelivery(
           ...params.telemetry,
         });
       }
+      if (
+        params.deliveryRequested &&
+        isStaleCronDelivery({
+          job: params.job,
+          runStartedAt: params.runStartedAt,
+        })
+      ) {
+        deliveryAttempted = true;
+        const nowMs = Date.now();
+        const scheduledAtMs = resolveCronDeliveryScheduledAtMs({
+          job: params.job,
+          runStartedAt: params.runStartedAt,
+        });
+        const startDelayMs = resolveCronDeliveryStartDelayMs({
+          job: params.job,
+          runStartedAt: params.runStartedAt,
+        });
+        logWarn(
+          `[cron:${params.job.id}] skipping stale delivery scheduled at ${new Date(scheduledAtMs).toISOString()}, started ${Math.round(startDelayMs / 60_000)}m late, current age ${Math.round((nowMs - scheduledAtMs) / 60_000)}m`,
+        );
+        return params.withRunSession({
+          status: "ok",
+          summary,
+          outputText,
+          deliveryAttempted,
+          delivered: false,
+          ...params.telemetry,
+        });
+      }
       deliveryAttempted = true;
+      const cachedResults = getCompletedDirectCronDelivery(deliveryIdempotencyKey);
+      if (cachedResults) {
+        // Cached entries are only recorded after a successful non-empty delivery.
+        delivered = true;
+        return null;
+      }
       const deliverySession = buildOutboundSessionContext({
         cfg: params.cfgWithAgentDefaults,
         agentId: params.agentId,
@@ -273,6 +417,9 @@ export async function dispatchCronDelivery(
           })
         : await runDelivery();
       delivered = deliveryResults.length > 0;
+      if (delivered) {
+        rememberCompletedDirectCronDelivery(deliveryIdempotencyKey, deliveryResults);
+      }
       return null;
     } catch (err) {
       if (!params.deliveryBestEffort) {

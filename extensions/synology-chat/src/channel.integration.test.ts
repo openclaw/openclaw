@@ -1,5 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  dispatchReplyWithBufferedBlockDispatcher,
+  registerPluginHttpRouteMock,
+} from "./channel.test-mocks.js";
 import { makeFormBody, makeReq, makeRes } from "./test-http-utils.js";
 
 type RegisteredRoute = {
@@ -7,41 +11,6 @@ type RegisteredRoute = {
   accountId: string;
   handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 };
-
-const registerPluginHttpRouteMock = vi.fn<(params: RegisteredRoute) => () => void>(() => vi.fn());
-const dispatchReplyWithBufferedBlockDispatcher = vi.fn().mockResolvedValue({ counts: {} });
-
-vi.mock("openclaw/plugin-sdk/synology-chat", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/synology-chat")>();
-  return {
-    ...actual,
-    DEFAULT_ACCOUNT_ID: "default",
-    setAccountEnabledInConfigSection: vi.fn((_opts: any) => ({})),
-    registerPluginHttpRoute: registerPluginHttpRouteMock,
-    buildChannelConfigSchema: vi.fn((schema: any) => ({ schema })),
-    createFixedWindowRateLimiter: vi.fn(() => ({
-      isRateLimited: vi.fn(() => false),
-      size: vi.fn(() => 0),
-      clear: vi.fn(),
-    })),
-  };
-});
-
-vi.mock("./runtime.js", () => ({
-  getSynologyRuntime: vi.fn(() => ({
-    config: { loadConfig: vi.fn().mockResolvedValue({}) },
-    channel: {
-      reply: {
-        dispatchReplyWithBufferedBlockDispatcher,
-      },
-    },
-  })),
-}));
-
-vi.mock("./client.js", () => ({
-  sendMessage: vi.fn().mockResolvedValue(true),
-  sendFileUrl: vi.fn().mockResolvedValue(true),
-}));
 
 const { createSynologyChatPlugin } = await import("./channel.js");
 describe("Synology channel wiring integration", () => {
@@ -85,7 +54,6 @@ describe("Synology channel wiring integration", () => {
     const registered = firstCall[0];
     expect(registered.path).toBe("/webhook/synology-alerts");
     expect(registered.accountId).toBe("alerts");
-    expect(typeof registered.handler).toBe("function");
 
     const req = makeReq(
       "POST",

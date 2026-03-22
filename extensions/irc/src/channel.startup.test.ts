@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createStartAccountContext } from "../../test-utils/start-account-context.js";
+import {
+  expectStopPendingUntilAbort,
+  startAccountAndTrackLifecycle,
+  waitForStartedMocks,
+} from "../../../test/helpers/extensions/start-account-lifecycle.js";
 import type { ResolvedIrcAccount } from "./accounts.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -16,6 +20,24 @@ vi.mock("./monitor.js", async () => {
 
 import { ircPlugin } from "./channel.js";
 
+function buildAccount(): ResolvedIrcAccount {
+  return {
+    accountId: "default",
+    enabled: true,
+    name: "default",
+    configured: true,
+    host: "irc.example.com",
+    port: 6697,
+    tls: true,
+    nick: "openclaw",
+    username: "openclaw",
+    realname: "OpenClaw",
+    password: "",
+    passwordSource: "none",
+    config: {} as ResolvedIrcAccount["config"],
+  };
+}
+
 describe("ircPlugin gateway.startAccount", () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -25,43 +47,17 @@ describe("ircPlugin gateway.startAccount", () => {
     const stop = vi.fn();
     hoisted.monitorIrcProvider.mockResolvedValue({ stop });
 
-    const account: ResolvedIrcAccount = {
-      accountId: "default",
-      enabled: true,
-      name: "default",
-      configured: true,
-      host: "irc.example.com",
-      port: 6697,
-      tls: true,
-      nick: "openclaw",
-      username: "openclaw",
-      realname: "OpenClaw",
-      password: "",
-      passwordSource: "none",
-      config: {} as ResolvedIrcAccount["config"],
-    };
-
-    const abort = new AbortController();
-    const task = ircPlugin.gateway!.startAccount!(
-      createStartAccountContext({
-        account,
-        abortSignal: abort.signal,
-      }),
-    );
-    let settled = false;
-    void task.then(() => {
-      settled = true;
+    const { abort, task, isSettled } = startAccountAndTrackLifecycle({
+      startAccount: ircPlugin.gateway!.startAccount!,
+      account: buildAccount(),
     });
 
-    await vi.waitFor(() => {
-      expect(hoisted.monitorIrcProvider).toHaveBeenCalledOnce();
+    await expectStopPendingUntilAbort({
+      waitForStarted: waitForStartedMocks(hoisted.monitorIrcProvider),
+      isSettled,
+      abort,
+      task,
+      stop,
     });
-    expect(settled).toBe(false);
-    expect(stop).not.toHaveBeenCalled();
-
-    abort.abort();
-    await task;
-
-    expect(stop).toHaveBeenCalledOnce();
   });
 });
