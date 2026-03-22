@@ -31,15 +31,15 @@ See [Brave Search setup](/tools/brave-search), [Perplexity Search setup](/tools/
 
 ## Choosing a search provider
 
-| Provider                  | Result shape                       | Provider-specific filters                                    | Notes                                                                          | API key                                     |
-| ------------------------- | ---------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------ | ------------------------------------------- |
-| **Brave Search API**      | Structured results with snippets   | `country`, `language`, `ui_lang`, time                       | Supports Brave `llm-context` mode                                              | `BRAVE_API_KEY`                             |
-| **Firecrawl Search**      | Structured results with snippets   | Use `firecrawl_search` for Firecrawl-specific search options | Best for pairing search with Firecrawl scraping/extraction                     | `FIRECRAWL_API_KEY`                         |
-| **Gemini**                | AI-synthesized answers + citations | —                                                            | Uses Google Search grounding                                                   | `GEMINI_API_KEY`                            |
-| **Grok**                  | AI-synthesized answers + citations | —                                                            | Uses xAI web-grounded responses                                                | `XAI_API_KEY`                               |
-| **Kimi**                  | AI-synthesized answers + citations | —                                                            | Uses Moonshot web search                                                       | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
-| **Perplexity Search API** | Structured results with snippets   | `country`, `language`, time, `domain_filter`                 | Supports content extraction controls; OpenRouter uses Sonar compatibility path | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
-| **Tavily Search API**     | Structured results with snippets   | Use `tavily_search` for Tavily-specific search options       | Search depth, topic filtering, AI answers, URL extraction via `tavily_extract` | `TAVILY_API_KEY`                            |
+| Provider                                   | Result shape                       | Setup guide                                 |
+| ------------------------------------------ | ---------------------------------- | ------------------------------------------- |
+| [**Brave Search**](/tools/brave-search)    | Structured results with snippets   | `BRAVE_API_KEY`                             |
+| [**Firecrawl**](/tools/firecrawl)          | Structured results with snippets   | `FIRECRAWL_API_KEY`                         |
+| [**Gemini**](/tools/gemini-search)         | AI-synthesized answers + citations | `GEMINI_API_KEY`                            |
+| [**Grok**](/tools/grok-search)             | AI-synthesized answers + citations | `XAI_API_KEY`                               |
+| [**Kimi**](/tools/kimi-search)             | AI-synthesized answers + citations | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
+| [**Perplexity**](/tools/perplexity-search) | Structured results with snippets   | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
+| [**Tavily**](/tools/tavily)                | Structured results with snippets   | `TAVILY_API_KEY`                            |
 
 ### Auto-detection
 
@@ -63,32 +63,33 @@ Runtime SecretRef behavior:
 
 ## Setting up web search
 
-Use `openclaw configure --section web` to set up your API key and choose a provider.
+Run `openclaw configure --section web` to choose a provider and store your API key. For detailed setup, see the provider-specific pages:
 
-### Brave Search
+<CardGroup cols={2}>
+  <Card title="Brave Search" icon="shield" href="/tools/brave-search">
+    Structured results with snippets and LLM context mode
+  </Card>
+  <Card title="Firecrawl" icon="fire" href="/tools/firecrawl">
+    Search + scraping with content extraction
+  </Card>
+  <Card title="Gemini" icon="sparkles" href="/tools/gemini-search">
+    AI-synthesized answers via Google Search grounding
+  </Card>
+  <Card title="Grok" icon="zap" href="/tools/grok-search">
+    AI-synthesized answers via xAI web grounding
+  </Card>
+  <Card title="Kimi" icon="moon" href="/tools/kimi-search">
+    AI-synthesized answers via Moonshot web search
+  </Card>
+  <Card title="Perplexity" icon="search" href="/tools/perplexity-search">
+    Structured results with content extraction controls
+  </Card>
+  <Card title="Tavily" icon="globe" href="/tools/tavily">
+    Search depth, topic filtering, and URL extraction
+  </Card>
+</CardGroup>
 
-1. Create a Brave Search API account at [brave.com/search/api](https://brave.com/search/api/)
-2. In the dashboard, choose the **Search** plan and generate an API key.
-3. Run `openclaw configure --section web` to store the key in config, or set `BRAVE_API_KEY` in your environment.
-
-Each Brave plan includes **\$5/month in free credit** (renewing). The Search
-plan costs \$5 per 1,000 requests, so the credit covers 1,000 queries/month. Set
-your usage limit in the Brave dashboard to avoid unexpected charges. See the
-[Brave API portal](https://brave.com/search/api/) for current plans and
-pricing.
-
-### Perplexity Search
-
-1. Create a Perplexity account at [perplexity.ai/settings/api](https://www.perplexity.ai/settings/api)
-2. Generate an API key in the dashboard
-3. Run `openclaw configure --section web` to store the key in config, or set `PERPLEXITY_API_KEY` in your environment.
-
-For legacy Sonar/OpenRouter compatibility, set `OPENROUTER_API_KEY` instead, or configure `plugins.entries.perplexity.config.webSearch.apiKey` with an `sk-or-...` key. Setting `plugins.entries.perplexity.config.webSearch.baseUrl` or `model` also opts Perplexity back into the chat-completions compatibility path.
-
-Provider-specific web search config now lives under `plugins.entries.<plugin>.config.webSearch.*`.
-Legacy `tools.web.search.*` provider paths still load through a compatibility shim for one release, but they should not be used in new configs.
-
-See [Perplexity Search API Docs](https://docs.perplexity.ai/guides/search-quickstart) for more details.
+Provider-specific web search config lives under `plugins.entries.<plugin>.config.webSearch.*`.
 
 ### Where to store the key
 
@@ -295,57 +296,6 @@ In this mode, `country` and `language` / `search_lang` still work, but `ui_lang`
   },
 }
 ```
-
-## Using Gemini (Google Search grounding)
-
-Gemini models support built-in [Google Search grounding](https://ai.google.dev/gemini-api/docs/grounding),
-which returns AI-synthesized answers backed by live Google Search results with citations.
-
-### Getting a Gemini API key
-
-1. Go to [Google AI Studio](https://aistudio.google.com/apikey)
-2. Create an API key
-3. Set `GEMINI_API_KEY` in the Gateway environment, or configure `plugins.entries.google.config.webSearch.apiKey`
-
-### Setting up Gemini search
-
-```json5
-{
-  plugins: {
-    entries: {
-      google: {
-        config: {
-          webSearch: {
-            // API key (optional if GEMINI_API_KEY is set)
-            apiKey: "AIza...",
-            // Model (defaults to "gemini-2.5-flash")
-            model: "gemini-2.5-flash",
-          },
-        },
-      },
-    },
-  },
-  tools: {
-    web: {
-      search: {
-        provider: "gemini",
-      },
-    },
-  },
-}
-```
-
-**Environment alternative:** set `GEMINI_API_KEY` in the Gateway environment.
-For a gateway install, put it in `~/.openclaw/.env`.
-
-### Notes
-
-- Citation URLs from Gemini grounding are automatically resolved from Google's
-  redirect URLs to direct URLs.
-- Redirect resolution uses the SSRF guard path (HEAD + redirect checks + http/https validation) before returning the final citation URL.
-- Redirect resolution uses strict SSRF defaults, so redirects to private/internal targets are blocked.
-- The default model (`gemini-2.5-flash`) is fast and cost-effective.
-  Any Gemini model that supports grounding can be used.
 
 ## web_search
 
