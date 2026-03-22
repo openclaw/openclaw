@@ -58,7 +58,7 @@ describe("detectConfigConflicts", () => {
     ).toBe(true);
   });
 
-  it("reports info for high-safety config profile", () => {
+  it("reports info for near-high-safety config profile with recommendation", () => {
     const conflicts = detectConfigConflicts({
       agents: { defaults: { sandbox: { mode: "all" } } },
       tools: {
@@ -70,7 +70,32 @@ describe("detectConfigConflicts", () => {
       },
     } as OpenClawConfig);
 
-    expect(conflicts.some((entry) => entry.level === "info")).toBe(true);
+    expect(
+      conflicts.some(
+        (entry) =>
+          entry.level === "info" &&
+          entry.message.includes("Near-high-safety profile") &&
+          entry.message.includes("exec.security=full"),
+      ),
+    ).toBe(true);
+  });
+
+  it("reports critical conflict for tailnet bind without auth", () => {
+    const conflicts = detectConfigConflicts({
+      gateway: {
+        bind: "tailnet",
+        auth: { mode: "none" },
+      },
+    } as OpenClawConfig);
+
+    expect(
+      conflicts.some(
+        (entry) =>
+          entry.level === "critical" &&
+          entry.message.includes('gateway.bind is "tailnet"') &&
+          entry.message.includes('gateway.auth.mode is "none"'),
+      ),
+    ).toBe(true);
   });
 
   it("returns multiple conflicts when several risky combinations are configured", () => {

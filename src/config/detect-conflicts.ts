@@ -1,6 +1,7 @@
 import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { OpenClawConfig } from "./config.js";
+import type { GatewayBindMode } from "./types.gateway.js";
 
 const log = createSubsystemLogger("config/conflicts");
 
@@ -13,8 +14,8 @@ function isSandboxActive(mode: string): boolean {
   return mode === "non-main" || mode === "all";
 }
 
-function isGatewayExposed(bind: OpenClawConfig["gateway"] extends { bind?: infer T } ? T : never): boolean {
-  return bind === "lan" || bind === "custom" || bind === "auto";
+function isGatewayExposed(bind: GatewayBindMode): boolean {
+  return bind === "lan" || bind === "custom" || bind === "auto" || bind === "tailnet";
 }
 
 export function detectConfigConflicts(config: OpenClawConfig): ConflictResult[] {
@@ -25,7 +26,7 @@ export function detectConfigConflicts(config: OpenClawConfig): ConflictResult[] 
   const execAsk = config.tools?.exec?.ask ?? "on-miss";
   const execHost = config.tools?.exec?.host ?? "sandbox";
   const execSecurity = config.tools?.exec?.security ?? "deny";
-  const elevatedEnabled = config.tools?.elevated?.enabled ?? true;
+  const elevatedEnabled = config.tools?.elevated?.enabled === true;
   const bind = config.gateway?.bind ?? "loopback";
   const authMode = config.gateway?.auth?.mode ?? "token";
 
@@ -69,8 +70,8 @@ export function detectConfigConflicts(config: OpenClawConfig): ConflictResult[] 
     conflicts.push({
       level: "info",
       message:
-        "High-safety execution profile detected: sandbox mode is all, exec.ask is always, " +
-        "exec.host is sandbox, and exec.security is not full.",
+        "Near-high-safety profile: sandbox=all, exec.ask=always, exec.host=sandbox. " +
+        "Consider setting exec.security=full for maximum restriction.",
     });
   }
 
