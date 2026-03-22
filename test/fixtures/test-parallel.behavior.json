@@ -314,6 +314,38 @@
         "reason": "Terminates cleanly under threads, but not process forks on this host."
       },
       {
+        "file": "src/hooks/install.test.ts",
+        "reason": "Measured ~14% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/hooks/loader.test.ts",
+        "reason": "Measured ~13% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/hooks/bundled/session-memory/handler.test.ts",
+        "reason": "Measured ~16% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/plugin-sdk/subpaths.test.ts",
+        "reason": "Measured ~23% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/plugins/install.test.ts",
+        "reason": "Measured ~18% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/cron/isolated-agent.uses-last-non-empty-agent-text-as.test.ts",
+        "reason": "Measured ~15% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/cron/isolated-agent.skips-delivery-without-whatsapp-recipient-besteffortdeliver-true.test.ts",
+        "reason": "Measured ~13% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/plugins/loader.test.ts",
+        "reason": "Measured ~13% faster under threads than forks on this host while keeping the file green."
+      },
+      {
         "file": "src/infra/outbound/deliver.test.ts",
         "reason": "Terminates cleanly under threads, but not process forks on this host."
       },
@@ -332,6 +364,34 @@
       {
         "file": "src/infra/outbound/message-action-runner.context.test.ts",
         "reason": "Terminates cleanly under threads, but not process forks on this host."
+      },
+      {
+        "file": "src/infra/provider-usage.test.ts",
+        "reason": "Measured ~17% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/infra/fs-pinned-write-helper.test.ts",
+        "reason": "Measured ~13% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/acp/server.startup.test.ts",
+        "reason": "Measured ~11% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/daemon/schtasks.startup-fallback.test.ts",
+        "reason": "Measured ~15% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/secrets/audit.test.ts",
+        "reason": "Measured ~14% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/security/audit.test.ts",
+        "reason": "Measured ~40% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "ui/src/ui/views/chat.test.ts",
+        "reason": "Measured ~25% faster under threads than forks on this host while keeping the file green."
       },
       {
         "file": "src/tts/tts.test.ts",

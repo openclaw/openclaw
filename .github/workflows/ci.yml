@@ -185,8 +185,8 @@ jobs:
         run: pnpm release:check
 
   checks:
-    needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    needs: [docs-scope, changed-scope, build-artifacts]
+    if: always() && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     strategy:
       fail-fast: false
@@ -262,6 +262,17 @@ jobs:
             echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
             echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
           fi
+
+      - name: Download dist artifact
+        if: github.event_name == 'push' && matrix.task == 'test'
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-build
+          path: dist/
+
+      - name: Build dist
+        if: github.event_name != 'push' && matrix.task == 'test' && matrix.runtime == 'node'
+        run: pnpm build
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         if: github.event_name != 'pull_request' || (matrix.runtime != 'bun' && matrix.task != 'compat-node22')
@@ -368,6 +379,11 @@ jobs:
         continue-on-error: true
         run: pnpm config:docs:check
 
+      - name: Check plugin SDK API baseline drift
+        id: plugin_sdk_api_drift
+        continue-on-error: true
+        run: pnpm plugin-sdk:api:check
+
       - name: Upload gateway watch regression artifacts
         if: always()
         uses: actions/upload-artifact@v7
@@ -386,6 +402,7 @@ jobs:
           NO_RAW_WINDOW_OPEN_OUTCOME: ${{ steps.no_raw_window_open.outcome }}
           GATEWAY_WATCH_REGRESSION_OUTCOME: ${{ steps.gateway_watch_regression.outcome }}
           CONFIG_DOCS_DRIFT_OUTCOME: ${{ steps.config_docs_drift.outcome }}
+          PLUGIN_SDK_API_DRIFT_OUTCOME: ${{ steps.plugin_sdk_api_drift.outcome }}
         run: |
           failures=0
           for result in \
@@ -395,7 +412,8 @@ jobs:
             "extension-plugin-sdk-internal-boundary|$EXTENSION_PLUGIN_SDK_INTERNAL_BOUNDARY_OUTCOME" \
             "lint:ui:no-raw-window-open|$NO_RAW_WINDOW_OPEN_OUTCOME" \
             "gateway-watch-regression|$GATEWAY_WATCH_REGRESSION_OUTCOME" \
-            "config-docs-drift|$CONFIG_DOCS_DRIFT_OUTCOME"; do
+            "config-docs-drift|$CONFIG_DOCS_DRIFT_OUTCOME" \
+            "plugin-sdk-api-drift|$PLUGIN_SDK_API_DRIFT_OUTCOME"; do
             name="${result%%|*}"
             outcome="${result#*|}"
             if [ "$outcome" != "success" ]; then
@@ -570,8 +588,8 @@ jobs:
         run: pre-commit run --all-files pnpm-audit-prod
 
   checks-windows:
-    needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_windows == 'true'
+    needs: [docs-scope, changed-scope, build-artifacts]
+    if: always() && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_windows == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
     runs-on: blacksmith-32vcpu-windows-2025
     timeout-minutes: 45
     env:
@@ -691,6 +709,17 @@ jobs:
         if: matrix.task == 'test'
         run: pnpm canvas:a2ui:bundle
 
+      - name: Download dist artifact
+        if: github.event_name == 'push' && matrix.task == 'test'
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-build
+          path: dist/
+
+      - name: Build dist (Windows)
+        if: github.event_name != 'push' && matrix.task == 'test'
+        run: pnpm build
+
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         run: ${{ matrix.command }}
 
@@ -712,6 +741,9 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+
+      - name: Build dist (macOS)
+        run: pnpm build
 
       # --- Run all checks sequentially (fast gates first) ---
       - name: TS tests (macOS)

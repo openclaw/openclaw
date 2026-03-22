@@ -25,8 +25,16 @@ struct ExecCommandResolution {
         cwd: String?,
         env: [String: String]?) -> [ExecCommandResolution]
     {
-        let shell = ExecShellWrapperParser.extract(command: command, rawCommand: rawCommand)
+        // Allowlist resolution must follow actual argv execution for wrappers.
+        // `rawCommand` is caller-supplied display text and may be canonicalized.
+        let shell = ExecShellWrapperParser.extract(command: command, rawCommand: nil)
         if shell.isWrapper {
+            // Fail closed when env modifiers precede a shell wrapper. This mirrors
+            // system-run binding behavior where such invocations must stay bound to
+            // full argv and must not be auto-allowlisted by payload-only matches.
+            if ExecSystemRunCommandValidator.hasEnvManipulationBeforeShellWrapper(command) {
+                return []
+            }
             guard let shellCommand = shell.command,
                   let segments = self.splitShellCommandChain(shellCommand)
             else {
@@ -46,7 +54,12 @@ struct ExecCommandResolution {
             return resolutions
         }
 
-        guard let resolution = self.resolve(command: command, rawCommand: rawCommand, cwd: cwd, env: env) else {
+        guard let resolution = self.resolveForAllowlistCommand(
+            command: command,
+            rawCommand: rawCommand,
+            cwd: cwd,
+            env: env)
+        else {
             return []
         }
         return [resolution]
@@ -70,6 +83,23 @@ struct ExecCommandResolution {
     }
 
     static func resolve(command: [String], cwd: String?, env: [String: String]?) -> ExecCommandResolution? {
+        let effective = ExecEnvInvocationUnwrapper.unwrapTransparentDispatchWrappersForResolution(command)
+        guard let raw = effective.first?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return nil
+        }
+        return self.resolveExecutable(rawExecutable: raw, cwd: cwd, env: env)
+    }
+
+    private static func resolveForAllowlistCommand(
+        command: [String],
+        rawCommand: String?,
+        cwd: String?,
+        env: [String: String]?) -> ExecCommandResolution?
+    {
+        let trimmedRaw = rawCommand?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedRaw.isEmpty, let token = self.parseFirstToken(trimmedRaw) {
+            return self.resolveExecutable(rawExecutable: token, cwd: cwd, env: env)
+        }
         let effective = ExecEnvInvocationUnwrapper.unwrapDispatchWrappersForResolution(command)
         guard let raw = effective.first?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
             return nil

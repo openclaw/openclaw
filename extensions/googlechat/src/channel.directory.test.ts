@@ -55,4 +55,32 @@ describe("googlechat directory", () => {
       ]),
     );
   });
+
+  it("normalizes spaced provider-prefixed dm allowlist entries", async () => {
+    const cfg = {
+      channels: {
+        googlechat: {
+          serviceAccount: { client_email: "bot@example.com" },
+          dm: { allowFrom: [" users/alice ", " googlechat:user:Bob@Example.com "] },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const directory = expectDirectorySurface(googlechatPlugin.directory);
+
+    await expect(
+      directory.listPeers({
+        cfg,
+        accountId: undefined,
+        query: undefined,
+        limit: undefined,
+        runtime: runtimeEnv,
+      }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        { kind: "user", id: "users/alice" },
+        { kind: "user", id: "users/bob@example.com" },
+      ]),
+    );
+  });
 });

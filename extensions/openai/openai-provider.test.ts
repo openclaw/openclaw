@@ -207,13 +207,14 @@ describeLive("buildOpenAIProvider live", () => {
         modelId: liveCase.modelId,
         modelRegistry: registry as never,
       });
-
-      expect(resolved).toBeDefined();
+      if (!resolved) {
+        throw new Error(`openai provider did not resolve ${liveCase.modelId}`);
+      }
 
       const normalized = provider.normalizeResolvedModel?.({
         provider: "openai",
-        modelId: resolved!.id,
-        model: resolved!,
+        modelId: resolved.id,
+        model: resolved,
       });
 
       expect(normalized).toMatchObject({
