@@ -5,4 +5,5 @@ memory-baseline	0.614	0.352	0.190	0.800	1.000	1.000	0.995	1.000	0.960	0.000	0.33
 eb5f954	0.695	0.363	0.432	1.000	1.000	1.000	1.000	1.000	1.000	0.000	0.400	0.333	0.250	1.000	0.575	0.550	0.600	keep	morpheus: MEMORY.md update step; morpheus richness 0.185→0.550 (major gain); composite 0.673→0.695
 5e2c11f	0.744	0.384	0.643	1.000	1.000	1.000	1.000	1.000	1.000	0.000	0.400	0.333	0.250	1.000	0.575	0.550	0.600	keep	op1: exec fallback ban; composite 0.695→0.744 (+0.049); memory 0.432→0.643 (major gain); delegation still weak at 0.384
 90cc600	0.763	0.400	0.714	1.000	1.000	1.000	1.000	1.000	1.000	0.000	0.400	0.333	0.250	1.000	0.575	0.550	0.600	keep	op1: diagnostics routing to Neo; composite 0.744→0.763 (+0.019); delegation 0.384→0.400; memory 0.643→0.714
-f91ef40	pending	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	pending	op1: write memory after each task (not end of session) — target op1_wb 0.000→higher
+f91ef40	0.770	0.400	0.750	1.000	1.000	1.000	1.000	1.000	1.000	0.000	0.400	0.250	0.250	1.000	0.575	0.550	0.600	keep	op1: write memory after each task; composite 0.763→0.770 (+0.007); op1_wb still 0.000 (7 iters, prompt not triggering)
+next	pending	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	pending	op1: move write-back to Session Startup step 7 — make it a numbered protocol step, not a buried section
