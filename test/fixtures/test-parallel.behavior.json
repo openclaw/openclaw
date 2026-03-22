@@ -105,104 +105,12 @@
         "reason": "Measured ~11% faster under threads than forks on base config while keeping register agent coverage green."
       },
       {
-        "file": "test/vitest-unit-paths.test.ts",
-        "reason": "Measured ~11% faster under threads than forks on base config while keeping unit path checks green."
-      },
-      {
-        "file": "test/scripts/check-channel-agnostic-boundaries.test.ts",
-        "reason": "Measured ~29% faster under threads than forks on base config while keeping channel-agnostic boundary checks green."
-      },
-      {
-        "file": "test/plugin-npm-release.test.ts",
-        "reason": "Measured ~10% faster under threads than forks on base config while keeping npm release checks green."
-      },
-      {
-        "file": "src/cli/daemon-cli-compat.test.ts",
-        "reason": "Measured ~12% faster under threads than forks on base config while keeping daemon CLI compatibility coverage green."
-      },
-      {
-        "file": "src/cli/program/command-registry.test.ts",
-        "reason": "Measured ~10% faster under threads than forks on base config while keeping command registry coverage green."
-      },
-      {
-        "file": "src/cli/program.force.test.ts",
-        "reason": "Measured ~14% faster under threads than forks on base config while keeping force option coverage green."
-      },
-      {
-        "file": "src/cli/cli-utils.test.ts",
-        "reason": "Measured ~15% faster under threads than forks on base config while keeping CLI utility coverage green."
-      },
-      {
-        "file": "src/cli/devices-cli.test.ts",
-        "reason": "Measured ~21% faster under threads than forks on base config while keeping devices CLI coverage green."
-      },
-      {
-        "file": "src/cli/message-secret-scope.test.ts",
-        "reason": "Measured ~16% faster under threads than forks on base config while keeping message secret scope coverage green."
-      },
-      {
-        "file": "src/cli/banner.test.ts",
-        "reason": "Measured ~30% faster under threads than forks on base config while keeping banner rendering coverage green."
-      },
-      {
-        "file": "src/cli/gateway-cli.coverage.test.ts",
-        "reason": "Measured ~18% faster under threads than forks on base config while keeping gateway CLI coverage green."
-      },
-      {
         "file": "src/channels/plugins/actions/actions.test.ts",
         "reason": "Terminates cleanly under threads, but not process forks on this host."
       },
       {
         "file": "test/extension-plugin-sdk-boundary.test.ts",
         "reason": "Measured ~12% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/hooks/install.test.ts",
-        "reason": "Measured ~14% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/hooks/plugin-hooks.test.ts",
-        "reason": "Measured ~11% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/hooks/hooks-install.test.ts",
-        "reason": "Measured ~11% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/hooks/workspace.test.ts",
-        "reason": "Measured ~11% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/hooks/loader.test.ts",
-        "reason": "Measured ~13% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/plugins/conversation-binding.test.ts",
-        "reason": "Measured ~11% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/hooks/bundled/session-memory/handler.test.ts",
-        "reason": "Measured ~16% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/plugin-sdk/subpaths.test.ts",
-        "reason": "Measured ~23% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/plugin-sdk/channel-import-guardrails.test.ts",
-        "reason": "Measured ~30% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/plugins/contracts/wizard.contract.test.ts",
-        "reason": "Measured ~9% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/plugins/contracts/auth-choice.contract.test.ts",
-        "reason": "Measured ~13% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/channels/plugins/contracts/outbound-payload.contract.test.ts",
-        "reason": "Measured ~15% faster under threads than forks on this host while keeping the file green."
       },
       {
         "file": "src/plugins/install.test.ts",
