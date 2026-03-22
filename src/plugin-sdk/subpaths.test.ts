@@ -49,6 +49,7 @@ const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PLUGIN_SDK_DIR = resolve(ROOT_DIR, "plugin-sdk");
 const sourceCache = new Map<string, string>();
 const representativeRuntimeSmokeSubpaths = ["channel-runtime", "conversation-runtime"] as const;
+const importPluginSdkSubpath = (specifier: string) => import(specifier);
 
 const importResolvedPluginSdkSubpath = async (specifier: string) => import(specifier);
 
