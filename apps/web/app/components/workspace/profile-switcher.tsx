@@ -1,6 +1,20 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "../ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "../ui/dialog";
 
 export type WorkspaceInfo = {
   name: string;
@@ -46,6 +60,7 @@ export function ProfileSwitcher({
   const [isOpen, setIsOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [deletingWorkspace, setDeletingWorkspace] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -75,7 +90,9 @@ export function ProfileSwitcher({
   // Close dropdown on outside click
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+      const target = e.target as Element;
+      if (dropdownRef.current && !dropdownRef.current.contains(target)) {
+        if (target.closest?.('[data-slot="dropdown-menu-item"], [data-slot="dropdown-menu-content"]')) return;
         setIsOpen(false);
       }
     }
@@ -116,19 +133,9 @@ export function ProfileSwitcher({
   };
 
   const handleDeleteWorkspace = async (workspaceName: string) => {
-    const target = workspaces.find((workspace) => workspace.name === workspaceName);
-    if (!target?.workspaceDir) {
-      return;
-    }
-    const confirmed = window.confirm(
-      `Delete workspace "${workspaceName}"?\n\nThis permanently removes:\n${shortenPath(target.workspaceDir)}\n\nThis cannot be undone.`,
-    );
-    if (!confirmed) {
-      return;
-    }
-
     setActionError(null);
     setDeletingWorkspace(workspaceName);
+    setConfirmDelete(null);
     try {
       const res = await fetch("/api/workspace/delete", {
         method: "POST",
@@ -212,13 +219,13 @@ export function ProfileSwitcher({
             {workspaces.map((workspace) => {
               const isCurrent = workspace.name === activeWorkspace;
               return (
-                <div key={workspace.name} className="flex items-center gap-0.5">
-                  <button
-                    onClick={() => void handleSwitch(workspace.name)}
-                    disabled={switching || !!deletingWorkspace}
-                    className="flex-1 min-w-0 flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-left text-sm transition-all hover:bg-neutral-400/15 disabled:opacity-50 cursor-pointer"
-                    style={{ color: "var(--color-text)" }}
-                  >
+                <div
+                  key={workspace.name}
+                  className="group flex items-center rounded-xl transition-all hover:bg-neutral-400/15 cursor-pointer"
+                  onClick={() => void handleSwitch(workspace.name)}
+                  style={{ color: "var(--color-text)" }}
+                >
+                  <div className="flex-1 min-w-0 flex items-center gap-2 px-2.5 py-1.5">
                     <span
                       className="w-2 h-2 rounded-full shrink-0"
                       style={{
@@ -244,24 +251,31 @@ export function ProfileSwitcher({
                         Active
                       </span>
                     )}
-                  </button>
+                  </div>
 
                   {workspace.workspaceDir && (
-                    <button
-                      onClick={() => void handleDeleteWorkspace(workspace.name)}
-                      disabled={switching || !!deletingWorkspace}
-                      title={`Delete workspace ${workspace.name}`}
-                      className="p-1.5 rounded-xl transition-all hover:bg-neutral-400/15 disabled:opacity-50 shrink-0 cursor-pointer"
-                      style={{
-                        color: deletingWorkspace === workspace.name
-                          ? "var(--color-text-muted)"
-                          : "var(--color-error)",
-                      }}
-                    >
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" />
-                      </svg>
-                    </button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        onClick={(e) => e.stopPropagation()}
+                        className="p-1 mr-1 rounded-lg transition-all opacity-0 group-hover:opacity-100 hover:bg-neutral-400/25 shrink-0 cursor-pointer"
+                        style={{ color: "var(--color-text-muted)" }}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <circle cx="12" cy="5" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="12" cy="19" r="1" />
+                        </svg>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent side="right" align="start" sideOffset={4} className="min-w-[140px]">
+                        <DropdownMenuItem
+                          variant="destructive"
+                          onSelect={() => setConfirmDelete(workspace.name)}
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" />
+                          </svg>
+                          Delete
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   )}
                 </div>
               );
@@ -297,6 +311,34 @@ export function ProfileSwitcher({
           </div>
         </div>
       )}
+
+      <Dialog open={!!confirmDelete} onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}>
+        <DialogContent showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>Delete workspace</DialogTitle>
+            <DialogDescription>
+              This will permanently delete <strong style={{ color: "var(--color-text)" }}>{confirmDelete}</strong> and all its data. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <button
+              onClick={() => setConfirmDelete(null)}
+              className="px-3 py-1.5 text-[13px] rounded-full transition-all hover:bg-neutral-400/15 cursor-pointer"
+              style={{ color: "var(--color-text-muted)" }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => { if (confirmDelete) void handleDeleteWorkspace(confirmDelete); }}
+              disabled={!!deletingWorkspace}
+              className="px-3 py-1.5 text-[13px] font-medium rounded-full transition-all hover:opacity-80 disabled:opacity-50 cursor-pointer"
+              style={{ background: "var(--color-error)", color: "#fff" }}
+            >
+              {deletingWorkspace === confirmDelete ? "Deleting..." : "Delete"}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

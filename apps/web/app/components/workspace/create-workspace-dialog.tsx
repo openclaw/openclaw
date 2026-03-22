@@ -1,6 +1,14 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "../ui/dialog";
 
 type CreateWorkspaceDialogProps = {
   isOpen: boolean;
@@ -22,9 +30,7 @@ export function CreateWorkspaceDialog({ isOpen, onClose, onCreated }: CreateWork
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ workspaceDir: string; seededFiles: string[] } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
 
-  // Focus input on open
   useEffect(() => {
     if (isOpen) {
       setWorkspaceName("");
@@ -33,17 +39,6 @@ export function CreateWorkspaceDialog({ isOpen, onClose, onCreated }: CreateWork
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   }, [isOpen]);
-
-  // Close on Escape.
-  useEffect(() => {
-    function handleKey(e: KeyboardEvent) {
-      if (e.key === "Escape") {onClose();}
-    }
-    if (isOpen) {
-      document.addEventListener("keydown", handleKey);
-      return () => document.removeEventListener("keydown", handleKey);
-    }
-  }, [isOpen, onClose]);
 
   const handleCreate = async () => {
     const name = workspaceName.trim();
@@ -89,51 +84,11 @@ export function CreateWorkspaceDialog({ isOpen, onClose, onCreated }: CreateWork
     }
   };
 
-  if (!isOpen) {return null;}
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      style={{ background: "rgba(0,0,0,0.5)" }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) {onClose();}
-      }}
-    >
-      <div
-        ref={dialogRef}
-        className="w-full max-w-md rounded-xl overflow-hidden"
-        style={{
-          background: "var(--color-surface)",
-          border: "1px solid var(--color-border)",
-          boxShadow: "var(--shadow-xl)",
-        }}
-      >
-        {/* Header */}
-        <div
-          className="flex items-center justify-between px-5 py-4"
-          style={{ borderBottom: "1px solid var(--color-border)" }}
-        >
-          <h2
-            className="text-base font-semibold"
-            style={{ color: "var(--color-text)" }}
-          >
-            New Workspace
-          </h2>
-          <button
-            onClick={onClose}
-            className="p-1 rounded-md hover:bg-[var(--color-surface-hover)] transition-colors"
-            style={{ color: "var(--color-text-muted)" }}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M18 6 6 18" /><path d="m6 6 12 12" />
-            </svg>
-          </button>
-        </div>
-
-        {/* Body */}
-        <div className="px-5 py-4 space-y-4">
-          {result ? (
-            /* Success state */
+    <Dialog open={isOpen} onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent showCloseButton={!result} className="sm:max-w-md">
+        {result ? (
+          <>
             <div className="text-center py-4">
               <div
                 className="w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3"
@@ -165,10 +120,23 @@ export function CreateWorkspaceDialog({ isOpen, onClose, onCreated }: CreateWork
                 </p>
               )}
             </div>
-          ) : (
-            /* Form */
-            <>
-              {/* Profile name */}
+            <DialogFooter>
+              <button
+                onClick={onClose}
+                className="px-4 py-2 text-sm font-medium rounded-lg transition-colors hover:opacity-80 cursor-pointer"
+                style={{ background: "var(--color-accent)", color: "#fff" }}
+              >
+                Done
+              </button>
+            </DialogFooter>
+          </>
+        ) : (
+          <>
+            <DialogHeader>
+              <DialogTitle>New Workspace</DialogTitle>
+            </DialogHeader>
+
+            <div className="space-y-4">
               <div>
                 <label
                   className="block text-sm font-medium mb-1.5"
@@ -185,7 +153,7 @@ export function CreateWorkspaceDialog({ isOpen, onClose, onCreated }: CreateWork
                     setError(null);
                   }}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter" && !creating) {void handleCreate();}
+                    if (e.key === "Enter" && !creating) { void handleCreate(); }
                   }}
                   placeholder="e.g. work, personal, project-x"
                   className="w-full px-3 py-2 text-sm rounded-lg focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]"
@@ -195,15 +163,11 @@ export function CreateWorkspaceDialog({ isOpen, onClose, onCreated }: CreateWork
                     color: "var(--color-text)",
                   }}
                 />
-                <p
-                  className="text-xs mt-1"
-                  style={{ color: "var(--color-text-muted)" }}
-                >
+                <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>
                   This creates a workspace under ~/.openclaw-dench/workspace-{"{name}"}.
                 </p>
               </div>
 
-              {/* Bootstrap toggle */}
               <label className="flex items-center gap-2 cursor-pointer hidden">
                 <input
                   type="checkbox"
@@ -212,68 +176,41 @@ export function CreateWorkspaceDialog({ isOpen, onClose, onCreated }: CreateWork
                   className="rounded"
                   style={{ accentColor: "var(--color-accent)" }}
                 />
-                <span
-                  className="text-sm"
-                  style={{ color: "var(--color-text-secondary)" }}
-                >
+                <span className="text-sm" style={{ color: "var(--color-text-secondary)" }}>
                   Seed bootstrap files and workspace database
                 </span>
               </label>
+
               {error && (
                 <p
                   className="text-sm px-3 py-2 rounded-lg"
-                  style={{
-                    background: "rgba(220, 38, 38, 0.08)",
-                    color: "var(--color-error)",
-                  }}
+                  style={{ background: "rgba(220, 38, 38, 0.08)", color: "var(--color-error)" }}
                 >
                   {error}
                 </p>
               )}
-            </>
-          )}
-        </div>
+            </div>
 
-        {/* Footer */}
-        <div
-          className="flex items-center justify-end gap-2 px-5 py-3"
-          style={{ borderTop: "1px solid var(--color-border)" }}
-        >
-          {result ? (
-            <button
-              onClick={onClose}
-              className="px-4 py-2 text-sm font-medium rounded-lg transition-colors"
-              style={{
-                background: "var(--color-accent)",
-                color: "#fff",
-              }}
-            >
-              Done
-            </button>
-          ) : (
-            <>
+            <DialogFooter>
               <button
                 onClick={onClose}
-                className="px-4 py-2 text-sm rounded-lg transition-colors hover:bg-[var(--color-surface-hover)]"
-                style={{ color: "var(--color-text-secondary)" }}
+                className="px-3 py-1.5 text-[13px] rounded-full transition-all hover:bg-neutral-400/15 cursor-pointer"
+                style={{ color: "var(--color-text-muted)" }}
               >
                 Cancel
               </button>
               <button
                 onClick={() => void handleCreate()}
                 disabled={creating || !workspaceName.trim()}
-                className="px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
-                style={{
-                  background: "var(--color-accent)",
-                  color: "#fff",
-                }}
+                className="px-4 py-2 text-sm font-medium rounded-full transition-colors hover:opacity-80 disabled:opacity-50 cursor-pointer"
+                style={{ background: "var(--color-accent)", color: "#fff" }}
               >
                 {creating ? "Creating..." : "Create Workspace"}
               </button>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
+            </DialogFooter>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }

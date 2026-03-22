@@ -2227,7 +2227,7 @@ function WorkspacePageInner() {
         )
       ) : (
           <div
-            className="sidebar-animate flex shrink-0 flex-col relative overflow-hidden"
+            className={`sidebar-animate flex shrink-0 flex-col relative z-10 ${leftSidebarCollapsed ? "overflow-hidden" : ""}`}
             style={{
               width: leftSidebarCollapsed ? 0 : leftSidebarWidth,
               minWidth: leftSidebarCollapsed ? 0 : leftSidebarWidth,
