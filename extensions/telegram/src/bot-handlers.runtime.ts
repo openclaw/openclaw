@@ -2192,7 +2192,22 @@ export const registerTelegramHandlers = ({
       // Fire image generation in background — waits for inline_message_id via autoEditPending
       const sanitizedQuery = queryText.replace(/[`$\\|&;(){}<>!]/g, "");
       const imageQueryHtml = escapeHtml(queryText);
-      const researchInstruction = `Generate an image for the following request. Use the nano-banana-pro skill (run ~/.local/bin/uv run ~/.openclaw/workspace/skills/nano-banana-pro/scripts/generate_image.py with appropriate args). Output the image file path on a line starting with FILE: \n\n${sanitizedQuery}`;
+      const homeDir2 = process.env.HOME ?? "/home/linuxuser";
+      const nanobananaScript2 = `${homeDir2}/.openclaw/workspace/skills/nano-banana-pro/scripts/generate_image.py`;
+      const uvBin2 = `${homeDir2}/.local/bin/uv`;
+      const inlineOutputPath2 = `/tmp/inline-img-${Date.now()}.png`;
+      const nanobananaKey2 =
+        (cfg as unknown as { skills?: { entries?: Record<string, { apiKey?: string }> } }).skills
+          ?.entries?.["nano-banana-pro"]?.apiKey ?? "";
+      const researchInstruction = [
+        `[Image generation request. Do NOT explain or ask questions — generate the image immediately using the exec tool.]`,
+        `Run this command EXACTLY (no modifications):`,
+        `${uvBin2} run ${nanobananaScript2} --prompt ${JSON.stringify(sanitizedQuery)} --filename ${JSON.stringify(inlineOutputPath2)} --resolution 1K${nanobananaKey2 ? ` --api-key ${JSON.stringify(nanobananaKey2)}` : ""}`,
+        `When the command succeeds, output the file path on its own line in EXACTLY this format:`,
+        `FILE:${inlineOutputPath2}`,
+        `Then write a single short caption.`,
+        `The query: ${sanitizedQuery}`,
+      ].join("\n");
       const researchCtx = finalizeInboundContext({
         Body: researchInstruction,
         BodyForAgent: researchInstruction,
