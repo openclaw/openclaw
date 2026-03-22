@@ -16,10 +16,10 @@ enum CronCustomSessionTarget: Codable, Equatable {
 
     var rawValue: String {
         switch self {
-        case .predefined(let target):
-            return target.rawValue
-        case .session(let id):
-            return "session:\(id)"
+        case let .predefined(target):
+            target.rawValue
+        case let .session(id):
+            "session:\(id)"
         }
     }
 
@@ -328,10 +328,10 @@ struct CronJob: Identifiable, Codable, Equatable {
     /// predefined enum.
     var sessionTarget: CronSessionTarget {
         switch self.parsedSessionTarget {
-        case .predefined(let target):
-            return target
+        case let .predefined(target):
+            target
         case .session:
-            return .isolated
+            .isolated
         }
     }
 
@@ -342,20 +342,20 @@ struct CronJob: Identifiable, Codable, Equatable {
     var transcriptSessionKey: String? {
         switch self.parsedSessionTarget {
         case .predefined(.main):
-            return nil
+            nil
         case .predefined(.isolated), .predefined(.current):
-            return "cron:\(self.id)"
-        case .session(let id):
-            return id
+            "cron:\(self.id)"
+        case let .session(id):
+            id
         }
     }
 
     var supportsAnnounceDelivery: Bool {
         switch self.parsedSessionTarget {
         case .predefined(.main):
-            return false
+            false
         case .predefined(.isolated), .predefined(.current), .session:
-            return true
+            true
         }
     }
 

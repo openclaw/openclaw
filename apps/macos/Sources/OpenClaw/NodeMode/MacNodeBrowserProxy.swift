@@ -147,7 +147,9 @@ actor MacNodeBrowserProxy {
         }
 
         if method != "GET", let body = params.body {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body.foundationValue, options: [.fragmentsAllowed])
+            request.httpBody = try JSONSerialization.data(
+                withJSONObject: body.foundationValue,
+                options: [.fragmentsAllowed])
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
 
