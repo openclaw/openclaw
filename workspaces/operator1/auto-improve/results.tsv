@@ -7,4 +7,5 @@ eb5f954	0.695	0.363	0.432	1.000	1.000	1.000	1.000	1.000	1.000	0.000	0.400	0.333	
 90cc600	0.763	0.400	0.714	1.000	1.000	1.000	1.000	1.000	1.000	0.000	0.400	0.333	0.250	1.000	0.575	0.550	0.600	keep	op1: diagnostics routing to Neo; composite 0.744→0.763 (+0.019); delegation 0.384→0.400; memory 0.643→0.714
 f91ef40	0.770	0.400	0.750	1.000	1.000	1.000	1.000	1.000	1.000	0.000	0.400	0.250	0.250	1.000	0.575	0.550	0.600	keep	op1: write memory after each task; composite 0.763→0.770 (+0.007); op1_wb still 0.000 (7 iters, prompt not triggering)
 dec7e02	0.770	0.400	0.750	1.000	1.000	1.000	1.000	1.000	1.000	0.333	0.600	0.250	0.250	1.000	0.575	0.550	0.600	keep	op1: write-back step 7; score held 0.770; op1_wb 0.000→0.333 (first write-back!) neo_wb 0.400→0.600; delegation still 0.400
-6a5e153	pending	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	pending	op1: add QMD/qmd-status/memory-system/vector-store row to routing table — target exec calls for qmd diagnostics
+6a5e153	0.770	0.470	0.740	1.000	1.000	1.000	1.000	1.000	1.000	0.400	0.600	0.250	0.000	1.000	0.575	0.550	0.600	keep	op1: QMD routing to Neo; test session del=0.667 mem=0.741 (strong); trinity_wb=0.000 is new target
+0cd91ef	pending	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	pending	trinity: lower write-back threshold >5 messages → >2 tool uses; all trinity sessions are short subagent runs
