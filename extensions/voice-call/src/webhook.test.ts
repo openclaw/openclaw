@@ -245,11 +245,19 @@ describe("VoiceCallWebhookServer replay handling", () => {
 
       expect(response.status).toBe(200);
       expect(parseWebhookEvent).toHaveBeenCalledTimes(1);
-      expect(parseWebhookEvent.mock.calls[0]?.[1]).toEqual({
+      const parseOptions = parseWebhookEvent.mock.calls[0]?.[1];
+      if (!parseOptions) {
+        throw new Error("webhook server did not pass verified parse options");
+      }
+      expect(parseOptions).toEqual({
         verifiedRequestKey: "verified:req:123",
       });
       expect(processEvent).toHaveBeenCalledTimes(1);
-      expect(processEvent.mock.calls[0]?.[0]?.dedupeKey).toBe("verified:req:123");
+      const firstEvent = processEvent.mock.calls[0]?.[0];
+      if (!firstEvent) {
+        throw new Error("webhook server did not forward the parsed event");
+      }
+      expect(firstEvent.dedupeKey).toBe("verified:req:123");
     } finally {
       await server.stop();
     }
@@ -426,7 +434,9 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
         onConnect?: (providerCallId: string, streamSid: string) => void;
       };
     };
-    expect(mediaHandler).toBeTruthy();
+    if (!mediaHandler) {
+      throw new Error("expected webhook server to expose a media stream handler");
+    }
 
     mediaHandler.config.onConnect?.("CA-stream-1", "MZ-new");
     mediaHandler.config.onDisconnect?.("CA-stream-1", "MZ-old");

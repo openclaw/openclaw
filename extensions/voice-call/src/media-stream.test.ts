@@ -244,14 +244,17 @@ describe("MediaStreamHandler security hardening", () => {
       const ws = await connectWs(server.url);
       ws.close(1000, "forged\nline\r\tentry");
       await waitForClose(ws);
+      await flush();
 
       const closeLog = logSpy.mock.calls
-        .map((call) => call[0])
+        .map((call) => call.map((value) => String(value)).join(" "))
         .find(
           (value): value is string =>
             typeof value === "string" && value.includes("[MediaStream] WebSocket closed"),
         );
-      expect(closeLog).toBeDefined();
+      if (!closeLog) {
+        throw new Error("sanitized websocket close log was not emitted");
+      }
       expect(closeLog).not.toContain("\n");
       expect(closeLog).not.toContain("\r");
       expect(closeLog).not.toContain("\t");
