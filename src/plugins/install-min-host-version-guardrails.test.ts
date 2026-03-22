@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { isAtLeast, parseSemver } from "../infra/runtime-guard.js";
 import { parseMinHostVersionRequirement } from "./min-host-version.js";
 
-const MIN_HOST_VERSION_BASELINE = "2026.3.14";
+const MIN_HOST_VERSION_BASELINE = "2026.3.22";
 const PLUGIN_MANIFEST_PATHS_REQUIRING_MIN_HOST_VERSION = [
   "extensions/bluebubbles/package.json",
   "extensions/discord/package.json",
