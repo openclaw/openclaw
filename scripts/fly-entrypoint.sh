@@ -199,6 +199,8 @@ log "tool check complete."
 # Required by upstream when --bind lan is used. Must be set before gateway starts.
 # Idempotent: only writes if the key is missing.
 GATEWAY_CONFIG="$DATA_DIR/openclaw.json"
+# Always enforce these settings so they survive upgrades and config syncs.
+# Add new allowed origins here — they'll be applied on every boot.
 if [ -f "$GATEWAY_CONFIG" ] && command -v python3 &>/dev/null; then
   python3 - "$GATEWAY_CONFIG" <<'PYEOF' 2>/dev/null || true
 import json, sys
@@ -206,20 +208,26 @@ path = sys.argv[1]
 with open(path) as f:
     c = json.load(f)
 ui = c.setdefault('gateway', {}).setdefault('controlUi', {})
-changed = False
-if 'allowedOrigins' not in ui and not ui.get('dangerouslyAllowHostHeaderOriginFallback'):
-    ui['allowedOrigins'] = [
-        'https://openclaw-jhs.fly.dev',
-        'https://larry.jhsconsulting.net',
-        'https://od.jhsconsulting.net'
-    ]
-    changed = True
-if not ui.get('dangerouslyDisableDeviceAuth'):
-    ui['dangerouslyDisableDeviceAuth'] = True
-    changed = True
-if changed:
-    with open(path, 'w') as f:
-        json.dump(c, f, indent=2)
+
+# Always ensure these origins are allowed — add new domains here
+required_origins = [
+    'https://openclaw-jhs.fly.dev',
+    'https://larry.jhsconsulting.net',
+    'https://od.jhsconsulting.net',
+    'https://oc.jhsconsulting.net',
+]
+existing = ui.get('allowedOrigins', [])
+merged = list(dict.fromkeys(existing + required_origins))  # deduplicate, preserve order
+ui['allowedOrigins'] = merged
+
+# Personal deployment — gateway token handles auth, device pairing adds no value
+ui['dangerouslyDisableDeviceAuth'] = True
+
+# Never set dangerouslyAllowHostHeaderOriginFallback on production
+ui.pop('dangerouslyAllowHostHeaderOriginFallback', None)
+
+with open(path, 'w') as f:
+    json.dump(c, f, indent=2)
 PYEOF
 fi
 
