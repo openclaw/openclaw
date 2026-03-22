@@ -68,9 +68,11 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
     through the real `run.ts` / `compact.ts` paths; helper-only tests are not a
     sufficient substitute for those integration paths.
 - Pool note:
-  - OpenClaw uses Vitest `vmForks` on Node 22, 23, and 24 for faster unit shards.
-  - On Node 25+, OpenClaw automatically falls back to regular `forks` until the repo is re-validated there.
-  - Override manually with `OPENCLAW_TEST_VM_FORKS=0` (force `forks`) or `OPENCLAW_TEST_VM_FORKS=1` (force `vmForks`).
+  - OpenClaw uses Vitest `forks` by default for unit shards.
+  - `pnpm test` also defaults to `--isolate=false` at the wrapper level for faster file startup.
+  - Opt back into Vitest file isolation with `OPENCLAW_TEST_ISOLATE=1 pnpm test`.
+  - `OPENCLAW_TEST_NO_ISOLATE=0` or `OPENCLAW_TEST_NO_ISOLATE=false` also force isolated runs.
+  - `OPENCLAW_TEST_VM_FORKS=1` remains an opt-in experiment on Node 22, 23, and 24 only.
 
 ### E2E (gateway smoke)
 
@@ -78,8 +80,8 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
 - Config: `vitest.e2e.config.ts`
 - Files: `src/**/*.e2e.test.ts`, `test/**/*.e2e.test.ts`
 - Runtime defaults:
-  - Uses Vitest `vmForks` for faster file startup.
-  - Uses adaptive workers (CI: 2-4, local: 4-8).
+  - Uses Vitest `forks` for deterministic cross-file isolation.
+  - Uses adaptive workers (CI: up to 2, local: 1 by default).
   - Runs in silent mode by default to reduce console I/O overhead.
 - Useful overrides:
   - `OPENCLAW_E2E_WORKERS=<n>` to force worker count (capped at 16).
