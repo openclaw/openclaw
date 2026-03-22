@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -69,7 +68,9 @@ function ensureSuiteTempRoot() {
   if (suiteTempRoot) {
     return suiteTempRoot;
   }
-  suiteTempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-install-"));
+  const bundleTempRoot = path.join(process.cwd(), ".tmp");
+  fs.mkdirSync(bundleTempRoot, { recursive: true });
+  suiteTempRoot = fs.mkdtempSync(path.join(bundleTempRoot, "openclaw-plugin-install-"));
   return suiteTempRoot;
 }
 
