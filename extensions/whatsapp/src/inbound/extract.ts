@@ -66,8 +66,6 @@ export function extractMentionedJids(rawMessage: proto.IMessage | undefined): st
 
   const candidates: Array<string[] | null | undefined> = [
     message.extendedTextMessage?.contextInfo?.mentionedJid,
-    message.extendedTextMessage?.contextInfo?.quotedMessage?.extendedTextMessage?.contextInfo
-      ?.mentionedJid,
     message.imageMessage?.contextInfo?.mentionedJid,
     message.videoMessage?.contextInfo?.mentionedJid,
     message.documentMessage?.contextInfo?.mentionedJid,
