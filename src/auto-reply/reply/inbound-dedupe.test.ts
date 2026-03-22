@@ -113,7 +113,7 @@ describe("inbound dedupe", () => {
       MessageSid: "msg-2",
     };
     const cloneCache: DedupeCache = {
-      check: vi.fn((key: string) => key.includes("same body")),
+      check: vi.fn((key: string | null | undefined) => (key ?? "").includes("same body")),
       clear: vi.fn(),
     };
 
