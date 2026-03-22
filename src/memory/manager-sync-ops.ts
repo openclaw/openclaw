@@ -268,6 +268,8 @@ export abstract class MemoryManagerSyncOps {
     ensureDir(dir);
     const { DatabaseSync } = requireNodeSqlite();
     const db = new DatabaseSync(dbPath, { allowExtension: this.settings.store.vector.enabled });
+    db.exec("PRAGMA journal_mode = WAL;");
+    db.exec("PRAGMA synchronous = NORMAL;");
     // busy_timeout is per-connection and resets to 0 on restart.
     // Set it on every open so concurrent processes retry instead of
     // failing immediately with SQLITE_BUSY.
