@@ -194,6 +194,8 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     sandbox: AgentSandboxSchema,
+    systemPrompt: z.string().optional(),
+    rules: z.array(z.string()).optional(),
   })
   .strict()
   .optional();
