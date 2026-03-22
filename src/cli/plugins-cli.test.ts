@@ -16,6 +16,7 @@ const buildPluginStatusReport = vi.fn();
 const applyExclusiveSlotSelection = vi.fn();
 const uninstallPlugin = vi.fn();
 const updateNpmInstalledPlugins = vi.fn();
+const updateNpmInstalledHookPacks = vi.fn();
 const promptYesNo = vi.fn();
 const installPluginFromNpmSpec = vi.fn();
 const installPluginFromPath = vi.fn();
@@ -79,6 +80,10 @@ vi.mock("../plugins/uninstall.js", () => ({
 
 vi.mock("../plugins/update.js", () => ({
   updateNpmInstalledPlugins: (...args: unknown[]) => updateNpmInstalledPlugins(...args),
+}));
+
+vi.mock("../hooks/update.js", () => ({
+  updateNpmInstalledHookPacks: (...args: unknown[]) => updateNpmInstalledHookPacks(...args),
 }));
 
 vi.mock("./prompt.js", () => ({
@@ -145,6 +150,7 @@ describe("plugins cli", () => {
     uninstallPlugin.mockReset();
     updateNpmInstalledPlugins.mockReset();
     promptYesNo.mockReset();
+    updateNpmInstalledHookPacks.mockReset();
     installPluginFromNpmSpec.mockReset();
     installPluginFromPath.mockReset();
     installPluginFromClawHub.mockReset();
@@ -185,6 +191,11 @@ describe("plugins cli", () => {
       },
     });
     updateNpmInstalledPlugins.mockResolvedValue({
+      outcomes: [],
+      changed: false,
+      config: {} as OpenClawConfig,
+    });
+    updateNpmInstalledHookPacks.mockResolvedValue({
       outcomes: [],
       changed: false,
       config: {} as OpenClawConfig,
@@ -596,34 +607,24 @@ describe("plugins cli", () => {
       changed: false,
       outcomes: [],
     });
-    installHooksFromNpmSpec.mockResolvedValue({
-      ok: true,
-      hookPackId: "demo-hooks",
-      hooks: ["command-audit"],
-      targetDir: "/tmp/hooks/demo-hooks",
-      version: "1.1.0",
-      npmResolution: {
-        name: "@acme/demo-hooks",
-        spec: "@acme/demo-hooks@1.1.0",
-        integrity: "sha256-demo-2",
-      },
+    updateNpmInstalledHookPacks.mockResolvedValue({
+      config: nextConfig,
+      changed: true,
+      outcomes: [
+        {
+          hookId: "demo-hooks",
+          status: "updated",
+          message: 'Updated hook pack "demo-hooks": 1.0.0 -> 1.1.0.',
+        },
+      ],
     });
-    recordHookInstall.mockReturnValue(nextConfig);
 
     await runCommand(["plugins", "update", "demo-hooks"]);
 
-    expect(installHooksFromNpmSpec).toHaveBeenCalledWith(
+    expect(updateNpmInstalledHookPacks).toHaveBeenCalledWith(
       expect.objectContaining({
-        spec: "@acme/demo-hooks@1.0.0",
-        mode: "update",
-        expectedHookPackId: "demo-hooks",
-      }),
-    );
-    expect(recordHookInstall).toHaveBeenCalledWith(
-      cfg,
-      expect.objectContaining({
-        hookId: "demo-hooks",
-        hooks: ["command-audit"],
+        config: cfg,
+        hookIds: ["demo-hooks"],
       }),
     );
     expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
@@ -756,6 +757,7 @@ describe("plugins cli", () => {
     await runCommand(["plugins", "update", "--all"]);
 
     expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(updateNpmInstalledHookPacks).not.toHaveBeenCalled();
     expect(runtimeLogs.at(-1)).toBe("No tracked plugins or hook packs to update.");
   });
 
@@ -918,6 +920,11 @@ describe("plugins cli", () => {
     updateNpmInstalledPlugins.mockResolvedValue({
       outcomes: [{ status: "ok", message: "Updated alpha -> 1.1.0" }],
       changed: true,
+      config: nextConfig,
+    });
+    updateNpmInstalledHookPacks.mockResolvedValue({
+      outcomes: [],
+      changed: false,
       config: nextConfig,
     });
 
