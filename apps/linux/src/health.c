@@ -238,6 +238,10 @@ static void on_health_probe_finished(GObject *source_object, GAsyncResult *res, 
     
     GSubprocess *subprocess = G_SUBPROCESS(source_object);
     g_autoptr(GError) error = NULL;
+    // Declared before any goto to prevent __attribute__((cleanup)) from
+    // firing on an uninitialized garbage pointer when goto jumps past
+    // the assignment.  Initialized to NULL so cleanup is a safe no-op.
+    g_autoptr(JsonParser) parser = NULL;
     gchar *stdout_buf = NULL;
     gchar *stderr_buf = NULL;
     
@@ -260,7 +264,7 @@ static void on_health_probe_finished(GObject *source_object, GAsyncResult *res, 
         goto check_pending;
     }
     
-    g_autoptr(JsonParser) parser = json_parser_new();
+    parser = json_parser_new();
     if (!json_parser_load_from_data(parser, stdout_buf, -1, &error)) {
         HealthState hs = {0};
         hs.last_updated = g_get_real_time();

@@ -35,7 +35,8 @@ sources = [
   'src/health_helpers.c',
   'src/state.c',
   'src/notify.c',
-  'src/diagnostics.c'
+  'src/diagnostics.c',
+  'src/log.c'
 ]
 
 executable('openclaw-linux',
@@ -60,7 +61,7 @@ install_data('ai.openclaw.Companion.desktop',
 
 # Local Tests
 test_state_exe = executable('test_state',
-  ['tests/test_state.c', 'src/state.c'],
+  ['tests/test_state.c', 'src/state.c', 'src/log.c'],
   dependencies : [glib_dep, gio_dep])
 test('state', test_state_exe)
 
