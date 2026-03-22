@@ -470,10 +470,29 @@ export function detectToolCallLoop(
     };
   }
 
-  // Generic detector: warn-only for repeated identical calls.
+  // Generic detector: warn on repeated identical calls for all tools.
+  // Exec is higher risk, so it escalates to critical at the configured critical threshold.
   const recentCount = history.filter(
     (h) => h.toolName === toolName && h.argsHash === currentHash,
   ).length;
+  const isExecTool = toolName === "exec";
+
+  if (
+    !knownPollTool &&
+    isExecTool &&
+    resolvedConfig.detectors.genericRepeat &&
+    recentCount >= resolvedConfig.criticalThreshold
+  ) {
+    log.error(`Critical exec loop detected: ${toolName} called ${recentCount} times identically`);
+    return {
+      stuck: true,
+      level: "critical",
+      detector: "generic_repeat",
+      count: recentCount,
+      message: `CRITICAL: You have called ${toolName} ${recentCount} times with identical arguments. Session execution blocked to prevent runaway command loops.`,
+      warningKey: `generic:${toolName}:${currentHash}`,
+    };
+  }
 
   if (
     !knownPollTool &&

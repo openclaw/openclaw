@@ -249,6 +249,17 @@ describe("tool-loop-detection", () => {
   });
 
   describe("detectToolCallLoop", () => {
+    const execThresholdConfig: ToolLoopDetectionConfig = {
+      enabled: true,
+      warningThreshold: 3,
+      criticalThreshold: 6,
+      detectors: {
+        genericRepeat: true,
+        knownPollNoProgress: true,
+        pingPong: true,
+      },
+    };
+
     it("is disabled by default", () => {
       const state = createState();
 
@@ -274,6 +285,98 @@ describe("tool-loop-detection", () => {
         enabledLoopDetectionConfig,
       );
       expect(result.stuck).toBe(false);
+    });
+
+    it("warns for repeated exec calls at repeat threshold", () => {
+      const result = detectLoopAfterRepeatedCalls({
+        toolName: "exec",
+        toolParams: { command: "ls /tmp" },
+        result: {
+          content: [{ type: "text", text: "file-a\nfile-b" }],
+          details: { status: "completed", exitCode: 0 },
+        },
+        count: 3,
+        config: execThresholdConfig,
+      });
+
+      expect(result.stuck).toBe(true);
+      if (result.stuck) {
+        expect(result.level).toBe("warning");
+        expect(result.detector).toBe("generic_repeat");
+      }
+    });
+
+    it("does not warn for different exec commands", () => {
+      const state = createState();
+      recordSuccessfulCall(
+        state,
+        "exec",
+        { command: "ls" },
+        { content: [{ type: "text", text: "a" }], details: { status: "completed", exitCode: 0 } },
+        1,
+      );
+      recordSuccessfulCall(
+        state,
+        "exec",
+        { command: "pwd" },
+        {
+          content: [{ type: "text", text: "/workspace" }],
+          details: { status: "completed", exitCode: 0 },
+        },
+        2,
+      );
+      recordSuccessfulCall(
+        state,
+        "exec",
+        { command: "whoami" },
+        {
+          content: [{ type: "text", text: "openclaw" }],
+          details: { status: "completed", exitCode: 0 },
+        },
+        3,
+      );
+
+      const result = detectToolCallLoop(
+        state,
+        "exec",
+        { command: "date" },
+        execThresholdConfig,
+      );
+      expect(result.stuck).toBe(false);
+    });
+
+    it("does not warn for exec calls below threshold", () => {
+      const result = detectLoopAfterRepeatedCalls({
+        toolName: "exec",
+        toolParams: { command: "ls" },
+        result: {
+          content: [{ type: "text", text: "a\nb" }],
+          details: { status: "completed", exitCode: 0 },
+        },
+        count: 2,
+        config: execThresholdConfig,
+      });
+
+      expect(result.stuck).toBe(false);
+    });
+
+    it("keeps non-exec generic loop detection behavior unchanged", () => {
+      const result = detectLoopAfterRepeatedCalls({
+        toolName: "read",
+        toolParams: { path: "a.txt" },
+        result: {
+          content: [{ type: "text", text: "same file data" }],
+          details: { ok: true },
+        },
+        count: 4,
+        config: execThresholdConfig,
+      });
+
+      expect(result.stuck).toBe(true);
+      if (result.stuck) {
+        expect(result.level).toBe("warning");
+        expect(result.detector).toBe("generic_repeat");
+      }
     });
 
     it("warns on generic repeated tool+args calls", () => {
