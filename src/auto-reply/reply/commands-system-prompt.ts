@@ -5,13 +5,12 @@ import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import type { EmbeddedContextFile } from "../../agents/pi-embedded-helpers.js";
 import { createOpenClawCodingTools } from "../../agents/pi-tools.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
-import { parseShieldPolicy } from "../../agents/shield-policy.js";
+import { loadShieldPolicyFromWorkspace } from "../../agents/shield-policy.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import { buildToolSummaryMap } from "../../agents/tool-summaries.js";
-import { DEFAULT_SHIELD_FILENAME } from "../../agents/workspace.js";
 import type { WorkspaceBootstrapFile } from "../../agents/workspace.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
@@ -52,9 +51,7 @@ export async function resolveCommandsSystemPromptBundle(
     cfg: params.cfg,
     sessionKey: params.ctx.SessionKey ?? params.sessionKey,
   });
-  const shieldPolicy = parseShieldPolicy(
-    bootstrapFiles.find((f) => f.name === DEFAULT_SHIELD_FILENAME)?.content,
-  );
+  const shieldPolicy = loadShieldPolicyFromWorkspace(workspaceDir);
   const tools = (() => {
     try {
       return createOpenClawCodingTools({

@@ -88,7 +88,7 @@ import {
   resolveSessionLockMaxHoldFromTimeout,
 } from "../../session-write-lock.js";
 import { detectRuntimeShell } from "../../shell-utils.js";
-import { parseShieldPolicy } from "../../shield-policy.js";
+import { loadShieldPolicyFromWorkspace } from "../../shield-policy.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
@@ -101,7 +101,7 @@ import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { normalizeToolName } from "../../tool-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
-import { DEFAULT_BOOTSTRAP_FILENAME, DEFAULT_SHIELD_FILENAME } from "../../workspace.js";
+import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import type { CompactEmbeddedPiSessionParams } from "../compact.js";
@@ -1691,11 +1691,9 @@ export async function runEmbeddedAttempt(
         contextMode: params.bootstrapContextMode,
         runKind: params.bootstrapContextRunKind,
       });
-    // Parse SHIELD.md deny rules for tool policy enforcement.
-    const shieldContent = hookAdjustedBootstrapFiles.find(
-      (f) => f.name === DEFAULT_SHIELD_FILENAME,
-    )?.content;
-    const shieldPolicy = parseShieldPolicy(shieldContent);
+    // Load SHIELD.md deny rules directly from the real workspace (not the
+    // bootstrap context, which may be filtered for lightweight/cron runs).
+    const shieldPolicy = loadShieldPolicyFromWorkspace(resolvedWorkspace);
 
     const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
     const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);

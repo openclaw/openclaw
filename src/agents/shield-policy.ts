@@ -1,3 +1,26 @@
+import fs from "node:fs";
+import path from "node:path";
+import { DEFAULT_SHIELD_FILENAME } from "./workspace.js";
+
+/**
+ * Load and parse SHIELD.md directly from a workspace directory.
+ * This reads the file from disk rather than relying on bootstrap context
+ * (which may be filtered for lightweight/heartbeat/cron runs).
+ */
+export function loadShieldPolicyFromWorkspace(
+  workspaceDir: string | undefined,
+): ShieldPolicy | undefined {
+  if (!workspaceDir) {
+    return undefined;
+  }
+  try {
+    const content = fs.readFileSync(path.join(workspaceDir, DEFAULT_SHIELD_FILENAME), "utf-8");
+    return parseShieldPolicy(content);
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Parse SHIELD.md content and extract tool policy rules from YAML frontmatter.
  *

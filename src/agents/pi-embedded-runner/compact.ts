@@ -76,7 +76,7 @@ import {
   resolveSessionLockMaxHoldFromTimeout,
 } from "../session-write-lock.js";
 import { detectRuntimeShell } from "../shell-utils.js";
-import { parseShieldPolicy } from "../shield-policy.js";
+import { loadShieldPolicyFromWorkspace } from "../shield-policy.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
@@ -84,7 +84,6 @@ import {
   type SkillSnapshot,
 } from "../skills.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
-import { DEFAULT_SHIELD_FILENAME } from "../workspace.js";
 import {
   compactWithSafetyTimeout,
   resolveCompactionTimeoutMs,
@@ -554,16 +553,15 @@ export async function compactEmbeddedPiSessionDirect(
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
-    const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
+    const { contextFiles } = await resolveBootstrapContextForRun({
       workspaceDir: effectiveWorkspace,
       config: params.config,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
       warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
     });
-    const shieldPolicy = parseShieldPolicy(
-      bootstrapFiles.find((f) => f.name === DEFAULT_SHIELD_FILENAME)?.content,
-    );
+    // Load SHIELD.md directly from the real workspace (not bootstrap context).
+    const shieldPolicy = loadShieldPolicyFromWorkspace(resolvedWorkspace);
     // Apply contextTokens cap to model so pi-coding-agent's auto-compaction
     // threshold uses the effective limit, not the native context window.
     const ctxInfo = resolveContextWindowInfo({
