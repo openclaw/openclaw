@@ -485,6 +485,11 @@ jobs:
         continue-on-error: true
         run: pnpm plugin-sdk:api:check
 
+      - name: Check memory access bypass guardrail
+        id: memory_access_guard
+        continue-on-error: true
+        run: pnpm lint:memory-access
+
       - name: Upload gateway watch regression artifacts
         if: always()
         uses: actions/upload-artifact@v7
@@ -504,6 +509,7 @@ jobs:
           GATEWAY_WATCH_REGRESSION_OUTCOME: ${{ steps.gateway_watch_regression.outcome }}
           CONFIG_DOCS_DRIFT_OUTCOME: ${{ steps.config_docs_drift.outcome }}
           PLUGIN_SDK_API_DRIFT_OUTCOME: ${{ steps.plugin_sdk_api_drift.outcome }}
+          MEMORY_ACCESS_GUARD_OUTCOME: ${{ steps.memory_access_guard.outcome }}
         run: |
           failures=0
           for result in \
@@ -514,7 +520,8 @@ jobs:
             "lint:ui:no-raw-window-open|$NO_RAW_WINDOW_OPEN_OUTCOME" \
             "gateway-watch-regression|$GATEWAY_WATCH_REGRESSION_OUTCOME" \
             "config-docs-drift|$CONFIG_DOCS_DRIFT_OUTCOME" \
-            "plugin-sdk-api-drift|$PLUGIN_SDK_API_DRIFT_OUTCOME"; do
+            "plugin-sdk-api-drift|$PLUGIN_SDK_API_DRIFT_OUTCOME" \
+            "memory-access-guard|$MEMORY_ACCESS_GUARD_OUTCOME"; do
             name="${result%%|*}"
             outcome="${result#*|}"
             if [ "$outcome" != "success" ]; then

@@ -16,6 +16,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { writeFileWithinRoot } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
+import { writeMemoryFileViaManager } from "../../../memory/index.js";
 import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
@@ -197,14 +198,38 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     const entry = entryParts.join("\n");
 
-    // Write under memory root with alias-safe file validation.
-    await writeFileWithinRoot({
-      rootDir: memoryDir,
-      relativePath: filename,
-      data: entry,
-      encoding: "utf-8",
-    });
-    log.debug("Memory file written successfully");
+    // Route writes through the memory manager when config is available so
+    // it can validate the path and mark the index dirty for the next sync.
+    if (cfg) {
+      const relPath = `memory/${filename}`;
+      const wrote = await writeMemoryFileViaManager({
+        cfg,
+        agentId,
+        relPath,
+        data: entry,
+      });
+      if (wrote) {
+        log.debug("Memory file written via manager", { path: wrote });
+      } else {
+        // Manager unavailable; fall back to direct write.
+        await writeFileWithinRoot({
+          rootDir: memoryDir,
+          relativePath: filename,
+          data: entry,
+          encoding: "utf-8",
+        });
+        log.debug("Memory file written directly (manager unavailable)");
+      }
+    } else {
+      // No config; write directly with alias-safe file validation.
+      await writeFileWithinRoot({
+        rootDir: memoryDir,
+        relativePath: filename,
+        data: entry,
+        encoding: "utf-8",
+      });
+      log.debug("Memory file written directly (no config)");
+    }
 
     // Log completion (but don't send user-visible confirmation - it's internal housekeeping)
     const relPath = memoryFilePath.replace(os.homedir(), "~");

@@ -1,9 +1,12 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { type FSWatcher } from "chokidar";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { ResolvedMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { writeFileWithinRoot } from "../infra/fs-safe.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -675,6 +678,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
   }
 
+  get workspace(): string {
+    return this.workspaceDir;
+  }
+
   async readFile(params: {
     relPath: string;
     from?: number;
@@ -687,6 +694,56 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       from: params.from,
       lines: params.lines,
     });
+  }
+
+  /**
+   * Write a file inside the agent's memory directory.
+   *
+   * Validates that the path is relative, targets the memory subdirectory,
+   * ends with `.md`, and does not follow symlinks outside the workspace.
+   */
+  async writeMemoryFile(params: { relPath: string; data: string }): Promise<string> {
+    const { relPath, data } = params;
+    // Must be a relative path
+    if (path.isAbsolute(relPath)) {
+      throw new Error(`writeMemoryFile: path must be relative, got "${relPath}"`);
+    }
+    // Must target the memory/ subdirectory
+    const normalized = path.normalize(relPath);
+    if (!normalized.startsWith("memory/") && !normalized.startsWith("memory\\")) {
+      throw new Error(`writeMemoryFile: path must be inside memory/, got "${relPath}"`);
+    }
+    // Only .md files
+    if (!normalized.endsWith(".md")) {
+      throw new Error(`writeMemoryFile: only .md files are allowed, got "${relPath}"`);
+    }
+    // Reject traversal
+    if (normalized.includes("..")) {
+      throw new Error(`writeMemoryFile: path must not contain "..", got "${relPath}"`);
+    }
+
+    const memoryDir = path.join(this.workspaceDir, "memory");
+    await fs.mkdir(memoryDir, { recursive: true });
+
+    // Resolve to check for symlink escapes
+    const absTarget = path.join(this.workspaceDir, normalized);
+    const resolvedTarget = await fs.realpath(path.dirname(absTarget)).catch(() => absTarget);
+    const resolvedWorkspace = await fs.realpath(this.workspaceDir).catch(() => this.workspaceDir);
+    if (!resolvedTarget.startsWith(resolvedWorkspace)) {
+      throw new Error(`writeMemoryFile: resolved path escapes workspace root`);
+    }
+
+    // filename only (no subdirectory portion beyond memory/)
+    const filename = path.basename(normalized);
+    await writeFileWithinRoot({
+      rootDir: memoryDir,
+      relativePath: filename,
+      data,
+      encoding: "utf-8",
+    });
+
+    this.dirty = true;
+    return absTarget;
   }
 
   status(): MemoryProviderStatus {

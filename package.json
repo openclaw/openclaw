@@ -627,6 +627,7 @@
     "lint:extensions:no-relative-outside-package": "node scripts/check-extension-plugin-sdk-boundary.mjs --mode=relative-outside-package",
     "lint:extensions:no-src-outside-plugin-sdk": "node scripts/check-extension-plugin-sdk-boundary.mjs --mode=src-outside-plugin-sdk",
     "lint:fix": "oxlint --type-aware --fix && pnpm format",
+    "lint:memory-access": "node --import tsx scripts/check-memory-access.ts",
     "lint:plugins:no-extension-imports": "node scripts/check-plugin-extension-import-boundary.mjs",
     "lint:plugins:no-extension-src-imports": "node --import tsx scripts/check-no-extension-src-imports.ts",
     "lint:plugins:no-extension-test-core-imports": "node --import tsx scripts/check-no-extension-test-core-imports.ts",

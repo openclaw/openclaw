@@ -8,4 +8,5 @@ export {
   closeAllMemorySearchManagers,
   getMemorySearchManager,
   type MemorySearchManagerResult,
+  writeMemoryFileViaManager,
 } from "./search-manager.js";

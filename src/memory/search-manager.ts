@@ -262,3 +262,35 @@ function buildQmdCacheKey(agentId: string, config: ResolvedQmdConfig): string {
   // Fast stringify avoids deep key-sorting overhead on this hot path.
   return `${agentId}:${JSON.stringify(config)}`;
 }
+
+/**
+ * Write a memory file through the MemoryIndexManager, which validates paths
+ * and marks the index dirty so the next sync picks up the change.
+ *
+ * Returns the absolute path of the written file, or null if no manager is available.
+ */
+export async function writeMemoryFileViaManager(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  relPath: string;
+  data: string;
+}): Promise<string | null> {
+  try {
+    const { MemoryIndexManager } = await loadManagerRuntime();
+    const manager = await MemoryIndexManager.get({
+      cfg: params.cfg,
+      agentId: params.agentId,
+    });
+    if (!manager) {
+      return null;
+    }
+    return await manager.writeMemoryFile({
+      relPath: params.relPath,
+      data: params.data,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.warn(`writeMemoryFileViaManager failed: ${message}`);
+    return null;
+  }
+}
