@@ -31,6 +31,7 @@ import {
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
 } from "./proxy-stream-wrappers.js";
+import { createXaiFastModeWrapper } from "./xai-stream-wrappers.js";
 
 /**
  * Resolve provider-specific extra params from model config.
@@ -415,6 +416,15 @@ export function applyExtraParamsToAgent(
     const kilocodeThinkingLevel =
       modelId === "kilo/auto" || isProxyReasoningUnsupported(modelId) ? undefined : thinkingLevel;
     agent.streamFn = createKilocodeWrapper(agent.streamFn, kilocodeThinkingLevel);
+  }
+
+  if (typeof effectiveExtraParams?.fastMode === "boolean") {
+    log.debug(
+      `applying MiniMax fast mode=${effectiveExtraParams.fastMode} for ${provider}/${modelId}`,
+    );
+    agent.streamFn = createMinimaxFastModeWrapper(agent.streamFn, effectiveExtraParams.fastMode);
+    log.debug(`applying xAI fast mode=${effectiveExtraParams.fastMode} for ${provider}/${modelId}`);
+    agent.streamFn = createXaiFastModeWrapper(agent.streamFn, effectiveExtraParams.fastMode);
   }
 
   if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
