@@ -252,7 +252,9 @@ SCHEDULE TYPES (schedule.kind):
 - "every": Recurring interval
   { "kind": "every", "everyMs": <interval-ms>, "anchorMs": <optional-start-ms> }
 - "cron": Cron expression
-  { "kind": "cron", "expr": "<cron-expression>", "tz": "<optional-timezone>" }
+  { "kind": "cron", "expr": "<cron-expression>", "tz": "<optional IANA zone, e.g. America/New_York>" }
+
+When \`tz\` is set for cron schedules, use an IANA timezone name from the tz database (for example \`Europe/Berlin\`, \`Asia/Tokyo\`). Numeric UTC offsets such as \`+08\` or \`-0500\` are not supported; pick a canonical region/city zone instead.
 
 ISO timestamps without an explicit timezone are treated as UTC.
 
