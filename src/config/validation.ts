@@ -10,6 +10,7 @@ import {
 } from "../plugins/config-state.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
+import { validatePrivateModeConfig } from "../private-mode/policy.js";
 import {
   hasAvatarUriScheme,
   isAvatarDataUrl,
@@ -272,6 +273,10 @@ export function validateConfigObjectRaw(
   const gatewayTailscaleBindIssues = validateGatewayTailscaleBind(validated.data as OpenClawConfig);
   if (gatewayTailscaleBindIssues.length > 0) {
     return { ok: false, issues: gatewayTailscaleBindIssues };
+  }
+  const privateModeIssues = validatePrivateModeConfig(validated.data as OpenClawConfig);
+  if (privateModeIssues.length > 0) {
+    return { ok: false, issues: privateModeIssues };
   }
   return {
     ok: true,

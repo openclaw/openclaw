@@ -877,6 +877,64 @@ export const OpenClawSchema = z
       .optional(),
     memory: MemorySchema,
     mcp: McpConfigSchema,
+    privateMode: z
+      .object({
+        enabled: z.boolean().optional(),
+        localOnly: z
+          .object({
+            enabled: z.boolean().optional(),
+            allowedProviders: z.array(z.string()).optional(),
+            failOnDisallowedProviders: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+        embeddings: z
+          .object({
+            provider: z.union([z.literal("local"), z.literal("ollama")]).optional(),
+            allowFtsFallback: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+        filesystem: z
+          .object({
+            allowedRoots: z.array(z.string()).optional(),
+            workspaceAccessDefault: z
+              .union([z.literal("none"), z.literal("ro"), z.literal("rw")])
+              .optional(),
+            blockAbsolutePaths: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+        execution: z
+          .object({
+            disableElevatedExec: z.boolean().optional(),
+            sandboxMode: z.literal("all").optional(),
+            blockHostExec: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+        skills: z
+          .object({
+            disableAll: z.boolean().optional(),
+            allowlist: z.array(z.string()).optional(),
+            blockEnvInjection: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+        audit: z
+          .object({
+            enabled: z.boolean().optional(),
+            logPath: z.string().optional(),
+            logPromptSources: z.boolean().optional(),
+            logFileReads: z.boolean().optional(),
+            logModelCalls: z.boolean().optional(),
+            redactContent: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     skills: z
       .object({
         allowBundled: z.array(z.string()).optional(),
