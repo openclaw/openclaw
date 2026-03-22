@@ -318,6 +318,19 @@ export const ToolsWebSearchSchema = z
       })
       .strict()
       .optional(),
+    tavily: z
+      .object({
+        apiKey: SecretInputSchema.optional().register(sensitive),
+      })
+      .strict()
+      .optional(),
+    searxng: z
+      .object({
+        baseUrl: z.string().optional(),
+        apiKey: SecretInputSchema.optional().register(sensitive),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

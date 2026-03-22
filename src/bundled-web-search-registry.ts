@@ -3,6 +3,7 @@ import firecrawlPlugin from "../extensions/firecrawl/index.js";
 import googlePlugin from "../extensions/google/index.js";
 import moonshotPlugin from "../extensions/moonshot/index.js";
 import perplexityPlugin from "../extensions/perplexity/index.js";
+import searxngPlugin from "../extensions/searxng/index.js";
 import tavilyPlugin from "../extensions/tavily/index.js";
 import xaiPlugin from "../extensions/xai/index.js";
 import type { OpenClawPluginApi } from "./plugins/types.js";
@@ -45,6 +46,12 @@ export const bundledWebSearchPluginRegistrations: ReadonlyArray<{
       return perplexityPlugin;
     },
     credentialValue: "pplx-test",
+  },
+  {
+    get plugin() {
+      return searxngPlugin;
+    },
+    credentialValue: "searxng-test",
   },
   {
     get plugin() {
