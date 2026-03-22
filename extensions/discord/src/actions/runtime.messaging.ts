@@ -386,6 +386,7 @@ export async function handleDiscordMessagingAction(
         ...cfgOptions,
         ...(accountId ? { accountId } : {}),
         mediaUrl,
+        filename: filename ?? undefined,
         mediaLocalRoots: options?.mediaLocalRoots,
         replyTo,
         components,
