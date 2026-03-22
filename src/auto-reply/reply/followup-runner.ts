@@ -478,6 +478,7 @@ export function createFollowupRunner(params: {
           const suffix = typeof count === "number" ? ` (count ${count})` : "";
           finalPayloads.unshift({
             text: `🧹 Auto-compaction complete${suffix}.`,
+            isCompactionNotice: true,
           });
         }
       }

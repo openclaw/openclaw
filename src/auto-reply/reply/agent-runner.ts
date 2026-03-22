@@ -806,7 +806,10 @@ export async function runReplyAgent(params: {
 
       if (verboseEnabled) {
         const suffix = typeof count === "number" ? ` (count ${count})` : "";
-        verboseNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
+        verboseNotices.push({
+          text: `🧹 Auto-compaction complete${suffix}.`,
+          isCompactionNotice: true,
+        });
       }
     }
     if (verboseNotices.length > 0) {
