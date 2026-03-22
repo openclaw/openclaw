@@ -65,6 +65,41 @@ function normalizeAnthropicProviderBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/v1\/?$/, "").replace(/\/+$/, "");
 }
 
+function resolveAnthropicVerificationAuthHeader(params: {
+  baseUrl: string;
+  modelId: string;
+  providers: Record<string, ModelProviderConfig | undefined>;
+}): boolean {
+  const matchingProviders = Object.values(params.providers).filter(
+    (provider) =>
+      provider?.api === "anthropic-messages" &&
+      normalizeAnthropicProviderBaseUrl(provider.baseUrl ?? "") ===
+        normalizeAnthropicProviderBaseUrl(params.baseUrl),
+  );
+
+  if (matchingProviders.length === 0) {
+    return false;
+  }
+
+  const modelMatches = matchingProviders.filter((provider) =>
+    provider?.models?.some((existingModel) => existingModel.id === params.modelId),
+  );
+
+  if (modelMatches.length === 1) {
+    return modelMatches[0]?.authHeader === true;
+  }
+
+  if (modelMatches.length > 1) {
+    return false;
+  }
+
+  if (matchingProviders.length === 1) {
+    return matchingProviders[0]?.authHeader === true;
+  }
+
+  return false;
+}
+
 export type CustomApiCompatibility = "openai" | "anthropic";
 type CustomApiCompatibilityChoice = CustomApiCompatibility | "unknown";
 export type CustomApiResult = {
@@ -756,22 +791,17 @@ export async function promptCustomApiConfig(params: {
     }
 
     const verifySpinner = prompter.progress("Verifying...");
-    const normalizedAnthropicBaseUrl = normalizeAnthropicProviderBaseUrl(baseUrl);
     const result =
       compatibility === "anthropic"
         ? await requestAnthropicVerification({
             baseUrl,
             apiKey: resolvedApiKey,
             modelId,
-            authHeader:
-              Object.values(config.models?.providers ?? {}).some(
-                (provider) =>
-                  provider?.api === "anthropic-messages" &&
-                  normalizeAnthropicProviderBaseUrl(provider?.baseUrl ?? "") ===
-                    normalizedAnthropicBaseUrl &&
-                  provider?.models?.some((existingModel) => existingModel.id === modelId) &&
-                  provider?.authHeader === true,
-              ) || false,
+            authHeader: resolveAnthropicVerificationAuthHeader({
+              baseUrl,
+              modelId,
+              providers: config.models?.providers ?? {},
+            }),
           })
         : await requestOpenAiVerification({ baseUrl, apiKey: resolvedApiKey, modelId });
     if (result.ok) {
