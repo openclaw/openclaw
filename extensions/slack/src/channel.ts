@@ -617,18 +617,19 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
               "botTokenStatus",
               "appTokenStatus",
             ])) ?? isSlackPluginAccountConfigured(account);
-      const base = buildComputedAccountStatusSnapshot({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured,
-        runtime,
-        probe,
-      });
-      return {
-        ...base,
-        ...projectCredentialSnapshotFields(account),
-      };
+      return buildComputedAccountStatusSnapshot(
+        {
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured,
+          runtime,
+          probe,
+        },
+        {
+          ...projectCredentialSnapshotFields(account),
+        },
+      );
     },
   },
   gateway: {

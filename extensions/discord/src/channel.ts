@@ -635,26 +635,27 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
         resolveConfiguredFromCredentialStatuses(account) ?? Boolean(account.token?.trim());
       const app = runtime?.application ?? (probe as { application?: unknown })?.application;
       const bot = runtime?.bot ?? (probe as { bot?: unknown })?.bot;
-      const base = buildComputedAccountStatusSnapshot({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured,
-        runtime,
-        probe,
-      });
-      return {
-        ...base,
-        ...projectCredentialSnapshotFields(account),
-        connected: runtime?.connected ?? false,
-        reconnectAttempts: runtime?.reconnectAttempts,
-        lastConnectedAt: runtime?.lastConnectedAt ?? null,
-        lastDisconnect: runtime?.lastDisconnect ?? null,
-        lastEventAt: runtime?.lastEventAt ?? null,
-        application: app ?? undefined,
-        bot: bot ?? undefined,
-        audit,
-      };
+      return buildComputedAccountStatusSnapshot(
+        {
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured,
+          runtime,
+          probe,
+        },
+        {
+          ...projectCredentialSnapshotFields(account),
+          connected: runtime?.connected ?? false,
+          reconnectAttempts: runtime?.reconnectAttempts,
+          lastConnectedAt: runtime?.lastConnectedAt ?? null,
+          lastDisconnect: runtime?.lastDisconnect ?? null,
+          lastEventAt: runtime?.lastEventAt ?? null,
+          application: app ?? undefined,
+          bot: bot ?? undefined,
+          audit,
+        },
+      );
     },
   },
   gateway: {
