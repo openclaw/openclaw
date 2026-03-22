@@ -29,7 +29,7 @@ export function createSessionsManageTool(opts?: {
     label: "Session Manage",
     name: "sessions_manage",
     description:
-      "Compact or reset a session by key. Use action 'compact' to compress context or 'reset' to start fresh.",
+      "Manage a session by key. Use action 'compact' to trim the transcript (keeps last N lines, not semantic summarization) or 'reset' to clear the session and start fresh. Cannot reset the caller's own session.",
     parameters: SessionsManageToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
