@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { describe, expect, it, vi } from "vitest";
 
 const handleDiscordMessageActionMock = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 
@@ -49,14 +50,7 @@ describe("discordMessageActions", () => {
     expect(discovery?.capabilities).toEqual(["interactive", "components"]);
     expect(discovery?.schema).not.toBeNull();
     expect(discovery?.actions).toEqual(
-      expect.arrayContaining([
-        "send",
-        "poll",
-        "react",
-        "reactions",
-        "emoji-list",
-        "permissions",
-      ]),
+      expect.arrayContaining(["send", "poll", "react", "reactions", "emoji-list", "permissions"]),
     );
     expect(discovery?.actions).not.toContain("channel-create");
     expect(discovery?.actions).not.toContain("role-add");
@@ -90,10 +84,13 @@ describe("discordMessageActions", () => {
         },
       },
     } as OpenClawConfig;
-    const toolContext = { sessionId: "s1" };
+    const toolContext: ChannelMessageActionContext["toolContext"] = {
+      currentChannelProvider: "discord",
+    };
     const mediaLocalRoots = ["/tmp/media"];
 
     await discordMessageActions.handleAction?.({
+      channel: "discord",
       action: "send",
       params: { to: "channel:123", text: "hello" },
       cfg,
