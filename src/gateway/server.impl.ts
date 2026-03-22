@@ -1,4 +1,4 @@
-import path from "node:path";
+﻿import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
@@ -83,8 +83,8 @@ import {
 } from "./events.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { startGatewayModelPricingRefresh } from "./model-pricing-cache.js";
-import { GATEWAY_CLIENT_IDS } from "./protocol/client-info.js";
 import { NodeRegistry } from "./node-registry.js";
+import { GATEWAY_CLIENT_IDS } from "./protocol/client-info.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
 import {
