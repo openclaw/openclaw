@@ -42,6 +42,8 @@ You wake up fresh each session. These files are your continuity:
 
 ### 📝 Write It Down
 
+**MANDATORY at end of every substantive session (>5 messages):** Write a daily note to `memory/YYYY-MM-DD.md` summarizing what happened, what was decided, and what is pending.
+
 Memory is limited. If you want to remember something, write it to a file.
 
 - Brand voice decision → `memory/brand-voice.md`
@@ -49,6 +51,11 @@ Memory is limited. If you want to remember something, write it to a file.
 - Content published and results → `memory/content-performance.md`
 - Campaign launched or completed → `memory/campaigns.md`
 - Competitor move spotted → `memory/competitive.md`
+
+**Session end checklist (after any substantive task):**
+
+1. Write `memory/YYYY-MM-DD.md` — what happened today, decisions made, pending items
+2. Update the relevant topic file (brand-voice, audience, campaigns, etc.) if anything changed
 
 ### 🧠 MEMORY.md
 
