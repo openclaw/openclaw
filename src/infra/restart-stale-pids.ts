@@ -82,12 +82,106 @@ function parsePidsFromLsofOutput(stdout: string): number[] {
  * Find PIDs of gateway processes listening on the given port using synchronous lsof.
  * Returns only PIDs that belong to openclaw gateway processes (not the current process).
  */
+/**
+ * Parse gateway PIDs from `netstat -ano` output on Windows.
+ * Looks for LISTENING entries on the given port and returns PIDs of openclaw
+ * processes (excluding the current process).
+ *
+ * netstat -ano output format:
+ *   TCP    0.0.0.0:18789          0.0.0.0:0              LISTENING       12345
+ *   TCP    [::]:18789             [::]:0                  LISTENING       12345
+ */
+function findGatewayPidsOnPortWindows(
+  port: number,
+  spawnTimeoutMs: number,
+): number[] {
+  const res = spawnSync("netstat", ["-ano", "-p", "TCP"], {
+    encoding: "utf8",
+    timeout: spawnTimeoutMs,
+    windowsHide: true,
+  });
+  if (res.error || res.status !== 0) {
+    restartLog.warn(
+      `netstat failed during stale-pid scan for port ${port}: ${res.error ? String(res.error) : `exit ${res.status}`}`,
+    );
+    return [];
+  }
+  const pids = new Set<number>();
+  const portSuffix = `:${port}`;
+  for (const line of res.stdout.split(/\r?\n/)) {
+    // Match lines like: TCP  0.0.0.0:18789  0.0.0.0:0  LISTENING  12345
+    if (!line.includes("LISTENING")) continue;
+    const parts = line.trim().split(/\s+/);
+    // parts: [proto, local_addr, foreign_addr, state, pid]
+    if (parts.length < 5) continue;
+    const localAddr = parts[1];
+    if (!localAddr || !localAddr.endsWith(portSuffix)) continue;
+    const pid = Number.parseInt(parts[4], 10);
+    if (Number.isFinite(pid) && pid > 0 && pid !== process.pid) {
+      pids.add(pid);
+    }
+  }
+  if (pids.size === 0) return [];
+  // Verify each PID is actually an openclaw/node process via tasklist
+  const confirmed: number[] = [];
+  for (const pid of pids) {
+    try {
+      const tl = spawnSync("tasklist", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"], {
+        encoding: "utf8",
+        timeout: spawnTimeoutMs,
+        windowsHide: true,
+      });
+      if (tl.stdout && tl.stdout.toLowerCase().includes("node")) {
+        confirmed.push(pid);
+      }
+    } catch {
+      // If tasklist fails, include the PID anyway — better to kill a stale
+      // process than leave a port occupied.
+      confirmed.push(pid);
+    }
+  }
+  return confirmed;
+}
+
+/**
+ * Poll whether the given port is free on Windows using netstat.
+ */
+function pollPortOnceWindows(port: number): PollResult {
+  try {
+    const res = spawnSync("netstat", ["-ano", "-p", "TCP"], {
+      encoding: "utf8",
+      timeout: POLL_SPAWN_TIMEOUT_MS,
+      windowsHide: true,
+    });
+    if (res.error) {
+      const code = (res.error as NodeJS.ErrnoException).code;
+      const permanent = code === "ENOENT" || code === "EACCES" || code === "EPERM";
+      return { free: null, permanent };
+    }
+    if (res.status !== 0) {
+      return { free: null, permanent: false };
+    }
+    const portSuffix = `:${port}`;
+    for (const line of res.stdout.split(/\r?\n/)) {
+      if (line.includes("LISTENING") && line.includes(portSuffix)) {
+        const parts = line.trim().split(/\s+/);
+        if (parts[1]?.endsWith(portSuffix)) {
+          return { free: false };
+        }
+      }
+    }
+    return { free: true };
+  } catch {
+    return { free: null, permanent: false };
+  }
+}
+
 export function findGatewayPidsOnPortSync(
   port: number,
   spawnTimeoutMs = SPAWN_TIMEOUT_MS,
 ): number[] {
   if (process.platform === "win32") {
-    return [];
+    return findGatewayPidsOnPortWindows(port, spawnTimeoutMs);
   }
   const lsof = resolveLsofCommandSync();
   const res = spawnSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], {
@@ -139,6 +233,9 @@ export function findGatewayPidsOnPortSync(
 type PollResult = { free: true } | { free: false } | { free: null; permanent: boolean };
 
 function pollPortOnce(port: number): PollResult {
+  if (process.platform === "win32") {
+    return pollPortOnceWindows(port);
+  }
   try {
     const lsof = resolveLsofCommandSync();
     const res = spawnSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], {
