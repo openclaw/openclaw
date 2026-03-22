@@ -15,6 +15,20 @@ function isOpenRouterAnthropicModel(provider: string, modelId: string): boolean 
   return provider.toLowerCase() === "openrouter" && modelId.toLowerCase().startsWith("anthropic/");
 }
 
+function isOpenRouterCacheableModel(provider: string, modelId: string): boolean {
+  if (provider.toLowerCase() !== "openrouter") {
+    return false;
+  }
+  const normalized = modelId.toLowerCase();
+  return (
+    normalized.startsWith("anthropic/") ||
+    normalized.startsWith("deepseek/") ||
+    normalized.startsWith("moonshot/") ||
+    normalized.startsWith("moonshotai/") ||
+    normalized.startsWith("zai/")
+  );
+}
+
 function mapThinkingLevelToOpenRouterReasoningEffort(
   thinkingLevel: ThinkLevel,
 ): "none" | "minimal" | "low" | "medium" | "high" | "xhigh" {
@@ -61,7 +75,7 @@ export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | unde
     if (
       typeof model.provider !== "string" ||
       typeof model.id !== "string" ||
-      !isOpenRouterAnthropicModel(model.provider, model.id)
+      !isOpenRouterCacheableModel(model.provider, model.id)
     ) {
       return underlying(model, context, options);
     }
