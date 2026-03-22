@@ -120,6 +120,7 @@ describe("env test utils", () => {
 
   it("createPathResolutionEnv clears leaked path overrides before applying explicit ones", () => {
     const homeDir = path.join(path.sep, "tmp", "openclaw-home");
+    const resolvedHomeDir = path.resolve(homeDir);
     const previousOpenClawHome = process.env.OPENCLAW_HOME;
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const previousBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -132,7 +133,7 @@ describe("env test utils", () => {
         OPENCLAW_STATE_DIR: "~/state",
       });
 
-      expect(env.HOME).toBe(homeDir);
+      expect(env.HOME).toBe(resolvedHomeDir);
       expect(env.OPENCLAW_HOME).toBeUndefined();
       expect(env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
       expect(env.OPENCLAW_STATE_DIR).toBe("~/state");
@@ -145,6 +146,7 @@ describe("env test utils", () => {
 
   it("withPathResolutionEnv only applies the explicit path env inside the callback", () => {
     const homeDir = path.join(path.sep, "tmp", "openclaw-home");
+    const resolvedHomeDir = path.resolve(homeDir);
     const previousOpenClawHome = process.env.OPENCLAW_HOME;
     process.env.OPENCLAW_HOME = "/srv/openclaw-home";
 
@@ -161,7 +163,7 @@ describe("env test utils", () => {
       );
 
       expect(seen).toEqual({
-        processHome: homeDir,
+        processHome: resolvedHomeDir,
         processOpenClawHome: undefined,
         processBundledDir: "~/bundled",
         envBundledDir: "~/bundled",
