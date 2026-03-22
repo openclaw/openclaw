@@ -6,6 +6,9 @@ const mocks = vi.hoisted(() => ({
   runtime: {
     log: vi.fn(),
     error: vi.fn(),
+    writeJson: vi.fn((value: unknown, space = 2) => {
+      mocks.runtime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
+    }),
     exit: vi.fn(() => {
       throw new Error("exit");
     }),
