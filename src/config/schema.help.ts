@@ -236,6 +236,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional default working directory for this agent's ACP sessions.",
   "agents.list[].identity.avatar":
     "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
+  "agents.defaults.publicMode":
+    "When true, redact local runtime/workspace details in prompts and default HTTP /v1 ingress for public-mode agents to non-owner semantics unless x-openclaw-sender-is-owner=true is explicitly supplied by a trusted upstream.",
+  "agents.list[].publicMode":
+    "Per-agent public-mode override. Public-mode agents hide local runtime details in prompts and default HTTP /v1 ingress to non-owner semantics unless a trusted upstream explicitly marks the caller as owner.",
   "agents.defaults.heartbeat.suppressToolErrorWarnings":
     "Suppress tool error warning payloads during heartbeat runs.",
   "agents.list[].heartbeat.suppressToolErrorWarnings":

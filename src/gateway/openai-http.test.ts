@@ -636,6 +636,65 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     );
   });
 
+  it("defaults public-mode agents to non-owner ingress unless explicitly trusted", async () => {
+    testState.agentsConfig = {
+      defaults: { publicMode: true },
+      list: [
+        { id: "beta", publicMode: false },
+        { id: "gamma", publicMode: true },
+      ],
+    };
+
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValue({ payloads: [{ text: "hello" }] } as never);
+
+    const defaultRes = await postChatCompletions(enabledPort, {
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(defaultRes.status).toBe(200);
+    const defaultOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+      | { senderIsOwner?: boolean }
+      | undefined;
+    expect(defaultOpts?.senderIsOwner).toBe(true);
+    await defaultRes.text();
+
+    agentCommand.mockClear();
+    const publicRes = await postChatCompletions(
+      enabledPort,
+      {
+        model: "openclaw",
+        messages: [{ role: "user", content: "hi" }],
+      },
+      { "x-openclaw-agent-id": "gamma" },
+    );
+    expect(publicRes.status).toBe(200);
+    const publicOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+      | { senderIsOwner?: boolean }
+      | undefined;
+    expect(publicOpts?.senderIsOwner).toBe(false);
+    await publicRes.text();
+
+    agentCommand.mockClear();
+    const routedPublicRes = await postChatCompletions(
+      enabledPort,
+      {
+        model: "openclaw",
+        messages: [{ role: "user", content: "hi" }],
+      },
+      {
+        "x-openclaw-agent-id": "beta",
+        "x-openclaw-session-key": "agent:gamma:openai:routed-public",
+      },
+    );
+    expect(routedPublicRes.status).toBe(200);
+    const routedPublicOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+      | { senderIsOwner?: boolean }
+      | undefined;
+    expect(routedPublicOpts?.senderIsOwner).toBe(false);
+    await routedPublicRes.text();
+  });
+
   it("streams SSE chunks when stream=true", async () => {
     const port = enabledPort;
     try {

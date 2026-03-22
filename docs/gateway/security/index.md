@@ -803,8 +803,9 @@ still require token/password auth.
 
 Important boundary note:
 
-- Gateway HTTP bearer auth is effectively all-or-nothing operator access.
+- Gateway HTTP bearer auth is effectively operator access for the gateway.
 - Treat credentials that can call `/v1/chat/completions`, `/v1/responses`, `/tools/invoke`, or `/api/channels/*` as full-access operator secrets for that gateway.
+- For `/v1/chat/completions` and `/v1/responses`, agents with `publicMode: true` default missing `x-openclaw-sender-is-owner` to non-owner semantics, but that only strips owner-only tools and prompt metadata. It is not a full per-user sandbox.
 - Do not share these credentials with untrusted callers; prefer separate gateways per trust boundary.
 
 **Trust assumption:** tokenless Serve auth assumes the gateway host is trusted.

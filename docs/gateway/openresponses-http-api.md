@@ -29,6 +29,74 @@ Operational behavior matches [OpenAI Chat Completions](/gateway/openai-http-api)
 
 Enable or disable this endpoint with `gateway.http.endpoints.responses.enabled`.
 
+Notes:
+
+- When `gateway.auth.mode="token"`, use `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`).
+- When `gateway.auth.mode="password"`, use `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`).
+- If `gateway.auth.rateLimit` is configured and too many auth failures occur, the endpoint returns `429` with `Retry-After`.
+
+## Security boundary (important)
+
+Treat this endpoint as an **operator-access** surface for the gateway instance unless you
+intentionally target a `publicMode` agent through a trusted upstream.
+
+- HTTP bearer auth here is not a narrow per-user scope model.
+- A valid Gateway token/password for this endpoint should still be treated like an owner/operator credential.
+- Requests run through the same control-plane agent path as trusted operator actions.
+- For normal agents, missing `x-openclaw-sender-is-owner` defaults to owner semantics.
+- For agents with `publicMode: true`, missing `x-openclaw-sender-is-owner` defaults to non-owner semantics; only an explicit `x-openclaw-sender-is-owner: true` restores owner access.
+- `publicMode` is not a full per-user sandbox. It redacts local runtime details in prompts and strips owner-only tools, but any non-owner tools still allowed by the target agent remain callable.
+- Keep this endpoint on loopback/tailnet/private ingress only; do not expose it directly to the public internet.
+
+See [Security](/gateway/security) and [Remote access](/gateway/remote).
+
+## Choosing an agent
+
+No custom headers required: encode the agent id in the OpenResponses `model` field:
+
+- `model: "openclaw:<agentId>"` (example: `"openclaw:main"`, `"openclaw:beta"`)
+- `model: "agent:<agentId>"` (alias)
+
+Or target a specific OpenClaw agent by header:
+
+- `x-openclaw-agent-id: <agentId>` (default: `main`)
+
+Advanced:
+
+- `x-openclaw-session-key: <sessionKey>` to fully control session routing.
+
+## Enabling the endpoint
+
+Set `gateway.http.endpoints.responses.enabled` to `true`:
+
+```json5
+{
+  gateway: {
+    http: {
+      endpoints: {
+        responses: { enabled: true },
+      },
+    },
+  },
+}
+```
+
+## Disabling the endpoint
+
+Set `gateway.http.endpoints.responses.enabled` to `false`:
+
+```json5
+{
+  gateway: {
+    http: {
+      endpoints: {
+        responses: { enabled: false },
+      },
+    },
+  },
+}
+```
+
 ## Session behavior
 
 By default the endpoint is **stateless per request** (a new session key is generated each call).

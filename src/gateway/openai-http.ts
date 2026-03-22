@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { resolveAgentPublicMode, resolveSessionAgentId } from "../agents/agent-scope.js";
 import type { ImageContent } from "../agents/command/types.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
@@ -27,12 +29,13 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
-import { resolveGatewayRequestContext } from "./http-utils.js";
+import { resolveGatewayRequestContext, resolveIngressSenderIsOwner } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 
 type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
   config?: GatewayHttpChatCompletionsConfig;
+  runtimeConfig?: OpenClawConfig;
   maxBodyBytes?: number;
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
@@ -101,11 +104,19 @@ function writeSse(res: ServerResponse, data: unknown) {
 }
 
 function buildAgentCommandInput(params: {
+  req: IncomingMessage;
   prompt: { message: string; extraSystemPrompt?: string; images?: ImageContent[] };
   sessionKey: string;
   runId: string;
   messageChannel: string;
+  publicMode?: boolean;
+  trustedProxies?: string[];
 }) {
+  const senderIsOwner = resolveIngressSenderIsOwner({
+    req: params.req,
+    publicMode: params.publicMode,
+    trustedProxies: params.trustedProxies,
+  });
   return {
     message: params.prompt.message,
     extraSystemPrompt: params.prompt.extraSystemPrompt,
@@ -115,8 +126,7 @@ function buildAgentCommandInput(params: {
     deliver: false as const,
     messageChannel: params.messageChannel,
     bestEffortDeliver: false as const,
-    // HTTP API callers are authenticated operator clients for this gateway context.
-    senderIsOwner: true as const,
+    senderIsOwner,
     allowModelOverride: true as const,
   };
 }
@@ -315,6 +325,7 @@ async function resolveImagesForRequest(
 }
 
 export const __testOnlyOpenAiHttp = {
+  buildAgentCommandInput,
   resolveImagesForRequest,
   resolveOpenAiChatCompletionsLimits,
 };
@@ -440,6 +451,9 @@ export async function handleOpenAiHttpRequest(
     defaultMessageChannel: "webchat",
     useMessageChannelHeader: true,
   });
+  const runtimeConfig = opts.runtimeConfig ?? {};
+  const effectiveAgentId = resolveSessionAgentId({ sessionKey, config: runtimeConfig });
+  const publicMode = resolveAgentPublicMode(runtimeConfig, effectiveAgentId);
   const activeTurnContext = resolveActiveTurnContext(payload.messages);
   const prompt = buildAgentPrompt(payload.messages, activeTurnContext.activeUserMessageIndex);
   let images: ImageContent[] = [];
@@ -469,6 +483,7 @@ export async function handleOpenAiHttpRequest(
   const runId = `chatcmpl_${randomUUID()}`;
   const deps = createDefaultDeps();
   const commandInput = buildAgentCommandInput({
+    req,
     prompt: {
       message: prompt.message,
       extraSystemPrompt: prompt.extraSystemPrompt,
@@ -477,6 +492,8 @@ export async function handleOpenAiHttpRequest(
     sessionKey,
     runId,
     messageChannel,
+    publicMode,
+    trustedProxies: opts.trustedProxies,
   });
 
   if (!stream) {

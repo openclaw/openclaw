@@ -10,6 +10,7 @@ import type { ReasoningLevel, ThinkLevel } from "./utils.js";
 
 export function buildEmbeddedSystemPrompt(params: {
   workspaceDir: string;
+  publicMode?: boolean;
   defaultThinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
   extraSystemPrompt?: string;
@@ -32,11 +33,11 @@ export function buildEmbeddedSystemPrompt(params: {
   acpEnabled?: boolean;
   runtimeInfo: {
     agentId?: string;
-    host: string;
-    os: string;
-    arch: string;
-    node: string;
-    model: string;
+    host?: string;
+    os?: string;
+    arch?: string;
+    node?: string;
+    model?: string;
     provider?: string;
     capabilities?: string[];
     channel?: string;
@@ -55,6 +56,7 @@ export function buildEmbeddedSystemPrompt(params: {
 }): string {
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
+    publicMode: params.publicMode,
     defaultThinkLevel: params.defaultThinkLevel,
     reasoningLevel: params.reasoningLevel,
     extraSystemPrompt: params.extraSystemPrompt,

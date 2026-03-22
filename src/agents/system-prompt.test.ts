@@ -637,6 +637,47 @@ describe("buildAgentSystemPrompt", () => {
     expect(line).toContain("thinking=low");
   });
 
+  it("redacts runtime and workspace details in public mode", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/Users/alex/openclaw",
+      publicMode: true,
+      docsPath: "/Users/alex/openclaw/docs",
+      runtimeInfo: {
+        agentId: "community",
+        host: "Alexs-Mac-Mini",
+        repoRoot: "/Users/alex/openclaw",
+        os: "Darwin 25.3.0",
+        arch: "arm64",
+        node: "v25.2.1",
+        model: "openai/gpt-5",
+        defaultModel: "openai/gpt-5",
+        shell: "/bin/zsh",
+      },
+      sandboxInfo: {
+        enabled: true,
+        workspaceDir: "/Users/alex/openclaw",
+        containerWorkspaceDir: "/workspace",
+        workspaceAccess: "rw",
+        agentWorkspaceMount: "/mnt/agent",
+        browserNoVncUrl: "http://internal.example/vnc",
+        elevated: { allowed: true, defaultLevel: "ask" },
+      },
+    });
+
+    expect(prompt).toContain("Runtime: public-facing agent");
+    expect(prompt).toContain(
+      "Your working directory is: managed internally for this public-facing agent",
+    );
+    expect(prompt).toContain("Agent workspace access: rw");
+    expect(prompt).not.toContain("agent=community");
+    expect(prompt).not.toContain("host=Alexs-Mac-Mini");
+    expect(prompt).not.toContain("model=openai/gpt-5");
+    expect(prompt).not.toContain("OpenClaw docs: /Users/alex/openclaw/docs");
+    expect(prompt).not.toContain("/Users/alex/openclaw");
+    expect(prompt).not.toContain("/workspace");
+    expect(prompt).not.toContain("http://internal.example/vnc");
+  });
+
   it("describes sandboxed runtime and elevated when allowed", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

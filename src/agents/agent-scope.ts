@@ -27,6 +27,7 @@ type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[num
 
 type ResolvedAgentConfig = {
   name?: string;
+  publicMode?: boolean;
   workspace?: string;
   agentDir?: string;
   model?: AgentEntry["model"];
@@ -127,8 +128,15 @@ export function resolveAgentConfig(
   if (!entry) {
     return undefined;
   }
+  const defaultPublicMode = cfg.agents?.defaults?.publicMode;
   return {
     name: typeof entry.name === "string" ? entry.name : undefined,
+    publicMode:
+      typeof entry.publicMode === "boolean"
+        ? entry.publicMode
+        : typeof defaultPublicMode === "boolean"
+          ? defaultPublicMode
+          : undefined,
     workspace: typeof entry.workspace === "string" ? entry.workspace : undefined,
     agentDir: typeof entry.agentDir === "string" ? entry.agentDir : undefined,
     model:
@@ -148,6 +156,10 @@ export function resolveAgentConfig(
     sandbox: entry.sandbox,
     tools: entry.tools,
   };
+}
+
+export function resolveAgentPublicMode(cfg: OpenClawConfig, agentId: string): boolean {
+  return resolveAgentConfig(cfg, agentId)?.publicMode === true;
 }
 
 export function resolveAgentSkillsFilter(

@@ -13,9 +13,15 @@ async function makeRepoRoot(root: string): Promise<void> {
   await fs.mkdir(path.join(root, ".git"), { recursive: true });
 }
 
-function buildParams(params: { config?: OpenClawConfig; workspaceDir?: string; cwd?: string }) {
+function buildParams(params: {
+  config?: OpenClawConfig;
+  publicMode?: boolean;
+  workspaceDir?: string;
+  cwd?: string;
+}) {
   return buildSystemPromptParams({
     config: params.config,
+    publicMode: params.publicMode,
     workspaceDir: params.workspaceDir,
     cwd: params.cwd,
     runtime: {
@@ -100,5 +106,23 @@ describe("buildSystemPromptParams repo root", () => {
     const { runtimeInfo } = buildParams({ workspaceDir });
 
     expect(runtimeInfo.repoRoot).toBeUndefined();
+  });
+
+  it("strips sensitive runtime fields in public mode", async () => {
+    const temp = await makeTempDir("public");
+    const repoRoot = path.join(temp, "repo");
+    const workspaceDir = path.join(repoRoot, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await makeRepoRoot(repoRoot);
+
+    const { runtimeInfo } = buildParams({ publicMode: true, workspaceDir });
+
+    expect(runtimeInfo.host).toBeUndefined();
+    expect(runtimeInfo.os).toBeUndefined();
+    expect(runtimeInfo.arch).toBeUndefined();
+    expect(runtimeInfo.repoRoot).toBeUndefined();
+    expect(runtimeInfo.shell).toBeUndefined();
+    expect(runtimeInfo.node).toBe("node");
+    expect(runtimeInfo.model).toBe("model");
   });
 });

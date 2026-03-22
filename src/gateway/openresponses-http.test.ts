@@ -5,7 +5,7 @@ import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
-import { agentCommand, getFreePort, installGatewayTestHooks } from "./test-helpers.js";
+import { agentCommand, getFreePort, installGatewayTestHooks, testState } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -532,6 +532,65 @@ describe("OpenResponses HTTP API (e2e)", () => {
     } finally {
       // shared server
     }
+  });
+
+  it("defaults public-mode agents to non-owner ingress unless explicitly trusted", async () => {
+    testState.agentsConfig = {
+      defaults: { publicMode: true },
+      list: [
+        { id: "beta", publicMode: false },
+        { id: "gamma", publicMode: true },
+      ],
+    };
+
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValue({ payloads: [{ text: "hello" }] } as never);
+
+    const defaultRes = await postResponses(enabledPort, {
+      model: "openclaw",
+      input: "hi",
+    });
+    expect(defaultRes.status).toBe(200);
+    const defaultOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+      | { senderIsOwner?: boolean }
+      | undefined;
+    expect(defaultOpts?.senderIsOwner).toBe(true);
+    await ensureResponseConsumed(defaultRes);
+
+    agentCommand.mockClear();
+    const publicRes = await postResponses(
+      enabledPort,
+      {
+        model: "openclaw",
+        input: "hi",
+      },
+      { "x-openclaw-agent-id": "gamma" },
+    );
+    expect(publicRes.status).toBe(200);
+    const publicOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+      | { senderIsOwner?: boolean }
+      | undefined;
+    expect(publicOpts?.senderIsOwner).toBe(false);
+    await ensureResponseConsumed(publicRes);
+
+    agentCommand.mockClear();
+    const routedPublicRes = await postResponses(
+      enabledPort,
+      {
+        model: "openclaw",
+        input: "hi",
+      },
+      {
+        "x-openclaw-agent-id": "beta",
+        "x-openclaw-session-key": "agent:gamma:openresponses:routed-public",
+      },
+    );
+    expect(routedPublicRes.status).toBe(200);
+    const routedPublicOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+      | { senderIsOwner?: boolean }
+      | undefined;
+    expect(routedPublicOpts?.senderIsOwner).toBe(false);
+    await ensureResponseConsumed(routedPublicRes);
   });
 
   it("streams OpenResponses SSE events", async () => {

@@ -1,5 +1,5 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
+import { resolveAgentPublicMode, resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import type { EmbeddedContextFile } from "../../agents/pi-embedded-helpers.js";
@@ -28,6 +28,13 @@ export async function resolveCommandsSystemPromptBundle(
   params: HandleCommandsParams,
 ): Promise<CommandsSystemPromptBundle> {
   const workspaceDir = params.workspaceDir;
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.cfg,
+    agentId: params.agentId,
+  });
+  const publicMode =
+    params.cfg && sessionAgentId ? resolveAgentPublicMode(params.cfg, sessionAgentId) : false;
   const { bootstrapFiles, contextFiles: injectedFiles } = await resolveBootstrapContextForRun({
     workspaceDir,
     config: params.cfg,
@@ -35,6 +42,9 @@ export async function resolveCommandsSystemPromptBundle(
     sessionId: params.sessionEntry?.sessionId,
   });
   const skillsSnapshot = (() => {
+    if (publicMode) {
+      return { prompt: "", skills: [], resolvedSkills: [] };
+    }
     try {
       return buildWorkspaceSkillSnapshot(workspaceDir, {
         config: params.cfg,
@@ -73,11 +83,6 @@ export async function resolveCommandsSystemPromptBundle(
   })();
   const toolSummaries = buildToolSummaryMap(tools);
   const toolNames = tools.map((t) => t.name);
-  const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.cfg,
-    agentId: params.agentId,
-  });
   const defaultModelRef = resolveDefaultModelForAgent({
     cfg: params.cfg,
     agentId: sessionAgentId,
@@ -86,6 +91,7 @@ export async function resolveCommandsSystemPromptBundle(
   const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
     config: params.cfg,
     agentId: sessionAgentId,
+    publicMode,
     workspaceDir,
     cwd: process.cwd(),
     runtime: {
@@ -112,6 +118,7 @@ export async function resolveCommandsSystemPromptBundle(
 
   const systemPrompt = buildAgentSystemPrompt({
     workspaceDir,
+    publicMode,
     defaultThinkLevel: params.resolvedThinkLevel,
     reasoningLevel: params.resolvedReasoningLevel,
     extraSystemPrompt: undefined,
