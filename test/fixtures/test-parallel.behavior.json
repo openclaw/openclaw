@@ -22,7 +22,6 @@
         "reason": "Touches process-level unhandledRejection listeners."
       }
     ],
-    "forkBatched": [],
     "threadPinned": [
       {
         "file": "src/cli/secrets-cli.test.ts",
@@ -184,10 +183,6 @@
         "file": "src/media-understanding/runner.video.test.ts",
         "reason": "Measured ~25% faster under threads than forks on this host while keeping the file green."
       }
-    ],
-    "vmForkPinned": []
-  },
-  "extensions": {
-    "isolated": []
+    ]
   }
 }

@@ -49,20 +49,10 @@ describe("scripts/test-find-thread-candidates exclusions", () => {
         },
         unit: {
           isolated: [{ file: "src/a.test.ts" }],
-          forkBatched: [{ file: "src/b.test.ts" }],
           threadPinned: [{ file: "src/c.test.ts" }],
-          vmForkPinned: [{ file: "src/d.test.ts" }],
         },
       }),
-    ).toEqual(
-      new Set([
-        "src/base-a.test.ts",
-        "src/a.test.ts",
-        "src/b.test.ts",
-        "src/c.test.ts",
-        "src/d.test.ts",
-      ]),
-    );
+    ).toEqual(new Set(["src/base-a.test.ts", "src/a.test.ts", "src/c.test.ts"]));
   });
 
   it("keeps backward-compatible aliases readable", () => {
@@ -73,20 +63,10 @@ describe("scripts/test-find-thread-candidates exclusions", () => {
         },
         unit: {
           isolated: [{ file: "src/a.test.ts" }],
-          singletonIsolated: [{ file: "src/b.test.ts" }],
           threadSingleton: [{ file: "src/c.test.ts" }],
-          vmForkSingleton: [{ file: "src/d.test.ts" }],
         },
       }),
-    ).toEqual(
-      new Set([
-        "src/base-a.test.ts",
-        "src/a.test.ts",
-        "src/b.test.ts",
-        "src/c.test.ts",
-        "src/d.test.ts",
-      ]),
-    );
+    ).toEqual(new Set(["src/base-a.test.ts", "src/a.test.ts", "src/c.test.ts"]));
   });
 });
 
