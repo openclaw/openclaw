@@ -635,8 +635,16 @@ export function formatAssistantErrorText(
     return formatRawAssistantErrorForUi(raw);
   }
 
-  // Preserve actionable auth/model error messages instead of swallowing them
+  // Preserve actionable error messages instead of swallowing them
   // into the generic catch-all (these can reach here after retries are exhausted).
+  if (isImageDimensionErrorMessage(raw)) {
+    const parsed = parseImageDimensionError(raw);
+    const limit = parsed?.maxDimensionPx ? ` (max ${parsed.maxDimensionPx}px)` : "";
+    return `Image dimensions exceed the allowed size${limit}. Please resize the image and try again.`;
+  }
+  if (isCliSessionExpiredErrorMessage(raw)) {
+    return "Session expired or not found. Use /new to start a fresh session.";
+  }
   if (isAuthPermanentErrorMessage(raw) || isAuthErrorMessage(raw)) {
     return "Authentication failed. Please check your API key or re-authenticate.";
   }
