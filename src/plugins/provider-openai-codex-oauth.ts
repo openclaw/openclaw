@@ -1,4 +1,5 @@
 import { loginOpenAICodex, type OAuthCredentials } from "@mariozechner/pi-ai/oauth";
+import { ensureGlobalUndiciEnvProxyDispatcher } from "../infra/net/undici-global-dispatcher.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
@@ -51,6 +52,12 @@ export async function loginOpenAICodexOAuth(params: {
       localBrowserMessage: localBrowserMessage ?? "Complete sign-in in browser…",
       manualPromptMessage: manualInputPromptMessage,
     });
+
+    // Ensure env-based proxy dispatcher is active before the OAuth token exchange.
+    // The move from @mariozechner/pi-ai to @mariozechner/pi-ai/oauth dropped the
+    // implicit http-proxy.js side-effect import that previously initialized the
+    // global undici dispatcher (#51569, #51619).
+    ensureGlobalUndiciEnvProxyDispatcher();
 
     const creds = await loginOpenAICodex({
       onAuth: baseOnAuth,
