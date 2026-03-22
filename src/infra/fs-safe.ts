@@ -746,7 +746,7 @@ async function resolvePinnedWriteTargetWithinRoot(params: {
   if (!basename || basename === "." || basename === "/") {
     throw new SafeOpenError("invalid-path", "invalid target path");
   }
-  let mode = 0o600;
+  let mode = 0o666;
   try {
     const opened = await openFileWithinRoot({
       rootDir: params.rootDir,
@@ -773,7 +773,7 @@ async function resolvePinnedWriteTargetWithinRoot(params: {
     relativeParentPath:
       path.posix.dirname(relativePosix) === "." ? "" : path.posix.dirname(relativePosix),
     basename,
-    mode: mode || 0o600,
+    mode: mode || 0o666,
   };
 }
 
