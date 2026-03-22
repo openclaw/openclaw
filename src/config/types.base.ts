@@ -133,6 +133,13 @@ export type SessionConfig = {
   threadBindings?: SessionThreadBindingsConfig;
   /** Automatic session store maintenance (pruning, capping, file rotation). */
   maintenance?: SessionMaintenanceConfig;
+  /**
+   * When true, agent replies to webchat (control UI) turns are also
+   * delivered to the session's last active external channel (Discord,
+   * Telegram, etc.). This enables multi-device workflows where users
+   * send via browser and read on mobile. Default: false.
+   */
+  mirrorWebchatToLastExternalChannel?: boolean;
 };
 
 export type SessionMaintenanceMode = "enforce" | "warn";

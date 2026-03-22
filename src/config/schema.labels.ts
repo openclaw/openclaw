@@ -566,6 +566,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.maintenance.resetArchiveRetention": "Session Reset Archive Retention",
   "session.maintenance.maxDiskBytes": "Session Max Disk Budget",
   "session.maintenance.highWaterBytes": "Session Disk High-water Target",
+  "session.mirrorWebchatToLastExternalChannel": "Mirror Webchat to Last External Channel",
   cron: "Cron",
   "cron.enabled": "Cron Enabled",
   "cron.store": "Cron Store Path",

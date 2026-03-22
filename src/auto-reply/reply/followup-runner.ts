@@ -128,6 +128,45 @@ export function createFollowupRunner(params: {
         }
       } else if (opts?.onBlockReply) {
         await opts.onBlockReply(payload);
+
+        // Mirror webchat reply to last external channel if configured.
+        if (
+          queued.run.config?.session?.mirrorWebchatToLastExternalChannel === true &&
+          isInternalMessageChannel(queued.originatingChannel ?? queued.run.messageProvider) &&
+          sessionEntry?.lastChannel &&
+          isRoutableChannel(sessionEntry.lastChannel) &&
+          sessionEntry.lastTo
+        ) {
+          try {
+            // Strip webchat-specific replyToId — it's a webchat message ID
+            // that would be meaningless (or target the wrong thread) on the
+            // external channel.
+            const mirrorPayload = payload.replyToId
+              ? { ...payload, replyToId: undefined }
+              : payload;
+            const mirrorResult = await routeReply({
+              payload: mirrorPayload,
+              channel: sessionEntry.lastChannel,
+              to: sessionEntry.lastTo,
+              sessionKey: queued.run.sessionKey,
+              accountId: sessionEntry.lastAccountId ?? undefined,
+              threadId: sessionEntry.lastThreadId ?? undefined,
+              cfg: queued.run.config,
+              // Webchat flow already appends to the session transcript;
+              // skip transcript mirror to avoid duplicate entries.
+              mirror: false,
+            });
+            if (!mirrorResult.ok) {
+              logVerbose(
+                `followup queue: webchat mirror to ${sessionEntry.lastChannel} failed: ${mirrorResult.error ?? "unknown error"}`,
+              );
+            }
+          } catch (err: unknown) {
+            logVerbose(
+              `followup queue: webchat mirror to ${sessionEntry.lastChannel} failed: ${String(err)}`,
+            );
+          }
+        }
       }
     }
   };

@@ -58552,6 +58552,20 @@
       "hasChildren": false
     },
     {
+      "path": "session.mirrorWebchatToLastExternalChannel",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "storage"
+      ],
+      "label": "Mirror Webchat to Last External Channel",
+      "help": "When enabled, agent replies to webchat (control UI) turns are also delivered to the session's last active external channel. Use this for multi-device workflows where you send via browser and read on mobile.",
+      "hasChildren": false
+    },
+    {
       "path": "session.parentForkMaxTokens",
       "kind": "core",
       "type": "integer",
