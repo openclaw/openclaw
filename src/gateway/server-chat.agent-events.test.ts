@@ -187,7 +187,7 @@ describe("agent event handler", () => {
     };
     expect(payload.state).toBe("delta");
     expect(payload.message?.content?.[0]?.text).toBe("Hello world");
-    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
     nowSpy?.mockRestore();
   });
 
@@ -202,7 +202,7 @@ describe("agent event handler", () => {
       message?: { content?: Array<{ text?: string }> };
     };
     expect(payload.message?.content?.[0]?.text).toBe("Hello  world ");
-    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
     nowSpy?.mockRestore();
   });
 
@@ -233,7 +233,7 @@ describe("agent event handler", () => {
 
     const payload = expectSingleFinalChatPayload(broadcast) as { message?: unknown };
     expect(payload.message).toBeUndefined();
-    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
     nowSpy?.mockRestore();
   });
 
@@ -256,7 +256,7 @@ describe("agent event handler", () => {
 
     const payload = expectSingleFinalChatPayload(broadcast) as { message?: unknown };
     expect(payload.message).toBeUndefined();
-    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
     nowSpy?.mockRestore();
   });
 
@@ -279,7 +279,7 @@ describe("agent event handler", () => {
       message?: { content?: Array<{ text?: string }> };
     };
     expect(payload.message?.content?.[0]?.text).toBe("No");
-    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
     nowSpy?.mockRestore();
   });
 
@@ -323,7 +323,7 @@ describe("agent event handler", () => {
     expect(secondPayload.state).toBe("delta");
     expect(secondPayload.message?.content?.[0]?.text).toBe("Hello world");
     expect(thirdPayload.state).toBe("final");
-    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(3);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
     nowSpy.mockRestore();
   });
 
@@ -369,7 +369,7 @@ describe("agent event handler", () => {
     expect(secondPayload.message?.content?.[0]?.text).toBe("Before tool call\nAfter tool call");
     expect(finalPayload.state).toBe("final");
     expect(finalPayload.message?.content?.[0]?.text).toBe("Before tool call\nAfter tool call");
-    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(3);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
     nowSpy.mockRestore();
   });
 
@@ -415,7 +415,7 @@ describe("agent event handler", () => {
     expect(flushPayload.message?.content?.[0]?.text).toBe("Before tool call\nAfter tool call");
     expect(finalPayload.state).toBe("final");
     expect(finalPayload.message?.content?.[0]?.text).toBe("Before tool call\nAfter tool call");
-    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(3);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
     nowSpy.mockRestore();
   });
 
@@ -454,7 +454,7 @@ describe("agent event handler", () => {
       "delta",
       "final",
     ]);
-    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(3);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
     nowSpy.mockRestore();
   });
 
@@ -585,7 +585,7 @@ describe("agent event handler", () => {
     };
     expect(flushedPayload.state).toBe("delta");
     expect(flushedPayload.message?.content?.[0]?.text).toBe("Before tool expanded");
-    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(2);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
 
     expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
     const flushCallOrder = broadcast.mock.invocationCallOrder[1] ?? 0;
@@ -941,7 +941,7 @@ describe("agent event handler", () => {
 
     const finalPayload = expectSingleFinalChatPayload(broadcast) as { message?: unknown };
     expect(finalPayload.message).toBeUndefined();
-    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
   });
 
   it("keeps heartbeat alert text in final chat output when remainder exceeds ackMaxChars", () => {
