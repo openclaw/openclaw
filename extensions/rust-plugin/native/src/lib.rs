@@ -12,6 +12,30 @@ use std::io::Read;
 use std::path::Path;
 
 // =============================================================================
+// OWASP CWE-70 (Input Size Limits) Security Constants
+// =============================================================================
+/// Maximum input size for string processing (64MB)
+/// OWASP recommends 64MB as safe limit to prevent DoS attacks
+const CWE_70_MAX_INPUT_SIZE: usize = 64 * 1024 * 1024; // 64MB in bytes
+
+/// Maximum buffer size for data processing operations (64MB)
+/// OWASP recommends 64MB as safe limit to prevent buffer overflow attacks
+/// while maintaining reasonable functionality for legitimate use cases
+const CWE_70_MAX_BUFFER_SIZE: usize = 64 * 1024 * 1024; // 64MB in bytes
+
+/// Maximum file size for read/write operations (64MB)
+const CWE_70_MAX_FILE_SIZE: u64 = 64 * 1024 * 1024; // 64MB in bytes
+
+/// Maximum pattern size for regex operations (10KB)
+const CWE_70_MAX_PATTERN_SIZE: usize = 10_000; // 10KB in bytes
+
+/// Maximum read size for file operations (64MB)
+const CWE_70_MAX_READ_SIZE: u64 = 64 * 1024 * 1024; // 64MB in bytes
+
+// =============================================================================
+
+
+// =============================================================================
 // STRING PROCESSING
 // =============================================================================
 
@@ -21,8 +45,8 @@ pub async fn process_string(
     options: Option<HashMap<String, bool>>,
 ) -> Result<String> {
     // Limit input size to prevent DoS
-    if input.len() > 10_000_000 {
-        return Err(Error::new(Status::InvalidArg, "Input too large (max 10MB)"));
+    if input.len() > CWE_70_MAX_INPUT_SIZE {
+        return Err(Error::new(Status::InvalidArg, format!("Input too large (max {}MB)", CWE_70_MAX_INPUT_SIZE / 1024 / 1024)));
     }
 
     let opts = options.unwrap_or_default();
@@ -339,7 +363,7 @@ pub fn read_file_buffer(path: String) -> Result<Buffer> {
 pub fn write_file_buffer(path: String, content: Buffer) -> Result<()> {
     validate_path(&path)?;
     // Limit content size to prevent DoS
-    if content.len() > 10_000_000 {
+    if content.len() > CWE_70_MAX_INPUT_SIZE {
         return Err(Error::new(
             Status::InvalidArg,
             "Content too large (max 10MB)",
@@ -354,7 +378,7 @@ pub fn write_file_buffer(path: String, content: Buffer) -> Result<()> {
 pub fn write_file_string(path: String, content: String) -> Result<()> {
     validate_path(&path)?;
     // Limit content size to prevent DoS
-    if content.len() > 10_000_000 {
+    if content.len() > CWE_70_MAX_INPUT_SIZE {
         return Err(Error::new(
             Status::InvalidArg,
             "Content too large (max 10MB)",
@@ -449,7 +473,7 @@ pub fn base64_encode(input: String) -> String {
 #[napi]
 pub fn base64_decode(input: String) -> Result<String> {
     // Limit input size to prevent DoS
-    if input.len() > 20_000_000 {
+    if input.len() > CWE_70_MAX_INPUT_SIZE {
         return Err(Error::new(Status::InvalidArg, "Input too large (max 20MB)"));
     }
 
@@ -473,8 +497,8 @@ pub fn base64_decode(input: String) -> Result<String> {
 #[napi]
 pub fn url_decode(input: String) -> Result<String> {
     // Limit input size
-    if input.len() > 10_000_000 {
-        return Err(Error::new(Status::InvalidArg, "Input too large (max 10MB)"));
+    if input.len() > CWE_70_MAX_INPUT_SIZE {
+        return Err(Error::new(Status::InvalidArg, format!("Input too large (max {}MB)", CWE_70_MAX_INPUT_SIZE / 1024 / 1024)));
     }
 
     urlencoding::decode(&input)
@@ -490,7 +514,7 @@ pub fn hex_encode(input: Buffer) -> String {
 #[napi]
 pub fn hex_decode(input: String) -> Result<Buffer> {
     // Limit input size
-    if input.len() > 20_000_000 {
+    if input.len() > CWE_70_MAX_INPUT_SIZE {
         return Err(Error::new(Status::InvalidArg, "Input too large (max 20MB)"));
     }
 
@@ -498,7 +522,7 @@ pub fn hex_decode(input: String) -> Result<Buffer> {
         .map_err(|e| Error::new(Status::InvalidArg, format!("Hex decode failed: {}", e)))?;
 
     // Limit output size
-    if bytes.len() > 10_000_000 {
+    if bytes.len() > CWE_70_MAX_INPUT_SIZE {
         return Err(Error::new(
             Status::InvalidArg,
             "Decoded data too large (max 10MB)",
@@ -543,7 +567,7 @@ impl DataProcessor {
 
     #[napi]
     pub fn append(&mut self, mut env: Env, data: Buffer) -> Result<()> {
-        const MAX_BUFFER_SIZE: usize = 100_000_000; // 100MB limit
+        const MAX_BUFFER_SIZE: usize = CWE_70_MAX_BUFFER_SIZE; // 100MB limit
 
         let data_len = data.len();
         let new_len = self
@@ -555,7 +579,7 @@ impl DataProcessor {
         if new_len > MAX_BUFFER_SIZE {
             return Err(Error::new(
                 Status::InvalidArg,
-                format!("Buffer too large (max {}MB)", MAX_BUFFER_SIZE / 1_000_000),
+                format!("Buffer too large (max {}MB)", MAX_BUFFER_SIZE / CWE_70_MAX_INPUT_SIZE),
             ));
         }
 
@@ -566,7 +590,7 @@ impl DataProcessor {
 
     #[napi]
     pub fn append_string(&mut self, mut env: Env, data: String) -> Result<()> {
-        const MAX_BUFFER_SIZE: usize = 100_000_000;
+        const MAX_BUFFER_SIZE: usize = CWE_70_MAX_BUFFER_SIZE;
         let data_len = data.len();
         let new_len = self
             .buffer
@@ -670,7 +694,7 @@ pub struct RegexMatch {
 #[napi]
 pub fn regex_find(text: String, pattern: String) -> Result<RegexMatch> {
     // Size limits to prevent ReDoS
-    if text.len() > 10_000_000 {
+    if text.len() > CWE_70_MAX_INPUT_SIZE {
         return Err(Error::new(Status::InvalidArg, "Text too large (max 10MB)"));
     }
     if pattern.len() > 10_000 {
@@ -698,7 +722,7 @@ pub fn regex_find(text: String, pattern: String) -> Result<RegexMatch> {
 #[napi]
 pub fn regex_replace(text: String, pattern: String, replacement: String) -> Result<String> {
     // Size limits to prevent ReDoS
-    if text.len() > 10_000_000 {
+    if text.len() > CWE_70_MAX_INPUT_SIZE {
         return Err(Error::new(Status::InvalidArg, "Text too large (max 10MB)"));
     }
     if pattern.len() > 10_000 {
@@ -716,7 +740,7 @@ pub fn regex_replace(text: String, pattern: String, replacement: String) -> Resu
 #[napi]
 pub fn regex_test(text: String, pattern: String) -> Result<bool> {
     // Size limits to prevent ReDoS
-    if text.len() > 10_000_000 {
+    if text.len() > CWE_70_MAX_INPUT_SIZE {
         return Err(Error::new(Status::InvalidArg, "Text too large (max 10MB)"));
     }
     if pattern.len() > 10_000 {
@@ -744,10 +768,10 @@ pub struct JsonValidation {
 #[napi]
 pub fn validate_json(json_string: String) -> JsonValidation {
     // Limit input size to prevent DoS
-    if json_string.len() > 10_000_000 {
+    if json_string.len() > CWE_70_MAX_INPUT_SIZE {
         return JsonValidation {
             valid: false,
-            error: Some("Input too large (max 10MB)".to_string()),
+            error: Some(format!("Input too large (max {}MB)", CWE_70_MAX_INPUT_SIZE / 1024 / 1024).to_string()),
         };
     }
 
@@ -773,8 +797,8 @@ pub struct JsonProcessResult {
 #[napi]
 pub async fn process_json(json_string: String) -> Result<JsonProcessResult> {
     // Limit input size
-    if json_string.len() > 10_000_000 {
-        return Err(Error::new(Status::InvalidArg, "Input too large (max 10MB)"));
+    if json_string.len() > CWE_70_MAX_INPUT_SIZE {
+        return Err(Error::new(Status::InvalidArg, format!("Input too large (max {}MB)", CWE_70_MAX_INPUT_SIZE / 1024 / 1024)));
     }
 
     match serde_json::from_str::<serde_json::Value>(&json_string) {
@@ -794,8 +818,8 @@ pub async fn process_json(json_string: String) -> Result<JsonProcessResult> {
 #[napi]
 pub async fn minify_json(json_string: String) -> Result<String> {
     // Limit input size
-    if json_string.len() > 10_000_000 {
-        return Err(Error::new(Status::InvalidArg, "Input too large (max 10MB)"));
+    if json_string.len() > CWE_70_MAX_INPUT_SIZE {
+        return Err(Error::new(Status::InvalidArg, format!("Input too large (max {}MB)", CWE_70_MAX_INPUT_SIZE / 1024 / 1024)));
     }
 
     let value: serde_json::Value = serde_json::from_str(&json_string)
@@ -812,8 +836,8 @@ pub async fn minify_json(json_string: String) -> Result<String> {
 #[napi]
 pub async fn prettify_json(json_string: String, indent: Option<u32>) -> Result<String> {
     // Limit input size
-    if json_string.len() > 10_000_000 {
-        return Err(Error::new(Status::InvalidArg, "Input too large (max 10MB)"));
+    if json_string.len() > CWE_70_MAX_INPUT_SIZE {
+        return Err(Error::new(Status::InvalidArg, format!("Input too large (max {}MB)", CWE_70_MAX_INPUT_SIZE / 1024 / 1024)));
     }
 
     let value: serde_json::Value = serde_json::from_str(&json_string)

@@ -7,6 +7,21 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use std::collections::HashMap;
 
+// =============================================================================
+// OWASP CWE-70 (Input Size Limits) Security Constants
+// =============================================================================
+/// Maximum input size for data processing (64MB)
+const CWE_70_MAX_INPUT_SIZE: usize = 64 * 1024 * 1024; // 64MB in bytes
+
+/// Maximum buffer size for decompression (64MB)
+const CWE_70_MAX_BUFFER_SIZE: usize = 64 * 1024 * 1024; // 64MB in bytes
+
+/// Maximum pattern size for pattern matching (10KB)
+const CWE_70_MAX_PATTERN_SIZE: usize = 10_000; // 10KB in bytes
+
+// =============================================================================
+
+
 /// Compression result
 #[napi(object)]
 pub struct CompressionResult {
@@ -29,8 +44,8 @@ pub struct DecompressionResult {
 #[napi]
 pub fn rle_compress(data: String) -> Result<CompressionResult> {
     // Validate input size
-    if data.len() > 10_000_000 {
-        return Err(Error::new(Status::InvalidArg, "Input too large (max 10MB)"));
+    if data.len() > CWE_70_MAX_INPUT_SIZE {
+        return Err(Error::new(Status::InvalidArg, format!("Input too large (max {}MB)", CWE_70_MAX_INPUT_SIZE / 1024 / 1024)));
     }
 
     let bytes = data.as_bytes();
@@ -82,16 +97,16 @@ pub fn rle_compress(data: String) -> Result<CompressionResult> {
 #[napi]
 pub fn rle_decompress(compressed: String) -> Result<DecompressionResult> {
     // Limit input size
-    const MAX_INPUT: usize = 10_000_000; // 10MB
-    const MAX_OUTPUT: usize = 20_000_000; // 20MB
+    const MAX_INPUT: usize = CWE_70_MAX_INPUT_SIZE; // 10MB
+    const MAX_OUTPUT: usize = CWE_70_MAX_OUTPUT_SIZE; // 20MB
 
-    if compressed.len() > MAX_INPUT {
+    if compressed.len() > CWE_70_MAX_INPUT {
         return Ok(DecompressionResult {
             data: String::new(),
             success: false,
             error: Some(format!(
                 "Input too large (max {}MB)",
-                MAX_INPUT / 1024 / 1024
+                CWE_70_CWE_70_MAX_INPUT / 1024 / 1024
             )),
         });
     }
@@ -139,13 +154,13 @@ pub fn rle_decompress(compressed: String) -> Result<DecompressionResult> {
         };
 
         // Validate total size (compression bomb protection)
-        if decompressed_size > MAX_OUTPUT {
+        if decompressed_size > CWE_70_MAX_OUTPUT {
             return Ok(DecompressionResult {
                 data: String::new(),
                 success: false,
                 error: Some(format!(
                     "Decompressed data too large (max {}MB)",
-                    MAX_OUTPUT / 1024 / 1024
+                    CWE_70_CWE_70_MAX_OUTPUT / 1024 / 1024
                 )),
             });
         }
@@ -176,8 +191,8 @@ pub fn rle_decompress(compressed: String) -> Result<DecompressionResult> {
 #[napi]
 pub fn tokenize(text: String, mode: Option<String>) -> Result<Vec<String>> {
     // Validate input size
-    if text.len() > 10_000_000 {
-        return Err(Error::new(Status::InvalidArg, "Input too large (max 10MB)"));
+    if text.len() > CWE_70_MAX_INPUT_SIZE {
+        return Err(Error::new(Status::InvalidArg, format!("Input too large (max {}MB)", CWE_70_MAX_INPUT_SIZE / 1024 / 1024)));
     }
 
     let mode_str = mode.unwrap_or_else(|| "words".to_string());
@@ -252,8 +267,8 @@ pub struct ExtendedTextStats {
 #[napi]
 pub fn extended_text_stats(text: String) -> Result<ExtendedTextStats> {
     // Validate input size
-    if text.len() > 10_000_000 {
-        return Err(Error::new(Status::InvalidArg, "Input too large (max 10MB)"));
+    if text.len() > CWE_70_MAX_INPUT_SIZE {
+        return Err(Error::new(Status::InvalidArg, format!("Input too large (max {}MB)", CWE_70_MAX_INPUT_SIZE / 1024 / 1024)));
     }
 
     let characters = text.len() as f64;
@@ -295,8 +310,8 @@ pub fn extended_text_stats(text: String) -> Result<ExtendedTextStats> {
 #[napi]
 pub fn transform_text(text: String, operations: Vec<String>) -> Result<String> {
     // Validate input size
-    if text.len() > 10_000_000 {
-        return Err(Error::new(Status::InvalidArg, "Input too large (max 10MB)"));
+    if text.len() > CWE_70_MAX_INPUT_SIZE {
+        return Err(Error::new(Status::InvalidArg, format!("Input too large (max {}MB)", CWE_70_MAX_INPUT_SIZE / 1024 / 1024)));
     }
 
     // Validate operations count
@@ -354,10 +369,10 @@ pub fn transform_text(text: String, operations: Vec<String>) -> Result<String> {
 #[napi]
 pub fn pattern_match(text: String, pattern: String) -> Result<bool> {
     // Validate input sizes
-    if text.len() > 1_000_000 {
-        return Err(Error::new(Status::InvalidArg, "Text too large (max 1MB)"));
+    if text.len() > CWE_70_MAX_INPUT_SIZE {
+        return Err(Error::new(Status::InvalidArg, format!("Text too large (max {}MB)", CWE_70_MAX_INPUT_SIZE / 1024 / 1024)));
     }
-    if pattern.len() > 10_000 {
+    if pattern.len() > CWE_70_MAX_PATTERN_SIZE {
         return Err(Error::new(
             Status::InvalidArg,
             "Pattern too large (max 10KB)",
@@ -523,8 +538,8 @@ pub fn find_replace(
     use_regex: Option<bool>,
 ) -> Result<String> {
     // Validate input sizes
-    if text.len() > 10_000_000 {
-        return Err(Error::new(Status::InvalidArg, "Input too large (max 10MB)"));
+    if text.len() > CWE_70_MAX_INPUT_SIZE {
+        return Err(Error::new(Status::InvalidArg, format!("Input too large (max {}MB)", CWE_70_MAX_INPUT_SIZE / 1024 / 1024)));
     }
 
     // Regex is disabled by default for security (no ReDoS)

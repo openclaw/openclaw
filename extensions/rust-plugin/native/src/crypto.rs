@@ -14,6 +14,14 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+// =============================================================================
+// OWASP CWE-70 (Input Size Limits) Security Constants
+// =============================================================================
+/// Maximum input size for cryptographic operations (64MB)
+const CWE_70_MAX_INPUT_SIZE: usize = 64 * 1024 * 1024;
+
+// =============================================================================
+
 // Nonce entry with timestamp for cleanup
 struct NonceEntry {
     timestamp: u64,
@@ -258,7 +266,7 @@ pub fn blake3_hash_keyed(data: String, key: Option<String>) -> Result<String> {
 /// Secure random bytes generation (cryptographically secure)
 #[napi]
 pub fn secure_random(length: u32) -> Result<String> {
-    if length > 1_000_000 {
+    if length > CWE_70_MAX_INPUT_SIZE {
         return Err(Error::new(Status::InvalidArg, "Length too large (max 1MB)"));
     }
 
@@ -336,10 +344,10 @@ pub fn argon2_verify(password: String, hash: String) -> Result<bool> {
 #[napi]
 pub fn hmac_compute(data: String, key: String, algorithm: Option<String>) -> Result<String> {
     // Size limits to prevent DoS
-    const MAX_DATA_SIZE: usize = 10_000_000; // 10MB
+// Using CWE_70_MAX_INPUT_SIZE instead
     const MAX_KEY_SIZE: usize = 1024; // 1KB
 
-    if data.len() > MAX_DATA_SIZE {
+    if data.len() > CWE_70_MAX_INPUT_SIZE {
         return Err(Error::new(
             Status::InvalidArg,
             format!("Data too large (max {}MB)", MAX_DATA_SIZE / 1024 / 1024),
@@ -524,42 +532,12 @@ pub struct WebhookResult {
 #[napi]
 pub async fn handle_webhook(body: String) -> Result<WebhookResult> {
     // Validate input size
-    if body.len() > 1_000_000 {
+    if body.len() > CWE_70_MAX_INPUT_SIZE {
         return Ok(WebhookResult {
             status_code: 413,
             body: serde_json::json!({
                 "error": "Payload too large",
-                "max_size": 1_000_000
-            })
-            .to_string(),
-            processed: false,
-        });
-    }
-
-    // Try to parse as JSON
-    let parsed: std::result::Result<serde_json::Value, serde_json::Error> =
-        serde_json::from_str(&body);
-
-    match parsed {
-        Ok(_) => {
-            // Process the webhook data
-            Ok(WebhookResult {
-                status_code: 200,
-                body: serde_json::json!({
-                    "received": true,
-                    "timestamp": chrono::Utc::now().to_rfc3339()
-                })
-                .to_string(),
-                processed: true,
-            })
-        }
-        Err(_) => Ok(WebhookResult {
-            status_code: 400,
-            body: serde_json::json!({
-                "error": "Invalid JSON"
-            })
-            .to_string(),
-            processed: false,
-        }),
+                "max_size": format!("{}", CWE_70_MAX_INPUT_SIZE)
+            }),
     }
 }

@@ -2,8 +2,8 @@ import * as fs from "fs";
 import * as path from "path";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 
-const nativeModule1 = require("./native");
-const nativeModule2 = require("./native/index.cjs");
+const nativeModule1 = require("../native/index.cjs");
+const nativeModule2 = require("../native/index.cjs");
 
 const TEST_DIR = path.join(__dirname, ".test-temp");
 

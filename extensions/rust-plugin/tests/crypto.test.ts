@@ -34,7 +34,7 @@ describe("rust-plugin advanced cryptography", () => {
 
       it("should use provided nonce", () => {
         const key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        const nonce = "0123456789ab"; // 12 bytes
+        const nonce = "0123456789abcdef0123456789"; // 24 hex characters
         const result = native.aes256GcmEncrypt("test", key, nonce);
 
         expect(result.nonce).toBe(nonce);

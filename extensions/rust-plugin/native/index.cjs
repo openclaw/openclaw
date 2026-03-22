@@ -1,31 +1,29 @@
-"use strict";
+// Load the native addon and re-export all functions
+const native = require('./index.linux-x64-gnu.node');
+const crypto = require('crypto');
 
-const path = require("path");
-const fs = require("fs");
-
-// Find the .node file
-const searchDirs = [
-  __dirname || path.dirname(require.resolve("./index.cjs")),
-  path.dirname(require.resolve("./index.cjs")),
-];
-
-let loaded = false;
-for (const dir of searchDirs) {
-  const nodePath = path.join(dir, "rust_plugin.node");
-  if (fs.existsSync(nodePath)) {
-    try {
-      const nativeModule = require(nodePath);
-      if (nativeModule && Object.keys(nativeModule).length > 0) {
-        module.exports = nativeModule;
-        loaded = true;
-        break;
-      }
-    } catch {
-      // Continue to next path
-    }
+// Wrapper for randomBytes (not directly exported)
+function randomBytes(length) {
+  if (length < 0 || length > 10_000_000) {
+    throw new Error('Invalid length (max 10MB)');
   }
+  return crypto.randomBytes(length);
 }
 
-if (!loaded) {
-  module.exports = {};
+// Wrapper for urlEncode (not directly exported)
+function urlEncode(input) {
+  if (typeof input !== 'string') {
+    throw new Error('Input must be a string');
+  }
+  if (input.length > 10_000_000) {
+    throw new Error('Input too large (max 10MB)');
+  }
+  return encodeURIComponent(input);
 }
+
+// Re-export all functions with wrappers
+module.exports = {
+  ...native,
+  randomBytes,
+  urlEncode,
+};
