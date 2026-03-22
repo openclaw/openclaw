@@ -213,6 +213,36 @@ export const memoryDashboardHandlers: GatewayRequestHandlers = {
     }
   },
 
+  "memory.collection.remove": async ({ respond, params }) => {
+    const name = (params as { name?: string })?.name?.trim();
+    if (!name) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "name is required"));
+      return;
+    }
+    const cfg = loadConfig();
+    const agentId = resolveDefaultAgentId(cfg);
+    const { manager, error } = await getMemorySearchManager({ cfg, agentId });
+    if (!manager) {
+      respond(true, { ok: false, error: error ?? "memory search unavailable" }, undefined);
+      return;
+    }
+    try {
+      // Remove via QMD CLI with correct env vars
+      const { execSync } = await import("node:child_process");
+      const qmdCmd = cfg.memory?.qmd?.command ?? "qmd";
+      execSync(`${qmdCmd} collection remove ${JSON.stringify(name)}`, {
+        env: { ...process.env },
+        timeout: 30000,
+        stdio: "pipe",
+      });
+      respond(true, { ok: true, removed: name }, undefined);
+    } catch (err) {
+      respond(true, { ok: false, error: `remove failed: ${formatError(err)}` }, undefined);
+    } finally {
+      await manager.close?.().catch(() => {});
+    }
+  },
+
   "memory.embed": async ({ respond }) => {
     const cfg = loadConfig();
     const agentId = resolveDefaultAgentId(cfg);
