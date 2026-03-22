@@ -107,10 +107,17 @@ const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
 // redundant full plugin discovery + activation cycles.  See #47429, #48380.
 let pluginRegistryCacheEntryCap = MAX_PLUGIN_REGISTRY_CACHE_ENTRIES;
 const registryCache: Map<string, CachedPluginState> =
-  ((globalThis as Record<string, unknown>).__ocPluginRegistryCache as Map<string, CachedPluginState> | undefined) ??
-  ((globalThis as Record<string, unknown>).__ocPluginRegistryCache = new Map<string, CachedPluginState>());
+  ((globalThis as Record<string, unknown>).__ocPluginRegistryCache as
+    | Map<string, CachedPluginState>
+    | undefined) ??
+  ((globalThis as Record<string, unknown>).__ocPluginRegistryCache = new Map<
+    string,
+    CachedPluginState
+  >());
 const openAllowlistWarningCache: Set<string> =
-  ((globalThis as Record<string, unknown>).__ocPluginAllowlistWarningCache as Set<string> | undefined) ??
+  ((globalThis as Record<string, unknown>).__ocPluginAllowlistWarningCache as
+    | Set<string>
+    | undefined) ??
   ((globalThis as Record<string, unknown>).__ocPluginAllowlistWarningCache = new Set<string>());
 const LAZY_RUNTIME_REFLECTION_KEYS = [
   "version",
