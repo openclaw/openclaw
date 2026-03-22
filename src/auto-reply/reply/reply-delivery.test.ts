@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
@@ -9,6 +10,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       text: payload.text,
       skip: false,
     }));
+    const directlySentBlockKeys = new Set<string>();
     const typingSignals = {
       signalTextDelta: vi.fn(async () => {}),
     } as unknown as TypingSignaler;
@@ -20,7 +22,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       typingSignals,
       blockStreamingEnabled: false,
       blockReplyPipeline: null,
-      directlySentBlockKeys: new Set(),
+      directlySentBlockKeys,
     });
 
     await handler({
@@ -38,6 +40,15 @@ describe("createBlockReplyDeliveryHandler", () => {
       replyToTag: undefined,
       audioAsVoice: false,
     });
+    expect(directlySentBlockKeys).toEqual(
+      new Set([
+        createBlockReplyContentKey({
+          text: "here's the vibe",
+          mediaUrls: ["/tmp/generated.png"],
+          replyToCurrent: true,
+        }),
+      ]),
+    );
     expect(typingSignals.signalTextDelta).toHaveBeenCalledWith("here's the vibe");
   });
 
