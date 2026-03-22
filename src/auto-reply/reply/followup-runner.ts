@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import path from "node:path";
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
@@ -44,6 +45,32 @@ import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
+
+function transplantSessionFilePath(params: {
+  previousSessionId?: string;
+  previousSessionFile?: string;
+  nextSessionId: string;
+}): string | undefined {
+  const previousSessionId = params.previousSessionId?.trim();
+  const previousSessionFile = params.previousSessionFile?.trim();
+  if (!previousSessionId || !previousSessionFile) {
+    return undefined;
+  }
+  const parsed = path.parse(previousSessionFile);
+  if (!parsed.name) {
+    return undefined;
+  }
+  if (parsed.name === previousSessionId) {
+    return path.join(parsed.dir, `${params.nextSessionId}${parsed.ext}`);
+  }
+  if (!parsed.name.startsWith(`${previousSessionId}-`)) {
+    return undefined;
+  }
+  return path.join(
+    parsed.dir,
+    `${params.nextSessionId}${parsed.name.slice(previousSessionId.length)}${parsed.ext}`,
+  );
+}
 
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
@@ -149,19 +176,34 @@ export function createFollowupRunner(params: {
         if (!latestSessionId || latestSessionId === queued.run.sessionId) {
           return latestEntry;
         }
-        queued.run.sessionId = latestSessionId;
-        queued.run.sessionFile = resolveSessionFilePath(
+        const reboundSessionFile = resolveSessionFilePath(
           latestSessionId,
-          latestEntry,
+          latestEntry?.sessionFile?.trim()
+            ? latestEntry
+            : {
+                sessionFile: transplantSessionFilePath({
+                  previousSessionId: queued.run.sessionId,
+                  previousSessionFile: queued.run.sessionFile,
+                  nextSessionId: latestSessionId,
+                }),
+              },
           resolveSessionFilePathOptions({
             agentId: resolveAgentIdFromSessionKey(sessionKey),
             storePath,
           }),
         );
+        queued.run.sessionId = latestSessionId;
+        queued.run.sessionFile = reboundSessionFile;
         logVerbose(
           `followup queue: rebound ${sessionKey ?? queued.run.sessionId} to session ${latestSessionId}`,
         );
-        return latestEntry;
+        return latestEntry
+          ? {
+              ...latestEntry,
+              sessionId: latestSessionId,
+              sessionFile: reboundSessionFile,
+            }
+          : latestEntry;
       };
       const isQueuedRunSuperseded = () => {
         const latestEntry = resolveLatestSessionEntry();
@@ -370,11 +412,13 @@ export function createFollowupRunner(params: {
         queued.originatingAccountId,
         queued.originatingChatType,
       );
+      const currentMessageId = queued.messageId?.trim() || undefined;
 
       const replyTaggedPayloads: ReplyPayload[] = applyReplyThreading({
         payloads: sanitizedPayloads,
         replyToMode,
         replyToChannel,
+        currentMessageId,
       });
 
       const dedupedPayloads = filterMessagingToolDuplicates({
@@ -408,7 +452,7 @@ export function createFollowupRunner(params: {
       if (autoCompactionCount > 0) {
         const previousSessionId = queued.run.sessionId;
         const count = await incrementRunCompactionCount({
-          sessionEntry,
+          sessionEntry: activeSessionEntry,
           sessionStore,
           sessionKey,
           storePath,

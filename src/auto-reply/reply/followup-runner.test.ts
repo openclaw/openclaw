@@ -691,6 +691,46 @@ describe("createFollowupRunner session resets", () => {
     expect(onBlockReply).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves topic transcript suffixes when rebinding to a reset session without sessionFile", async () => {
+    const sessionStore: Record<string, SessionEntry> = {
+      main: {
+        sessionId: "session-new",
+        updatedAt: Date.now(),
+      },
+    };
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: {
+        sessionId: "session-old",
+        sessionFile: "session-old-topic-456.jsonl",
+        updatedAt: Date.now(),
+      },
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          sessionId: "session-old",
+          sessionFile: "session-old-topic-456.jsonl",
+        },
+      }),
+    );
+
+    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as { sessionFile?: string };
+    expect(path.basename(call.sessionFile ?? "")).toBe("session-new-topic-456.jsonl");
+  });
+
   it("drops followup output when the run is superseded by a newer session", async () => {
     const sessionStore: Record<string, SessionEntry> = {
       main: {
@@ -799,6 +839,46 @@ describe("createFollowupRunner bootstrap warning dedupe", () => {
     expect(call?.allowGatewaySubagentBinding).toBe(true);
     expect(call?.bootstrapPromptWarningSignaturesSeen).toEqual(["sig-a", "sig-b"]);
     expect(call?.bootstrapPromptWarningSignature).toBe("sig-b");
+  });
+});
+
+describe("createFollowupRunner reply threading", () => {
+  it("threads followup replies to the current message when reply mode targets the first reply", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        messageId: "msg-42",
+        run: {
+          messageProvider: "discord",
+          config: {
+            channels: {
+              discord: {
+                replyToMode: "first",
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "final",
+        replyToId: "msg-42",
+      }),
+    );
   });
 });
 
