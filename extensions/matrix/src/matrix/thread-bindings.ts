@@ -524,7 +524,7 @@ export async function createMatrixThreadBindingManager(params: {
   registerSessionBindingAdapter({
     channel: "matrix",
     accountId: params.accountId,
-    capabilities: { placements: ["current", "child"], bindSupported: true, unbindSupported: true },
+    capabilities: { placements: params.sendMessage ? ["current", "child"] : ["current"], bindSupported: true, unbindSupported: true },
     bind: async (input) => {
       const conversationId = input.conversation.conversationId.trim();
       const parentConversationId = input.conversation.parentConversationId?.trim() || undefined;

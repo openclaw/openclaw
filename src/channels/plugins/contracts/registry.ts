@@ -737,7 +737,7 @@ export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
       adapterAvailable: true,
       bindSupported: true,
       unbindSupported: true,
-      placements: ["current", "child"],
+      placements: ["current"],
     },
     getCapabilities: async () => {
       await createContractMatrixThreadBindingManager();
