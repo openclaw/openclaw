@@ -52,6 +52,13 @@ type PackageManifest = PluginPackageManifest & {
 
 const MISSING_EXTENSIONS_ERROR =
   'package.json missing openclaw.extensions; update the plugin package to include openclaw.extensions (for example ["./dist/index.js"]). See https://docs.openclaw.ai/help/troubleshooting#plugin-install-fails-with-missing-openclaw-extensions';
+const PLUGIN_ARCHIVE_ROOT_MARKERS = [
+  "package.json",
+  "openclaw.plugin.json",
+  ".codex-plugin/plugin.json",
+  ".claude-plugin/plugin.json",
+  ".cursor-plugin/plugin.json",
+];
 
 export const PLUGIN_INSTALL_ERROR_CODE = {
   INVALID_NPM_SPEC: "invalid_npm_spec",
@@ -611,6 +618,7 @@ export async function installPluginFromArchive(
     tempDirPrefix: "openclaw-plugin-",
     timeoutMs,
     logger,
+    rootMarkers: PLUGIN_ARCHIVE_ROOT_MARKERS,
     onExtracted: async (sourceDir) =>
       await installPluginFromSourceDir({
         sourceDir,
