@@ -182,7 +182,7 @@ describe("gateway server chat", () => {
           finish();
           return;
         }
-          opts?.abortSignal?.addEventListener("abort", finish, { once: true });
+        opts?.abortSignal?.addEventListener("abort", finish, { once: true });
       });
       return undefined;
     });
