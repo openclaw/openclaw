@@ -4,7 +4,6 @@ import * as tar from "tar";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { safePathSegmentHashed } from "../infra/install-safe-path.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import * as skillScanner from "../security/skill-scanner.js";
 import {
   expectSingleNpmInstallIgnoreScriptsCall,
   expectSingleNpmPackIgnoreScriptsCall,
@@ -14,6 +13,7 @@ import {
   expectIntegrityDriftRejected,
   mockNpmPackMetadataResult,
 } from "../test-utils/npm-spec-install-test-helpers.js";
+import * as installSecurityScan from "./install-security-scan.js";
 import {
   installPluginFromArchive,
   installPluginFromDir,
@@ -493,6 +493,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe("installPluginFromArchive", () => {
@@ -688,7 +689,7 @@ describe("installPluginFromArchive", () => {
 
   it("continues install when scanner throws", async () => {
     const scanSpy = vi
-      .spyOn(skillScanner, "scanDirectoryWithSummary")
+      .spyOn(installSecurityScan, "scanPackageInstallSource")
       .mockRejectedValueOnce(new Error("scanner exploded"));
 
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
@@ -773,6 +774,95 @@ describe("installPluginFromDir", () => {
     };
     expect(manifest.devDependencies?.openclaw).toBeUndefined();
     expect(manifest.devDependencies?.vitest).toBe("^3.0.0");
+  });
+
+  it("rejects plugins whose minHostVersion is newer than the current host", async () => {
+    vi.stubEnv("OPENCLAW_VERSION", "2026.3.13");
+    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
+    const packageJsonPath = path.join(pluginDir, "package.json");
+    const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
+      openclaw?: { install?: Record<string, unknown> };
+    };
+    manifest.openclaw = {
+      ...manifest.openclaw,
+      install: {
+        ...manifest.openclaw?.install,
+        minHostVersion: ">=2026.3.14",
+      },
+    };
+    fs.writeFileSync(packageJsonPath, JSON.stringify(manifest), "utf-8");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_HOST_VERSION);
+    expect(result.error).toContain("requires OpenClaw >=2026.3.14, but this host is 2026.3.13");
+    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
+  });
+
+  it("rejects plugins with invalid minHostVersion metadata", async () => {
+    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
+    const packageJsonPath = path.join(pluginDir, "package.json");
+    const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
+      openclaw?: { install?: Record<string, unknown> };
+    };
+    manifest.openclaw = {
+      ...manifest.openclaw,
+      install: {
+        ...manifest.openclaw?.install,
+        minHostVersion: "2026.3.14",
+      },
+    };
+    fs.writeFileSync(packageJsonPath, JSON.stringify(manifest), "utf-8");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_MIN_HOST_VERSION);
+    expect(result.error).toContain("invalid package.json openclaw.install.minHostVersion");
+    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
+  });
+
+  it("reports unknown host versions distinctly for minHostVersion-gated plugins", async () => {
+    vi.stubEnv("OPENCLAW_VERSION", "unknown");
+    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
+    const packageJsonPath = path.join(pluginDir, "package.json");
+    const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
+      openclaw?: { install?: Record<string, unknown> };
+    };
+    manifest.openclaw = {
+      ...manifest.openclaw,
+      install: {
+        ...manifest.openclaw?.install,
+        minHostVersion: ">=2026.3.14",
+      },
+    };
+    fs.writeFileSync(packageJsonPath, JSON.stringify(manifest), "utf-8");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.UNKNOWN_HOST_VERSION);
+    expect(result.error).toContain("host version could not be determined");
+    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
   });
 
   it("uses openclaw.plugin.json id as install key when it differs from package name", async () => {

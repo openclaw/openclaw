@@ -27,6 +27,20 @@ function expectStreamingTwiml(body: string) {
   expect(body).toContain("<Connect>");
 }
 
+function requireResponseBody(body: string | undefined): string {
+  if (!body) {
+    throw new Error("Twilio provider did not return a response body");
+  }
+  return body;
+}
+
+function requireEvent<T>(event: T | undefined, message: string): T {
+  if (!event) {
+    throw new Error(message);
+  }
+  return event;
+}
+
 describe("TwilioProvider", () => {
   it("returns streaming TwiML for outbound conversation calls before in-progress", () => {
     const provider = createProvider();
@@ -36,8 +50,7 @@ describe("TwilioProvider", () => {
 
     const result = provider.parseWebhookEvent(ctx);
 
-    expect(result.providerResponseBody).toBeDefined();
-    expectStreamingTwiml(result.providerResponseBody ?? "");
+    expectStreamingTwiml(requireResponseBody(result.providerResponseBody));
   });
 
   it("returns empty TwiML for status callbacks", () => {
@@ -60,8 +73,7 @@ describe("TwilioProvider", () => {
 
     const result = provider.parseWebhookEvent(ctx);
 
-    expect(result.providerResponseBody).toBeDefined();
-    expectStreamingTwiml(result.providerResponseBody ?? "");
+    expectStreamingTwiml(requireResponseBody(result.providerResponseBody));
   });
 
   it("returns queue TwiML for second inbound call when first call is active", () => {
@@ -149,11 +161,11 @@ describe("TwilioProvider", () => {
     const eventA = provider.parseWebhookEvent(ctxA).events[0];
     const eventB = provider.parseWebhookEvent(ctxB).events[0];
 
-    expect(eventA).toBeDefined();
-    expect(eventB).toBeDefined();
-    expect(eventA?.id).not.toBe(eventB?.id);
-    expect(eventA?.dedupeKey).toContain("twilio:fallback:");
-    expect(eventA?.dedupeKey).toBe(eventB?.dedupeKey);
+    const first = requireEvent(eventA, "expected first fallback Twilio event");
+    const second = requireEvent(eventB, "expected second fallback Twilio event");
+    expect(first.id).not.toBe(second.id);
+    expect(first.dedupeKey).toContain("twilio:fallback:");
+    expect(first.dedupeKey).toBe(second.dedupeKey);
   });
 
   it("uses verified request key for dedupe and ignores idempotency header changes", () => {
@@ -173,8 +185,12 @@ describe("TwilioProvider", () => {
     const eventB = provider.parseWebhookEvent(ctxB, { verifiedRequestKey: "twilio:req:abc" })
       .events[0];
 
-    expect(eventA?.dedupeKey).toBe("twilio:req:abc");
-    expect(eventB?.dedupeKey).toBe("twilio:req:abc");
+    expect(requireEvent(eventA, "expected verified first Twilio event").dedupeKey).toBe(
+      "twilio:req:abc",
+    );
+    expect(requireEvent(eventB, "expected verified second Twilio event").dedupeKey).toBe(
+      "twilio:req:abc",
+    );
   });
 
   it("keeps turnToken from query on speech events", () => {
@@ -185,8 +201,9 @@ describe("TwilioProvider", () => {
     });
 
     const event = provider.parseWebhookEvent(ctx).events[0];
-    expect(event?.type).toBe("call.speech");
-    expect(event?.turnToken).toBe("turn-xyz");
+    const parsed = requireEvent(event, "expected speech event from Twilio webhook");
+    expect(parsed.type).toBe("call.speech");
+    expect(parsed.turnToken).toBe("turn-xyz");
   });
 
   it("fails when an active stream exists but telephony TTS is unavailable", async () => {

@@ -32,8 +32,11 @@ async function mergeOverride(override: unknown): Promise<Record<string, unknown>
   });
 
   await provider.synthesizeForTelephony("hello");
-  expect(mergedConfig?.messages?.tts).toBeDefined();
-  return mergedConfig?.messages?.tts as Record<string, unknown>;
+  const tts = mergedConfig?.messages?.tts;
+  if (!tts) {
+    throw new Error("telephony TTS runtime did not receive merged TTS config");
+  }
+  return tts as Record<string, unknown>;
 }
 
 afterEach(() => {
