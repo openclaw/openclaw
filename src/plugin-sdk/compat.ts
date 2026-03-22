@@ -50,3 +50,13 @@ export {
   resolveBlueBubblesGroupToolPolicy,
 } from "../../extensions/bluebubbles/runtime-api.js";
 export { collectBlueBubblesStatusIssues } from "../channels/plugins/status-issues/bluebubbles.js";
+export { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+export { stripMarkdown } from "../line/markdown-to-line.js";
+export { withFileLock } from "./file-lock.js";
+export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
+export { createTypingCallbacks } from "../channels/typing.js";
+export {
+  resolveDirectDmAuthorizationOutcome,
+  resolveSenderCommandAuthorizationWithRuntime,
+} from "./command-auth.js";
