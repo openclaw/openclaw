@@ -1,6 +1,6 @@
-import { createAccountListHelpers, mergeAccountConfig } from "openclaw/plugin-sdk/account-helpers";
+import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-resolution";
+import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
 import { parseOptionalDelimitedEntries } from "openclaw/plugin-sdk/core";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/infra-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
@@ -46,29 +46,15 @@ const { listAccountIds: listIrcAccountIds, resolveDefaultAccountId: resolveDefau
   createAccountListHelpers("irc", { normalizeAccountId });
 export { listIrcAccountIds, resolveDefaultIrcAccountId };
 
-function resolveAccountConfig(cfg: CoreConfig, accountId: string): IrcAccountConfig | undefined {
-  return resolveNormalizedAccountEntry(
-    cfg.channels?.irc?.accounts as Record<string, IrcAccountConfig> | undefined,
-    accountId,
-    normalizeAccountId,
-  );
-}
-
 function mergeIrcAccountConfig(cfg: CoreConfig, accountId: string): IrcAccountConfig {
-  const account = resolveAccountConfig(cfg, accountId) ?? {};
-  const merged: IrcAccountConfig = mergeAccountConfig<IrcAccountConfig>({
+  return resolveMergedAccountConfig<IrcAccountConfig>({
     channelConfig: cfg.channels?.irc as IrcAccountConfig | undefined,
-    accountConfig: account,
+    accounts: cfg.channels?.irc?.accounts as Record<string, Partial<IrcAccountConfig>> | undefined,
+    accountId,
     omitKeys: ["defaultAccount"],
+    normalizeAccountId,
+    nestedObjectKeys: ["nickserv"],
   });
-  const baseNickServ = (cfg.channels?.irc as IrcAccountConfig | undefined)?.nickserv;
-  if (baseNickServ || account.nickserv) {
-    merged.nickserv = {
-      ...baseNickServ,
-      ...account.nickserv,
-    };
-  }
-  return merged;
 }
 
 function resolvePassword(accountId: string, merged: IrcAccountConfig) {
