@@ -31,7 +31,6 @@ Docs: https://docs.openclaw.ai
 - Telegram/error replies: add a default-off `channels.telegram.silentErrorReplies` setting so bot error replies can be delivered silently across regular replies, native commands, and fallback sends. (#19776) Thanks @ImLukeF.
 - Doctor/refactor: start splitting doctor provider checks into `src/commands/doctor/providers/*` by extracting Telegram first-run and group allowlist warnings into a provider-specific module, keeping the current setup guidance and warning behavior intact. Thanks @vincentkoc.
 - Refactor/channels: remove the legacy channel shim directories and point channel-specific imports directly at the extension-owned implementations. (#45967) Thanks @scoootscooob.
-- Plugins/hooks: add `before_message_process` hook that fires after message routing but before the AI agent runs; plugins can return `{ handled: true }` to intercept the message and skip AI processing (first-claim-wins across registered plugins).
 - Docs/Zalo: clarify the Marketplace-bot support matrix and config guidance so the Zalo channel docs match current Bot Creator behavior more closely. (#47552) Thanks @No898.
 - secrets: harden read-only SecretRef command paths and diagnostics. (#47794) Thanks @joshavant.
 - Browser/existing-session: support `browser.profiles.<name>.userDataDir` so Chrome DevTools MCP can attach to Brave, Edge, and other Chromium-based browsers through their own user data directories. (#48170) Thanks @velvet-shark.
@@ -64,6 +63,7 @@ Docs: https://docs.openclaw.ai
 - Models/OpenAI: switch the default OpenAI setup model to `openai/gpt-5.4`, keep Codex on `openai-codex/gpt-5.4`, and centralize OpenAI chat, image, TTS, transcription, and embedding defaults in one shared module so future default-model updates stay low-churn. Thanks @vincentkoc.
 - Memory/plugins: let the active memory plugin register its own system-prompt section while preserving cache-clear and snapshot-load prompt isolation. (#40126) Thanks @jarimustonen.
 - Control UI/usage: improve usage overview styling, localization, and responsive chat/context-notice presentation, including safer theme color handling and unclipped usage-header menus. (#51951) Thanks @BunsDev.
+- Plugins/hooks: add `before_message_process` hook that fires after message routing but before the AI agent runs; plugins can return `{ handled: true }` to intercept the message and skip AI processing (first-claim-wins across registered plugins).
 
 ### Fixes
 
