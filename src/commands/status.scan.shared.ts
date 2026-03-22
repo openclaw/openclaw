@@ -77,6 +77,7 @@ export async function resolveGatewayProbeSnapshot(params: {
           auth: gatewayProbeAuthResolution.auth,
           timeoutMs: Math.min(params.opts.all ? 5000 : 2500, params.opts.timeoutMs ?? 10_000),
           detailLevel: "presence",
+          allowLocalDeviceAuthRetry: gatewayMode === "local" || remoteUrlMissing,
         }).catch(() => null);
   if (gatewayProbeAuthWarning && gatewayProbe?.ok === false) {
     gatewayProbe.error = gatewayProbe.error

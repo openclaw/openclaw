@@ -181,6 +181,7 @@ export async function gatewayStatusCommand(
               url: target.url,
               auth,
               timeoutMs,
+              allowLocalDeviceAuthRetry: target.kind === "localLoopback",
             });
             const configSummary = probe.configSnapshot
               ? extractConfigSummary(probe.configSnapshot)

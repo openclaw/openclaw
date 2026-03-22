@@ -558,8 +558,14 @@ describe("gateway-status command", () => {
     expect(probeGateway).toHaveBeenCalled();
     const tunnelCall = probeGateway.mock.calls.find(
       (call) => typeof call?.[0]?.url === "string" && call[0].url.startsWith("ws://127.0.0.1:"),
-    )?.[0] as { auth?: { token?: string } } | undefined;
+    )?.[0] as
+      | {
+          auth?: { token?: string };
+          allowLocalDeviceAuthRetry?: boolean;
+        }
+      | undefined;
     expect(tunnelCall?.auth?.token).toBe("rtok");
+    expect(tunnelCall?.allowLocalDeviceAuthRetry).toBe(false);
     expect(sshStop).toHaveBeenCalledTimes(1);
 
     const parsed = JSON.parse(runtimeLogs.join("\n")) as Record<string, unknown>;

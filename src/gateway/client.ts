@@ -98,6 +98,7 @@ export type GatewayClientOptions = {
   permissions?: Record<string, boolean>;
   pathEnv?: string;
   deviceIdentity?: DeviceIdentity | null;
+  clearDeviceAuthTokenOnMismatch?: boolean;
   minProtocol?: number;
   maxProtocol?: number;
   tlsFingerprint?: string;
@@ -254,6 +255,7 @@ export class GatewayClient {
       if (
         code === 1008 &&
         reasonText.toLowerCase().includes("device token mismatch") &&
+        this.opts.clearDeviceAuthTokenOnMismatch !== false &&
         !this.opts.token &&
         !this.opts.password &&
         this.opts.deviceIdentity

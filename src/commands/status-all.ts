@@ -134,6 +134,7 @@ export async function statusAllCommand(
       url: connection.url,
       auth: probeAuth,
       timeoutMs: Math.min(5000, opts?.timeoutMs ?? 10_000),
+      allowLocalDeviceAuthRetry: !isRemoteMode || remoteUrlMissing,
     }).catch(() => null);
     const gatewayReachable = gatewayProbe?.ok === true;
     const gatewaySelf = pickGatewaySelfPresence(gatewayProbe?.presence ?? null);

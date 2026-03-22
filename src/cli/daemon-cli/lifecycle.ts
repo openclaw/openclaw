@@ -60,6 +60,7 @@ async function assertUnmanagedGatewayRestartEnabled(port: number): Promise<void>
       password: process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() || undefined,
     },
     timeoutMs: 1_000,
+    allowLocalDeviceAuthRetry: true,
   }).catch(() => null);
 
   if (!probe?.ok) {

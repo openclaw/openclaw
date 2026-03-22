@@ -67,6 +67,7 @@ async function confirmGatewayReachable(port: number): Promise<boolean> {
     auth: token || password ? { token, password } : undefined,
     timeoutMs: 3_000,
     includeDetails: false,
+    allowLocalDeviceAuthRetry: true,
   });
   return probe.ok || looksLikeAuthClose(probe.close?.code, probe.close?.reason);
 }
