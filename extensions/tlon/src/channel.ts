@@ -1,11 +1,11 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { createHybridChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
+import { buildComputedAccountStatusSnapshot } from "openclaw/plugin-sdk/tlon";
 import { tlonChannelConfigSchema } from "./config-schema.js";
 import { resolveTlonOutboundSessionRoute } from "./session-route.js";
 import {
@@ -154,23 +154,21 @@ export const tlonPlugin: ChannelPlugin = {
       }
       return await (await loadTlonChannelRuntime()).probeTlonAccount(account as never);
     },
-    buildAccountSnapshot: ({ account, runtime, probe }) => {
-      // Tlon-specific snapshot with ship/url for status display
-      const snapshot = {
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: account.configured,
-        ship: account.ship,
-        url: account.url,
-        running: runtime?.running ?? false,
-        lastStartAt: runtime?.lastStartAt ?? null,
-        lastStopAt: runtime?.lastStopAt ?? null,
-        lastError: runtime?.lastError ?? null,
-        probe,
-      };
-      return snapshot as ChannelAccountSnapshot;
-    },
+    buildAccountSnapshot: ({ account, runtime, probe }) =>
+      buildComputedAccountStatusSnapshot(
+        {
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured: account.configured,
+          runtime,
+          probe,
+        },
+        {
+          ship: account.ship,
+          url: account.url,
+        },
+      ),
   },
   gateway: {
     startAccount: async (ctx) =>
