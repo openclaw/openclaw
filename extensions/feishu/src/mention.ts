@@ -1,4 +1,5 @@
 import type { FeishuMessageEvent } from "./bot.js";
+import { isFeishuGroupChat } from "./chat-type.js";
 
 /**
  * Escape regex metacharacters so user-controlled mention fields are treated literally.
@@ -53,7 +54,7 @@ export function isMentionForwardRequest(event: FeishuMessageEvent, botOpenId?: s
     return false;
   }
 
-  const isDirectMessage = event.message.chat_type !== "group";
+  const isDirectMessage = !isFeishuGroupChat(event.message.chat_type, event.message.chat_id);
   const hasOtherMention = mentions.some((m) => m.id.open_id !== botOpenId);
 
   if (isDirectMessage) {
