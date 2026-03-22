@@ -46,8 +46,8 @@ export async function sendExecApprovalFollowup(
     {
       sessionKey,
       message: buildExecApprovalFollowupPrompt(resultText),
-      deliver: true,
-      bestEffortDeliver: true,
+      deliver: Boolean(channel && to),
+      ...(channel && to ? { bestEffortDeliver: true } : {}),
       channel: channel && to ? channel : undefined,
       to: channel && to ? to : undefined,
       accountId: channel && to ? params.turnSourceAccountId?.trim() || undefined : undefined,
