@@ -43,8 +43,8 @@ const resolveSynologyChatDmPolicy = createScopedDmSecurityResolver<ResolvedSynol
 
 const synologyChatConfigAdapter = createHybridChannelConfigAdapter<ResolvedSynologyChatAccount>({
   sectionKey: CHANNEL_ID,
-  listAccountIds: (cfg: any) => listAccountIds(cfg),
-  resolveAccount: (cfg: any, accountId?: string | null) => resolveAccount(cfg, accountId),
+  listAccountIds,
+  resolveAccount,
   defaultAccountId: () => DEFAULT_ACCOUNT_ID,
   clearBaseFields: [
     "token",
