@@ -521,6 +521,7 @@ export async function runCronIsolatedAgentTurn(params: {
               cfg: cfgWithAgentDefaults,
               provider: providerOverride,
               model: modelOverride,
+              agentId,
               sessionEntry: cronSession.sessionEntry,
             }).enabled,
             verboseLevel: resolvedVerboseLevel,
