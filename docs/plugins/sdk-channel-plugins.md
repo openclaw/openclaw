@@ -1,161 +1,370 @@
 ---
-title: "Channel Plugin SDK"
+title: "Building Channel Plugins"
 sidebarTitle: "Channel Plugins"
-summary: "Contracts and helpers for native messaging channel plugins, including actions, routing, pairing, and setup"
+summary: "Step-by-step guide to building a messaging channel plugin for OpenClaw"
 read_when:
-  - You are building a native channel plugin
-  - You need to implement the shared `message` tool for a channel
-  - You need pairing, setup, or routing helpers for a channel
+  - You are building a new messaging channel plugin
+  - You want to connect OpenClaw to a messaging platform
+  - You need to understand the ChannelPlugin adapter surface
 ---
 
-# Channel Plugin SDK
+# Building Channel Plugins
 
-Channel plugins use `defineChannelPluginEntry(...)` from
-`openclaw/plugin-sdk/core` and implement the `ChannelPlugin` contract.
+This guide walks through building a channel plugin that connects OpenClaw to a
+messaging platform. By the end you will have a working channel with DM security,
+pairing, reply threading, and outbound messaging.
 
-## Minimal channel entry
+<Info>
+  If you have not built any OpenClaw plugin before, read
+  [Getting Started](/plugins/building-plugins) first for the basic package
+  structure and manifest setup.
+</Info>
 
-```ts
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
-import { exampleChannelPlugin } from "./src/channel.js";
-import { setExampleRuntime } from "./src/runtime.js";
+## How channel plugins work
 
-export default defineChannelPluginEntry({
-  id: "example-channel",
-  name: "Example Channel",
-  description: "Example native channel plugin",
-  plugin: exampleChannelPlugin,
-  setRuntime: setExampleRuntime,
-});
-```
+Channel plugins do not need their own send/edit/react tools. OpenClaw keeps one
+shared `message` tool in core. Your plugin owns:
 
-## `ChannelPlugin` shape
+- **Config** — account resolution and setup wizard
+- **Security** — DM policy and allowlists
+- **Pairing** — DM approval flow
+- **Outbound** — sending text, media, and polls to the platform
+- **Threading** — how replies are threaded
 
-Important sections of the contract:
+Core owns the shared message tool, prompt wiring, session bookkeeping, and
+dispatch.
 
-- `meta`: docs, labels, and picker metadata
-- `capabilities`: replies, polls, reactions, threads, media, and chat types
-- `config` and `configSchema`: account resolution and config parsing
-- `setup` and `setupWizard`: onboarding/setup flow
-- `security`: DM policy and allowlist behavior
-- `messaging`: target parsing and outbound session routing
-- `actions`: shared `message` tool discovery and execution
-- `pairing`, `threading`, `status`, `lifecycle`, `groups`, `directory`
+## Walkthrough
 
-For pure types, import from `openclaw/plugin-sdk/channel-contract`.
+<Steps>
+  <Step title="Package and manifest">
+    Create the standard plugin files. The `channel` field in `package.json` is
+    what makes this a channel plugin:
 
-## Shared `message` tool
+    <CodeGroup>
+    ```json package.json
+    {
+      "name": "@myorg/openclaw-acme-chat",
+      "version": "1.0.0",
+      "type": "module",
+      "openclaw": {
+        "extensions": ["./index.ts"],
+        "setupEntry": "./setup-entry.ts",
+        "channel": {
+          "id": "acme-chat",
+          "label": "Acme Chat",
+          "blurb": "Connect OpenClaw to Acme Chat."
+        }
+      }
+    }
+    ```
 
-Channel plugins own their channel-specific part of the shared `message` tool
-through `ChannelMessageActionAdapter`.
+    ```json openclaw.plugin.json
+    {
+      "id": "acme-chat",
+      "kind": "channel",
+      "channels": ["acme-chat"],
+      "name": "Acme Chat",
+      "description": "Acme Chat channel plugin",
+      "configSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "acme-chat": {
+            "type": "object",
+            "properties": {
+              "token": { "type": "string" },
+              "allowFrom": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    }
+    ```
+    </CodeGroup>
 
-```ts
-import { Type } from "@sinclair/typebox";
-import { createMessageToolButtonsSchema } from "openclaw/plugin-sdk/channel-actions";
+  </Step>
 
-export const exampleActions = {
-  describeMessageTool() {
-    return {
-      actions: ["send", "edit"],
-      capabilities: ["buttons"],
-      schema: {
-        visibility: "current-channel",
-        properties: {
-          buttons: createMessageToolButtonsSchema(),
-          threadId: Type.String(),
-        },
-      },
+  <Step title="Build the channel plugin object">
+    The `ChannelPlugin` interface has many optional adapter surfaces. Start with
+    the minimum — `id` and `setup` — and add adapters as you need them.
+
+    Create `src/channel.ts`:
+
+    ```typescript src/channel.ts
+    import {
+      createChatChannelPlugin,
+      createChannelPluginBase,
+    } from "openclaw/plugin-sdk/core";
+    import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+    import { acmeChatApi } from "./client.js"; // your platform API client
+
+    type ResolvedAccount = {
+      accountId: string | null;
+      token: string;
+      allowFrom: string[];
+      dmPolicy: string | undefined;
     };
-  },
-  async handleAction(ctx) {
-    if (ctx.action === "send") {
+
+    function resolveAccount(
+      cfg: OpenClawConfig,
+      accountId?: string | null,
+    ): ResolvedAccount {
+      const section = (cfg.channels as Record<string, any>)?.["acme-chat"];
+      const token = section?.token;
+      if (!token) throw new Error("acme-chat: token is required");
       return {
-        content: [{ type: "text", text: `send to ${String(ctx.params.to)}` }],
+        accountId: accountId ?? null,
+        token,
+        allowFrom: section?.allowFrom ?? [],
+        dmPolicy: section?.dmSecurity,
       };
     }
 
-    return {
-      content: [{ type: "text", text: `unsupported action: ${ctx.action}` }],
-    };
-  },
-};
-```
+    export const acmeChatPlugin = createChatChannelPlugin<ResolvedAccount>({
+      base: createChannelPluginBase({
+        id: "acme-chat",
+        setup: {
+          resolveAccount,
+          inspectAccount(cfg, accountId) {
+            const section =
+              (cfg.channels as Record<string, any>)?.["acme-chat"];
+            return {
+              enabled: Boolean(section?.token),
+              configured: Boolean(section?.token),
+              tokenStatus: section?.token ? "available" : "missing",
+            };
+          },
+        },
+      }),
 
-Key types:
+      // DM security: who can message the bot
+      security: {
+        dm: {
+          channelKey: "acme-chat",
+          resolvePolicy: (account) => account.dmPolicy,
+          resolveAllowFrom: (account) => account.allowFrom,
+          defaultPolicy: "allowlist",
+        },
+      },
 
-- `ChannelMessageActionAdapter`
-- `ChannelMessageActionContext`
-- `ChannelMessageActionDiscoveryContext`
-- `ChannelMessageToolDiscovery`
+      // Pairing: approval flow for new DM contacts
+      pairing: {
+        text: {
+          idLabel: "Acme Chat username",
+          message: "Send this code to verify your identity:",
+          notify: async ({ target, code }) => {
+            await acmeChatApi.sendDm(target, `Pairing code: ${code}`);
+          },
+        },
+      },
 
-## Outbound routing helpers
+      // Threading: how replies are delivered
+      threading: { topLevelReplyToMode: "reply" },
 
-When a channel plugin needs custom outbound routing, implement
-`messaging.resolveOutboundSessionRoute(...)`.
-
-Use `buildChannelOutboundSessionRoute(...)` from `plugin-sdk/core` to return the
-standard route payload:
-
-```ts
-import { buildChannelOutboundSessionRoute } from "openclaw/plugin-sdk/core";
-
-const messaging = {
-  resolveOutboundSessionRoute({ cfg, agentId, accountId, target }) {
-    return buildChannelOutboundSessionRoute({
-      cfg,
-      agentId,
-      channel: "example-channel",
-      accountId,
-      peer: { kind: "direct", id: target },
-      chatType: "direct",
-      from: accountId ?? "default",
-      to: target,
+      // Outbound: send messages to the platform
+      outbound: {
+        attachedResults: {
+          sendText: async (params) => {
+            const result = await acmeChatApi.sendMessage(
+              params.to,
+              params.text,
+            );
+            return { messageId: result.id };
+          },
+        },
+        base: {
+          sendMedia: async (params) => {
+            await acmeChatApi.sendFile(params.to, params.filePath);
+          },
+        },
+      },
     });
-  },
-};
+    ```
+
+    <Accordion title="What createChatChannelPlugin does for you">
+      Instead of implementing low-level adapter interfaces manually, you pass
+      declarative options and the builder composes them:
+
+      | Option | What it wires |
+      | --- | --- |
+      | `security.dm` | Scoped DM security resolver from config fields |
+      | `pairing.text` | Text-based DM pairing flow with code exchange |
+      | `threading` | Reply-to-mode resolver (fixed, account-scoped, or custom) |
+      | `outbound.attachedResults` | Send functions that return result metadata (message IDs) |
+
+      You can also pass raw adapter objects instead of the declarative options
+      if you need full control.
+    </Accordion>
+
+  </Step>
+
+  <Step title="Wire the entry point">
+    Create `index.ts`:
+
+    ```typescript index.ts
+    import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+    import { acmeChatPlugin } from "./src/channel.js";
+
+    export default defineChannelPluginEntry({
+      id: "acme-chat",
+      name: "Acme Chat",
+      description: "Acme Chat channel plugin",
+      plugin: acmeChatPlugin,
+      registerFull(api) {
+        api.registerCli(
+          ({ program }) => {
+            program
+              .command("acme-chat")
+              .description("Acme Chat management");
+          },
+          { commands: ["acme-chat"] },
+        );
+      },
+    });
+    ```
+
+    `defineChannelPluginEntry` handles the setup/full registration split
+    automatically. See
+    [Entry Points](/plugins/sdk-entrypoints#definechannelpluginentry) for all
+    options.
+
+  </Step>
+
+  <Step title="Add a setup entry">
+    Create `setup-entry.ts` for lightweight loading during onboarding:
+
+    ```typescript setup-entry.ts
+    import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
+    import { acmeChatPlugin } from "./src/channel.js";
+
+    export default defineSetupPluginEntry(acmeChatPlugin);
+    ```
+
+    OpenClaw loads this instead of the full entry when the channel is disabled
+    or unconfigured. It avoids pulling in heavy runtime code during setup flows.
+    See [Setup and Config](/plugins/sdk-setup#setup-entry) for details.
+
+  </Step>
+
+  <Step title="Handle inbound messages">
+    Your plugin needs to receive messages from the platform and forward them to
+    OpenClaw. The typical pattern is a webhook that verifies the request and
+    dispatches it through your channel's inbound handler:
+
+    ```typescript
+    registerFull(api) {
+      api.registerHttpRoute({
+        path: "/acme-chat/webhook",
+        auth: "plugin", // plugin-managed auth (verify signatures yourself)
+        handler: async (req, res) => {
+          const event = parseWebhookPayload(req);
+
+          // Your inbound handler dispatches the message to OpenClaw.
+          // The exact wiring depends on your platform SDK —
+          // see a real example in extensions/msteams or extensions/googlechat.
+          await handleAcmeChatInbound(api, event);
+
+          res.statusCode = 200;
+          res.end("ok");
+          return true;
+        },
+      });
+    }
+    ```
+
+    <Note>
+      Inbound message handling is channel-specific. Each channel plugin owns
+      its own inbound pipeline. Look at bundled channel plugins
+      (e.g. `extensions/msteams`, `extensions/googlechat`) for real patterns.
+    </Note>
+
+  </Step>
+
+  <Step title="Test">
+    Write colocated tests in `src/channel.test.ts`:
+
+    ```typescript src/channel.test.ts
+    import { describe, it, expect } from "vitest";
+    import { acmeChatPlugin } from "./channel.js";
+
+    describe("acme-chat plugin", () => {
+      it("resolves account from config", () => {
+        const cfg = {
+          channels: {
+            "acme-chat": { token: "test-token", allowFrom: ["user1"] },
+          },
+        } as any;
+        const account = acmeChatPlugin.setup!.resolveAccount(cfg, undefined);
+        expect(account.token).toBe("test-token");
+      });
+
+      it("inspects account without materializing secrets", () => {
+        const cfg = {
+          channels: { "acme-chat": { token: "test-token" } },
+        } as any;
+        const result = acmeChatPlugin.setup!.inspectAccount!(cfg, undefined);
+        expect(result.configured).toBe(true);
+        expect(result.tokenStatus).toBe("available");
+      });
+
+      it("reports missing config", () => {
+        const cfg = { channels: {} } as any;
+        const result = acmeChatPlugin.setup!.inspectAccount!(cfg, undefined);
+        expect(result.configured).toBe(false);
+      });
+    });
+    ```
+
+    ```bash
+    pnpm test -- extensions/acme-chat/
+    ```
+
+    For shared test helpers, see [Testing](/plugins/sdk-testing).
+
+  </Step>
+</Steps>
+
+## File structure
+
+```
+extensions/acme-chat/
+├── package.json              # openclaw.channel metadata
+├── openclaw.plugin.json      # Manifest with config schema
+├── index.ts                  # defineChannelPluginEntry
+├── setup-entry.ts            # defineSetupPluginEntry
+├── api.ts                    # Public exports (optional)
+├── runtime-api.ts            # Internal runtime exports (optional)
+└── src/
+    ├── channel.ts            # ChannelPlugin via createChatChannelPlugin
+    ├── channel.test.ts       # Tests
+    ├── client.ts             # Platform API client
+    └── runtime.ts            # Runtime store (if needed)
 ```
 
-## Pairing helpers
+## Advanced topics
 
-Use `plugin-sdk/channel-pairing` for DM approval flows:
+<CardGroup cols={2}>
+  <Card title="Threading options" icon="git-branch" href="/plugins/sdk-entrypoints#registration-mode">
+    Fixed, account-scoped, or custom reply modes
+  </Card>
+  <Card title="Message tool integration" icon="puzzle" href="/plugins/architecture#channel-plugins-and-the-shared-message-tool">
+    describeMessageTool and action discovery
+  </Card>
+  <Card title="Target resolution" icon="crosshair" href="/plugins/architecture#channel-target-resolution">
+    inferTargetChatType, looksLikeId, resolveTarget
+  </Card>
+  <Card title="Runtime helpers" icon="settings" href="/plugins/sdk-runtime">
+    TTS, STT, media, subagent via api.runtime
+  </Card>
+</CardGroup>
 
-```ts
-import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
+## Next steps
 
-const pairing = createChannelPairingController({
-  core: runtime,
-  channel: "example-channel",
-  accountId: "default",
-});
-
-const result = pairing.issueChallenge({
-  agentId: "assistant",
-  requesterId: "user-123",
-});
-```
-
-That surface also gives you scoped access to pairing storage helpers such as
-allowlist reads and request upserts.
-
-## Channel setup helpers
-
-Use:
-
-- `plugin-sdk/channel-setup` for optional or installable channels
-- `plugin-sdk/setup` for setup adapters, DM policy, and allowlist prompts
-- `plugin-sdk/webhook-ingress` for plugin-owned webhook routes
-
-## Channel plugin guidance
-
-- Keep transport-specific execution inside the channel package.
-- Use `channel-contract` types in tests and local helpers.
-- Keep `describeMessageTool(...)` and `handleAction(...)` aligned.
-- Keep session routing in `messaging`, not in ad-hoc command handlers.
-- Prefer focused subpaths over broad runtime coupling.
-
-## Related
-
-- [Plugin SDK Overview](/plugins/sdk-overview)
-- [Plugin Entry Points](/plugins/sdk-entrypoints)
-- [Plugin Setup](/plugins/sdk-setup)
-- [Plugin Internals](/plugins/architecture)
+- [Provider Plugins](/plugins/sdk-provider-plugins) — if your plugin also provides models
+- [SDK Overview](/plugins/sdk-overview) — full subpath import reference
+- [SDK Testing](/plugins/sdk-testing) — test utilities and contract tests
+- [Plugin Manifest](/plugins/manifest) — full manifest schema

@@ -75,9 +75,6 @@ function createMockSock(): MockSock {
   };
 }
 
-const sock: MockSock = createMockSock();
-sessionState.sock = sock;
-
 vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
   return {
@@ -134,7 +131,10 @@ vi.mock("./session.js", () => ({
 }));
 
 export function getSock(): MockSock {
-  return sock;
+  if (!sessionState.sock) {
+    throw new Error("mock WhatsApp socket not initialized");
+  }
+  return sessionState.sock;
 }
 
 export type InboxOnMessage = NonNullable<Parameters<typeof monitorWebInbox>[0]["onMessage"]>;
@@ -212,6 +212,7 @@ export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    sessionState.sock = createMockSock();
     mockLoadConfig.mockReturnValue(DEFAULT_WEB_INBOX_CONFIG);
     readAllowFromStoreMock.mockResolvedValue([]);
     upsertPairingRequestMock.mockResolvedValue({

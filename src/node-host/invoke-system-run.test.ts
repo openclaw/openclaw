@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, type Mock, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import { loadExecApprovals, saveExecApprovals } from "../infra/exec-approvals.js";
@@ -31,6 +31,29 @@ describe("formatSystemRunAllowlistMissMessage", () => {
 });
 
 describe("handleSystemRunInvoke mac app exec host routing", () => {
+  let testOpenClawHome = "";
+  let previousOpenClawHome: string | undefined;
+
+  beforeEach(() => {
+    previousOpenClawHome = process.env.OPENCLAW_HOME;
+    testOpenClawHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-host-home-"));
+    process.env.OPENCLAW_HOME = testOpenClawHome;
+    clearRuntimeConfigSnapshot();
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+    if (previousOpenClawHome === undefined) {
+      delete process.env.OPENCLAW_HOME;
+    } else {
+      process.env.OPENCLAW_HOME = previousOpenClawHome;
+    }
+    if (testOpenClawHome) {
+      fs.rmSync(testOpenClawHome, { recursive: true, force: true });
+      testOpenClawHome = "";
+    }
+  });
+
   function createLocalRunResult(stdout = "local-ok") {
     return {
       success: true,

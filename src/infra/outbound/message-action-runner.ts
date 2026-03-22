@@ -40,6 +40,10 @@ import {
   readBooleanParam,
   resolveAttachmentMediaPolicy,
 } from "./message-action-params.js";
+import {
+  prepareOutboundMirrorRoute,
+  resolveAndApplyOutboundThreadId,
+} from "./message-action-threading.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import {
   applyCrossContextDecoration,
@@ -61,34 +65,6 @@ export type MessageActionRunnerGateway = {
   clientDisplayName?: string;
   mode: GatewayClientMode;
 };
-
-function resolveAndApplyOutboundThreadId(
-  params: Record<string, unknown>,
-  ctx: {
-    cfg: OpenClawConfig;
-    channel: ChannelId;
-    to: string;
-    accountId?: string | null;
-    toolContext?: ChannelThreadingToolContext;
-  },
-): string | undefined {
-  const threadId = readStringParam(params, "threadId");
-  const resolved =
-    threadId ??
-    getChannelPlugin(ctx.channel)?.threading?.resolveAutoThreadId?.({
-      cfg: ctx.cfg,
-      accountId: ctx.accountId,
-      to: ctx.to,
-      toolContext: ctx.toolContext,
-      replyToId: readStringParam(params, "replyTo"),
-    });
-  // Write auto-resolved threadId back into params so downstream dispatch
-  // (plugin `readStringParam(params, "threadId")`) picks it up.
-  if (resolved && !params.threadId) {
-    params.threadId = resolved;
-  }
-  return resolved ?? undefined;
-}
 
 export type RunMessageActionParams = {
   cfg: OpenClawConfig;
@@ -501,41 +477,20 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   const silent = readBooleanParam(params, "silent");
 
   const replyToId = readStringParam(params, "replyTo");
-  const resolvedThreadId = resolveAndApplyOutboundThreadId(params, {
+  const { resolvedThreadId, outboundRoute } = await prepareOutboundMirrorRoute({
     cfg,
     channel,
     to,
+    actionParams: params,
     accountId,
     toolContext: input.toolContext,
+    agentId,
+    dryRun,
+    resolvedTarget,
+    resolveAutoThreadId: getChannelPlugin(channel)?.threading?.resolveAutoThreadId,
+    resolveOutboundSessionRoute,
+    ensureOutboundSessionEntry,
   });
-  const outboundRoute =
-    agentId && !dryRun
-      ? await resolveOutboundSessionRoute({
-          cfg,
-          channel,
-          agentId,
-          accountId,
-          target: to,
-          resolvedTarget,
-          replyToId,
-          threadId: resolvedThreadId,
-        })
-      : null;
-  if (outboundRoute && agentId && !dryRun) {
-    await ensureOutboundSessionEntry({
-      cfg,
-      agentId,
-      channel,
-      accountId,
-      route: outboundRoute,
-    });
-  }
-  if (outboundRoute && !dryRun) {
-    params.__sessionKey = outboundRoute.sessionKey;
-  }
-  if (agentId) {
-    params.__agentId = agentId;
-  }
   const mirrorMediaUrls =
     mergedMediaUrls.length > 0 ? mergedMediaUrls : mediaUrl ? [mediaUrl] : undefined;
   throwIfAborted(abortSignal);
@@ -595,10 +550,10 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
 
   const resolvedThreadId = resolveAndApplyOutboundThreadId(params, {
     cfg,
-    channel,
     to,
     accountId,
     toolContext: input.toolContext,
+    resolveAutoThreadId: getChannelPlugin(channel)?.threading?.resolveAutoThreadId,
   });
 
   const base = typeof params.message === "string" ? params.message : "";

@@ -1,5 +1,6 @@
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 
 export type AgentEventStream = "lifecycle" | "tool" | "assistant" | "error" | (string & {});
 
@@ -83,18 +84,11 @@ export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
     seq: nextSeq,
     ts: Date.now(),
   };
-  for (const listener of state.listeners) {
-    try {
-      listener(enriched);
-    } catch {
-      /* ignore */
-    }
-  }
+  notifyListeners(state.listeners, enriched);
 }
 
 export function onAgentEvent(listener: (evt: AgentEventPayload) => void) {
-  state.listeners.add(listener);
-  return () => state.listeners.delete(listener);
+  return registerListener(state.listeners, listener);
 }
 
 export function resetAgentEventsForTest() {

@@ -42157,6 +42157,46 @@
       "hasChildren": true
     },
     {
+      "path": "hooks.internal.installs.*.clawhubChannel",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "hooks.internal.installs.*.clawhubFamily",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "hooks.internal.installs.*.clawhubPackage",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "hooks.internal.installs.*.clawhubUrl",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "hooks.internal.installs.*.hooks",
       "kind": "core",
       "type": "array",
@@ -57880,6 +57920,46 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
+    },
+    {
+      "path": "plugins.installs.*.clawhubChannel",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.installs.*.clawhubFamily",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.installs.*.clawhubPackage",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.installs.*.clawhubUrl",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
     },
     {
       "path": "plugins.installs.*.installedAt",

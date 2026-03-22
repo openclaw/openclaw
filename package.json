@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.3.14",
+  "version": "2026.3.22",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -699,6 +699,7 @@
     "test:parallels:macos": "bash scripts/e2e/parallels-macos-smoke.sh",
     "test:parallels:windows": "bash scripts/e2e/parallels-windows-smoke.sh",
     "test:perf:budget": "node scripts/test-perf-budget.mjs",
+    "test:perf:find-thread-candidates": "node scripts/test-find-thread-candidates.mjs",
     "test:perf:hotspots": "node scripts/test-hotspots.mjs",
     "test:perf:update-memory-hotspots": "node scripts/test-update-memory-hotspots.mjs",
     "test:perf:update-timings": "node scripts/test-update-timings.mjs",
@@ -816,7 +817,6 @@
       "yauzl": "3.2.1"
     },
     "onlyBuiltDependencies": [
-      "@discordjs/opus",
       "@lydell/node-pty",
       "@matrix-org/matrix-sdk-crypto-nodejs",
       "@napi-rs/canvas",
@@ -828,6 +828,10 @@
       "node-llama-cpp",
       "protobufjs",
       "sharp"
+    ],
+    "ignoredBuiltDependencies": [
+      "@discordjs/opus",
+      "koffi"
     ],
     "packageExtensions": {
       "@mariozechner/pi-coding-agent": {

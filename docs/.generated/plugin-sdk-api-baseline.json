@@ -55,7 +55,7 @@
           "exportName": "onDiagnosticEvent",
           "kind": "function",
           "source": {
-            "line": 229,
+            "line": 223,
             "path": "src/infra/diagnostic-events.ts"
           }
         },
@@ -289,7 +289,7 @@
           "exportName": "ContextEngineFactory",
           "kind": "type",
           "source": {
-            "line": 9,
+            "line": 10,
             "path": "src/context-engine/registry.ts"
           }
         },
@@ -325,7 +325,7 @@
           "exportName": "DiagnosticEventPayload",
           "kind": "type",
           "source": {
-            "line": 150,
+            "line": 152,
             "path": "src/infra/diagnostic-events.ts"
           }
         },
@@ -1269,7 +1269,7 @@
           }
         },
         {
-          "declaration": "export type ReplyPrefixContext = import(\"/Users/anslutsky/Dev/nemoclaw/my_fork/openclaw/src/auto-reply/reply/response-prefix-template\").ResponsePrefixContext;",
+          "declaration": "export type ReplyPrefixContext = import(\"src/auto-reply/reply/response-prefix-template\").ResponsePrefixContext;",
           "exportName": "ReplyPrefixContext",
           "kind": "type",
           "source": {
@@ -2418,6 +2418,15 @@
           }
         },
         {
+          "declaration": "export function createPreCryptoDirectDmAuthorizer(params: { resolveAccess: (senderId: string) => Promise<ResolvedInboundDirectDmAccess | Pick<ResolvedInboundDirectDmAccess, \"access\">>; issuePairingChallenge?: ((params: { ...; }) => Promise<...>) | undefined; onBlocked?: ((params: { ...; }) => void) | undefined; }): (input: { ...; }) => Promise<...>;",
+          "exportName": "createPreCryptoDirectDmAuthorizer",
+          "kind": "function",
+          "source": {
+            "line": 105,
+            "path": "src/plugin-sdk/direct-dm.ts"
+          }
+        },
+        {
           "declaration": "export function findCommandByNativeName(name: string, provider?: string | undefined): ChatCommandDefinition | undefined;",
           "exportName": "findCommandByNativeName",
           "kind": "function",
@@ -2638,7 +2647,7 @@
           "exportName": "resolveDirectDmAuthorizationOutcome",
           "kind": "function",
           "source": {
-            "line": 114,
+            "line": 120,
             "path": "src/plugin-sdk/command-auth.ts"
           }
         },
@@ -2649,6 +2658,15 @@
           "source": {
             "line": 47,
             "path": "src/channels/command-gating.ts"
+          }
+        },
+        {
+          "declaration": "export function resolveInboundDirectDmAccessWithRuntime(params: { cfg: OpenClawConfig; channel: ChannelId; accountId: string; dmPolicy?: string | null | undefined; allowFrom?: (string | number)[] | null | undefined; senderId: string; ... 4 more ...; readStoreAllowFrom?: ((provider: ChannelId, accountId: string) => Promise<...>) | undefined; }): Promise<...>;",
+          "exportName": "resolveInboundDirectDmAccessWithRuntime",
+          "kind": "function",
+          "source": {
+            "line": 35,
+            "path": "src/plugin-sdk/direct-dm.ts"
           }
         },
         {
@@ -2674,7 +2692,7 @@
           "exportName": "resolveSenderCommandAuthorization",
           "kind": "function",
           "source": {
-            "line": 143,
+            "line": 149,
             "path": "src/plugin-sdk/command-auth.ts"
           }
         },
@@ -2683,7 +2701,7 @@
           "exportName": "resolveSenderCommandAuthorizationWithRuntime",
           "kind": "function",
           "source": {
-            "line": 132,
+            "line": 138,
             "path": "src/plugin-sdk/command-auth.ts"
           }
         },
@@ -2809,7 +2827,7 @@
           "exportName": "CommandAuthorizationRuntime",
           "kind": "type",
           "source": {
-            "line": 98,
+            "line": 104,
             "path": "src/plugin-sdk/command-auth.ts"
           }
         },
@@ -2859,6 +2877,15 @@
           }
         },
         {
+          "declaration": "export type DirectDmCommandAuthorizationRuntime = DirectDmCommandAuthorizationRuntime;",
+          "exportName": "DirectDmCommandAuthorizationRuntime",
+          "kind": "type",
+          "source": {
+            "line": 13,
+            "path": "src/plugin-sdk/direct-dm.ts"
+          }
+        },
+        {
           "declaration": "export type ModelsProviderData = ModelsProviderData;",
           "exportName": "ModelsProviderData",
           "kind": "type",
@@ -2886,6 +2913,15 @@
           }
         },
         {
+          "declaration": "export type ResolvedInboundDirectDmAccess = ResolvedInboundDirectDmAccess;",
+          "exportName": "ResolvedInboundDirectDmAccess",
+          "kind": "type",
+          "source": {
+            "line": 22,
+            "path": "src/plugin-sdk/direct-dm.ts"
+          }
+        },
+        {
           "declaration": "export type ResolveNativeCommandSessionTargetsParams = ResolveNativeCommandSessionTargetsParams;",
           "exportName": "ResolveNativeCommandSessionTargetsParams",
           "kind": "type",
@@ -2899,7 +2935,7 @@
           "exportName": "ResolveSenderCommandAuthorizationParams",
           "kind": "type",
           "source": {
-            "line": 81,
+            "line": 87,
             "path": "src/plugin-sdk/command-auth.ts"
           }
         },
@@ -2908,7 +2944,7 @@
           "exportName": "ResolveSenderCommandAuthorizationWithRuntimeParams",
           "kind": "type",
           "source": {
-            "line": 106,
+            "line": 112,
             "path": "src/plugin-sdk/command-auth.ts"
           }
         },
@@ -3090,7 +3126,7 @@
           "exportName": "getChatChannelMeta",
           "kind": "function",
           "source": {
-            "line": 142,
+            "line": 158,
             "path": "src/channels/registry.ts"
           }
         },
@@ -3302,7 +3338,7 @@
           }
         },
         {
-          "declaration": "export type ChannelOutboundSessionRouteParams = {    cfg: OpenClawConfig;    agentId: string;    accountId?: string | null;    target: string;    resolvedTarget?: {        to: string;        kind: import(\"/Users/anslutsky/Dev/nemoclaw/my_fork/openclaw/src/channels/plugins/types.core\").ChannelDirectoryEntryKind | \"channel\";        display?: string;        source: \"normalized\" | \"directory\";    };    replyToId?: string | null;    threadId?: string | number | null;};",
+          "declaration": "export type ChannelOutboundSessionRouteParams = {    cfg: OpenClawConfig;    agentId: string;    accountId?: string | null;    target: string;    resolvedTarget?: {        to: string;        kind: import(\"src/channels/plugins/types.core\").ChannelDirectoryEntryKind | \"channel\";        display?: string;        source: \"normalized\" | \"directory\";    };    replyToId?: string | null;    threadId?: string | number | null;};",
           "exportName": "ChannelOutboundSessionRouteParams",
           "kind": "type",
           "source": {
@@ -4309,7 +4345,7 @@
           "exportName": "ModelDefinitionConfig",
           "kind": "type",
           "source": {
-            "line": 46,
+            "line": 47,
             "path": "src/config/types.models.ts"
           }
         },
@@ -4318,7 +4354,7 @@
           "exportName": "ModelProviderConfig",
           "kind": "type",
           "source": {
-            "line": 64,
+            "line": 65,
             "path": "src/config/types.models.ts"
           }
         },
@@ -4850,7 +4886,7 @@
           "exportName": "isRequestBodyLimitError",
           "kind": "function",
           "source": {
-            "line": 46,
+            "line": 47,
             "path": "src/infra/http-body.ts"
           }
         },
@@ -4877,7 +4913,7 @@
           "exportName": "readRequestBodyWithLimit",
           "kind": "function",
           "source": {
-            "line": 121,
+            "line": 122,
             "path": "src/infra/http-body.ts"
           }
         },
@@ -4922,7 +4958,7 @@
           "exportName": "requestBodyErrorToText",
           "kind": "function",
           "source": {
-            "line": 59,
+            "line": 60,
             "path": "src/infra/http-body.ts"
           }
         },

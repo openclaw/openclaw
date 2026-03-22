@@ -8,7 +8,7 @@ title: "Hooks"
 
 # Hooks
 
-Hooks provide an extensible event-driven system for automating actions in response to agent commands and events. Hooks are automatically discovered from directories and can be managed via CLI commands, similar to how skills work in OpenClaw.
+Hooks provide an extensible event-driven system for automating actions in response to agent commands and events. Hooks are automatically discovered from directories and can be inspected with `openclaw hooks`, while hook-pack installation and updates now go through `openclaw plugins`.
 
 ## Getting Oriented
 
@@ -17,7 +17,7 @@ Hooks are small scripts that run when something happens. There are two kinds:
 - **Hooks** (this page): run inside the Gateway when agent events fire, like `/new`, `/reset`, `/stop`, or lifecycle events.
 - **Webhooks**: external HTTP webhooks that let other systems trigger work in OpenClaw. See [Webhook Hooks](/automation/webhook) or use `openclaw webhooks` for Gmail helper commands.
 
-Hooks can also be bundled inside plugins; see [Plugin hooks](/plugins/architecture#provider-runtime-hooks).
+Hooks can also be bundled inside plugins; see [Plugin hooks](/plugins/architecture#provider-runtime-hooks). `openclaw hooks list` shows both standalone hooks and plugin-managed hooks.
 
 Common uses:
 
@@ -107,7 +107,7 @@ Hook packs are standard npm packages that export one or more hooks via `openclaw
 `package.json`. Install them with:
 
 ```bash
-openclaw hooks install <path-or-spec>
+openclaw plugins install <path-or-spec>
 ```
 
 Npm specs are registry-only (package name + optional exact version or dist-tag).
@@ -134,7 +134,7 @@ Hook packs can ship dependencies; they will be installed under `~/.openclaw/hook
 Each `openclaw.hooks` entry must stay inside the package directory after symlink
 resolution; entries that escape are rejected.
 
-Security note: `openclaw hooks install` installs dependencies with `npm install --ignore-scripts`
+Security note: `openclaw plugins install` installs hook-pack dependencies with `npm install --ignore-scripts`
 (no lifecycle scripts). Keep hook pack dependency trees "pure JS/TS" and avoid packages that rely
 on `postinstall` builds.
 
@@ -301,11 +301,13 @@ Message events include rich context about the message:
     to?: string,
     provider?: string,
     surface?: string,
-    threadId?: string,
+    threadId?: string | number,
     senderId?: string,
     senderName?: string,
     senderUsername?: string,
     senderE164?: string,
+    guildId?: string,     // Discord guild / server ID
+    channelName?: string, // Channel name (e.g., Discord channel name)
   }
 }
 
@@ -325,22 +327,42 @@ Message events include rich context about the message:
 
 // message:transcribed context
 {
+  from?: string,          // Sender identifier
+  to?: string,            // Recipient identifier
   body?: string,          // Raw inbound body before enrichment
   bodyForAgent?: string,  // Enriched body visible to the agent
   transcript: string,     // Audio transcript text
+  timestamp?: number,     // Unix timestamp when received
   channelId: string,      // Channel (e.g., "telegram", "whatsapp")
   conversationId?: string,
   messageId?: string,
+  senderId?: string,      // Sender user ID
+  senderName?: string,    // Sender display name
+  senderUsername?: string,
+  provider?: string,      // Provider name
+  surface?: string,       // Surface name
+  mediaPath?: string,     // Path to the media file that was transcribed
+  mediaType?: string,     // MIME type of the media
 }
 
 // message:preprocessed context
 {
+  from?: string,          // Sender identifier
+  to?: string,            // Recipient identifier
   body?: string,          // Raw inbound body
   bodyForAgent?: string,  // Final enriched body after media/link understanding
   transcript?: string,    // Transcript when audio was present
+  timestamp?: number,     // Unix timestamp when received
   channelId: string,      // Channel (e.g., "telegram", "whatsapp")
   conversationId?: string,
   messageId?: string,
+  senderId?: string,      // Sender user ID
+  senderName?: string,    // Sender display name
+  senderUsername?: string,
+  provider?: string,      // Provider name
+  surface?: string,       // Surface name
+  mediaPath?: string,     // Path to the media file
+  mediaType?: string,     // MIME type of the media
   isGroup?: boolean,
   groupId?: string,
 }
@@ -601,6 +623,11 @@ Saves session context to memory when you issue `/new`.
 - **Session Key**: agent:main:main
 - **Session ID**: abc123def456
 - **Source**: telegram
+
+## Conversation Summary
+
+user: Can you help me design the API?
+assistant: Sure! Let's start with the endpoints...
 ```
 
 **Filename examples**:

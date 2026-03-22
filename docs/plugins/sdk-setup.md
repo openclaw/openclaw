@@ -1,132 +1,331 @@
 ---
-title: "Plugin Setup"
-sidebarTitle: "Setup"
-summary: "Shared setup-wizard helpers for channel plugins, provider plugins, and secret inputs"
+title: "Plugin SDK Setup"
+sidebarTitle: "Setup and Config"
+summary: "Setup wizards, setup-entry.ts, config schemas, and package.json metadata"
 read_when:
-  - You are building a setup or onboarding flow
-  - You need shared allowlist or DM policy setup helpers
-  - You need the shared secret-input schema
+  - You are adding a setup wizard to a plugin
+  - You need to understand setup-entry.ts vs index.ts
+  - You are defining plugin config schemas or package.json openclaw metadata
 ---
 
-# Plugin Setup
+# Plugin Setup and Config
 
-OpenClaw exposes shared setup helpers so plugin setup flows behave like the
-built-in ones.
+Reference for plugin packaging (`package.json` metadata), manifests
+(`openclaw.plugin.json`), setup entries, and config schemas.
 
-Main subpaths:
+<Tip>
+  **Looking for a walkthrough?** The how-to guides cover packaging in context:
+  [Channel Plugins](/plugins/sdk-channel-plugins#step-1-package-and-manifest) and
+  [Provider Plugins](/plugins/sdk-provider-plugins#step-1-package-and-manifest).
+</Tip>
 
-- `openclaw/plugin-sdk/setup`
-- `openclaw/plugin-sdk/channel-setup`
-- `openclaw/plugin-sdk/secret-input`
+## Package metadata
 
-## Channel setup helpers
+Your `package.json` needs an `openclaw` field that tells the plugin system what
+your plugin provides:
 
-Use `plugin-sdk/channel-setup` when a channel plugin needs the standard setup
-adapter and setup wizard shapes.
+**Channel plugin:**
 
-### Optional channel plugins
-
-If a channel is installable but not always present, use
-`createOptionalChannelSetupSurface(...)`:
-
-```ts
-import { createOptionalChannelSetupSurface } from "openclaw/plugin-sdk/channel-setup";
-
-export const optionalExampleSetup = createOptionalChannelSetupSurface({
-  channel: "example",
-  label: "Example Channel",
-  npmSpec: "@openclaw/example-channel",
-  docsPath: "/channels/example",
-});
-```
-
-That returns:
-
-- `setupAdapter`
-- `setupWizard`
-
-Both surfaces produce a consistent “install this plugin first” experience.
-
-## Shared setup helpers
-
-`plugin-sdk/setup` re-exports the setup primitives used by bundled channels.
-
-Common helpers:
-
-- `applySetupAccountConfigPatch(...)`
-- `createPatchedAccountSetupAdapter(...)`
-- `createEnvPatchedAccountSetupAdapter(...)`
-- `createTopLevelChannelDmPolicy(...)`
-- `setSetupChannelEnabled(...)`
-- `promptResolvedAllowFrom(...)`
-- `promptSingleChannelSecretInput(...)`
-
-### Example: patch channel config in setup
-
-```ts
-import {
-  DEFAULT_ACCOUNT_ID,
-  createPatchedAccountSetupAdapter,
-  setSetupChannelEnabled,
-} from "openclaw/plugin-sdk/setup";
-
-export const exampleSetupAdapter = createPatchedAccountSetupAdapter({
-  resolveAccountId: ({ accountId }) => accountId ?? DEFAULT_ACCOUNT_ID,
-  applyPatch: ({ nextConfig, accountId }) => {
-    const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
-    return setSetupChannelEnabled({
-      nextConfig,
-      channel: "example",
-      accountId: resolvedAccountId,
-      enabled: true,
-    });
-  },
-});
-```
-
-## Secret input schema
-
-Use `plugin-sdk/secret-input` instead of rolling your own secret-input parser.
-
-```ts
-import {
-  buildOptionalSecretInputSchema,
-  buildSecretInputArraySchema,
-  buildSecretInputSchema,
-  hasConfiguredSecretInput,
-} from "openclaw/plugin-sdk/secret-input";
-
-const ApiKeySchema = buildSecretInputSchema();
-const OptionalApiKeySchema = buildOptionalSecretInputSchema();
-const ExtraKeysSchema = buildSecretInputArraySchema();
-
-const parsed = OptionalApiKeySchema.safeParse(process.env.EXAMPLE_API_KEY);
-if (parsed.success && hasConfiguredSecretInput(parsed.data)) {
-  // ...
+```json
+{
+  "name": "@myorg/openclaw-my-channel",
+  "version": "1.0.0",
+  "type": "module",
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "my-channel",
+      "label": "My Channel",
+      "blurb": "Short description of the channel."
+    }
+  }
 }
 ```
 
-## Provider setup note
+**Provider plugin:**
 
-Provider-specific onboarding helpers live on provider-focused subpaths:
+```json
+{
+  "name": "@myorg/openclaw-my-provider",
+  "version": "1.0.0",
+  "type": "module",
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "providers": ["my-provider"]
+  }
+}
+```
 
-- `plugin-sdk/provider-auth`
-- `plugin-sdk/provider-onboard`
-- `plugin-sdk/provider-setup`
-- `plugin-sdk/self-hosted-provider-setup`
+### `openclaw` fields
 
-See [Provider Plugin SDK](/plugins/sdk-provider-plugins).
+| Field        | Type       | Description                                                                                |
+| ------------ | ---------- | ------------------------------------------------------------------------------------------ |
+| `extensions` | `string[]` | Entry point files (relative to package root)                                               |
+| `setupEntry` | `string`   | Lightweight setup-only entry (optional)                                                    |
+| `channel`    | `object`   | Channel metadata: `id`, `label`, `blurb`, `selectionLabel`, `docsPath`, `order`, `aliases` |
+| `providers`  | `string[]` | Provider ids registered by this plugin                                                     |
+| `install`    | `object`   | Install hints: `npmSpec`, `localPath`, `defaultChoice`                                     |
+| `startup`    | `object`   | Startup behavior flags                                                                     |
 
-## Setup guidance
+### Deferred full load
 
-- Keep setup input schemas strict and small.
-- Reuse OpenClaw’s allowlist, DM-policy, and secret-input helpers.
-- Keep setup-entry modules thin; move behavior into `src/`.
-- Link docs from setup flows when install or auth steps are manual.
+Channel plugins can opt into deferred loading with:
+
+```json
+{
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "setupEntry": "./setup-entry.ts",
+    "startup": {
+      "deferConfiguredChannelFullLoadUntilAfterListen": true
+    }
+  }
+}
+```
+
+When enabled, OpenClaw loads only `setupEntry` during the pre-listen startup
+phase, even for already-configured channels. The full entry loads after the
+gateway starts listening.
+
+<Warning>
+  Only enable deferred loading when your `setupEntry` registers everything the
+  gateway needs before it starts listening (channel registration, HTTP routes,
+  gateway methods). If the full entry owns required startup capabilities, keep
+  the default behavior.
+</Warning>
+
+## Plugin manifest
+
+Every native plugin must ship an `openclaw.plugin.json` in the package root.
+OpenClaw uses this to validate config without executing plugin code.
+
+```json
+{
+  "id": "my-plugin",
+  "name": "My Plugin",
+  "description": "Adds My Plugin capabilities to OpenClaw",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webhookSecret": {
+        "type": "string",
+        "description": "Webhook verification secret"
+      }
+    }
+  }
+}
+```
+
+For channel plugins, add `kind` and `channels`:
+
+```json
+{
+  "id": "my-channel",
+  "kind": "channel",
+  "channels": ["my-channel"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
+```
+
+Even plugins with no config must ship a schema. An empty schema is valid:
+
+```json
+{
+  "id": "my-plugin",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}
+```
+
+See [Plugin Manifest](/plugins/manifest) for the full schema reference.
+
+## Setup entry
+
+The `setup-entry.ts` file is a lightweight alternative to `index.ts` that
+OpenClaw loads when it only needs setup surfaces (onboarding, config repair,
+disabled channel inspection).
+
+```typescript
+// setup-entry.ts
+import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
+import { myChannelPlugin } from "./src/channel.js";
+
+export default defineSetupPluginEntry(myChannelPlugin);
+```
+
+This avoids loading heavy runtime code (crypto libraries, CLI registrations,
+background services) during setup flows.
+
+**When OpenClaw uses `setupEntry` instead of the full entry:**
+
+- The channel is disabled but needs setup/onboarding surfaces
+- The channel is enabled but unconfigured
+- Deferred loading is enabled (`deferConfiguredChannelFullLoadUntilAfterListen`)
+
+**What `setupEntry` must register:**
+
+- The channel plugin object (via `defineSetupPluginEntry`)
+- Any HTTP routes required before gateway listen
+- Any gateway methods needed during startup
+
+**What `setupEntry` should NOT include:**
+
+- CLI registrations
+- Background services
+- Heavy runtime imports (crypto, SDKs)
+- Gateway methods only needed after startup
+
+## Config schema
+
+Plugin config is validated against the JSON Schema in your manifest. Users
+configure plugins via:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "my-plugin": {
+        config: {
+          webhookSecret: "abc123",
+        },
+      },
+    },
+  },
+}
+```
+
+Your plugin receives this config as `api.pluginConfig` during registration.
+
+For channel-specific config, use the channel config section instead:
+
+```json5
+{
+  channels: {
+    "my-channel": {
+      token: "bot-token",
+      allowFrom: ["user1", "user2"],
+    },
+  },
+}
+```
+
+### Building channel config schemas
+
+Use `buildChannelConfigSchema` from `openclaw/plugin-sdk/core` to convert a
+Zod schema into the `ChannelConfigSchema` wrapper that OpenClaw validates:
+
+```typescript
+import { z } from "zod";
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk/core";
+
+const accountSchema = z.object({
+  token: z.string().optional(),
+  allowFrom: z.array(z.string()).optional(),
+  accounts: z.object({}).catchall(z.any()).optional(),
+  defaultAccount: z.string().optional(),
+});
+
+const configSchema = buildChannelConfigSchema(accountSchema);
+```
+
+## Setup wizards
+
+Channel plugins can provide interactive setup wizards for `openclaw onboard`.
+The wizard is a `ChannelSetupWizard` object on the `ChannelPlugin`:
+
+```typescript
+import type { ChannelSetupWizard } from "openclaw/plugin-sdk/channel-setup";
+
+const setupWizard: ChannelSetupWizard = {
+  channel: "my-channel",
+  status: {
+    configuredLabel: "Connected",
+    unconfiguredLabel: "Not configured",
+    resolveConfigured: ({ cfg }) => Boolean((cfg.channels as any)?.["my-channel"]?.token),
+  },
+  credentials: [
+    {
+      inputKey: "token",
+      providerHint: "my-channel",
+      credentialLabel: "Bot token",
+      preferredEnvVar: "MY_CHANNEL_BOT_TOKEN",
+      envPrompt: "Use MY_CHANNEL_BOT_TOKEN from environment?",
+      keepPrompt: "Keep current token?",
+      inputPrompt: "Enter your bot token:",
+      inspect: ({ cfg, accountId }) => {
+        const token = (cfg.channels as any)?.["my-channel"]?.token;
+        return {
+          accountConfigured: Boolean(token),
+          hasConfiguredValue: Boolean(token),
+        };
+      },
+    },
+  ],
+};
+```
+
+The `ChannelSetupWizard` type supports `credentials`, `textInputs`,
+`dmPolicy`, `allowFrom`, `groupAccess`, `prepare`, `finalize`, and more.
+See bundled plugins (e.g. `extensions/discord/src/channel.setup.ts`) for
+full examples.
+
+For optional setup surfaces that should only appear in certain contexts, use
+`createOptionalChannelSetupSurface` from `openclaw/plugin-sdk/channel-setup`:
+
+```typescript
+import { createOptionalChannelSetupSurface } from "openclaw/plugin-sdk/channel-setup";
+
+const setupSurface = createOptionalChannelSetupSurface({
+  channel: "my-channel",
+  label: "My Channel",
+  npmSpec: "@myorg/openclaw-my-channel",
+  docsPath: "/channels/my-channel",
+});
+// Returns { setupAdapter, setupWizard }
+```
+
+## Publishing and installing
+
+**External plugins:** publish to [ClawHub](/tools/clawhub) or npm, then install:
+
+```bash
+openclaw plugins install @myorg/openclaw-my-plugin
+```
+
+OpenClaw tries ClawHub first and falls back to npm automatically. You can also
+force a specific source:
+
+```bash
+openclaw plugins install clawhub:@myorg/openclaw-my-plugin   # ClawHub only
+openclaw plugins install npm:@myorg/openclaw-my-plugin       # npm only
+```
+
+**In-repo plugins:** place under `extensions/` and they are automatically
+discovered during build.
+
+**Users can browse and install:**
+
+```bash
+openclaw plugins search <query>
+openclaw plugins install <package-name>
+```
+
+<Info>
+  For npm-sourced installs, `openclaw plugins install` runs
+  `npm install --ignore-scripts` (no lifecycle scripts). Keep plugin dependency
+  trees pure JS/TS and avoid packages that require `postinstall` builds.
+</Info>
 
 ## Related
 
-- [Plugin SDK Overview](/plugins/sdk-overview)
-- [Plugin Entry Points](/plugins/sdk-entrypoints)
-- [Provider Plugin SDK](/plugins/sdk-provider-plugins)
-- [Plugin Manifest](/plugins/manifest)
+- [SDK Entry Points](/plugins/sdk-entrypoints) -- `definePluginEntry` and `defineChannelPluginEntry`
+- [Plugin Manifest](/plugins/manifest) -- full manifest schema reference
+- [Building Plugins](/plugins/building-plugins) -- step-by-step getting started guide
