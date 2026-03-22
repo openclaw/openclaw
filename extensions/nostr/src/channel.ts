@@ -1,3 +1,4 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
   createScopedDmSecurityResolver,
   createTopLevelChannelConfigAdapter,
@@ -9,6 +10,7 @@ import {
   buildTrafficStatusSummary,
 } from "openclaw/plugin-sdk/extension-shared";
 import {
+  buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
   collectStatusIssuesFromLastError,
   createPreCryptoDirectDmAuthorizer,
@@ -164,13 +166,14 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
   config: {
     ...nostrConfigAdapter,
     isConfigured: (account) => account.configured,
-    describeAccount: (account) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
-      publicKey: account.publicKey,
-    }),
+    describeAccount: (account) =>
+      describeAccountSnapshot({
+        account,
+        configured: account.configured,
+        extra: {
+          publicKey: account.publicKey,
+        },
+      }),
   },
 
   pairing: {
@@ -247,19 +250,21 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
       buildPassiveChannelStatusSummary(snapshot, {
         publicKey: snapshot.publicKey ?? null,
       }),
-    buildAccountSnapshot: ({ account, runtime }) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
-      publicKey: account.publicKey,
-      profile: account.profile,
-      running: runtime?.running ?? false,
-      lastStartAt: runtime?.lastStartAt ?? null,
-      lastStopAt: runtime?.lastStopAt ?? null,
-      lastError: runtime?.lastError ?? null,
-      ...buildTrafficStatusSummary(runtime),
-    }),
+    buildAccountSnapshot: ({ account, runtime }) =>
+      buildComputedAccountStatusSnapshot(
+        {
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured: account.configured,
+          runtime,
+        },
+        {
+          publicKey: account.publicKey,
+          profile: account.profile,
+          ...buildTrafficStatusSummary(runtime),
+        },
+      ),
   },
 
   gateway: {

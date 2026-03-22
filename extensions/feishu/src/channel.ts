@@ -1,6 +1,10 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { createMessageToolCardSchema } from "openclaw/plugin-sdk/channel-actions";
-import { createHybridChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
+import {
+  adaptScopedAccountAccessor,
+  createHybridChannelConfigAdapter,
+} from "openclaw/plugin-sdk/channel-config-helpers";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageToolDiscovery,
@@ -164,7 +168,7 @@ const feishuConfigAdapter = createHybridChannelConfigAdapter<
 >({
   sectionKey: "feishu",
   listAccountIds: listFeishuAccountIds,
-  resolveAccount: (cfg, accountId) => resolveFeishuAccount({ cfg, accountId }),
+  resolveAccount: adaptScopedAccountAccessor(resolveFeishuAccount),
   defaultAccountId: resolveDefaultFeishuAccountId,
   clearBaseFields: [],
   resolveAllowFrom: (account) => account.config.allowFrom,
@@ -473,14 +477,15 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       };
     },
     isConfigured: (account) => account.configured,
-    describeAccount: (account) => ({
-      accountId: account.accountId,
-      enabled: account.enabled,
-      configured: account.configured,
-      name: account.name,
-      appId: account.appId,
-      domain: account.domain,
-    }),
+    describeAccount: (account) =>
+      describeAccountSnapshot({
+        account,
+        configured: account.configured,
+        extra: {
+          appId: account.appId,
+          domain: account.domain,
+        },
+      }),
   },
   actions: {
     describeMessageTool: describeFeishuMessageTool,
@@ -954,16 +959,19 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       }),
     probeAccount: async ({ account }) =>
       await (await loadFeishuChannelRuntime()).probeFeishu(account),
-    buildAccountSnapshot: ({ account, runtime, probe }) => ({
-      accountId: account.accountId,
-      enabled: account.enabled,
-      configured: account.configured,
-      name: account.name,
-      appId: account.appId,
-      domain: account.domain,
-      ...buildRuntimeAccountStatusSnapshot({ runtime, probe }),
-      port: runtime?.port ?? null,
-    }),
+    buildAccountSnapshot: ({ account, runtime, probe }) =>
+      buildRuntimeAccountStatusSnapshot(
+        { runtime, probe },
+        {
+          accountId: account.accountId,
+          enabled: account.enabled,
+          configured: account.configured,
+          name: account.name,
+          appId: account.appId,
+          domain: account.domain,
+          port: runtime?.port ?? null,
+        },
+      ),
   },
   gateway: {
     startAccount: async (ctx) => {

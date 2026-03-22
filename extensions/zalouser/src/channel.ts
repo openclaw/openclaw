@@ -455,21 +455,22 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
     buildAccountSnapshot: async ({ account, runtime }) => {
       const configured = await checkZcaAuthenticated(account.profile);
       const configError = "not authenticated";
-      const base = buildBaseAccountStatusSnapshot({
-        account: {
-          accountId: account.accountId,
-          name: account.name,
-          enabled: account.enabled,
-          configured,
+      return buildBaseAccountStatusSnapshot(
+        {
+          account: {
+            accountId: account.accountId,
+            name: account.name,
+            enabled: account.enabled,
+            configured,
+          },
+          runtime: configured
+            ? runtime
+            : { ...runtime, lastError: runtime?.lastError ?? configError },
         },
-        runtime: configured
-          ? runtime
-          : { ...runtime, lastError: runtime?.lastError ?? configError },
-      });
-      return {
-        ...base,
-        dmPolicy: account.config.dmPolicy ?? "pairing",
-      };
+        {
+          dmPolicy: account.config.dmPolicy ?? "pairing",
+        },
+      );
     },
   },
   gateway: {

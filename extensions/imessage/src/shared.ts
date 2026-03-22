@@ -1,4 +1,6 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
+  adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
   formatTrimmedAllowFromEntries,
@@ -32,7 +34,7 @@ export const imessageSetupWizard = createIMessageSetupWizardProxy(
 export const imessageConfigAdapter = createScopedChannelConfigAdapter<ResolvedIMessageAccount>({
   sectionKey: IMESSAGE_CHANNEL,
   listAccountIds: listIMessageAccountIds,
-  resolveAccount: (cfg, accountId) => resolveIMessageAccount({ cfg, accountId }),
+  resolveAccount: adaptScopedAccountAccessor(resolveIMessageAccount),
   defaultAccountId: resolveDefaultIMessageAccountId,
   clearBaseFields: ["cliPath", "dbPath", "service", "region", "name"],
   resolveAllowFrom: (account: ResolvedIMessageAccount) => account.config.allowFrom,
@@ -90,12 +92,11 @@ export function createIMessagePluginBase(params: {
     config: {
       ...imessageConfigAdapter,
       isConfigured: (account) => account.configured,
-      describeAccount: (account) => ({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: account.configured,
-      }),
+      describeAccount: (account) =>
+        describeAccountSnapshot({
+          account,
+          configured: account.configured,
+        }),
     },
     security: {
       resolveDmPolicy: imessageResolveDmPolicy,

@@ -66,6 +66,28 @@ describe("buildBaseChannelStatusSummary", () => {
       lastError: "boom",
     });
   });
+
+  it("merges extra fields into the normalized channel summary", () => {
+    expect(
+      buildBaseChannelStatusSummary(
+        {
+          configured: true,
+        },
+        {
+          mode: "webhook",
+          secretSource: "env",
+        },
+      ),
+    ).toEqual({
+      configured: true,
+      mode: "webhook",
+      secretSource: "env",
+      running: false,
+      lastStartAt: null,
+      lastStopAt: null,
+      lastError: null,
+    });
+  });
 });
 
 describe("buildBaseAccountStatusSnapshot", () => {
@@ -86,6 +108,34 @@ describe("buildBaseAccountStatusSnapshot", () => {
       probe: undefined,
       lastInboundAt: null,
       lastOutboundAt: null,
+    });
+  });
+
+  it("merges extra snapshot fields after the shared account shape", () => {
+    expect(
+      buildBaseAccountStatusSnapshot(
+        {
+          account: { accountId: "default", configured: true },
+        },
+        {
+          connected: true,
+          mode: "polling",
+        },
+      ),
+    ).toEqual({
+      accountId: "default",
+      name: undefined,
+      enabled: undefined,
+      configured: true,
+      running: false,
+      lastStartAt: null,
+      lastStopAt: null,
+      lastError: null,
+      probe: undefined,
+      lastInboundAt: null,
+      lastOutboundAt: null,
+      connected: true,
+      mode: "polling",
     });
   });
 });
@@ -112,6 +162,33 @@ describe("buildComputedAccountStatusSnapshot", () => {
       lastOutboundAt: null,
     });
   });
+
+  it("merges computed extras after the shared fields", () => {
+    expect(
+      buildComputedAccountStatusSnapshot(
+        {
+          accountId: "default",
+          configured: true,
+        },
+        {
+          connected: true,
+        },
+      ),
+    ).toEqual({
+      accountId: "default",
+      name: undefined,
+      enabled: undefined,
+      configured: true,
+      running: false,
+      lastStartAt: null,
+      lastStopAt: null,
+      lastError: null,
+      probe: undefined,
+      lastInboundAt: null,
+      lastOutboundAt: null,
+      connected: true,
+    });
+  });
 });
 
 describe("buildRuntimeAccountStatusSnapshot", () => {
@@ -122,6 +199,17 @@ describe("buildRuntimeAccountStatusSnapshot", () => {
       lastStopAt: null,
       lastError: null,
       probe: undefined,
+    });
+  });
+
+  it("merges extra fields into runtime snapshots", () => {
+    expect(buildRuntimeAccountStatusSnapshot({}, { port: 3978 })).toEqual({
+      running: false,
+      lastStartAt: null,
+      lastStopAt: null,
+      lastError: null,
+      probe: undefined,
+      port: 3978,
     });
   });
 });

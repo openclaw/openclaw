@@ -287,7 +287,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   actions: signalMessageActions,
   allowlist: buildDmGroupAccountAllowlistAdapter({
     channelId: "signal",
-    resolveAccount: ({ cfg, accountId }) => resolveSignalAccount({ cfg, accountId }),
+    resolveAccount: resolveSignalAccount,
     normalize: ({ cfg, accountId, values }) =>
       signalConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
     resolveDmAllowFrom: (account) => account.config.allowFrom,
@@ -369,12 +369,12 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   status: {
     defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
     collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("signal", accounts),
-    buildChannelSummary: ({ snapshot }) => ({
-      ...buildBaseChannelStatusSummary(snapshot),
-      baseUrl: snapshot.baseUrl ?? null,
-      probe: snapshot.probe,
-      lastProbeAt: snapshot.lastProbeAt ?? null,
-    }),
+    buildChannelSummary: ({ snapshot }) =>
+      buildBaseChannelStatusSummary(snapshot, {
+        baseUrl: snapshot.baseUrl ?? null,
+        probe: snapshot.probe,
+        lastProbeAt: snapshot.lastProbeAt ?? null,
+      }),
     probeAccount: async ({ account, timeoutMs }) => {
       const baseUrl = account.baseUrl;
       return await getSignalRuntime().channel.signal.probeSignal(baseUrl, timeoutMs);
@@ -383,10 +383,8 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       (probe as SignalProbe | undefined)?.version
         ? [{ text: `Signal daemon: ${(probe as SignalProbe).version}` }]
         : [],
-    buildAccountSnapshot: ({ account, runtime, probe }) => ({
-      ...buildBaseAccountStatusSnapshot({ account, runtime, probe }),
-      baseUrl: account.baseUrl,
-    }),
+    buildAccountSnapshot: ({ account, runtime, probe }) =>
+      buildBaseAccountStatusSnapshot({ account, runtime, probe }, { baseUrl: account.baseUrl }),
   },
   gateway: {
     startAccount: async (ctx) => {

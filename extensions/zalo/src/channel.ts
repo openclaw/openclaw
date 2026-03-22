@@ -1,4 +1,6 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
+  adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
   mapAllowFromEntries,
@@ -68,7 +70,7 @@ const loadZaloChannelRuntime = createLazyRuntimeModule(() => import("./channel.r
 const zaloConfigAdapter = createScopedChannelConfigAdapter<ResolvedZaloAccount>({
   sectionKey: "zalo",
   listAccountIds: listZaloAccountIds,
-  resolveAccount: (cfg, accountId) => resolveZaloAccount({ cfg, accountId }),
+  resolveAccount: adaptScopedAccountAccessor(resolveZaloAccount),
   defaultAccountId: resolveDefaultZaloAccountId,
   clearBaseFields: ["botToken", "tokenFile", "name"],
   resolveAllowFrom: (account: ResolvedZaloAccount) => account.config.allowFrom,
@@ -138,13 +140,14 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
   config: {
     ...zaloConfigAdapter,
     isConfigured: (account) => Boolean(account.token?.trim()),
-    describeAccount: (account): ChannelAccountSnapshot => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: Boolean(account.token?.trim()),
-      tokenSource: account.tokenSource,
-    }),
+    describeAccount: (account): ChannelAccountSnapshot =>
+      describeAccountSnapshot({
+        account,
+        configured: Boolean(account.token?.trim()),
+        extra: {
+          tokenSource: account.tokenSource,
+        },
+      }),
   },
   security: {
     resolveDmPolicy: resolveZaloDmPolicy,
@@ -167,9 +170,9 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
   },
   directory: createChannelDirectoryAdapter({
     listPeers: async (params) =>
-      listResolvedDirectoryUserEntriesFromAllowFrom({
+      listResolvedDirectoryUserEntriesFromAllowFrom<ResolvedZaloAccount>({
         ...params,
-        resolveAccount: (cfg, accountId) => resolveZaloAccount({ cfg, accountId }),
+        resolveAccount: adaptScopedAccountAccessor(resolveZaloAccount),
         resolveAllowFrom: (account) => account.config.allowFrom,
         normalizeId: (entry) => entry.trim().replace(/^(zalo|zl):/i, ""),
       }),
@@ -232,21 +235,22 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
       await (await loadZaloChannelRuntime()).probeZaloAccount({ account, timeoutMs }),
     buildAccountSnapshot: ({ account, runtime }) => {
       const configured = Boolean(account.token?.trim());
-      const base = buildBaseAccountStatusSnapshot({
-        account: {
-          accountId: account.accountId,
-          name: account.name,
-          enabled: account.enabled,
-          configured,
+      return buildBaseAccountStatusSnapshot(
+        {
+          account: {
+            accountId: account.accountId,
+            name: account.name,
+            enabled: account.enabled,
+            configured,
+          },
+          runtime,
         },
-        runtime,
-      });
-      return {
-        ...base,
-        tokenSource: account.tokenSource,
-        mode: account.config.webhookUrl ? "webhook" : "polling",
-        dmPolicy: account.config.dmPolicy ?? "pairing",
-      };
+        {
+          tokenSource: account.tokenSource,
+          mode: account.config.webhookUrl ? "webhook" : "polling",
+          dmPolicy: account.config.dmPolicy ?? "pairing",
+        },
+      );
     },
   },
   gateway: {

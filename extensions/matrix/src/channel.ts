@@ -1,4 +1,6 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
+  adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
@@ -39,6 +41,7 @@ import {
   resolveMatrixTargetIdentity,
 } from "./matrix/target-ids.js";
 import {
+  buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
   buildProbeChannelStatusSummary,
   collectStatusIssuesFromLastError,
@@ -77,7 +80,7 @@ const matrixConfigAdapter = createScopedChannelConfigAdapter<
 >({
   sectionKey: "matrix",
   listAccountIds: listMatrixAccountIds,
-  resolveAccount: (cfg, accountId) => resolveMatrixAccount({ cfg, accountId }),
+  resolveAccount: adaptScopedAccountAccessor(resolveMatrixAccount),
   resolveAccessorAccount: ({ cfg, accountId }) =>
     resolveMatrixAccountConfig({ cfg: cfg as CoreConfig, accountId }),
   defaultAccountId: resolveDefaultMatrixAccountId,
@@ -215,13 +218,14 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
   config: {
     ...matrixConfigAdapter,
     isConfigured: (account) => account.configured,
-    describeAccount: (account) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
-      baseUrl: account.homeserver,
-    }),
+    describeAccount: (account) =>
+      describeAccountSnapshot({
+        account,
+        configured: account.configured,
+        extra: {
+          baseUrl: account.homeserver,
+        },
+      }),
   },
   security: {
     resolveDmPolicy: resolveMatrixDmPolicy,
@@ -238,9 +242,10 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
     resolveToolPolicy: resolveMatrixGroupToolPolicy,
   },
   threading: {
-    resolveReplyToMode: createScopedAccountReplyToModeResolver({
-      resolveAccount: (cfg, accountId) =>
-        resolveMatrixAccountConfig({ cfg: cfg as CoreConfig, accountId }),
+    resolveReplyToMode: createScopedAccountReplyToModeResolver<
+      ReturnType<typeof resolveMatrixAccountConfig>
+    >({
+      resolveAccount: adaptScopedAccountAccessor(resolveMatrixAccountConfig),
       resolveReplyToMode: (account) => account.replyToMode,
     }),
     buildToolContext: ({ context, hasRepliedRef }) => {
@@ -277,11 +282,10 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
   },
   directory: createChannelDirectoryAdapter({
     listPeers: async (params) => {
-      const entries = listResolvedDirectoryEntriesFromSources({
+      const entries = listResolvedDirectoryEntriesFromSources<ResolvedMatrixAccount>({
         ...params,
         kind: "user",
-        resolveAccount: (cfg, accountId) =>
-          resolveMatrixAccount({ cfg: cfg as CoreConfig, accountId }),
+        resolveAccount: adaptScopedAccountAccessor(resolveMatrixAccount),
         resolveSources: (account) => [
           account.config.dm?.allowFrom ?? [],
           account.config.groupAllowFrom ?? [],
@@ -306,11 +310,10 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       });
     },
     listGroups: async (params) =>
-      listResolvedDirectoryEntriesFromSources({
+      listResolvedDirectoryEntriesFromSources<ResolvedMatrixAccount>({
         ...params,
         kind: "group",
-        resolveAccount: (cfg, accountId) =>
-          resolveMatrixAccount({ cfg: cfg as CoreConfig, accountId }),
+        resolveAccount: adaptScopedAccountAccessor(resolveMatrixAccount),
         resolveSources: (account) => [
           Object.keys(account.config.groups ?? account.config.rooms ?? {}),
         ],
@@ -410,20 +413,22 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
         };
       }
     },
-    buildAccountSnapshot: ({ account, runtime, probe }) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
-      baseUrl: account.homeserver,
-      running: runtime?.running ?? false,
-      lastStartAt: runtime?.lastStartAt ?? null,
-      lastStopAt: runtime?.lastStopAt ?? null,
-      lastError: runtime?.lastError ?? null,
-      probe,
-      lastProbeAt: runtime?.lastProbeAt ?? null,
-      ...buildTrafficStatusSummary(runtime),
-    }),
+    buildAccountSnapshot: ({ account, runtime, probe }) =>
+      buildComputedAccountStatusSnapshot(
+        {
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured: account.configured,
+          runtime,
+          probe,
+        },
+        {
+          baseUrl: account.homeserver,
+          lastProbeAt: runtime?.lastProbeAt ?? null,
+          ...buildTrafficStatusSummary(runtime),
+        },
+      ),
   },
   gateway: {
     startAccount: async (ctx) => {
