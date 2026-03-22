@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const readdirMock = vi.hoisted(() => vi.fn());
@@ -190,7 +191,9 @@ describe("postinstall gateway service repair", () => {
 
     expect(result).toBe(false);
     expect(installMock).not.toHaveBeenCalled();
-    expect(accessMock).toHaveBeenCalledWith("/Users/managed/.openclaw/disable-launchagent");
+    expect(accessMock).toHaveBeenCalledWith(
+      path.join("/Users/managed", ".openclaw", "disable-launchagent"),
+    );
   });
 
   it("skips when the installed LaunchAgent already matches the current package", async () => {
