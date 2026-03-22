@@ -1,5 +1,5 @@
 ---
-title: "Plugin SDK Runtime"
+title: "Plugin Runtime Helpers"
 sidebarTitle: "Runtime Helpers"
 summary: "api.runtime -- the injected runtime helpers available to plugins"
 read_when:

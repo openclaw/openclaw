@@ -1,5 +1,5 @@
 ---
-title: "SDK Testing"
+title: "Plugin Testing"
 sidebarTitle: "Testing"
 summary: "Testing utilities and patterns for OpenClaw plugins"
 read_when:
