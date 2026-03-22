@@ -189,7 +189,8 @@ async function handleFeedbackInvoke(
     }
   }
 
-  const conversationId = activity.conversation?.id ?? "unknown";
+  // Strip ;messageid=... suffix to match the normalized ID used by the message handler.
+  const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "unknown");
   const senderId = activity.from?.aadObjectId ?? activity.from?.id ?? "unknown";
   const messageId = value.replyToId ?? activity.replyToId ?? "unknown";
   const isNegative = reaction === "dislike";
