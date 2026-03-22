@@ -1266,8 +1266,19 @@ description: test skill
   });
 
   it("evaluates ineffective gateway.nodes.denyCommands entries", async () => {
-    const cases = [
+    type DenyCommandsIneffectiveCase =
+      | {
+          kind: "warn";
+          name: string;
+          cfg: OpenClawConfig;
+          detailIncludes: readonly string[];
+          detailExcludes?: readonly string[];
+        }
+      | { kind: "absent"; name: string; cfg: OpenClawConfig };
+
+    const cases: DenyCommandsIneffectiveCase[] = [
       {
+        kind: "warn",
         name: "flags ineffective gateway.nodes.denyCommands entries",
         cfg: {
           gateway: {
@@ -1279,6 +1290,7 @@ description: test skill
         detailIncludes: ["system.*", "system.runx", "did you mean", "system.run"],
       },
       {
+        kind: "warn",
         name: "suggests prefix-matching commands for unknown denyCommands entries",
         cfg: {
           gateway: {
@@ -1290,6 +1302,7 @@ description: test skill
         detailIncludes: ["system.run.prep", "did you mean", "system.run.prepare"],
       },
       {
+        kind: "warn",
         name: "keeps unknown denyCommands entries without suggestions when no close command exists",
         cfg: {
           gateway: {
@@ -1302,6 +1315,7 @@ description: test skill
         detailExcludes: ["did you mean"],
       },
       {
+        kind: "absent",
         name: "does not flag denyCommands that name default dangerous node commands",
         cfg: {
           gateway: {
@@ -1310,9 +1324,8 @@ description: test skill
             },
           },
         } satisfies OpenClawConfig,
-        expectAbsent: true,
       },
-    ] as const;
+    ];
 
     await Promise.all(
       cases.map(async (testCase) => {
@@ -1320,7 +1333,7 @@ description: test skill
         const finding = res.findings.find(
           (f) => f.checkId === "gateway.nodes.deny_commands_ineffective",
         );
-        if ("expectAbsent" in testCase && testCase.expectAbsent) {
+        if (testCase.kind === "absent") {
           expect(finding, testCase.name).toBeUndefined();
           return;
         }
@@ -1328,7 +1341,7 @@ description: test skill
         for (const text of testCase.detailIncludes) {
           expect(finding?.detail, `${testCase.name}:${text}`).toContain(text);
         }
-        const detailExcludes = "detailExcludes" in testCase ? testCase.detailExcludes : [];
+        const detailExcludes = testCase.detailExcludes ?? [];
         for (const text of detailExcludes) {
           expect(finding?.detail, `${testCase.name}:${text}`).not.toContain(text);
         }
