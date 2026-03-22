@@ -25,7 +25,15 @@ export function resolveDisplaySessionKey(params: { key: string; alias: string; m
   return params.key;
 }
 
-export function resolveInternalSessionKey(params: { key: string; alias: string; mainKey: string }) {
+export function resolveInternalSessionKey(params: {
+  key: string;
+  alias: string;
+  mainKey: string;
+  requesterInternalKey?: string;
+}) {
+  if (params.key === "current") {
+    return params.requesterInternalKey ?? params.key;
+  }
   if (params.key === "main") {
     return params.alias;
   }
@@ -121,7 +129,7 @@ export function looksLikeSessionKey(value: string): boolean {
     return false;
   }
   // These are canonical key shapes that should never be treated as sessionIds.
-  if (raw === "main" || raw === "global" || raw === "unknown") {
+  if (raw === "main" || raw === "global" || raw === "unknown" || raw === "current") {
     return true;
   }
   if (isAcpSessionKey(raw)) {
@@ -257,6 +265,42 @@ async function resolveSessionKeyFromKey(params: {
   }
 }
 
+async function tryResolveSessionKeyFromSessionId(params: {
+  sessionId: string;
+  alias: string;
+  mainKey: string;
+  requesterInternalKey?: string;
+  restrictToSpawned: boolean;
+}): Promise<Extract<SessionReferenceResolution, { ok: true }> | null> {
+  try {
+    const result = await callGateway<{ key?: string }>({
+      method: "sessions.resolve",
+      params: {
+        sessionId: params.sessionId,
+        spawnedBy: params.restrictToSpawned ? params.requesterInternalKey : undefined,
+        includeGlobal: !params.restrictToSpawned,
+        includeUnknown: !params.restrictToSpawned,
+      },
+    });
+    const key = typeof result?.key === "string" ? result.key.trim() : "";
+    if (!key) {
+      return null;
+    }
+    return {
+      ok: true,
+      key,
+      displayKey: resolveDisplaySessionKey({
+        key,
+        alias: params.alias,
+        mainKey: params.mainKey,
+      }),
+      resolvedViaSessionId: true,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function resolveSessionReference(params: {
   sessionKey: string;
   alias: string;
@@ -264,7 +308,33 @@ export async function resolveSessionReference(params: {
   requesterInternalKey?: string;
   restrictToSpawned: boolean;
 }): Promise<SessionReferenceResolution> {
-  const raw = params.sessionKey.trim();
+  const rawInput = params.sessionKey.trim();
+  if (rawInput === "current") {
+    if (!params.restrictToSpawned) {
+      const resolvedByKey = await resolveSessionKeyFromKey({
+        key: rawInput,
+        alias: params.alias,
+        mainKey: params.mainKey,
+        requesterInternalKey: params.requesterInternalKey,
+        restrictToSpawned: false,
+      });
+      if (resolvedByKey) {
+        return resolvedByKey;
+      }
+    }
+    const resolvedBySessionId = await tryResolveSessionKeyFromSessionId({
+      sessionId: rawInput,
+      alias: params.alias,
+      mainKey: params.mainKey,
+      requesterInternalKey: params.requesterInternalKey,
+      restrictToSpawned: params.restrictToSpawned,
+    });
+    if (resolvedBySessionId) {
+      return resolvedBySessionId;
+    }
+  }
+  const raw =
+    rawInput === "current" && params.requesterInternalKey ? params.requesterInternalKey : rawInput;
   if (shouldResolveSessionIdInput(raw)) {
     // Prefer key resolution to avoid misclassifying custom keys as sessionIds.
     const resolvedByKey = await resolveSessionKeyFromKey({
@@ -290,6 +360,7 @@ export async function resolveSessionReference(params: {
     key: raw,
     alias: params.alias,
     mainKey: params.mainKey,
+    requesterInternalKey: params.requesterInternalKey,
   });
   const displayKey = resolveDisplaySessionKey({
     key: resolvedKey,
