@@ -1,6 +1,7 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type {
   BaseProbeResult as ContractBaseProbeResult,
   BaseTokenResolution as ContractBaseTokenResolution,
@@ -46,11 +47,53 @@ import type {
 import { pluginSdkSubpaths } from "./entrypoints.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const PKG_ROOT = resolve(ROOT_DIR, "..");
 const PLUGIN_SDK_DIR = resolve(ROOT_DIR, "plugin-sdk");
 const sourceCache = new Map<string, string>();
 const representativeRuntimeSmokeSubpaths = ["channel-runtime", "conversation-runtime"] as const;
+const requireFromHere = createRequire(import.meta.url);
 
-const importResolvedPluginSdkSubpath = async (specifier: string) => import(specifier);
+function isModuleNotFound(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as NodeJS.ErrnoException).code === "MODULE_NOT_FOUND"
+  );
+}
+
+function resolvePluginSdkSourceFallback(specifier: string, cause: unknown): string {
+  const match = /^openclaw\/plugin-sdk\/(.+)$/.exec(specifier);
+  if (!match) {
+    throw new Error(`Cannot resolve ${specifier}`, { cause });
+  }
+  const subpath = match[1];
+  const srcPath = resolve(PKG_ROOT, "src", "plugin-sdk", `${subpath}.ts`);
+  if (existsSync(srcPath)) {
+    return srcPath;
+  }
+  throw new Error(`Cannot resolve ${specifier}: run pnpm build or add ${srcPath}`, { cause });
+}
+
+function resolvePluginSdkImportPath(specifier: string): string {
+  let resolvedDist: string;
+  try {
+    resolvedDist = requireFromHere.resolve(specifier);
+  } catch (err) {
+    // `exports` points at dist/*.js; `resolve` throws when that file is missing (CI skips `pnpm build`).
+    if (isModuleNotFound(err)) {
+      return resolvePluginSdkSourceFallback(specifier, err);
+    }
+    throw err;
+  }
+  if (existsSync(resolvedDist)) {
+    return resolvedDist;
+  }
+  return resolvePluginSdkSourceFallback(specifier, resolvedDist);
+}
+
+const importResolvedPluginSdkSubpath = async (specifier: string) =>
+  import(pathToFileURL(resolvePluginSdkImportPath(specifier)).href);
 
 function readPluginSdkSource(subpath: string): string {
   const file = resolve(PLUGIN_SDK_DIR, `${subpath}.ts`);
