@@ -30,10 +30,10 @@ You follow the AutoResearch pattern (karpathy/autoresearch):
 2. Read current workspace files to understand what you're optimizing:
 
    ```bash
-   cat ~/.openclaw/workspace/AGENTS.md
-   cat ~/.openclaw/workspace/SOUL.md
-   cat ~/.openclaw/workspace/TOOLS.md
-   cat ~/.openclaw/workspace/HEARTBEAT.md
+   cat ~/dev/operator1/workspaces/operator1/AGENTS.md
+   cat ~/dev/operator1/workspaces/operator1/SOUL.md
+   cat ~/dev/operator1/workspaces/operator1/TOOLS.md
+   cat ~/dev/operator1/workspaces/operator1/HEARTBEAT.md
    ```
 
 3. Establish baseline by scoring the last N sessions.
@@ -80,7 +80,7 @@ Log as `neo_exec`, `morpheus_exec`, `trinity_exec` in results.tsv. Use `-` if no
 
 ### 3. Log Baseline (First Run Only)
 
-If `~/.openclaw/workspace/auto-improve/results.tsv` doesn't exist, create it and record the baseline:
+If `~/dev/operator1/workspaces/operator1/auto-improve/results.tsv` doesn't exist, create it and record the baseline:
 
 ```
 commit	score	delegation	memory	conciseness	silent_reply	error_rate	status	description
@@ -93,7 +93,7 @@ If score improved from last recorded entry: the previous change worked. Keep it.
 If score worsened: the previous change hurt. Revert and restart gateway:
 
 ```bash
-cd ~/.openclaw/workspace && git reset --hard HEAD~1
+cd ~/dev/operator1 && git revert --no-edit HEAD
 openclaw gateway restart
 ```
 
@@ -117,34 +117,21 @@ Make exactly ONE change to ONE file. Target the weakest metric:
 
 **Subagent weaknesses → edit that agent's workspace files:**
 
-| Agent Issue                 | Workspace                         | What to Change                                                            |
-| --------------------------- | --------------------------------- | ------------------------------------------------------------------------- |
-| Neo low tool exec rate      | `~/.openclaw/workspace-neo/`      | Simplify TOOLS.md, make tool call instructions more explicit in AGENTS.md |
-| Morpheus low tool exec rate | `~/.openclaw/workspace-morpheus/` | Same — simplify tool instructions for GLM-5                               |
-| Trinity low tool exec rate  | `~/.openclaw/workspace-trinity/`  | Same — simplify tool instructions for GLM-5                               |
+| Agent Issue                 | Workspace                              | What to Change                                                            |
+| --------------------------- | -------------------------------------- | ------------------------------------------------------------------------- |
+| Neo low tool exec rate      | `~/dev/operator1/workspaces/neo/`      | Simplify TOOLS.md, make tool call instructions more explicit in AGENTS.md |
+| Morpheus low tool exec rate | `~/dev/operator1/workspaces/morpheus/` | Same — simplify tool instructions for GLM-5                               |
+| Trinity low tool exec rate  | `~/dev/operator1/workspaces/trinity/`  | Same — simplify tool instructions for GLM-5                               |
 
-### 7. Edit, Commit, and Sync to Repo
+### 7. Edit and Commit
 
-```bash
-cd ~/.openclaw/workspace
-# Make the edit to the workspace file...
-git add <file>
-git commit -m "auto-improve: <description of change>"
-```
-
-**MANDATORY: Sync to source repo.** Copy the changed file to the operator1 repo so improvements survive fresh installs:
+Workspaces are now inside the operator1 repo — no separate sync step needed.
 
 ```bash
-# Workspace → Repo mapping:
-# ~/.openclaw/workspace/AGENTS.md    → ~/dev/operator1/docs/reference/templates/AGENTS.md
-# ~/.openclaw/workspace/SOUL.md      → ~/dev/operator1/docs/reference/templates/SOUL.md
-# ~/.openclaw/workspace/TOOLS.md     → ~/dev/operator1/docs/reference/templates/TOOLS.md
-# ~/.openclaw/workspace/HEARTBEAT.md → ~/dev/operator1/docs/reference/templates/HEARTBEAT.md
-
-cp ~/.openclaw/workspace/<changed_file> ~/dev/operator1/docs/reference/templates/<changed_file>
 cd ~/dev/operator1
-git add docs/reference/templates/<changed_file>
-git commit -m "auto-improve: sync <changed_file> from workspace — <description>"
+# Make the edit to the workspace file (e.g., workspaces/operator1/AGENTS.md)
+git add workspaces/<agent>/<changed_file>
+git commit -m "auto-improve: <description of change>"
 ```
 
 ### 8. Restart Gateway (with active session check)
@@ -167,7 +154,7 @@ If active sessions prevent restart, the workspace file changes will still take e
 
 ### 9. Log to results.tsv
 
-Append a row to `~/.openclaw/workspace/auto-improve/results.tsv`:
+Append a row to `~/dev/operator1/workspaces/operator1/auto-improve/results.tsv`:
 
 ```
 <commit_sha_7chars>	<score>	<delegation>	<memory>	<conciseness>	<silent>	<errors>	<keep|discard>	<description>
@@ -185,31 +172,31 @@ Wait for new conversations to happen with the updated prompts. The user may spec
 
 **Operator1:**
 
-- `~/.openclaw/workspace/AGENTS.md`
-- `~/.openclaw/workspace/SOUL.md`
-- `~/.openclaw/workspace/TOOLS.md`
-- `~/.openclaw/workspace/HEARTBEAT.md`
+- `~/dev/operator1/workspaces/operator1/AGENTS.md`
+- `~/dev/operator1/workspaces/operator1/SOUL.md`
+- `~/dev/operator1/workspaces/operator1/TOOLS.md`
+- `~/dev/operator1/workspaces/operator1/HEARTBEAT.md`
 
 **Neo:**
 
-- `~/.openclaw/workspace-neo/AGENTS.md`
-- `~/.openclaw/workspace-neo/SOUL.md`
-- `~/.openclaw/workspace-neo/TOOLS.md`
-- `~/.openclaw/workspace-neo/HEARTBEAT.md`
+- `~/dev/operator1/workspaces/neo/AGENTS.md`
+- `~/dev/operator1/workspaces/neo/SOUL.md`
+- `~/dev/operator1/workspaces/neo/TOOLS.md`
+- `~/dev/operator1/workspaces/neo/HEARTBEAT.md`
 
 **Morpheus:**
 
-- `~/.openclaw/workspace-morpheus/AGENTS.md`
-- `~/.openclaw/workspace-morpheus/SOUL.md`
-- `~/.openclaw/workspace-morpheus/TOOLS.md`
-- `~/.openclaw/workspace-morpheus/HEARTBEAT.md`
+- `~/dev/operator1/workspaces/morpheus/AGENTS.md`
+- `~/dev/operator1/workspaces/morpheus/SOUL.md`
+- `~/dev/operator1/workspaces/morpheus/TOOLS.md`
+- `~/dev/operator1/workspaces/morpheus/HEARTBEAT.md`
 
 **Trinity:**
 
-- `~/.openclaw/workspace-trinity/AGENTS.md`
-- `~/.openclaw/workspace-trinity/SOUL.md`
-- `~/.openclaw/workspace-trinity/TOOLS.md`
-- `~/.openclaw/workspace-trinity/HEARTBEAT.md`
+- `~/dev/operator1/workspaces/trinity/AGENTS.md`
+- `~/dev/operator1/workspaces/trinity/SOUL.md`
+- `~/dev/operator1/workspaces/trinity/TOOLS.md`
+- `~/dev/operator1/workspaces/trinity/HEARTBEAT.md`
 
 ### Files You CANNOT Edit
 

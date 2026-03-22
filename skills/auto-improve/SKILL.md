@@ -12,12 +12,12 @@ This skill defines the fixed evaluation rules for the auto-improve agent. Like `
 
 ## Monitored Agents
 
-| Agent                   | Session Logs                                   | Workspace                         | What to Measure                                            |
-| ----------------------- | ---------------------------------------------- | --------------------------------- | ---------------------------------------------------------- |
-| **main** (Operator1)    | `~/.openclaw/agents/main/sessions/*.jsonl`     | `~/.openclaw/workspace/`          | Delegation, memory, conciseness, silent reply, tool errors |
-| **neo** (Neo)           | `~/.openclaw/agents/neo/sessions/*.jsonl`      | `~/.openclaw/workspace-neo/`      | Tool execution rate, task completion quality               |
-| **morpheus** (Morpheus) | `~/.openclaw/agents/morpheus/sessions/*.jsonl` | `~/.openclaw/workspace-morpheus/` | Tool execution rate, task completion quality               |
-| **trinity** (Trinity)   | `~/.openclaw/agents/trinity/sessions/*.jsonl`  | `~/.openclaw/workspace-trinity/`  | Tool execution rate, task completion quality               |
+| Agent                   | Session Logs                                   | Workspace                               | What to Measure                                            |
+| ----------------------- | ---------------------------------------------- | --------------------------------------- | ---------------------------------------------------------- |
+| **main** (Operator1)    | `~/.openclaw/agents/main/sessions/*.jsonl`     | `~/dev/operator1/workspaces/operator1/` | Delegation, memory, conciseness, silent reply, tool errors |
+| **neo** (Neo)           | `~/.openclaw/agents/neo/sessions/*.jsonl`      | `~/dev/operator1/workspaces/neo/`       | Tool execution rate, task completion quality               |
+| **morpheus** (Morpheus) | `~/.openclaw/agents/morpheus/sessions/*.jsonl` | `~/dev/operator1/workspaces/morpheus/`  | Tool execution rate, task completion quality               |
+| **trinity** (Trinity)   | `~/.openclaw/agents/trinity/sessions/*.jsonl`  | `~/dev/operator1/workspaces/trinity/`   | Tool execution rate, task completion quality               |
 
 **Scoring:**
 
@@ -221,42 +221,42 @@ All else being equal, simpler workspace files are better:
 
 ## File Access Rules (Enforced)
 
-| File                                             | Permission   |
-| ------------------------------------------------ | ------------ |
-| `~/.openclaw/workspace/AGENTS.md`                | READ + WRITE |
-| `~/.openclaw/workspace/SOUL.md`                  | READ + WRITE |
-| `~/.openclaw/workspace/TOOLS.md`                 | READ + WRITE |
-| `~/.openclaw/workspace/HEARTBEAT.md`             | READ + WRITE |
-| `~/.openclaw/workspace/MEMORY.md`                | READ ONLY    |
-| `~/.openclaw/workspace/IDENTITY.md`              | READ ONLY    |
-| `~/.openclaw/workspace/auto-improve/results.tsv` | READ + WRITE |
-| `~/.openclaw/workspace-neo/AGENTS.md`            | READ + WRITE |
-| `~/.openclaw/workspace-neo/SOUL.md`              | READ + WRITE |
-| `~/.openclaw/workspace-neo/TOOLS.md`             | READ + WRITE |
-| `~/.openclaw/workspace-neo/HEARTBEAT.md`         | READ + WRITE |
-| `~/.openclaw/workspace-neo/IDENTITY.md`          | READ ONLY    |
-| `~/.openclaw/workspace-neo/MEMORY.md`            | READ ONLY    |
-| `~/.openclaw/workspace-morpheus/AGENTS.md`       | READ + WRITE |
-| `~/.openclaw/workspace-morpheus/SOUL.md`         | READ + WRITE |
-| `~/.openclaw/workspace-morpheus/TOOLS.md`        | READ + WRITE |
-| `~/.openclaw/workspace-morpheus/HEARTBEAT.md`    | READ + WRITE |
-| `~/.openclaw/workspace-morpheus/IDENTITY.md`     | READ ONLY    |
-| `~/.openclaw/workspace-morpheus/MEMORY.md`       | READ ONLY    |
-| `~/.openclaw/workspace-trinity/AGENTS.md`        | READ + WRITE |
-| `~/.openclaw/workspace-trinity/SOUL.md`          | READ + WRITE |
-| `~/.openclaw/workspace-trinity/TOOLS.md`         | READ + WRITE |
-| `~/.openclaw/workspace-trinity/HEARTBEAT.md`     | READ + WRITE |
-| `~/.openclaw/workspace-trinity/IDENTITY.md`      | READ ONLY    |
-| `~/.openclaw/workspace-trinity/MEMORY.md`        | READ ONLY    |
-| `~/.openclaw/agents/main/sessions/*.jsonl`       | READ ONLY    |
-| `~/.openclaw/agents/neo/sessions/*.jsonl`        | READ ONLY    |
-| `~/.openclaw/agents/morpheus/sessions/*.jsonl`   | READ ONLY    |
-| `~/.openclaw/agents/trinity/sessions/*.jsonl`    | READ ONLY    |
-| Everything else                                  | NO ACCESS    |
+| File                                                            | Permission   |
+| --------------------------------------------------------------- | ------------ |
+| `~/dev/operator1/workspaces/operator1/AGENTS.md`                | READ + WRITE |
+| `~/dev/operator1/workspaces/operator1/SOUL.md`                  | READ + WRITE |
+| `~/dev/operator1/workspaces/operator1/TOOLS.md`                 | READ + WRITE |
+| `~/dev/operator1/workspaces/operator1/HEARTBEAT.md`             | READ + WRITE |
+| `~/dev/operator1/workspaces/operator1/MEMORY.md`                | READ ONLY    |
+| `~/dev/operator1/workspaces/operator1/IDENTITY.md`              | READ ONLY    |
+| `~/dev/operator1/workspaces/operator1/auto-improve/results.tsv` | READ + WRITE |
+| `~/dev/operator1/workspaces/neo/AGENTS.md`                      | READ + WRITE |
+| `~/dev/operator1/workspaces/neo/SOUL.md`                        | READ + WRITE |
+| `~/dev/operator1/workspaces/neo/TOOLS.md`                       | READ + WRITE |
+| `~/dev/operator1/workspaces/neo/HEARTBEAT.md`                   | READ + WRITE |
+| `~/dev/operator1/workspaces/neo/IDENTITY.md`                    | READ ONLY    |
+| `~/dev/operator1/workspaces/neo/MEMORY.md`                      | READ ONLY    |
+| `~/dev/operator1/workspaces/morpheus/AGENTS.md`                 | READ + WRITE |
+| `~/dev/operator1/workspaces/morpheus/SOUL.md`                   | READ + WRITE |
+| `~/dev/operator1/workspaces/morpheus/TOOLS.md`                  | READ + WRITE |
+| `~/dev/operator1/workspaces/morpheus/HEARTBEAT.md`              | READ + WRITE |
+| `~/dev/operator1/workspaces/morpheus/IDENTITY.md`               | READ ONLY    |
+| `~/dev/operator1/workspaces/morpheus/MEMORY.md`                 | READ ONLY    |
+| `~/dev/operator1/workspaces/trinity/AGENTS.md`                  | READ + WRITE |
+| `~/dev/operator1/workspaces/trinity/SOUL.md`                    | READ + WRITE |
+| `~/dev/operator1/workspaces/trinity/TOOLS.md`                   | READ + WRITE |
+| `~/dev/operator1/workspaces/trinity/HEARTBEAT.md`               | READ + WRITE |
+| `~/dev/operator1/workspaces/trinity/IDENTITY.md`                | READ ONLY    |
+| `~/dev/operator1/workspaces/trinity/MEMORY.md`                  | READ ONLY    |
+| `~/.openclaw/agents/main/sessions/*.jsonl`                      | READ ONLY    |
+| `~/.openclaw/agents/neo/sessions/*.jsonl`                       | READ ONLY    |
+| `~/.openclaw/agents/morpheus/sessions/*.jsonl`                  | READ ONLY    |
+| `~/.openclaw/agents/trinity/sessions/*.jsonl`                   | READ ONLY    |
+| Everything else                                                 | NO ACCESS    |
 
 ## Results Tracking Format
 
-File: `~/.openclaw/workspace/auto-improve/results.tsv`
+File: `~/dev/operator1/workspaces/operator1/auto-improve/results.tsv`
 
 Header row (tab-separated):
 
