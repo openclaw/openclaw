@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   loadAuthProfileStoreForSecretsRuntime: vi.fn(),
@@ -30,6 +33,7 @@ vi.mock("../daemon/service-env.js", () => ({
 import {
   buildGatewayInstallPlan,
   gatewayInstallErrorHint,
+  readStateDirDotEnvVars,
   resolveGatewayDevMode,
 } from "./daemon-install-helpers.js";
 
@@ -325,6 +329,139 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     expect(plan.environment.OPENAI_API_KEY).toBeUndefined();
+  });
+});
+
+describe("readStateDirDotEnvVars", () => {
+  let tmpDir: string;
+
+  function writeDotEnv(content: string): void {
+    const ocDir = path.join(tmpDir, ".openclaw");
+    fs.mkdirSync(ocDir, { recursive: true });
+    fs.writeFileSync(path.join(ocDir, ".env"), content, "utf8");
+  }
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-dotenv-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("reads key-value pairs from state dir .env file", () => {
+    writeDotEnv("BRAVE_API_KEY=BSA-test-key\nDISCORD_BOT_TOKEN=discord-tok\n");
+    const vars = readStateDirDotEnvVars({ HOME: tmpDir });
+    expect(vars.BRAVE_API_KEY).toBe("BSA-test-key");
+    expect(vars.DISCORD_BOT_TOKEN).toBe("discord-tok");
+  });
+
+  it("returns empty record when .env file is missing", () => {
+    const vars = readStateDirDotEnvVars({ HOME: tmpDir });
+    expect(vars).toEqual({});
+  });
+
+  it("drops dangerous env vars like NODE_OPTIONS", () => {
+    writeDotEnv("NODE_OPTIONS=--require /tmp/evil.js\nSAFE_KEY=safe\n");
+    const vars = readStateDirDotEnvVars({ HOME: tmpDir });
+    expect(vars.NODE_OPTIONS).toBeUndefined();
+    expect(vars.SAFE_KEY).toBe("safe");
+  });
+
+  it("drops empty and whitespace-only values", () => {
+    writeDotEnv("EMPTY=\nBLANK=   \nVALID=ok\n");
+    const vars = readStateDirDotEnvVars({ HOME: tmpDir });
+    expect(vars.EMPTY).toBeUndefined();
+    expect(vars.BLANK).toBeUndefined();
+    expect(vars.VALID).toBe("ok");
+  });
+
+  it("respects OPENCLAW_STATE_DIR override", () => {
+    const customDir = path.join(tmpDir, "custom-state");
+    fs.mkdirSync(customDir, { recursive: true });
+    fs.writeFileSync(path.join(customDir, ".env"), "CUSTOM_KEY=from-override\n", "utf8");
+    const vars = readStateDirDotEnvVars({ OPENCLAW_STATE_DIR: customDir });
+    expect(vars.CUSTOM_KEY).toBe("from-override");
+  });
+});
+
+describe("buildGatewayInstallPlan — dotenv merge", () => {
+  let tmpDir: string;
+
+  function writeDotEnv(content: string): void {
+    const ocDir = path.join(tmpDir, ".openclaw");
+    fs.mkdirSync(ocDir, { recursive: true });
+    fs.writeFileSync(path.join(ocDir, ".env"), content, "utf8");
+  }
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-plan-dotenv-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("merges .env file vars into the install plan", async () => {
+    writeDotEnv("BRAVE_API_KEY=BSA-from-env\nOPENROUTER_API_KEY=or-key\n");
+    mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+    });
+
+    expect(plan.environment.BRAVE_API_KEY).toBe("BSA-from-env");
+    expect(plan.environment.OPENROUTER_API_KEY).toBe("or-key");
+    expect(plan.environment.OPENCLAW_PORT).toBe("3000");
+  });
+
+  it("config env vars override .env file vars", async () => {
+    writeDotEnv("MY_KEY=from-dotenv\n");
+    mockNodeGatewayPlanFixture({ serviceEnvironment: {} });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+      config: {
+        env: {
+          vars: {
+            MY_KEY: "from-config",
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.MY_KEY).toBe("from-config");
+  });
+
+  it("service env overrides .env file vars", async () => {
+    writeDotEnv("HOME=/from-dotenv\n");
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: { HOME: "/from-service" },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+    });
+
+    expect(plan.environment.HOME).toBe("/from-service");
+  });
+
+  it("works when .env file does not exist", async () => {
+    mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+    });
+
+    expect(plan.environment.OPENCLAW_PORT).toBe("3000");
   });
 });
 
