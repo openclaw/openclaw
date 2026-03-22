@@ -1,5 +1,5 @@
 {
-  "name": "@openclaw/acpx",
+  "name": "@openclaw/acpx-plugin",
   "version": "2026.3.14",
   "description": "OpenClaw ACP runtime backend via acpx",
   "type": "module",
