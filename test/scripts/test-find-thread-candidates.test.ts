@@ -31,6 +31,13 @@ describe("scripts/test-find-thread-candidates parseArgs", () => {
       files: ["src/a.test.ts"],
     });
   });
+
+  it("accepts zero thresholds for explicit deep scans", () => {
+    expect(parseArgs(["--min-duration-ms", "0", "--min-gain-ms", "0"])).toMatchObject({
+      minDurationMs: 0,
+      minGainMs: 0,
+    });
+  });
 });
 
 describe("scripts/test-find-thread-candidates exclusions", () => {

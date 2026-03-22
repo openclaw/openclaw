@@ -44,7 +44,7 @@ export function parseArgs(argv) {
     }
     if (arg === "--min-duration-ms") {
       const parsed = Number.parseFloat(argv[i + 1] ?? "");
-      if (Number.isFinite(parsed) && parsed > 0) {
+      if (Number.isFinite(parsed) && parsed >= 0) {
         args.minDurationMs = parsed;
       }
       i += 1;
@@ -52,7 +52,7 @@ export function parseArgs(argv) {
     }
     if (arg === "--min-gain-ms") {
       const parsed = Number.parseFloat(argv[i + 1] ?? "");
-      if (Number.isFinite(parsed) && parsed > 0) {
+      if (Number.isFinite(parsed) && parsed >= 0) {
         args.minGainMs = parsed;
       }
       i += 1;
