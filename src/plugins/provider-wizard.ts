@@ -3,7 +3,7 @@ import { parseModelRef } from "../agents/model-selection.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { resolvePluginProviders } from "./providers.js";
+import { resolvePluginProviders } from "./providers.runtime.js";
 import type {
   ProviderAuthMethod,
   ProviderPlugin,
