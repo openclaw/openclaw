@@ -108,11 +108,13 @@ export async function resolveCopilotApiToken(params: {
   }
 
   const fetchImpl = params.fetchImpl ?? fetch;
+  // PATs (github_pat_, ghp_) use "token" prefix; OAuth tokens (ghu_) use "Bearer".
+  const authPrefix = params.githubToken.startsWith("ghu_") ? "Bearer" : "token";
   const res = await fetchImpl(COPILOT_TOKEN_URL, {
     method: "GET",
     headers: {
       Accept: "application/json",
-      Authorization: `Bearer ${params.githubToken}`,
+      Authorization: `${authPrefix} ${params.githubToken}`,
     },
   });
 

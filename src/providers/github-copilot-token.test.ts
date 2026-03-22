@@ -72,4 +72,76 @@ describe("github-copilot token", () => {
     expect(res.baseUrl).toBe("https://api.contoso.test");
     expect(saveJsonFile).toHaveBeenCalledTimes(1);
   });
+
+  it("uses Bearer prefix for OAuth tokens (ghu_)", async () => {
+    loadJsonFile.mockReturnValue(undefined);
+
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        token: "result-token",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+      }),
+    });
+
+    await resolveCopilotApiToken({
+      githubToken: "ghu_abc123",
+      cachePath,
+      loadJsonFileImpl: loadJsonFile,
+      saveJsonFileImpl: saveJsonFile,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    const headers = fetchImpl.mock.calls[0][1].headers;
+    expect(headers.Authorization).toBe("Bearer ghu_abc123");
+  });
+
+  it("uses token prefix for PATs (github_pat_)", async () => {
+    loadJsonFile.mockReturnValue(undefined);
+
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        token: "result-token",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+      }),
+    });
+
+    await resolveCopilotApiToken({
+      githubToken: "github_pat_abc123",
+      cachePath,
+      loadJsonFileImpl: loadJsonFile,
+      saveJsonFileImpl: saveJsonFile,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    const headers = fetchImpl.mock.calls[0][1].headers;
+    expect(headers.Authorization).toBe("token github_pat_abc123");
+  });
+
+  it("uses token prefix for classic PATs (ghp_)", async () => {
+    loadJsonFile.mockReturnValue(undefined);
+
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        token: "result-token",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+      }),
+    });
+
+    await resolveCopilotApiToken({
+      githubToken: "ghp_abc123",
+      cachePath,
+      loadJsonFileImpl: loadJsonFile,
+      saveJsonFileImpl: saveJsonFile,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    const headers = fetchImpl.mock.calls[0][1].headers;
+    expect(headers.Authorization).toBe("token ghp_abc123");
+  });
 });
