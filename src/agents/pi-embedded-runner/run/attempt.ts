@@ -52,6 +52,7 @@ import { resolveModelAuthMode } from "../../model-auth.js";
 import { normalizeProviderId, resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { createConfiguredOllamaStreamFn } from "../../ollama-stream.js";
+import { resolveContextWindowInfo } from "../../context-window-guard.js";
 import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import {
@@ -1232,9 +1233,20 @@ export async function runEmbeddedAttempt(
         const providerConfig = params.config?.models?.providers?.[params.model.provider];
         const providerBaseUrl =
           typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl : undefined;
+        // Resolve context window respecting user config (models.providers.ollama.models[].contextWindow
+        // and agents.defaults.contextTokens) so we don't send the model's raw advertised max (e.g. 262k)
+        // to Ollama, which would blow VRAM. See #52206.
+        const ctxInfo = resolveContextWindowInfo({
+          cfg: params.config,
+          provider: params.model.provider,
+          modelId: params.model.id,
+          modelContextWindow: params.model.contextWindow,
+          defaultTokens: params.model.contextWindow ?? 65536,
+        });
         const ollamaStreamFn = createConfiguredOllamaStreamFn({
           model: params.model,
           providerBaseUrl,
+          contextTokensOverride: ctxInfo.source !== "model" ? ctxInfo.tokens : undefined,
         });
         activeSession.agent.streamFn = ollamaStreamFn;
         ensureCustomApiRegistered(params.model.api, ollamaStreamFn);

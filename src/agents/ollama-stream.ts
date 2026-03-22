@@ -434,6 +434,7 @@ function resolveOllamaModelHeaders(model: {
 export function createOllamaStreamFn(
   baseUrl: string,
   defaultHeaders?: Record<string, string>,
+  contextTokensOverride?: number,
 ): StreamFn {
   const chatUrl = resolveOllamaChatUrl(baseUrl);
 
@@ -450,8 +451,11 @@ export function createOllamaStreamFn(
         const ollamaTools = extractOllamaTools(context.tools);
 
         // Ollama defaults to num_ctx=4096 which is too small for large
-        // system prompts + many tool definitions. Use model's contextWindow.
-        const ollamaOptions: Record<string, unknown> = { num_ctx: model.contextWindow ?? 65536 };
+        // system prompts + many tool definitions. Prefer user-configured
+        // context limit (contextTokensOverride) over model's advertised max
+        // to avoid blowing VRAM on models that advertise 262k+ context.
+        const numCtx = contextTokensOverride ?? model.contextWindow ?? 65536;
+        const ollamaOptions: Record<string, unknown> = { num_ctx: numCtx };
         if (typeof options?.temperature === "number") {
           ollamaOptions.temperature = options.temperature;
         }
@@ -571,6 +575,7 @@ export function createOllamaStreamFn(
 export function createConfiguredOllamaStreamFn(params: {
   model: { baseUrl?: string; headers?: unknown };
   providerBaseUrl?: string;
+  contextTokensOverride?: number;
 }): StreamFn {
   const modelBaseUrl = typeof params.model.baseUrl === "string" ? params.model.baseUrl : undefined;
   return createOllamaStreamFn(
@@ -579,5 +584,6 @@ export function createConfiguredOllamaStreamFn(params: {
       providerBaseUrl: params.providerBaseUrl,
     }),
     resolveOllamaModelHeaders(params.model),
+    params.contextTokensOverride,
   );
 }
