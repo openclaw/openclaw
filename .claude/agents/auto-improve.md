@@ -44,14 +44,16 @@ LOOP FOREVER (until manually stopped):
 
 ### 1. Collect Sessions
 
-Read the most recent session JSONL files from BOTH agents:
+Read the most recent session JSONL files from ALL 4 agents:
 
 ```bash
 # Operator1 sessions (for composite score)
 ls -t ~/.openclaw/agents/main/sessions/*.jsonl | head -5
 
-# Neo sessions (for subagent tool execution diagnostic)
+# Subagent sessions (for tool execution diagnostics)
 ls -t ~/.openclaw/agents/neo/sessions/*.jsonl | head -5
+ls -t ~/.openclaw/agents/morpheus/sessions/*.jsonl | head -5
+ls -t ~/.openclaw/agents/trinity/sessions/*.jsonl | head -5
 ```
 
 For each file, parse tool calls, responses, and errors. Use the JSONL schema documented in the skill.
@@ -68,11 +70,13 @@ For each file, parse tool calls, responses, and errors. Use the JSONL schema doc
 
 Compute the composite score: `score = del*0.3 + mem*0.2 + con*0.15 + sil*0.15 + err*0.2`
 
-**Neo diagnostic** (tracked separately, not in composite):
+**Subagent diagnostics** (tracked separately per agent, not in composite):
 
-- **Tool execution rate** — count real `toolCall` entries vs text that echoes tool syntax. If Neo has 0 real toolCalls and echoes commands as text, the rate is 0.0. This means GLM-5 is failing to use the tool API.
+For each of Neo, Morpheus, Trinity:
 
-Log as `neo_exec` in results.tsv. If `neo_exec < 0.3`, note in the description that delegation is hollow — Operator1 routes correctly but Neo can't execute.
+- **Tool execution rate** — count real `toolCall` entries vs text that echoes tool syntax. If an agent has 0 real toolCalls and echoes commands as text, the rate is 0.0.
+
+Log as `neo_exec`, `morpheus_exec`, `trinity_exec` in results.tsv. Use `-` if no sessions exist for an agent. If any agent's rate is < 0.3, note that delegation to that agent is hollow.
 
 ### 3. Log Baseline (First Run Only)
 
@@ -101,6 +105,8 @@ Find the metric with the lowest score. This is your target for the next experime
 
 Make exactly ONE change to ONE file. Target the weakest metric:
 
+**Operator1 weaknesses → edit Operator1 workspace files:**
+
 | Weakest Metric   | File to Edit | What to Change                                                                   |
 | ---------------- | ------------ | -------------------------------------------------------------------------------- |
 | Delegation ratio | AGENTS.md    | Strengthen routing table, add more keywords, make delegation rules more explicit |
@@ -108,6 +114,14 @@ Make exactly ONE change to ONE file. Target the weakest metric:
 | Conciseness      | SOUL.md      | Strengthen brevity rules                                                         |
 | Silent reply     | AGENTS.md    | Strengthen channel rules                                                         |
 | Tool errors      | TOOLS.md     | Clarify tool usage instructions                                                  |
+
+**Subagent weaknesses → edit that agent's workspace files:**
+
+| Agent Issue                 | Workspace                         | What to Change                                                            |
+| --------------------------- | --------------------------------- | ------------------------------------------------------------------------- |
+| Neo low tool exec rate      | `~/.openclaw/workspace-neo/`      | Simplify TOOLS.md, make tool call instructions more explicit in AGENTS.md |
+| Morpheus low tool exec rate | `~/.openclaw/workspace-morpheus/` | Same — simplify tool instructions for GLM-5                               |
+| Trinity low tool exec rate  | `~/.openclaw/workspace-trinity/`  | Same — simplify tool instructions for GLM-5                               |
 
 ### 7. Edit, Commit, and Sync to Repo
 
@@ -169,15 +183,38 @@ Wait for new conversations to happen with the updated prompts. The user may spec
 
 ### Files You CAN Edit
 
+**Operator1:**
+
 - `~/.openclaw/workspace/AGENTS.md`
 - `~/.openclaw/workspace/SOUL.md`
 - `~/.openclaw/workspace/TOOLS.md`
 - `~/.openclaw/workspace/HEARTBEAT.md`
 
+**Neo:**
+
+- `~/.openclaw/workspace-neo/AGENTS.md`
+- `~/.openclaw/workspace-neo/SOUL.md`
+- `~/.openclaw/workspace-neo/TOOLS.md`
+- `~/.openclaw/workspace-neo/HEARTBEAT.md`
+
+**Morpheus:**
+
+- `~/.openclaw/workspace-morpheus/AGENTS.md`
+- `~/.openclaw/workspace-morpheus/SOUL.md`
+- `~/.openclaw/workspace-morpheus/TOOLS.md`
+- `~/.openclaw/workspace-morpheus/HEARTBEAT.md`
+
+**Trinity:**
+
+- `~/.openclaw/workspace-trinity/AGENTS.md`
+- `~/.openclaw/workspace-trinity/SOUL.md`
+- `~/.openclaw/workspace-trinity/TOOLS.md`
+- `~/.openclaw/workspace-trinity/HEARTBEAT.md`
+
 ### Files You CANNOT Edit
 
-- `~/.openclaw/workspace/MEMORY.md` — personal data
-- `~/.openclaw/workspace/IDENTITY.md` — system-critical
+- Any `MEMORY.md` — personal data
+- Any `IDENTITY.md` — system-critical
 - Any source code under `src/`
 - Any config files
 

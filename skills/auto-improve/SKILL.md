@@ -12,12 +12,18 @@ This skill defines the fixed evaluation rules for the auto-improve agent. Like `
 
 ## Monitored Agents
 
-| Agent                | Session Logs                               | What to Measure                                                       |
-| -------------------- | ------------------------------------------ | --------------------------------------------------------------------- |
-| **main** (Operator1) | `~/.openclaw/agents/main/sessions/*.jsonl` | Delegation, memory, conciseness, silent reply, tool errors            |
-| **neo** (Neo)        | `~/.openclaw/agents/neo/sessions/*.jsonl`  | Subagent tool execution rate — are tool calls real or echoed as text? |
+| Agent                   | Session Logs                                   | Workspace                         | What to Measure                                            |
+| ----------------------- | ---------------------------------------------- | --------------------------------- | ---------------------------------------------------------- |
+| **main** (Operator1)    | `~/.openclaw/agents/main/sessions/*.jsonl`     | `~/.openclaw/workspace/`          | Delegation, memory, conciseness, silent reply, tool errors |
+| **neo** (Neo)           | `~/.openclaw/agents/neo/sessions/*.jsonl`      | `~/.openclaw/workspace-neo/`      | Tool execution rate, task completion quality               |
+| **morpheus** (Morpheus) | `~/.openclaw/agents/morpheus/sessions/*.jsonl` | `~/.openclaw/workspace-morpheus/` | Tool execution rate, task completion quality               |
+| **trinity** (Trinity)   | `~/.openclaw/agents/trinity/sessions/*.jsonl`  | `~/.openclaw/workspace-trinity/`  | Tool execution rate, task completion quality               |
 
-Score Operator1 and Neo sessions separately. Operator1 metrics drive workspace file changes. Neo metrics are diagnostic — they reveal whether delegation is actually productive (Neo completing work) or hollow (Neo echoing commands without executing).
+**Scoring:**
+
+- Operator1 gets the full 5-metric composite score — its metrics drive workspace file changes
+- Neo, Morpheus, Trinity each get the **tool execution rate** diagnostic — reveals whether subagent delegation is productive or hollow
+- All 4 agents' tool execution patterns feed into the overall picture
 
 ## JSONL Session Log Schema
 
@@ -165,9 +171,9 @@ Score: `tool_execution_rate` (0.0 to 1.0, higher is better)
 
 **What to do with this metric:**
 
-- If `tool_execution_rate < 0.3`: Neo is mostly non-functional. Flag in results.tsv. Consider whether Neo's TOOLS.md or workspace instructions need simplification.
-- If `tool_execution_rate > 0.7`: Neo is executing tools properly. Delegation is productive.
-- This metric does NOT affect Operator1's composite score — it's tracked separately in the `neo_exec` column of results.tsv.
+- If `tool_execution_rate < 0.3`: Agent is mostly non-functional. Flag in results.tsv. Consider whether the agent's TOOLS.md or workspace instructions need simplification.
+- If `tool_execution_rate > 0.7`: Agent is executing tools properly. Delegation is productive.
+- This metric does NOT affect Operator1's composite score — tracked separately in results.tsv per agent (`neo_exec`, `morpheus_exec`, `trinity_exec`).
 
 **Pattern detection — text echo vs real tool call:**
 
@@ -224,8 +230,28 @@ All else being equal, simpler workspace files are better:
 | `~/.openclaw/workspace/MEMORY.md`                | READ ONLY    |
 | `~/.openclaw/workspace/IDENTITY.md`              | READ ONLY    |
 | `~/.openclaw/workspace/auto-improve/results.tsv` | READ + WRITE |
+| `~/.openclaw/workspace-neo/AGENTS.md`            | READ + WRITE |
+| `~/.openclaw/workspace-neo/SOUL.md`              | READ + WRITE |
+| `~/.openclaw/workspace-neo/TOOLS.md`             | READ + WRITE |
+| `~/.openclaw/workspace-neo/HEARTBEAT.md`         | READ + WRITE |
+| `~/.openclaw/workspace-neo/IDENTITY.md`          | READ ONLY    |
+| `~/.openclaw/workspace-neo/MEMORY.md`            | READ ONLY    |
+| `~/.openclaw/workspace-morpheus/AGENTS.md`       | READ + WRITE |
+| `~/.openclaw/workspace-morpheus/SOUL.md`         | READ + WRITE |
+| `~/.openclaw/workspace-morpheus/TOOLS.md`        | READ + WRITE |
+| `~/.openclaw/workspace-morpheus/HEARTBEAT.md`    | READ + WRITE |
+| `~/.openclaw/workspace-morpheus/IDENTITY.md`     | READ ONLY    |
+| `~/.openclaw/workspace-morpheus/MEMORY.md`       | READ ONLY    |
+| `~/.openclaw/workspace-trinity/AGENTS.md`        | READ + WRITE |
+| `~/.openclaw/workspace-trinity/SOUL.md`          | READ + WRITE |
+| `~/.openclaw/workspace-trinity/TOOLS.md`         | READ + WRITE |
+| `~/.openclaw/workspace-trinity/HEARTBEAT.md`     | READ + WRITE |
+| `~/.openclaw/workspace-trinity/IDENTITY.md`      | READ ONLY    |
+| `~/.openclaw/workspace-trinity/MEMORY.md`        | READ ONLY    |
 | `~/.openclaw/agents/main/sessions/*.jsonl`       | READ ONLY    |
 | `~/.openclaw/agents/neo/sessions/*.jsonl`        | READ ONLY    |
+| `~/.openclaw/agents/morpheus/sessions/*.jsonl`   | READ ONLY    |
+| `~/.openclaw/agents/trinity/sessions/*.jsonl`    | READ ONLY    |
 | Everything else                                  | NO ACCESS    |
 
 ## Results Tracking Format
@@ -235,13 +261,13 @@ File: `~/.openclaw/workspace/auto-improve/results.tsv`
 Header row (tab-separated):
 
 ```
-commit	score	delegation	memory	conciseness	silent_reply	error_rate	neo_exec	status	description
+commit	score	delegation	memory	conciseness	silent_reply	error_rate	neo_exec	morpheus_exec	trinity_exec	status	description
 ```
 
 - `commit`: git short SHA (7 chars), or "baseline" for first entry
 - `score`: composite score (e.g., 0.650)
 - `delegation` through `error_rate`: individual Operator1 metric scores
-- `neo_exec`: Neo's tool_execution_rate (diagnostic, not in composite)
+- `neo_exec`, `morpheus_exec`, `trinity_exec`: per-agent tool_execution_rate (diagnostic, not in composite). Use `-` if no sessions available for that agent.
 - `status`: `baseline`, `keep`, or `discard`
 - `description`: short text of what was changed
 
@@ -252,8 +278,14 @@ commit	score	delegation	memory	conciseness	silent_reply	error_rate	neo_exec	stat
 - Sessions shorter than 3 messages (too little data)
 - Sessions that are purely heartbeat (only HEARTBEAT_OK responses)
 
-**Neo:** Use the N most recent sessions from `~/.openclaw/agents/neo/sessions/` (default N=5). Skip:
+**Subagents (Neo, Morpheus, Trinity):** Use the N most recent sessions from each agent's session dir (default N=5). Skip:
 
 - Sessions shorter than 2 messages
+
+Session paths:
+
+- Neo: `~/.openclaw/agents/neo/sessions/*.jsonl`
+- Morpheus: `~/.openclaw/agents/morpheus/sessions/*.jsonl`
+- Trinity: `~/.openclaw/agents/trinity/sessions/*.jsonl`
 
 Sort by modification time, newest first.
