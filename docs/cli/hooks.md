@@ -21,7 +21,7 @@ Related:
 openclaw hooks list
 ```
 
-List all discovered hooks from workspace, managed, and bundled directories.
+List all discovered hooks from workspace, managed, extra, and bundled directories.
 
 **Options:**
 
@@ -127,8 +127,7 @@ openclaw hooks enable <name>
 
 Enable a specific hook by adding it to your config (`~/.openclaw/config.json`).
 
-**Note:** Hooks managed by plugins show `plugin:<id>` in `openclaw hooks list` and
-can’t be enabled/disabled here. Enable/disable the plugin instead.
+**Note:** Workspace hooks are disabled by default until enabled here or in config. Hooks managed by plugins show `plugin:<id>` in `openclaw hooks list` and can’t be enabled/disabled here. Enable/disable the plugin instead.
 
 **Arguments:**
 
@@ -151,6 +150,9 @@ openclaw hooks enable session-memory
 - Checks if hook exists and is eligible
 - Updates `hooks.internal.entries.<name>.enabled = true` in your config
 - Saves config to disk
+
+If the hook came from `<workspace>/hooks/`, this opt-in step is required before
+the Gateway will load it.
 
 **After enabling:**
 
@@ -229,6 +231,9 @@ openclaw hooks install @openclaw/my-hook-pack
 # Link a local directory without copying
 openclaw hooks install -l ./my-hook-pack
 ```
+
+Linked hook packs are treated as managed hooks from an operator-configured
+directory, not as workspace hooks.
 
 ## Update Hooks
 
