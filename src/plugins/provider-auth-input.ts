@@ -5,7 +5,11 @@ import {
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
-import { resolveUsableCustomProviderApiKey } from "../agents/model-auth.js";
+import { isKnownEnvApiKeyMarker } from "../agents/model-auth-markers.js";
+import {
+  getCustomProviderApiKey,
+  resolveUsableCustomProviderApiKey,
+} from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/types.js";
 import {
@@ -215,10 +219,14 @@ async function resolveExistingProviderApiKey(params: {
         env: process.env,
       });
       if (configApiKey) {
+        const rawConfigApiKey = getCustomProviderApiKey(params.config, provider);
         return {
           apiKey: configApiKey.apiKey,
           source: configApiKey.source,
-          credential: configApiKey.apiKey,
+          credential:
+            rawConfigApiKey && isKnownEnvApiKeyMarker(rawConfigApiKey)
+              ? rawConfigApiKey
+              : configApiKey.apiKey,
         };
       }
     }

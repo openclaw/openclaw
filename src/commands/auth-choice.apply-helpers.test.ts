@@ -850,6 +850,47 @@ describe("ensureApiKeyFromOptionEnvOrPrompt", () => {
     expect(text).not.toHaveBeenCalled();
   });
 
+  it("reuses env-marker models.json API keys without flattening them", async () => {
+    const originalOpenAiApiKey = process.env.OPENAI_API_KEY;
+    delete process.env.MINIMAX_API_KEY;
+    delete process.env.MINIMAX_OAUTH_TOKEN;
+    process.env.OPENAI_API_KEY = "marker-backed-key"; // pragma: allowlist secret
+
+    const { confirm, text, setCredential } = createPromptAndCredentialSpies({
+      confirmResult: true,
+      textResult: "prompt-key",
+    });
+
+    try {
+      const result = await ensureMinimaxApiKey({
+        confirm,
+        text,
+        setCredential,
+        config: {
+          models: {
+            providers: {
+              minimax: {
+                baseUrl: "https://api.minimax.example/v1",
+                apiKey: "OPENAI_API_KEY",
+                models: [],
+              },
+            },
+          },
+        },
+      });
+
+      expect(result).toBe("marker-backed-key");
+      expect(setCredential).toHaveBeenCalledWith("OPENAI_API_KEY", "plaintext");
+      expect(text).not.toHaveBeenCalled();
+    } finally {
+      if (originalOpenAiApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalOpenAiApiKey;
+      }
+    }
+  });
+
   it("does not reuse the main agent store for a secondary agent prompt", async () => {
     const { stateDir, agentDir: mainAgentDir } = await setupAuthTestEnv("openclaw-auth-scope-");
     const agentDir = `${stateDir}/agents/minimax`;
