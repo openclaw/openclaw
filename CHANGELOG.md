@@ -203,6 +203,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/security: add regression coverage proving pinned fallback host overrides stay bound to Telegram and delegate non-matching hostnames back to the original lookup path. Thanks @vincentkoc.
 - Secrets/exec refs: require explicit `--allow-exec` for `secrets apply` write plans that contain exec SecretRefs/providers, and align audit/configure/apply dry-run behavior to skip exec checks unless opted in to prevent unexpected command side effects. (#49417) Thanks @restriction and @joshavant.
 - Tools/image generation: add bundled fal image generation support so `image_generate` can target `fal/*` models with `FAL_KEY`, including single-image edit flows via FLUX image-to-image. Thanks @vincentkoc.
+- Messages/polls: treat zero-valued poll params on `message.send` as unset defaults while keeping non-zero poll params on the poll validation path. (#52150) Fixes #52118. Thanks @Bartok9.
 - xAI/web search: add missing Grok credential metadata so the bundled provider registration type-checks again. (#49472) thanks @scoootscooob.
 - Signal/runtime API: re-export `SignalAccountConfig` so Signal account resolution type-checks again. (#49470) Thanks @scoootscooob.
 - Google Chat/runtime API: thin the private runtime barrel onto the curated public SDK surface while keeping public Google Chat exports intact. (#49504) Thanks @scoootscooob.
@@ -233,6 +234,7 @@ Docs: https://docs.openclaw.ai
 - make `openclaw update status` explicitly say `up to date` when the local version already matches npm latest, while keeping the availability logic unchanged. (#51409) Thanks @dongzhenye.
 - Android/canvas: recycle captured and scaled snapshot bitmaps so repeated canvas snapshots do not leak native image memory. (#41889) Thanks @Kaneki-x.
 - Android/theme: switch status bar icon contrast with the active system theme so Android light mode no longer leaves unreadable light icons over the app header. (#51098) Thanks @goweii.
+- Discord/ACP: forward worker abort signals into ACP turns so timed-out Discord jobs cancel the running turn instead of silently leaving the bound ACP session working in the background.
 
 ### Breaking
 
