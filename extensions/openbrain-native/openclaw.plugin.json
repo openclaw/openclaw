@@ -57,6 +57,7 @@
   "uiHints": {
     "url": {
       "label": "OpenBrain MCP URL",
+      "sensitive": true,
       "help": "HTTP MCP endpoint for OpenBrain (can include ?key=... if your deployment uses URL keys)",
       "placeholder": "https://.../open-brain-mcp?key=..."
     },

@@ -81,22 +81,37 @@ function parseMcpPayload(raw: string): unknown {
     return JSON.parse(trimmed);
   }
 
-  const dataLines = trimmed
-    .split(/\r?\n/)
-    .filter((line) => line.startsWith("data:"))
-    .map((line) => line.replace(/^data:\s?/, "").trim())
-    .filter(Boolean)
-    .filter((line) => line !== "[DONE]");
+  const eventBlocks = trimmed
+    .split(/\r?\n\r?\n/)
+    .map((b) => b.trim())
+    .filter(Boolean);
 
-  for (let i = dataLines.length - 1; i >= 0; i -= 1) {
-    const chunk = dataLines[i];
-    if (!chunk.startsWith("{")) continue;
+  const candidates: unknown[] = [];
+  for (const block of eventBlocks) {
+    const dataParts = block
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.replace(/^data:\s?/, ""));
+    if (dataParts.length === 0) continue;
+
+    const dataCombined = dataParts.join("\n").trim();
+    if (!dataCombined || dataCombined === "[DONE]") continue;
+    if (!dataCombined.startsWith("{")) continue;
+
     try {
-      return JSON.parse(chunk);
+      candidates.push(JSON.parse(dataCombined));
     } catch {
-      // keep trying older frames
+      // keep scanning other events
     }
   }
+
+  for (let i = candidates.length - 1; i >= 0; i -= 1) {
+    const c = candidates[i] as { result?: unknown; error?: unknown };
+    if (c && (c.result !== undefined || c.error !== undefined)) {
+      return c;
+    }
+  }
+  if (candidates.length > 0) return candidates[candidates.length - 1];
 
   throw new Error(`OpenBrain MCP returned non-JSON payload: ${trimmed.slice(0, 400)}`);
 }
