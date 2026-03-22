@@ -169,8 +169,11 @@ function expectBoundSessionDispatch(
   const dispatchCall = dispatchSpy.mock.calls[0]?.[0] as {
     ctx?: { SessionKey?: string; CommandTargetSessionKey?: string };
   };
-  expect(dispatchCall.ctx?.SessionKey).toMatch(expectedPattern);
-  expect(dispatchCall.ctx?.CommandTargetSessionKey).toMatch(expectedPattern);
+  if (!dispatchCall.ctx?.SessionKey || !dispatchCall.ctx.CommandTargetSessionKey) {
+    throw new Error("native command dispatch did not include bound session context");
+  }
+  expect(dispatchCall.ctx.SessionKey).toMatch(expectedPattern);
+  expect(dispatchCall.ctx.CommandTargetSessionKey).toMatch(expectedPattern);
   expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
 }
 
