@@ -2229,7 +2229,7 @@ export const registerTelegramHandlers = ({
           cfg,
           channel: "telegram",
           accountId,
-          peer: { kind: "dm", id: senderId },
+          peer: { kind: "direct", id: senderId },
         }).sessionKey,
         AccountId: accountId,
         OriginatingChannel: "telegram",
