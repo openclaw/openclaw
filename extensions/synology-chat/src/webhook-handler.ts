@@ -225,7 +225,6 @@ export interface WebhookHandlerDeps {
     senderName: string;
     provider: string;
     chatType: string;
-    sessionKey: string;
     accountId: string;
     commandAuthorized: boolean;
     /** Chat API user_id for sending replies (may differ from webhook user_id) */
@@ -358,14 +357,12 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
         );
       }
 
-      const sessionKey = `synology-chat-${payload.user_id}`;
       const deliverPromise = deliver({
         body: cleanText,
         from: payload.user_id,
         senderName: payload.username,
         provider: "synology-chat",
         chatType: "direct",
-        sessionKey,
         accountId: account.accountId,
         commandAuthorized: auth.allowed,
         chatUserId: replyUserId,
