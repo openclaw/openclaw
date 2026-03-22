@@ -2,6 +2,8 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
+import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
@@ -25,6 +27,18 @@ export type PluginInspectShape =
   | "plain-capability"
   | "hybrid-capability"
   | "non-capability";
+
+export type PluginCompatibilityNotice = {
+  pluginId: string;
+  code: "legacy-before-agent-start" | "hook-only";
+  severity: "warn" | "info";
+  message: string;
+};
+
+export type PluginCompatibilitySummary = {
+  noticeCount: number;
+  pluginCount: number;
+};
 
 export type PluginInspectReport = {
   workspaceDir?: string;
@@ -52,7 +66,16 @@ export type PluginInspectReport = {
   cliCommands: string[];
   services: string[];
   gatewayMethods: string[];
+  mcpServers: Array<{
+    name: string;
+    hasStdioTransport: boolean;
+  }>;
+  lspServers: Array<{
+    name: string;
+    hasStdioTransport: boolean;
+  }>;
   httpRouteCount: number;
+  bundleCapabilities: string[];
   diagnostics: PluginDiagnostic[];
   policy: {
     allowPromptInjection?: boolean;
@@ -61,7 +84,33 @@ export type PluginInspectReport = {
     hasAllowedModelsConfig: boolean;
   };
   usesLegacyBeforeAgentStart: boolean;
+  compatibility: PluginCompatibilityNotice[];
 };
+
+function buildCompatibilityNoticesForInspect(
+  inspect: Pick<PluginInspectReport, "plugin" | "shape" | "usesLegacyBeforeAgentStart">,
+): PluginCompatibilityNotice[] {
+  const warnings: PluginCompatibilityNotice[] = [];
+  if (inspect.usesLegacyBeforeAgentStart) {
+    warnings.push({
+      pluginId: inspect.plugin.id,
+      code: "legacy-before-agent-start",
+      severity: "warn",
+      message:
+        "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
+    });
+  }
+  if (inspect.shape === "hook-only") {
+    warnings.push({
+      pluginId: inspect.plugin.id,
+      code: "hook-only",
+      severity: "info",
+      message:
+        "is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.",
+    });
+  }
+  return warnings;
+}
 
 const log = createSubsystemLogger("plugins");
 
@@ -159,14 +208,14 @@ export function buildPluginInspectReport(params: {
       name: entry.hookName,
       priority: entry.priority,
     }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .toSorted((a, b) => a.name.localeCompare(b.name));
   const customHooks = report.hooks
     .filter((entry) => entry.pluginId === plugin.id)
     .map((entry) => ({
       name: entry.entry.hook.name,
-      events: [...entry.events].sort(),
+      events: [...entry.events].toSorted(),
     }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .toSorted((a, b) => a.name.localeCompare(b.name));
   const tools = report.tools
     .filter((entry) => entry.pluginId === plugin.id)
     .map((entry) => ({
@@ -176,21 +225,70 @@ export function buildPluginInspectReport(params: {
   const diagnostics = report.diagnostics.filter((entry) => entry.pluginId === plugin.id);
   const policyEntry = normalizePluginsConfig(config.plugins).entries[plugin.id];
   const capabilityCount = capabilities.length;
+  const shape = deriveInspectShape({
+    capabilityCount,
+    typedHookCount: typedHooks.length,
+    customHookCount: customHooks.length,
+    toolCount: tools.length,
+    commandCount: plugin.commands.length,
+    cliCount: plugin.cliCommands.length,
+    serviceCount: plugin.services.length,
+    gatewayMethodCount: plugin.gatewayMethods.length,
+    httpRouteCount: plugin.httpRoutes,
+  });
 
+  // Populate MCP server info for bundle-format plugins with a known rootDir.
+  let mcpServers: PluginInspectReport["mcpServers"] = [];
+  if (plugin.format === "bundle" && plugin.bundleFormat && plugin.rootDir) {
+    const mcpSupport = inspectBundleMcpRuntimeSupport({
+      pluginId: plugin.id,
+      rootDir: plugin.rootDir,
+      bundleFormat: plugin.bundleFormat,
+    });
+    mcpServers = [
+      ...mcpSupport.supportedServerNames.map((name) => ({
+        name,
+        hasStdioTransport: true,
+      })),
+      ...mcpSupport.unsupportedServerNames.map((name) => ({
+        name,
+        hasStdioTransport: false,
+      })),
+    ];
+  }
+
+  // Populate LSP server info for bundle-format plugins with a known rootDir.
+  let lspServers: PluginInspectReport["lspServers"] = [];
+  if (plugin.format === "bundle" && plugin.bundleFormat && plugin.rootDir) {
+    const lspSupport = inspectBundleLspRuntimeSupport({
+      pluginId: plugin.id,
+      rootDir: plugin.rootDir,
+      bundleFormat: plugin.bundleFormat,
+    });
+    lspServers = [
+      ...lspSupport.supportedServerNames.map((name) => ({
+        name,
+        hasStdioTransport: true,
+      })),
+      ...lspSupport.unsupportedServerNames.map((name) => ({
+        name,
+        hasStdioTransport: false,
+      })),
+    ];
+  }
+
+  const usesLegacyBeforeAgentStart = typedHooks.some(
+    (entry) => entry.name === "before_agent_start",
+  );
+  const compatibility = buildCompatibilityNoticesForInspect({
+    plugin,
+    shape,
+    usesLegacyBeforeAgentStart,
+  });
   return {
     workspaceDir: report.workspaceDir,
     plugin,
-    shape: deriveInspectShape({
-      capabilityCount,
-      typedHookCount: typedHooks.length,
-      customHookCount: customHooks.length,
-      toolCount: tools.length,
-      commandCount: plugin.commands.length,
-      cliCount: plugin.cliCommands.length,
-      serviceCount: plugin.services.length,
-      gatewayMethodCount: plugin.gatewayMethods.length,
-      httpRouteCount: plugin.httpRoutes,
-    }),
+    shape,
     capabilityMode: capabilityCount === 0 ? "none" : capabilityCount === 1 ? "plain" : "hybrid",
     capabilityCount,
     capabilities,
@@ -201,7 +299,10 @@ export function buildPluginInspectReport(params: {
     cliCommands: [...plugin.cliCommands],
     services: [...plugin.services],
     gatewayMethods: [...plugin.gatewayMethods],
+    mcpServers,
+    lspServers,
     httpRouteCount: plugin.httpRoutes,
+    bundleCapabilities: plugin.bundleCapabilities ?? [],
     diagnostics,
     policy: {
       allowPromptInjection: policyEntry?.hooks?.allowPromptInjection,
@@ -209,7 +310,8 @@ export function buildPluginInspectReport(params: {
       allowedModels: [...(policyEntry?.subagent?.allowedModels ?? [])],
       hasAllowedModelsConfig: policyEntry?.subagent?.hasAllowedModelsConfig === true,
     },
-    usesLegacyBeforeAgentStart: typedHooks.some((entry) => entry.name === "before_agent_start"),
+    usesLegacyBeforeAgentStart,
+    compatibility,
   };
 }
 
@@ -237,4 +339,35 @@ export function buildAllPluginInspectReports(params?: {
       }),
     )
     .filter((entry): entry is PluginInspectReport => entry !== null);
+}
+
+export function buildPluginCompatibilityWarnings(params?: {
+  config?: ReturnType<typeof loadConfig>;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  report?: PluginStatusReport;
+}): string[] {
+  return buildPluginCompatibilityNotices(params).map(formatPluginCompatibilityNotice);
+}
+
+export function buildPluginCompatibilityNotices(params?: {
+  config?: ReturnType<typeof loadConfig>;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  report?: PluginStatusReport;
+}): PluginCompatibilityNotice[] {
+  return buildAllPluginInspectReports(params).flatMap((inspect) => inspect.compatibility);
+}
+
+export function formatPluginCompatibilityNotice(notice: PluginCompatibilityNotice): string {
+  return `${notice.pluginId} ${notice.message}`;
+}
+
+export function summarizePluginCompatibility(
+  notices: PluginCompatibilityNotice[],
+): PluginCompatibilitySummary {
+  return {
+    noticeCount: notices.length,
+    pluginCount: new Set(notices.map((notice) => notice.pluginId)).size,
+  };
 }

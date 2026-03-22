@@ -1,5 +1,5 @@
-import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ClawdbotConfig } from "../runtime-api.js";
 import {
   buildStructuredCard,
   editMessageFeishu,

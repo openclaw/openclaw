@@ -1,29 +1,17 @@
-import { buildAccountScopedAllowlistConfigEditor } from "openclaw/plugin-sdk/allowlist-config-edit";
+import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import {
-  buildAccountScopedDmSecurityPolicy,
-  collectAllowlistProviderRestrictSendersWarnings,
-} from "openclaw/plugin-sdk/channel-config-helpers";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
+  createPairingPrefixStripper,
+  createTextPairingAdapter,
+} from "openclaw/plugin-sdk/channel-pairing";
+import {
+  attachChannelToResult,
+  attachChannelToResults,
+  createAttachedChannelResultAdapter,
+} from "openclaw/plugin-sdk/channel-send-result";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { buildOutboundBaseSessionKey } from "openclaw/plugin-sdk/core";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
-import { type RoutePeer } from "openclaw/plugin-sdk/routing";
-import {
-  buildBaseAccountStatusSnapshot,
-  buildBaseChannelStatusSummary,
-  buildChannelConfigSchema,
-  collectStatusIssuesFromLastError,
-  createDefaultChannelRuntimeState,
-  DEFAULT_ACCOUNT_ID,
-  looksLikeSignalTargetId,
-  normalizeE164,
-  normalizeSignalMessagingTarget,
-  PAIRING_APPROVED_MESSAGE,
-  resolveChannelMediaMaxBytes,
-  SignalConfigSchema,
-  type ChannelMessageActionAdapter,
-  type ChannelPlugin,
-} from "openclaw/plugin-sdk/signal";
+import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js";
 import { markdownToSignalTextChunks } from "./format.js";
 import {
@@ -32,24 +20,30 @@ import {
   resolveSignalRecipient,
   resolveSignalSender,
 } from "./identity.js";
+import { signalMessageActions } from "./message-actions.js";
 import type { SignalProbe } from "./probe.js";
+import {
+  buildBaseAccountStatusSnapshot,
+  buildBaseChannelStatusSummary,
+  collectStatusIssuesFromLastError,
+  createDefaultChannelRuntimeState,
+  DEFAULT_ACCOUNT_ID,
+  looksLikeSignalTargetId,
+  normalizeE164,
+  normalizeSignalMessagingTarget,
+  PAIRING_APPROVED_MESSAGE,
+  resolveChannelMediaMaxBytes,
+  type ChannelPlugin,
+} from "./runtime-api.js";
 import { getSignalRuntime } from "./runtime.js";
 import { signalSetupAdapter } from "./setup-core.js";
-import { createSignalPluginBase, signalConfigAccessors, signalSetupWizard } from "./shared.js";
-
-const signalMessageActions: ChannelMessageActionAdapter = {
-  listActions: (ctx) => getSignalRuntime().channel.signal.messageActions?.listActions?.(ctx) ?? [],
-  supportsAction: (ctx) =>
-    getSignalRuntime().channel.signal.messageActions?.supportsAction?.(ctx) ?? false,
-  handleAction: async (ctx) => {
-    const ma = getSignalRuntime().channel.signal.messageActions;
-    if (!ma?.handleAction) {
-      throw new Error("Signal message actions not available");
-    }
-    return ma.handleAction(ctx);
-  },
-};
-
+import {
+  collectSignalSecurityWarnings,
+  signalConfigAdapter,
+  createSignalPluginBase,
+  signalResolveDmPolicy,
+  signalSetupWizard,
+} from "./shared.js";
 type SignalSendFn = ReturnType<typeof getSignalRuntime>["channel"]["signal"]["sendMessageSignal"];
 
 function resolveSignalSendContext(params: {
@@ -233,9 +227,9 @@ async function sendFormattedSignalText(ctx: {
       textMode: "plain",
       textStyles: chunk.styles,
     });
-    results.push({ channel: "signal" as const, ...result });
+    results.push(result);
   }
-  return results;
+  return attachChannelToResults("signal", results);
 }
 
 async function sendFormattedSignalMedia(ctx: {
@@ -274,69 +268,36 @@ async function sendFormattedSignalMedia(ctx: {
     textMode: "plain",
     textStyles: formatted.styles,
   });
-  return { channel: "signal" as const, ...result };
+  return attachChannelToResult("signal", result);
 }
 
 export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   ...createSignalPluginBase({
-    configSchema: buildChannelConfigSchema(SignalConfigSchema),
     setupWizard: signalSetupWizard,
     setup: signalSetupAdapter,
   }),
-  pairing: {
+  pairing: createTextPairingAdapter({
     idLabel: "signalNumber",
-    normalizeAllowEntry: (entry) => entry.replace(/^signal:/i, ""),
-    notifyApproval: async ({ id }) => {
-      await getSignalRuntime().channel.signal.sendMessageSignal(id, PAIRING_APPROVED_MESSAGE);
+    message: PAIRING_APPROVED_MESSAGE,
+    normalizeAllowEntry: createPairingPrefixStripper(/^signal:/i),
+    notify: async ({ id, message }) => {
+      await getSignalRuntime().channel.signal.sendMessageSignal(id, message);
     },
-  },
+  }),
   actions: signalMessageActions,
-  allowlist: {
-    supportsScope: ({ scope }) => scope === "dm" || scope === "group" || scope === "all",
-    readConfig: ({ cfg, accountId }) => {
-      const account = resolveSignalAccount({ cfg, accountId });
-      return {
-        dmAllowFrom: (account.config.allowFrom ?? []).map(String),
-        groupAllowFrom: (account.config.groupAllowFrom ?? []).map(String),
-        dmPolicy: account.config.dmPolicy,
-        groupPolicy: account.config.groupPolicy,
-      };
-    },
-    applyConfigEdit: buildAccountScopedAllowlistConfigEditor({
-      channelId: "signal",
-      normalize: ({ cfg, accountId, values }) =>
-        signalConfigAccessors.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
-      resolvePaths: (scope) => ({
-        readPaths: [[scope === "dm" ? "allowFrom" : "groupAllowFrom"]],
-        writePath: [scope === "dm" ? "allowFrom" : "groupAllowFrom"],
-      }),
-    }),
-  },
+  allowlist: buildDmGroupAccountAllowlistAdapter({
+    channelId: "signal",
+    resolveAccount: ({ cfg, accountId }) => resolveSignalAccount({ cfg, accountId }),
+    normalize: ({ cfg, accountId, values }) =>
+      signalConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
+    resolveDmAllowFrom: (account) => account.config.allowFrom,
+    resolveGroupAllowFrom: (account) => account.config.groupAllowFrom,
+    resolveDmPolicy: (account) => account.config.dmPolicy,
+    resolveGroupPolicy: (account) => account.config.groupPolicy,
+  }),
   security: {
-    resolveDmPolicy: ({ cfg, accountId, account }) => {
-      return buildAccountScopedDmSecurityPolicy({
-        cfg,
-        channelKey: "signal",
-        accountId,
-        fallbackAccountId: account.accountId ?? DEFAULT_ACCOUNT_ID,
-        policy: account.config.dmPolicy,
-        allowFrom: account.config.allowFrom ?? [],
-        policyPathSuffix: "dmPolicy",
-        normalizeEntry: (raw) => normalizeE164(raw.replace(/^signal:/i, "").trim()),
-      });
-    },
-    collectWarnings: ({ account, cfg }) => {
-      return collectAllowlistProviderRestrictSendersWarnings({
-        cfg,
-        providerConfigPresent: cfg.channels?.signal !== undefined,
-        configuredGroupPolicy: account.config.groupPolicy,
-        surface: "Signal groups",
-        openScope: "any member",
-        groupPolicyPath: "channels.signal.groupPolicy",
-        groupAllowFromPath: "channels.signal.groupAllowFrom",
-        mentionGated: false,
-      });
-    },
+    resolveDmPolicy: signalResolveDmPolicy,
+    collectWarnings: collectSignalSecurityWarnings,
   },
   messaging: {
     normalizeTarget: normalizeSignalMessagingTarget,
@@ -383,28 +344,27 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         deps,
         abortSignal,
       }),
-    sendText: async ({ cfg, to, text, accountId, deps }) => {
-      const result = await sendSignalOutbound({
-        cfg,
-        to,
-        text,
-        accountId: accountId ?? undefined,
-        deps,
-      });
-      return { channel: "signal", ...result };
-    },
-    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps }) => {
-      const result = await sendSignalOutbound({
-        cfg,
-        to,
-        text,
-        mediaUrl,
-        mediaLocalRoots,
-        accountId: accountId ?? undefined,
-        deps,
-      });
-      return { channel: "signal", ...result };
-    },
+    ...createAttachedChannelResultAdapter({
+      channel: "signal",
+      sendText: async ({ cfg, to, text, accountId, deps }) =>
+        await sendSignalOutbound({
+          cfg,
+          to,
+          text,
+          accountId: accountId ?? undefined,
+          deps,
+        }),
+      sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps }) =>
+        await sendSignalOutbound({
+          cfg,
+          to,
+          text,
+          mediaUrl,
+          mediaLocalRoots,
+          accountId: accountId ?? undefined,
+          deps,
+        }),
+    }),
   },
   status: {
     defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),

@@ -7,6 +7,10 @@ import {
   estimateTokens,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
+import {
+  resolveTelegramInlineButtonsScope,
+  resolveTelegramReactionLevel,
+} from "../../../extensions/telegram/api.js";
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
@@ -20,10 +24,6 @@ import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getMemorySearchManager } from "../../memory/index.js";
 import { resolveSignalReactionLevel } from "../../plugin-sdk/signal.js";
-import {
-  resolveTelegramInlineButtonsScope,
-  resolveTelegramReactionLevel,
-} from "../../plugin-sdk/telegram.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
@@ -38,6 +38,10 @@ import { resolveSessionAgentId, resolveSessionAgentIds } from "../agent-scope.js
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
+import {
+  hasMeaningfulConversationContent,
+  isRealConversationMessage,
+} from "../compaction-real-conversation.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { ensureCustomApiRegistered } from "../custom-api-registry.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
@@ -53,6 +57,7 @@ import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { createConfiguredOllamaStreamFn } from "../ollama-stream.js";
 import { resolveOwnerDisplaySetting } from "../owner-display.js";
+import { createBundleLspToolRuntime } from "../pi-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../pi-bundle-mcp-tools.js";
 import {
   ensureSessionHeader,
@@ -82,6 +87,7 @@ import {
   compactWithSafetyTimeout,
   resolveCompactionTimeoutMs,
 } from "./compaction-safety-timeout.js";
+import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
 import {
   logToolSchemasForGoogle,
@@ -91,9 +97,11 @@ import {
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
+import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-discovery-input.js";
 import { buildModelAliasLines, resolveModelAsync } from "./model.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
+import { truncateSessionAfterCompaction } from "./session-truncation.js";
 import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
 import {
   applySystemPromptOverrideToSession,
@@ -113,6 +121,11 @@ export type CompactEmbeddedPiSessionParams = {
   messageChannel?: string;
   messageProvider?: string;
   agentAccountId?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string;
+  currentMessageId?: string | number;
+  /** Trusted sender id from inbound context for scoped message-tool discovery. */
+  senderId?: string;
   authProfileId?: string;
   /** Group id for channel-level tool policy resolution. */
   groupId?: string | null;
@@ -160,8 +173,12 @@ type CompactionMessageMetrics = {
   contributors: Array<{ role: string; chars: number; tool?: string }>;
 };
 
-function hasRealConversationContent(msg: AgentMessage): boolean {
-  return msg.role === "user" || msg.role === "assistant" || msg.role === "toolResult";
+function hasRealConversationContent(
+  msg: AgentMessage,
+  messages: AgentMessage[],
+  index: number,
+): boolean {
+  return isRealConversationMessage(msg, messages, index);
 }
 
 function createCompactionDiagId(): string {
@@ -581,6 +598,7 @@ export async function compactEmbeddedPiSessionDirect(
       abortSignal: runAbortController.signal,
       modelProvider: model.provider,
       modelId,
+      modelCompat: effectiveModel.compat,
       modelContextWindowTokens: ctxInfo.tokens,
       modelAuthMode: resolveModelAuthMode(model.provider, params.config),
     });
@@ -596,10 +614,21 @@ export async function compactEmbeddedPiSessionDirect(
           reservedToolNames: tools.map((tool) => tool.name),
         })
       : undefined;
-    const effectiveTools =
-      bundleMcpRuntime && bundleMcpRuntime.tools.length > 0
-        ? [...tools, ...bundleMcpRuntime.tools]
-        : tools;
+    const bundleLspRuntime = toolsEnabled
+      ? await createBundleLspToolRuntime({
+          workspaceDir: effectiveWorkspace,
+          cfg: params.config,
+          reservedToolNames: [
+            ...tools.map((tool) => tool.name),
+            ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
+          ],
+        })
+      : undefined;
+    const effectiveTools = [
+      ...tools,
+      ...(bundleMcpRuntime?.tools ?? []),
+      ...(bundleLspRuntime?.tools ?? []),
+    ];
     const allowedToolNames = collectAllowedToolNames({ tools: effectiveTools });
     logToolSchemasForGoogle({ tools: effectiveTools, provider });
     const machineName = await getMachineDisplayName();
@@ -649,12 +678,26 @@ export async function compactEmbeddedPiSessionDirect(
             return undefined;
           })()
         : undefined;
+    const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+      sessionKey: params.sessionKey,
+      config: params.config,
+    });
     // Resolve channel-specific message actions for system prompt
     const channelActions = runtimeChannel
-      ? listChannelSupportedActions({
-          cfg: params.config,
-          channel: runtimeChannel,
-        })
+      ? listChannelSupportedActions(
+          buildEmbeddedMessageActionDiscoveryInput({
+            cfg: params.config,
+            channel: runtimeChannel,
+            currentChannelId: params.currentChannelId,
+            currentThreadTs: params.currentThreadTs,
+            currentMessageId: params.currentMessageId,
+            accountId: params.agentAccountId,
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionId,
+            agentId: sessionAgentId,
+            senderId: params.senderId,
+          }),
+        )
       : undefined;
     const messageToolHints = runtimeChannel
       ? resolveChannelMessageToolHints({
@@ -680,10 +723,6 @@ export async function compactEmbeddedPiSessionDirect(
     const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
     const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
     const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
-    const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
-      sessionKey: params.sessionKey,
-      config: params.config,
-    });
     const isDefaultAgent = sessionAgentId === defaultAgentId;
     const promptMode =
       isSubagentSessionKey(params.sessionKey) || isCronSessionKey(params.sessionKey)
@@ -931,7 +970,11 @@ export async function compactEmbeddedPiSessionDirect(
           );
         }
 
-        if (!session.messages.some(hasRealConversationContent)) {
+        if (
+          !session.messages.some((message, index, messages) =>
+            hasRealConversationContent(message, messages, index),
+          )
+        ) {
           log.info(
             `[compaction] skipping — no real conversation messages (sessionKey=${params.sessionKey ?? params.sessionId})`,
           );
@@ -1056,6 +1099,25 @@ export async function compactEmbeddedPiSessionDirect(
             });
           }
         }
+        // Truncate session file to remove compacted entries (#39953)
+        if (params.config?.agents?.defaults?.compaction?.truncateAfterCompaction) {
+          try {
+            const truncResult = await truncateSessionAfterCompaction({
+              sessionFile: params.sessionFile,
+            });
+            if (truncResult.truncated) {
+              log.info(
+                `[compaction] post-compaction truncation removed ${truncResult.entriesRemoved} entries ` +
+                  `(sessionKey=${params.sessionKey ?? params.sessionId})`,
+              );
+            }
+          } catch (err) {
+            log.warn("[compaction] post-compaction truncation failed", {
+              errorMessage: err instanceof Error ? err.message : String(err),
+              errorStack: err instanceof Error ? err.stack : undefined,
+            });
+          }
+        }
         return {
           ok: true,
           compacted: true,
@@ -1075,6 +1137,7 @@ export async function compactEmbeddedPiSessionDirect(
         });
         session.dispose();
         await bundleMcpRuntime?.dispose();
+        await bundleLspRuntime?.dispose();
       }
     } finally {
       await sessionLock.release();
@@ -1176,6 +1239,16 @@ export async function compactEmbeddedPiSession(
           force: params.trigger === "manual",
           runtimeContext: params as Record<string, unknown>,
         });
+        if (result.ok && result.compacted) {
+          await runContextEngineMaintenance({
+            contextEngine,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            sessionFile: params.sessionFile,
+            reason: "compaction",
+            runtimeContext: params as Record<string, unknown>,
+          });
+        }
         if (engineOwnsCompaction && result.ok && result.compacted) {
           await runPostCompactionSideEffects({
             config: params.config,
@@ -1220,3 +1293,8 @@ export async function compactEmbeddedPiSession(
     }),
   );
 }
+
+export const __testing = {
+  hasRealConversationContent,
+  hasMeaningfulConversationContent,
+} as const;

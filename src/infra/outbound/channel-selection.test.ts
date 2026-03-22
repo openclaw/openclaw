@@ -143,6 +143,23 @@ describe("resolveMessageChannelSelection", () => {
     });
   });
 
+  it("does not probe configured channels when an explicit channel is available", async () => {
+    const isConfigured = vi.fn(async () => true);
+    mocks.listChannelPlugins.mockReturnValue([makePlugin({ id: "slack", isConfigured })]);
+
+    const selection = await resolveMessageChannelSelection({
+      cfg: {} as never,
+      channel: "slack",
+    });
+
+    expect(selection).toEqual({
+      channel: "slack",
+      configured: [],
+      source: "explicit",
+    });
+    expect(isConfigured).not.toHaveBeenCalled();
+  });
+
   it("falls back to tool context channel when explicit channel is unknown", async () => {
     const selection = await resolveMessageChannelSelection({
       cfg: {} as never,

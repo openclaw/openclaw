@@ -1,17 +1,14 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/nostr";
 import { describe, expect, it, vi } from "vitest";
-import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import {
+  createPluginSetupWizardConfigure,
   createTestWizardPrompter,
+  runSetupWizardConfigure,
   type WizardPrompter,
 } from "../../../test/helpers/extensions/setup-wizard.js";
+import type { OpenClawConfig } from "../runtime-api.js";
 import { nostrPlugin } from "./channel.js";
 
-const nostrConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
-  plugin: nostrPlugin,
-  wizard: nostrPlugin.setupWizard!,
-});
+const nostrConfigure = createPluginSetupWizardConfigure(nostrPlugin);
 
 describe("nostr setup wizard", () => {
   it("configures a private key and relay URLs", async () => {
@@ -27,14 +24,11 @@ describe("nostr setup wizard", () => {
       }) as WizardPrompter["text"],
     });
 
-    const result = await nostrConfigureAdapter.configure({
+    const result = await runSetupWizardConfigure({
+      configure: nostrConfigure,
       cfg: {} as OpenClawConfig,
-      runtime: createRuntimeEnv(),
       prompter,
       options: {},
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
     });
 
     expect(result.accountId).toBe("default");

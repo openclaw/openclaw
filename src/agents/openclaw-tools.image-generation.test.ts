@@ -17,7 +17,17 @@ function stubImageGenerationProviders() {
       id: "openai",
       defaultModel: "gpt-image-1",
       models: ["gpt-image-1"],
-      supportedSizes: ["1024x1024"],
+      capabilities: {
+        generate: {
+          supportsSize: true,
+        },
+        edit: {
+          enabled: false,
+        },
+        geometry: {
+          sizes: ["1024x1024"],
+        },
+      },
       generateImage: vi.fn(async () => {
         throw new Error("not used");
       }),

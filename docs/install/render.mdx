@@ -1,5 +1,9 @@
 ---
-title: Deploy on Render
+summary: "Deploy OpenClaw on Render with Infrastructure-as-Code"
+read_when:
+  - Deploying OpenClaw to Render
+  - You want a declarative cloud deploy with Render Blueprints
+title: "Render"
 ---
 
 Deploy OpenClaw on Render using Infrastructure as Code. The included `render.yaml` Blueprint defines your entire stack declaratively, service, disk, environment variables, so you can deploy with a single click and version your infrastructure alongside your code.
@@ -135,7 +139,7 @@ This downloads a portable backup you can restore on any OpenClaw host.
 
 ## Troubleshooting
 
-### Service won't start
+### Service will not start
 
 Check the deploy logs in the Render Dashboard. Common issues:
 
@@ -157,3 +161,9 @@ Render expects a 200 response from `/health` within 30 seconds. If builds succee
 
 - Build logs for errors
 - Whether the container runs locally with `docker build && docker run`
+
+## Next steps
+
+- Set up messaging channels: [Channels](/channels)
+- Configure the Gateway: [Gateway configuration](/gateway/configuration)
+- Keep OpenClaw up to date: [Updating](/install/updating)

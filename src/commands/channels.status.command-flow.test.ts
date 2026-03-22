@@ -92,7 +92,7 @@ function createTokenOnlyPlugin() {
       isEnabled: () => true,
     },
     actions: {
-      listActions: () => ["send"],
+      describeMessageTool: () => ({ actions: ["send"] }),
     },
   };
 }

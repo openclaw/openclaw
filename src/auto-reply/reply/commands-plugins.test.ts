@@ -62,6 +62,7 @@ describe("handleCommands /plugins", () => {
       expect(showResult.reply?.text).toContain('"id": "superpowers"');
       expect(showResult.reply?.text).toContain('"bundleFormat": "claude"');
       expect(showResult.reply?.text).toContain('"shape":');
+      expect(showResult.reply?.text).toContain('"compatibilityWarnings": []');
 
       const inspectAllParams = buildCommandTestParams(
         "/plugins inspect all",
@@ -75,6 +76,7 @@ describe("handleCommands /plugins", () => {
       const inspectAllResult = await handleCommands(inspectAllParams);
       expect(inspectAllResult.reply?.text).toContain("```json");
       expect(inspectAllResult.reply?.text).toContain('"plugin"');
+      expect(inspectAllResult.reply?.text).toContain('"compatibilityWarnings"');
       expect(inspectAllResult.reply?.text).toContain('"superpowers"');
     });
   });

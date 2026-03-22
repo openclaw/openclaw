@@ -140,7 +140,7 @@ async function stubPdfToolInfra(
     modelFound?: boolean;
   },
 ) {
-  const webMedia = await import("../../../extensions/whatsapp/src/media.js");
+  const webMedia = await import("../../media/web-media.js");
   const loadSpy = vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue(FAKE_PDF_MEDIA as never);
 
   const modelDiscovery = await import("../pi-model-discovery.js");

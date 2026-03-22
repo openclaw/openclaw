@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
-import { optionalStringEnum } from "openclaw/plugin-sdk/agent-runtime";
 import { jsonResult, readNumberParam, readStringParam } from "openclaw/plugin-sdk/agent-runtime";
+import { optionalStringEnum } from "openclaw/plugin-sdk/core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import { runFirecrawlScrape } from "./firecrawl-client.js";
 

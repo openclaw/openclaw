@@ -67,10 +67,15 @@ const configSessionsMocks = vi.hoisted(() => ({
 const readSessionUpdatedAt = configSessionsMocks.readSessionUpdatedAt;
 const resolveStorePath = configSessionsMocks.resolveStorePath;
 
-vi.mock("../send.js", () => ({
-  reactMessageDiscord: sendMocks.reactMessageDiscord,
-  removeReactionDiscord: sendMocks.removeReactionDiscord,
-}));
+vi.mock("../send.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../send.js")>();
+  return {
+    ...actual,
+    addRoleDiscord: vi.fn(),
+    reactMessageDiscord: sendMocks.reactMessageDiscord,
+    removeReactionDiscord: sendMocks.removeReactionDiscord,
+  };
+});
 
 vi.mock("../send.messages.js", () => ({
   editMessageDiscord: deliveryMocks.editMessageDiscord,

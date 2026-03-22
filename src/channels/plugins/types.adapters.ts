@@ -74,6 +74,13 @@ export type ChannelSetupAdapter = {
     accountId: string;
     input: ChannelSetupInput;
   }) => OpenClawConfig;
+  afterAccountConfigWritten?: (params: {
+    previousCfg: OpenClawConfig;
+    cfg: OpenClawConfig;
+    accountId: string;
+    input: ChannelSetupInput;
+    runtime: RuntimeEnv;
+  }) => Promise<void> | void;
   validateInput?: (params: {
     cfg: OpenClawConfig;
     accountId: string;
@@ -123,6 +130,7 @@ export type ChannelOutboundContext = {
   to: string;
   text: string;
   mediaUrl?: string;
+  audioAsVoice?: boolean;
   mediaLocalRoots?: readonly string[];
   gifPlayback?: boolean;
   /** Send image as document to avoid Telegram compression. */
@@ -330,6 +338,7 @@ export type ChannelPairingAdapter = {
   notifyApproval?: (params: {
     cfg: OpenClawConfig;
     id: string;
+    accountId?: string;
     runtime?: RuntimeEnv;
   }) => Promise<void>;
 };
