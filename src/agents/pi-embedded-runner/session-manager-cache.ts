@@ -68,7 +68,11 @@ function isSessionManagerCached(sessionFile: string): boolean {
   if (!entry) {
     return false;
   }
-  return now - entry.loadedAt <= ttl;
+  if (now - entry.loadedAt > ttl) {
+    SESSION_MANAGER_CACHE.delete(sessionFile);
+    return false;
+  }
+  return true;
 }
 
 export async function prewarmSessionFile(sessionFile: string): Promise<void> {
