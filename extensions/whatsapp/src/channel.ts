@@ -70,7 +70,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
   },
   allowlist: buildDmGroupAccountAllowlistAdapter({
     channelId: "whatsapp",
-    resolveAccount: ({ cfg, accountId }) => resolveWhatsAppAccount({ cfg, accountId }),
+    resolveAccount: resolveWhatsAppAccount,
     normalize: ({ values }) => formatWhatsAppConfigAllowFromEntries(values),
     resolveDmAllowFrom: (account) => account.allowFrom,
     resolveGroupAllowFrom: (account) => account.groupAllowFrom,

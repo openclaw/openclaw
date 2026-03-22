@@ -67,6 +67,18 @@ export const resolveMemorySearchConfigMock = vi.fn(() => ({
 }));
 export const resolveSessionAgentIdMock = vi.fn(() => "main");
 export const estimateTokensMock = vi.fn((_message?: unknown) => 10);
+export const sessionMessages: unknown[] = [
+  { role: "user", content: "hello", timestamp: 1 },
+  { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
+  {
+    role: "toolResult",
+    toolCallId: "t1",
+    toolName: "exec",
+    content: [{ type: "text", text: "output" }],
+    isError: false,
+    timestamp: 3,
+  },
+];
 export const sessionAbortCompactionMock: Mock<(reason?: unknown) => void> = vi.fn();
 export const createOpenClawCodingToolsMock = vi.fn(() => []);
 
@@ -134,6 +146,20 @@ export function resetCompactHooksHarnessMocks(): void {
   resolveSessionAgentIdMock.mockReturnValue("main");
   estimateTokensMock.mockReset();
   estimateTokensMock.mockReturnValue(10);
+  sessionMessages.splice(
+    0,
+    sessionMessages.length,
+    { role: "user", content: "hello", timestamp: 1 },
+    { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
+    {
+      role: "toolResult",
+      toolCallId: "t1",
+      toolName: "exec",
+      content: [{ type: "text", text: "output" }],
+      isError: false,
+      timestamp: 3,
+    },
+  );
   sessionAbortCompactionMock.mockReset();
   createOpenClawCodingToolsMock.mockReset();
   createOpenClawCodingToolsMock.mockReturnValue([]);
@@ -142,6 +168,7 @@ export function resetCompactHooksHarnessMocks(): void {
 export async function loadCompactHooksHarness(): Promise<{
   compactEmbeddedPiSessionDirect: typeof import("./compact.js").compactEmbeddedPiSessionDirect;
   compactEmbeddedPiSession: typeof import("./compact.js").compactEmbeddedPiSession;
+  __testing: typeof import("./compact.js").__testing;
   onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 }> {
   resetCompactHooksHarnessMocks();
@@ -165,10 +192,16 @@ export async function loadCompactHooksHarness(): Promise<{
     };
   });
 
-  vi.doMock("@mariozechner/pi-ai/oauth", () => ({
-    getOAuthApiKey: vi.fn(),
-    getOAuthProviders: vi.fn(() => []),
-  }));
+  vi.doMock("@mariozechner/pi-ai/oauth", async () => {
+    const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
+      "@mariozechner/pi-ai/oauth",
+    );
+    return {
+      ...actual,
+      getOAuthApiKey: vi.fn(),
+      getOAuthProviders: vi.fn(() => []),
+    };
+  });
 
   vi.doMock("@mariozechner/pi-coding-agent", () => ({
     AuthStorage: class AuthStorage {},
@@ -176,18 +209,11 @@ export async function loadCompactHooksHarness(): Promise<{
     createAgentSession: vi.fn(async () => {
       const session = {
         sessionId: "session-1",
-        messages: [
-          { role: "user", content: "hello", timestamp: 1 },
-          { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
-          {
-            role: "toolResult",
-            toolCallId: "t1",
-            toolName: "exec",
-            content: [{ type: "text", text: "output" }],
-            isError: false,
-            timestamp: 3,
-          },
-        ],
+        messages: sessionMessages.map((message) =>
+          typeof structuredClone === "function"
+            ? structuredClone(message)
+            : JSON.parse(JSON.stringify(message)),
+        ),
         agent: {
           replaceMessages: vi.fn((messages: unknown[]) => {
             session.messages = [...(messages as typeof session.messages)];
@@ -358,10 +384,15 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveChannelCapabilities: vi.fn(() => undefined),
   }));
 
-  vi.doMock("../../utils/message-channel.js", () => ({
-    INTERNAL_MESSAGE_CHANNEL: "webchat",
-    normalizeMessageChannel: vi.fn(() => undefined),
-  }));
+  vi.doMock("../../utils/message-channel.js", async () => {
+    const actual = await vi.importActual<typeof import("../../utils/message-channel.js")>(
+      "../../utils/message-channel.js",
+    );
+    return {
+      ...actual,
+      normalizeMessageChannel: vi.fn(() => undefined),
+    };
+  });
 
   vi.doMock("../pi-embedded-helpers.js", () => ({
     ensureSessionHeader: vi.fn(async () => {}),

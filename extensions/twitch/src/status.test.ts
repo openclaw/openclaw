@@ -50,8 +50,12 @@ describe("status", () => {
       const issues = collectTwitchStatusIssues(snapshots);
 
       expect(issues.length).toBeGreaterThan(0);
-      const disabledIssue = issues.find((i) => i.message.includes("disabled"));
-      expect(disabledIssue).toBeDefined();
+      expect(issues).toContainEqual(
+        expect.objectContaining({
+          kind: "config",
+          message: "Twitch account is disabled",
+        }),
+      );
     });
 
     it("should detect missing clientId when account configured (simplified config)", () => {
@@ -64,8 +68,12 @@ describe("status", () => {
 
       const issues = collectTwitchStatusIssues(snapshots, () => mockCfg as never);
 
-      const clientIdIssue = issues.find((i) => i.message.includes("client ID"));
-      expect(clientIdIssue).toBeDefined();
+      expect(issues).toContainEqual(
+        expect.objectContaining({
+          kind: "config",
+          message: "Twitch client ID is required",
+        }),
+      );
     });
 
     it("should warn about oauth: prefix in token (simplified config)", () => {
@@ -78,9 +86,12 @@ describe("status", () => {
 
       const issues = collectTwitchStatusIssues(snapshots, () => mockCfg as never);
 
-      const prefixIssue = issues.find((i) => i.message.includes("oauth:"));
-      expect(prefixIssue).toBeDefined();
-      expect(prefixIssue?.kind).toBe("config");
+      expect(issues).toContainEqual(
+        expect.objectContaining({
+          kind: "config",
+          message: "Token contains 'oauth:' prefix (will be stripped)",
+        }),
+      );
     });
 
     it("should detect clientSecret without refreshToken (simplified config)", () => {
@@ -95,8 +106,12 @@ describe("status", () => {
 
       const issues = collectTwitchStatusIssues(snapshots, () => mockCfg as never);
 
-      const secretIssue = issues.find((i) => i.message.includes("clientSecret"));
-      expect(secretIssue).toBeDefined();
+      expect(issues).toContainEqual(
+        expect.objectContaining({
+          kind: "config",
+          message: "clientSecret provided without refreshToken",
+        }),
+      );
     });
 
     it("should detect empty allowFrom array (simplified config)", () => {
@@ -110,8 +125,12 @@ describe("status", () => {
 
       const issues = collectTwitchStatusIssues(snapshots, () => mockCfg as never);
 
-      const allowFromIssue = issues.find((i) => i.message.includes("allowFrom"));
-      expect(allowFromIssue).toBeDefined();
+      expect(issues).toContainEqual(
+        expect.objectContaining({
+          kind: "config",
+          message: "allowFrom is configured but empty",
+        }),
+      );
     });
 
     it("should detect allowedRoles 'all' with allowFrom conflict (simplified config)", () => {
@@ -126,9 +145,12 @@ describe("status", () => {
 
       const issues = collectTwitchStatusIssues(snapshots, () => mockCfg as never);
 
-      const conflictIssue = issues.find((i) => i.kind === "intent");
-      expect(conflictIssue).toBeDefined();
-      expect(conflictIssue?.message).toContain("allowedRoles is set to 'all'");
+      expect(issues).toContainEqual(
+        expect.objectContaining({
+          kind: "intent",
+          message: "allowedRoles is set to 'all' but allowFrom is also configured",
+        }),
+      );
     });
 
     it("should detect runtime errors", () => {
@@ -138,9 +160,12 @@ describe("status", () => {
 
       const issues = collectTwitchStatusIssues(snapshots);
 
-      const runtimeIssue = issues.find((i) => i.kind === "runtime");
-      expect(runtimeIssue).toBeDefined();
-      expect(runtimeIssue?.message).toContain("Connection timeout");
+      expect(issues).toContainEqual(
+        expect.objectContaining({
+          kind: "runtime",
+          message: "Last error: Connection timeout",
+        }),
+      );
     });
 
     it("should detect accounts that never connected", () => {
@@ -154,10 +179,12 @@ describe("status", () => {
 
       const issues = collectTwitchStatusIssues(snapshots);
 
-      const neverConnectedIssue = issues.find((i) =>
-        i.message.includes("never connected successfully"),
+      expect(issues).toContainEqual(
+        expect.objectContaining({
+          kind: "runtime",
+          message: "Account has never connected successfully",
+        }),
       );
-      expect(neverConnectedIssue).toBeDefined();
     });
 
     it("should detect long-running connections", () => {
@@ -172,8 +199,12 @@ describe("status", () => {
 
       const issues = collectTwitchStatusIssues(snapshots);
 
-      const uptimeIssue = issues.find((i) => i.message.includes("running for"));
-      expect(uptimeIssue).toBeDefined();
+      expect(issues).toContainEqual(
+        expect.objectContaining({
+          kind: "runtime",
+          message: "Connection has been running for 8 days",
+        }),
+      );
     });
 
     it("should handle empty snapshots array", () => {
@@ -194,8 +225,13 @@ describe("status", () => {
 
       const issues = collectTwitchStatusIssues(snapshots);
 
-      // Should not crash, may return empty or minimal issues
-      expect(Array.isArray(issues)).toBe(true);
+      expect(issues).toEqual([
+        expect.objectContaining({
+          accountId: "unknown",
+          kind: "config",
+          message: "Twitch account is not properly configured",
+        }),
+      ]);
     });
   });
 });

@@ -112,7 +112,7 @@ describe("applyDefaultModelChoice", () => {
   });
 
   it("uses applyDefaultConfig path when setDefaultModel is true", async () => {
-    const defaultModel = "openai/gpt-5.1-codex";
+    const defaultModel = "openai/gpt-5.4";
     const applied = await applyDefaultModelChoice({
       config: {},
       setDefaultModel: true,

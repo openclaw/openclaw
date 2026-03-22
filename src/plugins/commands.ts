@@ -8,7 +8,15 @@
 import { parseExplicitTargetForChannel } from "../channels/plugins/target-parsing.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import {
+  clearPluginCommands,
+  clearPluginCommandsForPlugin,
+  getPluginCommandSpecs,
+  isPluginCommandRegistryLocked,
+  pluginCommands,
+  setPluginCommandRegistryLocked,
+  type RegisteredPluginCommand,
+} from "./command-registry-state.js";
 import {
   detachPluginConversationBinding,
   getCurrentPluginConversationBinding,
@@ -19,26 +27,6 @@ import type {
   PluginCommandContext,
   PluginCommandResult,
 } from "./types.js";
-
-type RegisteredPluginCommand = OpenClawPluginCommandDefinition & {
-  pluginId: string;
-  pluginName?: string;
-  pluginRoot?: string;
-};
-
-type PluginCommandState = {
-  pluginCommands: Map<string, RegisteredPluginCommand>;
-  registryLocked: boolean;
-};
-
-const PLUGIN_COMMAND_STATE_KEY = Symbol.for("openclaw.pluginCommandsState");
-
-const state = resolveGlobalSingleton<PluginCommandState>(PLUGIN_COMMAND_STATE_KEY, () => ({
-  pluginCommands: new Map<string, RegisteredPluginCommand>(),
-  registryLocked: false,
-}));
-
-const pluginCommands = state.pluginCommands;
 
 // Maximum allowed length for command arguments (defense in depth)
 const MAX_ARGS_LENGTH = 4096;
@@ -181,7 +169,7 @@ export function registerPluginCommand(
   opts?: { pluginName?: string; pluginRoot?: string },
 ): CommandRegistrationResult {
   // Prevent registration while commands are being processed
-  if (state.registryLocked) {
+  if (isPluginCommandRegistryLocked()) {
     return { ok: false, error: "Cannot register commands while processing is in progress" };
   }
 
@@ -225,24 +213,7 @@ export function registerPluginCommand(
   return { ok: true };
 }
 
-/**
- * Clear all registered plugin commands.
- * Called during plugin reload.
- */
-export function clearPluginCommands(): void {
-  pluginCommands.clear();
-}
-
-/**
- * Clear plugin commands for a specific plugin.
- */
-export function clearPluginCommandsForPlugin(pluginId: string): void {
-  for (const [key, cmd] of pluginCommands.entries()) {
-    if (cmd.pluginId === pluginId) {
-      pluginCommands.delete(key);
-    }
-  }
-}
+export { clearPluginCommands, clearPluginCommandsForPlugin, getPluginCommandSpecs };
 
 /**
  * Check if a command body matches a registered plugin command.
@@ -322,7 +293,7 @@ function resolveBindingConversationFromCommand(params: {
   from?: string;
   to?: string;
   accountId?: string;
-  messageThreadId?: number;
+  messageThreadId?: string | number;
 }): {
   channel: string;
   accountId: string;
@@ -460,7 +431,7 @@ export async function executePluginCommand(params: {
   };
 
   // Lock registry during execution to prevent concurrent modifications
-  state.registryLocked = true;
+  setPluginCommandRegistryLocked(true);
   try {
     const result = await command.handler(ctx);
     logVerbose(
@@ -473,7 +444,7 @@ export async function executePluginCommand(params: {
     // Don't leak internal error details - return a safe generic message
     return { text: "⚠️ Command failed. Please try again later." };
   } finally {
-    state.registryLocked = false;
+    setPluginCommandRegistryLocked(false);
   }
 }
 
@@ -493,43 +464,8 @@ export function listPluginCommands(): Array<{
   }));
 }
 
-function resolvePluginNativeName(
-  command: OpenClawPluginCommandDefinition,
-  provider?: string,
-): string {
-  const providerName = provider?.trim().toLowerCase();
-  const providerOverride = providerName ? command.nativeNames?.[providerName] : undefined;
-  if (typeof providerOverride === "string" && providerOverride.trim()) {
-    return providerOverride.trim();
-  }
-  const defaultOverride = command.nativeNames?.default;
-  if (typeof defaultOverride === "string" && defaultOverride.trim()) {
-    return defaultOverride.trim();
-  }
-  return command.name;
-}
-
 function listPluginInvocationNames(command: OpenClawPluginCommandDefinition): string[] {
   return listPluginInvocationKeys(command);
-}
-
-/**
- * Get plugin command specs for native command registration (e.g., Telegram).
- */
-export function getPluginCommandSpecs(provider?: string): Array<{
-  name: string;
-  description: string;
-  acceptsArgs: boolean;
-}> {
-  const providerName = provider?.trim().toLowerCase();
-  if (providerName && providerName !== "telegram" && providerName !== "discord") {
-    return [];
-  }
-  return Array.from(pluginCommands.values()).map((cmd) => ({
-    name: resolvePluginNativeName(cmd, provider),
-    description: cmd.description,
-    acceptsArgs: cmd.acceptsArgs ?? false,
-  }));
 }
 
 export const __testing = {

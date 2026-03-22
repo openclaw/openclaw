@@ -35,9 +35,6 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
-const { registerQrCli } = await import("./qr-cli.js");
-const { registerMaintenanceCommands } = await import("./program/register.maintenance.js");
-
 function createGatewayTokenRefFixture() {
   return {
     secrets: {
@@ -81,10 +78,28 @@ function decodeSetupCode(setupCode: string): {
 }
 
 async function runCli(args: string[]): Promise<void> {
-  const program = new Command();
-  registerQrCli(program);
-  registerMaintenanceCommands(program);
-  await program.parseAsync(args, { from: "user" });
+  await withCliModules(async ({ registerQrCli, registerMaintenanceCommands }) => {
+    const program = new Command();
+    registerQrCli(program);
+    registerMaintenanceCommands(program);
+    await program.parseAsync(args, { from: "user" });
+  });
+}
+
+async function withCliModules<T>(
+  run: (modules: {
+    registerQrCli: typeof import("./qr-cli.js").registerQrCli;
+    registerMaintenanceCommands: typeof import("./program/register.maintenance.js").registerMaintenanceCommands;
+  }) => Promise<T>,
+): Promise<T> {
+  vi.resetModules();
+  try {
+    const { registerQrCli } = await import("./qr-cli.js");
+    const { registerMaintenanceCommands } = await import("./program/register.maintenance.js");
+    return await run({ registerQrCli, registerMaintenanceCommands });
+  } finally {
+    vi.restoreAllMocks();
+  }
 }
 
 describe("cli integration: qr + dashboard token SecretRef", () => {
@@ -102,6 +117,8 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
 
   afterAll(() => {
     envSnapshot.restore();
+    vi.restoreAllMocks();
+    vi.resetModules();
   });
 
   beforeEach(() => {
@@ -159,7 +176,9 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
       config: fixture,
     });
 
-    await expect(runCli(["qr", "--setup-code-only"])).rejects.toThrow("__exit__:1");
+    await expect(runCli(["qr", "--setup-code-only"])).rejects.toThrow(
+      /(__exit__:1|process\.exit unexpectedly called with "?1"?)/,
+    );
     expect(runtimeErrors.join("\n")).toMatch(/SHARED_GATEWAY_TOKEN/);
 
     runtimeLogs.length = 0;

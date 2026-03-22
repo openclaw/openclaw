@@ -1037,12 +1037,29 @@
                 "group": "Plugins",
                 "pages": [
                   "tools/plugin",
-                  "plugins/building-plugins",
                   "plugins/community",
                   "plugins/bundles",
-                  "plugins/manifest",
-                  "plugins/sdk-migration",
-                  "plugins/architecture"
+                  {
+                    "group": "Building Plugins",
+                    "pages": [
+                      "plugins/building-plugins",
+                      "plugins/sdk-channel-plugins",
+                      "plugins/sdk-provider-plugins",
+                      "plugins/sdk-migration"
+                    ]
+                  },
+                  {
+                    "group": "SDK Reference",
+                    "pages": [
+                      "plugins/sdk-overview",
+                      "plugins/sdk-entrypoints",
+                      "plugins/sdk-runtime",
+                      "plugins/sdk-setup",
+                      "plugins/sdk-testing",
+                      "plugins/manifest",
+                      "plugins/architecture"
+                    ]
+                  }
                 ]
               },
               {

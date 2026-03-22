@@ -35,15 +35,16 @@ export function createTtsTool(opts?: {
       });
 
       if (result.success && result.audioPath) {
-        const lines: string[] = [];
-        // Tag Telegram Opus output as a voice bubble instead of a file attachment.
-        if (result.voiceCompatible) {
-          lines.push("[[audio_as_voice]]");
-        }
-        lines.push(`MEDIA:${result.audioPath}`);
         return {
-          content: [{ type: "text", text: lines.join("\n") }],
-          details: { audioPath: result.audioPath, provider: result.provider },
+          content: [{ type: "text", text: "Generated audio reply." }],
+          details: {
+            audioPath: result.audioPath,
+            provider: result.provider,
+            media: {
+              mediaUrl: result.audioPath,
+              ...(result.voiceCompatible ? { audioAsVoice: true } : {}),
+            },
+          },
         };
       }
 
