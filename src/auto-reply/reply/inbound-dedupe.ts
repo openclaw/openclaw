@@ -73,12 +73,24 @@ export function buildInboundDedupeKey(ctx: MsgContext): string | null {
 function normalizeInboundContentCloneText(value: string): string {
   return value
     .replace(/<@!?\d+>/g, "@")
-    .replace(/<@&\d+>/g, "@role")
-    .replace(/<#\d+>/g, "#channel")
     .replace(/https?:\/\/\S+/g, (match) => match.toLowerCase())
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
+}
+
+function resolveInboundMediaCloneIdentity(ctx: MsgContext): string {
+  const rawMedia = [
+    ...(Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : []),
+    ...(Array.isArray(ctx.MediaUrls) ? ctx.MediaUrls : []),
+    typeof ctx.MediaPath === "string" ? ctx.MediaPath : undefined,
+    typeof ctx.MediaUrl === "string" ? ctx.MediaUrl : undefined,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .sort();
+  return rawMedia.join("|");
 }
 
 function buildDiscordThreadContentCloneDedupeKey(ctx: MsgContext): string | null {
@@ -115,6 +127,7 @@ function buildDiscordThreadContentCloneDedupeKey(ctx: MsgContext): string | null
   if (!normalizedBody) {
     return null;
   }
+  const mediaIdentity = resolveInboundMediaCloneIdentity(ctx);
   return [
     provider,
     ctx.AccountId?.trim() ?? "",
@@ -122,6 +135,7 @@ function buildDiscordThreadContentCloneDedupeKey(ctx: MsgContext): string | null
     peerId,
     threadId,
     normalizedBody,
+    mediaIdentity,
   ].join("|");
 }
 

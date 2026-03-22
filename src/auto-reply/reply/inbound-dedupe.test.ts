@@ -113,7 +113,7 @@ describe("inbound dedupe", () => {
       MessageSid: "msg-2",
     };
     const cloneCache: DedupeCache = {
-      check: vi.fn((key: string) => key.endsWith("same body")),
+      check: vi.fn((key: string) => key.includes("same body")),
       clear: vi.fn(),
     };
 
@@ -122,5 +122,48 @@ describe("inbound dedupe", () => {
     expect(shouldSkipDuplicateInbound(second, { now: 101, cache: cloneCache, cloneCache })).toBe(
       true,
     );
+  });
+
+  it("does not collapse distinct role or channel mentions", () => {
+    const base: MsgContext = {
+      Provider: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:c1",
+      SessionKey: "agent:main:discord:channel:c1",
+      MessageThreadId: "thread-1",
+      BodyForCommands: "post this in <#123> for <@&456>",
+    };
+
+    expect(shouldSkipDuplicateInbound({ ...base, MessageSid: "msg-1" }, { now: 100 })).toBe(false);
+    expect(
+      shouldSkipDuplicateInbound(
+        { ...base, MessageSid: "msg-2", BodyForCommands: "post this in <#999> for <@&888>" },
+        { now: 101 },
+      ),
+    ).toBe(false);
+  });
+
+  it("does not collapse messages with the same text but different media", () => {
+    const base: MsgContext = {
+      Provider: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:c1",
+      SessionKey: "agent:main:discord:channel:c1",
+      MessageThreadId: "thread-1",
+      BodyForCommands: "here",
+    };
+
+    expect(
+      shouldSkipDuplicateInbound(
+        { ...base, MessageSid: "msg-1", MediaPaths: ["/tmp/a.png"] },
+        { now: 100 },
+      ),
+    ).toBe(false);
+    expect(
+      shouldSkipDuplicateInbound(
+        { ...base, MessageSid: "msg-2", MediaPaths: ["/tmp/b.png"] },
+        { now: 101 },
+      ),
+    ).toBe(false);
   });
 });
