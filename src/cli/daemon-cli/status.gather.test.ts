@@ -215,6 +215,36 @@ describe("gatherDaemonStatus", () => {
     expect(status.rpc?.url).toBe("wss://override.example:18790");
   });
 
+  it("uses fallback network details when interface discovery throws during status inspection", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        bind: "tailnet",
+        tls: { enabled: true },
+        auth: { token: "daemon-token" },
+      },
+    };
+    resolveGatewayBindHost.mockImplementationOnce(async () => {
+      throw new Error("uv_interface_addresses failed");
+    });
+    pickPrimaryTailnetIPv4.mockImplementationOnce(() => {
+      throw new Error("uv_interface_addresses failed");
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(status.gateway).toMatchObject({
+      bindMode: "tailnet",
+      bindHost: "127.0.0.1",
+      probeUrl: "wss://127.0.0.1:19001",
+    });
+    expect(status.gateway?.probeNote).toContain("interface discovery failed");
+    expect(status.gateway?.probeNote).toContain("tailnet addresses");
+  });
+
   it("reuses command environment when reading runtime status", async () => {
     serviceReadCommand.mockResolvedValueOnce({
       programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],

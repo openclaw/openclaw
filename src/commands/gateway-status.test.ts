@@ -220,6 +220,24 @@ describe("gateway-status command", () => {
     expect(targets[0]?.summary).toBeTruthy();
   });
 
+  it("keeps status output working when tailnet discovery throws", async () => {
+    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
+    pickPrimaryTailnetIPv4.mockImplementationOnce(() => {
+      throw new Error("uv_interface_addresses failed");
+    });
+
+    await runGatewayStatus(runtime, { timeout: "1000", json: true });
+
+    expect(runtimeErrors).toHaveLength(0);
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+      network?: { tailnetIPv4?: string | null; localTailnetUrl?: string | null };
+    };
+    expect(parsed.network).toMatchObject({
+      tailnetIPv4: null,
+      localTailnetUrl: null,
+    });
+  });
+
   it("treats missing-scope RPC probe failures as degraded but reachable", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
     readBestEffortConfig.mockResolvedValueOnce({
