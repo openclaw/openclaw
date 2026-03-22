@@ -138,7 +138,7 @@ export function createFollowupRunner(params: {
           sessionEntry.lastTo
         ) {
           try {
-            await routeReply({
+            const mirrorResult = await routeReply({
               payload,
               channel: sessionEntry.lastChannel,
               to: sessionEntry.lastTo,
@@ -146,7 +146,15 @@ export function createFollowupRunner(params: {
               accountId: sessionEntry.lastAccountId ?? undefined,
               threadId: sessionEntry.lastThreadId ?? undefined,
               cfg: queued.run.config,
+              // Webchat flow already appends to the session transcript;
+              // skip transcript mirror to avoid duplicate entries.
+              mirror: false,
             });
+            if (!mirrorResult.ok) {
+              logVerbose(
+                `followup queue: webchat mirror to ${sessionEntry.lastChannel} failed: ${mirrorResult.error ?? "unknown error"}`,
+              );
+            }
           } catch (err: unknown) {
             logVerbose(
               `followup queue: webchat mirror to ${sessionEntry.lastChannel} failed: ${String(err)}`,

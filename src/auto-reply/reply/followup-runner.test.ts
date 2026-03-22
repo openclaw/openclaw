@@ -859,6 +859,9 @@ describe("createFollowupRunner webchat mirror to last external channel", () => {
         to: "chat_123",
         accountId: "work",
         threadId: "topic_456",
+        // Must disable transcript mirror to avoid double-append
+        // (webchat flow already appends to session transcript).
+        mirror: false,
       }),
     );
   });
@@ -961,8 +964,8 @@ describe("createFollowupRunner webchat mirror to last external channel", () => {
       meta: {},
     });
 
-    // Make the mirror routeReply call throw an error.
-    routeReplyMock.mockRejectedValueOnce(new Error("mirror delivery failed"));
+    // routeReply returns { ok: false } on delivery failures (it does not throw).
+    routeReplyMock.mockResolvedValueOnce({ ok: false, error: "mirror delivery failed" });
 
     const runner = createMirrorRunner({ sessionEntry, onBlockReply });
     await runner(createWebchatMirrorRun());
