@@ -160,6 +160,16 @@ function requirePendingUpload(uploadId: string) {
   return upload;
 }
 
+async function runRegisteredHandler(
+  handler: MSTeamsActivityHandler,
+  context: MSTeamsTurnContext,
+): Promise<void> {
+  if (!handler.run) {
+    throw new Error("expected registerMSTeamsHandlers to install handler.run");
+  }
+  await handler.run(context);
+}
+
 describe("msteams file consent invoke authz", () => {
   beforeEach(() => {
     setMSTeamsRuntime(runtimeStub);
@@ -174,7 +184,7 @@ describe("msteams file consent invoke authz", () => {
       action: "accept",
     });
 
-    await handler.run(context);
+    await runRegisteredHandler(handler, context);
 
     // invokeResponse should be sent immediately
     expect(sendActivity).toHaveBeenCalledWith(
@@ -199,7 +209,7 @@ describe("msteams file consent invoke authz", () => {
       action: "accept",
     });
 
-    await handler.run(context);
+    await runRegisteredHandler(handler, context);
 
     // invokeResponse should be sent immediately
     expect(sendActivity).toHaveBeenCalledWith(
@@ -226,7 +236,7 @@ describe("msteams file consent invoke authz", () => {
       action: "decline",
     });
 
-    await handler.run(context);
+    await runRegisteredHandler(handler, context);
 
     // invokeResponse should be sent immediately
     expect(sendActivity).toHaveBeenCalledWith(
