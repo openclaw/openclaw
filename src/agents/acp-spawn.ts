@@ -464,6 +464,15 @@ export async function spawnAcpDirect(
           .listBySession(parentSessionKey)
           .some((record) => record.targetKind === "subagent" && record.status !== "ended")
       : false;
+  // Check if the parent session has an active thread/session binding (targetKind === "session").
+  // This catches thread-bound parent sessions even when ctx.agentThreadId is absent in the
+  // call context (e.g., certain HTTP tool invocation paths), preventing implicit progress
+  // forwarding to user-facing threads that should be excluded.
+  const requesterHasThreadBinding = parentSessionKey
+    ? bindingService
+        .listBySession(parentSessionKey)
+        .some((record) => record.targetKind === "session" && record.status !== "ended")
+    : false;
   const requesterHasThreadContext =
     typeof ctx.agentThreadId === "string"
       ? ctx.agentThreadId.trim().length > 0
@@ -497,6 +506,7 @@ export async function spawnAcpDirect(
     spawnMode === "run" &&
     !requestThreadBinding &&
     !requesterHasActiveSubagentBinding &&
+    !requesterHasThreadBinding &&
     !requesterHasThreadContext &&
     requesterHeartbeatEnabled &&
     requesterHeartbeatRelayRouteUsable;

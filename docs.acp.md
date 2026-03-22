@@ -207,6 +207,15 @@ Progress updates are compact, milestone-oriented messages sent as system events 
 
 The progress relay buffers text output and emits compact snippets periodically (default: 2.5s flush interval). Full raw events are written to `.acp-stream.jsonl` in the session directory for debugging.
 
+### Prerequisites
+
+For implicit forwarding to activate, the parent session must have:
+
+1. **Heartbeat enabled** — `agents.defaults.heartbeat.every` (or the per-agent equivalent) must not be `0m`. See [Heartbeat configuration](/gateway/heartbeat#configuration) to set a cadence.
+2. **A usable session-local heartbeat relay route** — the session must have a heartbeat relay path that can accept forwarded events (this is the case for normal Gateway sessions; it is not available for isolated subagent sessions or sessions with thread binding).
+
+If either prerequisite is missing, progress updates are not forwarded even when `acp.progressForward` is `true` (or unset, which defaults to `true`).
+
 ### Configuration
 
 By default, `acp.progressForward` is `true` (enabled). To disable:

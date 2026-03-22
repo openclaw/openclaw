@@ -1004,6 +1004,45 @@ describe("spawnAcpDirect", () => {
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
+  it("does not implicitly stream for parent sessions with an active thread binding (no ctx.agentThreadId)", async () => {
+    // Regression test: when ctx.agentThreadId is absent but the parent session has an
+    // active thread binding (targetKind === "session"), implicit forwarding must be
+    // blocked to prevent ACP milestone chatter from leaking into user-facing threads.
+    hoisted.sessionBindingListBySessionMock.mockImplementation((targetSessionKey: string) => {
+      if (targetSessionKey === "agent:main:thread-parent") {
+        return [
+          createSessionBinding({
+            targetSessionKey,
+            targetKind: "session",
+            status: "active",
+          }),
+        ];
+      }
+      return [];
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:thread-parent",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:parent-channel",
+        // Note: agentThreadId is intentionally absent to simulate the HTTP tool
+        // invocation path where ctx.agentThreadId may be missing even though the
+        // parent session is thread-bound.
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.mode).toBe("run");
+    expect(result.streamLogPath).toBeUndefined();
+    expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
+  });
+
   it("announces parent relay start only after successful child dispatch", async () => {
     const firstHandle = createRelayHandle();
     const secondHandle = createRelayHandle();
