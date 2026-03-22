@@ -4,13 +4,9 @@ import {
   redactConfigSnapshot,
   restoreRedactedValues as restoreRedactedValues_orig,
 } from "./redact-snapshot.js";
-import { __test__ } from "./schema.hints.js";
+import { redactSnapshotTestHints as mainSchemaHints } from "./redact-snapshot.test-hints.js";
 import type { ConfigUiHints } from "./schema.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
-import { OpenClawSchema } from "./zod-schema.js";
-
-const { mapSensitivePaths } = __test__;
-const mainSchemaHints = mapSensitivePaths(OpenClawSchema, "", {});
 
 type TestSnapshot<TConfig extends Record<string, unknown>> = ConfigFileSnapshot & {
   parsed: TConfig;
@@ -49,13 +45,6 @@ function restoreRedactedValues<TOriginal>(
 
 describe("realredactConfigSnapshot_real", () => {
   it("main schema redact works (samples)", () => {
-    const schema = OpenClawSchema.toJSONSchema({
-      target: "draft-07",
-      unrepresentable: "any",
-    });
-    schema.title = "OpenClawConfig";
-    const hints = mainSchemaHints;
-
     const snapshot = makeSnapshot({
       agents: {
         defaults: {
@@ -77,11 +66,11 @@ describe("realredactConfigSnapshot_real", () => {
       },
     });
 
-    const result = redactConfigSnapshot(snapshot, hints);
+    const result = redactConfigSnapshot(snapshot, mainSchemaHints);
     const config = result.config as typeof snapshot.config;
     expect(config.agents.defaults.memorySearch.remote.apiKey).toBe(REDACTED_SENTINEL);
     expect(config.agents.list[0].memorySearch.remote.apiKey).toBe(REDACTED_SENTINEL);
-    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    const restored = restoreRedactedValues(result.config, snapshot.config, mainSchemaHints);
     expect(restored.agents.defaults.memorySearch.remote.apiKey).toBe("1234");
     expect(restored.agents.list[0].memorySearch.remote.apiKey).toBe("6789");
   });

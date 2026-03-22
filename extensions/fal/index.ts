@@ -1,5 +1,5 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/core";
 import { buildFalImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 import { applyFalConfig, FAL_DEFAULT_IMAGE_MODEL_REF } from "./onboard.js";
 
@@ -35,6 +35,7 @@ export default definePluginEntry({
             groupId: "fal",
             groupLabel: "fal",
             groupHint: "Image generation",
+            onboardingScopes: ["image-generation"],
           },
         }),
       ],

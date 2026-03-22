@@ -1,3 +1,4 @@
+import { buildAnthropicVertexProvider } from "../../extensions/anthropic-vertex/provider-catalog.js";
 import {
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_ID,
@@ -7,9 +8,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
+import { hasAnthropicVertexAvailableAuth } from "./anthropic-vertex-provider.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
-import { normalizeGoogleModelId } from "./model-id-normalization.js";
+import { normalizeGoogleModelId, normalizeXaiModelId } from "./model-id-normalization.js";
 import { resolveOllamaApiBase } from "./models-config.providers.discovery.js";
 export { buildKimiCodingProvider } from "../../extensions/kimi-coding/provider-catalog.js";
 export { buildKilocodeProvider } from "../../extensions/kilocode/provider-catalog.js";
@@ -42,7 +44,7 @@ import {
 } from "./model-auth-markers.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
 export { resolveOllamaApiBase } from "./models-config.providers.discovery.js";
-export { normalizeGoogleModelId };
+export { normalizeGoogleModelId, normalizeXaiModelId };
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
@@ -552,7 +554,10 @@ export function normalizeProviders(params: {
         mutated = true;
         normalizedProvider = { ...normalizedProvider, apiKey };
       } else {
-        const fromEnv = resolveEnvApiKeyVarName(normalizedKey, env);
+        const fromEnv =
+          normalizedKey === "anthropic-vertex"
+            ? resolveEnvApiKey(normalizedKey, env)?.apiKey
+            : resolveEnvApiKeyVarName(normalizedKey, env);
         const apiKey = fromEnv ?? profileApiKey?.apiKey;
         if (apiKey?.trim()) {
           if (profileApiKey && profileApiKey.source !== "plaintext") {
@@ -812,9 +817,34 @@ export async function resolveImplicitProviders(
       : implicitBedrock;
   }
 
+  const implicitAnthropicVertex = resolveImplicitAnthropicVertexProvider({ env });
+  if (implicitAnthropicVertex) {
+    const existing = providers["anthropic-vertex"];
+    providers["anthropic-vertex"] = existing
+      ? {
+          ...implicitAnthropicVertex,
+          ...existing,
+          models:
+            Array.isArray(existing.models) && existing.models.length > 0
+              ? existing.models
+              : implicitAnthropicVertex.models,
+        }
+      : implicitAnthropicVertex;
+  }
+
   return providers;
 }
 
+export function resolveImplicitAnthropicVertexProvider(params: {
+  env?: NodeJS.ProcessEnv;
+}): ProviderConfig | null {
+  const env = params.env ?? process.env;
+  if (!hasAnthropicVertexAvailableAuth(env)) {
+    return null;
+  }
+
+  return buildAnthropicVertexProvider({ env });
+}
 export async function resolveImplicitBedrockProvider(params: {
   agentDir: string;
   config?: OpenClawConfig;

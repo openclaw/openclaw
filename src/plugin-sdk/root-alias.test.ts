@@ -9,6 +9,7 @@ const require = createRequire(import.meta.url);
 const rootSdk = require("./root-alias.cjs") as Record<string, unknown>;
 const rootAliasPath = fileURLToPath(new URL("./root-alias.cjs", import.meta.url));
 const rootAliasSource = fs.readFileSync(rootAliasPath, "utf-8");
+const packageJsonPath = fileURLToPath(new URL("../../package.json", import.meta.url));
 
 type EmptySchema = {
   safeParse: (value: unknown) =>
@@ -48,6 +49,12 @@ function loadRootAliasWithStubs(options?: {
     }
     if (id === "node:fs") {
       return {
+        readFileSync: () =>
+          JSON.stringify({
+            exports: {
+              "./plugin-sdk/group-access": { default: "./dist/plugin-sdk/group-access.js" },
+            },
+          }),
         existsSync: () => options?.distExists ?? false,
       };
     }
@@ -164,18 +171,48 @@ describe("plugin-sdk root alias", () => {
     expect("delegateCompactionToRuntime" in lazyRootSdk).toBe(true);
   });
 
+  it("forwards onDiagnosticEvent through the compat-backed root alias", () => {
+    const onDiagnosticEvent = () => () => undefined;
+    const lazyModule = loadRootAliasWithStubs({
+      monolithicExports: {
+        onDiagnosticEvent,
+      },
+    });
+    const lazyRootSdk = lazyModule.moduleExports;
+
+    expect(typeof lazyRootSdk.onDiagnosticEvent).toBe("function");
+    expect(
+      typeof (lazyRootSdk.onDiagnosticEvent as (listener: () => void) => () => void)(
+        () => undefined,
+      ),
+    ).toBe("function");
+    expect("onDiagnosticEvent" in lazyRootSdk).toBe(true);
+  });
+
   it("loads legacy root exports through the merged root wrapper", { timeout: 240_000 }, () => {
     expect(typeof rootSdk.resolveControlCommandGate).toBe("function");
+    expect(typeof rootSdk.onDiagnosticEvent).toBe("function");
     expect(typeof rootSdk.default).toBe("object");
     expect(rootSdk.default).toBe(rootSdk);
     expect(rootSdk.__esModule).toBe(true);
   });
 
+  it("publishes the Discord plugin-sdk subpath", () => {
+    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
+      exports?: Record<string, unknown>;
+    };
+
+    expect(packageJson.exports?.["./plugin-sdk/discord"]).toBeDefined();
+  });
+
   it("preserves reflection semantics for lazily resolved exports", { timeout: 240_000 }, () => {
     expect("resolveControlCommandGate" in rootSdk).toBe(true);
+    expect("onDiagnosticEvent" in rootSdk).toBe(true);
     const keys = Object.keys(rootSdk);
     expect(keys).toContain("resolveControlCommandGate");
+    expect(keys).toContain("onDiagnosticEvent");
     const descriptor = Object.getOwnPropertyDescriptor(rootSdk, "resolveControlCommandGate");
     expect(descriptor).toBeDefined();
+    expect(Object.getOwnPropertyDescriptor(rootSdk, "onDiagnosticEvent")).toBeDefined();
   });
 });

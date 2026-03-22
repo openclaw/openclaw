@@ -9,6 +9,8 @@ export {
   readReactionParams,
   readStringParam,
   resolveWhatsAppGroupIntroHint,
+  resolveWhatsAppGroupRequireMention,
+  resolveWhatsAppGroupToolPolicy,
   resolveWhatsAppOutboundTarget,
   ToolAuthorizationError,
   WhatsAppConfigSchema,
@@ -19,6 +21,9 @@ export {
 export {
   createWhatsAppOutboundBase,
   isWhatsAppGroupJid,
+  looksLikeWhatsAppTargetId,
+  normalizeWhatsAppAllowFromEntries,
+  normalizeWhatsAppMessagingTarget,
   normalizeWhatsAppTarget,
   resolveWhatsAppHeartbeatRecipients,
   resolveWhatsAppMentionStripRegexes,

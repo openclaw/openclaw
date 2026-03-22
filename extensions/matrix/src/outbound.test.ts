@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/matrix";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../runtime-api.js";
 
 const mocks = vi.hoisted(() => ({
   sendMessageMatrix: vi.fn(),
@@ -77,6 +77,7 @@ describe("matrixOutbound cfg threading", () => {
       mediaUrl: "file:///tmp/cat.png",
       mediaLocalRoots: ["/tmp/openclaw"],
       accountId: "default",
+      audioAsVoice: true,
     });
 
     expect(mocks.sendMessageMatrix).toHaveBeenCalledWith(
@@ -86,6 +87,7 @@ describe("matrixOutbound cfg threading", () => {
         cfg,
         mediaUrl: "file:///tmp/cat.png",
         mediaLocalRoots: ["/tmp/openclaw"],
+        audioAsVoice: true,
       }),
     );
   });

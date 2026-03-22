@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import { extractQueryTerms, filterSessionsByQuery } from "../usage-helpers.ts";
 import {
   buildAggregatesFromSessions,
@@ -22,7 +23,7 @@ import {
   removeQueryToken,
   setQueryTokensForKey,
 } from "./usage-query.ts";
-import { renderEmptyDetailState, renderSessionDetailPanel } from "./usage-render-details.ts";
+import { renderSessionDetailPanel } from "./usage-render-details.ts";
 import {
   renderCostBreakdownCompact,
   renderDailyChartCompact,
@@ -30,11 +31,11 @@ import {
   renderSessionsCard,
   renderUsageInsights,
 } from "./usage-render-overview.ts";
-import { usageStylesString } from "./usageStyles.ts";
 import {
   SessionLogEntry,
   SessionLogRole,
   UsageColumnId,
+  UsageFilterState,
   UsageProps,
   UsageSessionEntry,
   UsageTotals,
@@ -88,66 +89,69 @@ function addUsageTotals(
   return acc;
 }
 
-export function renderUsage(props: UsageProps) {
-  // Show loading skeleton if loading and no data yet
-  if (props.loading && !props.totals) {
-    // Use inline styles since main stylesheet hasn't loaded yet on initial render
-    return html`
-      <style>
-        @keyframes initial-spin {
-          to { transform: rotate(360deg); }
-        }
-        @keyframes initial-pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.7; }
-        }
-      </style>
-      <section class="card">
-        <div class="row" style="justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px;">
-          <div style="flex: 1; min-width: 250px;">
-            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 2px;">
-              <div class="card-title" style="margin: 0;">Token Usage</div>
-              <span style="
-                display: inline-flex;
-                align-items: center;
-                gap: 6px;
-                padding: 4px 10px;
-                background: rgba(255, 77, 77, 0.1);
-                border-radius: 4px;
-                font-size: 12px;
-                color: #ff4d4d;
-              ">
-                <span style="
-                  width: 10px;
-                  height: 10px;
-                  border: 2px solid #ff4d4d;
-                  border-top-color: transparent;
-                  border-radius: 50%;
-                  animation: initial-spin 0.6s linear infinite;
-                "></span>
-                Loading
-              </span>
-            </div>
-          </div>
-          <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 8px;">
-            <div style="display: flex; gap: 8px; align-items: center;">
-              <input type="date" .value=${props.startDate} disabled style="padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 13px; opacity: 0.6;" />
-              <span style="color: var(--muted);">to</span>
-              <input type="date" .value=${props.endDate} disabled style="padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 13px; opacity: 0.6;" />
-            </div>
+function renderUsageLoadingState(filters: UsageFilterState) {
+  return html`
+    <section class="card usage-loading-card">
+      <div class="usage-loading-header">
+        <div class="usage-loading-title-group">
+          <div class="card-title usage-section-title">${t("usage.loading.title")}</div>
+          <span class="usage-loading-badge">
+            <span class="usage-loading-spinner" aria-hidden="true"></span>
+            ${t("usage.loading.badge")}
+          </span>
+        </div>
+        <div class="usage-loading-controls">
+          <div class="usage-date-range usage-date-range--loading">
+            <input class="usage-date-input" type="date" .value=${filters.startDate} disabled />
+            <span class="usage-separator">${t("usage.filters.to")}</span>
+            <input class="usage-date-input" type="date" .value=${filters.endDate} disabled />
           </div>
         </div>
-      </section>
-    `;
+      </div>
+      <div class="usage-loading-grid">
+        <div class="usage-skeleton-block usage-skeleton-block--tall"></div>
+        <div class="usage-skeleton-block"></div>
+        <div class="usage-skeleton-block"></div>
+      </div>
+    </section>
+  `;
+}
+
+function renderUsageEmptyState(onRefresh: () => void) {
+  return html`
+    <section class="card usage-empty-state">
+      <div class="usage-empty-state__title">${t("usage.empty.title")}</div>
+      <div class="card-sub usage-empty-state__subtitle">${t("usage.empty.subtitle")}</div>
+      <div class="usage-empty-state__features">
+        <span class="usage-empty-state__feature">${t("usage.empty.featureOverview")}</span>
+        <span class="usage-empty-state__feature">${t("usage.empty.featureSessions")}</span>
+        <span class="usage-empty-state__feature">${t("usage.empty.featureTimeline")}</span>
+      </div>
+      <div class="usage-empty-state__actions">
+        <button class="btn primary usage-action-btn usage-primary-btn" @click=${onRefresh}>
+          ${t("common.refresh")}
+        </button>
+      </div>
+    </section>
+  `;
+}
+
+export function renderUsage(props: UsageProps) {
+  const { data, filters, display, detail, callbacks } = props;
+  const filterActions = callbacks.filters;
+  const displayActions = callbacks.display;
+  const detailActions = callbacks.details;
+
+  if (data.loading && !data.totals) {
+    return html`<div class="usage-page">${renderUsageLoadingState(filters)}</div>`;
   }
 
-  const isTokenMode = props.chartMode === "tokens";
-  const hasQuery = props.query.trim().length > 0;
-  const hasDraftQuery = props.queryDraft.trim().length > 0;
-  // (intentionally no global Clear button in the header; chips + query clear handle this)
+  const isTokenMode = display.chartMode === "tokens";
+  const hasQuery = filters.query.trim().length > 0;
+  const hasDraftQuery = filters.queryDraft.trim().length > 0;
 
   // Sort sessions by tokens or cost depending on mode
-  const sortedSessions = [...props.sessions].toSorted((a, b) => {
+  const sortedSessions = [...data.sessions].toSorted((a, b) => {
     const valA = isTokenMode ? (a.usage?.totalTokens ?? 0) : (a.usage?.totalCost ?? 0);
     const valB = isTokenMode ? (b.usage?.totalTokens ?? 0) : (b.usage?.totalCost ?? 0);
     return valB - valA;
@@ -155,17 +159,17 @@ export function renderUsage(props: UsageProps) {
 
   // Filter sessions by selected days
   const dayFilteredSessions =
-    props.selectedDays.length > 0
+    filters.selectedDays.length > 0
       ? sortedSessions.filter((s) => {
           if (s.usage?.activityDates?.length) {
-            return s.usage.activityDates.some((d) => props.selectedDays.includes(d));
+            return s.usage.activityDates.some((d) => filters.selectedDays.includes(d));
           }
           if (!s.updatedAt) {
             return false;
           }
           const d = new Date(s.updatedAt);
           const sessionDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-          return props.selectedDays.includes(sessionDate);
+          return filters.selectedDays.includes(sessionDate);
         })
       : sortedSessions;
 
@@ -184,11 +188,11 @@ export function renderUsage(props: UsageProps) {
     let cursor = startMs;
     while (cursor <= endMs) {
       const date = new Date(cursor);
-      const hour = getZonedHour(date, props.timeZone);
+      const hour = getZonedHour(date, filters.timeZone);
       if (hours.includes(hour)) {
         return true;
       }
-      const nextHour = setToHourEnd(date, props.timeZone);
+      const nextHour = setToHourEnd(date, filters.timeZone);
       const nextMs = Math.min(nextHour.getTime(), endMs);
       cursor = nextMs + 1;
     }
@@ -196,20 +200,20 @@ export function renderUsage(props: UsageProps) {
   };
 
   const hourFilteredSessions =
-    props.selectedHours.length > 0
-      ? dayFilteredSessions.filter((s) => sessionTouchesHours(s, props.selectedHours))
+    filters.selectedHours.length > 0
+      ? dayFilteredSessions.filter((s) => sessionTouchesHours(s, filters.selectedHours))
       : dayFilteredSessions;
 
   // Filter sessions by query (client-side)
-  const queryResult = filterSessionsByQuery(hourFilteredSessions, props.query);
+  const queryResult = filterSessionsByQuery(hourFilteredSessions, filters.query);
   const filteredSessions = queryResult.sessions;
   const queryWarnings = queryResult.warnings;
   const querySuggestions = buildQuerySuggestions(
-    props.queryDraft,
+    filters.queryDraft,
     sortedSessions,
-    props.aggregates,
+    data.aggregates,
   );
-  const queryTerms = extractQueryTerms(props.query);
+  const queryTerms = extractQueryTerms(filters.query);
   const selectedValuesFor = (key: string): string[] => {
     const normalized = normalizeQueryText(key);
     return queryTerms
@@ -231,22 +235,22 @@ export function renderUsage(props: UsageProps) {
   const providerOptions = unique([
     ...sortedSessions.map((s) => s.modelProvider),
     ...sortedSessions.map((s) => s.providerOverride),
-    ...(props.aggregates?.byProvider.map((entry) => entry.provider) ?? []),
+    ...(data.aggregates?.byProvider.map((entry) => entry.provider) ?? []),
   ]).slice(0, 12);
   const modelOptions = unique([
     ...sortedSessions.map((s) => s.model),
-    ...(props.aggregates?.byModel.map((entry) => entry.model) ?? []),
+    ...(data.aggregates?.byModel.map((entry) => entry.model) ?? []),
   ]).slice(0, 12);
-  const toolOptions = unique(props.aggregates?.tools.tools.map((tool) => tool.name) ?? []).slice(
+  const toolOptions = unique(data.aggregates?.tools.tools.map((tool) => tool.name) ?? []).slice(
     0,
     12,
   );
 
   // Get first selected session for detail view (timeseries, logs)
   const primarySelectedEntry =
-    props.selectedSessions.length === 1
-      ? (props.sessions.find((s) => s.key === props.selectedSessions[0]) ??
-        filteredSessions.find((s) => s.key === props.selectedSessions[0]))
+    filters.selectedSessions.length === 1
+      ? (data.sessions.find((s) => s.key === filters.selectedSessions[0]) ??
+        filteredSessions.find((s) => s.key === filters.selectedSessions[0]))
       : null;
 
   // Compute totals from sessions
@@ -259,7 +263,7 @@ export function renderUsage(props: UsageProps) {
 
   // Compute totals from daily data for selected days (more accurate than session totals)
   const computeDailyTotals = (days: string[]): UsageTotals => {
-    const matchingDays = props.costDaily.filter((d) => days.includes(d.date));
+    const matchingDays = data.costDaily.filter((d) => days.includes(d.date));
     return matchingDays.reduce((acc, day) => addUsageTotals(acc, day), createEmptyUsageTotals());
   };
 
@@ -268,18 +272,18 @@ export function renderUsage(props: UsageProps) {
   let displaySessionCount: number;
   const totalSessions = sortedSessions.length;
 
-  if (props.selectedSessions.length > 0) {
+  if (filters.selectedSessions.length > 0) {
     // Sessions selected - compute totals from selected sessions
     const selectedSessionEntries = filteredSessions.filter((s) =>
-      props.selectedSessions.includes(s.key),
+      filters.selectedSessions.includes(s.key),
     );
     displayTotals = computeSessionTotals(selectedSessionEntries);
     displaySessionCount = selectedSessionEntries.length;
-  } else if (props.selectedDays.length > 0 && props.selectedHours.length === 0) {
+  } else if (filters.selectedDays.length > 0 && filters.selectedHours.length === 0) {
     // Days selected - use daily aggregates for accurate per-day totals
-    displayTotals = computeDailyTotals(props.selectedDays);
+    displayTotals = computeDailyTotals(filters.selectedDays);
     displaySessionCount = filteredSessions.length;
-  } else if (props.selectedHours.length > 0) {
+  } else if (filters.selectedHours.length > 0) {
     displayTotals = computeSessionTotals(filteredSessions);
     displaySessionCount = filteredSessions.length;
   } else if (hasQuery) {
@@ -287,26 +291,26 @@ export function renderUsage(props: UsageProps) {
     displaySessionCount = filteredSessions.length;
   } else {
     // No filters - show all
-    displayTotals = props.totals;
+    displayTotals = data.totals;
     displaySessionCount = totalSessions;
   }
 
   const aggregateSessions =
-    props.selectedSessions.length > 0
-      ? filteredSessions.filter((s) => props.selectedSessions.includes(s.key))
-      : hasQuery || props.selectedHours.length > 0
+    filters.selectedSessions.length > 0
+      ? filteredSessions.filter((s) => filters.selectedSessions.includes(s.key))
+      : hasQuery || filters.selectedHours.length > 0
         ? filteredSessions
-        : props.selectedDays.length > 0
+        : filters.selectedDays.length > 0
           ? dayFilteredSessions
           : sortedSessions;
-  const activeAggregates = buildAggregatesFromSessions(aggregateSessions, props.aggregates);
+  const activeAggregates = buildAggregatesFromSessions(aggregateSessions, data.aggregates);
 
   // Filter daily chart data if sessions are selected
   const filteredDaily =
-    props.selectedSessions.length > 0
+    filters.selectedSessions.length > 0
       ? (() => {
           const selectedEntries = filteredSessions.filter((s) =>
-            props.selectedSessions.includes(s.key),
+            filters.selectedSessions.includes(s.key),
           );
           const allActivityDates = new Set<string>();
           for (const entry of selectedEntries) {
@@ -315,13 +319,13 @@ export function renderUsage(props: UsageProps) {
             }
           }
           return allActivityDates.size > 0
-            ? props.costDaily.filter((d) => allActivityDates.has(d.date))
-            : props.costDaily;
+            ? data.costDaily.filter((d) => allActivityDates.has(d.date))
+            : data.costDaily;
         })()
-      : props.costDaily;
+      : data.costDaily;
 
   const insightStats = buildUsageInsightStats(aggregateSessions, displayTotals, activeAggregates);
-  const isEmpty = !props.loading && !props.totals && props.sessions.length === 0;
+  const isEmpty = !data.loading && !data.totals && data.sessions.length === 0;
   const hasMissingCost =
     (displayTotals?.missingCostEntries ?? 0) > 0 ||
     (displayTotals
@@ -334,16 +338,16 @@ export function renderUsage(props: UsageProps) {
           0
       : false);
   const datePresets = [
-    { label: "Today", days: 1 },
-    { label: "7d", days: 7 },
-    { label: "30d", days: 30 },
+    { label: t("usage.presets.today"), days: 1 },
+    { label: t("usage.presets.last7d"), days: 7 },
+    { label: t("usage.presets.last30d"), days: 30 },
   ];
   const applyPreset = (days: number) => {
     const end = new Date();
     const start = new Date();
     start.setDate(start.getDate() - (days - 1));
-    props.onStartDateChange(formatIsoDate(start));
-    props.onEndDateChange(formatIsoDate(end));
+    filterActions.onStartDateChange(formatIsoDate(start));
+    filterActions.onEndDateChange(formatIsoDate(end));
   };
   const renderFilterSelect = (key: string, label: string, options: string[]) => {
     if (options.length === 0) {
@@ -378,7 +382,7 @@ export function renderUsage(props: UsageProps) {
             selectedCount > 0
               ? html`<span class="usage-filter-badge">${selectedCount}</span>`
               : html`
-                  <span class="usage-filter-badge">All</span>
+                  <span class="usage-filter-badge">${t("usage.filters.all")}</span>
                 `
           }
         </summary>
@@ -389,22 +393,24 @@ export function renderUsage(props: UsageProps) {
               @click=${(e: Event) => {
                 e.preventDefault();
                 e.stopPropagation();
-                props.onQueryDraftChange(setQueryTokensForKey(props.queryDraft, key, options));
+                filterActions.onQueryDraftChange(
+                  setQueryTokensForKey(filters.queryDraft, key, options),
+                );
               }}
               ?disabled=${allSelected}
             >
-              Select All
+              ${t("usage.filters.selectAll")}
             </button>
             <button
               class="btn btn-sm"
               @click=${(e: Event) => {
                 e.preventDefault();
                 e.stopPropagation();
-                props.onQueryDraftChange(setQueryTokensForKey(props.queryDraft, key, []));
+                filterActions.onQueryDraftChange(setQueryTokensForKey(filters.queryDraft, key, []));
               }}
               ?disabled=${selectedCount === 0}
             >
-              Clear
+              ${t("usage.filters.clear")}
             </button>
           </div>
           <div class="usage-filter-options">
@@ -418,10 +424,10 @@ export function renderUsage(props: UsageProps) {
                     @change=${(e: Event) => {
                       const target = e.target as HTMLInputElement;
                       const token = `${key}:${value}`;
-                      props.onQueryDraftChange(
+                      filterActions.onQueryDraftChange(
                         target.checked
-                          ? addQueryToken(props.queryDraft, token)
-                          : removeQueryToken(props.queryDraft, token),
+                          ? addQueryToken(filters.queryDraft, token)
+                          : removeQueryToken(filters.queryDraft, token),
                       );
                     }}
                   />
@@ -437,399 +443,416 @@ export function renderUsage(props: UsageProps) {
   const exportStamp = formatIsoDate(new Date());
 
   return html`
-    <style>${usageStylesString}</style>
+    <div class="usage-page">
+      <section class="usage-page-header">
+        <div class="usage-page-title">${t("tabs.usage")}</div>
+        <div class="usage-page-subtitle">${t("usage.page.subtitle")}</div>
+      </section>
 
-    <section class="usage-page-header">
-      <div class="usage-page-title">Usage</div>
-      <div class="usage-page-subtitle">See where tokens go, when sessions spike, and what drives cost.</div>
-    </section>
-
-    <section class="card usage-header ${props.headerPinned ? "pinned" : ""}">
-      <div class="usage-header-row">
-        <div class="usage-header-title">
-          <div class="card-title" style="margin: 0;">Filters</div>
-          ${
-            props.loading
-              ? html`
-                  <span class="usage-refresh-indicator">Loading</span>
-                `
-              : nothing
-          }
-          ${
-            isEmpty
-              ? html`
-                  <span class="usage-query-hint">Select a date range and click Refresh to load usage.</span>
-                `
-              : nothing
-          }
-        </div>
-        <div class="usage-header-metrics">
-          ${
-            displayTotals
-              ? html`
-                <span class="usage-metric-badge">
-                  <strong>${formatTokens(displayTotals.totalTokens)}</strong> tokens
-                </span>
-                <span class="usage-metric-badge">
-                  <strong>${formatCost(displayTotals.totalCost)}</strong> cost
-                </span>
-                <span class="usage-metric-badge">
-                  <strong>${displaySessionCount}</strong>
-                  session${displaySessionCount !== 1 ? "s" : ""}
-                </span>
-              `
-              : nothing
-          }
-          <button
-            class="usage-pin-btn ${props.headerPinned ? "active" : ""}"
-            title=${props.headerPinned ? "Unpin filters" : "Pin filters"}
-            @click=${props.onToggleHeaderPinned}
-          >
-            ${props.headerPinned ? "Pinned" : "Pin"}
-          </button>
-          <details
-            class="usage-export-menu"
-            @toggle=${(e: Event) => {
-              const el = e.currentTarget as HTMLDetailsElement;
-              if (!el.open) {
-                return;
-              }
-              const onClick = (ev: MouseEvent) => {
-                const path = ev.composedPath();
-                if (!path.includes(el)) {
-                  el.open = false;
-                  window.removeEventListener("click", onClick, true);
-                }
-              };
-              window.addEventListener("click", onClick, true);
-            }}
-          >
-            <summary class="usage-export-button">Export ▾</summary>
-            <div class="usage-export-popover">
-              <div class="usage-export-list">
-                <button
-                  class="usage-export-item"
-                  @click=${() =>
-                    downloadTextFile(
-                      `openclaw-usage-sessions-${exportStamp}.csv`,
-                      buildSessionsCsv(filteredSessions),
-                      "text/csv",
-                    )}
-                  ?disabled=${filteredSessions.length === 0}
-                >
-                  Sessions CSV
-                </button>
-                <button
-                  class="usage-export-item"
-                  @click=${() =>
-                    downloadTextFile(
-                      `openclaw-usage-daily-${exportStamp}.csv`,
-                      buildDailyCsv(filteredDaily),
-                      "text/csv",
-                    )}
-                  ?disabled=${filteredDaily.length === 0}
-                >
-                  Daily CSV
-                </button>
-                <button
-                  class="usage-export-item"
-                  @click=${() =>
-                    downloadTextFile(
-                      `openclaw-usage-${exportStamp}.json`,
-                      JSON.stringify(
-                        {
-                          totals: displayTotals,
-                          sessions: filteredSessions,
-                          daily: filteredDaily,
-                          aggregates: activeAggregates,
-                        },
-                        null,
-                        2,
-                      ),
-                      "application/json",
-                    )}
-                  ?disabled=${filteredSessions.length === 0 && filteredDaily.length === 0}
-                >
-                  JSON
-                </button>
-              </div>
-            </div>
-          </details>
-        </div>
-      </div>
-      <div class="usage-header-row">
-        <div class="usage-controls">
-          ${renderFilterChips(
-            props.selectedDays,
-            props.selectedHours,
-            props.selectedSessions,
-            props.sessions,
-            props.onClearDays,
-            props.onClearHours,
-            props.onClearSessions,
-            props.onClearFilters,
-          )}
-          <div class="usage-presets">
-            ${datePresets.map(
-              (preset) => html`
-                <button class="btn btn-sm" @click=${() => applyPreset(preset.days)}>
-                  ${preset.label}
-                </button>
-              `,
-            )}
+      <section class="card usage-header ${display.headerPinned ? "pinned" : ""}">
+        <div class="usage-header-row">
+          <div class="usage-header-title">
+            <div class="card-title usage-section-title">${t("usage.filters.title")}</div>
+            ${data.loading ? html`<span class="usage-refresh-indicator">${t("usage.loading.badge")}</span>` : nothing}
+            ${isEmpty ? html`<span class="usage-query-hint">${t("usage.empty.hint")}</span>` : nothing}
           </div>
-          <input
-            type="date"
-            .value=${props.startDate}
-            title="Start Date"
-            @change=${(e: Event) => props.onStartDateChange((e.target as HTMLInputElement).value)}
-          />
-          <span style="color: var(--muted);">to</span>
-          <input
-            type="date"
-            .value=${props.endDate}
-            title="End Date"
-            @change=${(e: Event) => props.onEndDateChange((e.target as HTMLInputElement).value)}
-          />
-          <select
-            title="Time zone"
-            .value=${props.timeZone}
-            @change=${(e: Event) =>
-              props.onTimeZoneChange((e.target as HTMLSelectElement).value as "local" | "utc")}
-          >
-            <option value="local">Local</option>
-            <option value="utc">UTC</option>
-          </select>
-          <div class="chart-toggle">
-            <button
-              class="toggle-btn ${isTokenMode ? "active" : ""}"
-              @click=${() => props.onChartModeChange("tokens")}
-            >
-              Tokens
-            </button>
-            <button
-              class="toggle-btn ${!isTokenMode ? "active" : ""}"
-              @click=${() => props.onChartModeChange("cost")}
-            >
-              Cost
-            </button>
-          </div>
-          <button
-            class="btn btn-sm usage-action-btn usage-primary-btn"
-            @click=${props.onRefresh}
-            ?disabled=${props.loading}
-          >
-            Refresh
-          </button>
-        </div>
-        
-      </div>
-
-      <div style="margin-top: 12px;">
-          <div class="usage-query-bar">
-          <input
-            class="usage-query-input"
-            type="text"
-            .value=${props.queryDraft}
-            placeholder="Filter sessions (e.g. key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)"
-            @input=${(e: Event) => props.onQueryDraftChange((e.target as HTMLInputElement).value)}
-            @keydown=${(e: KeyboardEvent) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                props.onApplyQuery();
-              }
-            }}
-          />
-          <div class="usage-query-actions">
-            <button
-              class="btn btn-sm usage-action-btn usage-secondary-btn"
-              @click=${props.onApplyQuery}
-              ?disabled=${props.loading || (!hasDraftQuery && !hasQuery)}
-            >
-              Filter (client-side)
-            </button>
+          <div class="usage-header-metrics">
             ${
-              hasDraftQuery || hasQuery
-                ? html`<button class="btn btn-sm usage-action-btn usage-secondary-btn" @click=${props.onClearQuery}>Clear</button>`
+              displayTotals
+                ? html`
+                    <span class="usage-metric-badge">
+                      <strong>${formatTokens(displayTotals.totalTokens)}</strong>
+                      ${t("usage.metrics.tokens")}
+                    </span>
+                    <span class="usage-metric-badge">
+                      <strong>${formatCost(displayTotals.totalCost)}</strong>
+                      ${t("usage.metrics.cost")}
+                    </span>
+                    <span class="usage-metric-badge">
+                      <strong>${displaySessionCount}</strong>
+                      ${
+                        displaySessionCount === 1
+                          ? t("usage.metrics.session")
+                          : t("usage.metrics.sessions")
+                      }
+                    </span>
+                  `
                 : nothing
             }
-            <span class="usage-query-hint">
-              ${
-                hasQuery
-                  ? `${filteredSessions.length} of ${totalSessions} sessions match`
-                  : `${totalSessions} sessions in range`
-              }
-            </span>
+            <button
+              class="usage-pin-btn ${display.headerPinned ? "active" : ""}"
+              title=${display.headerPinned ? t("usage.filters.unpin") : t("usage.filters.pin")}
+              @click=${filterActions.onToggleHeaderPinned}
+            >
+              ${display.headerPinned ? t("usage.filters.pinned") : t("usage.filters.pin")}
+            </button>
+            <details
+              class="usage-export-menu"
+              @toggle=${(e: Event) => {
+                const el = e.currentTarget as HTMLDetailsElement;
+                if (!el.open) {
+                  return;
+                }
+                const onClick = (ev: MouseEvent) => {
+                  const path = ev.composedPath();
+                  if (!path.includes(el)) {
+                    el.open = false;
+                    window.removeEventListener("click", onClick, true);
+                  }
+                };
+                window.addEventListener("click", onClick, true);
+              }}
+            >
+              <summary class="usage-export-button">${t("usage.export.label")} ▾</summary>
+              <div class="usage-export-popover">
+                <div class="usage-export-list">
+                  <button
+                    class="usage-export-item"
+                    @click=${() =>
+                      downloadTextFile(
+                        `openclaw-usage-sessions-${exportStamp}.csv`,
+                        buildSessionsCsv(filteredSessions),
+                        "text/csv",
+                      )}
+                    ?disabled=${filteredSessions.length === 0}
+                  >
+                    ${t("usage.export.sessionsCsv")}
+                  </button>
+                  <button
+                    class="usage-export-item"
+                    @click=${() =>
+                      downloadTextFile(
+                        `openclaw-usage-daily-${exportStamp}.csv`,
+                        buildDailyCsv(filteredDaily),
+                        "text/csv",
+                      )}
+                    ?disabled=${filteredDaily.length === 0}
+                  >
+                    ${t("usage.export.dailyCsv")}
+                  </button>
+                  <button
+                    class="usage-export-item"
+                    @click=${() =>
+                      downloadTextFile(
+                        `openclaw-usage-${exportStamp}.json`,
+                        JSON.stringify(
+                          {
+                            totals: displayTotals,
+                            sessions: filteredSessions,
+                            daily: filteredDaily,
+                            aggregates: activeAggregates,
+                          },
+                          null,
+                          2,
+                        ),
+                        "application/json",
+                      )}
+                    ?disabled=${filteredSessions.length === 0 && filteredDaily.length === 0}
+                  >
+                    ${t("usage.export.json")}
+                  </button>
+                </div>
+              </div>
+            </details>
           </div>
         </div>
-        <div class="usage-filter-row">
-          ${renderFilterSelect("agent", "Agent", agentOptions)}
-          ${renderFilterSelect("channel", "Channel", channelOptions)}
-          ${renderFilterSelect("provider", "Provider", providerOptions)}
-          ${renderFilterSelect("model", "Model", modelOptions)}
-          ${renderFilterSelect("tool", "Tool", toolOptions)}
-          <span class="usage-query-hint">
-            Tip: use filters or click bars to filter days.
-          </span>
+
+        <div class="usage-header-row">
+          <div class="usage-controls">
+            ${renderFilterChips(
+              filters.selectedDays,
+              filters.selectedHours,
+              filters.selectedSessions,
+              data.sessions,
+              filterActions.onClearDays,
+              filterActions.onClearHours,
+              filterActions.onClearSessions,
+              filterActions.onClearFilters,
+            )}
+            <div class="usage-presets">
+              ${datePresets.map(
+                (preset) => html`
+                  <button class="btn btn-sm" @click=${() => applyPreset(preset.days)}>
+                    ${preset.label}
+                  </button>
+                `,
+              )}
+            </div>
+            <div class="usage-date-range">
+              <input
+                class="usage-date-input"
+                type="date"
+                .value=${filters.startDate}
+                title=${t("usage.filters.startDate")}
+                @change=${(e: Event) =>
+                  filterActions.onStartDateChange((e.target as HTMLInputElement).value)}
+              />
+              <span class="usage-separator">${t("usage.filters.to")}</span>
+              <input
+                class="usage-date-input"
+                type="date"
+                .value=${filters.endDate}
+                title=${t("usage.filters.endDate")}
+                @change=${(e: Event) =>
+                  filterActions.onEndDateChange((e.target as HTMLInputElement).value)}
+              />
+            </div>
+            <select
+              class="usage-select"
+              title=${t("usage.filters.timeZone")}
+              .value=${filters.timeZone}
+              @change=${(e: Event) =>
+                filterActions.onTimeZoneChange(
+                  (e.target as HTMLSelectElement).value as "local" | "utc",
+                )}
+            >
+              <option value="local">${t("usage.filters.timeZoneLocal")}</option>
+              <option value="utc">${t("usage.filters.timeZoneUtc")}</option>
+            </select>
+            <div class="chart-toggle">
+              <button
+                class="toggle-btn ${isTokenMode ? "active" : ""}"
+                @click=${() => displayActions.onChartModeChange("tokens")}
+              >
+                ${t("usage.metrics.tokens")}
+              </button>
+              <button
+                class="toggle-btn ${!isTokenMode ? "active" : ""}"
+                @click=${() => displayActions.onChartModeChange("cost")}
+              >
+                ${t("usage.metrics.cost")}
+              </button>
+            </div>
+            <button
+              class="btn btn-sm usage-action-btn usage-primary-btn"
+              @click=${filterActions.onRefresh}
+              ?disabled=${data.loading}
+            >
+              ${t("common.refresh")}
+            </button>
+          </div>
         </div>
-        ${
-          queryTerms.length > 0
-            ? html`
-                <div class="usage-query-chips">
-                  ${queryTerms.map((term) => {
-                    const label = term.raw;
-                    return html`
-                      <span class="usage-query-chip">
-                        ${label}
+
+        <div class="usage-query-section">
+          <div class="usage-query-bar">
+            <input
+              class="usage-query-input"
+              type="text"
+              .value=${filters.queryDraft}
+              placeholder=${t("usage.query.placeholder")}
+              @input=${(e: Event) =>
+                filterActions.onQueryDraftChange((e.target as HTMLInputElement).value)}
+              @keydown=${(e: KeyboardEvent) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  filterActions.onApplyQuery();
+                }
+              }}
+            />
+            <div class="usage-query-actions">
+              <button
+                class="btn btn-sm usage-action-btn usage-secondary-btn"
+                @click=${filterActions.onApplyQuery}
+                ?disabled=${data.loading || (!hasDraftQuery && !hasQuery)}
+              >
+                ${t("usage.query.apply")}
+              </button>
+              ${
+                hasDraftQuery || hasQuery
+                  ? html`
+                      <button
+                        class="btn btn-sm usage-action-btn usage-secondary-btn"
+                        @click=${filterActions.onClearQuery}
+                      >
+                        ${t("usage.filters.clear")}
+                      </button>
+                    `
+                  : nothing
+              }
+              <span class="usage-query-hint">
+                ${
+                  hasQuery
+                    ? t("usage.query.matching", {
+                        shown: String(filteredSessions.length),
+                        total: String(totalSessions),
+                      })
+                    : t("usage.query.inRange", { total: String(totalSessions) })
+                }
+              </span>
+            </div>
+          </div>
+          <div class="usage-filter-row">
+            ${renderFilterSelect("agent", t("usage.filters.agent"), agentOptions)}
+            ${renderFilterSelect("channel", t("usage.filters.channel"), channelOptions)}
+            ${renderFilterSelect("provider", t("usage.filters.provider"), providerOptions)}
+            ${renderFilterSelect("model", t("usage.filters.model"), modelOptions)}
+            ${renderFilterSelect("tool", t("usage.filters.tool"), toolOptions)}
+            <span class="usage-query-hint">${t("usage.query.tip")}</span>
+          </div>
+          ${
+            queryTerms.length > 0
+              ? html`
+                  <div class="usage-query-chips">
+                    ${queryTerms.map((term) => {
+                      const label = term.raw;
+                      return html`
+                        <span class="usage-query-chip">
+                          ${label}
+                          <button
+                            title=${t("usage.filters.remove")}
+                            @click=${() =>
+                              filterActions.onQueryDraftChange(
+                                removeQueryToken(filters.queryDraft, label),
+                              )}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      `;
+                    })}
+                  </div>
+                `
+              : nothing
+          }
+          ${
+            querySuggestions.length > 0
+              ? html`
+                  <div class="usage-query-suggestions">
+                    ${querySuggestions.map(
+                      (suggestion) => html`
                         <button
-                          title="Remove filter"
+                          class="usage-query-suggestion"
                           @click=${() =>
-                            props.onQueryDraftChange(removeQueryToken(props.queryDraft, label))}
+                            filterActions.onQueryDraftChange(
+                              applySuggestionToQuery(filters.queryDraft, suggestion.value),
+                            )}
                         >
-                          ×
+                          ${suggestion.label}
                         </button>
-                      </span>
-                    `;
-                  })}
+                      `,
+                    )}
+                  </div>
+                `
+              : nothing
+          }
+          ${
+            queryWarnings.length > 0
+              ? html`
+                  <div class="callout warning usage-callout usage-callout--tight">
+                    ${queryWarnings.join(" · ")}
+                  </div>
+                `
+              : nothing
+          }
+        </div>
+
+        ${data.error ? html`<div class="callout danger usage-callout">${data.error}</div>` : nothing}
+
+        ${
+          data.sessionsLimitReached
+            ? html`
+                <div class="callout warning usage-callout">
+                  ${t("usage.sessions.limitReached")}
                 </div>
               `
             : nothing
         }
-        ${
-          querySuggestions.length > 0
-            ? html`
-                <div class="usage-query-suggestions">
-                  ${querySuggestions.map(
-                    (suggestion) => html`
-                      <button
-                        class="usage-query-suggestion"
-                        @click=${() =>
-                          props.onQueryDraftChange(
-                            applySuggestionToQuery(props.queryDraft, suggestion.value),
-                          )}
-                      >
-                        ${suggestion.label}
-                      </button>
-                    `,
+      </section>
+
+      ${
+        isEmpty
+          ? renderUsageEmptyState(filterActions.onRefresh)
+          : html`
+              ${renderUsageInsights(
+                displayTotals,
+                activeAggregates,
+                insightStats,
+                hasMissingCost,
+                buildPeakErrorHours(aggregateSessions, filters.timeZone),
+                displaySessionCount,
+                totalSessions,
+              )}
+
+              ${renderUsageMosaic(
+                aggregateSessions,
+                filters.timeZone,
+                filters.selectedHours,
+                filterActions.onSelectHour,
+              )}
+
+              <div class="usage-grid">
+                <div class="usage-grid-column">
+                  <div class="card usage-left-card">
+                    ${renderDailyChartCompact(
+                      filteredDaily,
+                      filters.selectedDays,
+                      display.chartMode,
+                      display.dailyChartMode,
+                      displayActions.onDailyChartModeChange,
+                      filterActions.onSelectDay,
+                    )}
+                    ${
+                      displayTotals
+                        ? renderCostBreakdownCompact(displayTotals, display.chartMode)
+                        : nothing
+                    }
+                  </div>
+                  ${renderSessionsCard(
+                    filteredSessions,
+                    filters.selectedSessions,
+                    filters.selectedDays,
+                    isTokenMode,
+                    display.sessionSort,
+                    display.sessionSortDir,
+                    display.recentSessions,
+                    display.sessionsTab,
+                    detailActions.onSelectSession,
+                    displayActions.onSessionSortChange,
+                    displayActions.onSessionSortDirChange,
+                    displayActions.onSessionsTabChange,
+                    display.visibleColumns,
+                    totalSessions,
+                    filterActions.onClearSessions,
                   )}
                 </div>
-              `
-            : nothing
-        }
-        ${
-          queryWarnings.length > 0
-            ? html`
-                <div class="callout warning" style="margin-top: 8px;">
-                  ${queryWarnings.join(" · ")}
-                </div>
-              `
-            : nothing
-        }
-      </div>
-
-      ${
-        props.error
-          ? html`<div class="callout danger" style="margin-top: 12px;">${props.error}</div>`
-          : nothing
-      }
-
-      ${
-        props.sessionsLimitReached
-          ? html`
-              <div class="callout warning" style="margin-top: 12px">
-                Showing first 1,000 sessions. Narrow date range for complete results.
+                ${
+                  primarySelectedEntry
+                    ? html`<div class="usage-grid-column">
+                        ${renderSessionDetailPanel(
+                          primarySelectedEntry,
+                          detail.timeSeries,
+                          detail.timeSeriesLoading,
+                          detail.timeSeriesMode,
+                          detailActions.onTimeSeriesModeChange,
+                          detail.timeSeriesBreakdownMode,
+                          detailActions.onTimeSeriesBreakdownChange,
+                          detail.timeSeriesCursorStart,
+                          detail.timeSeriesCursorEnd,
+                          detailActions.onTimeSeriesCursorRangeChange,
+                          filters.startDate,
+                          filters.endDate,
+                          filters.selectedDays,
+                          detail.sessionLogs,
+                          detail.sessionLogsLoading,
+                          detail.sessionLogsExpanded,
+                          detailActions.onToggleSessionLogsExpanded,
+                          detail.logFilters,
+                          detailActions.onLogFilterRolesChange,
+                          detailActions.onLogFilterToolsChange,
+                          detailActions.onLogFilterHasToolsChange,
+                          detailActions.onLogFilterQueryChange,
+                          detailActions.onLogFilterClear,
+                          display.contextExpanded,
+                          detailActions.onToggleContextExpanded,
+                          filterActions.onClearSessions,
+                        )}
+                      </div>`
+                    : nothing
+                }
               </div>
             `
-          : nothing
       }
-    </section>
-
-    ${renderUsageInsights(
-      displayTotals,
-      activeAggregates,
-      insightStats,
-      hasMissingCost,
-      buildPeakErrorHours(aggregateSessions, props.timeZone),
-      displaySessionCount,
-      totalSessions,
-    )}
-
-    ${renderUsageMosaic(aggregateSessions, props.timeZone, props.selectedHours, props.onSelectHour)}
-
-    <!-- Two-column layout: Daily+Breakdown on left, Sessions on right -->
-    <div class="usage-grid">
-      <div class="usage-grid-left">
-        <div class="card usage-left-card">
-          ${renderDailyChartCompact(
-            filteredDaily,
-            props.selectedDays,
-            props.chartMode,
-            props.dailyChartMode,
-            props.onDailyChartModeChange,
-            props.onSelectDay,
-          )}
-          ${displayTotals ? renderCostBreakdownCompact(displayTotals, props.chartMode) : nothing}
-        </div>
-      </div>
-      <div class="usage-grid-right">
-        ${renderSessionsCard(
-          filteredSessions,
-          props.selectedSessions,
-          props.selectedDays,
-          isTokenMode,
-          props.sessionSort,
-          props.sessionSortDir,
-          props.recentSessions,
-          props.sessionsTab,
-          props.onSelectSession,
-          props.onSessionSortChange,
-          props.onSessionSortDirChange,
-          props.onSessionsTabChange,
-          props.visibleColumns,
-          totalSessions,
-          props.onClearSessions,
-        )}
-      </div>
     </div>
-
-    <!-- Session Detail Panel (when selected) or Empty State -->
-    ${
-      primarySelectedEntry
-        ? renderSessionDetailPanel(
-            primarySelectedEntry,
-            props.timeSeries,
-            props.timeSeriesLoading,
-            props.timeSeriesMode,
-            props.onTimeSeriesModeChange,
-            props.timeSeriesBreakdownMode,
-            props.onTimeSeriesBreakdownChange,
-            props.timeSeriesCursorStart,
-            props.timeSeriesCursorEnd,
-            props.onTimeSeriesCursorRangeChange,
-            props.startDate,
-            props.endDate,
-            props.selectedDays,
-            props.sessionLogs,
-            props.sessionLogsLoading,
-            props.sessionLogsExpanded,
-            props.onToggleSessionLogsExpanded,
-            {
-              roles: props.logFilterRoles,
-              tools: props.logFilterTools,
-              hasTools: props.logFilterHasTools,
-              query: props.logFilterQuery,
-            },
-            props.onLogFilterRolesChange,
-            props.onLogFilterToolsChange,
-            props.onLogFilterHasToolsChange,
-            props.onLogFilterQueryChange,
-            props.onLogFilterClear,
-            props.contextExpanded,
-            props.onToggleContextExpanded,
-            props.onClearSessions,
-          )
-        : renderEmptyDetailState()
-    }
   `;
 }
 

@@ -1,5 +1,5 @@
-import { discordMessageActions } from "openclaw/plugin-sdk/discord";
 import {
+  discordMessageActions,
   getThreadBindingManager,
   resolveThreadBindingIdleTimeoutMs,
   resolveThreadBindingInactivityExpiresAt,
@@ -8,7 +8,7 @@ import {
   setThreadBindingIdleTimeoutBySessionKey,
   setThreadBindingMaxAgeBySessionKey,
   unbindThreadBindingsBySessionKey,
-} from "openclaw/plugin-sdk/discord";
+} from "../../plugin-sdk/discord.js";
 import {
   createLazyRuntimeMethodBinder,
   createLazyRuntimeSurface,
