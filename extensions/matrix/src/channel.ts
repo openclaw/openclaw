@@ -17,8 +17,8 @@ import {
   listResolvedDirectoryEntriesFromSources,
 } from "openclaw/plugin-sdk/directory-runtime";
 import { buildTrafficStatusSummary } from "openclaw/plugin-sdk/extension-shared";
-import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/infra-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import { matrixMessageActions } from "./actions.js";
 import { MatrixConfigSchema } from "./config-schema.js";
 import {

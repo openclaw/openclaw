@@ -19,6 +19,7 @@
   "channel-reply-pipeline",
   "channel-runtime",
   "interactive-runtime",
+  "outbound-runtime",
   "infra-runtime",
   "ssrf-runtime",
   "media-runtime",
