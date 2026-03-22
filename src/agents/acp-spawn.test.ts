@@ -1043,6 +1043,138 @@ describe("spawnAcpDirect", () => {
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
+  it("does not implicitly stream when acp.progressForward is explicitly disabled", async () => {
+    // Regression test: when acp.progressForward is set to false, implicit progress
+    // forwarding must be disabled even when all other prerequisites are met.
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      acp: {
+        ...hoisted.state.cfg.acp,
+        progressForward: false,
+      },
+      agents: {
+        defaults: {
+          heartbeat: {
+            every: "30m",
+            target: "last",
+          },
+        },
+      },
+    });
+    const handle = createRelayHandle();
+    hoisted.startAcpSpawnParentStreamRelayMock.mockReset().mockReturnValue(handle);
+    hoisted.loadSessionStoreMock.mockReset().mockImplementation(() => {
+      const store: Record<
+        string,
+        { sessionId: string; updatedAt: number; deliveryContext?: unknown }
+      > = {
+        "agent:main:subagent:progress-forward-opt-out": {
+          sessionId: "parent-sess-1",
+          updatedAt: Date.now(),
+          deliveryContext: {
+            channel: "discord",
+            to: "channel:parent-channel",
+            accountId: "default",
+          },
+        },
+      };
+      return new Proxy(store, {
+        get(target, prop) {
+          if (typeof prop === "string" && prop.startsWith("agent:codex:acp:")) {
+            return { sessionId: "sess-123", updatedAt: Date.now() };
+          }
+          return target[prop as keyof typeof target];
+        },
+      });
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:subagent:progress-forward-opt-out",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:parent-channel",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.mode).toBe("run");
+    expect(result.streamLogPath).toBeUndefined();
+    expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
+  });
+
+  it("does not implicitly stream for parent sessions with thread marker in session key (no ctx.agentThreadId)", async () => {
+    // Regression test: when ctx.agentThreadId is absent AND there is no binding record,
+    // but the session key itself contains a :thread: or :topic: marker, implicit
+    // forwarding must be blocked to prevent ACP milestone chatter from leaking into
+    // user-facing threads that were meant to be excluded.
+    // This covers HTTP tool invocation paths where agentSessionKey carries thread info
+    // but ctx.agentThreadId may not be set.
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      agents: {
+        defaults: {
+          heartbeat: {
+            every: "30m",
+            target: "last",
+          },
+        },
+      },
+    });
+    // No mock for sessionBindingListBySession means empty bindings (no thread binding)
+    hoisted.sessionBindingListBySessionMock.mockReturnValue([]);
+    hoisted.loadSessionStoreMock.mockReset().mockImplementation(() => {
+      const store: Record<
+        string,
+        { sessionId: string; updatedAt: number; deliveryContext?: unknown }
+      > = {
+        "agent:main:telegram:6098642967:thread:42": {
+          sessionId: "parent-sess-1",
+          updatedAt: Date.now(),
+          deliveryContext: {
+            channel: "telegram",
+            to: "6098642967",
+            accountId: "default",
+          },
+        },
+      };
+      return new Proxy(store, {
+        get(target, prop) {
+          if (typeof prop === "string" && prop.startsWith("agent:codex:acp:")) {
+            return { sessionId: "sess-123", updatedAt: Date.now() };
+          }
+          return target[prop as keyof typeof target];
+        },
+      });
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+      },
+      {
+        // Session key with :thread: marker but no ctx.agentThreadId
+        agentSessionKey: "agent:main:telegram:6098642967:thread:42",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentTo: "telegram:6098642967",
+        // Note: agentThreadId is intentionally absent to simulate the HTTP tool
+        // invocation path where ctx.agentThreadId may be missing even though the
+        // session key carries thread semantics.
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.mode).toBe("run");
+    expect(result.streamLogPath).toBeUndefined();
+    expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
+  });
+
   it("announces parent relay start only after successful child dispatch", async () => {
     const firstHandle = createRelayHandle();
     const secondHandle = createRelayHandle();

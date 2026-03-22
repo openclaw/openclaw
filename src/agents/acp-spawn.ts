@@ -26,6 +26,7 @@ import { parseDurationMs } from "../cli/parse-duration.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath, type SessionEntry } from "../config/sessions.js";
+import { parseSessionThreadInfo } from "../config/sessions/delivery-info.js";
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
 import { callGateway } from "../gateway/call.js";
 import { areHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
@@ -477,6 +478,12 @@ export async function spawnAcpDirect(
     typeof ctx.agentThreadId === "string"
       ? ctx.agentThreadId.trim().length > 0
       : ctx.agentThreadId != null;
+  // Also detect thread/topic markers in the session key itself, which can indicate a
+  // thread-bound parent session even when ctx.agentThreadId is absent (HTTP tool paths)
+  // and there is no binding record. Session keys like "agent:main:...:thread:123" or
+  // "agent:main:...:topic:456" carry first-class thread semantics via parseSessionThreadInfo.
+  const { threadId: requesterSessionKeyThreadId } = parseSessionThreadInfo(parentSessionKey);
+  const requesterSessionKeyHasThreadMarker = requesterSessionKeyThreadId !== undefined;
   const requesterHeartbeatEnabled = isHeartbeatEnabledForSessionAgent({
     cfg,
     sessionKey: parentSessionKey,
@@ -508,6 +515,7 @@ export async function spawnAcpDirect(
     !requesterHasActiveSubagentBinding &&
     !requesterHasThreadBinding &&
     !requesterHasThreadContext &&
+    !requesterSessionKeyHasThreadMarker &&
     requesterHeartbeatEnabled &&
     requesterHeartbeatRelayRouteUsable;
   const effectiveStreamToParent = streamToParentRequested || implicitStreamToParent;
