@@ -156,6 +156,7 @@ describe("resolveModelAuthMode", () => {
               models: {
                 providers: {
                   "google-vertex": {
+                    baseUrl: "https://vertex.example.com",
                     auth: "aws-sdk",
                     models: [],
                   },
@@ -602,6 +603,7 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
             models: {
               providers: {
                 "google-vertex": {
+                  baseUrl: "https://vertex.example.com",
                   auth: "aws-sdk",
                   models: [],
                 },
