@@ -369,12 +369,12 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   status: {
     defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
     collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("signal", accounts),
-    buildChannelSummary: ({ snapshot }) => ({
-      ...buildBaseChannelStatusSummary(snapshot),
-      baseUrl: snapshot.baseUrl ?? null,
-      probe: snapshot.probe,
-      lastProbeAt: snapshot.lastProbeAt ?? null,
-    }),
+    buildChannelSummary: ({ snapshot }) =>
+      buildBaseChannelStatusSummary(snapshot, {
+        baseUrl: snapshot.baseUrl ?? null,
+        probe: snapshot.probe,
+        lastProbeAt: snapshot.lastProbeAt ?? null,
+      }),
     probeAccount: async ({ account, timeoutMs }) => {
       const baseUrl = account.baseUrl;
       return await getSignalRuntime().channel.signal.probeSignal(baseUrl, timeoutMs);

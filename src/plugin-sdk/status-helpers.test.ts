@@ -66,6 +66,28 @@ describe("buildBaseChannelStatusSummary", () => {
       lastError: "boom",
     });
   });
+
+  it("merges extra fields into the normalized channel summary", () => {
+    expect(
+      buildBaseChannelStatusSummary(
+        {
+          configured: true,
+        },
+        {
+          mode: "webhook",
+          secretSource: "env",
+        },
+      ),
+    ).toEqual({
+      configured: true,
+      mode: "webhook",
+      secretSource: "env",
+      running: false,
+      lastStartAt: null,
+      lastStopAt: null,
+      lastError: null,
+    });
+  });
 });
 
 describe("buildBaseAccountStatusSnapshot", () => {
