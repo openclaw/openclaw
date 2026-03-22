@@ -54,6 +54,9 @@ describe("resolveDiscordThreadStarter", () => {
       () => undefined,
     );
 
-    expect(result?.text).toBe("starter content");
+    if (!result) {
+      throw new Error("starter content should have produced a resolved starter payload");
+    }
+    expect(result.text).toBe("starter content");
   });
 });

@@ -203,7 +203,9 @@ describe("agent components", () => {
     const pairingText = String(reply.mock.calls[0]?.[0]?.content ?? "");
     expect(pairingText).toContain("Pairing code:");
     const code = pairingText.match(/Pairing code:\s*([A-Z2-9]{8})/)?.[1];
-    expect(code).toBeDefined();
+    if (!code) {
+      throw new Error(`pairing reply did not include an 8-character pairing code: ${pairingText}`);
+    }
     expect(pairingText).toContain(`openclaw pairing approve discord ${code}`);
     expect(peekSystemEvents(dmSessionKey)).toEqual([]);
     expect(readAllowFromStoreMock).toHaveBeenCalledWith("discord", "default");
