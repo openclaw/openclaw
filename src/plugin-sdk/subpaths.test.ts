@@ -93,6 +93,14 @@ function normalizeModuleNotFoundPath(value: string): string {
     .toLowerCase();
 }
 
+function extractMissingModulePath(message: string): string | null {
+  const match = message.match(/Cannot find module ['"]([^'"]+)['"]/i);
+  if (!match) {
+    return null;
+  }
+  return match[1] ?? null;
+}
+
 function isPackageSelfResolutionFailure(specifier: string, message: string): boolean {
   return /package\.json/i.test(message) && message.includes(`imported from ${specifier}`);
 }
@@ -102,7 +110,11 @@ function isRequestedDistSubpathMissing(specifier: string, message: string): bool
   if (!distSuffix) {
     return false;
   }
-  return normalizeModuleNotFoundPath(message).includes(
+  const missingPath = extractMissingModulePath(message);
+  if (!missingPath) {
+    return false;
+  }
+  return normalizeModuleNotFoundPath(missingPath).endsWith(
     normalizeModuleNotFoundPath(distSuffix),
   );
 }
