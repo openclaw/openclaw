@@ -5,7 +5,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import {
   archiveSessionTranscripts,
   cleanupArchivedSessionTranscripts,
-} from "../../gateway/session-utils.fs.js";
+} from "../../gateway/session-archive.fs.js";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {

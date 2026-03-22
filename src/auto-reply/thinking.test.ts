@@ -6,7 +6,7 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   resolveProviderXHighThinking: vi.fn(),
 }));
 
-vi.mock("../plugins/provider-runtime.js", () => ({
+vi.mock("../plugins/provider-thinking.js", () => ({
   resolveProviderBinaryThinking: providerRuntimeMocks.resolveProviderBinaryThinking,
   resolveProviderDefaultThinkingLevel: providerRuntimeMocks.resolveProviderDefaultThinkingLevel,
   resolveProviderXHighThinking: providerRuntimeMocks.resolveProviderXHighThinking,

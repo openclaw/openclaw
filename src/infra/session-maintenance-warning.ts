@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
-import type { SessionEntry, SessionMaintenanceWarning } from "../config/sessions.js";
+import type { SessionMaintenanceWarning } from "../config/sessions/store-maintenance.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
