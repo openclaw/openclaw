@@ -31,6 +31,7 @@ export function loadTestRunnerBehavior() {
   const raw = tryReadJsonFile(behaviorManifestPath, {});
   const unit = raw.unit ?? {};
   const base = raw.base ?? {};
+  const extensions = raw.extensions ?? {};
   return {
     base: {
       threadSingleton: normalizeManifestEntries(base.threadSingleton ?? []),
@@ -40,6 +41,9 @@ export function loadTestRunnerBehavior() {
       singletonIsolated: normalizeManifestEntries(unit.singletonIsolated ?? []),
       threadSingleton: normalizeManifestEntries(unit.threadSingleton ?? []),
       vmForkSingleton: normalizeManifestEntries(unit.vmForkSingleton ?? []),
+    },
+    extensions: {
+      singletonIsolated: normalizeManifestEntries(extensions.singletonIsolated ?? []),
     },
   };
 }
