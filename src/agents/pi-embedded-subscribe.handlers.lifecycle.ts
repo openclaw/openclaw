@@ -1,5 +1,6 @@
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   buildApiErrorObservationFields,
   buildTextObservationFields,
@@ -36,7 +37,7 @@ export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {
   });
 }
 
-export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<void> {
+export async function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): Promise<void> {
   const lastAssistant = ctx.state.lastAssistant;
   const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
   let lifecycleErrorText: string | undefined;
@@ -73,7 +74,25 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
     const failoverReason = classifyFailoverReason(rawError ?? "", {
       provider: lastAssistant.provider,
     });
-    const errorText = (friendlyError || lastAssistant.errorMessage || "LLM request failed.").trim();
+    let errorText = (friendlyError || lastAssistant.errorMessage || "LLM request failed.").trim();
+
+    // Allow plugins to replace the error text before it is broadcast.
+    // This lets plugins swap raw provider errors for localised friendly messages.
+    const hookRunner = ctx.hookRunner ?? getGlobalHookRunner();
+    if (hookRunner?.hasHooks("agent_error")) {
+      try {
+        const hookResult = await hookRunner.runAgentError(
+          { error: errorText },
+          { sessionKey: ctx.params.sessionKey },
+        );
+        if (hookResult?.message != null) {
+          errorText = hookResult.message;
+        }
+      } catch {
+        // Don't block delivery on hook failure.
+      }
+    }
+
     const observedError = buildApiErrorObservationFields(rawError, {
       provider: lastAssistant.provider,
     });

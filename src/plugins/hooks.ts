@@ -14,6 +14,8 @@ import type {
   PluginHookAfterToolCallEvent,
   PluginHookAgentContext,
   PluginHookAgentEndEvent,
+  PluginHookAgentErrorEvent,
+  PluginHookAgentErrorResult,
   PluginHookBeforeAgentFinalizeEvent,
   PluginHookBeforeAgentFinalizeResult,
   PluginHookBeforeAgentReplyEvent,
@@ -96,6 +98,8 @@ export type {
   PluginHookBeforeAgentFinalizeEvent,
   PluginHookBeforeAgentFinalizeResult,
   PluginHookAgentEndEvent,
+  PluginHookAgentErrorEvent,
+  PluginHookAgentErrorResult,
   PluginHookBeforeCompactionEvent,
   PluginHookBeforeResetEvent,
   PluginHookInboundClaimContext,
@@ -661,6 +665,26 @@ export function createHookRunner(
   }
 
   /**
+   * Run agent_error hook.
+   * Allows plugins to replace the error text broadcast to the user when an
+   * agent run ends with an error (e.g. billing limit → friendly message).
+   * Runs sequentially so each plugin sees the previous plugin's replacement.
+   */
+  async function runAgentError(
+    event: PluginHookAgentErrorEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookAgentErrorResult | undefined> {
+    return runModifyingHook<"agent_error", PluginHookAgentErrorResult>(
+      "agent_error",
+      event,
+      ctx,
+      (acc, next) => ({
+        message: next.message ?? acc?.message,
+      }),
+    );
+  }
+
+  /**
    * Run llm_input hook.
    * Allows plugins to observe the exact input payload sent to the LLM.
    * Runs in parallel (fire-and-forget).
@@ -1207,6 +1231,7 @@ export function createHookRunner(
     runLlmOutput,
     runBeforeAgentFinalize,
     runAgentEnd,
+    runAgentError,
     runBeforeCompaction,
     runAfterCompaction,
     runBeforeReset,
