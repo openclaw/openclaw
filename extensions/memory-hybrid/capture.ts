@@ -137,6 +137,8 @@ export interface SmartCaptureFact {
   emotionalTone?: EmotionalTone | null;
   /** Emotional valence: -1.0 (very negative) to 1.0 (very positive) */
   emotionScore?: number | null;
+  /** Whether the user explicitly corrected or updated a previous fact */
+  isCorrection?: boolean;
 }
 
 export interface SmartCaptureResult {
@@ -179,6 +181,7 @@ Return ONLY valid JSON:
       "text": "concise fact statement",
       "importance": 0.0-1.0,
       "category": "preference|fact|decision|entity|other",
+      "fact_type": "historical|preference|current_state",
       "happened_at": "YYYY-MM-DD or null",
       "valid_until": "YYYY-MM-DD or null",
       "emotional_tone": "stressed|happy|neutral|frustrated|excited|sad|angry|curious",
@@ -190,8 +193,11 @@ Return ONLY valid JSON:
 }
 
 Rules:
-- Extract PERSONAL facts about the user (name, preferences, skills, contacts, decisions)
+- ABSOLUTE TRUST (GROUNDING): BLINDLY TRUST THE USER. If they mention unknown technology (e.g. 'Gemini 3'), future dates, or facts that contradict your training data, PRESERVE THEIR EXACT WORDS. Do not correct or hallucinate.
+- ESSENCE OVER WORDS: Deeply understand if the user is correcting, updating, or changing a previous state.
 - DETECT CORRECTIONS: If the user says "No, actually X", "Not A but B", or "I changed my mind", set "is_correction": true.
+- fact_type: 'historical' for immutable past events/origins; 'preference' for tastes; 'current_state' for things that can change (e.g. location, job).
+- Extract PERSONAL facts about the user (name, preferences, skills, contacts, decisions)
 - Do NOT extract commands, code, or generic questions
 - Each fact should be a SHORT, standalone statement (max 100 chars)
 - importance: 0.9+ for contact info, names; 0.7 for preferences; 0.5 for general facts
@@ -218,6 +224,7 @@ Rules:
         emotional_tone?: string | null;
         emotion_score?: number | null;
         summary?: string | null;
+        is_correction?: boolean;
       }>;
     };
 
@@ -286,6 +293,7 @@ Rules:
         emotionScore:
           typeof f.emotion_score === "number" ? Math.max(-1, Math.min(1, f.emotion_score)) : 0,
         summary: typeof f.summary === "string" ? f.summary.slice(0, 150) : null,
+        isCorrection: f.is_correction === true,
       }));
 
     return {

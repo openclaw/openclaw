@@ -1497,9 +1497,32 @@ const memoryPlugin = {
 
                   const vector = await embeddings.embed(fact.text);
 
-                  // Similarity check (skip if already exists)
-                  const existing = await db.search(vector, 1, 0.95);
-                  if (existing.length > 0) continue;
+                  // If LLM flagged this as a correction, search broadly and force contradiction check
+                  let skipStore = false;
+                  if (fact.isCorrection) {
+                    const broadExisting = await db.search(vector, 3, 0.6); // Broad search for old related facts
+                    if (broadExisting.length > 0) {
+                      const topMatch = broadExisting[0];
+                      const analysis = await chatModel.checkForContradiction(
+                        topMatch.entry.text,
+                        fact.text,
+                      );
+                      if (analysis.action === "update") {
+                        await db.delete(topMatch.entry.id);
+                        api.logger.info(
+                          `memory-hybrid: [Correction] auto-deleted old memory ${topMatch.entry.id} (replaced by new fact)`,
+                        );
+                      } else if (analysis.action === "ignore_new") {
+                        skipStore = true; // LLM decided the old one is actually better
+                      }
+                    }
+                  } else {
+                    // Regular similarity check (skip if already exists exactly)
+                    const existing = await db.search(vector, 1, 0.95);
+                    if (existing.length > 0) skipStore = true;
+                  }
+
+                  if (skipStore) continue;
 
                   const summary =
                     fact.summary || (await generateMemorySummary(fact.text, chatModel));
