@@ -438,6 +438,37 @@ describe("promoteMinimaxToolCallsToBlocks", () => {
     expect(calls[0].id).toBe("mc_mm_0_exec");
     expect(calls[1].id).toBe("mc_mm_1_exec");
   });
+
+  it("skips MiniMax wrappers inside Markdown code blocks", () => {
+    const text =
+      'Example code: ` <minimax:tool_call><invoke name="Test" /></minimax:tool_call> ` and then real one: <minimax:tool_call><invoke name="Bash" /></minimax:tool_call>';
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+    });
+
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    const calls = msg.content.filter((c) => c && typeof c === "object" && c.type === "toolCall");
+    expect(calls.length).toBe(1);
+    const call0 =
+      calls[0] && typeof calls[0] === "object" && "name" in calls[0] ? calls[0].name : "";
+    expect(call0).toBe("exec");
+  });
+
+  it("skips thinking tags inside inline code", () => {
+    const text = "Mentioning `<think>Internal</think>` in code.";
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+    });
+
+    promoteThinkingTagsToBlocks(msg);
+
+    expect(msg.content.length).toBe(1);
+    const type0 = msg.content[0] && typeof msg.content[0] === "object" ? msg.content[0].type : "";
+    expect(type0).toBe("text");
+  });
 });
 
 describe("formatReasoningMessage", () => {

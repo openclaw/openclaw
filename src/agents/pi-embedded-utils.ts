@@ -258,8 +258,31 @@ type ThinkTaggedSplitBlock =
   | { type: "thinking"; thinking: string }
   | { type: "text"; text: string };
 
+type MarkdownMaskRegion = { start: number; end: number; masked: boolean };
+
 /**
- * Split text by thinking tags, avoiding tags inside Markdown code fences.
+ * Identifies regions of text that are within Markdown code blocks or inline code.
+ */
+function getMarkdownMaskRegions(text: string): MarkdownMaskRegion[] {
+  const regions: MarkdownMaskRegion[] = [];
+  const maskRe = /(`{1,3})[\s\S]*?\1/g;
+  let lastIdx = 0;
+  for (const match of text.matchAll(maskRe)) {
+    const start = match.index ?? 0;
+    if (start > lastIdx) {
+      regions.push({ start: lastIdx, end: start, masked: false });
+    }
+    regions.push({ start, end: start + match[0].length, masked: true });
+    lastIdx = start + match[0].length;
+  }
+  if (lastIdx < text.length) {
+    regions.push({ start: lastIdx, end: text.length, masked: false });
+  }
+  return regions.toSorted((a, b) => a.start - b.start);
+}
+
+/**
+ * Split text by thinking tags, avoiding tags inside Markdown code blocks.
  */
 export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
   const openRe = /<\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
@@ -272,39 +295,17 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
     return null;
   }
 
-  // Mask code fences to avoid picking up example tags inside them.
-  const codeFenceRe = /(`{3,})[\s\S]*?\1/g;
-  const regions: Array<{ start: number; end: number; masked: boolean }> = [];
-  let lastIdx = 0;
-  for (const match of text.matchAll(codeFenceRe)) {
-    const start = match.index ?? 0;
-    if (start > lastIdx) {
-      regions.push({ start: lastIdx, end: start, masked: false });
-    }
-    regions.push({ start, end: start + match[0].length, masked: true });
-    lastIdx = start + match[0].length;
-  }
-  if (lastIdx < text.length) {
-    regions.push({ start: lastIdx, end: text.length, masked: false });
-  }
-
+  const regions = getMarkdownMaskRegions(text);
   const scanRe = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
   let inThinking = false;
   let cursor = 0;
   let thinkingStart = 0;
   const blocks: ThinkTaggedSplitBlock[] = [];
 
-  // Sort regions by start index to ensure sequential processing
-  regions.sort((a, b) => a.start - b.start);
-
   for (const region of regions) {
     if (region.masked) {
-      // If we are currently parsing thinking, and we hit a code fence,
-      // we treat the fence as literal text within the thinking block.
-      // If we are NOT in thinking, it's just normal prose.
       continue;
     }
-
     const subText = text.slice(region.start, region.end);
     for (const match of subText.matchAll(scanRe)) {
       const index = (match.index ?? 0) + region.start;
@@ -330,7 +331,7 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
 
   if (inThinking) {
     return null;
-  }
+  } // Must be strictly closed
   if (cursor < text.length) {
     blocks.push({ type: "text", text: text.slice(cursor) });
   }
@@ -342,8 +343,10 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   if (!message) {
     return;
   }
+
   const originalContent = message.content;
 
+  // Handle string-form assistant content
   if (typeof originalContent === "string") {
     const split = splitThinkingTaggedText(originalContent);
     if (!split) {
@@ -373,6 +376,7 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
 
   const next: AssistantMessage["content"] = [];
   let changed = false;
+
   for (const block of originalContent) {
     if (block?.type !== "text") {
       next.push(block);
@@ -392,6 +396,7 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
       }
     }
   }
+
   if (changed) {
     message.content = next;
   }
@@ -434,10 +439,13 @@ export function extractThinkingFromTaggedStream(text: string): string {
   }
   const closeMatches = [...text.matchAll(closeRe)];
   const lastOpen = openMatches[openMatches.length - 1];
+
+  // Find the last closing tag that appears AFTER the last opening tag.
   const lastClose = closeMatches.toReversed().find((m) => (m.index ?? -1) > (lastOpen.index ?? -1));
   if (lastClose) {
     return closed;
   }
+
   const start = (lastOpen.index ?? 0) + lastOpen[0].length;
   return text.slice(start).trim();
 }
@@ -478,21 +486,27 @@ export function unescapeXmlEntities(text: string): string {
       }
       return match;
     })
-    .replace(/&amp;/g, "&");
+    .replace(/&amp;/g, "&"); // Handle &amp; last to avoid double-decoding
 }
 
+/**
+ * Parse a raw XML parameter value into its appropriate type.
+ */
 export function parseXmlParameterValue(value: string): unknown {
   if (value === undefined) {
     return {};
-  }
+  } // For self-closing invoke with no params
+
   const unescaped = unescapeXmlEntities(value);
   const trimmed = unescaped.trim();
+
   if (trimmed === "true") {
     return true;
   }
   if (trimmed === "false") {
     return false;
   }
+
   if (
     (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
     (trimmed.startsWith("[") && trimmed.endsWith("]"))
@@ -500,9 +514,10 @@ export function parseXmlParameterValue(value: string): unknown {
     try {
       return JSON.parse(trimmed);
     } catch {
-      /* Fallback */
+      // Fallback
     }
   }
+
   return unescaped;
 }
 
@@ -511,7 +526,8 @@ type MinimaxToolCallSplitBlock =
   | { type: "text"; text: string };
 
 /**
- * Split text content into text blocks and toolCall blocks.
+ * Split text content into text blocks and toolCall blocks by parsing
+ * MiniMax-specific <minimax:tool_call> XML structures.
  */
 export function splitMinimaxToolCalls(
   text: string,
@@ -522,112 +538,134 @@ export function splitMinimaxToolCalls(
   }
   const { globalCounter = { val: 0 } } = options ?? {};
 
+  const regions = getMarkdownMaskRegions(text);
   const wrapperRe = /<minimax:tool_call>([\s\S]*?)<\/minimax:tool_call>|<\/minimax:tool_call>/gi;
+
   const blocks: MinimaxToolCallSplitBlock[] = [];
   let cursor = 0;
   let hasToolCall = false;
 
-  for (const match of text.matchAll(wrapperRe)) {
-    const index = match.index ?? 0;
-    const [fullMatch, innerContent] = match;
-    if (index > cursor) {
-      const prose = text.slice(cursor, index);
-      if (prose) {
-        blocks.push({ type: "text", text: prose });
-      }
+  for (const region of regions) {
+    if (region.masked) {
+      continue;
     }
+    const subText = text.slice(region.start, region.end);
+    for (const match of subText.matchAll(wrapperRe)) {
+      const index = (match.index ?? 0) + region.start;
+      const [fullMatch, innerContent] = match;
 
-    const isExplicitWrapper = innerContent !== undefined;
-    if (!isExplicitWrapper && blocks.length > 0) {
-      const lastBlock = blocks[blocks.length - 1];
-      if (lastBlock.type === "text" && /<invoke\b/i.test(lastBlock.text)) {
-        const lastText = lastBlock.text;
-        const matchedInvokes = Array.from(lastText.matchAll(MINIMAX_INVOKE_RE));
-        if (matchedInvokes.length > 0) {
-          const lastInvoke = matchedInvokes[matchedInvokes.length - 1];
-          const trailingProse = lastText.slice((lastInvoke.index ?? 0) + lastInvoke[0].length);
-          if (!trailingProse.trim()) {
-            let lastProcessedIdx = 0;
-            blocks.pop();
-            for (const iMatch of matchedInvokes) {
-              const iIndex = iMatch.index ?? 0;
-              const [iFullMatch, attributes, invokeBody] = iMatch;
-              if (iIndex > lastProcessedIdx) {
-                const subProse = lastText.slice(lastProcessedIdx, iIndex);
-                if (subProse) {
-                  blocks.push({ type: "text", text: subProse });
-                }
-              }
-              const nameMatch = /\bname=["']([^"']+)["']/i.exec(attributes);
-              const toolName = nameMatch ? nameMatch[1] : undefined;
-              if (toolName) {
-                const args: Record<string, unknown> = {};
-                if (invokeBody) {
-                  for (const pMatch of invokeBody.matchAll(MINIMAX_PARAM_RE)) {
-                    const [, pName, pValue] = pMatch;
-                    args[pName] = parseXmlParameterValue(pValue);
+      // Push preceding text prose (this is safely outside any wrapper)
+      if (index > cursor) {
+        const prose = text.slice(cursor, index);
+        if (prose) {
+          blocks.push({ type: "text", text: prose });
+        }
+      }
+
+      const isExplicitWrapper = innerContent !== undefined;
+
+      // Case B: Malformed closing tag fallback.
+      if (!isExplicitWrapper && blocks.length > 0) {
+        const lastBlock = blocks[blocks.length - 1];
+        if (lastBlock.type === "text" && /<invoke\b/i.test(lastBlock.text)) {
+          const lastText = lastBlock.text;
+          const matchedInvokes = Array.from(lastText.matchAll(MINIMAX_INVOKE_RE));
+
+          if (matchedInvokes.length > 0) {
+            const lastInvoke = matchedInvokes[matchedInvokes.length - 1];
+            const trailingProse = lastText.slice((lastInvoke.index ?? 0) + lastInvoke[0].length);
+
+            if (!trailingProse.trim()) {
+              let lastProcessedIdx = 0;
+              blocks.pop(); // Replace the last block with split parts
+
+              for (const iMatch of matchedInvokes) {
+                const iIndex = iMatch.index ?? 0;
+                const [iFullMatch, attributes, invokeBody] = iMatch;
+
+                if (iIndex > lastProcessedIdx) {
+                  const subProse = lastText.slice(lastProcessedIdx, iIndex);
+                  if (subProse) {
+                    blocks.push({ type: "text", text: subProse });
                   }
                 }
-                blocks.push({
-                  type: "toolCall",
-                  id: `mc_mm_${globalCounter.val++}_${normalizeToolName(toolName)}`,
-                  name: normalizeToolName(toolName),
-                  arguments: args,
-                });
-                hasToolCall = true;
-              }
-              lastProcessedIdx = iIndex + iFullMatch.length;
-            }
-            if (lastProcessedIdx < lastText.length) {
-              const finalSubProse = lastText.slice(lastProcessedIdx);
-              if (finalSubProse) {
-                blocks.push({ type: "text", text: finalSubProse });
-              }
-            }
-          }
-        }
-      }
-    }
 
-    if (isExplicitWrapper && innerContent) {
-      let innerCursor = 0;
-      for (const iMatch of innerContent.matchAll(MINIMAX_INVOKE_RE)) {
-        const iIndex = iMatch.index ?? 0;
-        const [iFullMatch, attributes, invokeBody] = iMatch;
-        if (iIndex > innerCursor) {
-          const innerProse = innerContent.slice(innerCursor, iIndex);
-          if (innerProse) {
-            blocks.push({ type: "text", text: innerProse });
-          }
-        }
-        const nameMatch = /\bname=["']([^"']+)["']/i.exec(attributes);
-        const toolName = nameMatch ? nameMatch[1] : undefined;
-        if (toolName) {
-          const args: Record<string, unknown> = {};
-          if (invokeBody) {
-            for (const pMatch of invokeBody.matchAll(MINIMAX_PARAM_RE)) {
-              const [, pName, pValue] = pMatch;
-              args[pName] = parseXmlParameterValue(pValue);
+                const nameMatch = /\bname=["']([^"']+)["']/i.exec(attributes);
+                const toolName = nameMatch ? nameMatch[1] : undefined;
+                if (toolName) {
+                  const args: Record<string, unknown> = {};
+                  if (invokeBody) {
+                    for (const pMatch of invokeBody.matchAll(MINIMAX_PARAM_RE)) {
+                      const [, pName, pValue] = pMatch;
+                      args[pName] = parseXmlParameterValue(pValue);
+                    }
+                  }
+                  blocks.push({
+                    type: "toolCall",
+                    id: `mc_mm_${globalCounter.val++}_${normalizeToolName(toolName)}`,
+                    name: normalizeToolName(toolName),
+                    arguments: args,
+                  });
+                  hasToolCall = true;
+                }
+                lastProcessedIdx = iIndex + iFullMatch.length;
+              }
+
+              if (lastProcessedIdx < lastText.length) {
+                const finalSubProse = lastText.slice(lastProcessedIdx);
+                if (finalSubProse) {
+                  blocks.push({ type: "text", text: finalSubProse });
+                }
+              }
             }
           }
-          blocks.push({
-            type: "toolCall",
-            id: `mc_mm_${globalCounter.val++}_${normalizeToolName(toolName)}`,
-            name: normalizeToolName(toolName),
-            arguments: args,
-          });
-          hasToolCall = true;
-        }
-        innerCursor = iIndex + iFullMatch.length;
-      }
-      if (innerCursor < innerContent.length) {
-        const remainingInnerProse = innerContent.slice(innerCursor);
-        if (remainingInnerProse) {
-          blocks.push({ type: "text", text: remainingInnerProse });
         }
       }
+
+      // Case A: Explicit <minimax:tool_call> inner content.
+      if (isExplicitWrapper && innerContent) {
+        let innerCursor = 0;
+        for (const iMatch of innerContent.matchAll(MINIMAX_INVOKE_RE)) {
+          const iIndex = iMatch.index ?? 0;
+          const [iFullMatch, attributes, invokeBody] = iMatch;
+
+          if (iIndex > innerCursor) {
+            const innerProse = innerContent.slice(innerCursor, iIndex);
+            if (innerProse) {
+              blocks.push({ type: "text", text: innerProse });
+            }
+          }
+
+          const nameMatch = /\bname=["']([^"']+)["']/i.exec(attributes);
+          const toolName = nameMatch ? nameMatch[1] : undefined;
+          if (toolName) {
+            const args: Record<string, unknown> = {};
+            if (invokeBody) {
+              for (const pMatch of invokeBody.matchAll(MINIMAX_PARAM_RE)) {
+                const [, pName, pValue] = pMatch;
+                args[pName] = parseXmlParameterValue(pValue);
+              }
+            }
+            blocks.push({
+              type: "toolCall",
+              id: `mc_mm_${globalCounter.val++}_${normalizeToolName(toolName)}`,
+              name: normalizeToolName(toolName),
+              arguments: args,
+            });
+            hasToolCall = true;
+          }
+          innerCursor = iIndex + iFullMatch.length;
+        }
+        if (innerCursor < innerContent.length) {
+          const remainingInnerProse = innerContent.slice(innerCursor);
+          if (remainingInnerProse) {
+            blocks.push({ type: "text", text: remainingInnerProse });
+          }
+        }
+      }
+
+      cursor = index + fullMatch.length;
     }
-    cursor = index + fullMatch.length;
   }
 
   if (!hasToolCall) {
@@ -636,25 +674,38 @@ export function splitMinimaxToolCalls(
   if (cursor < text.length) {
     blocks.push({ type: "text", text: text.slice(cursor) });
   }
+
   return blocks;
 }
 
+/**
+ * Scan assistant message content for MiniMax-specific XML tool calls.
+ */
 export function promoteMinimaxToolCallsToBlocks(message: AssistantMessage): void {
   if (!message) {
     return;
   }
+
   const messageContent: unknown = message.content;
   const globalCounter = { val: 0 };
 
+  // Handle string-form assistant content by converting it to a block array first.
   if (typeof messageContent === "string") {
     if (!messageContent.toLowerCase().includes("minimax:tool_call")) {
       return;
     }
+
+    // IMPORTANT: First promote thinking tags while it's still a single string.
+    // This handles cases where XML is nested inside <think> tags.
     promoteThinkingTagsToBlocks(message);
+
+    // If it was promoted to blocks, we continue with the array-based logic below.
+    // If it's still a string (e.g. no think tags), we split it manually here.
     if (typeof message.content !== "string") {
       promoteMinimaxToolCallsToBlocks(message);
       return;
     }
+
     const split = splitMinimaxToolCalls(messageContent, { globalCounter });
     if (!split) {
       return;
@@ -679,29 +730,36 @@ export function promoteMinimaxToolCallsToBlocks(message: AssistantMessage): void
   if (!Array.isArray(messageContent)) {
     return;
   }
+
   const next: AssistantMessage["content"] = [];
   let changed = false;
+
   for (const block of messageContent) {
     if (!block || typeof block !== "object") {
       next.push(block);
       continue;
     }
+
     const type = block.type as string;
+    // Handle both text and thinking blocks as sources for XML tool calls.
     const textValue =
       type === "text"
         ? (block as { text: string }).text
         : type === "thinking"
           ? (block as { thinking: string }).thinking
           : null;
+
     if (typeof textValue !== "string") {
       next.push(block);
       continue;
     }
+
     const split = splitMinimaxToolCalls(textValue, { globalCounter });
     if (!split) {
       next.push(block);
       continue;
     }
+
     changed = true;
     for (const part of split) {
       if (part.type === "toolCall") {
@@ -723,6 +781,7 @@ export function promoteMinimaxToolCallsToBlocks(message: AssistantMessage): void
       }
     }
   }
+
   if (changed) {
     message.content = next;
   }
