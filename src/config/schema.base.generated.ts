@@ -2403,6 +2403,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   customInstructions: {
                     type: "string",
                   },
+                  recentTurnsPreserve: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 12,
+                  },
                   identifierPolicy: {
                     anyOf: [
                       {
@@ -2421,11 +2426,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                   identifierInstructions: {
                     type: "string",
-                  },
-                  recentTurnsPreserve: {
-                    type: "integer",
-                    minimum: 0,
-                    maximum: 12,
                   },
                   qualityGuard: {
                     type: "object",
@@ -13820,7 +13820,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "agents.defaults.compaction.recentTurnsPreserve": {
       label: "Compaction Preserve Recent Turns",
-      help: "Number of most recent user/assistant turns kept verbatim outside safeguard summarization (default: 3). Raise this to preserve exact recent dialogue context, or lower it to maximize compaction savings.",
+      help: "Number of recent user turns (and their associated assistant/tool responses) to preserve verbatim in compaction summaries rather than summarizing (0–12, default: 3). Higher values keep more recent context intact but increase summary size.",
       tags: ["advanced"],
     },
     "agents.defaults.compaction.qualityGuard": {
