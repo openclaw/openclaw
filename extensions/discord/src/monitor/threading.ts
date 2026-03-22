@@ -189,10 +189,17 @@ export function resolveDiscordThreadChannel(params: {
   if (!messageChannelId) {
     return null;
   }
+  // Prefer parentId from the live Carbon channel object (available on the event even when
+  // channelInfo cache is stale or empty — important for brand-new forum posts whose parentId
+  // may not yet be cached).
+  const liveParentId =
+    channel && typeof channel === "object" && "parentId" in channel
+      ? ((channel as { parentId?: string | null }).parentId ?? undefined)
+      : undefined;
   return {
     id: messageChannelId,
     name: channelInfo?.name ?? undefined,
-    parentId: channelInfo?.parentId ?? undefined,
+    parentId: liveParentId ?? channelInfo?.parentId ?? undefined,
     parent: undefined,
     ownerId: channelInfo?.ownerId ?? undefined,
   };
