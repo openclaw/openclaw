@@ -3,7 +3,6 @@ export type SafeBinProfile = {
   maxPositional?: number;
   allowedValueFlags?: ReadonlySet<string>;
   deniedFlags?: ReadonlySet<string>;
-  positionalValidator?: (positional: readonly string[]) => boolean;
   // Precomputed long-option metadata for GNU abbreviation resolution.
   knownLongFlags?: readonly string[];
   knownLongFlagsSet?: ReadonlySet<string>;
@@ -20,6 +19,8 @@ export type SafeBinProfileFixture = {
 export type SafeBinProfileFixtures = Readonly<Record<string, SafeBinProfileFixture>>;
 
 const NO_FLAGS: ReadonlySet<string> = new Set();
+
+export const DEFAULT_SAFE_BINS = ["cut", "uniq", "head", "tail", "tr", "wc"] as const;
 
 const toFlagSet = (flags?: readonly string[]): ReadonlySet<string> => {
   if (!flags || flags.length === 0) {
@@ -69,18 +70,7 @@ export function buildLongFlagPrefixMap(
   return prefixMap;
 }
 
-const JQ_ENV_FILTER_PATTERN = /(^|[^.$A-Za-z0-9_])env([^A-Za-z0-9_]|$)/;
-
-function validateJqSafeBinPositional(positional: readonly string[]): boolean {
-  for (const token of positional) {
-    if (JQ_ENV_FILTER_PATTERN.test(token)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function compileSafeBinProfile(name: string, fixture: SafeBinProfileFixture): SafeBinProfile {
+function compileSafeBinProfile(fixture: SafeBinProfileFixture): SafeBinProfile {
   const allowedValueFlags = toFlagSet(fixture.allowedValueFlags);
   const deniedFlags = toFlagSet(fixture.deniedFlags);
   const knownLongFlags = collectKnownLongFlags(allowedValueFlags, deniedFlags);
@@ -89,7 +79,6 @@ function compileSafeBinProfile(name: string, fixture: SafeBinProfileFixture): Sa
     maxPositional: fixture.maxPositional,
     allowedValueFlags,
     deniedFlags,
-    positionalValidator: name === "jq" ? validateJqSafeBinPositional : undefined,
     knownLongFlags,
     knownLongFlagsSet: new Set(knownLongFlags),
     longFlagPrefixMap: buildLongFlagPrefixMap(knownLongFlags),
@@ -100,7 +89,7 @@ function compileSafeBinProfiles(
   fixtures: Record<string, SafeBinProfileFixture>,
 ): Record<string, SafeBinProfile> {
   return Object.fromEntries(
-    Object.entries(fixtures).map(([name, fixture]) => [name, compileSafeBinProfile(name, fixture)]),
+    Object.entries(fixtures).map(([name, fixture]) => [name, compileSafeBinProfile(fixture)]),
   ) as Record<string, SafeBinProfile>;
 }
 
@@ -325,4 +314,10 @@ export function renderSafeBinDeniedFlagsDocBullets(
   return bins
     .map((bin) => `- \`${bin}\`: ${deniedByBin[bin].map((flag) => `\`${flag}\``).join(", ")}`)
     .join("\n");
+}
+
+export function renderDefaultSafeBinsDocText(
+  defaults: readonly string[] = DEFAULT_SAFE_BINS,
+): string {
+  return defaults.map((bin) => `\`${bin}\``).join(", ");
 }
