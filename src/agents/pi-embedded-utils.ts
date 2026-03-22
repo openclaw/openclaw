@@ -246,7 +246,7 @@ export function extractAssistantText(msg: AssistantMessage): string {
     result = sanitize(msg.content);
   }
 
-  const cleaned = stripThinkingTagsFromText(result).replace(new RegExp(INLINE_GLUE, "g"), "");
+  const cleaned = stripThinkingTagsFromText(result).split(INLINE_GLUE).join("");
   const errorContext = msg.stopReason === "error";
   return sanitizeUserFacingText(cleaned.trim(), { errorContext });
 }
@@ -262,7 +262,7 @@ export function extractAssistantThinking(msg: AssistantMessage): string {
       }
       const record = block as unknown as Record<string, unknown>;
       if (record.type === "thinking" && typeof record.thinking === "string") {
-        return record.thinking.trim();
+        return record.thinking.split(INLINE_GLUE).join("").trim();
       }
       return "";
     })
@@ -354,7 +354,12 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
       }
 
       if (inThinking && isClose) {
-        blocks.push({ type: "thinking", thinking: text.slice(thinkingStart, index).trim() });
+        let thoughts = text.slice(thinkingStart, index);
+        // Also mark inline splits within thinking blocks
+        if (thoughts && !thoughts.endsWith("\n") && !thoughts.endsWith("\r")) {
+          thoughts += INLINE_GLUE;
+        }
+        blocks.push({ type: "thinking", thinking: thoughts.trim() });
         cursor = index + match[0].length;
         inThinking = false;
       }
@@ -369,6 +374,32 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
   }
 
   return blocks.length > 0 ? blocks : null;
+}
+
+/**
+ * Collapses adjacent text blocks that were split but belong
+ * to the same line/sentence, preventing artificial newlines in extraction.
+ */
+function mergeInlineTextBlocks(blocks: AssistantMessage["content"]): AssistantMessage["content"] {
+  const next: AssistantMessage["content"] = [];
+  for (const block of blocks) {
+    if (!block || typeof block !== "object") {
+      next.push(block);
+      continue;
+    }
+    const last = next[next.length - 1];
+    if (last?.type === "text" && block?.type === "text") {
+      // Logic: If the preceding block ends with INLINE_GLUE, merge them.
+      // We DON'T strip glue here because extractAssistantText needs it to know
+      // not to add \n. Glue is stripped in the final extract... functions.
+      if (last.text.endsWith(INLINE_GLUE)) {
+        last.text += block.text;
+        continue;
+      }
+    }
+    next.push(block);
+  }
+  return next;
 }
 
 export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
@@ -392,7 +423,7 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
         next.push({ type: "text", text: part.text });
       }
     }
-    message.content = next;
+    message.content = mergeInlineTextBlocks(next);
     return;
   }
 
@@ -430,7 +461,7 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   }
 
   if (changed) {
-    message.content = next;
+    message.content = mergeInlineTextBlocks(next);
   }
 }
 
@@ -539,17 +570,6 @@ export function parseXmlParameterValue(value: string): unknown {
     return false;
   }
 
-  if (
-    (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
-    (trimmed.startsWith("[") && trimmed.endsWith("]"))
-  ) {
-    try {
-      return JSON.parse(trimmed);
-    } catch {
-      // Fallback
-    }
-  }
-
   return unescaped;
 }
 
@@ -588,7 +608,11 @@ export function splitMinimaxToolCalls(
 
       // Push preceding text prose (this is safely outside any wrapper)
       if (index > cursor) {
-        const prose = text.slice(cursor, index);
+        let prose = text.slice(cursor, index);
+        // If this is a mid-line split, mark it.
+        if (prose && !prose.endsWith("\n") && !prose.endsWith("\r")) {
+          prose += INLINE_GLUE;
+        }
         if (prose) {
           blocks.push({ type: "text", text: prose });
         }
@@ -597,26 +621,43 @@ export function splitMinimaxToolCalls(
       const isExplicitWrapper = innerContent !== undefined;
 
       // Case B: Malformed closing tag fallback.
-      if (!isExplicitWrapper && blocks.length > 0) {
-        const lastBlock = blocks[blocks.length - 1];
-        if (lastBlock.type === "text" && /<invoke\b/i.test(lastBlock.text)) {
-          const lastText = lastBlock.text;
-          const matchedInvokes = Array.from(lastText.matchAll(MINIMAX_INVOKE_RE));
+      if (!isExplicitWrapper && (blocks.length > 0 || /<invoke\b/i.test(text.slice(0, index)))) {
+        // Search the most recent text block, or search entire preceding text if blocks is empty
+        let searchSource = "";
+        let targetBlock: MinimaxToolCallSplitBlock | undefined = undefined;
+
+        if (blocks.length > 0) {
+          targetBlock = blocks[blocks.length - 1];
+          if (targetBlock.type === "text") {
+            searchSource = targetBlock.text;
+          }
+        } else {
+          searchSource = text.slice(0, index);
+        }
+
+        if (searchSource && /<invoke\b/i.test(searchSource)) {
+          const matchedInvokes = Array.from(searchSource.matchAll(MINIMAX_INVOKE_RE));
 
           if (matchedInvokes.length > 0) {
             const lastInvoke = matchedInvokes[matchedInvokes.length - 1];
-            const trailingProse = lastText.slice((lastInvoke.index ?? 0) + lastInvoke[0].length);
+            const lastInvokeText = lastInvoke[0];
+            const lastInvokeEnd = (lastInvoke.index ?? 0) + lastInvokeText.length;
+            const trailingProse = searchSource.slice(lastInvokeEnd);
 
-            if (!trailingProse.trim()) {
+            // Only reclaim if the trailing prose is empty (ignore space/glue)
+            const cleanedTrailing = trailingProse.split(INLINE_GLUE).join("").trim();
+            if (!cleanedTrailing) {
               let lastProcessedIdx = 0;
-              blocks.pop(); // Replace the last block with split parts
+              if (targetBlock) {
+                blocks.pop();
+              } // Remove the block to replace it
 
               for (const iMatch of matchedInvokes) {
                 const iIndex = iMatch.index ?? 0;
                 const [iFullMatch, attributes, invokeBody] = iMatch;
 
                 if (iIndex > lastProcessedIdx) {
-                  const subProse = lastText.slice(lastProcessedIdx, iIndex);
+                  const subProse = searchSource.slice(lastProcessedIdx, iIndex);
                   if (subProse) {
                     blocks.push({ type: "text", text: subProse });
                   }
@@ -643,8 +684,8 @@ export function splitMinimaxToolCalls(
                 lastProcessedIdx = iIndex + iFullMatch.length;
               }
 
-              if (lastProcessedIdx < lastText.length) {
-                const finalSubProse = lastText.slice(lastProcessedIdx);
+              if (lastProcessedIdx < searchSource.length) {
+                const finalSubProse = searchSource.slice(lastProcessedIdx);
                 if (finalSubProse) {
                   blocks.push({ type: "text", text: finalSubProse });
                 }
@@ -691,7 +732,11 @@ export function splitMinimaxToolCalls(
         if (innerCursor < innerContent.length) {
           const remainingInnerProse = innerContent.slice(innerCursor);
           if (remainingInnerProse) {
-            blocks.push({ type: "text", text: remainingInnerProse });
+            let p = remainingInnerProse;
+            if (!p.endsWith("\n") && !p.endsWith("\r")) {
+              p += INLINE_GLUE;
+            }
+            blocks.push({ type: "text", text: p });
           }
         }
       }
@@ -755,7 +800,7 @@ export function promoteMinimaxToolCallsToBlocks(message: AssistantMessage): void
         next.push({ type: "text", text: part.text });
       }
     }
-    message.content = next;
+    message.content = mergeInlineTextBlocks(next);
     return;
   }
 
@@ -815,6 +860,6 @@ export function promoteMinimaxToolCallsToBlocks(message: AssistantMessage): void
   }
 
   if (changed) {
-    message.content = next;
+    message.content = mergeInlineTextBlocks(next);
   }
 }

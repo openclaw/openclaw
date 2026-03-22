@@ -17,6 +17,8 @@ function makeAssistantMessage(msg: Partial<AssistantMessage>): AssistantMessage 
   } as AssistantMessage;
 }
 
+const INLINE_GLUE = "\u200B";
+
 describe("promoteMinimaxToolCallsToBlocks", () => {
   it("converts MiniMax XML tool calls into toolCall blocks", () => {
     const text = `<minimax:tool_call>
@@ -97,11 +99,11 @@ describe("promoteMinimaxToolCallsToBlocks", () => {
     });
   });
 
-  it("parses JSON-like arguments correctly", () => {
+  it("keeps JSON-looking arguments as pure strings for safety", () => {
     const text = `<minimax:tool_call>
   <invoke name="Config">
     <parameter name="json">{"key": "value", "num": 42}</parameter>
-    <parameter name="list">[1, 2, 3]</parameter>
+    <parameter name="note">[Caution] Check this</parameter>
   </invoke>
 </minimax:tool_call>`;
     const msg = makeAssistantMessage({
@@ -113,11 +115,12 @@ describe("promoteMinimaxToolCallsToBlocks", () => {
     promoteMinimaxToolCallsToBlocks(msg);
 
     const toolCall = msg.content.find((c) => c && typeof c === "object" && c.type === "toolCall");
+    // Per Codex P2, we avoid automatic JSON parsing.
     expect(toolCall).toMatchObject({
       type: "toolCall",
       arguments: {
-        json: { key: "value", num: 42 },
-        list: [1, 2, 3],
+        json: '{"key": "value", "num": 42}',
+        note: "[Caution] Check this",
       },
     });
   });
@@ -205,14 +208,14 @@ describe("promoteMinimaxToolCallsToBlocks", () => {
 
     promoteThinkingTagsToBlocks(msg);
 
-    // Should result in: [text (up to <think>), thinking (Real thinking...), text (empty/remaining)]
+    // Should result in: [text (up to <think>), thinking (Real thinking...)]
     expect(msg.content.length).toBe(2);
     expect(msg.content[0]).toMatchObject({ type: "text" });
     const block0 = msg.content[0] as { type: "text"; text: string };
     expect(block0.text).toContain("<think>This should not be promoted</think>");
     expect(msg.content[1]).toMatchObject({
       type: "thinking",
-      thinking: "Real thinking with ```code``` inside",
+      thinking: "Real thinking with ```code``` inside" + INLINE_GLUE,
     });
   });
 
@@ -246,6 +249,20 @@ describe("promoteMinimaxToolCallsToBlocks", () => {
     const call0 =
       calls[0] && typeof calls[0] === "object" && "name" in calls[0] ? calls[0].name : "";
     expect(call0).toBe("exec");
+  });
+
+  it("preserves inline MiniMax XML calls when split", () => {
+    const text = 'Prefix.<minimax:tool_call><invoke name="Bash" /></minimax:tool_call>Suffix.';
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+    });
+
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    // Extraction should join Prefix. and Suffix. back into "Prefix.Suffix."
+    const resultText = extractAssistantText(msg);
+    expect(resultText).toBe("Prefix.Suffix.");
   });
 
   it("skips thinking tags inside inline code", () => {
@@ -343,6 +360,21 @@ describe("promoteMinimaxToolCallsToBlocks", () => {
     expect(block0.text).toContain("<think>Internal thinking...");
   });
 
+  it("handles inline <think> blocks preceded by ordinary prose", () => {
+    const text = `Okay. <think>Internal thoughts...</think> <minimax:tool_call><invoke name="Bash"><parameter name="command">ls</parameter></invoke></minimax:tool_call>`;
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: text as unknown as AssistantMessage["content"],
+      timestamp: Date.now(),
+    });
+
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    // Check for existence
+    const toolCall = msg.content.find((c) => c && typeof c === "object" && c.type === "toolCall");
+    expect(toolCall).toBeDefined();
+  });
+
   it("preserves leading/trailing whitespace in arguments", () => {
     const text = `<minimax:tool_call>
   <invoke name="Message">
@@ -437,9 +469,15 @@ describe("promoteMinimaxToolCallsToBlocks", () => {
     promoteMinimaxToolCallsToBlocks(msg);
 
     expect(msg.content.length).toBe(3);
-    expect(msg.content[0]).toMatchObject({ type: "thinking", thinking: "Internal thoughts... " });
+    expect(msg.content[0]).toMatchObject({
+      type: "thinking",
+      thinking: "Internal thoughts... " + INLINE_GLUE,
+    });
     expect(msg.content[1]).toMatchObject({ type: "toolCall", name: "exec" });
-    expect(msg.content[2]).toMatchObject({ type: "thinking", thinking: " End of thoughts." });
+    expect(msg.content[2]).toMatchObject({
+      type: "thinking",
+      thinking: " End of thoughts." + INLINE_GLUE,
+    });
   });
 
   it("generates deterministic tool-call IDs across blocks", () => {
