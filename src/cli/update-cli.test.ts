@@ -25,6 +25,12 @@ const formatPortDiagnostics = vi.fn();
 const pathExists = vi.fn();
 const syncPluginsForUpdateChannel = vi.fn();
 const updateNpmInstalledPlugins = vi.fn();
+const runtimeLog = vi.fn();
+const runtimeError = vi.fn();
+const runtimeExit = vi.fn();
+const runtimeWriteJson = vi.fn((value: unknown, space = 2) =>
+  runtimeLog(JSON.stringify(value, null, space > 0 ? space : undefined)),
+);
 
 vi.mock("@clack/prompts", () => ({
   confirm,
@@ -131,9 +137,10 @@ vi.mock("./daemon-cli.js", () => ({
 // Mock the runtime
 vi.mock("../runtime.js", () => ({
   defaultRuntime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
+    log: runtimeLog,
+    error: runtimeError,
+    writeJson: runtimeWriteJson,
+    exit: runtimeExit,
   },
 }));
 
