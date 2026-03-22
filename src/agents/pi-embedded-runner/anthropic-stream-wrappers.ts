@@ -318,6 +318,15 @@ export function createAnthropicToolPayloadCompatibilityWrapper(
   };
 }
 
+function deleteHeaderCaseInsensitive(headers: Record<string, string>, headerName: string): void {
+  const target = headerName.toLowerCase();
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === target) {
+      delete headers[key];
+    }
+  }
+}
+
 function shouldUseAnthropicAuthorizationHeader(
   cfg: OpenClawConfig | undefined,
   provider: unknown,
@@ -346,10 +355,13 @@ export function createAnthropicAuthHeaderWrapper(
       ...options.headers,
       Authorization: `Bearer ${options.apiKey}`,
     };
-    delete headers["x-api-key"];
+    deleteHeaderCaseInsensitive(headers, "authorization");
+    deleteHeaderCaseInsensitive(headers, "x-api-key");
+    headers.Authorization = `Bearer ${options.apiKey}`;
 
     return underlying(model, context, {
       ...options,
+      apiKey: undefined,
       headers,
     });
   };

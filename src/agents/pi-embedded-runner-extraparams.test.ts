@@ -1470,7 +1470,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(headers).toEqual({ "X-Custom": "1" });
   });
 
-  it("uses Authorization header for anthropic-compatible custom providers when authHeader is enabled", () => {
+  it("uses bearer auth mode for anthropic-compatible custom providers when authHeader is enabled", () => {
     const { calls, agent } = createOptionsCaptureAgent();
     const cfg = {
       models: {
@@ -1500,6 +1500,7 @@ describe("applyExtraParamsToAgent", () => {
     });
 
     expect(calls).toHaveLength(1);
+    expect(calls[0]?.apiKey).toBeUndefined();
     expect(calls[0]?.headers).toEqual({
       "anthropic-version": "2023-06-01",
       Authorization: "Bearer sk-proxy-test",
@@ -1507,7 +1508,7 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
-  it("does not add Authorization header for anthropic-compatible custom providers when authHeader is disabled", () => {
+  it("keeps apiKey auth mode for anthropic-compatible custom providers when authHeader is disabled", () => {
     const { calls, agent } = createOptionsCaptureAgent();
     const cfg = {
       models: {
@@ -1536,6 +1537,7 @@ describe("applyExtraParamsToAgent", () => {
     });
 
     expect(calls).toHaveLength(1);
+    expect(calls[0]?.apiKey).toBe("sk-proxy-test");
     expect(calls[0]?.headers).toEqual({
       "anthropic-version": "2023-06-01",
       "x-api-key": "stale",
