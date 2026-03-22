@@ -85,6 +85,10 @@
       "destination": "/tools/perplexity-search"
     },
     {
+      "source": "/web-fetch",
+      "destination": "/tools/web-fetch"
+    },
+    {
       "source": "/gemini-search",
       "destination": "/tools/gemini-search"
     },
@@ -1104,12 +1108,26 @@
                 "pages": [
                   "tools/apply-patch",
                   {
-                    "group": "Browser",
+                    "group": "Web Browser",
                     "pages": [
                       "tools/browser",
                       "tools/browser-login",
                       "tools/browser-linux-troubleshooting",
                       "tools/browser-wsl2-windows-remote-cdp-troubleshooting"
+                    ]
+                  },
+                  {
+                    "group": "Web Tools",
+                    "pages": [
+                      "tools/web-fetch",
+                      "tools/web",
+                      "tools/brave-search",
+                      "tools/firecrawl",
+                      "tools/gemini-search",
+                      "tools/grok-search",
+                      "tools/kimi-search",
+                      "tools/perplexity-search",
+                      "tools/tavily"
                     ]
                   },
                   "tools/btw",
@@ -1122,20 +1140,7 @@
                   "tools/loop-detection",
                   "tools/pdf",
                   "tools/reactions",
-                  "tools/thinking",
-                  "tools/web",
-                  {
-                    "group": "Web Search",
-                    "pages": [
-                      "tools/brave-search",
-                      "tools/firecrawl",
-                      "tools/gemini-search",
-                      "tools/grok-search",
-                      "tools/kimi-search",
-                      "tools/perplexity-search",
-                      "tools/tavily"
-                    ]
-                  }
+                  "tools/thinking"
                 ]
               },
               {
