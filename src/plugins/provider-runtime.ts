@@ -8,8 +8,8 @@ import {
 import {
   resolveNonBundledProviderPluginIds,
   resolveOwningPluginIdsForProvider,
-  resolvePluginProviders,
 } from "./providers.js";
+import { resolvePluginProviders } from "./providers.runtime.js";
 import { resolvePluginCacheInputs } from "./roots.js";
 import type {
   ProviderAuthDoctorHintContext,
