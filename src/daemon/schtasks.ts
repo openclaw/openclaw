@@ -119,8 +119,8 @@ async function queryInstalledTaskScriptPath(env: GatewayServiceEnv): Promise<str
 
 async function resolveTaskScriptCandidates(env: GatewayServiceEnv): Promise<string[]> {
   const candidates = [
-    await readStartupEntryTaskScriptPath(env),
     await queryInstalledTaskScriptPath(env),
+    await readStartupEntryTaskScriptPath(env),
     resolveTaskScriptPath(env),
     resolveLegacyOsHomeTaskScriptPath(env),
   ].filter((value): value is string => Boolean(value));

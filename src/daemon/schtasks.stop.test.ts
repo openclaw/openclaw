@@ -752,4 +752,72 @@ describe("Scheduled Task stop/restart cleanup", () => {
       expectGatewayTermination(9999);
     });
   });
+
+  it("prefers the registered task action over a stale startup launcher when resolving the stop port", async () => {
+    await withWindowsEnv("openclaw-win-stop-", async ({ env, tmpDir }) => {
+      const taskHome = path.join(tmpDir, "task-home");
+      const staleStartupHome = path.join(tmpDir, "stale-startup-home");
+      const taskEnv = { ...env, OPENCLAW_HOME: taskHome };
+      const staleStartupEnv = { ...env, OPENCLAW_HOME: staleStartupHome };
+      const installedScriptPath = resolveTaskScriptPath(taskEnv);
+      const staleScriptPath = resolveTaskScriptPath(staleStartupEnv);
+      const startupEntryPath = path.join(
+        env.APPDATA,
+        "Microsoft",
+        "Windows",
+        "Start Menu",
+        "Programs",
+        "Startup",
+        "OpenClaw Gateway.cmd",
+      );
+
+      await writeGatewayScript(taskEnv, GATEWAY_PORT, {
+        includePortEnv: false,
+        includePortFlag: false,
+        extraEnv: { OPENCLAW_HOME: taskHome },
+      });
+      await writeGatewayConfig(taskEnv, GATEWAY_PORT);
+      await writeGatewayScript(staleStartupEnv, 29999, {
+        includePortEnv: false,
+        includePortFlag: false,
+        extraEnv: { OPENCLAW_HOME: staleStartupHome },
+      });
+      await writeGatewayConfig(staleStartupEnv, 29999);
+      await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
+      await fs.writeFile(
+        startupEntryPath,
+        ["@echo off", `cmd.exe /d /c "${staleScriptPath}"`].join("\r\n"),
+        "utf8",
+      );
+
+      const stdout = new PassThrough();
+      const envWithoutPort: Record<string, string> = { ...env };
+      delete envWithoutPort.OPENCLAW_GATEWAY_PORT;
+      schtasksResponses.push(
+        { ...SUCCESS_RESPONSE },
+        { ...SUCCESS_RESPONSE },
+        { ...SUCCESS_RESPONSE },
+        {
+          code: 0,
+          stdout: `TaskName: OpenClaw Gateway\r\nTask To Run: "${installedScriptPath}"\r\n`,
+          stderr: "",
+        },
+        {
+          code: 0,
+          stdout: `TaskName: OpenClaw Gateway\r\nTask To Run: "${installedScriptPath}"\r\n`,
+          stderr: "",
+        },
+      );
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([9898]);
+      inspectPortUsage
+        .mockResolvedValueOnce(busyPortUsage(9898))
+        .mockResolvedValueOnce(freePortUsage());
+
+      await stopScheduledTask({ env: envWithoutPort, stdout });
+
+      expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
+      expect(inspectPortUsage).not.toHaveBeenCalledWith(29999);
+      expectGatewayTermination(9898);
+    });
+  });
 });

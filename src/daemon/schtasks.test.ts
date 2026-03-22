@@ -392,6 +392,70 @@ describe("readScheduledTaskCommand", () => {
     );
   });
 
+  it("prefers the registered task action over a stale startup launcher backup", async () => {
+    await withScheduledTaskScript(
+      {
+        env: (tmpDir) => ({
+          APPDATA: path.join(tmpDir, "AppData", "Roaming"),
+          OPENCLAW_HOME: path.join(tmpDir, "shell-home"),
+        }),
+      },
+      async (env) => {
+        const installedEnv = {
+          ...env,
+          OPENCLAW_HOME: path.join(env.USERPROFILE!, "installed-home"),
+        };
+        const staleEnv = {
+          ...env,
+          OPENCLAW_HOME: path.join(env.USERPROFILE!, "stale-startup-home"),
+        };
+        const installedScriptPath = resolveTaskScriptPath(installedEnv);
+        const staleScriptPath = resolveTaskScriptPath(staleEnv);
+        const startupEntryPath = path.join(
+          env.APPDATA!,
+          "Microsoft",
+          "Windows",
+          "Start Menu",
+          "Programs",
+          "Startup",
+          "OpenClaw Gateway.cmd",
+        );
+
+        await fs.mkdir(path.dirname(installedScriptPath), { recursive: true });
+        await fs.writeFile(
+          installedScriptPath,
+          ["@echo off", "node gateway.js --from-installed-task"].join("\r\n"),
+          "utf8",
+        );
+        await fs.mkdir(path.dirname(staleScriptPath), { recursive: true });
+        await fs.writeFile(
+          staleScriptPath,
+          ["@echo off", "node gateway.js --from-stale-startup-backup"].join("\r\n"),
+          "utf8",
+        );
+        await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
+        await fs.writeFile(
+          startupEntryPath,
+          ["@echo off", `cmd.exe /d /c "${staleScriptPath}"`].join("\r\n"),
+          "utf8",
+        );
+
+        schtasksResponses.push({
+          code: 0,
+          stdout: `TaskName: OpenClaw Gateway\r\nTask To Run: "${installedScriptPath}"\r\n`,
+          stderr: "",
+        });
+
+        const result = await readScheduledTaskCommand(env);
+
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js", "--from-installed-task"],
+          sourcePath: installedScriptPath,
+        });
+      },
+    );
+  });
+
   it("parses quoted set assignments with escaped metacharacters", async () => {
     await withScheduledTaskScript(
       {
