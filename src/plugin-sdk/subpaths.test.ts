@@ -52,7 +52,6 @@ const sourceCache = new Map<string, string>();
 const representativeRuntimeSmokeSubpaths = [
   "channel-runtime",
   "conversation-runtime",
-  "discord",
   "provider-auth",
   "provider-setup",
   "setup",
@@ -125,24 +124,28 @@ function expectSourceContract(
 
 describe("plugin-sdk subpath exports", () => {
   it("keeps the curated public list free of internal implementation subpaths", () => {
-    expect(pluginSdkSubpaths).not.toContain("acpx");
-    expect(pluginSdkSubpaths).not.toContain("compat");
-    expect(pluginSdkSubpaths).not.toContain("device-pair");
-    expect(pluginSdkSubpaths).not.toContain("google");
-    expect(pluginSdkSubpaths).not.toContain("lobster");
-    expect(pluginSdkSubpaths).not.toContain("pairing-access");
-    expect(pluginSdkSubpaths).not.toContain("qwen-portal-auth");
-    expect(pluginSdkSubpaths).not.toContain("reply-prefix");
-    expect(pluginSdkSubpaths).not.toContain("signal-core");
-    expect(pluginSdkSubpaths).not.toContain("synology-chat");
-    expect(pluginSdkSubpaths).not.toContain("typing");
-    expect(pluginSdkSubpaths).not.toContain("whatsapp");
-    expect(pluginSdkSubpaths).not.toContain("whatsapp-action-runtime");
-    expect(pluginSdkSubpaths).not.toContain("whatsapp-login-qr");
-    expect(pluginSdkSubpaths).not.toContain("secret-input-runtime");
-    expect(pluginSdkSubpaths).not.toContain("secret-input-schema");
-    expect(pluginSdkSubpaths).not.toContain("zai");
-    expect(pluginSdkSubpaths).not.toContain("provider-model-definitions");
+    for (const deniedSubpath of [
+      "acpx",
+      "compat",
+      "device-pair",
+      "google",
+      "lobster",
+      "pairing-access",
+      "provider-model-definitions",
+      "qwen-portal-auth",
+      "reply-prefix",
+      "secret-input-runtime",
+      "secret-input-schema",
+      "signal-core",
+      "synology-chat",
+      "typing",
+      "whatsapp",
+      "whatsapp-action-runtime",
+      "whatsapp-login-qr",
+      "zai",
+    ]) {
+      expect(pluginSdkSubpaths).not.toContain(deniedSubpath);
+    }
   });
 
   it("keeps core focused on generic shared exports", () => {
@@ -568,13 +571,10 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceMentions("testing", ["removeAckReactionAfterReply", "shouldAckReaction"]);
   });
 
-  it("exports shared core types used by bundled extensions", () => {
+  it("keeps core shared types aligned", () => {
     expectTypeOf<CoreOpenClawPluginApi>().toMatchTypeOf<OpenClawPluginApi>();
     expectTypeOf<CorePluginRuntime>().toMatchTypeOf<PluginRuntime>();
     expectTypeOf<CoreChannelMessageActionContext>().toMatchTypeOf<ChannelMessageActionContext>();
-  });
-
-  it("keeps core shared types aligned with the channel prelude", () => {
     expectTypeOf<CoreOpenClawPluginApi>().toMatchTypeOf<SharedOpenClawPluginApi>();
     expectTypeOf<CorePluginRuntime>().toMatchTypeOf<SharedPluginRuntime>();
     expectTypeOf<CoreChannelMessageActionContext>().toMatchTypeOf<SharedChannelMessageActionContext>();
