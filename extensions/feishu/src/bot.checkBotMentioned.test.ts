@@ -201,15 +201,15 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     expect(ctx.mentionedBot).toBe(false);
   });
 
-  it("returns mentionedBot=false for @_all even when bot is also in mentions list (opt-in path takes precedence)", () => {
-    // Explicit bot mention still wins via the mentions array path
+  it("returns mentionedBot=true for @_all when bot is also explicitly mentioned (direct mention takes precedence)", () => {
+    // Bot IS in the mentions array; the direct-mention path returns true
+    // regardless of the respondToAtAll opt-in flag.
     const event = makeEvent(
       "group",
       [{ key: "@_user_1", name: "Bot", id: { open_id: BOT_OPEN_ID } }],
       "@_all hello",
     );
     const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
-    // Bot IS in the mentions array, so it should still be true via that path
     expect(ctx.mentionedBot).toBe(true);
   });
 });
