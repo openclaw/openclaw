@@ -598,7 +598,22 @@ export function createExecTool(
               return;
             }
             if (outcome.status === "failed") {
-              reject(new Error(outcome.reason ?? "Command failed."));
+              const failText = outcome.reason ?? "Command failed.";
+              resolve({
+                content: [
+                  {
+                    type: "text",
+                    text: `${getWarningText()}${failText}`,
+                  },
+                ],
+                details: {
+                  status: "failed",
+                  exitCode: outcome.exitCode ?? null,
+                  durationMs: outcome.durationMs,
+                  aggregated: outcome.aggregated,
+                  cwd: run.session.cwd,
+                },
+              });
               return;
             }
             resolve({
