@@ -15,7 +15,13 @@
       "Iran's South Pars gas field bombed, oil prices surge to $118/barrel",
       "Iran retaliates with missile barrage on Qatar LNG terminal, Nasrallah missiles at Israeli/U.S. sites",
       "Pentagon seeks $200B for war effort, red alerts across Israel",
-      "Global energy fallout: fuel rationing in Asia, U.S. gasoline at 2023 highs"
+      "Global energy fallout: fuel rationing in Asia, U.S. gasoline at 2023 highs",
+      "Israel kills Iran's intelligence chief Ismael Khib in Tehran airstrikes",
+      "US government shutdown day 36 - TSA unpaid, major airport delays",
+      "Hawaii catastrophic flooding - thousands evacuated",
+      "Former FBI Director Robert Mueller dies at 81",
+      "Russia captures 12 Ukrainian settlements since early March",
+      "US reopens embassy in Caracas, Venezuela"
     ]
   },
   "frontierAI": {
@@ -32,6 +38,15 @@
     ]
   },
   "chineseAI": {
-    "models": ["Qwen 3.5", "Doubao 2.0", "Kimi K2.5", "MiMo-V2-Pro", "GLM-5", "GLM-4.7-Flash"]
+    "models": [
+      "Qwen 3.5",
+      "Doubao 2.0",
+      "Kimi K2.5",
+      "MiMo-V2-Pro",
+      "GLM-5",
+      "GLM-4.7-Flash",
+      "DeepSeek-V3",
+      "MiniMax M2.2"
+    ]
   }
 }
