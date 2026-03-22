@@ -122,7 +122,7 @@ curl -sS http://127.0.0.1:18789/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{
     "model": "openclaw:main",
-    "user": "device:ios-sim-001",
+    "user": "device:YOUR_DEVICE_ID",
     "messages": [{"role":"user","content":"Summarize my tasks for today"}]
   }'
 ```
