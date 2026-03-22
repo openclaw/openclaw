@@ -59,7 +59,6 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
 
 const NO_LISTENER_ERROR_RE = /No active WhatsApp Web listener/i;
 const RECONNECT_QUEUE_TTL_MS = 5 * 60 * 1000;
-const RECONNECT_RECOVERY_BUDGET_MS = 30_000;
 
 const drainInProgress = new Map<string, boolean>();
 
@@ -232,13 +231,21 @@ export async function drainReconnectQueue(opts: {
     await Promise.all(eligible.map((entry) => resetReconnectEntry(entry, opts.stateDir)));
 
     const deliver = opts.deliver ?? (await loadDeliverRuntime()).deliverOutboundPayloads;
-    await recoverPendingDeliveries({
-      deliver,
-      cfg: opts.cfg,
-      log: opts.log,
-      stateDir: opts.stateDir,
-      maxRecoveryMs: RECONNECT_RECOVERY_BUDGET_MS,
-    });
+
+    // Deliver only the reset entries for this account instead of replaying the full queue.
+    for (const entry of eligible) {
+      try {
+        await deliver(buildRecoveryDeliverParams(entry, opts.cfg));
+        await ackDelivery(entry.id, opts.stateDir);
+      } catch (err) {
+        const errMsg = formatErrorMessage(err);
+        if (isPermanentDeliveryError(errMsg)) {
+          await moveToFailed(entry.id, opts.stateDir).catch(() => {});
+        } else {
+          await failDelivery(entry.id, errMsg, opts.stateDir).catch(() => {});
+        }
+      }
+    }
   } finally {
     drainInProgress.delete(opts.accountId);
   }
