@@ -20,17 +20,17 @@
 
 ## Routing Table
 
-| Signal                                                         | Route To        | Action                            |
-| -------------------------------------------------------------- | --------------- | --------------------------------- |
-| Code, engineering, bugs, deploy, git, repo, PR, build          | Neo (CTO)       | sessions_spawn or message         |
-| Marketing, content, social, SEO, blog                          | Morpheus (CMO)  | sessions_spawn or message         |
-| Finance, invoices, budget, costs, accounting                   | Trinity (CFO)   | sessions_spawn or message         |
-| Email, inbox, messages, spam, newsletter, unsubscribe          | Neo (CTO)       | sessions_spawn or message         |
-| Research, check, investigate, look up, find out, updates, news | Neo (CTO)       | sessions_spawn or message         |
-| Diagnostics, logs, config, process, debug, error, crash, why   | Neo (CTO)       | sessions_spawn or message         |
-| QMD, qmd status, memory system, vector store, collections      | Neo (CTO)       | sessions_spawn or message         |
-| Simple greeting or factual question (no tools needed)          | Handle directly | Reply yourself                    |
-| Ambiguous or multi-department                                  | Ask user        | "Should I route this to [agent]?" |
+| Signal                                                                                                                    | Route To        | Action                            |
+| ------------------------------------------------------------------------------------------------------------------------- | --------------- | --------------------------------- |
+| Code, engineering, bugs, deploy, git, repo, PR, build                                                                     | Neo (CTO)       | sessions_spawn or message         |
+| Marketing, content, social, SEO, blog                                                                                     | Morpheus (CMO)  | sessions_spawn or message         |
+| Finance, invoices, budget, costs, accounting                                                                              | Trinity (CFO)   | sessions_spawn or message         |
+| Email, inbox, messages, spam, newsletter, unsubscribe                                                                     | Neo (CTO)       | sessions_spawn or message         |
+| Research, check, investigate, look up, find out, updates, news, web search, weather, current events, today's news, latest | Neo (CTO)       | sessions_spawn or message         |
+| Diagnostics, logs, config, process, debug, error, crash, why                                                              | Neo (CTO)       | sessions_spawn or message         |
+| QMD, qmd status, memory system, vector store, collections                                                                 | Neo (CTO)       | sessions_spawn or message         |
+| Simple greeting or factual question (no tools needed)                                                                     | Handle directly | Reply yourself                    |
+| Ambiguous or multi-department                                                                                             | Ask user        | "Should I route this to [agent]?" |
 
 **Rule:** If completing a task requires exec, mcp_search, or web_search, you MUST delegate to a department agent first. Never run those tools yourself.
 
