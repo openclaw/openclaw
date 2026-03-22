@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempHome } from "../../../test/helpers/temp-home.js";
+import { withPathResolutionEnv } from "../../test-utils/env.js";
 import type { OpenClawConfig } from "../config.js";
 import { resolveStorePath } from "./paths.js";
 import {
@@ -87,16 +88,25 @@ describe("resolveSessionStoreTargets", () => {
       },
     };
 
-    const targets = resolveSessionStoreTargets(cfg, { allAgents: true });
+    const homeDir = path.resolve(path.sep, "tmp", "openclaw-home");
+    const targets = withPathResolutionEnv(homeDir, {}, (env) =>
+      resolveSessionStoreTargets(cfg, { allAgents: true }, { env }),
+    );
 
     expect(targets).toEqual([
       {
         agentId: "main",
-        storePath: resolveStorePath(cfg.session?.store, { agentId: "main", env: process.env }),
+        storePath: resolveStorePath(cfg.session?.store, {
+          agentId: "main",
+          env: { HOME: homeDir },
+        }),
       },
       {
         agentId: "work",
-        storePath: resolveStorePath(cfg.session?.store, { agentId: "work", env: process.env }),
+        storePath: resolveStorePath(cfg.session?.store, {
+          agentId: "work",
+          env: { HOME: homeDir },
+        }),
       },
     ]);
   });

@@ -1,5 +1,13 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { captureEnv, captureFullEnv, withEnv, withEnvAsync } from "./env.js";
+import {
+  captureEnv,
+  captureFullEnv,
+  createPathResolutionEnv,
+  withEnv,
+  withEnvAsync,
+  withPathResolutionEnv,
+} from "./env.js";
 
 function restoreEnvKey(key: string, previous: string | undefined): void {
   if (previous === undefined) {
@@ -108,5 +116,59 @@ describe("env test utils", () => {
     expect(seen).toBeUndefined();
     expect(process.env[key]).toBe("outer");
     restoreEnvKey(key, prev);
+  });
+
+  it("createPathResolutionEnv clears leaked path overrides before applying explicit ones", () => {
+    const homeDir = path.join(path.sep, "tmp", "openclaw-home");
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const previousBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    process.env.OPENCLAW_HOME = "/srv/openclaw-home";
+    process.env.OPENCLAW_STATE_DIR = "/srv/openclaw-state";
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/srv/openclaw-bundled";
+
+    try {
+      const env = createPathResolutionEnv(homeDir, {
+        OPENCLAW_STATE_DIR: "~/state",
+      });
+
+      expect(env.HOME).toBe(homeDir);
+      expect(env.OPENCLAW_HOME).toBeUndefined();
+      expect(env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
+      expect(env.OPENCLAW_STATE_DIR).toBe("~/state");
+    } finally {
+      restoreEnvKey("OPENCLAW_HOME", previousOpenClawHome);
+      restoreEnvKey("OPENCLAW_STATE_DIR", previousStateDir);
+      restoreEnvKey("OPENCLAW_BUNDLED_PLUGINS_DIR", previousBundledDir);
+    }
+  });
+
+  it("withPathResolutionEnv only applies the explicit path env inside the callback", () => {
+    const homeDir = path.join(path.sep, "tmp", "openclaw-home");
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    process.env.OPENCLAW_HOME = "/srv/openclaw-home";
+
+    try {
+      const seen = withPathResolutionEnv(
+        homeDir,
+        { OPENCLAW_BUNDLED_PLUGINS_DIR: "~/bundled" },
+        (env) => ({
+          processHome: process.env.HOME,
+          processOpenClawHome: process.env.OPENCLAW_HOME,
+          processBundledDir: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR,
+          envBundledDir: env.OPENCLAW_BUNDLED_PLUGINS_DIR,
+        }),
+      );
+
+      expect(seen).toEqual({
+        processHome: homeDir,
+        processOpenClawHome: undefined,
+        processBundledDir: "~/bundled",
+        envBundledDir: "~/bundled",
+      });
+      expect(process.env.OPENCLAW_HOME).toBe("/srv/openclaw-home");
+    } finally {
+      restoreEnvKey("OPENCLAW_HOME", previousOpenClawHome);
+    }
   });
 });
