@@ -415,7 +415,7 @@ function resolveTaskConfigEnvironment(
     if (!sourcePath) {
       return env;
     }
-    return inferTaskStateDirFromScriptPath(env, sourcePath);
+    return inferTaskStateDirFromScriptPath(env, sourcePath, { preserveCurrentPathMatch: false });
   }
   const mergedEnvironment = { ...env, ...taskEnvironment };
   const hasTaskConfigRoot = TASK_CONFIG_ROOT_ENV_KEYS.some((key) => taskEnvironment[key]?.trim());
@@ -426,18 +426,26 @@ function resolveTaskConfigEnvironment(
     }
     return { ...merged, ...taskEnvironment };
   }
-  return inferTaskStateDirFromScriptPath(mergedEnvironment, sourcePath);
+  return inferTaskStateDirFromScriptPath(mergedEnvironment, sourcePath, {
+    preserveCurrentPathMatch: true,
+  });
 }
 
 function inferTaskStateDirFromScriptPath(
   env: GatewayServiceEnv,
   sourcePath?: string,
+  options: {
+    preserveCurrentPathMatch: boolean;
+  } = { preserveCurrentPathMatch: true },
 ): GatewayServiceEnv {
   if (!sourcePath) {
     return env;
   }
   const currentScriptPath = resolveTaskScriptPath(env);
-  if (path.resolve(sourcePath) === path.resolve(currentScriptPath)) {
+  if (
+    options.preserveCurrentPathMatch &&
+    path.resolve(sourcePath) === path.resolve(currentScriptPath)
+  ) {
     return env;
   }
   const merged: GatewayServiceEnv = { ...env };
