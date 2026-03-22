@@ -37,6 +37,9 @@ type ComputedAccountStatusAdapterParams<ResolvedAccount, Probe, Audit> = {
   audit?: Audit;
 };
 
+type ComputedAccountStatusSnapshot<TExtra extends StatusSnapshotExtra = StatusSnapshotExtra> =
+  ComputedAccountStatusBase & { extra?: TExtra };
+
 /** Create the baseline runtime snapshot shape used by channel/account status stores. */
 export function createDefaultChannelRuntimeState<T extends Record<string, unknown>>(
   accountId: string,
@@ -164,7 +167,7 @@ export function createComputedAccountStatusAdapter<
   options: Omit<ChannelStatusAdapter<ResolvedAccount, Probe, Audit>, "buildAccountSnapshot"> & {
     resolveAccountSnapshot: (
       params: ComputedAccountStatusAdapterParams<ResolvedAccount, Probe, Audit>,
-    ) => ComputedAccountStatusBase & { extra?: TExtra };
+    ) => ComputedAccountStatusSnapshot<TExtra>;
   },
 ): ChannelStatusAdapter<ResolvedAccount, Probe, Audit> {
   return {
@@ -184,6 +187,48 @@ export function createComputedAccountStatusAdapter<
         Audit
       >;
       const { extra, ...snapshot } = options.resolveAccountSnapshot(typedParams);
+      return buildComputedAccountStatusSnapshot(
+        {
+          ...snapshot,
+          runtime: typedParams.runtime,
+          probe: typedParams.probe,
+        },
+        extra,
+      );
+    },
+  };
+}
+
+/** Async variant for channels that compute configured state or snapshot extras from I/O. */
+export function createAsyncComputedAccountStatusAdapter<
+  ResolvedAccount,
+  Probe = unknown,
+  Audit = unknown,
+  TExtra extends StatusSnapshotExtra = StatusSnapshotExtra,
+>(
+  options: Omit<ChannelStatusAdapter<ResolvedAccount, Probe, Audit>, "buildAccountSnapshot"> & {
+    resolveAccountSnapshot: (
+      params: ComputedAccountStatusAdapterParams<ResolvedAccount, Probe, Audit>,
+    ) => Promise<ComputedAccountStatusSnapshot<TExtra>>;
+  },
+): ChannelStatusAdapter<ResolvedAccount, Probe, Audit> {
+  return {
+    defaultRuntime: options.defaultRuntime,
+    buildChannelSummary: options.buildChannelSummary,
+    probeAccount: options.probeAccount,
+    formatCapabilitiesProbe: options.formatCapabilitiesProbe,
+    auditAccount: options.auditAccount,
+    buildCapabilitiesDiagnostics: options.buildCapabilitiesDiagnostics,
+    logSelfId: options.logSelfId,
+    resolveAccountState: options.resolveAccountState,
+    collectStatusIssues: options.collectStatusIssues,
+    buildAccountSnapshot: async (params) => {
+      const typedParams = params as ComputedAccountStatusAdapterParams<
+        ResolvedAccount,
+        Probe,
+        Audit
+      >;
+      const { extra, ...snapshot } = await options.resolveAccountSnapshot(typedParams);
       return buildComputedAccountStatusSnapshot(
         {
           ...snapshot,
