@@ -19,14 +19,28 @@
 
 ## Vendor Tracking
 
-| Vendor      | Cost       | Renewal     | Notes       |
-| ----------- | ---------- | ----------- | ----------- |
-| GLM-5 (zai) | ~$0.14/day | Pay-per-use | Primary LLM |
+| Vendor         | Cost                   | Renewal     | Notes                      |
+| -------------- | ---------------------- | ----------- | -------------------------- |
+| Zhipu AI (zai) | ~$0.14/day (~$4.20/mo) | Pay-per-use | Primary LLM (GLM-5)        |
+| Apple Mac mini | $0 (owned)             | N/A         | Gateway host (self-hosted) |
+
+**See `memory/vendors.md` for full registry.**
 
 ## Project Work Log
 
 - [appsfomo] CFO feasibility analysis — 2026-03-17
 - [operator1] CFO commercialization analysis — 2026-03-17
+
+## Key Learnings
+
+1. Subagents don't auto-load MEMORY.md/SOUL.md — must use `memory_search` first
+2. Reports should always be saved to files for archival
+3. Token costs: CFO analysis ~35k-75k tokens per report
+
+---
+
+_Last updated: 2026-03-17_
+2026-03-17
 
 ## Key Learnings
 

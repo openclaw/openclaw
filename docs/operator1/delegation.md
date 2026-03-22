@@ -1,6 +1,6 @@
 ---
 summary: "Delegation protocols for Operator1 — how tasks flow through the agent hierarchy with context passing and session isolation."
-updated: "2026-03-19"
+updated: "2026-03-22"
 title: "Delegation"
 ---
 

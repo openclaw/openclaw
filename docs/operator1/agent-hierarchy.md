@@ -1,6 +1,6 @@
 ---
 summary: "Core agent hierarchy for the Operator1 system — 4 leadership agents and a 147+ persona registry for specialist workers."
-updated: "2026-03-19"
+updated: "2026-03-22"
 title: "Agent Hierarchy"
 ---
 

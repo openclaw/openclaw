@@ -1,6 +1,6 @@
 ---
 summary: "Four-layer memory architecture for Operator1 agents — daily notes, long-term MEMORY.md, project-scoped memory, and QMD semantic search."
-updated: "2026-03-19"
+updated: "2026-03-22"
 title: "Memory System"
 ---
 

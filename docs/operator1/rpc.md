@@ -1,6 +1,6 @@
 ---
 summary: "Complete gateway RPC reference for Operator1 — all ~180 methods, scopes, and params."
-updated: "2026-03-19"
+updated: "2026-03-22"
 title: "RPC Reference"
 tags: ["RPC", "Reference"]
 ---

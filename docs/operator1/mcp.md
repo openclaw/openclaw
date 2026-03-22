@@ -1,6 +1,6 @@
 ---
 summary: "MCP (Model Context Protocol) integration — connect external tool servers to Operator1 agents via the open MCP standard."
-updated: "2026-03-19"
+updated: "2026-03-22"
 title: "MCP Integration"
 ---
 

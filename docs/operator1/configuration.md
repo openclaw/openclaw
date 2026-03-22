@@ -1,6 +1,6 @@
 ---
 summary: "Configuration reference for the Operator1 multi-agent system — openclaw.json structure, agent definitions, and include directives."
-updated: "2026-03-19"
+updated: "2026-03-22"
 title: "Configuration"
 ---
 

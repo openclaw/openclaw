@@ -1,6 +1,6 @@
 ---
 summary: "System architecture of the Operator1 multi-agent system — components, tiers, and integration with OpenClaw gateway."
-updated: "2026-03-19"
+updated: "2026-03-22"
 title: "Architecture"
 ---
 
