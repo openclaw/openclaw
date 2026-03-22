@@ -112,6 +112,12 @@ wait_gateway_healthy() {
   done
   echo ""
   echo "ERROR: $label gateway not healthy within $((max_wait * 3))s"
+  # Dump diagnostic info
+  echo "==> Diagnostic: machine state = $(fly_machine_state "$mid")"
+  echo "==> Diagnostic: processes on machine:"
+  fly_exec_stdout "$mid" 'ps aux 2>/dev/null | head -10' 15 || true
+  echo "==> Diagnostic: memory:"
+  fly_exec_stdout "$mid" 'free -m 2>/dev/null' 10 || true
   return 1
 }
 
@@ -197,9 +203,11 @@ echo "    Machine B: $MACHINE_B"
 
 wait_machine_started "$MACHINE_B" "Machine B"
 
-echo "==> Waiting for WhatsApp gateway (Baileys init: 60-120s expected)..."
+# WhatsApp/Baileys init takes 90-300s on shared-cpu Fly machines.
+# Jiti compiles TypeScript extensions at first boot — CPU-intensive on shared cores.
+echo "==> Waiting for WhatsApp gateway (Baileys init: 90-300s on shared CPU)..."
 printf "    "
-WA_SECS=$(wait_gateway_healthy "$MACHINE_B" "Machine B" 90)
+WA_SECS=$(wait_gateway_healthy "$MACHINE_B" "Machine B" 120)
 echo "    WhatsApp gateway healthy in ${WA_SECS} ✓"
 
 WA_MEM=$(get_memory "$MACHINE_B")
