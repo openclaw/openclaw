@@ -114,7 +114,7 @@ export function TabBar({
     if (!tabId || tabId === HOME_TAB_ID) return;
     event.preventDefault();
     event.stopPropagation();
-    const tabEl = wrapperRef.current?.querySelector(`[data-tab-id="${tabId}"]`);
+    const tabEl = (event.target as Element).closest?.(".chrome-tab");
     if (tabEl) tabEl.setAttribute("data-context", "true");
     setContextMenu({ tabId, x: event.clientX, y: event.clientY });
   }, []);

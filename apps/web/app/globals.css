@@ -1950,9 +1950,9 @@ body {
   fill: var(--color-bg);
   transition: fill 0.15s ease;
 }
-.dench-chrome-tabs-wrapper .chrome-tabs .chrome-tab:hover:not([active]) .chrome-tab-background > svg .chrome-tab-geometry,
-.dench-chrome-tabs-wrapper .chrome-tabs .chrome-tab[data-context]:not([active]) .chrome-tab-background > svg .chrome-tab-geometry {
-  fill: #e8e7e5;
+.dench-chrome-tabs-wrapper .chrome-tabs .chrome-tab:hover .chrome-tab-background > svg .chrome-tab-geometry,
+.dench-chrome-tabs-wrapper .chrome-tabs .chrome-tab[data-context] .chrome-tab-background > svg .chrome-tab-geometry {
+  fill: #eae9e7;
 }
 .dench-chrome-tabs-wrapper .chrome-tabs .chrome-tab[active] .chrome-tab-background > svg .chrome-tab-geometry {
   fill: var(--color-surface);
