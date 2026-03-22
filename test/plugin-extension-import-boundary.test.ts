@@ -14,10 +14,7 @@ const baselinePath = path.join(
   "fixtures",
   "plugin-extension-import-boundary-inventory.json",
 );
-
-function readBaseline() {
-  return JSON.parse(readFileSync(baselinePath, "utf8"));
-}
+const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
 
 function createCapturedIo() {
   let stdout = "";
@@ -79,10 +76,9 @@ describe("plugin extension import boundary inventory", () => {
   });
 
   it("matches the checked-in baseline", async () => {
-    const expected = readBaseline();
     const actual = await collectPluginExtensionImportBoundaryInventory();
 
-    expect(diffInventory(expected, actual)).toEqual({ missing: [], unexpected: [] });
+    expect(diffInventory(baseline, actual)).toEqual({ missing: [], unexpected: [] });
   });
 
   it("script json output matches the baseline exactly", async () => {
@@ -91,6 +87,6 @@ describe("plugin extension import boundary inventory", () => {
 
     expect(exitCode).toBe(0);
     expect(captured.readStderr()).toBe("");
-    expect(JSON.parse(captured.readStdout())).toEqual(readBaseline());
+    expect(JSON.parse(captured.readStdout())).toEqual(baseline);
   });
 });

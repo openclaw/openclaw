@@ -19,6 +19,8 @@ const baselinePath = path.join(
   "fixtures",
   "plugin-extension-import-boundary-inventory.json",
 );
+let cachedInventoryPromise = null;
+let cachedExpectedInventoryPromise = null;
 
 const bundledWebSearchProviders = new Set([
   "brave",
@@ -202,29 +204,54 @@ function shouldSkipFile(filePath) {
 }
 
 export async function collectPluginExtensionImportBoundaryInventory() {
-  const files = (await collectTypeScriptFilesFromRoots(scanRoots))
-    .filter((filePath) => !shouldSkipFile(filePath))
-    .toSorted((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
-
-  const inventory = [];
-  for (const filePath of files) {
-    const source = await fs.readFile(filePath, "utf8");
-    const sourceFile = ts.createSourceFile(
-      filePath,
-      source,
-      ts.ScriptTarget.Latest,
-      true,
-      ts.ScriptKind.TS,
-    );
-    inventory.push(...scanImportBoundaryViolations(sourceFile, filePath));
-    inventory.push(...scanWebSearchRegistrySmells(sourceFile, filePath));
+  if (cachedInventoryPromise) {
+    return cachedInventoryPromise;
   }
 
-  return inventory.toSorted(compareEntries);
+  cachedInventoryPromise = (async () => {
+    const files = (await collectTypeScriptFilesFromRoots(scanRoots))
+      .filter((filePath) => !shouldSkipFile(filePath))
+      .toSorted((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
+
+    const inventory = [];
+    for (const filePath of files) {
+      const source = await fs.readFile(filePath, "utf8");
+      const sourceFile = ts.createSourceFile(
+        filePath,
+        source,
+        ts.ScriptTarget.Latest,
+        true,
+        ts.ScriptKind.TS,
+      );
+      inventory.push(...scanImportBoundaryViolations(sourceFile, filePath));
+      inventory.push(...scanWebSearchRegistrySmells(sourceFile, filePath));
+    }
+
+    return inventory.toSorted(compareEntries);
+  })();
+
+  try {
+    return await cachedInventoryPromise;
+  } catch (error) {
+    cachedInventoryPromise = null;
+    throw error;
+  }
 }
 
 export async function readExpectedInventory() {
-  return JSON.parse(await fs.readFile(baselinePath, "utf8"));
+  if (cachedExpectedInventoryPromise) {
+    return cachedExpectedInventoryPromise;
+  }
+
+  cachedExpectedInventoryPromise = fs
+    .readFile(baselinePath, "utf8")
+    .then((contents) => JSON.parse(contents));
+  try {
+    return await cachedExpectedInventoryPromise;
+  } catch (error) {
+    cachedExpectedInventoryPromise = null;
+    throw error;
+  }
 }
 
 export function diffInventory(expected, actual) {
