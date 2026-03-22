@@ -76,10 +76,13 @@ baseline	0.450	0.20	0.40	0.60	0.80	0.90	baseline	initial measurement
 ### 4. Compare to Previous
 
 If score improved from last recorded entry: the previous change worked. Keep it.
-If score worsened: the previous change hurt. Revert:
+If score worsened: the previous change hurt. Revert and restart gateway:
 
 ```bash
 cd ~/.openclaw/workspace && git reset --hard HEAD~1
+pkill -f openclaw-gateway
+sleep 3
+pgrep -f openclaw-gateway && echo "Gateway restarted with reverted files" || echo "WARNING: Gateway did not restart"
 ```
 
 ### 5. Identify Weakest Metric
@@ -107,7 +110,23 @@ git add <file>
 git commit -m "auto-improve: <description of change>"
 ```
 
-### 8. Log to results.tsv
+### 8. Restart Gateway and Reset Sessions
+
+After every workspace file change, restart the gateway so Operator1 picks up the new prompts:
+
+```bash
+# Gateway runs as a LaunchAgent with KeepAlive — killing it auto-respawns with new config
+pkill -f openclaw-gateway
+sleep 3
+# Verify it came back
+pgrep -f openclaw-gateway && echo "Gateway restarted" || echo "WARNING: Gateway did not restart"
+```
+
+This is MANDATORY after every edit. Without a restart, Operator1 continues using the old workspace files and your changes have no effect. The LaunchAgent (`ai.openclaw.gateway`) has `KeepAlive` set, so `pkill` triggers an automatic respawn.
+
+Note: Active sessions will continue with their current prompt until they end naturally or compact. New sessions will use the updated files immediately.
+
+### 9. Log to results.tsv
 
 Append a row to `~/.openclaw/workspace/auto-improve/results.tsv`:
 
