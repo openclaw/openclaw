@@ -1,12 +1,15 @@
 import path from "node:path";
-import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { expandHomePrefix } from "../infra/home-dir.js";
 import { resolveGatewayProfileSuffix } from "./constants.js";
 
 const windowsAbsolutePath = /^[a-zA-Z]:[\\/]/;
 const windowsUncPath = /^\\\\/;
 
 export function resolveHomeDir(env: Record<string, string | undefined>): string {
-  const home = resolveRequiredHomeDir(env);
+  const explicitHome = env.OPENCLAW_HOME?.trim();
+  const osHome = env.HOME?.trim() || env.USERPROFILE?.trim();
+  const home =
+    (explicitHome ? expandHomePrefix(explicitHome, { home: osHome, env }) : undefined) || osHome;
   if (!home) {
     throw new Error("Missing HOME");
   }
