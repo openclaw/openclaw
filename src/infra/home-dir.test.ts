@@ -44,6 +44,16 @@ describe("resolveEffectiveHomeDir", () => {
       homedir: () => " /fallback ",
       expected: "/fallback",
     },
+    {
+      name: "treats literal undefined env values as unset",
+      env: {
+        OPENCLAW_HOME: "undefined",
+        HOME: "undefined",
+        USERPROFILE: "null",
+      } as NodeJS.ProcessEnv,
+      homedir: () => " /fallback ",
+      expected: "/fallback",
+    },
   ])("$name", ({ env, homedir, expected }) => {
     expect(resolveEffectiveHomeDir(env, homedir)).toBe(path.resolve(expected));
   });
