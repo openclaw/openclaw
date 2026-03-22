@@ -389,15 +389,10 @@ export class TelegramPollingSession {
         this.#scheduleForceCycleRestart = undefined;
       }
       this.opts.abortSignal?.removeEventListener("abort", stopOnAbort);
-      if (forceCycleRestarted) {
-        // Force-cycle path already waited POLL_STOP_GRACE_MS for stuck stop handlers.
-        // Avoid compounding two more grace waits before next-cycle restart.
-        void stopRunner();
-        void stopBot();
-      } else {
-        await waitForGracefulStop(stopRunner);
-        await waitForGracefulStop(stopBot);
-      }
+      // Always await stop handlers (with grace timeout) before starting the next
+      // polling cycle so old/new bot instances do not overlap update handling.
+      await waitForGracefulStop(stopRunner);
+      await waitForGracefulStop(stopBot);
       this.#activeRunner = undefined;
       if (this.#activePollCycleId === pollCycleId) {
         this.#activePollCycleId = 0;

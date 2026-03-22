@@ -202,7 +202,7 @@ describe("TelegramPollingSession", () => {
     await runPromise;
   });
 
-  it("forces outbound-triggered restart when runner stop does not settle", async () => {
+  it("waits stop grace before outbound-triggered restart when runner stop does not settle", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const abort = new AbortController();
     const cycleCallbacks: Array<(params: { error: unknown; consecutiveFailures: number }) => void> =
@@ -271,6 +271,9 @@ describe("TelegramPollingSession", () => {
       error: new Error("outbound failure"),
       consecutiveFailures: 2,
     });
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(runMock).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(20_000);
     await vi.waitFor(() => {
