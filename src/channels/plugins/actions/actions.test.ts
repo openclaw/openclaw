@@ -748,8 +748,7 @@ describe("telegramMessageActions", () => {
         expectedPayload: expect.objectContaining({
           action: "sendMessage",
           to: "123",
-          content: "",
-          mediaUrl: "https://example.com/photo.jpg",
+          media: "https://example.com/photo.jpg",
           asDocument: true,
         }),
       },
