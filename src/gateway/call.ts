@@ -869,9 +869,10 @@ async function executeGatewayRequestWithScopes<T>(params: {
           client.stop();
           stop(new Error(formatGatewayCloseError(code, reason, params.connectionDetails)));
         };
-        if (requestInFlight) {
+        if (requestInFlight && code === 1000) {
           // A request can resolve and then immediately trigger a normal close in
-          // the same turn; defer close handling so the successful response wins.
+          // the same turn; defer only that benign close so the successful
+          // response wins without hiding real mid-request disconnect details.
           const closeTimer = setTimeout(failOnClose, 0);
           closeTimer.unref?.();
           return;
