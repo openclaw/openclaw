@@ -1,5 +1,8 @@
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
-import { createScopedChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
+import {
+  adaptScopedAccountAccessor,
+  createScopedChannelConfigAdapter,
+} from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   composeWarningCollectors,
   createAllowlistProviderGroupPolicyWarningCollector,
@@ -65,7 +68,7 @@ const formatAllowFromEntry = (entry: string) =>
 const googleChatConfigAdapter = createScopedChannelConfigAdapter<ResolvedGoogleChatAccount>({
   sectionKey: "googlechat",
   listAccountIds: listGoogleChatAccountIds,
-  resolveAccount: (cfg, accountId) => resolveGoogleChatAccount({ cfg, accountId }),
+  resolveAccount: adaptScopedAccountAccessor(resolveGoogleChatAccount),
   defaultAccountId: resolveDefaultGoogleChatAccountId,
   clearBaseFields: [
     "serviceAccount",
@@ -166,16 +169,16 @@ export const googlechatPlugin = createChatChannelPlugin({
     },
     directory: createChannelDirectoryAdapter({
       listPeers: async (params) =>
-        listResolvedDirectoryUserEntriesFromAllowFrom({
+        listResolvedDirectoryUserEntriesFromAllowFrom<ResolvedGoogleChatAccount>({
           ...params,
-          resolveAccount: (cfg, accountId) => resolveGoogleChatAccount({ cfg, accountId }),
+          resolveAccount: adaptScopedAccountAccessor(resolveGoogleChatAccount),
           resolveAllowFrom: (account) => account.config.dm?.allowFrom,
           normalizeId: (entry) => normalizeGoogleChatTarget(entry) ?? entry,
         }),
       listGroups: async (params) =>
-        listResolvedDirectoryGroupEntriesFromMapKeys({
+        listResolvedDirectoryGroupEntriesFromMapKeys<ResolvedGoogleChatAccount>({
           ...params,
-          resolveAccount: (cfg, accountId) => resolveGoogleChatAccount({ cfg, accountId }),
+          resolveAccount: adaptScopedAccountAccessor(resolveGoogleChatAccount),
           resolveGroups: (account) => account.config.groups,
         }),
     }),

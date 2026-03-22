@@ -1,4 +1,7 @@
-import { createScopedChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
+import {
+  adaptScopedAccountAccessor,
+  createScopedChannelConfigAdapter,
+} from "openclaw/plugin-sdk/channel-config-helpers";
 import type { ChannelPlugin } from "../runtime-api.js";
 import { buildChannelConfigSchema, formatAllowFromLowercase } from "../runtime-api.js";
 import {
@@ -25,7 +28,7 @@ export const zalouserMeta = {
 const zalouserConfigAdapter = createScopedChannelConfigAdapter<ResolvedZalouserAccount>({
   sectionKey: "zalouser",
   listAccountIds: listZalouserAccountIds,
-  resolveAccount: (cfg, accountId) => resolveZalouserAccountSync({ cfg, accountId }),
+  resolveAccount: adaptScopedAccountAccessor(resolveZalouserAccountSync),
   defaultAccountId: resolveDefaultZalouserAccountId,
   clearBaseFields: [
     "profile",

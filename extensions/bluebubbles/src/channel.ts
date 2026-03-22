@@ -1,5 +1,6 @@
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import {
+  adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
@@ -57,7 +58,7 @@ const loadBlueBubblesChannelRuntime = createLazyRuntimeNamedExport(
 const bluebubblesConfigAdapter = createScopedChannelConfigAdapter<ResolvedBlueBubblesAccount>({
   sectionKey: "bluebubbles",
   listAccountIds: listBlueBubblesAccountIds,
-  resolveAccount: (cfg, accountId) => resolveBlueBubblesAccount({ cfg, accountId }),
+  resolveAccount: adaptScopedAccountAccessor(resolveBlueBubblesAccount),
   defaultAccountId: resolveDefaultBlueBubblesAccountId,
   clearBaseFields: ["serverUrl", "password", "name", "webhookPath"],
   resolveAllowFrom: (account: ResolvedBlueBubblesAccount) => account.config.allowFrom,

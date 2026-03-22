@@ -1,4 +1,5 @@
 import {
+  adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
   formatTrimmedAllowFromEntries,
@@ -32,7 +33,7 @@ export const imessageSetupWizard = createIMessageSetupWizardProxy(
 export const imessageConfigAdapter = createScopedChannelConfigAdapter<ResolvedIMessageAccount>({
   sectionKey: IMESSAGE_CHANNEL,
   listAccountIds: listIMessageAccountIds,
-  resolveAccount: (cfg, accountId) => resolveIMessageAccount({ cfg, accountId }),
+  resolveAccount: adaptScopedAccountAccessor(resolveIMessageAccount),
   defaultAccountId: resolveDefaultIMessageAccountId,
   clearBaseFields: ["cliPath", "dbPath", "service", "region", "name"],
   resolveAllowFrom: (account: ResolvedIMessageAccount) => account.config.allowFrom,

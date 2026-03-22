@@ -1,5 +1,6 @@
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
+  adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
@@ -59,7 +60,7 @@ const nextcloudTalkConfigAdapter = createScopedChannelConfigAdapter<
 >({
   sectionKey: "nextcloud-talk",
   listAccountIds: listNextcloudTalkAccountIds,
-  resolveAccount: (cfg, accountId) => resolveNextcloudTalkAccount({ cfg, accountId }),
+  resolveAccount: adaptScopedAccountAccessor(resolveNextcloudTalkAccount),
   defaultAccountId: resolveDefaultNextcloudTalkAccountId,
   clearBaseFields: ["botSecret", "botSecretFile", "baseUrl", "name"],
   resolveAllowFrom: (account) => account.config.allowFrom,

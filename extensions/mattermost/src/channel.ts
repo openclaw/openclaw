@@ -1,6 +1,7 @@
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import { createMessageToolButtonsSchema } from "openclaw/plugin-sdk/channel-actions";
 import {
+  adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
@@ -266,7 +267,7 @@ function formatAllowEntry(entry: string): string {
 const mattermostConfigAdapter = createScopedChannelConfigAdapter<ResolvedMattermostAccount>({
   sectionKey: "mattermost",
   listAccountIds: listMattermostAccountIds,
-  resolveAccount: (cfg, accountId) => resolveMattermostAccount({ cfg, accountId }),
+  resolveAccount: adaptScopedAccountAccessor(resolveMattermostAccount),
   defaultAccountId: resolveDefaultMattermostAccountId,
   clearBaseFields: ["botToken", "baseUrl", "name"],
   resolveAllowFrom: (account: ResolvedMattermostAccount) => account.config.allowFrom,
