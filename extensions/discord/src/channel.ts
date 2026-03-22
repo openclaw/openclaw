@@ -20,7 +20,7 @@ import {
 import {
   createRuntimeOutboundDelegates,
   resolveOutboundSendDep,
-} from "openclaw/plugin-sdk/outbound-runtime";
+} from "openclaw/plugin-sdk/infra-runtime";
 import {
   buildOutboundBaseSessionKey,
   normalizeMessageChannel,
@@ -46,7 +46,6 @@ import {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
 } from "./group-policy.js";
-import { monitorDiscordProvider } from "./monitor.js";
 import {
   looksLikeDiscordTargetId,
   normalizeDiscordMessagingTarget,
@@ -78,6 +77,15 @@ type DiscordSendFn = ReturnType<
   typeof getDiscordRuntime
 >["channel"]["discord"]["sendMessageDiscord"];
 
+let discordProviderRuntimePromise:
+  | Promise<typeof import("./monitor/provider.runtime.js")>
+  | undefined;
+
+async function loadDiscordProviderRuntime() {
+  discordProviderRuntimePromise ??= import("./monitor/provider.runtime.js");
+  return await discordProviderRuntimePromise;
+}
+
 const meta = getChatChannelMeta("discord");
 const REQUIRED_DISCORD_PERMISSIONS = ["ViewChannel", "SendMessages"] as const;
 
@@ -86,12 +94,7 @@ const resolveDiscordDmPolicy = createScopedDmSecurityResolver<ResolvedDiscordAcc
   resolvePolicy: (account) => account.config.dm?.policy,
   resolveAllowFrom: (account) => account.config.dm?.allowFrom,
   allowFromPathSuffix: "dm.",
-  normalizeEntry: (raw) =>
-    raw
-      .trim()
-      .replace(/^(discord|user):/i, "")
-      .trim()
-      .replace(/^<@!?(\d+)>$/, "$1"),
+  normalizeEntry: (raw) => raw.replace(/^(discord|user):/i, "").replace(/^<@!?(\d+)>$/, "$1"),
 });
 
 function formatDiscordIntents(intents?: {
@@ -684,7 +687,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
         }
       }
       ctx.log?.info(`[${account.accountId}] starting provider${discordBotLabel}`);
-      return monitorDiscordProvider({
+      return (await loadDiscordProviderRuntime()).monitorDiscordProvider({
         token,
         accountId: account.accountId,
         config: ctx.cfg,
