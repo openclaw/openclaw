@@ -56,7 +56,6 @@ function isRecoverableToolError(error: string | undefined): boolean {
  * tool retry scenarios.
  */
 const SELF_CORRECTABLE_TOOL_ERROR_KEYWORDS = [
-  ...RECOVERABLE_TOOL_ERROR_KEYWORDS,
   "not found",
   "could not find",
   "mismatch",
