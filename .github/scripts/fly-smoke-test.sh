@@ -195,22 +195,29 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "MACHINE B: WhatsApp pre-configured (OOM test + QR test)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# Custom entrypoint: write WhatsApp config, then call the real entrypoint.
-# blink-entrypoint.sh runs as root, preps /data, drops to node, execs CMD.
-# Base64-encode the config to avoid shell quoting issues.
-WA_CONFIG_B64=$(printf '%s' '{"agents":{"defaults":{"workspace":"/data/workspace"}},"gateway":{"auth":{"mode":"token"},"controlUi":{"dangerouslyAllowHostHeaderOriginFallback":true,"dangerouslyDisableDeviceAuth":true}},"browser":{"noSandbox":true},"channels":{"whatsapp":{"accounts":{"default":{"authDir":"/data/workspace/.whatsapp"}}}}}' | base64 | tr -d '\n')
-
-echo "==> Creating machine B (WhatsApp configured from boot)..."
-WA_CMD="mkdir -p /data/workspace/.whatsapp /data/agents/main/agent /data/agents/main/sessions /data/scripts /data/npm-global && printf '%s' '${WA_CONFIG_B64}' | base64 -d > /data/openclaw.json && chown -R node:node /data && exec /app/blink-entrypoint.sh node openclaw.mjs gateway --allow-unconfigured"
+# Start Machine B with default entrypoint (same as Machine A). Once healthy,
+# write WhatsApp config via exec, restart the process, and re-check health.
+# This mirrors exactly how production agents enable WhatsApp.
+echo "==> Creating machine B..."
 MACHINE_B=$(create_machine \
-  '[ "/bin/sh", "-c" ]' \
-  "$(python3 -c "import json; print(json.dumps(['''$WA_CMD''']))")")
+  '["/app/blink-entrypoint.sh"]' \
+  '["node", "openclaw.mjs", "gateway", "--allow-unconfigured"]')
 echo "    Machine B: $MACHINE_B"
 
 wait_machine_started "$MACHINE_B" "Machine B"
 
-# With Jiti cache pre-warmed in Docker build, WhatsApp init should be ~10-30s.
-# Without cache, it takes 90-300s on shared CPUs.
+echo "==> Waiting for Machine B baseline health..."
+wait_gateway_healthy "$MACHINE_B" "Machine B" 60
+
+echo "==> Writing WhatsApp config into Machine B + restarting process..."
+WA_CONFIG_B64=$(printf '%s' '{"agents":{"defaults":{"workspace":"/data/workspace"}},"gateway":{"auth":{"mode":"token"},"controlUi":{"dangerouslyAllowHostHeaderOriginFallback":true,"dangerouslyDisableDeviceAuth":true}},"browser":{"noSandbox":true},"channels":{"whatsapp":{"accounts":{"default":{"authDir":"/data/workspace/.whatsapp"}}}}}' | base64 | tr -d '\n')
+fly_exec "$MACHINE_B" \
+  "mkdir -p /data/workspace/.whatsapp && printf '%s' '$WA_CONFIG_B64' | base64 -d > /data/openclaw.json" 30 > /dev/null
+
+# Kill the gateway process — Fly restart:always brings it back with new config
+fly_exec "$MACHINE_B" 'kill $(pgrep -f "openclaw.mjs" | head -1) 2>/dev/null || true' 10 > /dev/null 2>&1 || true
+sleep 5
+
 echo "==> Waiting for WhatsApp gateway (should be fast with Jiti cache)..."
 wait_gateway_healthy "$MACHINE_B" "Machine B" 120
 WA_SECS="$_GATEWAY_SECS"
