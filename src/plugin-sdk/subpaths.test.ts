@@ -106,10 +106,11 @@ function isRequestedDistSubpathMissing(specifier: string, message: string): bool
 }
 
 function shouldFallbackToPluginSdkSource(specifier: string, err: unknown): boolean {
-  const message =
+  const rawMessage =
     typeof err === "object" && err !== null && "message" in err
-      ? String((err as { message?: unknown }).message ?? "")
-      : "";
+      ? (err as { message?: unknown }).message
+      : undefined;
+  const message = typeof rawMessage === "string" ? rawMessage : "";
   const code =
     typeof err === "object" &&
     err !== null &&
