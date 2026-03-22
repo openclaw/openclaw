@@ -58,6 +58,13 @@ import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./contro
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import {
+  captureMctlConnectCallbackFromUrl as captureMctlConnectCallbackFromUrlInternal,
+  disconnectMctl as disconnectMctlInternal,
+  loadMctlConnectStatus as loadMctlConnectStatusInternal,
+  maybeCompleteMctlConnect as maybeCompleteMctlConnectInternal,
+  startMctlConnect as startMctlConnectInternal,
+} from "./controllers/mctl-connect.ts";
 import type { SkillMessage } from "./controllers/skills.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
@@ -393,6 +400,12 @@ export class OpenClawApp extends LitElement {
   @state() overviewShowGatewayPassword = false;
   @state() overviewLogLines: string[] = [];
   @state() overviewLogCursor = 0;
+  @state() mctlConnectLoading = false;
+  @state() mctlConnectStatus: import("./types.ts").MctlConnectStatus | null = null;
+  @state() mctlConnectError: string | null = null;
+  @state() mctlCallbackCode: string | null = null;
+  @state() mctlCallbackState: string | null = null;
+  @state() mctlCallbackError: string | null = null;
 
   @state() skillsLoading = false;
   @state() skillsReport: SkillStatusReport | null = null;
@@ -578,6 +591,26 @@ export class OpenClawApp extends LitElement {
 
   async loadOverview() {
     await loadOverviewInternal(this as unknown as Parameters<typeof loadOverviewInternal>[0]);
+  }
+
+  captureMctlConnectCallbackFromUrl() {
+    captureMctlConnectCallbackFromUrlInternal(this);
+  }
+
+  async loadMctlConnectStatus() {
+    await loadMctlConnectStatusInternal(this);
+  }
+
+  async startMctlConnect() {
+    await startMctlConnectInternal(this);
+  }
+
+  async maybeCompleteMctlConnect() {
+    await maybeCompleteMctlConnectInternal(this);
+  }
+
+  async disconnectMctl() {
+    await disconnectMctlInternal(this);
   }
 
   async loadCron() {

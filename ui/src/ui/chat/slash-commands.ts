@@ -126,6 +126,14 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
     category: "tools",
     executeLocal: true,
   },
+  {
+    name: "connect",
+    description: "Start a connector flow",
+    args: "<mctl>",
+    category: "tools",
+    executeLocal: true,
+    argOptions: ["mctl"],
+  },
 
   // ── Agents ──
   {

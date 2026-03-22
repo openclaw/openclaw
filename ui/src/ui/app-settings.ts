@@ -18,6 +18,7 @@ import { loadDebug } from "./controllers/debug.ts";
 import { loadDevices } from "./controllers/devices.ts";
 import { loadExecApprovals } from "./controllers/exec-approvals.ts";
 import { loadLogs } from "./controllers/logs.ts";
+import { loadMctlConnectStatus } from "./controllers/mctl-connect.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import { loadSessions } from "./controllers/sessions.ts";
@@ -58,6 +59,9 @@ type SettingsHost = {
   pendingGatewayUrl?: string | null;
   systemThemeCleanup?: (() => void) | null;
   pendingGatewayToken?: string | null;
+  mctlConnectLoading?: boolean;
+  mctlConnectStatus?: unknown;
+  mctlConnectError?: string | null;
 };
 
 export function applySettings(host: SettingsHost, next: UiSettings) {
@@ -505,6 +509,7 @@ export async function loadOverview(host: SettingsHost) {
     loadDebug(app),
     loadSkills(app),
     loadUsage(app),
+    loadMctlConnectStatus(app),
     loadOverviewLogs(app),
   ]);
   buildAttentionItems(app);

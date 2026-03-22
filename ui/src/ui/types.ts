@@ -1,6 +1,7 @@
 export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
 import type { CronJobBase } from "../../../src/cron/types-shared.js";
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
+export type MctlConnectStatus = import("../../../src/mctl/oauth-store.js").MctlConnectStatus;
 import type {
   GatewayAgentRow as SharedGatewayAgentRow,
   SessionsListResultBase,

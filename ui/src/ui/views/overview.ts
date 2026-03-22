@@ -10,6 +10,7 @@ import type {
   AttentionItem,
   CronJob,
   CronStatus,
+  MctlConnectStatus,
   SessionsListResult,
   SessionsUsageResult,
   SkillStatusReport,
@@ -45,6 +46,9 @@ export type OverviewProps = {
   attentionItems: AttentionItem[];
   eventLog: EventLogEntry[];
   overviewLogLines: string[];
+  mctlConnectStatus: MctlConnectStatus | null;
+  mctlConnectLoading: boolean;
+  mctlConnectError: string | null;
   showGatewayToken: boolean;
   showGatewayPassword: boolean;
   onSettingsChange: (next: UiSettings) => void;
@@ -56,6 +60,8 @@ export type OverviewProps = {
   onRefresh: () => void;
   onNavigate: (tab: string) => void;
   onRefreshLogs: () => void;
+  onStartMctlConnect: () => void;
+  onDisconnectMctl: () => void;
 };
 
 export function renderOverview(props: OverviewProps) {
@@ -193,6 +199,17 @@ export function renderOverview(props: OverviewProps) {
   const currentLocale = isSupportedLocale(props.settings.locale)
     ? props.settings.locale
     : i18n.getLocale();
+  const mctlStatus = props.mctlConnectStatus;
+  const mctlLabel =
+    mctlStatus?.state === "connected"
+      ? mctlStatus.login
+        ? `Connected as ${mctlStatus.login}`
+        : "Connected"
+      : mctlStatus?.state === "pending"
+        ? "Authorization pending"
+        : mctlStatus?.state === "expired"
+          ? "Token expired"
+          : "Not connected";
 
   return html`
     <section class="grid">
@@ -375,6 +392,58 @@ export function renderOverview(props: OverviewProps) {
                   ${t("overview.snapshot.channelsHint")}
                 </div>
               `
+        }
+      </div>
+
+      <div class="card">
+        <div class="card-title">mctl</div>
+        <div class="card-sub">OAuth-backed MCP connection for this service.</div>
+        <div class="stat-grid" style="margin-top: 16px;">
+          <div class="stat">
+            <div class="stat-label">Status</div>
+            <div class="stat-value ${mctlStatus?.state === "connected" ? "ok" : "warn"}">
+              ${mctlLabel}
+            </div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">API</div>
+            <div class="stat-value">${mctlStatus?.apiBase ?? "https://api.mctl.ai"}</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Expires</div>
+            <div class="stat-value">
+              ${mctlStatus?.expiresAt ? formatRelativeTimestamp(Date.parse(mctlStatus.expiresAt)) : t("common.na")}
+            </div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Updated</div>
+            <div class="stat-value">
+              ${mctlStatus?.updatedAt ? formatRelativeTimestamp(Date.parse(mctlStatus.updatedAt)) : t("common.na")}
+            </div>
+          </div>
+        </div>
+        <div class="row" style="margin-top: 14px;">
+          <button class="btn" ?disabled=${props.mctlConnectLoading} @click=${props.onStartMctlConnect}>
+            ${props.mctlConnectLoading ? "Working..." : "Connect mctl"}
+          </button>
+          <button
+            class="btn"
+            ?disabled=${props.mctlConnectLoading || !mctlStatus || mctlStatus.state === "disconnected"}
+            @click=${props.onDisconnectMctl}
+          >
+            Disconnect
+          </button>
+        </div>
+        ${
+          props.mctlConnectError
+            ? html`<div class="callout danger" style="margin-top: 14px;">${props.mctlConnectError}</div>`
+            : html`<div class="callout" style="margin-top: 14px;">
+                ${
+                  mctlStatus?.state === "connected"
+                    ? "Credentials are stored in the service state directory and survive pod restarts."
+                    : "Connect once in the browser. The resulting credentials are stored in .openclaw for this service."
+                }
+              </div>`
         }
       </div>
     </section>

@@ -636,6 +636,9 @@ export function renderApp(state: AppViewState) {
                 attentionItems: state.attentionItems,
                 eventLog: state.eventLog,
                 overviewLogLines: state.overviewLogLines,
+                mctlConnectStatus: state.mctlConnectStatus,
+                mctlConnectLoading: state.mctlConnectLoading,
+                mctlConnectError: state.mctlConnectError,
                 showGatewayToken: state.overviewShowGatewayToken,
                 showGatewayPassword: state.overviewShowGatewayPassword,
                 onSettingsChange: (next) => state.applySettings(next),
@@ -661,6 +664,8 @@ export function renderApp(state: AppViewState) {
                 onRefresh: () => state.loadOverview(),
                 onNavigate: (tab) => state.setTab(tab as import("./navigation.ts").Tab),
                 onRefreshLogs: () => state.loadOverview(),
+                onStartMctlConnect: () => void state.startMctlConnect(),
+                onDisconnectMctl: () => void state.disconnectMctl(),
               })
             : nothing
         }

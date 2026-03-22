@@ -79,6 +79,10 @@ export async function executeSlashCommand(
       return { content: "Exporting session...", action: "export" };
     case "usage":
       return await executeUsage(client, sessionKey);
+    case "connect":
+      return {
+        content: "Use `/connect mctl` from chat or the `Connect mctl` button on Overview.",
+      };
     case "agents":
       return await executeAgents(client);
     case "kill":

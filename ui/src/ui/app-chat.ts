@@ -6,6 +6,7 @@ import type { OpenClawApp } from "./app.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import { parseSlashCommand } from "./chat/slash-commands.ts";
 import { abortChatRun, loadChatHistory, sendChatMessage } from "./controllers/chat.ts";
+import { requestMctlConnectAuthorizeUrl } from "./controllers/mctl-connect.ts";
 import { loadModels } from "./controllers/models.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
@@ -72,6 +73,11 @@ function isChatResetCommand(text: string) {
     return true;
   }
   return normalized.startsWith("/new ") || normalized.startsWith("/reset ");
+}
+
+function isMctlConnectAlias(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  return normalized === "connect mctl" || normalized === "connect to mctl";
 }
 
 export async function handleAbortChat(host: ChatHost) {
@@ -213,7 +219,18 @@ export async function handleSendChat(
   }
 
   // Intercept local slash commands (/status, /model, /compact, etc.)
-  const parsed = parseSlashCommand(message);
+  const parsed =
+    parseSlashCommand(message) ??
+    (isMctlConnectAlias(message)
+      ? {
+          command: {
+            name: "connect",
+            description: "Start a connector flow",
+            executeLocal: true,
+          },
+          args: "mctl",
+        }
+      : null);
   if (parsed?.command.executeLocal) {
     if (isChatBusy(host) && shouldQueueLocalSlashCommand(parsed.command.name)) {
       if (messageOverride == null) {
@@ -298,6 +315,9 @@ async function dispatchSlashCommand(
     case "export":
       host.onSlashAction?.("export");
       return;
+    case "connect":
+      await connectMctlFromChat(host, args);
+      return;
   }
 
   if (!host.client) {
@@ -350,6 +370,38 @@ function injectCommandResult(host: ChatHost, content: string) {
       timestamp: Date.now(),
     },
   ];
+}
+
+async function connectMctlFromChat(host: ChatHost, args: string) {
+  const target = args.trim().toLowerCase();
+  if (target && target !== "mctl") {
+    injectCommandResult(
+      host,
+      `Unknown connector target \`${args.trim()}\`. Use \`/connect mctl\`.`,
+    );
+    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+    return;
+  }
+  if (!host.client || !host.connected) {
+    return;
+  }
+  try {
+    const authorizeUrl = await requestMctlConnectAuthorizeUrl({
+      client: host.client,
+      basePath: host.basePath,
+    });
+    const opened =
+      typeof window !== "undefined" ? window.open(authorizeUrl, "_blank", "noopener") : null;
+    injectCommandResult(
+      host,
+      opened
+        ? `Opened mctl connect flow in a new tab. If nothing appeared, open this URL manually:\n${authorizeUrl}`
+        : `Open this URL to connect mctl:\n${authorizeUrl}`,
+    );
+  } catch (err) {
+    injectCommandResult(host, `Failed to start mctl connect flow: ${String(err)}`);
+  }
+  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
 }
 
 export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: boolean }) {

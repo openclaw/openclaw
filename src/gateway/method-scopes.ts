@@ -90,6 +90,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "talk.config",
     "agents.files.list",
     "agents.files.get",
+    "mctl.connect.status",
   ],
   [WRITE_SCOPE]: [
     "send",
@@ -113,6 +114,9 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "browser.request",
     "push.test",
     "node.pending.enqueue",
+    "mctl.connect.start",
+    "mctl.connect.complete",
+    "mctl.connect.disconnect",
   ],
   [ADMIN_SCOPE]: [
     "channels.logout",
