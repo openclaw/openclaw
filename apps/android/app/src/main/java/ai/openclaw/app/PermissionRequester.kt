@@ -21,6 +21,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.suspendCancellableCoroutine
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 
 class PermissionRequester(private val activity: ComponentActivity) {
@@ -98,44 +99,38 @@ class PermissionRequester(private val activity: ComponentActivity) {
         val lifecycle = activity.lifecycle
         var dialog: AlertDialog? = null
         var observer: LifecycleEventObserver? = null
+        val finished = AtomicBoolean(false)
         val removeObserver = {
           observer?.let(lifecycle::removeObserver)
           observer = null
         }
+        fun finish(result: Boolean?) {
+          if (!finished.compareAndSet(false, true)) return
+          removeObserver()
+          dialog?.dismiss()
+          if (result != null) {
+            cont.resume(result)
+          }
+        }
         val actualObserver =
           LifecycleEventObserver { _, event ->
-            if (event != Lifecycle.Event.ON_DESTROY || !cont.isActive) return@LifecycleEventObserver
-            dialog?.dismiss()
-            removeObserver()
-            cont.resume(false)
+            if (event != Lifecycle.Event.ON_DESTROY) return@LifecycleEventObserver
+            finish(false)
           }
         observer = actualObserver
         lifecycle.addObserver(actualObserver)
         cont.invokeOnCancellation {
           mainHandler.post {
-            removeObserver()
-            dialog?.dismiss()
+            finish(null)
           }
         }
         dialog =
           AlertDialog.Builder(activity)
             .setTitle("Permission required")
             .setMessage(buildRationaleMessage(permissions))
-            .setPositiveButton("Continue") { _, _ ->
-              if (!cont.isActive) return@setPositiveButton
-              removeObserver()
-              cont.resume(true)
-            }
-            .setNegativeButton("Not now") { _, _ ->
-              if (!cont.isActive) return@setNegativeButton
-              removeObserver()
-              cont.resume(false)
-            }
-            .setOnCancelListener {
-              if (!cont.isActive) return@setOnCancelListener
-              removeObserver()
-              cont.resume(false)
-            }
+            .setPositiveButton("Continue") { _, _ -> finish(true) }
+            .setNegativeButton("Not now") { _, _ -> finish(false) }
+            .setOnCancelListener { finish(false) }
             .show()
       }
     }
