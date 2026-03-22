@@ -54,18 +54,7 @@ import {
   resolveDefaultLineAccountId,
   resolveLineAccount,
 } from "../../line/accounts.js";
-import { monitorLineProvider } from "../../line/monitor.js";
-import { probeLineBot } from "../../line/probe.js";
-import {
-  createQuickReplyItems,
-  pushFlexMessage,
-  pushLocationMessage,
-  pushMessageLine,
-  pushMessagesLine,
-  pushTemplateMessage,
-  pushTextMessageWithQuickReplies,
-  sendMessageLine,
-} from "../../line/send.js";
+import { createQuickReplyItems } from "../../line/quick-replies.js";
 import { buildTemplateMessageFromPayload } from "../../line/template-messages.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
@@ -76,6 +65,10 @@ import {
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
+import {
+  createLazyRuntimeMethodBinder,
+  createLazyRuntimeModule,
+} from "../../shared/lazy-runtime.js";
 import { createRuntimeDiscord } from "./runtime-discord.js";
 import { createRuntimeIMessage } from "./runtime-imessage.js";
 import { createRuntimeMatrix } from "./runtime-matrix.js";
@@ -84,6 +77,8 @@ import { createRuntimeSlack } from "./runtime-slack.js";
 import { createRuntimeTelegram } from "./runtime-telegram.js";
 import { createRuntimeWhatsApp } from "./runtime-whatsapp.js";
 import type { PluginRuntime } from "./types.js";
+
+const loadLineRuntime = createLazyRuntimeModule(() => import("./runtime-line.runtime.js"));
 
 function defineCachedValue<T extends object, K extends PropertyKey>(
   target: T,
@@ -106,6 +101,7 @@ function defineCachedValue<T extends object, K extends PropertyKey>(
 }
 
 export function createRuntimeChannel(): PluginRuntime["channel"] {
+  const bindLineRuntime = createLazyRuntimeMethodBinder(loadLineRuntime);
   const channelRuntime = {
     text: {
       chunkByNewline,
@@ -193,17 +189,19 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       resolveDefaultLineAccountId,
       resolveLineAccount,
       normalizeAccountId: normalizeLineAccountId,
-      probeLineBot,
-      sendMessageLine,
-      pushMessageLine,
-      pushMessagesLine,
-      pushFlexMessage,
-      pushTemplateMessage,
-      pushLocationMessage,
-      pushTextMessageWithQuickReplies,
+      probeLineBot: bindLineRuntime((runtime) => runtime.probeLineBot),
+      sendMessageLine: bindLineRuntime((runtime) => runtime.sendMessageLine),
+      pushMessageLine: bindLineRuntime((runtime) => runtime.pushMessageLine),
+      pushMessagesLine: bindLineRuntime((runtime) => runtime.pushMessagesLine),
+      pushFlexMessage: bindLineRuntime((runtime) => runtime.pushFlexMessage),
+      pushTemplateMessage: bindLineRuntime((runtime) => runtime.pushTemplateMessage),
+      pushLocationMessage: bindLineRuntime((runtime) => runtime.pushLocationMessage),
+      pushTextMessageWithQuickReplies: bindLineRuntime(
+        (runtime) => runtime.pushTextMessageWithQuickReplies,
+      ),
       createQuickReplyItems,
       buildTemplateMessageFromPayload,
-      monitorLineProvider,
+      monitorLineProvider: bindLineRuntime((runtime) => runtime.monitorLineProvider),
     },
   } satisfies Omit<
     PluginRuntime["channel"],
