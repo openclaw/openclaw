@@ -27,12 +27,15 @@ function parseTelegramTargetForTest(raw: string): {
 }
 
 function normalizeWhatsAppTargetForTest(raw: string): string | null {
-  const trimmed = raw.trim().replace(/^whatsapp:/i, "").trim();
+  const trimmed = raw
+    .trim()
+    .replace(/^whatsapp:/i, "")
+    .trim();
   if (!trimmed) {
     return null;
   }
   const lowered = trimmed.toLowerCase();
-  if (/@g\.us$/u.test(lowered)) {
+  if (lowered.endsWith("@g.us")) {
     const normalized = lowered.replace(/\s+/gu, "");
     return /^\d+@g\.us$/u.test(normalized) ? normalized : null;
   }
@@ -41,9 +44,7 @@ function normalizeWhatsAppTargetForTest(raw: string): string | null {
   return /^\+\d{7,15}$/u.test(normalized) ? normalized : null;
 }
 
-function createWhatsAppResolveTarget(
-  label = "WhatsApp",
-): ChannelOutboundAdapter["resolveTarget"] {
+function createWhatsAppResolveTarget(label = "WhatsApp"): ChannelOutboundAdapter["resolveTarget"] {
   return ({ to }) => {
     const normalized = to ? normalizeWhatsAppTargetForTest(to) : null;
     if (!normalized) {
@@ -133,7 +134,9 @@ export function createTelegramTestPlugin(): ChannelPlugin {
     },
     messaging: telegramMessagingForTest,
     resolveDefaultTo: ({ cfg }) =>
-      typeof cfg.channels?.telegram?.defaultTo === "string" ? cfg.channels.telegram.defaultTo : undefined,
+      typeof cfg.channels?.telegram?.defaultTo === "string"
+        ? cfg.channels.telegram.defaultTo
+        : undefined,
   });
 }
 
@@ -148,7 +151,9 @@ export function createWhatsAppTestPlugin(): ChannelPlugin {
     },
     messaging: whatsappMessagingForTest,
     resolveDefaultTo: ({ cfg }) =>
-      typeof cfg.channels?.whatsapp?.defaultTo === "string" ? cfg.channels.whatsapp.defaultTo : undefined,
+      typeof cfg.channels?.whatsapp?.defaultTo === "string"
+        ? cfg.channels.whatsapp.defaultTo
+        : undefined,
   });
 }
 
