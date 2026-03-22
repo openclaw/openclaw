@@ -294,6 +294,60 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
     expect(text).not.toHaveBeenCalled();
   });
 
+  it("prefers current env credentials over stored profiles", async () => {
+    const { stateDir, agentDir } = await setupAuthTestEnv("openclaw-auth-env-before-profile-", {
+      agentSubdir: "agents/minimax",
+    });
+    process.env.MINIMAX_API_KEY = "env-key";
+    delete process.env.MINIMAX_OAUTH_TOKEN;
+    await fs.writeFile(
+      authProfilePathForAgent(agentDir),
+      JSON.stringify(
+        {
+          version: 1,
+          profiles: {
+            "minimax:default": { type: "api_key", provider: "minimax", key: "stored-key" },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const { confirm, text, setCredential } = createPromptAndCredentialSpies({
+      confirmResult: true,
+      textResult: "prompt-key",
+    });
+
+    try {
+      const result = await ensureMinimaxApiKey({
+        agentDir,
+        confirm,
+        text,
+        setCredential,
+        config: {
+          auth: {
+            profiles: {
+              "minimax:default": { provider: "minimax", mode: "api_key" },
+            },
+          },
+        },
+      });
+
+      expect(result).toBe("env-key");
+      expect(confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("MINIMAX_API_KEY"),
+        }),
+      );
+      expect(setCredential).toHaveBeenCalledWith("env-key", "plaintext");
+      expect(text).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("reuses oauth env credentials when no api-key env var is set", async () => {
     const originalAnthropicApiKey = process.env.ANTHROPIC_API_KEY;
     const originalAnthropicOauthToken = process.env.ANTHROPIC_OAUTH_TOKEN;
@@ -692,8 +746,9 @@ describe("ensureApiKeyFromOptionEnvOrPrompt", () => {
     const { stateDir, agentDir } = await setupAuthTestEnv("openclaw-auth-inline-ref-", {
       agentSubdir: "agents/minimax",
     });
-    process.env.MINIMAX_API_KEY = "inline-env-key"; // pragma: allowlist secret
+    process.env.CUSTOM_MINIMAX_API_KEY = "inline-env-key"; // pragma: allowlist secret
     delete process.env.MINIMAX_OAUTH_TOKEN;
+    delete process.env.MINIMAX_API_KEY;
     await fs.writeFile(
       authProfilePathForAgent(agentDir),
       JSON.stringify(
@@ -703,7 +758,7 @@ describe("ensureApiKeyFromOptionEnvOrPrompt", () => {
             "minimax:default": {
               type: "api_key",
               provider: "minimax",
-              key: "${MINIMAX_API_KEY}",
+              key: "${CUSTOM_MINIMAX_API_KEY}",
             },
           },
         },
@@ -743,7 +798,7 @@ describe("ensureApiKeyFromOptionEnvOrPrompt", () => {
 
       expect(result).toBe("inline-env-key");
       expect(setCredential).toHaveBeenCalledWith(
-        { source: "env", provider: "shellenv", id: "MINIMAX_API_KEY" },
+        { source: "env", provider: "shellenv", id: "CUSTOM_MINIMAX_API_KEY" },
         "plaintext",
       );
       expect(text).not.toHaveBeenCalled();

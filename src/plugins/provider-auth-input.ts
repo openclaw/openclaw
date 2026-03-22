@@ -1,6 +1,5 @@
 import {
   loadAuthProfileStoreForInspection,
-  loadAuthProfileStore,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
   type AuthProfileStore,
@@ -90,9 +89,6 @@ export function formatApiKeyPreview(
 }
 
 async function loadScopedAuthProfileStore(agentDir?: string): Promise<AuthProfileStore> {
-  if (!agentDir) {
-    return loadAuthProfileStore();
-  }
   return loadAuthProfileStoreForInspection(agentDir);
 }
 
@@ -124,6 +120,15 @@ async function resolveExistingProviderApiKey(params: {
           .filter(Boolean),
       ),
     );
+    const envKey = resolveEnvApiKey(params.provider);
+    if (envKey) {
+      return {
+        apiKey: envKey.apiKey,
+        source: envKey.source,
+        credential: envKey.apiKey,
+      };
+    }
+
     if (params.allowProfile !== false) {
       const store = await loadScopedAuthProfileStore(params.agentDir);
       for (const provider of providersToSearch) {
@@ -179,15 +184,6 @@ async function resolveExistingProviderApiKey(params: {
           }
         }
       }
-    }
-
-    const envKey = resolveEnvApiKey(params.provider);
-    if (envKey) {
-      return {
-        apiKey: envKey.apiKey,
-        source: envKey.source,
-        credential: envKey.apiKey,
-      };
     }
 
     for (const provider of providersToSearch) {
