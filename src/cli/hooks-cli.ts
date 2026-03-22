@@ -17,7 +17,8 @@ import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
-import { runPluginInstallCommand, runPluginUpdateCommand } from "./plugins-cli.js";
+import { runPluginInstallCommand } from "./plugins-install-command.js";
+import { runPluginUpdateCommand } from "./plugins-update-command.js";
 
 export type HooksListOptions = {
   json?: boolean;
