@@ -927,8 +927,6 @@ describe("chat view", () => {
   it("switches to the created session and clears pending state on success", async () => {
     await withPromptStub(async () => {
       const { state, request } = createChatHeaderState();
-      state.chatMessage = "Draft carried forward";
-      state.chatAttachments = [createAttachment("draft-1")];
       const container = document.createElement("div");
       render(renderChatSessionSelect(state), container);
 
@@ -942,13 +940,65 @@ describe("chat view", () => {
       expect(state.settings.sessionKey).toBe("new-session");
       expect(state.settings.lastActiveSessionKey).toBe("new-session");
       expect(state.newChatSessionPending).toBe(false);
-      expect(state.chatMessage).toBe("Draft carried forward");
-      expect(state.chatAttachments).toEqual([createAttachment("draft-1")]);
+      expect(state.chatMessage).toBe("");
+      expect(state.chatAttachments).toEqual([]);
       expect(request).toHaveBeenCalledWith("sessions.create", {
         agentId: "main",
         label: "Session label",
       });
       expect(request).toHaveBeenCalledWith("chat.history", {
+        sessionKey: "new-session",
+        limit: 200,
+      });
+      expect(request.mock.calls.map(([method]) => method)).toContain("sessions.list");
+    });
+  });
+
+  it("does not auto-switch if the composer already has a draft", async () => {
+    await withPromptStub(async () => {
+      const { state, request } = createChatHeaderState();
+      state.chatMessage = "keep this draft";
+      const container = document.createElement("div");
+      render(renderChatSessionSelect(state), container);
+
+      const newChatButton = container.querySelector<HTMLButtonElement>(".chat-controls__new-chat");
+      expect(newChatButton).not.toBeNull();
+
+      newChatButton!.click();
+      await flushTasks();
+
+      expect(state.sessionKey).toBe("main");
+      expect(state.chatMessage).toBe("keep this draft");
+      expect(state.newChatSessionPending).toBe(false);
+      expect(request).not.toHaveBeenCalledWith("chat.history", {
+        sessionKey: "new-session",
+        limit: 200,
+      });
+      expect(request.mock.calls.map(([method]) => method)).toContain("sessions.list");
+    });
+  });
+
+  it("does not auto-switch if the composer already has attachments", async () => {
+    await withPromptStub(async () => {
+      const { state, request } = createChatHeaderState();
+      state.chatAttachments = [
+        { id: "a1", mimeType: "image/png", dataUrl: "data:image/png;base64,AAA=" },
+      ];
+      const container = document.createElement("div");
+      render(renderChatSessionSelect(state), container);
+
+      const newChatButton = container.querySelector<HTMLButtonElement>(".chat-controls__new-chat");
+      expect(newChatButton).not.toBeNull();
+
+      newChatButton!.click();
+      await flushTasks();
+
+      expect(state.sessionKey).toBe("main");
+      expect(state.chatAttachments).toEqual([
+        { id: "a1", mimeType: "image/png", dataUrl: "data:image/png;base64,AAA=" },
+      ]);
+      expect(state.newChatSessionPending).toBe(false);
+      expect(request).not.toHaveBeenCalledWith("chat.history", {
         sessionKey: "new-session",
         limit: 200,
       });
