@@ -38,10 +38,9 @@ import {
 import { getSignalRuntime } from "./runtime.js";
 import { signalSetupAdapter } from "./setup-core.js";
 import {
-  collectSignalSecurityWarnings,
   signalConfigAdapter,
   createSignalPluginBase,
-  signalResolveDmPolicy,
+  signalSecurityAdapter,
   signalSetupWizard,
 } from "./shared.js";
 type SignalSendFn = ReturnType<typeof getSignalRuntime>["channel"]["signal"]["sendMessageSignal"];
@@ -295,10 +294,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     resolveDmPolicy: (account) => account.config.dmPolicy,
     resolveGroupPolicy: (account) => account.config.groupPolicy,
   }),
-  security: {
-    resolveDmPolicy: signalResolveDmPolicy,
-    collectWarnings: collectSignalSecurityWarnings,
-  },
+  security: signalSecurityAdapter,
   messaging: {
     normalizeTarget: normalizeSignalMessagingTarget,
     parseExplicitTarget: ({ raw }) => parseSignalExplicitTarget(raw),
