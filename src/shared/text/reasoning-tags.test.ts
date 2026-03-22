@@ -192,7 +192,7 @@ describe("stripReasoningTagsFromText", () => {
     it("applies strict and preserve modes to unclosed tags", () => {
       const input = "Before <think>unclosed content after";
       const cases = [
-        { mode: "strict" as const, expected: "Before" },
+        { mode: "strict" as const, expected: "Before unclosed content after" },
         { mode: "preserve" as const, expected: "Before unclosed content after" },
       ];
       for (const { mode, expected } of cases) {
@@ -207,8 +207,8 @@ describe("stripReasoningTagsFromText", () => {
     });
   });
 
-  describe("strict-mode unclosed-tag fallback", () => {
-    it("recovers content after an unclosed opening tag that drops all text", () => {
+  describe("unclosed-tag fix (trailing text preservation)", () => {
+    it("preserves text after unclosed opening tags", () => {
       const cases = [
         {
           name: "unclosed think tag wrapping entire response",
@@ -220,31 +220,24 @@ describe("stripReasoningTagsFromText", () => {
           input: "<thinking>Full response here",
           expected: "Full response here",
         },
+        {
+          name: "visible text before unclosed tag — both preserved",
+          input: "Visible <think>unclosed content",
+          expected: "Visible unclosed content",
+        },
       ] as const;
       for (const { name, input, expected } of cases) {
         expect(stripReasoningTagsFromText(input, { mode: "strict" }), name).toBe(expected);
       }
     });
 
-    it("does not fall back for properly closed think tags (strict-mode contract)", () => {
-      // Closed tags: strict mode correctly strips content — not a bug.
-      expect(stripReasoningTagsFromText("<think>reasoning</think>", { mode: "strict" })).toBe("");
-      expect(
-        stripReasoningTagsFromText("<think>a</think><think>b</think>", { mode: "strict" }),
-      ).toBe("");
+    it("still strips closed blocks normally", () => {
+      expect(stripReasoningTagsFromText("Before <think>hidden</think>", { mode: "strict" })).toBe(
+        "Before",
+      );
     });
 
-    it("does not fall back when there is visible text outside tags", () => {
-      const input = "Before <think>hidden</think>";
-      expect(stripReasoningTagsFromText(input, { mode: "strict" })).toBe("Before");
-    });
-
-    it("does not fall back when unclosed tag has visible text before it", () => {
-      const input = "Visible <think>unclosed content";
-      expect(stripReasoningTagsFromText(input, { mode: "strict" })).toBe("Visible");
-    });
-
-    it("preserves code-block tags during fallback", () => {
+    it("preserves code-block tags in trailing text", () => {
       const input = "<think>Use `<think>` in your response";
       expect(stripReasoningTagsFromText(input, { mode: "strict" })).toBe(
         "Use `<think>` in your response",
@@ -252,11 +245,44 @@ describe("stripReasoningTagsFromText", () => {
     });
 
     it("recovers only content after the last tag when multiple unclosed tags appear", () => {
-      // With `<think>A<think>B`, lastIndex advances past the second <think>,
-      // so only "B" is recovered. "A" between the two tags is lost. Acceptable
-      // for the target scenario (single unclosed tag wrapping the entire response).
       const input = "<think>Part A<think>Part B";
       expect(stripReasoningTagsFromText(input, { mode: "strict" })).toBe("Part B");
+    });
+  });
+
+  describe("empty-result safety net (closed-tag fallback)", () => {
+    it("recovers content when closed tags wrap entire response", () => {
+      // Model error: entire response inside <think>. Empty delivery is worse
+      // than showing the content, so fall back to tag-only removal.
+      const cases = [
+        {
+          name: "single closed think block",
+          input: "<think>This is the full response text</think>",
+          expected: "This is the full response text",
+        },
+        {
+          name: "single closed thinking block",
+          input: "<thinking>Full response here</thinking>",
+          expected: "Full response here",
+        },
+        {
+          name: "multiple closed blocks",
+          input: "<think>block one</think><think>block two</think>",
+          expected: "block oneblock two",
+        },
+      ] as const;
+      for (const { name, input, expected } of cases) {
+        expect(stripReasoningTagsFromText(input, { mode: "strict" }), name).toBe(expected);
+      }
+    });
+
+    it("does not trigger when there is visible text outside tags", () => {
+      expect(stripReasoningTagsFromText("Before <think>hidden</think>", { mode: "strict" })).toBe(
+        "Before",
+      );
+      expect(
+        stripReasoningTagsFromText("A <think>x</think> B <think>y</think> C", { mode: "strict" }),
+      ).toBe("A  B  C");
     });
   });
 

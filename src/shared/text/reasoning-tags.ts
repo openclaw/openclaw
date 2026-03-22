@@ -30,7 +30,7 @@ export function stripReasoningTagsFromText(
     return text;
   }
 
-  const mode = options?.mode ?? "strict";
+  const _mode = options?.mode ?? "strict";
   const trimMode = options?.trim ?? "both";
 
   let cleaned = text;
@@ -84,27 +84,26 @@ export function stripReasoningTagsFromText(
     lastIndex = idx + match[0].length;
   }
 
-  if (!inThinking || mode === "preserve") {
-    result += cleaned.slice(lastIndex);
-  }
+  // Always include text after the last matched tag. Previously, strict mode
+  // discarded trailing text when an unclosed opening tag was active
+  // (inThinking=true), silently dropping entire responses when models wrap
+  // output in unclosed <think> tags (observed with Gemini Flash, Qwen 3.5).
+  // Closed <think>…</think> blocks are unaffected — their content is already
+  // excluded by the main loop above.
+  result += cleaned.slice(lastIndex);
 
   const trimmed = applyTrim(result, trimMode);
 
-  // When an unclosed opening tag at EOF causes strict mode to drop all
-  // remaining content, the user receives nothing — a silent response drop.
-  // Recover by including the text after the last matched tag (the same content
-  // preserve mode would keep). Only fires for genuinely unclosed tags; properly
-  // closed <think>…</think> blocks are still stripped per strict-mode contract.
-  // Observed with Gemini Flash wrapping entire responses in unclosed <think>.
-  //
-  // Limitation: when multiple unclosed opening tags appear (e.g.
-  // `<think>A<think>B`), only content after the last matched tag is recovered
-  // ("B"). Content between earlier tags ("A") is lost. This is acceptable for
-  // the target scenario (single unclosed tag wrapping the entire response).
-  if (mode === "strict" && inThinking && !trimmed && text.trim()) {
-    const fallbackResult = applyTrim(cleaned.slice(lastIndex), trimMode);
-    if (fallbackResult) {
-      return fallbackResult;
+  // Safety net: if the result is still empty after the above fix (e.g. the
+  // model wrapped the entire response in properly closed <think> tags), fall
+  // back to tag-only removal. An empty delivery is always a worse outcome
+  // than showing the content — the model made an error by tagging its entire
+  // response as reasoning, but the user should still see something.
+  if (!trimmed && text.trim()) {
+    THINKING_TAG_RE.lastIndex = 0;
+    const fallback = applyTrim(cleaned.replace(THINKING_TAG_RE, ""), trimMode);
+    if (fallback) {
+      return fallback;
     }
   }
 
