@@ -114,9 +114,7 @@ function isRequestedDistSubpathMissing(specifier: string, message: string): bool
   if (!missingPath) {
     return false;
   }
-  return normalizeModuleNotFoundPath(missingPath).endsWith(
-    normalizeModuleNotFoundPath(distSuffix),
-  );
+  return normalizeModuleNotFoundPath(missingPath).endsWith(normalizeModuleNotFoundPath(distSuffix));
 }
 
 function shouldFallbackToPluginSdkSource(specifier: string, err: unknown): boolean {
