@@ -25,34 +25,34 @@ describe("hook handler timeout", () => {
   });
 
   // -----------------------------------------------------------------------
-  // before_agent_start (modifying hook, sequential)
+  // before_prompt_build (modifying hook, sequential)
   // -----------------------------------------------------------------------
 
   it("completes normally when handler resolves within timeout", async () => {
     addTestHook({
       registry,
       pluginId: "fast-plugin",
-      hookName: "before_agent_start",
+      hookName: "before_prompt_build",
       handler: (() =>
         Promise.resolve({ prependContext: "fast result" })) as PluginHookRegistration["handler"],
     });
 
     const runner = createHookRunner(registry, { hookTimeoutMs: 5000, catchErrors: true });
-    const promise = runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
+    const promise = runner.runBeforePromptBuild({ prompt: "hello" }, stubCtx);
     await vi.advanceTimersByTimeAsync(0);
 
     const result = await promise;
     expect(result?.prependContext).toBe("fast result");
   });
 
-  it("skips a hanging before_agent_start handler after timeout and proceeds", async () => {
+  it("skips a hanging before_prompt_build handler after timeout and proceeds", async () => {
     const warnings: string[] = [];
 
     // This handler never resolves
     addTestHook({
       registry,
       pluginId: "hanging-plugin",
-      hookName: "before_agent_start",
+      hookName: "before_prompt_build",
       handler: (() => new Promise(() => {})) as PluginHookRegistration["handler"],
     });
 
@@ -66,7 +66,7 @@ describe("hook handler timeout", () => {
       },
     });
 
-    const promise = runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
+    const promise = runner.runBeforePromptBuild({ prompt: "hello" }, stubCtx);
     await vi.advanceTimersByTimeAsync(150);
 
     const result = await promise;
@@ -86,7 +86,7 @@ describe("hook handler timeout", () => {
     addTestHook({
       registry,
       pluginId: "good-plugin",
-      hookName: "before_agent_start",
+      hookName: "before_prompt_build",
       handler: (() =>
         Promise.resolve({
           prependContext: "good context",
@@ -98,7 +98,7 @@ describe("hook handler timeout", () => {
     addTestHook({
       registry,
       pluginId: "bad-plugin",
-      hookName: "before_agent_start",
+      hookName: "before_prompt_build",
       handler: (() => new Promise(() => {})) as PluginHookRegistration["handler"],
       priority: 1,
     });
@@ -113,7 +113,7 @@ describe("hook handler timeout", () => {
       },
     });
 
-    const promise = runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
+    const promise = runner.runBeforePromptBuild({ prompt: "hello" }, stubCtx);
     await vi.advanceTimersByTimeAsync(150);
 
     const result = await promise;
@@ -135,7 +135,7 @@ describe("hook handler timeout", () => {
     addTestHook({
       registry,
       pluginId: "fast-void-plugin",
-      hookName: "agent_end",
+      hookName: "message_received",
       handler: (() => {
         fastHandlerRan = true;
         return Promise.resolve();
@@ -145,7 +145,7 @@ describe("hook handler timeout", () => {
     addTestHook({
       registry,
       pluginId: "hanging-void-plugin",
-      hookName: "agent_end",
+      hookName: "message_received",
       handler: (() => new Promise(() => {})) as PluginHookRegistration["handler"],
     });
 
@@ -159,7 +159,11 @@ describe("hook handler timeout", () => {
       },
     });
 
-    const promise = runner.runAgentEnd({ messages: [], success: true }, stubCtx);
+    const msgCtx = { channelId: "test" };
+    const promise = runner.runMessageReceived(
+      { content: "hello", channel: "test", isGroup: false } as never,
+      msgCtx as never,
+    );
     await vi.advanceTimersByTimeAsync(150);
     await promise;
 
@@ -215,7 +219,7 @@ describe("hook handler timeout", () => {
     addTestHook({
       registry,
       pluginId: "slow-but-ok",
-      hookName: "before_agent_start",
+      hookName: "before_prompt_build",
       handler: (() =>
         new Promise((resolve) => {
           setTimeout(() => resolve({ prependContext: "slow result" }), 5000);
@@ -223,7 +227,7 @@ describe("hook handler timeout", () => {
     });
 
     const runner = createHookRunner(registry, { catchErrors: true });
-    const promise = runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
+    const promise = runner.runBeforePromptBuild({ prompt: "hello" }, stubCtx);
     await vi.advanceTimersByTimeAsync(5000);
 
     const result = await promise;
@@ -235,7 +239,7 @@ describe("hook handler timeout", () => {
     addTestHook({
       registry,
       pluginId: "very-slow-plugin",
-      hookName: "before_agent_start",
+      hookName: "before_prompt_build",
       handler: (() =>
         new Promise((resolve) => {
           setTimeout(() => resolve({ prependContext: "very slow result" }), 30_000);
@@ -243,7 +247,7 @@ describe("hook handler timeout", () => {
     });
 
     const runner = createHookRunner(registry, { hookTimeoutMs: 0, catchErrors: true });
-    const promise = runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
+    const promise = runner.runBeforePromptBuild({ prompt: "hello" }, stubCtx);
     await vi.advanceTimersByTimeAsync(30_000);
 
     const result = await promise;
@@ -256,7 +260,7 @@ describe("hook handler timeout", () => {
     addTestHook({
       registry,
       pluginId: "medium-slow-plugin",
-      hookName: "before_agent_start",
+      hookName: "before_prompt_build",
       handler: (() =>
         new Promise((resolve) => {
           setTimeout(() => resolve({ prependContext: "result" }), 3000);
@@ -273,7 +277,7 @@ describe("hook handler timeout", () => {
       },
     });
 
-    const promise = runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
+    const promise = runner.runBeforePromptBuild({ prompt: "hello" }, stubCtx);
     await vi.advanceTimersByTimeAsync(2500);
 
     const result = await promise;
@@ -291,12 +295,12 @@ describe("hook handler timeout", () => {
     addTestHook({
       registry,
       pluginId: "hanging-throw-plugin",
-      hookName: "before_agent_start",
+      hookName: "before_prompt_build",
       handler: (() => new Promise(() => {})) as PluginHookRegistration["handler"],
     });
 
     const runner = createHookRunner(registry, { hookTimeoutMs: 50, catchErrors: false });
-    const promise = runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
+    const promise = runner.runBeforePromptBuild({ prompt: "hello" }, stubCtx);
 
     // Register the rejection handler before advancing timers to avoid
     // unhandled rejection noise.
@@ -306,8 +310,10 @@ describe("hook handler timeout", () => {
   });
 
   // -----------------------------------------------------------------------
-  // Gatekeeper hooks are exempt from timeout
+  // Timeout-exempt hooks
   // -----------------------------------------------------------------------
+
+  // -- Security/policy gates --
 
   it("does not timeout message_sending hooks (gatekeeper)", async () => {
     addTestHook({
@@ -354,5 +360,52 @@ describe("hook handler timeout", () => {
     const result = await promise;
     expect(result?.block).toBe(true);
     expect(result?.blockReason).toBe("denied");
+  });
+
+  // -- Memory-critical hooks --
+
+  it("does not timeout before_agent_start hooks (memory recall)", async () => {
+    addTestHook({
+      registry,
+      pluginId: "memory-recall-plugin",
+      hookName: "before_agent_start",
+      handler: (() =>
+        new Promise((resolve) => {
+          // Simulates a slow remote embedding recall (~45 s, within the 60 s budget)
+          setTimeout(() => resolve({ prependContext: "recalled memories" }), 45_000);
+        })) as PluginHookRegistration["handler"],
+    });
+
+    const runner = createHookRunner(registry, { hookTimeoutMs: 100, catchErrors: true });
+    const promise = runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
+    await vi.advanceTimersByTimeAsync(45_000);
+
+    const result = await promise;
+    expect(result?.prependContext).toBe("recalled memories");
+  });
+
+  it("does not timeout agent_end hooks (memory auto-capture)", async () => {
+    let captureCompleted = false;
+
+    addTestHook({
+      registry,
+      pluginId: "memory-capture-plugin",
+      hookName: "agent_end",
+      handler: (() =>
+        new Promise<void>((resolve) => {
+          // Simulates sequential embed() calls exceeding the generic 30 s timeout
+          setTimeout(() => {
+            captureCompleted = true;
+            resolve();
+          }, 45_000);
+        })) as PluginHookRegistration["handler"],
+    });
+
+    const runner = createHookRunner(registry, { hookTimeoutMs: 100, catchErrors: true });
+    const promise = runner.runAgentEnd({ messages: [], success: true }, stubCtx);
+    await vi.advanceTimersByTimeAsync(45_000);
+    await promise;
+
+    expect(captureCompleted).toBe(true);
   });
 });

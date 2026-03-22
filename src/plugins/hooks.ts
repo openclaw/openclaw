@@ -138,14 +138,23 @@ export type HookFailurePolicy = "fail-open" | "fail-closed";
 const DEFAULT_HOOK_TIMEOUT_MS = 30_000;
 
 /**
- * Hooks that enforce security/policy gates (e.g. message moderation, tool
- * blocking).  These must never be silently skipped on timeout because
- * `handleHookError` would swallow the error and allow the action through
- * (fail-open).  They run without a time limit.
+ * Hooks exempt from the per-handler timeout.  Two categories:
+ *
+ * 1. Security/policy gates (message_sending, before_tool_call) — must never
+ *    be silently skipped because `handleHookError` would swallow the error
+ *    and allow the action through (fail-open).
+ *
+ * 2. Memory-critical hooks (before_agent_start, agent_end) — these drive
+ *    memory recall and auto-capture in memory-lancedb, which performs
+ *    embed() calls with their own upstream timeout budgets (60 s remote /
+ *    5 min local).  The generic 30 s hook timeout would silently drop
+ *    memory operations that are well within the system's normal budget.
  */
 const TIMEOUT_EXEMPT_HOOKS: ReadonlySet<PluginHookName> = new Set([
   "message_sending",
   "before_tool_call",
+  "before_agent_start",
+  "agent_end",
 ]);
 
 export type HookRunnerOptions = {
