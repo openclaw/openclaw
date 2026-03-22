@@ -69,13 +69,16 @@ export function hasPollCreationParams(params: Record<string, unknown>): boolean 
       }
     }
     if (def.kind === "number") {
-      if (typeof value === "number" && Number.isFinite(value)) {
+      if (typeof value === "number" && Number.isFinite(value) && value !== 0) {
         return true;
       }
       if (typeof value === "string") {
         const trimmed = value.trim();
-        if (trimmed.length > 0 && Number.isFinite(Number(trimmed))) {
-          return true;
+        if (trimmed.length > 0) {
+          const numericValue = Number(trimmed);
+          if (Number.isFinite(numericValue) && numericValue !== 0) {
+            return true;
+          }
         }
       }
     }
