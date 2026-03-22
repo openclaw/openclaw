@@ -1,3 +1,4 @@
+// Shared inbound parsing helpers for channel plugins.
 export {
   createInboundDebouncer,
   resolveInboundDebounceMs,

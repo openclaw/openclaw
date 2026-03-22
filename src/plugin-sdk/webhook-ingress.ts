@@ -1,3 +1,4 @@
+// Curated webhook helpers for plugin-owned HTTP ingress and webhook targets.
 export {
   createBoundedCounter,
   createFixedWindowRateLimiter,

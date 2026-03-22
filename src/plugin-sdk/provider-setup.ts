@@ -1,3 +1,4 @@
+// Curated setup helpers for provider plugins that integrate local/self-hosted models.
 export type {
   OpenClawPluginApi,
   ProviderAuthContext,
