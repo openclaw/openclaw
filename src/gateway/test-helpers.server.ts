@@ -4,7 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import {
+  clearConfigCache,
+  clearRuntimeConfigSnapshot,
+  parseConfigJson5,
+} from "../config/config.js";
 import {
   clearSessionStoreCacheForTest,
   resolveMainSessionKeyFromConfig,
@@ -76,19 +80,42 @@ async function persistTestSessionStorePath(storePath: string): Promise<void> {
   if (process.env.OPENCLAW_STATE_DIR) {
     configPaths.add(path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json"));
   }
+  const parsedConfigs = new Map<string, Record<string, unknown>>();
+  let persistedStoreValue: string | undefined;
   for (const configPath of configPaths) {
     let config: Record<string, unknown> = {};
     try {
       const raw = await fs.readFile(configPath, "utf-8");
-      config = JSON.parse(raw) as Record<string, unknown>;
+      const parsed = parseConfigJson5(raw);
+      if (
+        parsed.ok &&
+        parsed.parsed &&
+        typeof parsed.parsed === "object" &&
+        !Array.isArray(parsed.parsed)
+      ) {
+        config = parsed.parsed as Record<string, unknown>;
+      }
     } catch {
       config = {};
     }
+    parsedConfigs.set(configPath, config);
+    const session =
+      config.session && typeof config.session === "object" && !Array.isArray(config.session)
+        ? (config.session as Record<string, unknown>)
+        : undefined;
+    const existingStore = typeof session?.store === "string" ? session.store.trim() : "";
+    if (!persistedStoreValue && existingStore) {
+      persistedStoreValue = existingStore;
+    }
+  }
+  const nextStoreValue = persistedStoreValue || storePath;
+  for (const configPath of configPaths) {
+    const config = { ...parsedConfigs.get(configPath) };
     const session =
       config.session && typeof config.session === "object" && !Array.isArray(config.session)
         ? { ...(config.session as Record<string, unknown>) }
         : {};
-    session.store = storePath;
+    session.store = nextStoreValue;
     config.session = session;
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
