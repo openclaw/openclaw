@@ -1,6 +1,8 @@
----
+## <!-- Authored by: cc (Claude Code) | 2026-03-22 -->
+
 name: skill-creator
 description: Create, edit, improve, or audit AgentSkills. Use when creating a new skill from scratch or when asked to improve, review, audit, tidy up, or clean up an existing skill or SKILL.md file. Also use when editing or restructuring a skill directory (moving files to references/ or scripts/, removing stale content, validating against the AgentSkills spec). Triggers on phrases like "create a skill", "author a skill", "tidy up a skill", "improve this skill", "review the skill", "clean up the skill", "audit the skill".
+
 ---
 
 # Skill Creator
@@ -64,7 +66,7 @@ skill-name/
 
 Every SKILL.md consists of:
 
-- **Frontmatter** (YAML): Contains `name` and `description` fields. These are the only fields that Codex reads to determine when the skill gets used, thus it is very important to be clear and comprehensive in describing what the skill is, and when it should be used.
+- **Frontmatter** (YAML): Contains `name`, `description`, and optionally `triggers` fields. `name` and `description` are the primary fields Codex reads to determine when the skill gets used; `triggers` enables per-message dynamic loading (see below). It is very important to be clear and comprehensive in `description` describing what the skill is, and when it should be used.
 - **Body** (Markdown): Instructions and guidance for using the skill. Only loaded AFTER the skill triggers (if at all).
 
 #### Bundled Resources (optional)
@@ -112,11 +114,12 @@ The skill should only contain the information needed for an AI agent to do the j
 
 ### Progressive Disclosure Design Principle
 
-Skills use a three-level loading system to manage context efficiently:
+Skills use a loading system to manage context efficiently:
 
 1. **Metadata (name + description)** - Always in context (~100 words)
-2. **SKILL.md body** - When skill triggers (<5k words)
-3. **Bundled resources** - As needed by Codex (Unlimited because scripts can be executed without reading into context window)
+2. **Trigger matching** - When `triggers:` frontmatter is set and `skills.dynamicLoading.enabled: true` in `openclaw.json`, skills whose triggers match the current message get full content; unmatched skills get a compact listing only (name + path). Skills without `triggers:` always get full content (backward compatible).
+3. **SKILL.md body** - When skill triggers (<5k words)
+4. **Bundled resources** - As needed by Codex (unlimited, because scripts can be executed without loading into context)
 
 #### Progressive Disclosure Patterns
 
@@ -318,13 +321,17 @@ If you used `--examples`, delete any placeholder files that are not needed for t
 
 ##### Frontmatter
 
-Write the YAML frontmatter with `name` and `description`:
+Write the YAML frontmatter with `name`, `description`, and optionally `triggers`:
 
 - `name`: The skill name
 - `description`: This is the primary triggering mechanism for your skill, and helps Codex understand when to use the skill.
   - Include both what the Skill does and specific triggers/contexts for when to use it.
   - Include all "when to use" information here - Not in the body. The body is only loaded after triggering, so "When to Use This Skill" sections in the body are not helpful to Codex.
   - Example description for a `docx` skill: "Comprehensive document creation, editing, and analysis with support for tracked changes, comments, formatting preservation, and text extraction. Use when Codex needs to work with professional documents (.docx files) for: (1) Creating new documents, (2) Modifying or editing content, (3) Working with tracked changes, (4) Adding comments, or any other document tasks"
+- `triggers` _(optional)_: Array of lowercase keywords for per-message dynamic loading. When `skills.dynamicLoading.enabled: true` in `openclaw.json`, only skills whose triggers appear in the message get full content injected; others are shown as a compact listing. Skills without `triggers:` always get full content regardless of the setting. **Add `triggers:` when this skill will share a channel with 3 or more other skills** — it can reduce per-turn token cost by ~80% on targeted messages.
+  ```yaml
+  triggers: ["buy", "order", "purchase", "price", "checkout"]
+  ```
 
 Do not include any other fields in YAML frontmatter.
 

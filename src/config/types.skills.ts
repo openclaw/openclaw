@@ -37,11 +37,23 @@ export type SkillsLimitsConfig = {
   maxSkillFileBytes?: number;
 };
 
+export type SkillsDynamicLoadingConfig = {
+  /**
+   * When true, skills with `triggers:` frontmatter are only injected as full content
+   * when a trigger keyword appears in the incoming message. Unmatched skills are listed
+   * in compact format (name + path only) so the model can still discover and read them.
+   * Skills without triggers are always injected in full (backward compatible).
+   * Default: false (opt-in).
+   */
+  enabled?: boolean;
+};
+
 export type SkillsConfig = {
   /** Optional bundled-skill allowlist (only affects bundled skills). */
   allowBundled?: string[];
   load?: SkillsLoadConfig;
   install?: SkillsInstallConfig;
   limits?: SkillsLimitsConfig;
+  dynamicLoading?: SkillsDynamicLoadingConfig;
   entries?: Record<string, SkillConfig>;
 };

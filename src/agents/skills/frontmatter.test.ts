@@ -1,5 +1,44 @@
 import { describe, expect, it } from "vitest";
-import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontmatter.js";
+import {
+  parseTriggersFromFrontmatter,
+  resolveOpenClawMetadata,
+  resolveSkillInvocationPolicy,
+} from "./frontmatter.js";
+
+describe("parseTriggersFromFrontmatter", () => {
+  it("returns [] when triggers key is absent", () => {
+    expect(parseTriggersFromFrontmatter({})).toEqual([]);
+  });
+
+  it("parses comma-separated string", () => {
+    expect(parseTriggersFromFrontmatter({ triggers: "buy, order, checkout" })).toEqual([
+      "buy",
+      "order",
+      "checkout",
+    ]);
+  });
+
+  it("trims whitespace from comma-separated values", () => {
+    expect(parseTriggersFromFrontmatter({ triggers: " buy , order " })).toEqual(["buy", "order"]);
+  });
+
+  it("parses JSON array string (YAML inline array round-trip)", () => {
+    // parseFrontmatterBlock JSON-stringifies YAML arrays via coerceYamlFrontmatterValue
+    expect(parseTriggersFromFrontmatter({ triggers: '["buy","order","checkout"]' })).toEqual([
+      "buy",
+      "order",
+      "checkout",
+    ]);
+  });
+
+  it("falls back to comma-split when JSON parse fails", () => {
+    expect(parseTriggersFromFrontmatter({ triggers: "[broken" })).toEqual(["[broken"]);
+  });
+
+  it("filters out empty strings", () => {
+    expect(parseTriggersFromFrontmatter({ triggers: "buy,,order" })).toEqual(["buy", "order"]);
+  });
+});
 
 describe("resolveSkillInvocationPolicy", () => {
   it("defaults to enabled behaviors", () => {

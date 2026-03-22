@@ -1705,6 +1705,7 @@ export async function runEmbeddedAttempt(
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
       config: params.config,
       workspaceDir: effectiveWorkspace,
+      messageText: params.prompt,
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;

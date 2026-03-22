@@ -220,3 +220,34 @@ export function resolveSkillInvocationPolicy(
 export function resolveSkillKey(skill: Skill, entry?: SkillEntry): string {
   return entry?.metadata?.skillKey ?? skill.name;
 }
+
+/**
+ * Parse `triggers:` from skill frontmatter into a normalized string array.
+ * Handles two formats written by skill authors:
+ *   - Comma-separated string:   triggers: "buy, order, checkout"
+ *   - YAML inline array:        triggers: [buy, order, checkout]
+ *     (parseFrontmatterBlock JSON-stringifies arrays, so this arrives as '["buy","order","checkout"]')
+ * Returns [] when the field is absent or unparseable.
+ */
+export function parseTriggersFromFrontmatter(frontmatter: ParsedSkillFrontmatter): string[] {
+  const raw = frontmatter["triggers"];
+  if (!raw) return [];
+  // YAML array round-trip: parseFrontmatterBlock coerces arrays via JSON.stringify
+  if (raw.startsWith("[")) {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map(String)
+          .map((s) => s.trim())
+          .filter(Boolean);
+      }
+    } catch {
+      // fall through to comma-split
+    }
+  }
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}

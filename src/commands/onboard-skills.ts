@@ -218,5 +218,25 @@ export async function setupSkills(
     next = upsertSkillEntry(next, skill.skillKey, { apiKey: normalizeSecretInput(apiKey) });
   }
 
+  // Prompt to enable dynamic skill loading (opt-in per-message trigger filtering).
+  // Only show when the user has more than one eligible skill — single-skill channels
+  // gain nothing from this feature.
+  if (eligible.length > 1) {
+    const enableDynamic = await prompter.confirm({
+      message:
+        "Enable dynamic skill loading? (injects skills based on message keywords — saves tokens on multi-skill channels)",
+      initialValue: false,
+    });
+    if (enableDynamic) {
+      next = {
+        ...next,
+        skills: {
+          ...next.skills,
+          dynamicLoading: { enabled: true },
+        },
+      };
+    }
+  }
+
   return next;
 }
