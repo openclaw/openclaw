@@ -43,6 +43,19 @@ file messages via any DingTalk client.
 openclaw plugins install @largezhou/ddingtalk
 ```
 
+### Google Chat Pub/Sub
+
+Listen to Google Chat spaces via Workspace Events API + Cloud Pub/Sub — no
+@mention required. Multi-agent routing with keyword and alwaysListen support,
+thread-first replies, and per-thread session isolation.
+
+- **npm:** `@teyou/openclaw-googlechatpubsub`
+- **repo:** [github.com/teyou/openclaw-googlechatpubsub-plugin](https://github.com/teyou/openclaw-googlechatpubsub-plugin)
+
+```bash
+openclaw plugins install @teyou/openclaw-googlechatpubsub
+```
+
 ### Lossless Claw (LCM)
 
 Lossless Context Management plugin for OpenClaw. DAG-based conversation
