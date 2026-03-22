@@ -763,6 +763,7 @@ export async function promptCustomApiConfig(params: {
                 (provider) =>
                   provider?.api === "anthropic-messages" &&
                   provider?.baseUrl === baseUrl &&
+                  provider?.models?.some((existingModel) => existingModel.id === modelId) &&
                   provider?.authHeader === true,
               ) || false,
           })

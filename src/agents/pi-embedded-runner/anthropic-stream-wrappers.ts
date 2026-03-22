@@ -342,13 +342,15 @@ export function createAnthropicAuthHeaderWrapper(
       return underlying(model, context, options);
     }
 
+    const headers = {
+      ...options.headers,
+      Authorization: `Bearer ${options.apiKey}`,
+    };
+    delete headers["x-api-key"];
+
     return underlying(model, context, {
       ...options,
-      headers: {
-        ...options.headers,
-        Authorization: `Bearer ${options.apiKey}`,
-        "x-api-key": null as unknown as string,
-      },
+      headers,
     });
   };
 }

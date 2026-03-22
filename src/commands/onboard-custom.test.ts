@@ -403,7 +403,7 @@ describe("promptCustomApiConfig", () => {
 });
 
 describe("applyCustomApiConfig", () => {
-  it("preserves authHeader for anthropic custom providers when re-verifying", async () => {
+  it("preserves authHeader for the matching anthropic custom provider when re-verifying", async () => {
     const prompter = createTestPrompter({
       text: ["https://example.com", "test-key", "detected-model", "custom", "alias"],
       select: ["plaintext", "anthropic"],
@@ -429,6 +429,21 @@ describe("applyCustomApiConfig", () => {
               },
             ],
           },
+          "custom-other": {
+            baseUrl: "https://example.com",
+            api: "anthropic-messages",
+            models: [
+              {
+                id: "other-model",
+                name: "Other",
+                contextWindow: 131072,
+                maxTokens: 4096,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                reasoning: false,
+              },
+            ],
+          },
         },
       },
     });
@@ -440,6 +455,61 @@ describe("applyCustomApiConfig", () => {
       "Content-Type": "application/json",
       "anthropic-version": "2023-06-01",
       Authorization: "Bearer test-key",
+    });
+  });
+
+  it("does not inherit authHeader from a different provider that shares the same base url", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://example.com", "test-key", "detected-model", "custom", "alias"],
+      select: ["plaintext", "anthropic"],
+    });
+    const fetchMock = stubFetchSequence([{ ok: true }]);
+
+    await runPromptCustomApi(prompter, {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://example.com",
+            api: "anthropic-messages",
+            models: [
+              {
+                id: "detected-model",
+                name: "Detected",
+                contextWindow: 131072,
+                maxTokens: 4096,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                reasoning: false,
+              },
+            ],
+          },
+          "custom-other": {
+            baseUrl: "https://example.com",
+            api: "anthropic-messages",
+            authHeader: true,
+            models: [
+              {
+                id: "other-model",
+                name: "Other",
+                contextWindow: 131072,
+                maxTokens: 4096,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                reasoning: false,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const firstCall = fetchMock.mock.calls[0]?.[1] as
+      | { headers?: Record<string, string> }
+      | undefined;
+    expect(firstCall?.headers).toEqual({
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      "x-api-key": "test-key",
     });
   });
 

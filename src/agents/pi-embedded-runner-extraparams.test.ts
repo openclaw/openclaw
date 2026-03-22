@@ -1503,7 +1503,6 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.headers).toEqual({
       "anthropic-version": "2023-06-01",
       Authorization: "Bearer sk-proxy-test",
-      "x-api-key": null,
       "X-Custom": "1",
     });
   });
