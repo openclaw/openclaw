@@ -262,6 +262,27 @@ describe("promptCustomApiConfig", () => {
     expect(JSON.parse(firstCall?.body ?? "{}")).toMatchObject({ max_tokens: 1 });
   });
 
+  it("uses authHeader during anthropic verification for implicit minimax endpoints", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://api.minimax.io/anthropic", "test-key", "MiniMax-M2.5", "custom", "alias"],
+      select: ["plaintext", "anthropic"],
+    });
+    const fetchMock = stubFetchSequence([{ ok: true }]);
+
+    await runPromptCustomApi(prompter);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const firstCall = fetchMock.mock.calls[0]?.[1] as
+      | { headers?: Record<string, string>; body?: string }
+      | undefined;
+    expect(firstCall?.headers).toEqual({
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      Authorization: "Bearer test-key",
+    });
+    expect(JSON.parse(firstCall?.body ?? "{}")).toMatchObject({ max_tokens: 1 });
+  });
+
   it("uses authHeader during unknown anthropic detection for an existing equivalent endpoint", async () => {
     const prompter = createTestPrompter({
       text: ["https://example.com/v1/", "test-key", "new-model", "custom", "alias"],

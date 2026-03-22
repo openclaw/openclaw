@@ -1,6 +1,7 @@
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { buildModelAliasIndex, modelKey } from "../agents/model-selection.js";
+import { buildMinimaxProvider } from "../agents/models-config.providers.static.js";
 import { OLLAMA_DEFAULT_BASE_URL } from "../agents/ollama-models.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
@@ -65,12 +66,24 @@ function normalizeAnthropicProviderBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/v1\/?$/, "").replace(/\/+$/, "");
 }
 
+function buildAnthropicVerificationProviderSet(
+  providers: Record<string, ModelProviderConfig | undefined>,
+): Record<string, ModelProviderConfig | undefined> {
+  if (providers.minimax || providers["minimax-portal"]) {
+    return providers;
+  }
+  return {
+    minimax: buildMinimaxProvider(),
+    ...providers,
+  };
+}
+
 function resolveAnthropicVerificationAuthHeader(params: {
   baseUrl: string;
   modelId: string;
   providers: Record<string, ModelProviderConfig | undefined>;
 }): boolean {
-  const matchingProviders = Object.values(params.providers).filter(
+  const matchingProviders = Object.values(buildAnthropicVerificationProviderSet(params.providers)).filter(
     (provider) =>
       provider?.api === "anthropic-messages" &&
       normalizeAnthropicProviderBaseUrl(provider.baseUrl ?? "") ===
