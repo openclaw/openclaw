@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { ResolvedQmdConfig } from "./backend-config.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
 import type {
@@ -8,20 +9,19 @@ import type {
   MemorySyncProgressUpdate,
 } from "./types.js";
 
-const MEMORY_SEARCH_MANAGER_CACHE_KEY = "__openclawMemorySearchManagerCache";
+const MEMORY_SEARCH_MANAGER_CACHE_KEY = Symbol.for("openclaw.memorySearchManagerCache");
 type MemorySearchManagerCacheStore = {
   qmdManagerCache: Map<string, MemorySearchManager>;
 };
 
 function getMemorySearchManagerCacheStore(): MemorySearchManagerCacheStore {
-  const globalCache = globalThis as typeof globalThis & {
-    [MEMORY_SEARCH_MANAGER_CACHE_KEY]?: MemorySearchManagerCacheStore;
-  };
   // Keep caches reachable across `vi.resetModules()` so later cleanup can close older instances.
-  globalCache[MEMORY_SEARCH_MANAGER_CACHE_KEY] ??= {
-    qmdManagerCache: new Map<string, MemorySearchManager>(),
-  };
-  return globalCache[MEMORY_SEARCH_MANAGER_CACHE_KEY];
+  return resolveGlobalSingleton<MemorySearchManagerCacheStore>(
+    MEMORY_SEARCH_MANAGER_CACHE_KEY,
+    () => ({
+      qmdManagerCache: new Map<string, MemorySearchManager>(),
+    }),
+  );
 }
 
 const log = createSubsystemLogger("memory");
