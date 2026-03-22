@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../../config/config.js";
+import { sanitizeForLog } from "../../../terminal/ansi.js";
 import {
   collectDiscordNumericIdWarnings,
   scanDiscordNumericIdEntries,
@@ -65,7 +66,7 @@ export function collectDoctorPreviewWarnings(params: {
     extraWarningsForAccount: collectTelegramEmptyAllowlistExtraWarnings,
   });
   if (emptyAllowlistWarnings.length > 0) {
-    warnings.push(emptyAllowlistWarnings.join("\n"));
+    warnings.push(emptyAllowlistWarnings.map((line) => sanitizeForLog(line)).join("\n"));
   }
 
   const toolsBySenderHits = scanLegacyToolsBySenderKeys(params.cfg);
