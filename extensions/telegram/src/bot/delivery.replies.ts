@@ -260,7 +260,7 @@ async function deliverMediaGroupReply(params: {
       thread: params.thread,
       textMode: "html",
       plainText: carrierText || "\u200B",
-      linkPreview: params.linkPreview,
+      linkPreview: params.linkPreview ?? false,
       silent: params.silent,
       replyMarkup: params.replyMarkup,
     });
