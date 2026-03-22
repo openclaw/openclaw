@@ -521,6 +521,12 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
   void refreshSessionOptions(state);
 }
 
+function snapshotChatAttachments(attachments: AppViewState["chatAttachments"]): string {
+  return attachments
+    .map((attachment) => `${attachment.id}\u0000${attachment.mimeType}\u0000${attachment.dataUrl}`)
+    .join("\u0001");
+}
+
 async function createNewChatSession(state: AppViewState) {
   const client = (state as unknown as OpenClawApp).client;
   if (!client || !state.connected) {
@@ -540,6 +546,8 @@ async function createNewChatSession(state: AppViewState) {
   const parsed = parseAgentSessionKey(state.sessionKey);
   const agentId = parsed?.agentId ?? state.agentsList?.defaultId ?? "main";
   const originSessionKey = state.sessionKey;
+  const originDraft = state.chatMessage;
+  const originAttachments = snapshotChatAttachments(state.chatAttachments);
   state.newChatSessionPending = true;
   state.lastError = null;
   try {
@@ -548,7 +556,11 @@ async function createNewChatSession(state: AppViewState) {
       ...(label ? { label } : {}),
     });
     if (result?.key) {
-      if (state.sessionKey === originSessionKey) {
+      const draftUnchanged = state.chatMessage === originDraft;
+      const attachmentsUnchanged =
+        snapshotChatAttachments(state.chatAttachments) === originAttachments;
+      if (state.sessionKey === originSessionKey && draftUnchanged && attachmentsUnchanged) {
+        state.chatAttachments = [];
         switchChatSession(state, result.key);
       } else {
         void refreshSessionOptions(state);
@@ -565,6 +577,13 @@ async function createNewChatSession(state: AppViewState) {
 }
 
 async function refreshSessionOptions(state: AppViewState) {
+  // loadSessions() bails while another list request is running, so wait briefly
+  // for that fetch to finish before issuing the create-session refresh.
+  let attempts = 0;
+  while (state.sessionsLoading && attempts < 20) {
+    attempts += 1;
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
   await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
     activeMinutes: 0,
     limit: 0,

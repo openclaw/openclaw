@@ -93,7 +93,9 @@ export async function loadChatHistory(state: ChatState) {
   } catch (err) {
     state.lastError = String(err);
   } finally {
-    state.chatLoading = false;
+    if (state.sessionKey === requestedSessionKey) {
+      state.chatLoading = false;
+    }
   }
 }
 

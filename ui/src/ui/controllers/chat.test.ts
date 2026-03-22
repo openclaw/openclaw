@@ -632,13 +632,20 @@ describe("loadChatHistory", () => {
   });
 
   it("ignores stale history responses after the session changes", async () => {
-    let resolveHistory:
+    let resolveMainHistory:
+      | ((value: { messages?: Array<unknown>; thinkingLevel?: string }) => void)
+      | undefined;
+    let resolveOtherHistory:
       | ((value: { messages?: Array<unknown>; thinkingLevel?: string }) => void)
       | undefined;
     const request = vi.fn().mockImplementation(
-      () =>
+      (_method: string, params: { sessionKey: string }) =>
         new Promise<{ messages?: Array<unknown>; thinkingLevel?: string }>((resolve) => {
-          resolveHistory = resolve;
+          if (params.sessionKey === "main") {
+            resolveMainHistory = resolve;
+          } else {
+            resolveOtherHistory = resolve;
+          }
         }),
     );
     const state = createState({
@@ -656,7 +663,8 @@ describe("loadChatHistory", () => {
     });
 
     state.sessionKey = "other";
-    resolveHistory?.({
+    const nextHistory = loadChatHistory(state);
+    resolveMainHistory?.({
       messages: [{ role: "assistant", content: [{ type: "text", text: "Stale response" }] }],
       thinkingLevel: "low",
     });
@@ -666,6 +674,18 @@ describe("loadChatHistory", () => {
       { role: "assistant", content: [{ type: "text", text: "Current session" }] },
     ]);
     expect(state.chatThinkingLevel).toBe("high");
+    expect(state.chatLoading).toBe(true);
+
+    resolveOtherHistory?.({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "Fresh session" }] }],
+      thinkingLevel: "low",
+    });
+    await nextHistory;
+
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "Fresh session" }] },
+    ]);
+    expect(state.chatThinkingLevel).toBe("low");
     expect(state.chatLoading).toBe(false);
   });
 });

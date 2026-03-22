@@ -107,6 +107,7 @@ function createChatHeaderState(
     sessionKey: "main",
     connected: true,
     sessionsHideCron: true,
+    sessionsLoading: false,
     sessionsResult,
     chatModelOverrides: {},
     chatModelCatalog: catalog,
@@ -129,6 +130,7 @@ function createChatHeaderState(
       chatShowThinking: false,
     },
     chatMessage: "",
+    chatAttachments: [],
     chatStream: null,
     chatStreamStartedAt: null,
     chatRunId: null,
@@ -910,6 +912,9 @@ describe("chat view", () => {
   it("switches to the created session and clears pending state on success", async () => {
     await withPromptStub(async () => {
       const { state, request } = createChatHeaderState();
+      state.chatAttachments = [
+        { id: "a1", mimeType: "image/png", dataUrl: "data:image/png;base64,AAA=" },
+      ];
       const container = document.createElement("div");
       render(renderChatSessionSelect(state), container);
 
@@ -923,11 +928,90 @@ describe("chat view", () => {
       expect(state.settings.sessionKey).toBe("new-session");
       expect(state.settings.lastActiveSessionKey).toBe("new-session");
       expect(state.newChatSessionPending).toBe(false);
+      expect(state.chatAttachments).toEqual([]);
       expect(request).toHaveBeenCalledWith("sessions.create", {
         agentId: "main",
         label: "Session label",
       });
       expect(request).toHaveBeenCalledWith("chat.history", {
+        sessionKey: "new-session",
+        limit: 200,
+      });
+      expect(request.mock.calls.map(([method]) => method)).toContain("sessions.list");
+    });
+  });
+
+  it("does not auto-switch if the user types a draft while create is pending", async () => {
+    await withPromptStub(async () => {
+      let resolveCreate: ((value: { ok: boolean; key?: string }) => void) | undefined;
+      const createRequest = vi.fn(
+        async () =>
+          new Promise<{ ok: boolean; key?: string }>((resolve) => {
+            resolveCreate = resolve;
+          }),
+      );
+      const { state, request } = createChatHeaderState({ createRequest });
+      const container = document.createElement("div");
+      render(renderChatSessionSelect(state), container);
+
+      const newChatButton = container.querySelector<HTMLButtonElement>(".chat-controls__new-chat");
+      expect(newChatButton).not.toBeNull();
+
+      newChatButton!.click();
+      await flushTasks();
+      expect(state.newChatSessionPending).toBe(true);
+
+      state.chatMessage = "keep this draft";
+
+      resolveCreate?.({ ok: true, key: "new-session" });
+      await flushTasks();
+      await flushTasks();
+
+      expect(state.sessionKey).toBe("main");
+      expect(state.chatMessage).toBe("keep this draft");
+      expect(state.newChatSessionPending).toBe(false);
+      expect(request).not.toHaveBeenCalledWith("chat.history", {
+        sessionKey: "new-session",
+        limit: 200,
+      });
+      expect(request.mock.calls.map(([method]) => method)).toContain("sessions.list");
+    });
+  });
+
+  it("does not auto-switch if attachments change while create is pending", async () => {
+    await withPromptStub(async () => {
+      let resolveCreate: ((value: { ok: boolean; key?: string }) => void) | undefined;
+      const createRequest = vi.fn(
+        async () =>
+          new Promise<{ ok: boolean; key?: string }>((resolve) => {
+            resolveCreate = resolve;
+          }),
+      );
+      const { state, request } = createChatHeaderState({ createRequest });
+      const container = document.createElement("div");
+      render(renderChatSessionSelect(state), container);
+
+      const newChatButton = container.querySelector<HTMLButtonElement>(".chat-controls__new-chat");
+      expect(newChatButton).not.toBeNull();
+
+      newChatButton!.click();
+      await flushTasks();
+      expect(state.newChatSessionPending).toBe(true);
+
+      state.chatAttachments = [
+        { id: "a2", mimeType: "image/png", dataUrl: "data:image/png;base64,BBB=" },
+      ];
+
+      resolveCreate?.({ ok: true, key: "new-session" });
+      await flushTasks();
+      await flushTasks();
+
+      expect(state.sessionKey).toBe("main");
+      expect(state.chatAttachments).toEqual([
+        { id: "a2", mimeType: "image/png", dataUrl: "data:image/png;base64,BBB=" },
+      ]);
+      expect(state.newChatSessionPending).toBe(false);
+      expect(request).not.toHaveBeenCalledWith("chat.history", {
         sessionKey: "new-session",
         limit: 200,
       });
@@ -990,6 +1074,47 @@ describe("chat view", () => {
         limit: 200,
       });
       expect(request.mock.calls.map(([method]) => method)).toContain("sessions.list");
+    });
+  });
+
+  it("retries the session refresh after create if a session list load is already in flight", async () => {
+    await withPromptStub(async () => {
+      const { state, request } = createChatHeaderState();
+      state.sessionsLoading = true;
+      const container = document.createElement("div");
+      render(renderChatSessionSelect(state), container);
+
+      const newChatButton = container.querySelector<HTMLButtonElement>(".chat-controls__new-chat");
+      expect(newChatButton).not.toBeNull();
+
+      newChatButton!.click();
+      await flushTasks();
+
+      expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(0);
+
+      state.sessionsLoading = false;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+
+      expect(state.sessionKey).toBe("new-session");
+      expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(1);
+    });
+  });
+
+  it("sets lastError and clears pending state when sessions.create throws", async () => {
+    await withPromptStub(async () => {
+      const createRequest = vi.fn().mockRejectedValue(new Error("network failure"));
+      const { state } = createChatHeaderState({ createRequest });
+      const container = document.createElement("div");
+      render(renderChatSessionSelect(state), container);
+
+      const newChatButton = container.querySelector<HTMLButtonElement>(".chat-controls__new-chat");
+      expect(newChatButton).not.toBeNull();
+
+      newChatButton!.click();
+      await flushTasks();
+
+      expect(state.lastError).toContain("network failure");
+      expect(state.newChatSessionPending).toBe(false);
     });
   });
 
