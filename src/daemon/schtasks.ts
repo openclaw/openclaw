@@ -370,9 +370,36 @@ function parsePortFromProgramArguments(programArguments?: string[]): number | nu
   return null;
 }
 
+const TASK_CONFIG_ENV_KEYS = [
+  "OPENCLAW_CONFIG_PATH",
+  "CLAWDBOT_CONFIG_PATH",
+  "OPENCLAW_STATE_DIR",
+  "CLAWDBOT_STATE_DIR",
+  "OPENCLAW_HOME",
+  "OPENCLAW_PROFILE",
+] as const;
+
+function resolveTaskConfigEnvironment(
+  env: GatewayServiceEnv,
+  taskEnvironment?: Record<string, string>,
+): GatewayServiceEnv {
+  if (!taskEnvironment) {
+    return env;
+  }
+  const hasTaskConfigContext = TASK_CONFIG_ENV_KEYS.some((key) => taskEnvironment[key]?.trim());
+  if (!hasTaskConfigContext) {
+    return { ...env, ...taskEnvironment };
+  }
+  const merged: GatewayServiceEnv = { ...env };
+  for (const key of TASK_CONFIG_ENV_KEYS) {
+    delete merged[key];
+  }
+  return { ...merged, ...taskEnvironment };
+}
+
 async function resolveScheduledTaskPort(env: GatewayServiceEnv): Promise<number | null> {
   const command = await readScheduledTaskCommand(env).catch(() => null);
-  const taskEnv = command?.environment ? { ...env, ...command.environment } : env;
+  const taskEnv = resolveTaskConfigEnvironment(env, command?.environment);
   return (
     parsePortFromProgramArguments(command?.programArguments) ??
     parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??

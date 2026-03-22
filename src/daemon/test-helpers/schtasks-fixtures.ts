@@ -88,4 +88,5 @@ export async function writeGatewayConfig(env: Record<string, string>, port = 187
     ),
     "utf8",
   );
+  return configPath;
 }
