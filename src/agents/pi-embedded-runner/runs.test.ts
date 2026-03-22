@@ -5,6 +5,7 @@ import {
   abortEmbeddedPiRun,
   clearActiveEmbeddedRun,
   getActiveEmbeddedRunSnapshot,
+  queueEmbeddedPiMessage,
   setActiveEmbeddedRun,
   updateActiveEmbeddedRunSnapshot,
   waitForActiveEmbeddedRuns,
@@ -139,5 +140,61 @@ describe("pi-embedded runner run registry", () => {
 
     clearActiveEmbeddedRun("session-snapshot", handle);
     expect(getActiveEmbeddedRunSnapshot("session-snapshot")).toBeUndefined();
+  });
+});
+
+describe("queueEmbeddedPiMessage", () => {
+  afterEach(() => {
+    __testing.resetActiveEmbeddedRuns();
+  });
+
+  function createQueueableHandle(
+    overrides: { isCompacting?: boolean; isStreaming?: boolean } = {},
+  ): RunHandle & { queueMessageSpy: ReturnType<typeof vi.fn> } {
+    const queueMessageSpy = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    return {
+      queueMessage: queueMessageSpy,
+      isStreaming: () => overrides.isStreaming ?? true,
+      isCompacting: () => overrides.isCompacting ?? false,
+      abort: () => {},
+      queueMessageSpy,
+    };
+  }
+
+  it("returns false when no active run exists for the session", () => {
+    const result = queueEmbeddedPiMessage("no-such-session", "hello");
+    expect(result).toBe(false);
+  });
+
+  it("queues message when session is active but NOT streaming (original bug case)", () => {
+    // Simulates the between-turns state that was previously blocked by the
+    // removed isStreaming guard.
+    const handle = createQueueableHandle({ isStreaming: false });
+    setActiveEmbeddedRun("session-not-streaming", handle);
+
+    const result = queueEmbeddedPiMessage("session-not-streaming", "steer message");
+
+    expect(result).toBe(true);
+    expect(handle.queueMessageSpy).toHaveBeenCalledWith("steer message");
+  });
+
+  it("returns false when session is active but compacting", () => {
+    const handle = createQueueableHandle({ isCompacting: true });
+    setActiveEmbeddedRun("session-compacting", handle);
+
+    const result = queueEmbeddedPiMessage("session-compacting", "steer message");
+
+    expect(result).toBe(false);
+    expect(handle.queueMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("queues message when session is active and streaming (not compacting)", () => {
+    const handle = createQueueableHandle();
+    setActiveEmbeddedRun("session-streaming", handle);
+
+    const result = queueEmbeddedPiMessage("session-streaming", "steer message");
+
+    expect(result).toBe(true);
+    expect(handle.queueMessageSpy).toHaveBeenCalledWith("steer message");
   });
 });
