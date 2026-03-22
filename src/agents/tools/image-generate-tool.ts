@@ -610,7 +610,6 @@ export function createImageGenerateTool(options?: {
         .filter((entry): entry is string => Boolean(entry));
       const lines = [
         `Generated ${savedImages.length} image${savedImages.length === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
-        ...savedImages.map((image) => `MEDIA:${image.path}`),
       ];
 
       return {
@@ -619,6 +618,9 @@ export function createImageGenerateTool(options?: {
           provider: result.provider,
           model: result.model,
           count: savedImages.length,
+          media: {
+            mediaUrls: savedImages.map((image) => image.path),
+          },
           paths: savedImages.map((image) => image.path),
           ...(imageInputs.length === 1
             ? {
