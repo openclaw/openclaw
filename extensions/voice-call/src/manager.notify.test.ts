@@ -234,7 +234,7 @@ describe("CallManager notify and mapping", () => {
 
     const afterFailure = requireCall(manager, callId);
     expect(provider.playTtsCalls).toHaveLength(1);
-    expect(afterFailure.metadata?.initialMessage).toBe("Retry me");
+    expect(afterFailure.metadata).toEqual(expect.objectContaining({ initialMessage: "Retry me" }));
     expect(afterFailure.state).toBe("listening");
 
     manager.processEvent({
@@ -248,7 +248,7 @@ describe("CallManager notify and mapping", () => {
 
     const afterSuccess = requireCall(manager, callId);
     expect(provider.playTtsCalls).toHaveLength(2);
-    expect(afterSuccess.metadata?.initialMessage).toBeUndefined();
+    expect(afterSuccess.metadata).not.toHaveProperty("initialMessage");
   });
 
   it("speaks initial message only once on repeated stream-connect triggers", async () => {
@@ -313,7 +313,7 @@ describe("CallManager notify and mapping", () => {
     await Promise.all([first, second]);
 
     const call = requireCall(manager, callId);
-    expect(call.metadata?.initialMessage).toBeUndefined();
+    expect(call.metadata).not.toHaveProperty("initialMessage");
     expect(provider.playTtsCalls).toHaveLength(1);
     expect(requireFirstPlayTtsCall(provider).text).toBe("In-flight hello");
   });
