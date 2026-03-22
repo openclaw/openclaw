@@ -6,7 +6,7 @@ import {
   resolveConfigPath,
   resolveRuntimePlatform,
 } from "../shared/config-eval.js";
-import { resolveHookKey } from "./frontmatter.js";
+import { resolveHookConfig, resolveHookEnableState } from "./policy.js";
 import type { HookEligibilityContext, HookEntry } from "./types.js";
 
 const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
@@ -21,37 +21,7 @@ export function isConfigPathTruthy(config: OpenClawConfig | undefined, pathStr: 
   return isConfigPathTruthyWithDefaults(config, pathStr, DEFAULT_CONFIG_VALUES);
 }
 
-export function resolveHookConfig(
-  config: OpenClawConfig | undefined,
-  hookKey: string,
-): HookConfig | undefined {
-  const hooks = config?.hooks?.internal?.entries;
-  if (!hooks || typeof hooks !== "object") {
-    return undefined;
-  }
-  const entry = (hooks as Record<string, HookConfig | undefined>)[hookKey];
-  if (!entry || typeof entry !== "object") {
-    return undefined;
-  }
-  return entry;
-}
-
-export function isHookDisabledByConfig(params: {
-  entry: HookEntry;
-  config?: OpenClawConfig;
-  hookConfig?: HookConfig;
-}): boolean {
-  const { entry, config } = params;
-  const hookKey = resolveHookKey(entry.hook.name, entry);
-  const hookConfig = params.hookConfig ?? resolveHookConfig(config, hookKey);
-  if (entry.hook.source === "openclaw-plugin") {
-    return false;
-  }
-  if (hookConfig?.enabled === false) {
-    return true;
-  }
-  return entry.hook.source === "openclaw-workspace" && hookConfig?.enabled !== true;
-}
+export { resolveHookConfig };
 
 function evaluateHookRuntimeEligibility(params: {
   entry: HookEntry;
@@ -83,8 +53,11 @@ export function shouldIncludeHook(params: {
   eligibility?: HookEligibilityContext;
 }): boolean {
   const { entry, config, eligibility } = params;
-  const hookConfig = resolveHookConfig(config, resolveHookKey(entry.hook.name, entry));
-  if (isHookDisabledByConfig({ entry, config, hookConfig })) {
+  const hookConfig = resolveHookConfig(
+    config,
+    params.entry.metadata?.hookKey ?? params.entry.hook.name,
+  );
+  if (!resolveHookEnableState({ entry, config, hookConfig }).enabled) {
     return false;
   }
 
