@@ -106,4 +106,33 @@ describe("process supervisor", () => {
     expect(streamed).toBe("streamed");
     expect(exit.stdout).toBe("");
   });
+
+  it("tracks active runs and drains after cancelAll", async () => {
+    const supervisor = createProcessSupervisor();
+    const first = await spawnChild(supervisor, {
+      sessionId: "s-drain-1",
+      argv: [process.execPath, "-e", "setTimeout(() => {}, 1_000)"],
+      timeoutMs: 2_000,
+      stdinMode: "pipe-open",
+    });
+    const second = await spawnChild(supervisor, {
+      sessionId: "s-drain-2",
+      argv: [process.execPath, "-e", "setTimeout(() => {}, 1_000)"],
+      timeoutMs: 2_000,
+      stdinMode: "pipe-open",
+    });
+
+    expect(supervisor.getActiveRunCount()).toBe(2);
+
+    supervisor.cancelAll("manual-cancel");
+    await expect(supervisor.waitForActiveRuns(1_000, { pollMs: 10 })).resolves.toEqual({
+      drained: true,
+    });
+
+    const firstExit = await first.wait();
+    const secondExit = await second.wait();
+    expect(firstExit.reason === "manual-cancel" || firstExit.reason === "signal").toBe(true);
+    expect(secondExit.reason === "manual-cancel" || secondExit.reason === "signal").toBe(true);
+    expect(supervisor.getActiveRunCount()).toBe(0);
+  });
 });

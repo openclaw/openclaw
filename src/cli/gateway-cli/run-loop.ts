@@ -19,6 +19,7 @@ import {
   resetAllLanes,
   waitForActiveTasks,
 } from "../../process/command-queue.js";
+import { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { createRestartIterationHook } from "../../process/restart-recovery.js";
 import type { defaultRuntime } from "../../runtime.js";
 
@@ -128,34 +129,59 @@ export async function runGatewayLoop(params: {
           markGatewayDraining();
           const activeTasks = getActiveTaskCount();
           const activeRuns = getActiveEmbeddedRunCount();
+          const processSupervisor = getProcessSupervisor();
+          const activeProcessRuns = processSupervisor.getActiveRunCount();
 
           // Best-effort abort for compacting runs so long compaction operations
           // don't hold session write locks across restart boundaries.
           if (activeRuns > 0) {
             abortEmbeddedPiRun(undefined, { mode: "compacting" });
           }
+          if (activeProcessRuns > 0) {
+            processSupervisor.cancelAll("manual-cancel");
+          }
 
-          if (activeTasks > 0 || activeRuns > 0) {
+          if (activeTasks > 0 || activeRuns > 0 || activeProcessRuns > 0) {
             gatewayLog.info(
-              `draining ${activeTasks} active task(s) and ${activeRuns} active embedded run(s) before restart (timeout ${DRAIN_TIMEOUT_MS}ms)`,
+              `draining ${activeTasks} active task(s), ${activeRuns} active embedded run(s), and ${activeProcessRuns} active exec run(s) before restart (timeout ${DRAIN_TIMEOUT_MS}ms)`,
             );
-            const [tasksDrain, runsDrain] = await Promise.all([
+            const [tasksDrain, runsDrain, processRunsDrain] = await Promise.all([
               activeTasks > 0
                 ? waitForActiveTasks(DRAIN_TIMEOUT_MS)
                 : Promise.resolve({ drained: true }),
               activeRuns > 0
                 ? waitForActiveEmbeddedRuns(DRAIN_TIMEOUT_MS)
                 : Promise.resolve({ drained: true }),
+              activeProcessRuns > 0
+                ? processSupervisor.waitForActiveRuns(DRAIN_TIMEOUT_MS)
+                : Promise.resolve({ drained: true }),
             ]);
-            if (tasksDrain.drained && runsDrain.drained) {
+            if (tasksDrain.drained && runsDrain.drained && processRunsDrain.drained) {
               gatewayLog.info("all active work drained");
             } else {
               gatewayLog.warn("drain timeout reached; proceeding with restart");
               // Final best-effort abort to avoid carrying active runs into the
               // next lifecycle when drain time budget is exhausted.
               abortEmbeddedPiRun(undefined, { mode: "all" });
+              processSupervisor.cancelAll("manual-cancel");
             }
           }
+        } else {
+          const processSupervisor = getProcessSupervisor();
+          const closePromise = server?.close({
+            reason: isRestart ? "gateway restarting" : "gateway stopping",
+            restartExpectedMs: isRestart ? 1500 : null,
+          });
+          if (processSupervisor.getActiveRunCount() > 0) {
+            processSupervisor.cancelAll("manual-cancel");
+            await Promise.all([
+              closePromise,
+              processSupervisor.waitForActiveRuns(SHUTDOWN_TIMEOUT_MS),
+            ]);
+          } else {
+            await closePromise;
+          }
+          return;
         }
 
         await server?.close({

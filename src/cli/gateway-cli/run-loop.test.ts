@@ -29,6 +29,9 @@ const abortEmbeddedPiRun = vi.fn(
 );
 const getActiveEmbeddedRunCount = vi.fn(() => 0);
 const waitForActiveEmbeddedRuns = vi.fn(async (_timeoutMs: number) => ({ drained: true }));
+const cancelAllSupervisorRuns = vi.fn((_reason?: string) => {});
+const getActiveProcessRunCount = vi.fn(() => 0);
+const waitForActiveProcessRuns = vi.fn(async (_timeoutMs: number) => ({ drained: true }));
 const DRAIN_TIMEOUT_LOG = "drain timeout reached; proceeding with restart";
 const gatewayLog = {
   info: vi.fn(),
@@ -64,6 +67,14 @@ vi.mock("../../agents/pi-embedded-runner/runs.js", () => ({
     abortEmbeddedPiRun(sessionId, opts),
   getActiveEmbeddedRunCount: () => getActiveEmbeddedRunCount(),
   waitForActiveEmbeddedRuns: (timeoutMs: number) => waitForActiveEmbeddedRuns(timeoutMs),
+}));
+
+vi.mock("../../process/supervisor/index.js", () => ({
+  getProcessSupervisor: () => ({
+    cancelAll: (reason?: string) => cancelAllSupervisorRuns(reason),
+    getActiveRunCount: () => getActiveProcessRunCount(),
+    waitForActiveRuns: (timeoutMs: number) => waitForActiveProcessRuns(timeoutMs),
+  }),
 }));
 
 vi.mock("../../logging/subsystem.js", () => ({
@@ -210,8 +221,10 @@ describe("runGatewayLoop", () => {
     await withIsolatedSignals(async ({ captureSignal }) => {
       getActiveTaskCount.mockReturnValueOnce(2).mockReturnValueOnce(0);
       getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValueOnce(0);
+      getActiveProcessRunCount.mockReturnValueOnce(1).mockReturnValueOnce(0);
       waitForActiveTasks.mockResolvedValueOnce({ drained: false });
       waitForActiveEmbeddedRuns.mockResolvedValueOnce({ drained: true });
+      waitForActiveProcessRuns.mockResolvedValueOnce({ drained: true });
 
       type StartServer = () => Promise<{
         close: (opts: { reason: string; restartExpectedMs: number | null }) => Promise<void>;
@@ -269,8 +282,10 @@ describe("runGatewayLoop", () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
 
       expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, { mode: "compacting" });
+      expect(cancelAllSupervisorRuns).toHaveBeenCalledWith("manual-cancel");
       expect(waitForActiveTasks).toHaveBeenCalledWith(90_000);
       expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(90_000);
+      expect(waitForActiveProcessRuns).toHaveBeenCalledWith(90_000);
       expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, { mode: "all" });
       expect(markGatewayDraining).toHaveBeenCalledTimes(1);
       expect(gatewayLog.warn).toHaveBeenCalledWith(DRAIN_TIMEOUT_LOG);
@@ -322,6 +337,38 @@ describe("runGatewayLoop", () => {
       expect(close).not.toHaveBeenCalled();
       expect(start).toHaveBeenCalledTimes(1);
       expect(markGatewaySigusr1RestartHandled).not.toHaveBeenCalled();
+    });
+  });
+
+  it("cancels active exec runs during graceful stop", async () => {
+    vi.clearAllMocks();
+    getActiveProcessRunCount.mockReturnValueOnce(2);
+    let resolveWait: (() => void) | null = null;
+    waitForActiveProcessRuns.mockImplementationOnce(
+      () =>
+        new Promise<{ drained: boolean }>((resolve) => {
+          resolveWait = () => resolve({ drained: true });
+        }),
+    );
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, runtime, exited } = await createSignaledLoopHarness();
+      const sigterm = captureSignal("SIGTERM");
+
+      sigterm();
+
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(close).toHaveBeenCalledWith({
+        reason: "gateway stopping",
+        restartExpectedMs: null,
+      });
+
+      resolveWait?.();
+
+      await expect(exited).resolves.toBe(0);
+      expect(cancelAllSupervisorRuns).toHaveBeenCalledWith("manual-cancel");
+      expect(waitForActiveProcessRuns).toHaveBeenCalledWith(5_000);
+      expect(runtime.exit).toHaveBeenCalledWith(0);
     });
   });
 

@@ -46,6 +46,12 @@ export function createProcessSupervisor(): ProcessSupervisor {
     current.run.cancel(reason);
   };
 
+  const cancelAll = (reason: TerminationReason = "manual-cancel") => {
+    for (const runId of [...active.keys()]) {
+      cancel(runId, reason);
+    }
+  };
+
   const cancelScope = (scopeKey: string, reason: TerminationReason = "manual-cancel") => {
     if (!scopeKey.trim()) {
       return;
@@ -55,6 +61,28 @@ export function createProcessSupervisor(): ProcessSupervisor {
         continue;
       }
       cancel(runId, reason);
+    }
+  };
+
+  const getActiveRunCount = () => active.size;
+
+  const waitForActiveRuns = async (
+    timeoutMs = 15_000,
+    opts?: { pollMs?: number },
+  ): Promise<{ drained: boolean }> => {
+    const pollMsRaw = opts?.pollMs ?? 250;
+    const pollMs = Math.max(10, Math.floor(pollMsRaw));
+    const maxWaitMs = Math.max(pollMs, Math.floor(timeoutMs));
+    const startedAt = Date.now();
+
+    while (true) {
+      if (active.size === 0) {
+        return { drained: true };
+      }
+      if (Date.now() - startedAt >= maxWaitMs) {
+        return { drained: false };
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
     }
   };
 
@@ -272,7 +300,10 @@ export function createProcessSupervisor(): ProcessSupervisor {
   return {
     spawn,
     cancel,
+    cancelAll,
     cancelScope,
+    getActiveRunCount,
+    waitForActiveRuns,
     reconcileOrphans: async () => {
       // Deliberate no-op: this supervisor uses in-memory ownership only.
       // Active runs are not recovered after process restart in the current model.

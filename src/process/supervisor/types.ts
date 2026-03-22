@@ -100,7 +100,13 @@ export type SpawnInput = SpawnChildInput | SpawnPtyInput;
 export interface ProcessSupervisor {
   spawn(input: SpawnInput): Promise<ManagedRun>;
   cancel(runId: string, reason?: TerminationReason): void;
+  cancelAll(reason?: TerminationReason): void;
   cancelScope(scopeKey: string, reason?: TerminationReason): void;
+  getActiveRunCount(): number;
+  waitForActiveRuns(
+    timeoutMs?: number,
+    opts?: { pollMs?: number },
+  ): Promise<{ drained: boolean }>;
   reconcileOrphans(): Promise<void>;
   getRecord(runId: string): RunRecord | undefined;
 }
