@@ -95,6 +95,18 @@ function registerOpenAIPlugin() {
   return { providers, speechProviders, mediaProviders, imageProviders };
 }
 
+function requireOpenAIProvider<T = unknown>(entries: unknown[], id: string): T {
+  const entry = entries.find(
+    (candidate) =>
+      // oxlint-disable-next-line typescript/no-explicit-any
+      (candidate as any).id === id,
+  );
+  if (!entry) {
+    throw new Error(`provider ${id} was not registered`);
+  }
+  return entry as T;
+}
+
 function createReferencePng(): Buffer {
   const width = 96;
   const height = 96;
@@ -205,11 +217,7 @@ describe("openai plugin", () => {
 describeLive("openai plugin live", () => {
   it("registers an OpenAI provider that can complete a live request", async () => {
     const { providers } = registerOpenAIPlugin();
-    const provider =
-      // oxlint-disable-next-line typescript/no-explicit-any
-      providers.find((entry) => (entry as any).id === "openai");
-
-    expect(provider).toBeDefined();
+    const provider = requireOpenAIProvider(providers, "openai");
 
     // oxlint-disable-next-line typescript/no-explicit-any
     const resolved = (provider as any).resolveDynamicModel?.({
@@ -226,7 +234,9 @@ describeLive("openai plugin live", () => {
       },
     });
 
-    expect(resolved).toBeDefined();
+    if (!resolved) {
+      throw new Error("openai provider did not resolve the live model");
+    }
 
     // oxlint-disable-next-line typescript/no-explicit-any
     const normalized = (provider as any).normalizeResolvedModel?.({
@@ -257,16 +267,14 @@ describeLive("openai plugin live", () => {
 
   it("lists voices and synthesizes audio through the registered speech provider", async () => {
     const { speechProviders } = registerOpenAIPlugin();
-    const speechProvider =
-      // oxlint-disable-next-line typescript/no-explicit-any
-      speechProviders.find((entry) => (entry as any).id === "openai");
-
-    expect(speechProvider).toBeDefined();
+    const speechProvider = requireOpenAIProvider(speechProviders, "openai");
 
     // oxlint-disable-next-line typescript/no-explicit-any
     const voices = await (speechProvider as any).listVoices?.({});
-    expect(Array.isArray(voices)).toBe(true);
-    expect(voices.map((voice: { id: string }) => voice.id)).toContain("alloy");
+    if (!voices) {
+      throw new Error("openai speech provider did not return voices");
+    }
+    expect(voices).toEqual(expect.arrayContaining([expect.objectContaining({ id: "alloy" })]));
 
     const cfg = createLiveConfig();
     const ttsConfig = createLiveTtsConfig();
@@ -295,15 +303,8 @@ describeLive("openai plugin live", () => {
 
   it("transcribes synthesized speech through the registered media provider", async () => {
     const { speechProviders, mediaProviders } = registerOpenAIPlugin();
-    const speechProvider =
-      // oxlint-disable-next-line typescript/no-explicit-any
-      speechProviders.find((entry) => (entry as any).id === "openai");
-    const mediaProvider =
-      // oxlint-disable-next-line typescript/no-explicit-any
-      mediaProviders.find((entry) => (entry as any).id === "openai");
-
-    expect(speechProvider).toBeDefined();
-    expect(mediaProvider).toBeDefined();
+    const speechProvider = requireOpenAIProvider(speechProviders, "openai");
+    const mediaProvider = requireOpenAIProvider(mediaProviders, "openai");
 
     const cfg = createLiveConfig();
     const ttsConfig = createLiveTtsConfig();
@@ -333,11 +334,7 @@ describeLive("openai plugin live", () => {
 
   it("generates an image through the registered image provider", async () => {
     const { imageProviders } = registerOpenAIPlugin();
-    const imageProvider =
-      // oxlint-disable-next-line typescript/no-explicit-any
-      imageProviders.find((entry) => (entry as any).id === "openai");
-
-    expect(imageProvider).toBeDefined();
+    const imageProvider = requireOpenAIProvider(imageProviders, "openai");
 
     const cfg = createLiveConfig();
     const agentDir = await createTempAgentDir();
@@ -366,11 +363,7 @@ describeLive("openai plugin live", () => {
 
   it("describes a deterministic image through the registered media provider", async () => {
     const { mediaProviders } = registerOpenAIPlugin();
-    const mediaProvider =
-      // oxlint-disable-next-line typescript/no-explicit-any
-      mediaProviders.find((entry) => (entry as any).id === "openai");
-
-    expect(mediaProvider).toBeDefined();
+    const mediaProvider = requireOpenAIProvider(mediaProviders, "openai");
 
     const cfg = createLiveConfig();
     const agentDir = await createTempAgentDir();
