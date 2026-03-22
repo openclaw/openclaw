@@ -537,6 +537,12 @@ describe("processDiscordMessage draft streaming", () => {
     expectSinglePreviewEdit();
   });
 
+  it("keeps preview streaming off by default when streaming is unset", async () => {
+    await runSingleChunkFinalScenario({ maxLinesPerMessage: 5 });
+    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back to standard send when final needs multiple chunks", async () => {
     await runSingleChunkFinalScenario({ streamMode: "partial", maxLinesPerMessage: 1 });
 
