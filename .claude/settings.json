@@ -1,0 +1,11 @@
+{
+  "enabledPlugins": {
+    "typescript-lsp@claude-plugins-official": true,
+    "swift-lsp@claude-plugins-official": false,
+    "kotlin-lsp@claude-plugins-official": false,
+    "frontend-design@claude-plugins-official": true,
+    "claude-md-management@claude-plugins-official": true,
+    "skill-creator@claude-plugins-official": true,
+    "stellar-powers@stellar-powers": true
+  }
+}
