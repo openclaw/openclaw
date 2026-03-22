@@ -31,6 +31,7 @@ import { restartGatewayProcessWithFreshPid } from "./process-respawn.js";
 
 const originalArgv = [...process.argv];
 const originalExecArgv = [...process.execArgv];
+const originalExecPathDescriptor = Object.getOwnPropertyDescriptor(process, "execPath");
 const envSnapshot = captureFullEnv();
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
@@ -56,6 +57,9 @@ afterEach(() => {
   existsSyncMock.mockReturnValue(false);
   resolveOpenClawPackageRootSyncMock.mockReset();
   resolveOpenClawPackageRootSyncMock.mockReturnValue(null);
+  if (originalExecPathDescriptor) {
+    Object.defineProperty(process, "execPath", originalExecPathDescriptor);
+  }
   if (originalPlatformDescriptor) {
     Object.defineProperty(process, "platform", originalPlatformDescriptor);
   }
@@ -278,6 +282,37 @@ describe("restartGatewayProcessWithFreshPid", () => {
       }),
     );
     expect(resolveOpenClawPackageRootSyncMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps Bun-packaged gateways on a stable dist entrypoint instead of openclaw.mjs", () => {
+    delete process.env.OPENCLAW_NO_RESPAWN;
+    clearSupervisorHints();
+    setPlatform("linux");
+    if (originalExecPathDescriptor) {
+      Object.defineProperty(process, "execPath", {
+        ...originalExecPathDescriptor,
+        value: "/usr/local/bin/bun",
+      });
+    }
+    const rootPath = path.join(path.parse(process.cwd()).root, "opt", "openclaw");
+    const stableDistEntrypoint = path.join(rootPath, "dist", "entry.js");
+    process.execArgv = [];
+    process.argv = ["/usr/local/bin/bun", stableDistEntrypoint, "gateway", "run"];
+    resolveOpenClawPackageRootSyncMock.mockReturnValue(rootPath);
+    existsSyncMock.mockImplementation((value: unknown) => value === stableDistEntrypoint);
+    spawnMock.mockReturnValue({ pid: 6262, unref: vi.fn() });
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result).toEqual({ mode: "spawned", pid: 6262 });
+    expect(spawnMock).toHaveBeenCalledWith(
+      "/usr/local/bin/bun",
+      [stableDistEntrypoint, "gateway", "run"],
+      expect.objectContaining({
+        detached: true,
+        stdio: "inherit",
+      }),
+    );
   });
 
   it("returns supervised when OPENCLAW_LAUNCHD_LABEL is set (stock launchd plist)", () => {

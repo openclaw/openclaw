@@ -31,7 +31,39 @@ function looksLikeDevEntrypoint(argv1: string): boolean {
   return normalized.endsWith("/src/entry.ts") || normalized.endsWith("/src/index.ts");
 }
 
-function resolvePnpmStableWrapperFromArgv1(argv1: string): string | null {
+function isBunRespawnRuntime(): boolean {
+  const execBase = path.basename(process.execPath ?? "").toLowerCase();
+  return execBase === "bun" || execBase === "bun.exe" || Boolean(process.versions?.bun);
+}
+
+function resolveStableDistEntrypoint(packageRoot: string, argv1: string): string | null {
+  const currentBasename = path.basename(argv1);
+  const candidates = Array.from(
+    new Set([currentBasename, "entry.js", "entry.mjs", "index.js", "index.mjs"]),
+  );
+  for (const candidate of candidates) {
+    const candidatePath = path.join(packageRoot, "dist", candidate);
+    if (existsSync(candidatePath)) {
+      return candidatePath;
+    }
+  }
+  return null;
+}
+
+function resolveStablePackageEntrypoint(packageRoot: string, argv1: string): string | null {
+  if (isBunRespawnRuntime()) {
+    return resolveStableDistEntrypoint(packageRoot, argv1);
+  }
+
+  const wrapperPath = path.join(packageRoot, "openclaw.mjs");
+  if (existsSync(wrapperPath)) {
+    return wrapperPath;
+  }
+
+  return resolveStableDistEntrypoint(packageRoot, argv1);
+}
+
+function resolvePnpmStableEntrypointFromArgv1(argv1: string): string | null {
   const normalized = path.resolve(argv1);
   const marker = `${path.sep}node_modules${path.sep}.pnpm${path.sep}`;
   const markerIndex = normalized.lastIndexOf(marker);
@@ -49,8 +81,7 @@ function resolvePnpmStableWrapperFromArgv1(argv1: string): string | null {
   }
 
   const stableRoot = path.join(normalized.slice(0, markerIndex), "node_modules", "openclaw");
-  const stableWrapper = path.join(stableRoot, "openclaw.mjs");
-  return existsSync(stableWrapper) ? stableWrapper : null;
+  return resolveStablePackageEntrypoint(stableRoot, argv1);
 }
 
 function resolveStableRespawnArgs(): string[] {
@@ -60,9 +91,9 @@ function resolveStableRespawnArgs(): string[] {
     return currentArgs;
   }
 
-  const pnpmWrapper = resolvePnpmStableWrapperFromArgv1(argv1);
-  if (pnpmWrapper) {
-    return [...process.execArgv, pnpmWrapper, ...process.argv.slice(2)];
+  const pnpmEntrypoint = resolvePnpmStableEntrypointFromArgv1(argv1);
+  if (pnpmEntrypoint) {
+    return [...process.execArgv, pnpmEntrypoint, ...process.argv.slice(2)];
   }
 
   const packageRoot = resolveOpenClawPackageRootSync({
@@ -73,12 +104,12 @@ function resolveStableRespawnArgs(): string[] {
     return currentArgs;
   }
 
-  const wrapperPath = path.join(packageRoot, "openclaw.mjs");
-  if (!existsSync(wrapperPath)) {
+  const stableEntrypoint = resolveStablePackageEntrypoint(packageRoot, argv1);
+  if (!stableEntrypoint) {
     return currentArgs;
   }
 
-  return [...process.execArgv, wrapperPath, ...process.argv.slice(2)];
+  return [...process.execArgv, stableEntrypoint, ...process.argv.slice(2)];
 }
 
 /**
