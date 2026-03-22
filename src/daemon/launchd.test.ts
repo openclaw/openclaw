@@ -20,6 +20,7 @@ const state = vi.hoisted(() => ({
   bootstrapError: "",
   kickstartError: "",
   kickstartFailuresRemaining: 0,
+  printNotLoadedRemaining: 0,
   dirs: new Set<string>(),
   dirModes: new Map<string, number>(),
   files: new Map<string, string>(),
@@ -72,6 +73,10 @@ vi.mock("./exec-file.js", () => ({
       return { stdout: state.listOutput, stderr: "", code: 0 };
     }
     if (call[0] === "print") {
+      if (state.printNotLoadedRemaining > 0) {
+        state.printNotLoadedRemaining -= 1;
+        return { stdout: "", stderr: "Could not find service", code: 113 };
+      }
       return { stdout: state.printOutput, stderr: "", code: 0 };
     }
     if (call[0] === "bootstrap" && state.bootstrapError) {
@@ -154,6 +159,7 @@ beforeEach(() => {
   state.bootstrapError = "";
   state.kickstartError = "";
   state.kickstartFailuresRemaining = 0;
+  state.printNotLoadedRemaining = 0;
   state.dirs.clear();
   state.dirModes.clear();
   state.files.clear();
@@ -414,6 +420,46 @@ describe("launchd install", () => {
       }),
     ).rejects.toThrow("launchctl kickstart failed: Input/output error");
 
+    expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(false);
+    expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(false);
+  });
+
+  it("re-bootstraps when kickstart failure leaves the service unloaded (#52208)", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.kickstartError = "Input/output error";
+    state.kickstartFailuresRemaining = 1;
+    // After kickstart fails, launchd may remove the service. Simulate print
+    // returning "not loaded" for the ensureLaunchAgentLoadedAfterFailure probe,
+    // then succeeding after re-bootstrap.
+    state.printNotLoadedRemaining = 1;
+
+    await expect(
+      restartLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+      }),
+    ).rejects.toThrow("launchctl kickstart failed: Input/output error");
+
+    // The fix should have detected the unloaded state and re-bootstrapped.
+    expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(true);
+    expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(true);
+  });
+
+  it("skips re-bootstrap when kickstart fails but service is still loaded (#52208)", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.kickstartError = "Input/output error";
+    state.kickstartFailuresRemaining = 1;
+    // print succeeds → service is still loaded, no re-bootstrap needed
+    state.printNotLoadedRemaining = 0;
+
+    await expect(
+      restartLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+      }),
+    ).rejects.toThrow("launchctl kickstart failed: Input/output error");
+
+    // Should NOT have called enable/bootstrap since service is still loaded.
     expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(false);
     expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(false);
   });

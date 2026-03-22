@@ -527,6 +527,37 @@ export async function installLaunchAgent({
   return { plistPath };
 }
 
+/**
+ * Attempt to ensure the LaunchAgent remains loaded after a failed kickstart.
+ *
+ * A failed `launchctl kickstart -k` can cause launchd to mark the service
+ * inactive and remove it (#52208). If that happens, re-bootstrap so the
+ * service stays managed even though the restart itself failed.
+ */
+async function ensureLaunchAgentLoadedAfterFailure(params: {
+  domain: string;
+  serviceTarget: string;
+  plistPath: string;
+}): Promise<void> {
+  const probe = await execLaunchctl(["print", params.serviceTarget]);
+  if (probe.code === 0) {
+    // Service is still loaded — nothing to repair.
+    return;
+  }
+  // Service was removed/unloaded. Try to re-bootstrap it so it stays managed.
+  try {
+    await bootstrapLaunchAgentOrThrow({
+      domain: params.domain,
+      serviceTarget: params.serviceTarget,
+      plistPath: params.plistPath,
+      actionHint: "openclaw gateway start",
+    });
+  } catch {
+    // Best-effort: if re-bootstrap also fails we still throw the original
+    // kickstart error below, but at least we tried.
+  }
+}
+
 export async function restartLaunchAgent({
   stdout,
   env,
@@ -565,6 +596,10 @@ export async function restartLaunchAgent({
   }
 
   if (!isLaunchctlNotLoaded(start)) {
+    // kickstart failed for a reason other than "not loaded". A failed kickstart
+    // can cause launchd to mark the service inactive and remove it (#52208).
+    // Re-bootstrap the service so it remains managed before propagating the error.
+    await ensureLaunchAgentLoadedAfterFailure({ domain, serviceTarget, plistPath });
     throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
   }
 
@@ -578,6 +613,9 @@ export async function restartLaunchAgent({
 
   const retry = await execLaunchctl(["kickstart", "-k", serviceTarget]);
   if (retry.code !== 0) {
+    // Retry kickstart also failed after bootstrap. Ensure the service stays
+    // loaded even though the restart itself could not complete (#52208).
+    await ensureLaunchAgentLoadedAfterFailure({ domain, serviceTarget, plistPath });
     throw new Error(`launchctl kickstart failed: ${retry.stderr || retry.stdout}`.trim());
   }
   writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
