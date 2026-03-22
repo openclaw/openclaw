@@ -57,7 +57,27 @@ function stubChannelPlugin(params: {
           );
           return enabled ? ["default"] : [];
         }),
-      inspectAccount: params.inspectAccount,
+      inspectAccount:
+        params.inspectAccount ??
+        ((cfg, accountId) => {
+          const resolvedAccountId =
+            typeof accountId === "string" && accountId ? accountId : "default";
+          let account: { config?: Record<string, unknown> } | undefined;
+          try {
+            account = params.resolveAccount(cfg, resolvedAccountId) as
+              | { config?: Record<string, unknown> }
+              | undefined;
+          } catch {
+            return null;
+          }
+          const config = account?.config ?? {};
+          return {
+            accountId: resolvedAccountId,
+            enabled: params.isEnabled?.(account, cfg) ?? true,
+            configured: params.isConfigured?.(account, cfg) ?? true,
+            config,
+          };
+        }),
       resolveAccount: (cfg, accountId) => params.resolveAccount(cfg, accountId),
       isEnabled: (account, cfg) => params.isEnabled?.(account, cfg) ?? true,
       isConfigured: (account, cfg) => params.isConfigured?.(account, cfg) ?? true,
