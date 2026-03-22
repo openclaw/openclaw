@@ -193,6 +193,21 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       chown -R node:node /home/node/.cache/ms-playwright; \
     fi
 
+# Optionally install uv (Python package manager) for skills or extensions.
+# Build with: docker build --build-arg OPENCLAW_INSTALL_UV=1 ...
+# Installs uv to /usr/local/bin so it is accessible to all users (including non-root node user).
+# Docker build args are not persisted in the final image layer, so uv survives container restarts.
+ARG OPENCLAW_INSTALL_UV=""
+RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
+    if [ -n "$OPENCLAW_INSTALL_UV" ]; then \
+      apt-get update && \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl && \
+      curl -LsSf https://astral.sh/uv/install.sh | sh && \
+      mv /root/.local/bin/uv /usr/local/bin/uv && \
+      chmod 755 /usr/local/bin/uv; \
+    fi
+
 # Optionally install Docker CLI for sandbox container management.
 # Build with: docker build --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1 ...
 # Adds ~50MB. Only the CLI is installed — no Docker daemon.
