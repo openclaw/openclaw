@@ -4,7 +4,6 @@ import * as tar from "tar";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { safePathSegmentHashed } from "../infra/install-safe-path.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import * as skillScanner from "../security/skill-scanner.js";
 import {
   expectSingleNpmInstallIgnoreScriptsCall,
   expectSingleNpmPackIgnoreScriptsCall,
@@ -14,6 +13,7 @@ import {
   expectIntegrityDriftRejected,
   mockNpmPackMetadataResult,
 } from "../test-utils/npm-spec-install-test-helpers.js";
+import * as installSecurityScan from "./install-security-scan.js";
 import {
   installPluginFromArchive,
   installPluginFromDir,
@@ -689,7 +689,7 @@ describe("installPluginFromArchive", () => {
 
   it("continues install when scanner throws", async () => {
     const scanSpy = vi
-      .spyOn(skillScanner, "scanDirectoryWithSummary")
+      .spyOn(installSecurityScan, "scanPackageInstallSource")
       .mockRejectedValueOnce(new Error("scanner exploded"));
 
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
