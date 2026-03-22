@@ -43,10 +43,10 @@ See [Security](/gateway/security) and [Remote access](/gateway/remote).
 
 ## When to use this endpoint
 
-Use `/v1/chat/completions` when you are building your own private chat UI on top of an existing gateway, such as a Flutter, React Native, iOS, or Android app.
+Use `/v1/chat/completions` when you are integrating tooling or a trusted app-side backend with an existing gateway and can safely hold gateway operator credentials.
 
-- Prefer this over adding a new built-in channel when your app is just another operator/client surface for the same gateway.
-- Use [WebChat](/web/webchat) or the [Gateway Protocol](/gateway/protocol) instead if you need the native Gateway WebSocket path.
+- Prefer this over adding a new built-in channel when your integration is just another operator/client surface for the same gateway.
+- For native mobile clients that connect directly to a remote gateway, prefer [WebChat](/web/webchat) or the [Gateway Protocol](/gateway/protocol) so the device can use the native Gateway WebSocket path and paired-device auth flow instead of a shared HTTP token/password.
 - Build a channel plugin instead when you are integrating an external messaging network with its own users, rooms, webhook delivery, or outbound transport. See [Building Plugins](/plugins/building-plugins).
 
 ## Choosing an agent
@@ -102,7 +102,7 @@ By default the endpoint is **stateless per request** (a new session key is gener
 
 If the request includes an OpenAI `user` string, the Gateway derives a stable session key from it, so repeated calls can share an agent session.
 
-For custom apps, the simplest pattern is to reuse the same `user` value per installed app, signed-in account, or conversation thread. Use `x-openclaw-session-key` only when you need explicit routing control across multiple clients or threads.
+For custom apps, the safest default is to reuse the same `user` value per conversation thread. Avoid account-level identifiers unless you explicitly want multiple conversations or devices to share one OpenClaw session. Use `x-openclaw-session-key` when you need explicit routing control across multiple clients or threads.
 
 ## Streaming (SSE)
 
@@ -114,7 +114,7 @@ Set `stream: true` to receive Server-Sent Events (SSE):
 
 ## Examples
 
-Stable session for a private app:
+Stable session for one app conversation:
 
 ```bash
 curl -sS http://127.0.0.1:18789/v1/chat/completions \
@@ -122,12 +122,12 @@ curl -sS http://127.0.0.1:18789/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{
     "model": "openclaw:main",
-    "user": "device:YOUR_DEVICE_ID",
+    "user": "thread:YOUR_THREAD_ID",
     "messages": [{"role":"user","content":"Summarize my tasks for today"}]
   }'
 ```
 
-Reuse the same `user` value on later calls to continue the same agent session.
+Reuse the same `user` value on later calls for that conversation to continue the same agent session.
 
 Non-streaming:
 
