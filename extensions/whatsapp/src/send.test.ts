@@ -170,6 +170,22 @@ describe("web outbound", () => {
     });
   });
 
+  it("infers text/html for HTML attachments when MIME detection returns no content type", async () => {
+    const buf = Buffer.from("<html><body>hi</body></html>");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      kind: "document",
+      fileName: "page.html",
+    });
+    await sendMessageWhatsApp("+1555", "see attached", {
+      verbose: false,
+      mediaUrl: "/tmp/page.html",
+    });
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "see attached", buf, "text/html", {
+      fileName: "page.html",
+    });
+  });
+
   it("uses account-aware WhatsApp media caps for outbound uploads", async () => {
     setActiveWebListener("work", {
       sendComposingTo,

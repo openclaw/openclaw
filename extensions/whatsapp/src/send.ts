@@ -1,3 +1,4 @@
+import path from "node:path";
 import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { generateSecureUuid } from "openclaw/plugin-sdk/infra-runtime";
@@ -67,6 +68,12 @@ export async function sendMessageWhatsApp(
       const caption = text || undefined;
       mediaBuffer = media.buffer;
       mediaType = media.contentType;
+      if (!mediaType && mediaBuffer && media.fileName) {
+        const ext = path.extname(media.fileName).toLowerCase();
+        if (ext === ".html" || ext === ".htm") {
+          mediaType = "text/html";
+        }
+      }
       if (media.kind === "audio") {
         // WhatsApp expects explicit opus codec for PTT voice notes.
         mediaType =
