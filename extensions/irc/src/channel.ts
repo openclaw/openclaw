@@ -16,7 +16,10 @@ import {
   listResolvedDirectoryEntriesFromSources,
 } from "openclaw/plugin-sdk/directory-runtime";
 import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
-import { createDefaultChannelRuntimeState } from "openclaw/plugin-sdk/status-helpers";
+import {
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
 import {
   listIrcAccountIds,
   resolveDefaultIrcAccountId,
@@ -34,7 +37,6 @@ import {
 import { resolveIrcGroupMatch, resolveIrcRequireMention } from "./policy.js";
 import { probeIrc } from "./probe.js";
 import {
-  buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,
   buildChannelConfigSchema,
   createAccountStatusSink,
@@ -253,7 +255,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
         return entries.map((entry) => ({ ...entry, name: entry.id }));
       },
     }),
-    status: {
+    status: createComputedAccountStatusAdapter<ResolvedIrcAccount, IrcProbe>({
       defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
       buildChannelSummary: ({ account, snapshot }) => ({
         ...buildBaseChannelStatusSummary(snapshot),
@@ -266,18 +268,20 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
       }),
       probeAccount: async ({ cfg, account, timeoutMs }) =>
         probeIrc(cfg as CoreConfig, { accountId: account.accountId, timeoutMs }),
-      buildAccountSnapshot: ({ account, runtime, probe }) =>
-        buildBaseAccountStatusSnapshot(
-          { account, runtime, probe },
-          {
-            host: account.host,
-            port: account.port,
-            tls: account.tls,
-            nick: account.nick,
-            passwordSource: account.passwordSource,
-          },
-        ),
-    },
+      resolveAccountSnapshot: ({ account }) => ({
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured: account.configured,
+        extra: {
+          host: account.host,
+          port: account.port,
+          tls: account.tls,
+          nick: account.nick,
+          passwordSource: account.passwordSource,
+        },
+      }),
+    }),
     gateway: {
       startAccount: async (ctx) => {
         const account = ctx.account;

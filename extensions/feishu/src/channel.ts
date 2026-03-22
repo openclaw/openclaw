@@ -21,12 +21,12 @@ import {
 } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
+import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
 import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "../runtime-api.js";
 import {
   buildChannelConfigSchema,
   buildProbeChannelStatusSummary,
   createActionGate,
-  buildRuntimeAccountStatusSnapshot,
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
@@ -924,7 +924,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               }),
         }),
       }),
-      status: {
+      status: createComputedAccountStatusAdapter<ResolvedFeishuAccount, FeishuProbeResult>({
         defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, { port: null }),
         buildChannelSummary: ({ snapshot }) =>
           buildProbeChannelStatusSummary(snapshot, {
@@ -932,20 +932,18 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           }),
         probeAccount: async ({ account }) =>
           await (await loadFeishuChannelRuntime()).probeFeishu(account),
-        buildAccountSnapshot: ({ account, runtime, probe }) =>
-          buildRuntimeAccountStatusSnapshot(
-            { runtime, probe },
-            {
-              accountId: account.accountId,
-              enabled: account.enabled,
-              configured: account.configured,
-              name: account.name,
-              appId: account.appId,
-              domain: account.domain,
-              port: runtime?.port ?? null,
-            },
-          ),
-      },
+        resolveAccountSnapshot: ({ account, runtime }) => ({
+          accountId: account.accountId,
+          enabled: account.enabled,
+          configured: account.configured,
+          name: account.name,
+          extra: {
+            appId: account.appId,
+            domain: account.domain,
+            port: runtime?.port ?? null,
+          },
+        }),
+      }),
       gateway: {
         startAccount: async (ctx) => {
           const { monitorFeishuProvider } = await import("./monitor.js");
