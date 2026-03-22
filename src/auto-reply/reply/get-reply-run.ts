@@ -19,6 +19,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import { formatThreadContextNote, loadThreadContext } from "../../sessions/thread-context-store.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
@@ -363,11 +364,25 @@ export async function runPreparedReply(
   prefixedBodyBase = appendUntrustedContext(prefixedBodyBase, sessionCtx.UntrustedContext);
   const threadStarterBody = ctx.ThreadStarterBody?.trim();
   const threadHistoryBody = ctx.ThreadHistoryBody?.trim();
+  // Cross-session thread context: inject any prior cron/isolated-agent context
+  // stored for this thread so the agent knows what prompted the conversation
+  // (issue #50556). Only loaded for new sessions to avoid repeating stale info.
+  const priorThreadContext =
+    isNewSession && ctx.MessageThreadId != null
+      ? await loadThreadContext({
+          channel: ctx.OriginatingChannel ?? "",
+          accountId: ctx.AccountId,
+          chatId: ctx.OriginatingTo,
+          threadId: ctx.MessageThreadId,
+        })
+      : undefined;
   const threadContextNote = threadHistoryBody
     ? `[Thread history - for context]\n${threadHistoryBody}`
     : threadStarterBody
       ? `[Thread starter - for context]\n${threadStarterBody}`
-      : undefined;
+      : priorThreadContext
+        ? formatThreadContextNote(priorThreadContext)
+        : undefined;
   const skillResult = await ensureSkillSnapshot({
     sessionEntry,
     sessionStore,

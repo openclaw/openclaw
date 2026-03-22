@@ -30,6 +30,7 @@ import {
   handleAbortTrigger,
   handleActivationCommand,
   handleFastCommand,
+  handleInterruptCommand,
   handleRestartCommand,
   handleSessionCommand,
   handleSendPolicyCommand,
@@ -202,6 +203,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       handleDebugCommand,
       handleModelsCommand,
       handleStopCommand,
+      handleInterruptCommand,
       handleCompactCommand,
       handleAbortTrigger,
     ];

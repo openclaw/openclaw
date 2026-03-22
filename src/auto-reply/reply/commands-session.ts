@@ -3,8 +3,8 @@ import { formatThreadBindingDurationLabel } from "../../channels/thread-bindings
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { isRestartEnabled } from "../../config/commands.js";
 import { logVerbose } from "../../globals.js";
-import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
@@ -767,3 +767,4 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
 };
 
 export { handleAbortTrigger, handleStopCommand };
+export { handleInterruptCommand } from "./commands-session-interrupt.js";
