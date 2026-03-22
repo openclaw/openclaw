@@ -4,22 +4,19 @@ import {
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
-import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth";
 import {
   buildPassiveChannelStatusSummary,
   buildTrafficStatusSummary,
 } from "openclaw/plugin-sdk/extension-shared";
 import {
-  readStoreAllowFromForDmPolicy,
-  resolveDmGroupAccessWithLists,
-} from "openclaw/plugin-sdk/security-runtime";
-import {
   buildChannelConfigSchema,
-  createChannelReplyPipeline,
   collectStatusIssuesFromLastError,
+  createPreCryptoDirectDmAuthorizer,
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
+  dispatchInboundDirectDmWithRuntime,
   formatPairingApproveHint,
+  resolveInboundDirectDmAccessWithRuntime,
   type ChannelPlugin,
 } from "../runtime-api.js";
 import type { NostrProfile } from "./config-schema.js";
@@ -73,27 +70,25 @@ function isNostrSenderAllowed(senderPubkey: string, allowFrom: string[]): boolea
 }
 
 async function resolveNostrDirectAccess(params: {
+  cfg: Parameters<typeof resolveInboundDirectDmAccessWithRuntime>[0]["cfg"];
   accountId: string;
   dmPolicy: "pairing" | "allowlist" | "open" | "disabled";
   allowFrom: Array<string | number> | undefined;
   senderPubkey: string;
+  rawBody: string;
+  runtime: Parameters<typeof resolveInboundDirectDmAccessWithRuntime>[0]["runtime"];
 }) {
-  const storeAllowFrom =
-    params.dmPolicy === "pairing"
-      ? await readStoreAllowFromForDmPolicy({
-          provider: "nostr",
-          accountId: params.accountId,
-          dmPolicy: params.dmPolicy,
-        })
-      : [];
-
-  return resolveDmGroupAccessWithLists({
-    isGroup: false,
+  return resolveInboundDirectDmAccessWithRuntime({
+    cfg: params.cfg,
+    channel: "nostr",
+    accountId: params.accountId,
     dmPolicy: params.dmPolicy,
     allowFrom: params.allowFrom,
-    storeAllowFrom,
-    groupAllowFromFallbackToAllowFrom: false,
-    isSenderAllowed: (allowEntries) => isNostrSenderAllowed(params.senderPubkey, allowEntries),
+    senderId: params.senderPubkey,
+    rawBody: params.rawBody,
+    isSenderAllowed: isNostrSenderAllowed,
+    runtime: params.runtime,
+    modeWhenAccessGroupsOff: "configured",
   });
 }
 
@@ -288,170 +283,103 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
         channel: "nostr",
         accountId: account.accountId,
       });
+      const resolveInboundAccess = async (senderPubkey: string, rawBody: string) =>
+        await resolveNostrDirectAccess({
+          cfg: ctx.cfg,
+          accountId: account.accountId,
+          dmPolicy: account.config.dmPolicy ?? "pairing",
+          allowFrom: account.config.allowFrom,
+          senderPubkey,
+          rawBody,
+          runtime: {
+            shouldComputeCommandAuthorized: runtime.channel.commands.shouldComputeCommandAuthorized,
+            resolveCommandAuthorizedFromAuthorizers:
+              runtime.channel.commands.resolveCommandAuthorizedFromAuthorizers,
+          },
+        });
 
       // Track bus handle for metrics callback
       let busHandle: NostrBusHandle | null = null;
+
+      const authorizeSender = createPreCryptoDirectDmAuthorizer({
+        resolveAccess: async (senderPubkey) => await resolveInboundAccess(senderPubkey, ""),
+        issuePairingChallenge: async ({ senderId, reply }) => {
+          await pairing.issueChallenge({
+            senderId,
+            senderIdLine: `Your Nostr pubkey: ${senderId}`,
+            sendPairingReply: reply,
+            onCreated: () => {
+              ctx.log?.debug?.(`[${account.accountId}] nostr pairing request sender=${senderId}`);
+            },
+            onReplyError: (err) => {
+              ctx.log?.warn?.(
+                `[${account.accountId}] nostr pairing reply failed for ${senderId}: ${String(err)}`,
+              );
+            },
+          });
+        },
+        onBlocked: ({ senderId, reason }) => {
+          ctx.log?.debug?.(`[${account.accountId}] blocked Nostr sender ${senderId} (${reason})`);
+        },
+      });
 
       const bus = await startNostrBus({
         accountId: account.accountId,
         privateKey: account.privateKey,
         relays: account.relays,
-        authorizeSender: async ({ senderPubkey, reply }) => {
-          const dmPolicy = account.config.dmPolicy ?? "pairing";
-          const access = await resolveNostrDirectAccess({
-            accountId: account.accountId,
-            dmPolicy,
-            allowFrom: account.config.allowFrom,
-            senderPubkey,
-          });
-          if (access.decision === "allow") {
-            return "allow";
-          }
-          if (access.decision === "pairing") {
-            await pairing.issueChallenge({
-              senderId: senderPubkey,
-              senderIdLine: `Your Nostr pubkey: ${senderPubkey}`,
-              sendPairingReply: reply,
-              onCreated: () => {
-                ctx.log?.debug?.(
-                  `[${account.accountId}] nostr pairing request sender=${senderPubkey}`,
-                );
-              },
-              onReplyError: (err) => {
-                ctx.log?.warn?.(
-                  `[${account.accountId}] nostr pairing reply failed for ${senderPubkey}: ${String(err)}`,
-                );
-              },
-            });
-            return "pairing";
-          }
-          ctx.log?.debug?.(
-            `[${account.accountId}] blocked Nostr sender ${senderPubkey} (${access.reason})`,
-          );
-          return "block";
-        },
+        authorizeSender: async ({ senderPubkey, reply }) =>
+          await authorizeSender({ senderId: senderPubkey, reply }),
         onMessage: async (senderPubkey, text, reply, meta) => {
-          const dmPolicy = account.config.dmPolicy ?? "pairing";
-          const access = await resolveNostrDirectAccess({
-            accountId: account.accountId,
-            dmPolicy,
-            allowFrom: account.config.allowFrom,
-            senderPubkey,
-          });
-          if (access.decision !== "allow") {
+          const resolvedAccess = await resolveInboundAccess(senderPubkey, text);
+          if (resolvedAccess.access.decision !== "allow") {
             ctx.log?.warn?.(
-              `[${account.accountId}] dropping Nostr DM after preflight drift (${senderPubkey}, ${access.reason})`,
+              `[${account.accountId}] dropping Nostr DM after preflight drift (${senderPubkey}, ${resolvedAccess.access.reason})`,
             );
             return;
           }
 
-          const shouldComputeAuth = runtime.channel.commands.shouldComputeCommandAuthorized(
-            text,
-            ctx.cfg,
-          );
-          const senderAllowedForCommands = isNostrSenderAllowed(
-            senderPubkey,
-            access.effectiveAllowFrom,
-          );
-          const commandAuthorized = shouldComputeAuth
-            ? dmPolicy === "open"
-              ? true
-              : resolveCommandAuthorizedFromAuthorizers({
-                  useAccessGroups: ctx.cfg.commands?.useAccessGroups !== false,
-                  authorizers: [
-                    {
-                      configured: access.effectiveAllowFrom.length > 0,
-                      allowed: senderAllowedForCommands,
-                    },
-                  ],
-                  modeWhenAccessGroupsOff: "configured",
-                })
-            : undefined;
-
-          const route = runtime.channel.routing.resolveAgentRoute({
+          await dispatchInboundDirectDmWithRuntime({
             cfg: ctx.cfg,
+            runtime,
             channel: "nostr",
+            channelLabel: "Nostr",
             accountId: account.accountId,
             peer: {
               kind: "direct",
               id: senderPubkey,
             },
-          });
-          const storePath = runtime.channel.session.resolveStorePath(ctx.cfg.session?.store, {
-            agentId: route.agentId,
-          });
-          const body = runtime.channel.reply.formatAgentEnvelope({
-            channel: "Nostr",
-            from: senderPubkey,
+            senderId: senderPubkey,
+            senderAddress: `nostr:${senderPubkey}`,
+            recipientAddress: `nostr:${account.publicKey}`,
+            conversationLabel: senderPubkey,
+            rawBody: text,
+            messageId: meta.eventId,
             timestamp: meta.createdAt * 1000,
-            envelope: runtime.channel.reply.resolveEnvelopeFormatOptions(ctx.cfg),
-            body: text,
-          });
-          const ctxPayload = runtime.channel.reply.finalizeInboundContext({
-            Body: body,
-            BodyForAgent: text,
-            RawBody: text,
-            CommandBody: text,
-            From: `nostr:${senderPubkey}`,
-            To: `nostr:${account.publicKey}`,
-            SessionKey: route.sessionKey,
-            AccountId: route.accountId,
-            ChatType: "direct",
-            ConversationLabel: senderPubkey,
-            SenderId: senderPubkey,
-            Provider: "nostr",
-            Surface: "nostr",
-            MessageSid: meta.eventId,
-            MessageSidFull: meta.eventId,
-            CommandAuthorized: commandAuthorized,
-            OriginatingChannel: "nostr",
-            OriginatingTo: `nostr:${account.publicKey}`,
-          });
-          await runtime.channel.session.recordInboundSession({
-            storePath,
-            sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-            ctx: ctxPayload,
+            commandAuthorized: resolvedAccess.commandAuthorized,
+            deliver: async (payload) => {
+              const outboundText =
+                payload && typeof payload === "object" && "text" in payload
+                  ? String((payload as { text?: string }).text ?? "")
+                  : "";
+              if (!outboundText.trim()) {
+                return;
+              }
+              const tableMode = runtime.channel.text.resolveMarkdownTableMode({
+                cfg: ctx.cfg,
+                channel: "nostr",
+                accountId: account.accountId,
+              });
+              await reply(runtime.channel.text.convertMarkdownTables(outboundText, tableMode));
+            },
             onRecordError: (err) => {
               ctx.log?.error?.(
                 `[${account.accountId}] failed recording Nostr inbound session: ${String(err)}`,
               );
             },
-          });
-
-          const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
-            cfg: ctx.cfg,
-            agentId: route.agentId,
-            channel: "nostr",
-            accountId: route.accountId,
-          });
-          await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-            ctx: ctxPayload,
-            cfg: ctx.cfg,
-            dispatcherOptions: {
-              ...replyPipeline,
-              deliver: async (payload) => {
-                const outboundText =
-                  payload && typeof payload === "object" && "text" in payload
-                    ? String((payload as { text?: string }).text ?? "")
-                    : "";
-                if (!outboundText.trim()) {
-                  return;
-                }
-                const tableMode = runtime.channel.text.resolveMarkdownTableMode({
-                  cfg: ctx.cfg,
-                  channel: "nostr",
-                  accountId: route.accountId,
-                });
-                await reply(runtime.channel.text.convertMarkdownTables(outboundText, tableMode));
-              },
-              onError: (err, info) => {
-                ctx.log?.error?.(
-                  `[${account.accountId}] Nostr ${info.kind} reply failed: ${String(err)}`,
-                );
-              },
-            },
-            replyOptions: {
-              onModelSelected,
+            onDispatchError: (err, info) => {
+              ctx.log?.error?.(
+                `[${account.accountId}] Nostr ${info.kind} reply failed: ${String(err)}`,
+              );
             },
           });
         },

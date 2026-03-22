@@ -8,6 +8,16 @@ export type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js"
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
+export {
+  createDirectDmPreCryptoGuardPolicy,
+  dispatchInboundDirectDmWithRuntime,
+  type DirectDmPreCryptoGuardPolicy,
+  type DirectDmPreCryptoGuardPolicyOverrides,
+} from "./direct-dm.js";
+export {
+  createPreCryptoDirectDmAuthorizer,
+  resolveInboundDirectDmAccessWithRuntime,
+} from "./direct-dm.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { MarkdownConfigSchema } from "../config/zod-schema.core.js";
 export { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";

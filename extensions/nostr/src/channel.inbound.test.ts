@@ -36,6 +36,7 @@ function createRuntimeHarness() {
       commands: {
         shouldComputeCommandAuthorized: vi.fn(() => true),
       },
+      resolveCommandAuthorizedFromAuthorizers: vi.fn(() => true),
       routing: {
         resolveAgentRoute: vi.fn(({ accountId, peer }) => ({
           agentId: "agent-nostr",
@@ -45,6 +46,7 @@ function createRuntimeHarness() {
       },
       session: {
         resolveStorePath: vi.fn(() => "/tmp/nostr-session-store"),
+        readSessionUpdatedAt: vi.fn(() => undefined),
         recordInboundSession,
       },
       reply: {
