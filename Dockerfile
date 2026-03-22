@@ -224,10 +224,10 @@ ENV NODE_ENV=production
 
 # V8 heap limit: Node auto-detects available memory and caps the heap
 # accordingly, but on PaaS containers (Railway, Render, Fly) the detected
-# limit is often too low for the gateway's startup peak (~500 MB).
-# Default to 768 MB so startup succeeds on 1 GB+ containers.
-# Override via the NODE_OPTIONS env var on your hosting platform.
-ENV OPENCLAW_DEFAULT_MAX_OLD_SPACE_SIZE=768
+# limit is often too low for the gateway's startup peak (~800 MB).
+# Default to 1536 MB so startup succeeds comfortably.
+# Override via OPENCLAW_DEFAULT_MAX_OLD_SPACE_SIZE env var on your platform.
+ENV OPENCLAW_DEFAULT_MAX_OLD_SPACE_SIZE=1536
 
 # Security hardening: Run as non-root user
 # The node:24-bookworm image includes a 'node' user (uid 1000)
