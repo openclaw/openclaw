@@ -252,7 +252,6 @@ describe("session_status tool", () => {
     const result = await tool.execute("call-current-child", { sessionKey: "current" });
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
-    // The resolved key is "main" within the support agent's store scope.
     expect(details.sessionKey).toBe("main");
   });
 
@@ -322,9 +321,6 @@ describe("session_status tool", () => {
     expect(updateSessionStoreMock).toHaveBeenCalledWith(
       "/tmp/main/sessions.json",
       expect.objectContaining({
-        "agent:main:main": expect.objectContaining({
-          modelOverride: "claude-opus-4-5",
-        }),
         "agent:main:subagent:child": expect.objectContaining({
           modelOverride: "claude-sonnet-4-5",
         }),

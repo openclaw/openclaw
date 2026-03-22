@@ -123,6 +123,18 @@ function resolveSessionKeyFromSessionId(params: {
   return resolvePreferredSessionKeyForSessionIdMatches(matches, trimmed) ?? null;
 }
 
+function resolveStoreScopedRequesterKey(params: {
+  requesterKey: string;
+  agentId: string;
+  mainKey: string;
+}) {
+  const parsed = parseAgentSessionKey(params.requesterKey);
+  if (!parsed || parsed.agentId !== params.agentId) {
+    return params.requesterKey;
+  }
+  return parsed.rest === params.mainKey ? params.mainKey : params.requesterKey;
+}
+
 async function resolveModelOverride(params: {
   cfg: OpenClawConfig;
   raw: string;
@@ -297,6 +309,11 @@ export function createSessionStatusTool(opts?: {
         : requesterAgentId;
       let storePath = resolveStorePath(cfg.session?.store, { agentId });
       let store = loadSessionStore(storePath);
+      let storeScopedRequesterKey = resolveStoreScopedRequesterKey({
+        requesterKey: effectiveRequesterKey,
+        agentId,
+        mainKey,
+      });
 
       // Resolve against the requester-scoped store first to avoid leaking default agent data.
       let resolved = resolveSessionEntry({
@@ -304,7 +321,7 @@ export function createSessionStatusTool(opts?: {
         keyRaw: requestedKeyRaw,
         alias,
         mainKey,
-        requesterInternalKey: effectiveRequesterKey,
+        requesterInternalKey: storeScopedRequesterKey,
         includeAliasFallback: requestedKeyRaw !== "current",
       });
 
@@ -324,12 +341,17 @@ export function createSessionStatusTool(opts?: {
           agentId = resolveAgentIdFromSessionKey(resolvedKey);
           storePath = resolveStorePath(cfg.session?.store, { agentId });
           store = loadSessionStore(storePath);
+          storeScopedRequesterKey = resolveStoreScopedRequesterKey({
+            requesterKey: effectiveRequesterKey,
+            agentId,
+            mainKey,
+          });
           resolved = resolveSessionEntry({
             store,
             keyRaw: requestedKeyRaw,
             alias,
             mainKey,
-            requesterInternalKey: effectiveRequesterKey,
+            requesterInternalKey: storeScopedRequesterKey,
           });
         }
       }
@@ -340,7 +362,7 @@ export function createSessionStatusTool(opts?: {
           keyRaw: requestedKeyRaw,
           alias,
           mainKey,
-          requesterInternalKey: effectiveRequesterKey,
+          requesterInternalKey: storeScopedRequesterKey,
           includeAliasFallback: true,
         });
       }
