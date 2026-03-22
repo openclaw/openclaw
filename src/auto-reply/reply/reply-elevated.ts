@@ -186,6 +186,13 @@ export function resolveElevatedPermissions(params: {
   if (!enabled) {
     return { enabled, allowed: false, failures };
   }
+  if (params.cfg.privateMode?.enabled && params.cfg.privateMode?.execution?.disableElevatedExec) {
+    failures.push({
+      gate: "privateMode",
+      key: "privateMode.execution.disableElevatedExec",
+    });
+    return { enabled: false, allowed: false, failures };
+  }
   if (!params.provider) {
     failures.push({ gate: "provider", key: "ctx.Provider" });
     return { enabled, allowed: false, failures };

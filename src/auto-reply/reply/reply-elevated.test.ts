@@ -88,4 +88,28 @@ describe("resolveElevatedPermissions", () => {
       },
     });
   });
+
+  it("denies elevated exec when privateMode disables it", () => {
+    const result = resolveElevatedPermissions({
+      cfg: {
+        ...buildConfig(["+15550001111"]),
+        privateMode: {
+          enabled: true,
+          execution: {
+            disableElevatedExec: true,
+          },
+        },
+      },
+      agentId: "main",
+      provider: "whatsapp",
+      ctx: buildContext(),
+    });
+
+    expect(result.enabled).toBe(false);
+    expect(result.allowed).toBe(false);
+    expect(result.failures).toContainEqual({
+      gate: "privateMode",
+      key: "privateMode.execution.disableElevatedExec",
+    });
+  });
 });
