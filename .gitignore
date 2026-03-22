@@ -85,6 +85,9 @@ docs/.local/
 tmp/
 IDENTITY.md
 USER.md
+# Allow template files (blink-claw agent templates) even if the basename is otherwise ignored
+!templates/**/IDENTITY.md
+!templates/**/USER.md
 .tgz
 .idea
 
