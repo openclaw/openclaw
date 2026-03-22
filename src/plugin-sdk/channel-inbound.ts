@@ -4,6 +4,12 @@ export {
   resolveInboundDebounceMs,
 } from "../auto-reply/inbound-debounce.js";
 export {
+  createDirectDmPreCryptoGuardPolicy,
+  dispatchInboundDirectDmWithRuntime,
+  type DirectDmPreCryptoGuardPolicy,
+  type DirectDmPreCryptoGuardPolicyOverrides,
+} from "./direct-dm.js";
+export {
   formatInboundEnvelope,
   formatInboundFromLabel,
   resolveEnvelopeFormatOptions,
