@@ -60,9 +60,17 @@ export type { OpenClawConfig as ClawdbotConfig } from "../config/config.js";
 export * from "./image-generation.js";
 export type { SecretInput, SecretRef } from "../config/types.secrets.js";
 export type { RuntimeEnv } from "../runtime.js";
+export type { WizardPrompter } from "../wizard/prompts.js";
+export type { NativeCommandSpec } from "../auto-reply/commands-registry.js";
+export { listNativeCommandSpecs, listNativeCommandSpecsForConfig } from "./native-command-specs.js";
+export type { SkillCommandSpec } from "../agents/skills.js";
+export {
+  listSkillCommandsForAgents,
+  listSkillCommandsForWorkspace,
+} from "../auto-reply/skill-commands.js";
+export { getPluginCommandSpecs } from "../plugins/commands.js";
 export type { HookEntry } from "../hooks/types.js";
 export type { ReplyPayload } from "../auto-reply/types.js";
-export type { WizardPrompter } from "../wizard/prompts.js";
 export type { ContextEngineFactory } from "../context-engine/registry.js";
 export type { DiagnosticEventPayload } from "../infra/diagnostic-events.js";
 export type {
