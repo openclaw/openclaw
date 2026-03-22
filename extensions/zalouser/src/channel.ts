@@ -1,9 +1,6 @@
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
-import {
-  createPairingPrefixStripper,
-  createTextPairingAdapter,
-} from "openclaw/plugin-sdk/channel-pairing";
+import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createEmptyChannelResult,
   createRawChannelSendResultAdapter,
@@ -498,21 +495,23 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
     threading: {
       resolveReplyToMode: createStaticReplyToModeResolver("off"),
     },
-    pairing: createTextPairingAdapter({
-      idLabel: "zalouserUserId",
-      message: "Your pairing request has been approved.",
-      normalizeAllowEntry: createPairingPrefixStripper(/^(zalouser|zlu):/i),
-      notify: async ({ cfg, id, message }) => {
-        const account = resolveZalouserAccountSync({ cfg: cfg });
-        const authenticated = await checkZcaAuthenticated(account.profile);
-        if (!authenticated) {
-          throw new Error("Zalouser not authenticated");
-        }
-        await sendMessageZalouser(id, message, {
-          profile: account.profile,
-        });
+    pairing: {
+      text: {
+        idLabel: "zalouserUserId",
+        message: "Your pairing request has been approved.",
+        normalizeAllowEntry: createPairingPrefixStripper(/^(zalouser|zlu):/i),
+        notify: async ({ cfg, id, message }) => {
+          const account = resolveZalouserAccountSync({ cfg: cfg });
+          const authenticated = await checkZcaAuthenticated(account.profile);
+          if (!authenticated) {
+            throw new Error("Zalouser not authenticated");
+          }
+          await sendMessageZalouser(id, message, {
+            profile: account.profile,
+          });
+        },
       },
-    }),
+    },
     outbound: {
       deliveryMode: "direct",
       chunker: (text, limit) => getZalouserRuntime().channel.text.chunkMarkdownText(text, limit),
