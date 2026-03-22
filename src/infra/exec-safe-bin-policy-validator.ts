@@ -127,7 +127,10 @@ function validatePositionalCount(positional: string[], profile: SafeBinProfile):
   if (positional.length < minPositional) {
     return false;
   }
-  return typeof profile.maxPositional !== "number" || positional.length <= profile.maxPositional;
+  if (typeof profile.maxPositional === "number" && positional.length > profile.maxPositional) {
+    return false;
+  }
+  return profile.positionalValidator?.(positional) ?? true;
 }
 
 export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): boolean {

@@ -44,6 +44,21 @@ describe("exec safe bin policy grep", () => {
   });
 });
 
+describe("exec safe bin policy jq", () => {
+  const jqProfile = SAFE_BIN_PROFILES.jq;
+
+  it("allows normal jq field filters", () => {
+    expect(validateSafeBinArgv([".foo"], jqProfile)).toBe(true);
+    expect(validateSafeBinArgv([".env"], jqProfile)).toBe(true);
+  });
+
+  it("blocks jq env builtin filters in safe-bin mode", () => {
+    expect(validateSafeBinArgv(["env"], jqProfile)).toBe(false);
+    expect(validateSafeBinArgv(["env.FOO"], jqProfile)).toBe(false);
+    expect(validateSafeBinArgv([".foo | env"], jqProfile)).toBe(false);
+  });
+});
+
 describe("exec safe bin policy sort", () => {
   const sortProfile = SAFE_BIN_PROFILES.sort;
 
