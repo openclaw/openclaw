@@ -2052,6 +2052,11 @@ install_openclaw() {
     if [[ "${OPENCLAW_VERSION}" == "latest" && "${package_name}" == "openclaw" ]]; then
         if ! resolve_openclaw_bin &> /dev/null; then
             ui_warn "npm install openclaw@latest failed; retrying openclaw@next"
+            # Remove any bin symlink left by the earlier ensure_openclaw_bin_link
+            # so cleanup_npm_openclaw_paths + the @next install don't hit EEXIST.
+            local npm_bin_dir
+            npm_bin_dir="$(npm bin -g 2>/dev/null || true)"
+            [[ -n "$npm_bin_dir" && -L "${npm_bin_dir}/openclaw" ]] && rm -f "${npm_bin_dir}/openclaw"
             cleanup_npm_openclaw_paths
             install_openclaw_npm "openclaw@next"
             ensure_openclaw_bin_link || true
