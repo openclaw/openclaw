@@ -23,6 +23,7 @@ import ai.openclaw.app.isCanonicalMainSessionKey
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -104,7 +105,7 @@ class TalkModeManager(
   private val playbackGeneration = AtomicLong(0L)
 
   private var ttsJob: Job? = null
-  private var player: MediaPlayer? = null
+  private val player = AtomicReference<MediaPlayer?>(null)
   @Volatile private var finalizeInFlight = false
   private var listenWatchdogJob: Job? = null
 
@@ -763,7 +764,7 @@ class TalkModeManager(
     try {
       withContext(Dispatchers.IO) { tempFile.writeBytes(audioBytes) }
       val player = MediaPlayer()
-      this.player = player
+      this.player.set(player)
       val finished = CompletableDeferred<Unit>()
       player.setAudioAttributes(
         AudioAttributes.Builder()
@@ -821,7 +822,7 @@ class TalkModeManager(
       return
     }
     if (resetInterrupt) {
-      val currentMs = player?.currentPosition?.toDouble() ?: 0.0
+      val currentMs = player.get()?.currentPosition?.toDouble() ?: 0.0
       lastInterruptedAtSeconds = currentMs / 1000.0
     }
     cleanupPlayer()
@@ -865,9 +866,12 @@ class TalkModeManager(
   }
 
   private fun cleanupPlayer() {
-    player?.stop()
-    player?.release()
-    player = null
+    // Atomically take ownership so concurrent callers don't double-release
+    val p = player.getAndSet(null) ?: return
+    try {
+      p.stop()
+    } catch (_: IllegalStateException) {}
+    p.release()
   }
 
   private fun shouldInterrupt(transcript: String): Boolean {
