@@ -194,6 +194,7 @@ beforeEach(() => {
   createDiscordDraftStream.mockClear();
   dispatchInboundMessage.mockClear();
   recordInboundSession.mockClear();
+  typingMocks.sendTyping.mockClear();
   readSessionUpdatedAt.mockClear();
   resolveStorePath.mockClear();
   dispatchInboundMessage.mockResolvedValue(createNoQueuedDispatchResult());
@@ -384,6 +385,24 @@ describe("processDiscordMessage ack reactions", () => {
     const emojis = getReactionEmojis();
     expect(emojis).toContain("🟦");
     expect(emojis).toContain("🏁");
+  });
+
+  it("suppresses typing for PluralKit messages in bound sessions", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onReasoningStream?.();
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createBaseContext({
+      sender: { label: "pk", isPluralKit: true },
+      boundSessionKey: "agent:main:discord:thread:thread-1",
+      threadChannel: { id: "thread-1" },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(typingMocks.sendTyping).not.toHaveBeenCalled();
   });
 
   it("shows compacting reaction during auto-compaction and resumes thinking", async () => {

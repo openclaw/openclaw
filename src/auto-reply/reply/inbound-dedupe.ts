@@ -122,7 +122,7 @@ function buildDiscordThreadContentCloneDedupeKey(ctx: MsgContext): string | null
 
 export function shouldSkipDuplicateInbound(
   ctx: MsgContext,
-  opts?: { cache?: DedupeCache; now?: number },
+  opts?: { cache?: DedupeCache; cloneCache?: DedupeCache; now?: number },
 ): boolean {
   const key = buildInboundDedupeKey(ctx);
   if (key) {
@@ -139,7 +139,8 @@ export function shouldSkipDuplicateInbound(
   if (!contentCloneKey) {
     return false;
   }
-  const skippedClone = inboundDiscordThreadContentCloneCache.check(contentCloneKey, opts?.now);
+  const cloneCache = opts?.cloneCache ?? inboundDiscordThreadContentCloneCache;
+  const skippedClone = cloneCache.check(contentCloneKey, opts?.now);
   if (skippedClone && shouldLogVerbose()) {
     logVerbose(`inbound dedupe: skipped discord thread content clone ${contentCloneKey}`);
   }

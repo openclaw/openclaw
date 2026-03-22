@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../../test/helpers/import-fresh.js";
+import type { DedupeCache } from "../../infra/dedupe.js";
 import type { MsgContext } from "../templating.js";
 import { resetInboundDedupe, shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 
@@ -95,5 +96,29 @@ describe("inbound dedupe", () => {
         { now: 102 },
       ),
     ).toBe(false);
+  });
+
+  it("supports overriding the content-clone cache separately", () => {
+    const first: MsgContext = {
+      Provider: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:c1",
+      SessionKey: "agent:main:discord:channel:c1",
+      MessageThreadId: "thread-1",
+      MessageSid: "msg-1",
+      BodyForCommands: "same body",
+    };
+    const second: MsgContext = {
+      ...first,
+      MessageSid: "msg-2",
+    };
+    const cloneCache: DedupeCache = {
+      check: vi.fn((key: string) => key.endsWith("same body")),
+      clear: vi.fn(),
+    };
+
+    expect(shouldSkipDuplicateInbound(first, { now: 100, cloneCache })).toBe(true);
+    expect(cloneCache.check).toHaveBeenCalled();
+    expect(shouldSkipDuplicateInbound(second, { now: 101, cache: cloneCache, cloneCache })).toBe(true);
   });
 });
