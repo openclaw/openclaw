@@ -74,7 +74,8 @@
 
 ## Session Notes
 
-- Write daily log to memory/YYYY-MM-DD.md.
+**MANDATORY write-back at end of every substantive session (>5 messages):** Write `memory/YYYY-MM-DD.md` before your final reply. No exceptions.
+
 - Keep entries short: what happened, what was decided, what is pending.
 - Do not write secrets to memory files.
 
