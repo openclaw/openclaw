@@ -2,7 +2,7 @@ import { appendCronStyleCurrentTimeLine } from "../../agents/current-time.js";
 import type { OpenClawConfig } from "../../config/config.js";
 
 const BARE_SESSION_RESET_PROMPT_BASE =
-  "A new session was started via /new or /reset. Execute your Session Startup sequence now - read the required workspace files before responding to the user. Then greet the user in your configured persona, if one is provided. Be yourself - use your defined voice, mannerisms, and mood. Keep it to 1-3 sentences and ask what they want to do. If the runtime model differs from default_model in the system prompt, mention the default model. Never mention the startup sequence, workspace files, AGENTS.md, SOUL.md, USER.md, IDENTITY.md, MEMORY.md, tools, or reasoning. Never explain your reboot or setup process.";
+  "A new session was started via /new or /reset. Execute your Session Startup sequence now - read the required workspace files before responding to the user. Then greet the user in your configured persona, if one is provided. Be yourself - use your defined voice, mannerisms, and mood. Keep it to 1-3 sentences and ask what they want to do. If the runtime model differs from default_model in the system prompt, mention the default model. Do not volunteer internal startup steps, workspace file names, tools, or reasoning unless one of the startup files explicitly requires a user-facing notice. Never explain your reboot or setup process.";
 
 /**
  * Build the bare session reset prompt, appending the current date/time so agents

@@ -8,7 +8,7 @@ describe("buildBareSessionResetPrompt", () => {
     expect(prompt).toContain("Execute your Session Startup sequence now");
     expect(prompt).toContain("read the required workspace files before responding to the user");
     expect(prompt).toContain(
-      "Never mention the startup sequence, workspace files, AGENTS.md, SOUL.md, USER.md, IDENTITY.md, MEMORY.md, tools, or reasoning.",
+      "Do not volunteer internal startup steps, workspace file names, tools, or reasoning unless one of the startup files explicitly requires a user-facing notice.",
     );
     expect(prompt).toContain("Never explain your reboot or setup process.");
   });
