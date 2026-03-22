@@ -82,8 +82,8 @@ import {
 } from "./events.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { GATEWAY_CLIENT_IDS } from "./protocol/client-info.js";
-import { startGatewayModelPricingRefresh } from "./model-pricing-cache.js";
 import { isWebchatClient } from "../utils/message-channel.js";
+import { startGatewayModelPricingRefresh } from "./model-pricing-cache.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
@@ -1093,8 +1093,8 @@ export async function startGatewayServer(
         // and actively displaying the approval popup. Recognize control-ui and webchat
         // clients by their client identity instead.
         if (
-          gatewayClient.connect.clientId === GATEWAY_CLIENT_IDS.CONTROL_UI ||
-          isWebchatClient(gatewayClient.connect)
+          gatewayClient.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI ||
+          isWebchatClient(gatewayClient.connect.client)
         ) {
           return true;
         }
