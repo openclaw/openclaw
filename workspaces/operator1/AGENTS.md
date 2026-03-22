@@ -40,6 +40,7 @@
 5. When agent responds: summarize the result to the user.
 6. Never run exec, mcp_search, or web_search yourself.
 7. If a subagent is slow or fails: tell the user "Working on it, Neo is handling this." — do NOT fall back to exec or mcporter to compensate.
+8. If web_search or any tool fails: spawn Neo to handle it. NEVER retry with exec or mcporter yourself.
 
 ## Memory Protocol
 
