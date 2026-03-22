@@ -524,6 +524,39 @@ describe("createGigachatStreamFn tool calling", () => {
     );
   });
 
+  it("stops waiting on token refresh when the request signal is aborted", async () => {
+    initialAccessToken = undefined;
+    const controller = new AbortController();
+    updateToken.mockImplementationOnce(
+      async function (this: { _accessToken?: { access_token: string } }) {
+        await new Promise<void>((resolve) => {
+          controller.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        this._accessToken = { access_token: "late-token" };
+      },
+    );
+
+    const streamFn = createGigachatStreamFn({
+      baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+      authMode: "oauth",
+    });
+
+    const stream = await streamFn(
+      { api: "gigachat", provider: "gigachat", id: "GigaChat-2-Max" } as never,
+      { messages: [], tools: [] } as never,
+      { apiKey: "token", signal: controller.signal } as never,
+    );
+    queueMicrotask(() => controller.abort());
+
+    await expect(stream.result()).resolves.toMatchObject({
+      stopReason: "error",
+      errorMessage: "Operation aborted",
+    });
+
+    expect(updateToken).toHaveBeenCalledTimes(1);
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("prefers the resolved GigaChat baseUrl over the env override", async () => {
     vi.stubEnv("GIGACHAT_BASE_URL", "https://env-host.example/api/v1");
     request.mockResolvedValueOnce({

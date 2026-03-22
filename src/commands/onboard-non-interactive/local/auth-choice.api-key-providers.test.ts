@@ -24,9 +24,15 @@ vi.mock("../../../agents/auth-profiles.js", () => ({
 }));
 
 const applyAuthProfileConfig = vi.hoisted(() => vi.fn((cfg: OpenClawConfig) => cfg));
-vi.mock("../../../plugins/provider-auth-helpers.js", () => ({
-  applyAuthProfileConfig,
-}));
+vi.mock("../../../plugins/provider-auth-helpers.js", async () => {
+  const actual = await vi.importActual<typeof import("../../../plugins/provider-auth-helpers.js")>(
+    "../../../plugins/provider-auth-helpers.js",
+  );
+  return {
+    ...actual,
+    applyAuthProfileConfig,
+  };
+});
 
 const setGigachatApiKey = vi.hoisted(() => vi.fn(async () => {}));
 const setLitellmApiKey = vi.hoisted(() => vi.fn(async () => {}));
@@ -418,6 +424,46 @@ describe("applySimpleNonInteractiveApiKeyChoice", () => {
             gigachat: {
               baseUrl: "https://preview-basic.gigachat.example/api/v1",
               api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      opts: { token: "gigachat-oauth-credentials" } as never,
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() } as never,
+      agentDir,
+      apiKeyStorageOptions: undefined,
+      resolveApiKey,
+      maybeSetResolvedApiKey,
+    });
+
+    expect(applyGigachatConfig).toHaveBeenCalledWith(expect.any(Object), {
+      baseUrl: GIGACHAT_BASE_URL,
+    });
+  });
+
+  it("resets the GigaChat provider base URL when replacing config-backed Basic auth", async () => {
+    const agentDir = "/tmp/openclaw-agents/work/agent";
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    const resolveApiKey = vi.fn(async () => ({
+      key: "gigachat-oauth-credentials",
+      source: "flag" as const,
+    }));
+    const maybeSetResolvedApiKey = vi.fn(async (resolved, setter) => {
+      await setter(resolved.key);
+      return true;
+    });
+
+    await applySimpleNonInteractiveApiKeyChoice({
+      authChoice: "gigachat-oauth",
+      nextConfig,
+      baseConfig: {
+        models: {
+          providers: {
+            gigachat: {
+              api: "openai-completions",
+              apiKey: "basic-user:basic-pass",
+              baseUrl: "https://preview-basic.gigachat.example/api/v1",
               models: [],
             },
           },

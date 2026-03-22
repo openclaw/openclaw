@@ -2,8 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
+import {
+  loadAuthProfileStoreForSecretsRuntime,
+  resolveAuthProfileOrder,
+} from "../agents/auth-profiles.js";
 import { upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
-import { normalizeProviderIdForAuth } from "../agents/provider-id.js";
+import { resolveGigachatAuthMode } from "../agents/gigachat-auth.js";
+import { findNormalizedProviderValue, normalizeProviderIdForAuth } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -170,6 +175,33 @@ export function applyAuthProfileConfig(
       ...(order ? { order } : {}),
     },
   };
+}
+
+export function shouldResetGigachatBaseUrlForOAuthReauth(params: {
+  cfg: OpenClawConfig;
+  agentDir?: string;
+}): boolean {
+  const store = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
+  const activeProfileId = resolveAuthProfileOrder({
+    cfg: params.cfg,
+    store,
+    provider: "gigachat",
+  })[0];
+  const activeProfile = activeProfileId ? store.profiles[activeProfileId] : undefined;
+  if (
+    activeProfile?.type === "api_key" &&
+    activeProfile.provider === "gigachat" &&
+    activeProfile.metadata?.authMode === "basic"
+  ) {
+    return true;
+  }
+
+  // When no GigaChat auth profile is active, onboarding can still be replacing a
+  // manual config-backed Basic setup (`models.providers.gigachat.apiKey/baseUrl`).
+  const configuredProvider = findNormalizedProviderValue(params.cfg.models?.providers, "gigachat");
+  const configuredApiKey =
+    typeof configuredProvider?.apiKey === "string" ? configuredProvider.apiKey.trim() : undefined;
+  return activeProfile == null && resolveGigachatAuthMode({ apiKey: configuredApiKey }) === "basic";
 }
 
 /** Resolve real path, returning null if the target doesn't exist. */

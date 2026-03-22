@@ -20,6 +20,7 @@ interface ExtendedChatCompletionChunk extends ChatCompletionChunk {
   };
 }
 import https from "node:https";
+import { throwIfAborted } from "../infra/outbound/abort.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 export type GigachatAuthMode = "oauth" | "basic";
@@ -577,24 +578,67 @@ export function extractGigaChatErrorMessage(err: unknown): string {
 const MAX_RETRIES = 3;
 const INITIAL_BACKOFF_MS = 1000;
 
+function raceWithAbortSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  throwIfAborted(signal);
+  if (!signal) {
+    return promise;
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      cleanup();
+      const err = new Error("Operation aborted");
+      err.name = "AbortError";
+      reject(err);
+    };
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
+
+async function sleepWithAbortSignal(ms: number, signal?: AbortSignal): Promise<void> {
+  await raceWithAbortSignal(
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, ms);
+    }),
+    signal,
+  );
+}
+
 async function withRetry<T>(
   operation: () => Promise<T>,
   operationName: string,
   maxRetries = MAX_RETRIES,
+  signal?: AbortSignal,
 ): Promise<T> {
   let lastError: Error | undefined;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      return await operation();
+      throwIfAborted(signal);
+      // The GigaChat SDK does not accept an AbortSignal for token refresh, so
+      // we race the refresh promise against the turn abort to stop waiting.
+      return await raceWithAbortSignal(operation(), signal);
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(extractGigaChatErrorMessage(err));
+      if (lastError.name === "AbortError") {
+        throw lastError;
+      }
       if (attempt < maxRetries) {
         const backoffMs = INITIAL_BACKOFF_MS * Math.pow(2, attempt - 1);
         log.warn(
           `GigaChat ${operationName} failed (attempt ${attempt}/${maxRetries}): ${extractGigaChatErrorMessage(lastError)}. ` +
             `Retrying in ${backoffMs}ms...`,
         );
-        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+        await sleepWithAbortSignal(backoffMs, signal);
       }
     }
   }
@@ -630,13 +674,16 @@ function getGigachatAccessToken(client: GigachatRuntimeClient): string | undefin
   return client._accessToken?.access_token?.trim() || undefined;
 }
 
-async function ensureGigachatAccessToken(client: GigachatRuntimeClient): Promise<string> {
+async function ensureGigachatAccessToken(
+  client: GigachatRuntimeClient,
+  signal?: AbortSignal,
+): Promise<string> {
   const accessToken = getGigachatAccessToken(client);
   if (accessToken) {
     return accessToken;
   }
 
-  await withRetry(() => client.updateToken(), "token refresh");
+  await withRetry(() => client.updateToken(), "token refresh", MAX_RETRIES, signal);
 
   const refreshedToken = getGigachatAccessToken(client);
   if (!refreshedToken) {
@@ -982,7 +1029,7 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
 
         const axiosClient = client._client;
         const sendChatCompletionsRequest = async (): Promise<GigachatTransportResponse> => {
-          const accessToken = await ensureGigachatAccessToken(client);
+          const accessToken = await ensureGigachatAccessToken(client, options?.signal);
           return axiosClient.request({
             method: "POST",
             url: "/chat/completions",
@@ -1006,7 +1053,7 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
             `GigaChat request ${requestId}: received 401 from chat endpoint, refreshing token and retrying`,
           );
           resetGigachatAccessToken(client);
-          await ensureGigachatAccessToken(client);
+          await ensureGigachatAccessToken(client, options?.signal);
           response = await sendChatCompletionsRequest();
         }
 

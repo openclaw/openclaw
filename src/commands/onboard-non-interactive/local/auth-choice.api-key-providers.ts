@@ -1,11 +1,10 @@
-import {
-  loadAuthProfileStoreForSecretsRuntime,
-  resolveAuthProfileOrder,
-} from "../../../agents/auth-profiles.js";
 import { resolveGigachatAuthMode } from "../../../agents/gigachat-auth.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
-import { applyAuthProfileConfig } from "../../../plugins/provider-auth-helpers.js";
+import {
+  applyAuthProfileConfig,
+  shouldResetGigachatBaseUrlForOAuthReauth,
+} from "../../../plugins/provider-auth-helpers.js";
 import { setGigachatApiKey, setLitellmApiKey } from "../../../plugins/provider-auth-storage.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { applyGigachatConfig } from "../../onboard-auth.config-core.js";
@@ -23,17 +22,6 @@ type ResolvedNonInteractiveApiKey = {
   profileId?: string;
   metadata?: Record<string, string>;
 };
-
-function hasActiveGigachatBasicProfile(cfg: OpenClawConfig, agentDir?: string): boolean {
-  const store = loadAuthProfileStoreForSecretsRuntime(agentDir);
-  const activeProfileId = resolveAuthProfileOrder({ cfg, store, provider: "gigachat" })[0];
-  const profile = activeProfileId ? store.profiles[activeProfileId] : undefined;
-  return (
-    profile?.type === "api_key" &&
-    profile.provider === "gigachat" &&
-    profile.metadata?.authMode === "basic"
-  );
-}
 
 async function applyGigachatNonInteractiveApiKeyChoice(params: {
   nextConfig: OpenClawConfig;
@@ -57,7 +45,10 @@ async function applyGigachatNonInteractiveApiKeyChoice(params: {
     setter: (value: SecretInput) => Promise<void> | void,
   ) => Promise<boolean>;
 }): Promise<OpenClawConfig | null> {
-  const resetGigachatBaseUrl = hasActiveGigachatBasicProfile(params.baseConfig, params.agentDir);
+  const resetGigachatBaseUrl = shouldResetGigachatBaseUrlForOAuthReauth({
+    cfg: params.baseConfig,
+    agentDir: params.agentDir,
+  });
   const resolved = await params.resolveApiKey({
     provider: "gigachat",
     cfg: params.baseConfig,
