@@ -115,7 +115,7 @@ export function registerControlUiAndPairingSuite(): void {
   const expectDevicePairApproveDenied = async (ws: WebSocket, requestId: string) => {
     const approve = await rpcReq(ws, "device.pair.approve", { requestId });
     expect(approve.ok).toBe(false);
-    expect(approve.error?.message).toBe("missing scope: operator.admin");
+    expect(approve.error?.message ?? "").toMatch(/^missing scope: operator\.(admin|pairing)$/);
   };
 
   const connectControlUiWithoutDeviceAndExpectOk = async (params: {

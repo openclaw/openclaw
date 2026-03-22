@@ -96,6 +96,7 @@ type DevicePairingStateFile = {
 };
 
 const PENDING_TTL_MS = 5 * 60 * 1000;
+const OPERATOR_SCOPE_PREFIX = "operator.";
 
 const withLock = createAsyncLock();
 
@@ -397,6 +398,15 @@ export async function requestDevicePairing(
       }
     }
     if (pendingForDevice.length > 0) {
+      const mergedRoles = mergeRoles(
+        ...pendingForDevice.flatMap((pending) => [pending.roles, pending.role]),
+        req.roles,
+        req.role,
+      );
+      const mergedScopes = mergeScopes(
+        ...pendingForDevice.map((pending) => pending.scopes),
+        req.scopes,
+      );
       for (const pending of pendingForDevice) {
         delete state.pendingById[pending.requestId];
       }
@@ -405,6 +415,9 @@ export async function requestDevicePairing(
         isRepair,
         req: {
           ...req,
+          role: normalizeRole(req.role) ?? latestPending?.role,
+          roles: mergedRoles,
+          scopes: mergedScopes,
           // Preserve interactive visibility when superseding pending requests:
           // if any previous pending request was interactive, keep this one interactive.
           silent: resolveSupersededPendingSilent({
@@ -456,9 +469,12 @@ export async function approveDevicePairing(
     }
     const approvalRole = resolvePendingApprovalRole(pending);
     if (approvalRole && options?.callerScopes) {
+      const requestedOperatorScopes = normalizeDeviceAuthScopes(pending.scopes).filter((scope) =>
+        scope.startsWith(OPERATOR_SCOPE_PREFIX),
+      );
       const missingScope = resolveMissingRequestedScope({
         role: approvalRole,
-        requestedScopes: normalizeDeviceAuthScopes(pending.scopes),
+        requestedScopes: requestedOperatorScopes,
         allowedScopes: options.callerScopes,
       });
       if (missingScope) {
