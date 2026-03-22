@@ -146,7 +146,7 @@ describe("memory watcher config", () => {
     expect(ignored?.(path.join(workspaceDir, "memory", "NOTES.MD"), fakeFileStats)).toBe(false);
   });
 
-  it("watches multimodal extensions with case-insensitive globs", async () => {
+  it("watches multimodal extensions via directory + ignored callback", async () => {
     await setupWatcherWorkspace({ name: "PHOTO.PNG", contents: "png" });
     const cfg = createWatcherConfig({
       provider: "gemini",
@@ -158,15 +158,26 @@ describe("memory watcher config", () => {
     await expectWatcherManager(cfg);
 
     expect(watchMock).toHaveBeenCalledTimes(1);
-    const [watchedPaths] = watchMock.mock.calls[0] as unknown as [
+    const [watchedPaths, options] = watchMock.mock.calls[0] as unknown as [
       string[],
       Record<string, unknown>,
     ];
-    expect(watchedPaths).toEqual(
-      expect.arrayContaining([
-        path.join(extraDir, "**", "*.[pP][nN][gG]"),
-        path.join(extraDir, "**", "*.[wW][aA][vV]"),
-      ]),
-    );
+    // chokidar v4+ removed glob support — extraPaths directories are watched
+    // directly, and the ignored callback allows multimodal extensions through.
+    expect(watchedPaths).toEqual(expect.arrayContaining([extraDir]));
+
+    const ignored = options.ignored as
+      | ((watchPath: string, stats?: import("fs").Stats) => boolean)
+      | undefined;
+    expect(ignored).toBeTypeOf("function");
+    const fakeFileStats = { isFile: () => true } as import("fs").Stats;
+    // Multimodal image/audio files should NOT be ignored.
+    expect(ignored?.(path.join(extraDir, "photo.png"), fakeFileStats)).toBe(false);
+    expect(ignored?.(path.join(extraDir, "PHOTO.PNG"), fakeFileStats)).toBe(false);
+    expect(ignored?.(path.join(extraDir, "audio.wav"), fakeFileStats)).toBe(false);
+    // Non-multimodal, non-.md files should still be ignored.
+    expect(ignored?.(path.join(extraDir, "data.json"), fakeFileStats)).toBe(true);
+    // .md files should also pass through.
+    expect(ignored?.(path.join(extraDir, "notes.md"), fakeFileStats)).toBe(false);
   });
 });
