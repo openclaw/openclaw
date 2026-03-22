@@ -122,9 +122,8 @@ export function registerDefaultAuthTokenSuite(): void {
       delete process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
       delete process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
       try {
-        const { DEFAULT_HANDSHAKE_TIMEOUT_MS, LOOPBACK_HANDSHAKE_TIMEOUT_MS } = await import(
-          "./server-constants.js"
-        );
+        const { DEFAULT_HANDSHAKE_TIMEOUT_MS, LOOPBACK_HANDSHAKE_TIMEOUT_MS } =
+          await import("./server-constants.js");
         expect(getHandshakeTimeoutMs()).toBe(DEFAULT_HANDSHAKE_TIMEOUT_MS);
         expect(getHandshakeTimeoutMs({ isLoopback: true })).toBe(LOOPBACK_HANDSHAKE_TIMEOUT_MS);
       } finally {

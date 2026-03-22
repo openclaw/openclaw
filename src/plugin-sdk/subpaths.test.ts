@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -58,8 +58,27 @@ const representativeRuntimeSmokeSubpaths = [
   "webhook-ingress",
 ] as const;
 
+function resolvePluginSdkRuntimeImportHref(specifier: string): string {
+  try {
+    return pathToFileURL(requireFromHere.resolve(specifier)).href;
+  } catch (error) {
+    const packagePrefix = "openclaw/plugin-sdk/";
+    if (!specifier.startsWith(packagePrefix)) {
+      throw error;
+    }
+    const sourceSubpath = specifier.slice(packagePrefix.length);
+    const sourcePath = resolve(PLUGIN_SDK_DIR, `${sourceSubpath}.ts`);
+    // Unit tests run without a required dist build. `pnpm check` separately
+    // verifies the compiled plugin-sdk artifacts, so fall back to source here.
+    if (existsSync(sourcePath)) {
+      return pathToFileURL(sourcePath).href;
+    }
+    throw error;
+  }
+}
+
 const importResolvedPluginSdkSubpath = async (specifier: string) =>
-  import(pathToFileURL(requireFromHere.resolve(specifier)).href);
+  import(resolvePluginSdkRuntimeImportHref(specifier));
 
 function readPluginSdkSource(subpath: string): string {
   const file = resolve(PLUGIN_SDK_DIR, `${subpath}.ts`);
