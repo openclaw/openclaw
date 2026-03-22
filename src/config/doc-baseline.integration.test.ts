@@ -90,7 +90,7 @@ describe("config doc baseline integration", () => {
       kind: "core",
       sensitive: true,
     });
-    expect(byPath.get("channels.telegram.botToken")).toMatchObject({
+    expect(byPath.get("channels.discord.token")).toMatchObject({
       kind: "channel",
       sensitive: true,
     });
