@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
-import { createRuntimeEnv } from "../../../../test/helpers/extensions/runtime-env.js";
+import { createNonExitingTypedRuntimeEnv } from "../../../../test/helpers/extensions/runtime-env.js";
 
 const { resolveDiscordChannelAllowlistMock, resolveDiscordUserAllowlistMock } = vi.hoisted(() => ({
   resolveDiscordChannelAllowlistMock: vi.fn(
@@ -36,7 +36,7 @@ import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
 
 describe("resolveDiscordAllowlistConfig", () => {
   it("canonicalizes resolved user names to ids in runtime config", async () => {
-    const runtime = createRuntimeEnv({ throwOnExit: false }) as unknown as RuntimeEnv;
+    const runtime = createNonExitingTypedRuntimeEnv<RuntimeEnv>();
     const result = await resolveDiscordAllowlistConfig({
       token: "token",
       allowFrom: ["Alice", "111", "*"],
@@ -70,7 +70,7 @@ describe("resolveDiscordAllowlistConfig", () => {
         channelName: "missing-room",
       },
     ]);
-    const runtime = createRuntimeEnv({ throwOnExit: false }) as unknown as RuntimeEnv;
+    const runtime = createNonExitingTypedRuntimeEnv<RuntimeEnv>();
 
     await resolveDiscordAllowlistConfig({
       token: "token",
