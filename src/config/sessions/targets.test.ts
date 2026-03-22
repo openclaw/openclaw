@@ -3,7 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempHome } from "../../../test/helpers/temp-home.js";
+import { withPathResolutionEnv } from "../../test-utils/env.js";
 import type { OpenClawConfig } from "../config.js";
+import { resolveStorePath } from "./paths.js";
 import {
   resolveAllAgentSessionStoreTargets,
   resolveAllAgentSessionStoreTargetsSync,
@@ -86,20 +88,25 @@ describe("resolveSessionStoreTargets", () => {
       },
     };
 
-    const targets = resolveSessionStoreTargets(cfg, { allAgents: true });
+    const homeDir = path.resolve(path.sep, "tmp", "openclaw-home");
+    const targets = withPathResolutionEnv(homeDir, {}, (env) =>
+      resolveSessionStoreTargets(cfg, { allAgents: true }, { env }),
+    );
 
     expect(targets).toEqual([
       {
         agentId: "main",
-        storePath: path.resolve(
-          path.join(process.env.HOME ?? "", ".openclaw/agents/main/sessions/sessions.json"),
-        ),
+        storePath: resolveStorePath(cfg.session?.store, {
+          agentId: "main",
+          env: { HOME: homeDir },
+        }),
       },
       {
         agentId: "work",
-        storePath: path.resolve(
-          path.join(process.env.HOME ?? "", ".openclaw/agents/work/sessions/sessions.json"),
-        ),
+        storePath: resolveStorePath(cfg.session?.store, {
+          agentId: "work",
+          env: { HOME: homeDir },
+        }),
       },
     ]);
   });

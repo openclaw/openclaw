@@ -16,12 +16,15 @@ const MINIMAX_API_BASE_URL = "https://api.minimax.io/anthropic";
 const MINIMAX_CN_API_BASE_URL = "https://api.minimaxi.com/anthropic";
 const MINIMAX_HOSTED_MODEL_ID = "MiniMax-M2.7";
 const MINIMAX_HOSTED_MODEL_REF = `minimax/${MINIMAX_HOSTED_MODEL_ID}`;
-const DEFAULT_MINIMAX_CONTEXT_WINDOW = 200000;
-const DEFAULT_MINIMAX_MAX_TOKENS = 8192;
-const MINIMAX_API_COST = { input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0.12 };
+const DEFAULT_MINIMAX_CONTEXT_WINDOW = 204800;
+const DEFAULT_MINIMAX_MAX_TOKENS = 131072;
+const MINIMAX_API_COST = { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 };
 const MINIMAX_HOSTED_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 const MINIMAX_LM_STUDIO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 const MINIMAX_MODEL_CATALOG = {
+  "MiniMax-M2": { name: "MiniMax M2", reasoning: true },
+  "MiniMax-M2.1": { name: "MiniMax M2.1", reasoning: true },
+  "MiniMax-M2.1-highspeed": { name: "MiniMax M2.1 Highspeed", reasoning: true },
   "MiniMax-M2.7": { name: "MiniMax M2.7", reasoning: true },
   "MiniMax-M2.7-highspeed": { name: "MiniMax M2.7 Highspeed", reasoning: true },
   "MiniMax-M2.5": { name: "MiniMax M2.5", reasoning: true },
@@ -33,7 +36,7 @@ const MISTRAL_DEFAULT_MODEL_ID = "mistral-large-latest";
 const MISTRAL_DEFAULT_MODEL_REF = `mistral/${MISTRAL_DEFAULT_MODEL_ID}`;
 const MISTRAL_DEFAULT_CONTEXT_WINDOW = 262144;
 const MISTRAL_DEFAULT_MAX_TOKENS = 262144;
-const MISTRAL_DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+const MISTRAL_DEFAULT_COST = { input: 0.5, output: 1.5, cacheRead: 0, cacheWrite: 0 };
 
 const MODELSTUDIO_CN_BASE_URL = "https://coding.dashscope.aliyuncs.com/v1";
 const MODELSTUDIO_GLOBAL_BASE_URL = "https://coding-intl.dashscope.aliyuncs.com/v1";
@@ -114,22 +117,105 @@ const QIANFAN_DEFAULT_MODEL_REF = `qianfan/${QIANFAN_DEFAULT_MODEL_ID}`;
 const XAI_BASE_URL = "https://api.x.ai/v1";
 const XAI_DEFAULT_MODEL_ID = "grok-4";
 const XAI_DEFAULT_MODEL_REF = `xai/${XAI_DEFAULT_MODEL_ID}`;
-const XAI_DEFAULT_CONTEXT_WINDOW = 131072;
-const XAI_DEFAULT_MAX_TOKENS = 8192;
-const XAI_DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+const XAI_DEFAULT_CONTEXT_WINDOW = 256000;
+const XAI_DEFAULT_MAX_TOKENS = 64000;
+const XAI_DEFAULT_COST = { input: 3, output: 15, cacheRead: 0.75, cacheWrite: 0 };
 
 const ZAI_CODING_GLOBAL_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
 const ZAI_CODING_CN_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4";
 const ZAI_GLOBAL_BASE_URL = "https://api.z.ai/api/paas/v4";
 const ZAI_CN_BASE_URL = "https://open.bigmodel.cn/api/paas/v4";
 const ZAI_DEFAULT_MODEL_ID = "glm-5";
-const ZAI_DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+const ZAI_DEFAULT_COST = { input: 1, output: 3.2, cacheRead: 0.2, cacheWrite: 0 };
 const ZAI_MODEL_CATALOG = {
-  "glm-5": { name: "GLM-5", reasoning: true },
-  "glm-5-turbo": { name: "GLM-5 Turbo", reasoning: true },
-  "glm-4.7": { name: "GLM-4.7", reasoning: true },
-  "glm-4.7-flash": { name: "GLM-4.7 Flash", reasoning: true },
-  "glm-4.7-flashx": { name: "GLM-4.7 FlashX", reasoning: true },
+  "glm-5": {
+    name: "GLM-5",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 204800,
+    maxTokens: 131072,
+    cost: ZAI_DEFAULT_COST,
+  },
+  "glm-5-turbo": {
+    name: "GLM-5 Turbo",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 200000,
+    maxTokens: 131072,
+    cost: { input: 1.2, output: 4, cacheRead: 0.24, cacheWrite: 0 },
+  },
+  "glm-4.7": {
+    name: "GLM-4.7",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 204800,
+    maxTokens: 131072,
+    cost: { input: 0.6, output: 2.2, cacheRead: 0.11, cacheWrite: 0 },
+  },
+  "glm-4.7-flash": {
+    name: "GLM-4.7 Flash",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 200000,
+    maxTokens: 131072,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  },
+  "glm-4.7-flashx": {
+    name: "GLM-4.7 FlashX",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 200000,
+    maxTokens: 131072,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  },
+  "glm-4.6": {
+    name: "GLM-4.6",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 204800,
+    maxTokens: 131072,
+    cost: { input: 0.6, output: 2.2, cacheRead: 0.11, cacheWrite: 0 },
+  },
+  "glm-4.6v": {
+    name: "GLM-4.6V",
+    reasoning: true,
+    input: ["text", "image"],
+    contextWindow: 128000,
+    maxTokens: 32768,
+    cost: { input: 0.3, output: 0.9, cacheRead: 0, cacheWrite: 0 },
+  },
+  "glm-4.5": {
+    name: "GLM-4.5",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 131072,
+    maxTokens: 98304,
+    cost: { input: 0.6, output: 2.2, cacheRead: 0.11, cacheWrite: 0 },
+  },
+  "glm-4.5-air": {
+    name: "GLM-4.5 Air",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 131072,
+    maxTokens: 98304,
+    cost: { input: 0.2, output: 1.1, cacheRead: 0.03, cacheWrite: 0 },
+  },
+  "glm-4.5-flash": {
+    name: "GLM-4.5 Flash",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 131072,
+    maxTokens: 98304,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  },
+  "glm-4.5v": {
+    name: "GLM-4.5V",
+    reasoning: true,
+    input: ["text", "image"],
+    contextWindow: 64000,
+    maxTokens: 16384,
+    cost: { input: 0.6, output: 1.8, cacheRead: 0, cacheWrite: 0 },
+  },
 } as const;
 
 function buildMinimaxModelDefinition(params: {
@@ -243,6 +329,7 @@ function buildZaiModelDefinition(params: {
   id: string;
   name?: string;
   reasoning?: boolean;
+  input?: ("text" | "image")[];
   cost?: ModelDefinitionConfig["cost"];
   contextWindow?: number;
   maxTokens?: number;
@@ -252,10 +339,11 @@ function buildZaiModelDefinition(params: {
     id: params.id,
     name: params.name ?? catalog?.name ?? `GLM ${params.id}`,
     reasoning: params.reasoning ?? catalog?.reasoning ?? true,
-    input: ["text"],
-    cost: params.cost ?? ZAI_DEFAULT_COST,
-    contextWindow: params.contextWindow ?? 204800,
-    maxTokens: params.maxTokens ?? 131072,
+    input:
+      params.input ?? (catalog?.input ? ([...catalog.input] as ("text" | "image")[]) : ["text"]),
+    cost: params.cost ?? catalog?.cost ?? ZAI_DEFAULT_COST,
+    contextWindow: params.contextWindow ?? catalog?.contextWindow ?? 204800,
+    maxTokens: params.maxTokens ?? catalog?.maxTokens ?? 131072,
   };
 }
 

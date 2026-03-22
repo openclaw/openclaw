@@ -1,11 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { discordPlugin } from "../../extensions/discord/src/channel.js";
-import { feishuPlugin } from "../../extensions/feishu/src/channel.js";
-import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseFeishuConversationId } from "../../extensions/feishu/src/conversation-id.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import type { ChannelConfiguredBindingProvider, ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { parseTelegramTopicConversation } from "./conversation-id.js";
 import * as persistentBindingsResolveModule from "./persistent-bindings.resolve.js";
 import { buildConfiguredAcpSessionKey } from "./persistent-bindings.types.js";
 const managerMocks = vi.hoisted(() => ({
@@ -39,6 +39,10 @@ type PersistentBindingsModule = Pick<
     "ensureConfiguredAcpBindingSession" | "resetAcpSessionInPlace"
   >;
 let persistentBindings: PersistentBindingsModule;
+let lifecycleBindingsModule: Pick<
+  typeof import("./persistent-bindings.lifecycle.js"),
+  "ensureConfiguredAcpBindingSession" | "resetAcpSessionInPlace"
+>;
 
 type ConfiguredBinding = NonNullable<OpenClawConfig["bindings"]>[number];
 type BindingRecordInput = Parameters<
@@ -57,6 +61,131 @@ const baseCfg = {
 
 const defaultDiscordConversationId = "1478836151241412759";
 const defaultDiscordAccountId = "default";
+
+const discordBindings: ChannelConfiguredBindingProvider = {
+  compileConfiguredBinding: ({ conversationId }) => {
+    const normalized = conversationId.trim();
+    return normalized ? { conversationId: normalized } : null;
+  },
+  matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) => {
+    if (compiledBinding.conversationId === conversationId) {
+      return { conversationId, matchPriority: 2 };
+    }
+    if (
+      parentConversationId &&
+      parentConversationId !== conversationId &&
+      compiledBinding.conversationId === parentConversationId
+    ) {
+      return { conversationId: parentConversationId, matchPriority: 1 };
+    }
+    return null;
+  },
+};
+
+const telegramBindings: ChannelConfiguredBindingProvider = {
+  compileConfiguredBinding: ({ conversationId }) => {
+    const parsed = parseTelegramTopicConversation({ conversationId });
+    if (!parsed || !parsed.chatId.startsWith("-")) {
+      return null;
+    }
+    return {
+      conversationId: parsed.canonicalConversationId,
+      parentConversationId: parsed.chatId,
+    };
+  },
+  matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) => {
+    const incoming = parseTelegramTopicConversation({
+      conversationId,
+      parentConversationId,
+    });
+    if (!incoming || !incoming.chatId.startsWith("-")) {
+      return null;
+    }
+    if (compiledBinding.conversationId !== incoming.canonicalConversationId) {
+      return null;
+    }
+    return {
+      conversationId: incoming.canonicalConversationId,
+      parentConversationId: incoming.chatId,
+      matchPriority: 2,
+    };
+  },
+};
+
+function isSupportedFeishuDirectConversationId(conversationId: string): boolean {
+  const trimmed = conversationId.trim();
+  if (!trimmed || trimmed.includes(":")) {
+    return false;
+  }
+  if (trimmed.startsWith("oc_") || trimmed.startsWith("on_")) {
+    return false;
+  }
+  return true;
+}
+
+const feishuBindings: ChannelConfiguredBindingProvider = {
+  compileConfiguredBinding: ({ conversationId }) => {
+    const parsed = parseFeishuConversationId({ conversationId });
+    if (
+      !parsed ||
+      (parsed.scope !== "group_topic" &&
+        parsed.scope !== "group_topic_sender" &&
+        !isSupportedFeishuDirectConversationId(parsed.canonicalConversationId))
+    ) {
+      return null;
+    }
+    return {
+      conversationId: parsed.canonicalConversationId,
+      parentConversationId:
+        parsed.scope === "group_topic" || parsed.scope === "group_topic_sender"
+          ? parsed.chatId
+          : undefined,
+    };
+  },
+  matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) => {
+    const incoming = parseFeishuConversationId({
+      conversationId,
+      parentConversationId,
+    });
+    if (
+      !incoming ||
+      (incoming.scope !== "group_topic" &&
+        incoming.scope !== "group_topic_sender" &&
+        !isSupportedFeishuDirectConversationId(incoming.canonicalConversationId))
+    ) {
+      return null;
+    }
+    const matchesCanonicalConversation =
+      compiledBinding.conversationId === incoming.canonicalConversationId;
+    const matchesParentTopicForSenderScopedConversation =
+      incoming.scope === "group_topic_sender" &&
+      compiledBinding.parentConversationId === incoming.chatId &&
+      compiledBinding.conversationId === `${incoming.chatId}:topic:${incoming.topicId}`;
+    if (!matchesCanonicalConversation && !matchesParentTopicForSenderScopedConversation) {
+      return null;
+    }
+    return {
+      conversationId: matchesParentTopicForSenderScopedConversation
+        ? compiledBinding.conversationId
+        : incoming.canonicalConversationId,
+      parentConversationId:
+        incoming.scope === "group_topic" || incoming.scope === "group_topic_sender"
+          ? incoming.chatId
+          : undefined,
+      matchPriority: matchesCanonicalConversation ? 2 : 1,
+    };
+  },
+};
+
+function createConfiguredBindingTestPlugin(
+  id: ChannelPlugin["id"],
+  bindings: ChannelConfiguredBindingProvider,
+): Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config" | "bindings"> {
+  return {
+    ...createChannelTestPluginBase({ id }),
+    bindings,
+  };
+}
 
 function createCfgWithBindings(
   bindings: ConfiguredBinding[],
@@ -185,20 +314,26 @@ beforeEach(() => {
       persistentBindingsResolveModule.resolveConfiguredAcpBindingRecord,
     resolveConfiguredAcpBindingSpecBySessionKey:
       persistentBindingsResolveModule.resolveConfiguredAcpBindingSpecBySessionKey,
-    ensureConfiguredAcpBindingSession: async (...args) => {
-      const lifecycleModule = await import("./persistent-bindings.lifecycle.js");
-      return await lifecycleModule.ensureConfiguredAcpBindingSession(...args);
-    },
-    resetAcpSessionInPlace: async (...args) => {
-      const lifecycleModule = await import("./persistent-bindings.lifecycle.js");
-      return await lifecycleModule.resetAcpSessionInPlace(...args);
-    },
+    ensureConfiguredAcpBindingSession: lifecycleBindingsModule.ensureConfiguredAcpBindingSession,
+    resetAcpSessionInPlace: lifecycleBindingsModule.resetAcpSessionInPlace,
   };
   setActivePluginRegistry(
     createTestRegistry([
-      { pluginId: "discord", plugin: discordPlugin, source: "test" },
-      { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
-      { pluginId: "feishu", plugin: feishuPlugin, source: "test" },
+      {
+        pluginId: "discord",
+        plugin: createConfiguredBindingTestPlugin("discord", discordBindings),
+        source: "test",
+      },
+      {
+        pluginId: "telegram",
+        plugin: createConfiguredBindingTestPlugin("telegram", telegramBindings),
+        source: "test",
+      },
+      {
+        pluginId: "feishu",
+        plugin: createConfiguredBindingTestPlugin("feishu", feishuBindings),
+        source: "test",
+      },
     ]),
   );
   managerMocks.resolveSession.mockReset();
@@ -209,6 +344,10 @@ beforeEach(() => {
   managerMocks.initializeSession.mockReset().mockResolvedValue(undefined);
   managerMocks.updateSessionRuntimeOptions.mockReset().mockResolvedValue(undefined);
   sessionMetaMocks.readAcpSessionEntry.mockReset().mockReturnValue(undefined);
+});
+
+beforeAll(async () => {
+  lifecycleBindingsModule = await import("./persistent-bindings.lifecycle.js");
 });
 
 describe("resolveConfiguredAcpBindingRecord", () => {

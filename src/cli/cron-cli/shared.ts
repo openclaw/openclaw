@@ -4,7 +4,7 @@ import { resolveCronStaggerMs } from "../../cron/stagger.js";
 import type { CronJob, CronSchedule } from "../../cron/types.js";
 import { danger } from "../../globals.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.ts";
-import { defaultRuntime } from "../../runtime.js";
+import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
@@ -13,7 +13,7 @@ export const getCronChannelOptions = () =>
   ["last", ...listChannelPlugins().map((plugin) => plugin.id)].join("|");
 
 export function printCronJson(value: unknown) {
-  defaultRuntime.log(JSON.stringify(value, null, 2));
+  defaultRuntime.writeJson(value);
 }
 
 export function handleCronCliError(err: unknown) {
@@ -184,7 +184,7 @@ const formatStatus = (job: CronJob) => {
   return job.state.lastStatus ?? "idle";
 };
 
-export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
+export function printCronList(jobs: CronJob[], runtime: RuntimeEnv = defaultRuntime) {
   if (jobs.length === 0) {
     runtime.log("No cron jobs.");
     return;

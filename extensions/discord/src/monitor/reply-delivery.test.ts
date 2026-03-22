@@ -211,7 +211,11 @@ describe("deliverDiscordReply", () => {
       textLimit: 2000,
     });
 
-    expect(sendMessageDiscordMock.mock.calls[0]?.[2]?.cfg).toBe(cfg);
+    expect(sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:101",
+      "cfg path",
+      expect.objectContaining({ cfg }),
+    );
   });
 
   it("uses replyToId only for the first chunk when replyToMode is first", async () => {
@@ -231,8 +235,18 @@ describe("deliverDiscordReply", () => {
     });
 
     expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);
-    expect(sendMessageDiscordMock.mock.calls[0]?.[2]?.replyTo).toBe("reply-1");
-    expect(sendMessageDiscordMock.mock.calls[1]?.[2]?.replyTo).toBeUndefined();
+    expect(sendMessageDiscordMock.mock.calls).toEqual([
+      expect.arrayContaining([
+        "channel:789",
+        "12345",
+        expect.objectContaining({ replyTo: "reply-1" }),
+      ]),
+      expect.arrayContaining([
+        "channel:789",
+        "67890",
+        expect.not.objectContaining({ replyTo: expect.anything() }),
+      ]),
+    ]);
   });
 
   it("does not consume replyToId for replyToMode=first on whitespace-only payloads", async () => {

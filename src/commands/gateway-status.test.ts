@@ -220,6 +220,24 @@ describe("gateway-status command", () => {
     expect(targets[0]?.summary).toBeTruthy();
   });
 
+  it("keeps status output working when tailnet discovery throws", async () => {
+    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
+    pickPrimaryTailnetIPv4.mockImplementationOnce(() => {
+      throw new Error("uv_interface_addresses failed");
+    });
+
+    await runGatewayStatus(runtime, { timeout: "1000", json: true });
+
+    expect(runtimeErrors).toHaveLength(0);
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+      network?: { tailnetIPv4?: string | null; localTailnetUrl?: string | null };
+    };
+    expect(parsed.network).toMatchObject({
+      tailnetIPv4: null,
+      localTailnetUrl: null,
+    });
+  });
+
   it("treats missing-scope RPC probe failures as degraded but reachable", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
     readBestEffortConfig.mockResolvedValueOnce({
@@ -565,6 +583,47 @@ describe("gateway-status command", () => {
     const parsed = JSON.parse(runtimeLogs.join("\n")) as Record<string, unknown>;
     const targets = parsed.targets as Array<Record<string, unknown>>;
     expect(targets.some((t) => t.kind === "sshTunnel")).toBe(true);
+  });
+
+  it("passes the full caller timeout through to local loopback probes", async () => {
+    const { runtime } = createRuntimeCapture();
+    probeGateway.mockClear();
+    readBestEffortConfig.mockResolvedValueOnce({
+      gateway: {
+        mode: "local",
+        auth: { mode: "token", token: "ltok" },
+      },
+    } as never);
+
+    await runGatewayStatus(runtime, { timeout: "15000", json: true });
+
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+        timeoutMs: 15_000,
+      }),
+    );
+  });
+
+  it("keeps inactive local loopback probes on the short timeout in remote mode", async () => {
+    const { runtime } = createRuntimeCapture();
+    probeGateway.mockClear();
+    readBestEffortConfig.mockResolvedValueOnce({
+      gateway: {
+        mode: "remote",
+        auth: { mode: "token", token: "ltok" },
+        remote: {},
+      },
+    } as never);
+
+    await runGatewayStatus(runtime, { timeout: "15000", json: true });
+
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+        timeoutMs: 800,
+      }),
+    );
   });
 
   it("skips invalid ssh-auto discovery targets", async () => {

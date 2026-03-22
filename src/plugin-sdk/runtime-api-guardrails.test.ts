@@ -27,7 +27,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export * from "./src/send.js";',
   ],
   "extensions/imessage/runtime-api.ts": [
-    'export { DEFAULT_ACCOUNT_ID, PAIRING_APPROVED_MESSAGE, buildChannelConfigSchema, collectStatusIssuesFromLastError, formatTrimmedAllowFromEntries, getChatChannelMeta, looksLikeIMessageTargetId, normalizeIMessageMessagingTarget, resolveChannelMediaMaxBytes, resolveIMessageConfigAllowFrom, resolveIMessageConfigDefaultTo, IMessageConfigSchema, type ChannelPlugin, type IMessageAccountConfig } from "openclaw/plugin-sdk/imessage";',
+    'export { DEFAULT_ACCOUNT_ID, PAIRING_APPROVED_MESSAGE, buildComputedAccountStatusSnapshot, buildChannelConfigSchema, collectStatusIssuesFromLastError, formatTrimmedAllowFromEntries, getChatChannelMeta, looksLikeIMessageTargetId, normalizeIMessageMessagingTarget, resolveChannelMediaMaxBytes, resolveIMessageConfigAllowFrom, resolveIMessageConfigDefaultTo, IMessageConfigSchema, type ChannelPlugin, type IMessageAccountConfig } from "openclaw/plugin-sdk/imessage";',
     'export { resolveIMessageGroupRequireMention, resolveIMessageGroupToolPolicy } from "./src/group-policy.js";',
     'export { monitorIMessageProvider } from "./src/monitor.js";',
     'export type { MonitorIMessageOpts } from "./src/monitor.js";',
@@ -38,6 +38,11 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
   "extensions/matrix/runtime-api.ts": [
     'export * from "./src/auth-precedence.js";',
     'export * from "./helper-api.js";',
+    'export { assertHttpUrlTargetsPrivateNetwork, closeDispatcher, createPinnedDispatcher, resolvePinnedHostnameWithPolicy, ssrfPolicyFromAllowPrivateNetwork, type LookupFn, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";',
+    'export { setMatrixThreadBindingIdleTimeoutBySessionKey, setMatrixThreadBindingMaxAgeBySessionKey } from "./thread-bindings-runtime.js";',
+    'export { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";',
+    'export type { ChannelDirectoryEntry, ChannelMessageActionContext, OpenClawConfig, PluginRuntime, RuntimeLogger, RuntimeEnv, WizardPrompter } from "openclaw/plugin-sdk/matrix";',
+    'export { formatZonedTimestamp } from "openclaw/plugin-sdk/matrix";',
   ],
   "extensions/nextcloud-talk/runtime-api.ts": [
     'export * from "openclaw/plugin-sdk/nextcloud-talk";',

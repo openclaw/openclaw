@@ -1,4 +1,4 @@
-// Narrow plugin-sdk surface for the bundled matrix plugin.
+// Private helper surface for the bundled matrix plugin.
 // Keep this list additive and scoped to symbols used under extensions/matrix.
 
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
@@ -27,8 +27,6 @@ export {
   patchAllowlistUsersInConfigEntries,
   summarizeMapping,
 } from "../channels/allowlists/resolve-utils.js";
-export { ensureConfiguredAcpBindingReady } from "../acp/persistent-bindings.lifecycle.js";
-export { resolveConfiguredAcpBindingRecord } from "../acp/persistent-bindings.resolve.js";
 export { resolveControlCommandGate } from "../channels/command-gating.js";
 export type { NormalizedLocation } from "../channels/location.js";
 export { formatLocationText, toLocationContext } from "../channels/location.js";
@@ -112,7 +110,6 @@ export { ToolPolicySchema } from "../config/zod-schema.agent-runtime.js";
 export { MarkdownConfigSchema } from "../config/zod-schema.core.js";
 export { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
 export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-export { maybeCreateMatrixMigrationSnapshot } from "../infra/matrix-migration-snapshot.js";
 export {
   getSessionBindingService,
   registerSessionBindingAdapter,
@@ -150,8 +147,8 @@ export { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
 export { runPluginCommandWithTimeout } from "./run-command.js";
 export { createLoggerBackedRuntime, resolveRuntimeEnv } from "./runtime.js";
-export { dispatchReplyFromConfigWithSettledDispatcher } from "./inbound-reply-dispatch.js";
 export {
+  buildComputedAccountStatusSnapshot,
   buildProbeChannelStatusSummary,
   collectStatusIssuesFromLastError,
 } from "./status-helpers.js";

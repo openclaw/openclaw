@@ -81,6 +81,14 @@ function normalizeWsUrl(value: string): string | null {
   return trimmed;
 }
 
+function pickPrimaryTailnetIPv4ForStatus(): string | undefined {
+  try {
+    return pickPrimaryTailnetIPv4();
+  } catch {
+    return undefined;
+  }
+}
+
 export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): GatewayStatusTarget[] {
   const targets: GatewayStatusTarget[] = [];
   const add = (t: GatewayStatusTarget) => {
@@ -116,14 +124,21 @@ export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): Gatew
   return targets;
 }
 
-export function resolveProbeBudgetMs(overallMs: number, kind: TargetKind): number {
-  if (kind === "localLoopback") {
-    return Math.min(800, overallMs);
+export function resolveProbeBudgetMs(
+  overallMs: number,
+  target: Pick<GatewayStatusTarget, "kind" | "active">,
+): number {
+  switch (target.kind) {
+    case "localLoopback":
+      // Active loopback probes should honor the caller budget because local shells/containers
+      // can legitimately take longer to connect. Inactive loopback probes stay bounded so
+      // remote-mode status checks do not stall on an expected local miss.
+      return target.active ? overallMs : Math.min(800, overallMs);
+    case "sshTunnel":
+      return Math.min(2_000, overallMs);
+    default:
+      return Math.min(1_500, overallMs);
   }
-  if (kind === "sshTunnel") {
-    return Math.min(2000, overallMs);
-  }
-  return Math.min(1500, overallMs);
 }
 
 export function sanitizeSshTarget(value: unknown): string | null {
@@ -303,7 +318,7 @@ export function extractConfigSummary(snapshotUnknown: unknown): GatewayConfigSum
 }
 
 export function buildNetworkHints(cfg: OpenClawConfig) {
-  const tailnetIPv4 = pickPrimaryTailnetIPv4();
+  const tailnetIPv4 = pickPrimaryTailnetIPv4ForStatus();
   const port = resolveGatewayPort(cfg);
   return {
     localLoopbackUrl: `ws://127.0.0.1:${port}`,

@@ -25,6 +25,10 @@ import type {
 import { logVerbose } from "../globals.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
+import {
+  OPENAI_DEFAULT_TTS_MODEL as DEFAULT_OPENAI_MODEL,
+  OPENAI_DEFAULT_TTS_VOICE as DEFAULT_OPENAI_VOICE,
+} from "../providers/openai-defaults.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
   getSpeechProvider,
@@ -32,6 +36,7 @@ import {
   normalizeSpeechProviderId,
 } from "./provider-registry.js";
 import type { SpeechVoiceOption } from "./provider-types.js";
+import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 import {
   DEFAULT_OPENAI_BASE_URL,
   isValidOpenAIModel,
@@ -54,8 +59,6 @@ const DEFAULT_MAX_TEXT_LENGTH = 4096;
 const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
 const DEFAULT_ELEVENLABS_VOICE_ID = "pMsXgVXv3BLzUgSXRplE";
 const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
-const DEFAULT_OPENAI_MODEL = "gpt-4o-mini-tts";
-const DEFAULT_OPENAI_VOICE = "alloy";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
@@ -83,8 +86,6 @@ const DEFAULT_OUTPUT = {
   extension: ".mp3",
   voiceCompatible: false,
 };
-
-const TTS_AUTO_MODES = new Set<TtsAutoMode>(["off", "always", "inbound", "tagged"]);
 
 export type ResolvedTtsConfig = {
   auto: TtsAutoMode;
@@ -229,17 +230,6 @@ type TtsStatusEntry = {
 };
 
 let lastTtsAttempt: TtsStatusEntry | undefined;
-
-export function normalizeTtsAutoMode(value: unknown): TtsAutoMode | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim().toLowerCase();
-  if (TTS_AUTO_MODES.has(normalized as TtsAutoMode)) {
-    return normalized as TtsAutoMode;
-  }
-  return undefined;
-}
 
 function resolveModelOverridePolicy(
   overrides: TtsModelOverrideConfig | undefined,
@@ -516,7 +506,7 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
 }
 
 /** Channels that require opus audio and support voice-bubble playback */
-const VOICE_BUBBLE_CHANNELS = new Set(["telegram", "feishu", "whatsapp"]);
+const VOICE_BUBBLE_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "matrix"]);
 
 function resolveOutputFormat(channelId?: string | null) {
   if (channelId && VOICE_BUBBLE_CHANNELS.has(channelId)) {
@@ -825,6 +815,10 @@ export async function maybeApplyTtsToPayload(params: {
   inboundAudio?: boolean;
   ttsAuto?: string;
 }): Promise<ReplyPayload> {
+  // Compaction notices are informational UI signals — never synthesise them as speech.
+  if (params.payload.isCompactionNotice) {
+    return params.payload;
+  }
   const config = resolveTtsConfig(params.cfg);
   const prefsPath = resolveTtsPrefsPath(config);
   const autoMode = resolveTtsAutoMode({

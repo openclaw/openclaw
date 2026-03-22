@@ -14,6 +14,7 @@
 #   Slim (bookworm-slim):    docker build --build-arg OPENCLAW_VARIANT=slim .
 ARG OPENCLAW_EXTENSIONS=""
 ARG OPENCLAW_VARIANT=default
+ARG OPENCLAW_DOCKER_APT_UPGRADE=1
 ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:24-bookworm@sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"
 ARG OPENCLAW_NODE_BOOKWORM_DIGEST="sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="node:24-bookworm-slim@sha256:e8e2e91b1378f83c5b2dd15f0247f34110e2fe895f6ca7719dbb780f929368eb"
@@ -113,6 +114,7 @@ LABEL org.opencontainers.image.base.name="docker.io/library/node:24-bookworm-sli
 # ── Stage 3: Runtime ────────────────────────────────────────────
 FROM base-${OPENCLAW_VARIANT}
 ARG OPENCLAW_VARIANT
+ARG OPENCLAW_DOCKER_APT_UPGRADE
 
 # OCI base-image metadata for downstream image consumers.
 # If you change these annotations, also update:
@@ -129,10 +131,14 @@ WORKDIR /app
 
 # Install system utilities present in bookworm but missing in bookworm-slim.
 # On the full bookworm image these are already installed (apt-get is a no-op).
+# Smoke workflows can opt out of distro upgrades to cut repeated CI time while
+# keeping the default runtime image behavior unchanged.
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends && \
+    if [ "${OPENCLAW_DOCKER_APT_UPGRADE}" != "0" ]; then \
+      DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends; \
+    fi && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       procps hostname curl git lsof openssl
 

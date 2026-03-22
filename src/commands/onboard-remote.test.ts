@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -60,9 +60,15 @@ describe("promptRemoteGatewayConfig", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     envSnapshot.restore();
+    delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
     detectBinary.mockResolvedValue(false);
     discoverGatewayBeacons.mockResolvedValue([]);
     resolveWideAreaDiscoveryDomain.mockReturnValue(undefined);
+  });
+
+  afterEach(() => {
+    envSnapshot.restore();
+    delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
   });
 
   it("defaults discovered direct remote URLs to wss://", async () => {

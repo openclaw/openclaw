@@ -40,8 +40,21 @@ describe("xai web search config resolution", () => {
 
   it("uses config model when provided", () => {
     expect(resolveXaiWebSearchModel({ grok: { model: "grok-4-fast-reasoning" } })).toBe(
-      "grok-4-fast-reasoning",
+      "grok-4-fast",
     );
+  });
+
+  it("normalizes deprecated grok 4.20 beta model ids to GA ids", () => {
+    expect(
+      resolveXaiWebSearchModel({
+        grok: { model: "grok-4.20-experimental-beta-0304-reasoning" },
+      }),
+    ).toBe("grok-4.20-beta-latest-reasoning");
+    expect(
+      resolveXaiWebSearchModel({
+        grok: { model: "grok-4.20-experimental-beta-0304-non-reasoning" },
+      }),
+    ).toBe("grok-4.20-beta-latest-non-reasoning");
   });
 
   it("defaults inlineCitations to false", () => {

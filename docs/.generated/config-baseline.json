@@ -4112,6 +4112,20 @@
       "hasChildren": false
     },
     {
+      "path": "agents.list.*.fastModeDefault",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Agent Fast Mode Default",
+      "help": "Optional per-agent default for fast mode. Applies when no per-message or session fast-mode override is set.",
+      "hasChildren": false
+    },
+    {
       "path": "agents.list.*.groupChat",
       "kind": "core",
       "type": "object",
@@ -5227,6 +5241,25 @@
       "hasChildren": false
     },
     {
+      "path": "agents.list.*.reasoningDefault",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "on",
+        "off",
+        "stream"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Agent Reasoning Default",
+      "help": "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
+      "hasChildren": false
+    },
+    {
       "path": "agents.list.*.runtime",
       "kind": "core",
       "type": "object",
@@ -6288,6 +6321,29 @@
       "hasChildren": false
     },
     {
+      "path": "agents.list.*.thinkingDefault",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "adaptive"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Agent Thinking Default",
+      "help": "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
+      "hasChildren": false
+    },
+    {
       "path": "agents.list.*.tools",
       "kind": "core",
       "type": "object",
@@ -6808,6 +6864,16 @@
         "allowlist",
         "full"
       ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.tools.exec.strictInlineEval",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -31190,6 +31256,49 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.accounts.*.apiRoot",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.autoTopicLabel",
+      "kind": "channel",
+      "type": [
+        "boolean",
+        "object"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.telegram.accounts.*.autoTopicLabel.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.autoTopicLabel.prompt",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.accounts.*.blockStreaming",
       "kind": "channel",
       "type": "boolean",
@@ -31477,6 +31586,39 @@
         "number",
         "string"
       ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.direct.*.autoTopicLabel",
+      "kind": "channel",
+      "type": [
+        "boolean",
+        "object"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.telegram.accounts.*.direct.*.autoTopicLabel.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.direct.*.autoTopicLabel.prompt",
+      "kind": "channel",
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -33093,6 +33235,69 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.apiRoot",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Telegram API Root URL",
+      "help": "Custom Telegram Bot API root URL. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.autoTopicLabel",
+      "kind": "channel",
+      "type": [
+        "boolean",
+        "object"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Telegram Auto Topic Label",
+      "help": "Auto-rename DM forum topics on first message using LLM. Default: true. Set to false to disable, or use object form { enabled: true, prompt: '...' } for custom prompt.",
+      "hasChildren": true
+    },
+    {
+      "path": "channels.telegram.autoTopicLabel.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Telegram Auto Topic Label Enabled",
+      "help": "Whether auto topic labeling is enabled. Default: true.",
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.autoTopicLabel.prompt",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Telegram Auto Topic Label Prompt",
+      "help": "Custom prompt for LLM-based topic naming. The user message is appended after the prompt.",
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.blockStreaming",
       "kind": "channel",
       "type": "boolean",
@@ -33417,6 +33622,39 @@
         "number",
         "string"
       ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.direct.*.autoTopicLabel",
+      "kind": "channel",
+      "type": [
+        "boolean",
+        "object"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.telegram.direct.*.autoTopicLabel.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.direct.*.autoTopicLabel.prompt",
+      "kind": "channel",
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -41917,6 +42155,46 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
+    },
+    {
+      "path": "hooks.internal.installs.*.clawhubChannel",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "hooks.internal.installs.*.clawhubFamily",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "hooks.internal.installs.*.clawhubPackage",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "hooks.internal.installs.*.clawhubUrl",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
     },
     {
       "path": "hooks.internal.installs.*.hooks",
@@ -57447,6 +57725,46 @@
       "hasChildren": true
     },
     {
+      "path": "plugins.installs.*.clawhubChannel",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.installs.*.clawhubFamily",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.installs.*.clawhubPackage",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.installs.*.clawhubUrl",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "plugins.installs.*.installedAt",
       "kind": "core",
       "type": "string",
@@ -60200,6 +60518,20 @@
       ],
       "label": "Exec Security",
       "help": "Execution security posture selector controlling sandbox/approval expectations for command execution. Keep strict security mode for untrusted prompts and relax only for trusted operator workflows.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.exec.strictInlineEval",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools"
+      ],
+      "label": "Require Inline-Eval Approval",
+      "help": "Require explicit approval for interpreter inline-eval forms such as `python -c`, `node -e`, `ruby -e`, or `osascript -e`. Prevents silent allowlist reuse and downgrades allow-always to ask-each-time for those forms.",
       "hasChildren": false
     },
     {

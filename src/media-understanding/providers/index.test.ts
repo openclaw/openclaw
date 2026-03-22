@@ -1,11 +1,22 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+
+const { loadOpenClawPluginsMock } = vi.hoisted(() => ({
+  loadOpenClawPluginsMock: vi.fn(() => createEmptyPluginRegistry()),
+}));
+
+vi.mock("../../plugins/loader.js", () => ({
+  loadOpenClawPlugins: loadOpenClawPluginsMock,
+}));
+
 import { buildMediaUnderstandingRegistry, getMediaUnderstandingProvider } from "./index.js";
 
 describe("media-understanding provider registry", () => {
   afterEach(() => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
+    loadOpenClawPluginsMock.mockReset();
+    loadOpenClawPluginsMock.mockReturnValue(createEmptyPluginRegistry());
+    resetPluginRuntimeStateForTest();
   });
 
   it("keeps core-owned fallback providers registered by default", () => {
@@ -59,5 +70,12 @@ describe("media-understanding provider registry", () => {
     const provider = getMediaUnderstandingProvider("gemini", registry);
 
     expect(provider?.id).toBe("google");
+  });
+
+  it("does not load plugins when config is absent and no runtime registry is active", () => {
+    const registry = buildMediaUnderstandingRegistry();
+
+    expect([...registry.keys()]).toEqual(["groq", "deepgram"]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 });

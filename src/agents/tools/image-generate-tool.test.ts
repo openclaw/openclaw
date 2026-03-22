@@ -43,6 +43,7 @@ function stubImageGenerationProviders() {
         generate: {
           maxCount: 4,
           supportsSize: true,
+          supportsAspectRatio: true,
         },
         edit: {
           enabled: false,
@@ -50,6 +51,7 @@ function stubImageGenerationProviders() {
         },
         geometry: {
           sizes: ["1024x1024", "1024x1536", "1536x1024"],
+          aspectRatios: ["1:1", "16:9"],
         },
       },
       generateImage: vi.fn(async () => {
@@ -110,7 +112,7 @@ describe("createImageGenerateTool", () => {
     });
   });
 
-  it("generates images and returns MEDIA paths", async () => {
+  it("generates images and returns details.media paths", async () => {
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
       provider: "openai",
       model: "gpt-image-1",
@@ -215,14 +217,16 @@ describe("createImageGenerateTool", () => {
         provider: "openai",
         model: "gpt-image-1",
         count: 2,
+        media: {
+          mediaUrls: ["/tmp/generated-1.png", "/tmp/generated-2.png"],
+        },
         paths: ["/tmp/generated-1.png", "/tmp/generated-2.png"],
         filename: "cats/output.png",
         revisedPrompts: ["A more cinematic cat"],
       },
     });
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
-    expect(text).toContain("MEDIA:/tmp/generated-1.png");
-    expect(text).toContain("MEDIA:/tmp/generated-2.png");
+    expect(text).not.toContain("MEDIA:");
   });
 
   it("rejects counts outside the supported range", async () => {

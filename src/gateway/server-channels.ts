@@ -7,7 +7,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
-import { resolveAccountEntry } from "../routing/account-lookup.js";
+import { resolveAccountEntry, resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
@@ -162,13 +162,15 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     if (!normalizedAccountId) {
       return undefined;
     }
-    const matchKey = Object.keys(channelConfig.accounts).find(
-      (key) => normalizeAccountId(key) === normalizedAccountId,
+    const match = resolveNormalizedAccountEntry(
+      channelConfig.accounts,
+      normalizedAccountId,
+      normalizeAccountId,
     );
-    if (!matchKey) {
+    if (typeof match?.healthMonitor?.enabled !== "boolean") {
       return undefined;
     }
-    return channelConfig.accounts[matchKey]?.healthMonitor?.enabled;
+    return match.healthMonitor.enabled;
   };
 
   const isHealthMonitorEnabled = (channelId: ChannelId, accountId: string): boolean => {

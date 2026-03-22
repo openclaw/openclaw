@@ -6,6 +6,7 @@ import type {
   WebSearchProviderToolDefinition,
 } from "../plugins/types.js";
 import { resolveBundledPluginWebSearchProviders } from "../plugins/web-search-providers.js";
+import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
 import { resolveRuntimeWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
@@ -83,6 +84,15 @@ export function listWebSearchProviders(params?: {
   config?: OpenClawConfig;
 }): PluginWebSearchProviderEntry[] {
   return resolveRuntimeWebSearchProviders({
+    config: params?.config,
+    bundledAllowlistCompat: true,
+  });
+}
+
+export function listConfiguredWebSearchProviders(params?: {
+  config?: OpenClawConfig;
+}): PluginWebSearchProviderEntry[] {
+  return resolvePluginWebSearchProviders({
     config: params?.config,
     bundledAllowlistCompat: true,
   });

@@ -24,13 +24,19 @@ export {
   XAI_TOOL_SCHEMA_PROFILE,
 } from "../agents/model-compat.js";
 export { normalizeProviderId } from "../agents/provider-id.js";
+export { normalizeXaiModelId } from "../agents/model-id-normalization.js";
 export { cloneFirstTemplateModel } from "../plugins/provider-model-helpers.js";
 
 export {
   applyGoogleGeminiModelDefault,
   GOOGLE_GEMINI_DEFAULT_MODEL,
 } from "../plugins/provider-model-defaults.js";
-export { applyOpenAIConfig, OPENAI_DEFAULT_MODEL } from "../plugins/provider-model-defaults.js";
+export {
+  applyOpenAIConfig,
+  OPENAI_CODEX_DEFAULT_MODEL,
+  OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL,
+  OPENAI_DEFAULT_MODEL,
+} from "../plugins/provider-model-defaults.js";
 export { OPENCODE_GO_DEFAULT_MODEL_REF } from "../plugins/provider-model-defaults.js";
 export { OPENCODE_ZEN_DEFAULT_MODEL } from "../plugins/provider-model-defaults.js";
 export { OPENCODE_ZEN_DEFAULT_MODEL_REF } from "../agents/opencode-zen-models.js";
@@ -40,6 +46,7 @@ export {
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   resolveCloudflareAiGatewayBaseUrl,
 } from "../agents/cloudflare-ai-gateway.js";
+export { resolveAnthropicVertexRegion } from "../agents/anthropic-vertex-provider.js";
 export {
   discoverHuggingfaceModels,
   HUGGINGFACE_BASE_URL,

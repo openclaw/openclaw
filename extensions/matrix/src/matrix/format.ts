@@ -1,4 +1,5 @@
 import MarkdownIt from "markdown-it";
+import { isAutoLinkedFileRef } from "openclaw/plugin-sdk/text-runtime";
 
 const md = new MarkdownIt({
   html: false,
@@ -10,38 +11,6 @@ const md = new MarkdownIt({
 md.enable("strikethrough");
 
 const { escapeHtml } = md.utils;
-
-/**
- * Keep bare file references like README.md from becoming external http:// links.
- * Telegram already hardens this path; Matrix should not turn common code/docs
- * filenames into clickable registrar-style URLs either.
- */
-const FILE_EXTENSIONS_WITH_TLD = new Set(["md", "go", "py", "pl", "sh", "am", "at", "be", "cc"]);
-
-function isAutoLinkedFileRef(href: string, label: string): boolean {
-  const stripped = href.replace(/^https?:\/\//i, "");
-  if (stripped !== label) {
-    return false;
-  }
-  const dotIndex = label.lastIndexOf(".");
-  if (dotIndex < 1) {
-    return false;
-  }
-  const ext = label.slice(dotIndex + 1).toLowerCase();
-  if (!FILE_EXTENSIONS_WITH_TLD.has(ext)) {
-    return false;
-  }
-  const segments = label.split("/");
-  if (segments.length > 1) {
-    for (let i = 0; i < segments.length - 1; i += 1) {
-      if (segments[i]?.includes(".")) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
 function shouldSuppressAutoLink(
   tokens: Parameters<NonNullable<typeof md.renderer.rules.link_open>>[0],
   idx: number,

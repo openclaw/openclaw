@@ -106,6 +106,20 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("detaches inbound listeners and closes the socket on close()", async () => {
+    const listener = await openMonitor(vi.fn());
+    const sock = getSock();
+
+    expect(sock.ev.listenerCount("messages.upsert")).toBeGreaterThan(0);
+    expect(sock.ev.listenerCount("connection.update")).toBeGreaterThan(0);
+
+    await listener.close();
+
+    expect(sock.ev.listenerCount("messages.upsert")).toBe(0);
+    expect(sock.ev.listenerCount("connection.update")).toBe(0);
+    expect(sock.ws.close).toHaveBeenCalledTimes(1);
+  });
+
   it("logs inbound bodies to file", async () => {
     const logPath = path.join(os.tmpdir(), `openclaw-log-test-${crypto.randomUUID()}.log`);
     setLoggerOverride({ level: "trace", file: logPath });

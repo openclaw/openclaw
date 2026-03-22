@@ -16,6 +16,7 @@ import {
   resolveCacheRetention,
 } from "./anthropic-stream-wrappers.js";
 import { log } from "./logger.js";
+import { createMinimaxFastModeWrapper } from "./minimax-stream-wrappers.js";
 import {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
@@ -30,6 +31,7 @@ import {
   resolveOpenAIFastMode,
   resolveOpenAIServiceTier,
 } from "./openai-stream-wrappers.js";
+import { createXaiFastModeWrapper } from "./xai-stream-wrappers.js";
 
 /**
  * Resolve provider-specific extra params from model config.
@@ -273,6 +275,15 @@ export function applyExtraParamsToAgent(
   if (anthropicFastMode !== undefined) {
     log.debug(`applying Anthropic fast mode=${anthropicFastMode} for ${provider}/${modelId}`);
     agent.streamFn = createAnthropicFastModeWrapper(agent.streamFn, anthropicFastMode);
+  }
+
+  if (typeof effectiveExtraParams?.fastMode === "boolean") {
+    log.debug(
+      `applying MiniMax fast mode=${effectiveExtraParams.fastMode} for ${provider}/${modelId}`,
+    );
+    agent.streamFn = createMinimaxFastModeWrapper(agent.streamFn, effectiveExtraParams.fastMode);
+    log.debug(`applying xAI fast mode=${effectiveExtraParams.fastMode} for ${provider}/${modelId}`);
+    agent.streamFn = createXaiFastModeWrapper(agent.streamFn, effectiveExtraParams.fastMode);
   }
 
   const openAIFastMode = resolveOpenAIFastMode(effectiveExtraParams);

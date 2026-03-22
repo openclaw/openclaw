@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { writeFileWithinRoot } from "../infra/fs-safe.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isFileMissingError, statRegularFile } from "./fs-utils.js";
 import { resolveCliSpawnInvocation, runCliCommand } from "./qmd-process.js";
 import { deriveQmdScopeChannel, deriveQmdScopeChatType, isQmdScopeAllowed } from "./qmd-scope.js";
@@ -44,8 +45,21 @@ const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
 const QMD_EMBED_BACKOFF_MAX_MS = 60 * 60 * 1000;
 const HAN_SCRIPT_RE = /[\u3400-\u9fff]/u;
 const QMD_BM25_HAN_KEYWORD_LIMIT = 12;
+const MCPORTER_STATE_KEY = Symbol.for("openclaw.mcporterState");
+
+type McporterState = {
+  coldStartWarned: boolean;
+  daemonStart: Promise<void> | null;
+};
 
 let qmdEmbedQueueTail: Promise<void> = Promise.resolve();
+
+function getMcporterState(): McporterState {
+  return resolveGlobalSingleton<McporterState>(MCPORTER_STATE_KEY, () => ({
+    coldStartWarned: false,
+    daemonStart: null,
+  }));
+}
 
 function hasHanScript(value: string): boolean {
   return HAN_SCRIPT_RE.test(value);
@@ -1209,35 +1223,28 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (!mcporter.enabled) {
       return;
     }
+    const state = getMcporterState();
     if (!mcporter.startDaemon) {
-      type McporterWarnGlobal = typeof globalThis & {
-        __openclawMcporterColdStartWarned?: boolean;
-      };
-      const g: McporterWarnGlobal = globalThis;
-      if (!g.__openclawMcporterColdStartWarned) {
-        g.__openclawMcporterColdStartWarned = true;
+      if (!state.coldStartWarned) {
+        state.coldStartWarned = true;
         log.warn(
           "mcporter qmd bridge enabled but startDaemon=false; each query may cold-start QMD MCP. Consider setting memory.qmd.mcporter.startDaemon=true to keep it warm.",
         );
       }
       return;
     }
-    type McporterGlobal = typeof globalThis & {
-      __openclawMcporterDaemonStart?: Promise<void>;
-    };
-    const g: McporterGlobal = globalThis;
-    if (!g.__openclawMcporterDaemonStart) {
-      g.__openclawMcporterDaemonStart = (async () => {
+    if (!state.daemonStart) {
+      state.daemonStart = (async () => {
         try {
           await this.runMcporter(["daemon", "start"], { timeoutMs: 10_000 });
         } catch (err) {
           log.warn(`mcporter daemon start failed: ${String(err)}`);
           // Allow future searches to retry daemon start on transient failures.
-          delete g.__openclawMcporterDaemonStart;
+          state.daemonStart = null;
         }
       })();
     }
-    await g.__openclawMcporterDaemonStart;
+    await state.daemonStart;
   }
 
   private async runMcporter(

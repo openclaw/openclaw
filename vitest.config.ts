@@ -13,6 +13,10 @@ export default defineConfig({
   resolve: {
     // Keep this ordered: the base `openclaw/plugin-sdk` alias is a prefix match.
     alias: [
+      {
+        find: "openclaw/extension-api",
+        replacement: path.join(repoRoot, "src", "extensionAPI.ts"),
+      },
       ...pluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),
@@ -27,9 +31,9 @@ export default defineConfig({
     testTimeout: 120_000,
     hookTimeout: isWindows ? 180_000 : 120_000,
     // Many suites rely on `vi.stubEnv(...)` and expect it to be scoped to the test.
-    // This is especially important under `pool=vmForks` where env leaks cross-file.
+    // Keep env restoration automatic so shared-worker runs do not leak state.
     unstubEnvs: true,
-    // Same rationale as unstubEnvs: avoid cross-test pollution under vmForks.
+    // Same rationale as unstubEnvs: avoid cross-test pollution from shared globals.
     unstubGlobals: true,
     pool: "forks",
     maxWorkers: isCI ? ciWorkers : localWorkers,
@@ -45,6 +49,7 @@ export default defineConfig({
       "ui/src/ui/controllers/agents.test.ts",
       "ui/src/ui/controllers/chat.test.ts",
       "ui/src/ui/controllers/sessions.test.ts",
+      "ui/src/ui/views/sessions.test.ts",
       "ui/src/ui/app-gateway.sessions.node.test.ts",
     ],
     setupFiles: ["test/setup.ts"],

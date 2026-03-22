@@ -1,7 +1,7 @@
 import { Chalk } from "chalk";
 import type { Logger as TsLogger } from "tslog";
 import { isVerbose } from "../globals.js";
-import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { defaultRuntime, type OutputRuntimeEnv, type RuntimeEnv } from "../runtime.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
 import {
   formatConsoleTimestamp,
@@ -404,7 +404,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
 export function runtimeForLogger(
   logger: SubsystemLogger,
   exit: RuntimeEnv["exit"] = defaultRuntime.exit,
-): RuntimeEnv {
+): OutputRuntimeEnv {
   const formatArgs = (...args: unknown[]) =>
     args
       .map((arg) => formatRuntimeArg(arg))
@@ -413,6 +413,10 @@ export function runtimeForLogger(
   return {
     log: (...args: unknown[]) => logger.info(formatArgs(...args)),
     error: (...args: unknown[]) => logger.error(formatArgs(...args)),
+    writeStdout: (value: string) => logger.info(value),
+    writeJson: (value: unknown, space = 2) => {
+      logger.info(JSON.stringify(value, null, space > 0 ? space : undefined));
+    },
     exit,
   };
 }
@@ -420,6 +424,6 @@ export function runtimeForLogger(
 export function createSubsystemRuntime(
   subsystem: string,
   exit: RuntimeEnv["exit"] = defaultRuntime.exit,
-): RuntimeEnv {
+): OutputRuntimeEnv {
   return runtimeForLogger(createSubsystemLogger(subsystem), exit);
 }
