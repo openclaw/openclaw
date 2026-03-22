@@ -22,6 +22,7 @@ import { z } from "zod";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { sendMessage, sendFileUrl } from "./client.js";
 import { getSynologyRuntime } from "./runtime.js";
+import { buildSynologyChatInboundSessionKey } from "./session-key.js";
 import { synologyChatSetupAdapter, synologyChatSetupWizard } from "./setup-surface.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 import { createWebhookHandler } from "./webhook-handler.js";
@@ -246,6 +247,21 @@ export function createSynologyChatPlugin() {
             // The Chat API user_id (for sending) may differ from the webhook
             // user_id (used for sessions/pairing). Use chatUserId for API calls.
             const sendUserId = msg.chatUserId ?? msg.from;
+            const route = rt.channel.routing.resolveAgentRoute({
+              cfg: currentCfg,
+              channel: CHANNEL_ID,
+              accountId: account.accountId,
+              peer: {
+                kind: "direct",
+                id: msg.from,
+              },
+            });
+            const sessionKey = buildSynologyChatInboundSessionKey({
+              agentId: route.agentId,
+              accountId: account.accountId,
+              userId: msg.from,
+              identityLinks: currentCfg.session?.identityLinks,
+            });
 
             // Build MsgContext using SDK's finalizeInboundContext for proper normalization
             const msgCtx = rt.channel.reply.finalizeInboundContext({
@@ -254,7 +270,7 @@ export function createSynologyChatPlugin() {
               CommandBody: msg.body,
               From: `synology-chat:${msg.from}`,
               To: `synology-chat:${msg.from}`,
-              SessionKey: msg.sessionKey,
+              SessionKey: sessionKey,
               AccountId: account.accountId,
               OriginatingChannel: CHANNEL_ID,
               OriginatingTo: `synology-chat:${msg.from}`,
