@@ -236,7 +236,10 @@ export class TelegramPollingSession {
         lastGetUpdatesFinishedAt = finishedAt;
         lastGetUpdatesDurationMs = finishedAt - startedAt;
         lastGetUpdatesOutcome = Array.isArray(result) ? `ok:${result.length}` : "ok";
-        this.opts.setStatus?.(createConnectedChannelStatusPatch(finishedAt));
+        this.opts.setStatus?.({
+          ...createConnectedChannelStatusPatch(finishedAt),
+          mode: "polling",
+        });
         return result;
       } catch (err) {
         const finishedAt = Date.now();
@@ -353,7 +356,6 @@ export class TelegramPollingSession {
       );
       return shouldRestart ? "continue" : "exit";
     } catch (err) {
-      this.opts.setStatus?.({ connected: false });
       this.#forceRestarted = false;
       if (this.opts.abortSignal?.aborted) {
         throw err;
