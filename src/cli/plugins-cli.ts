@@ -7,6 +7,7 @@ import { loadConfig, writeConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveArchiveKind } from "../infra/archive.js";
+import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
@@ -224,6 +225,56 @@ function createPluginInstallLogger(): { info: (msg: string) => void; warn: (msg:
   return {
     info: (msg) => defaultRuntime.log(msg),
     warn: (msg) => defaultRuntime.log(theme.warn(msg)),
+  };
+}
+
+function extractInstalledNpmPackageName(install: PluginInstallRecord): string | undefined {
+  if (install.source !== "npm") {
+    return undefined;
+  }
+  const resolvedName = install.resolvedName?.trim();
+  if (resolvedName) {
+    return resolvedName;
+  }
+  return (
+    (install.spec ? parseRegistryNpmSpec(install.spec)?.name : undefined) ??
+    (install.resolvedSpec ? parseRegistryNpmSpec(install.resolvedSpec)?.name : undefined)
+  );
+}
+
+function resolvePluginUpdateSelection(params: {
+  installs: Record<string, PluginInstallRecord>;
+  rawId?: string;
+  all?: boolean;
+}): { pluginIds: string[]; specOverrides?: Record<string, string> } {
+  if (params.all) {
+    return { pluginIds: Object.keys(params.installs) };
+  }
+  if (!params.rawId) {
+    return { pluginIds: [] };
+  }
+
+  const parsedSpec = parseRegistryNpmSpec(params.rawId);
+  if (!parsedSpec || parsedSpec.selectorKind === "none") {
+    return { pluginIds: [params.rawId] };
+  }
+
+  const matches = Object.entries(params.installs).filter(([, install]) => {
+    return extractInstalledNpmPackageName(install) === parsedSpec.name;
+  });
+  if (matches.length !== 1) {
+    return { pluginIds: [params.rawId] };
+  }
+
+  const [pluginId] = matches[0];
+  if (!pluginId) {
+    return { pluginIds: [params.rawId] };
+  }
+  return {
+    pluginIds: [pluginId],
+    specOverrides: {
+      [pluginId]: parsedSpec.raw,
+    },
   };
 }
 
@@ -1032,7 +1083,12 @@ export function registerPluginsCli(program: Command) {
     .action(async (id: string | undefined, opts: PluginUpdateOptions) => {
       const cfg = loadConfig();
       const installs = cfg.plugins?.installs ?? {};
-      const targets = opts.all ? Object.keys(installs) : id ? [id] : [];
+      const selection = resolvePluginUpdateSelection({
+        installs,
+        rawId: id,
+        all: opts.all,
+      });
+      const targets = selection.pluginIds;
 
       if (targets.length === 0) {
         if (opts.all) {
@@ -1046,6 +1102,7 @@ export function registerPluginsCli(program: Command) {
       const result = await updateNpmInstalledPlugins({
         config: cfg,
         pluginIds: targets,
+        specOverrides: selection.specOverrides,
         dryRun: opts.dryRun,
         logger: {
           info: (msg) => defaultRuntime.log(msg),

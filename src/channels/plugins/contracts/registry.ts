@@ -1,9 +1,17 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { expect, vi } from "vitest";
 import {
   __testing as discordThreadBindingTesting,
   createThreadBindingManager as createDiscordThreadBindingManager,
 } from "../../../../extensions/discord/runtime-api.js";
 import { createFeishuThreadBindingManager } from "../../../../extensions/feishu/api.js";
+import {
+  createMatrixThreadBindingManager,
+  resetMatrixThreadBindingsForTests,
+} from "../../../../extensions/matrix/api.js";
+import { setMatrixRuntime } from "../../../../extensions/matrix/index.js";
 import { createTelegramThreadBindingManager } from "../../../../extensions/telegram/runtime-api.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
@@ -22,6 +30,12 @@ import {
   requireBundledChannelPlugin,
 } from "../bundled.js";
 import type { ChannelPlugin } from "../types.js";
+import {
+  channelPluginSurfaceKeys,
+  type ChannelPluginSurface,
+  sessionBindingContractChannelIds,
+  type SessionBindingContractChannelId,
+} from "./manifest.js";
 
 type PluginContractEntry = {
   id: string;
@@ -72,27 +86,6 @@ type StatusContractEntry = {
   }>;
 };
 
-export const channelPluginSurfaceKeys = [
-  "actions",
-  "setup",
-  "status",
-  "outbound",
-  "messaging",
-  "threading",
-  "directory",
-  "gateway",
-] as const;
-
-export type ChannelPluginSurface =
-  | "actions"
-  | "setup"
-  | "status"
-  | "outbound"
-  | "messaging"
-  | "threading"
-  | "directory"
-  | "gateway";
-
 type SurfaceContractEntry = {
   id: string;
   plugin: Pick<
@@ -126,7 +119,7 @@ type DirectoryContractEntry = {
 type SessionBindingContractEntry = {
   id: string;
   expectedCapabilities: SessionBindingCapabilities;
-  getCapabilities: () => SessionBindingCapabilities;
+  getCapabilities: () => SessionBindingCapabilities | Promise<SessionBindingCapabilities>;
   bindAndResolve: () => Promise<SessionBindingRecord>;
   unbindAndVerify: (binding: SessionBindingRecord) => Promise<void>;
   cleanup: () => Promise<void> | void;
@@ -136,6 +129,7 @@ function expectResolvedSessionBinding(params: {
   channel: string;
   accountId: string;
   conversationId: string;
+  parentConversationId?: string;
   targetSessionKey: string;
 }) {
   expect(
@@ -143,6 +137,7 @@ function expectResolvedSessionBinding(params: {
       channel: params.channel,
       accountId: params.accountId,
       conversationId: params.conversationId,
+      parentConversationId: params.parentConversationId,
     }),
   )?.toMatchObject({
     targetSessionKey: params.targetSessionKey,
@@ -175,6 +170,12 @@ function expectClearedSessionBinding(params: {
 
 const telegramDescribeMessageToolMock = vi.fn();
 const discordDescribeMessageToolMock = vi.fn();
+const sendMessageMatrixMock = vi.hoisted(() =>
+  vi.fn(async (to: string, _message: string, opts?: { threadId?: string }) => ({
+    messageId: opts?.threadId ? "$matrix-thread" : "$matrix-root",
+    roomId: to.replace(/^room:/, ""),
+  })),
+);
 
 bundledChannelRuntimeSetters.setTelegramRuntime({
   channel: {
@@ -206,6 +207,48 @@ bundledChannelRuntimeSetters.setLineRuntime({
     },
   },
 } as never);
+
+vi.mock("../../../../extensions/matrix/runtime-api.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../../../extensions/matrix/runtime-api.js")
+  >("../../../../extensions/matrix/runtime-api.js");
+  return {
+    ...actual,
+    sendMessageMatrix: sendMessageMatrixMock,
+  };
+});
+
+const matrixSessionBindingStateDir = fs.mkdtempSync(
+  path.join(os.tmpdir(), "openclaw-matrix-session-binding-contract-"),
+);
+const matrixSessionBindingAuth = {
+  accountId: "ops",
+  homeserver: "https://matrix.example.org",
+  userId: "@bot:example.org",
+  accessToken: "token",
+} as const;
+
+function resetMatrixSessionBindingStateDir() {
+  fs.rmSync(matrixSessionBindingStateDir, { recursive: true, force: true });
+  fs.mkdirSync(matrixSessionBindingStateDir, { recursive: true });
+}
+
+async function createContractMatrixThreadBindingManager() {
+  resetMatrixSessionBindingStateDir();
+  setMatrixRuntime({
+    state: {
+      resolveStateDir: () => matrixSessionBindingStateDir,
+    },
+  } as never);
+  return await createMatrixThreadBindingManager({
+    accountId: matrixSessionBindingAuth.accountId,
+    auth: matrixSessionBindingAuth,
+    client: {} as never,
+    idleTimeoutMs: 24 * 60 * 60 * 1000,
+    maxAgeMs: 0,
+    enableSweeper: false,
+  });
+}
 
 export const pluginContractRegistry: PluginContractEntry[] = bundledChannelPlugins.map(
   (plugin) => ({
@@ -589,9 +632,11 @@ const baseSessionBindingCfg = {
   session: { mainKey: "main", scope: "per-sender" },
 } satisfies OpenClawConfig;
 
-export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
-  {
-    id: "discord",
+const sessionBindingContractEntries: Record<
+  SessionBindingContractChannelId,
+  Omit<SessionBindingContractEntry, "id">
+> = {
+  discord: {
     expectedCapabilities: {
       adapterAvailable: true,
       bindSupported: true,
@@ -653,8 +698,7 @@ export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
       });
     },
   },
-  {
-    id: "feishu",
+  feishu: {
     expectedCapabilities: {
       adapterAvailable: true,
       bindSupported: true,
@@ -708,8 +752,57 @@ export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
       });
     },
   },
-  {
-    id: "telegram",
+  matrix: {
+    expectedCapabilities: {
+      adapterAvailable: true,
+      bindSupported: true,
+      unbindSupported: true,
+      placements: ["current", "child"],
+    },
+    getCapabilities: async () => {
+      await createContractMatrixThreadBindingManager();
+      return getSessionBindingService().getCapabilities({
+        channel: "matrix",
+        accountId: matrixSessionBindingAuth.accountId,
+      });
+    },
+    bindAndResolve: async () => {
+      await createContractMatrixThreadBindingManager();
+      const service = getSessionBindingService();
+      const binding = await service.bind({
+        targetSessionKey: "agent:matrix:child:thread-1",
+        targetKind: "subagent",
+        conversation: {
+          channel: "matrix",
+          accountId: matrixSessionBindingAuth.accountId,
+          conversationId: "$thread",
+          parentConversationId: "!room:example",
+        },
+        placement: "current",
+        metadata: {
+          label: "codex-matrix",
+        },
+      });
+      expectResolvedSessionBinding({
+        channel: "matrix",
+        accountId: matrixSessionBindingAuth.accountId,
+        conversationId: "$thread",
+        targetSessionKey: "agent:matrix:child:thread-1",
+      });
+      return binding;
+    },
+    unbindAndVerify: unbindAndExpectClearedSessionBinding,
+    cleanup: async () => {
+      resetMatrixThreadBindingsForTests();
+      resetMatrixSessionBindingStateDir();
+      expectClearedSessionBinding({
+        channel: "matrix",
+        accountId: matrixSessionBindingAuth.accountId,
+        conversationId: "$thread",
+      });
+    },
+  },
+  telegram: {
     expectedCapabilities: {
       adapterAvailable: true,
       bindSupported: true,
@@ -770,4 +863,10 @@ export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
       });
     },
   },
-];
+};
+
+export const sessionBindingContractRegistry: SessionBindingContractEntry[] =
+  sessionBindingContractChannelIds.map((id) => ({
+    id,
+    ...sessionBindingContractEntries[id],
+  }));

@@ -1,10 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { DmPolicy, GroupPolicy } from "../../config/types.js";
 import type { SecretInput } from "../../config/types.secrets.js";
-import {
-  promptSecretRefForSetup,
-  resolveSecretInputModeForEnvSelection,
-} from "../../plugins/provider-auth-input.js";
+import { resolveSecretInputModeForEnvSelection } from "../../plugins/provider-auth-mode.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import {
@@ -17,6 +14,15 @@ import type {
   PromptAccountIdParams,
 } from "./setup-wizard-types.js";
 import type { ChannelSetupWizard, ChannelSetupWizardAllowFromEntry } from "./setup-wizard.js";
+
+let providerAuthInputPromise:
+  | Promise<Pick<typeof import("../../plugins/provider-auth-ref.js"), "promptSecretRefForSetup">>
+  | undefined;
+
+function loadProviderAuthInput() {
+  providerAuthInputPromise ??= import("../../plugins/provider-auth-ref.js");
+  return providerAuthInputPromise;
+}
 
 export const promptAccountId: PromptAccountId = async (params: PromptAccountIdParams) => {
   const existingIds = params.listAccountIds(params.cfg);
@@ -1035,6 +1041,7 @@ export async function promptSingleChannelSecretInput(params: {
     }
   }
 
+  const { promptSecretRefForSetup } = await loadProviderAuthInput();
   const resolved = await promptSecretRefForSetup({
     provider: params.providerHint,
     config: params.cfg,

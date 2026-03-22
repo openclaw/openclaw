@@ -1,73 +1,207 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { clearMatrixRuntime, setMatrixRuntime } from "../runtime.js";
-import { loadMatrixCredentials, resolveMatrixCredentialsDir } from "./credentials.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { installMatrixTestRuntime } from "../test-runtime.js";
+import {
+  credentialsMatchConfig,
+  loadMatrixCredentials,
+  clearMatrixCredentials,
+  resolveMatrixCredentialsPath,
+  saveMatrixCredentials,
+  touchMatrixCredentials,
+} from "./credentials.js";
 
-describe("matrix credentials paths", () => {
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-
-  beforeEach(() => {
-    clearMatrixRuntime();
-    delete process.env.OPENCLAW_STATE_DIR;
-  });
+describe("matrix credentials storage", () => {
+  const tempDirs: string[] = [];
 
   afterEach(() => {
-    clearMatrixRuntime();
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("falls back to OPENCLAW_STATE_DIR when runtime is not initialized", () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-creds-"));
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-
-    expect(resolveMatrixCredentialsDir(process.env)).toBe(
-      path.join(stateDir, "credentials", "matrix"),
-    );
-  });
-
-  it("prefers runtime state dir when runtime is initialized", () => {
-    const runtimeStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-runtime-"));
-    const envStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-env-"));
-    process.env.OPENCLAW_STATE_DIR = envStateDir;
-
-    setMatrixRuntime({
-      state: {
-        resolveStateDir: () => runtimeStateDir,
+  function setupStateDir(
+    cfg: Record<string, unknown> = {
+      channels: {
+        matrix: {},
       },
-    } as never);
+    },
+  ): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-creds-"));
+    tempDirs.push(dir);
+    installMatrixTestRuntime({ cfg, stateDir: dir });
+    return dir;
+  }
 
-    expect(resolveMatrixCredentialsDir(process.env)).toBe(
-      path.join(runtimeStateDir, "credentials", "matrix"),
-    );
-  });
-
-  it("prefers explicit stateDir argument over runtime/env", () => {
-    const explicitStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-explicit-"));
-    const runtimeStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-runtime-"));
-    process.env.OPENCLAW_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-env-"));
-
-    setMatrixRuntime({
-      state: {
-        resolveStateDir: () => runtimeStateDir,
+  it("writes credentials atomically with secure file permissions", async () => {
+    const stateDir = setupStateDir();
+    await saveMatrixCredentials(
+      {
+        homeserver: "https://matrix.example.org",
+        userId: "@bot:example.org",
+        accessToken: "secret-token",
+        deviceId: "DEVICE123",
       },
-    } as never);
-
-    expect(resolveMatrixCredentialsDir(process.env, explicitStateDir)).toBe(
-      path.join(explicitStateDir, "credentials", "matrix"),
+      {},
+      "ops",
     );
+
+    const credPath = resolveMatrixCredentialsPath({}, "ops");
+    expect(fs.existsSync(credPath)).toBe(true);
+    expect(credPath).toBe(path.join(stateDir, "credentials", "matrix", "credentials-ops.json"));
+    const mode = fs.statSync(credPath).mode & 0o777;
+    expect(mode).toBe(0o600);
   });
 
-  it("returns null without throwing when credentials are missing and runtime is absent", () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-creds-missing-"));
-    process.env.OPENCLAW_STATE_DIR = stateDir;
+  it("touch updates lastUsedAt while preserving createdAt", async () => {
+    setupStateDir();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-03-01T10:00:00.000Z"));
+      await saveMatrixCredentials(
+        {
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accessToken: "secret-token",
+        },
+        {},
+        "default",
+      );
+      const initial = loadMatrixCredentials({}, "default");
+      expect(initial).not.toBeNull();
 
-    expect(() => loadMatrixCredentials(process.env)).not.toThrow();
-    expect(loadMatrixCredentials(process.env)).toBeNull();
+      vi.setSystemTime(new Date("2026-03-01T10:05:00.000Z"));
+      await touchMatrixCredentials({}, "default");
+      const touched = loadMatrixCredentials({}, "default");
+      expect(touched).not.toBeNull();
+
+      expect(touched?.createdAt).toBe(initial?.createdAt);
+      expect(touched?.lastUsedAt).toBe("2026-03-01T10:05:00.000Z");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("migrates legacy matrix credential files on read", async () => {
+    const stateDir = setupStateDir({
+      channels: {
+        matrix: {
+          accounts: {
+            ops: {},
+          },
+        },
+      },
+    });
+    const legacyPath = path.join(stateDir, "credentials", "matrix", "credentials.json");
+    const currentPath = resolveMatrixCredentialsPath({}, "ops");
+    fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
+    fs.writeFileSync(
+      legacyPath,
+      JSON.stringify({
+        homeserver: "https://matrix.example.org",
+        userId: "@bot:example.org",
+        accessToken: "legacy-token",
+        createdAt: "2026-03-01T10:00:00.000Z",
+      }),
+    );
+
+    const loaded = loadMatrixCredentials({}, "ops");
+
+    expect(loaded?.accessToken).toBe("legacy-token");
+    expect(fs.existsSync(legacyPath)).toBe(false);
+    expect(fs.existsSync(currentPath)).toBe(true);
+  });
+
+  it("does not migrate legacy default credentials during a non-selected account read", () => {
+    const stateDir = setupStateDir({
+      channels: {
+        matrix: {
+          defaultAccount: "default",
+          accounts: {
+            default: {
+              homeserver: "https://matrix.default.example.org",
+              accessToken: "default-token",
+            },
+            ops: {},
+          },
+        },
+      },
+    });
+    const legacyPath = path.join(stateDir, "credentials", "matrix", "credentials.json");
+    const currentPath = resolveMatrixCredentialsPath({}, "ops");
+    fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
+    fs.writeFileSync(
+      legacyPath,
+      JSON.stringify({
+        homeserver: "https://matrix.default.example.org",
+        userId: "@default:example.org",
+        accessToken: "default-token",
+        createdAt: "2026-03-01T10:00:00.000Z",
+      }),
+    );
+
+    const loaded = loadMatrixCredentials({}, "ops");
+
+    expect(loaded).toBeNull();
+    expect(fs.existsSync(legacyPath)).toBe(true);
+    expect(fs.existsSync(currentPath)).toBe(false);
+  });
+
+  it("clears both current and legacy credential paths", () => {
+    const stateDir = setupStateDir({
+      channels: {
+        matrix: {
+          accounts: {
+            ops: {},
+          },
+        },
+      },
+    });
+    const currentPath = resolveMatrixCredentialsPath({}, "ops");
+    const legacyPath = path.join(stateDir, "credentials", "matrix", "credentials.json");
+    fs.mkdirSync(path.dirname(currentPath), { recursive: true });
+    fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
+    fs.writeFileSync(currentPath, "{}");
+    fs.writeFileSync(legacyPath, "{}");
+
+    clearMatrixCredentials({}, "ops");
+
+    expect(fs.existsSync(currentPath)).toBe(false);
+    expect(fs.existsSync(legacyPath)).toBe(false);
+  });
+
+  it("requires a token match when userId is absent", () => {
+    expect(
+      credentialsMatchConfig(
+        {
+          homeserver: "https://matrix.example.org",
+          userId: "@old:example.org",
+          accessToken: "tok-old",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+        {
+          homeserver: "https://matrix.example.org",
+          userId: "",
+          accessToken: "tok-new",
+        },
+      ),
+    ).toBe(false);
+
+    expect(
+      credentialsMatchConfig(
+        {
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accessToken: "tok-123",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+        {
+          homeserver: "https://matrix.example.org",
+          userId: "",
+          accessToken: "tok-123",
+        },
+      ),
+    ).toBe(true);
   });
 });

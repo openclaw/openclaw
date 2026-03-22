@@ -93,6 +93,17 @@ describe("monitorDiscordProvider", () => {
     return opts.eventQueue;
   };
 
+  const getConstructedClientOptions = (): {
+    eventQueue?: { listenerTimeout?: number };
+  } => {
+    expect(clientConstructorOptionsMock).toHaveBeenCalledTimes(1);
+    return (
+      (clientConstructorOptionsMock.mock.calls[0]?.[0] as {
+        eventQueue?: { listenerTimeout?: number };
+      }) ?? {}
+    );
+  };
+
   const getHealthProbe = () => {
     expect(reconcileAcpThreadBindingsOnStartupMock).toHaveBeenCalledTimes(1);
     const firstCall = reconcileAcpThreadBindingsOnStartupMock.mock.calls.at(0) as
@@ -468,6 +479,43 @@ describe("monitorDiscordProvider", () => {
     expect(commandNames).toContain("cron_jobs");
   });
 
+  it("registers plugin commands from the real registry as native Discord commands", async () => {
+    const { clearPluginCommands, getPluginCommandSpecs, registerPluginCommand } =
+      await import("../../../../src/plugins/commands.js");
+    clearPluginCommands();
+    const { monitorDiscordProvider } = await import("./provider.js");
+    listNativeCommandSpecsForConfigMock.mockReturnValue([
+      { name: "status", description: "Status", acceptsArgs: false },
+    ]);
+    getPluginCommandSpecsMock.mockImplementation((provider?: string) =>
+      getPluginCommandSpecs(provider),
+    );
+
+    expect(
+      registerPluginCommand("demo-plugin", {
+        name: "pair",
+        description: "Pair device",
+        acceptsArgs: true,
+        requireAuth: false,
+        handler: async ({ args }) => ({ text: `paired:${args ?? ""}` }),
+      }),
+    ).toEqual({ ok: true });
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    const commandNames = (createDiscordNativeCommandMock.mock.calls as Array<unknown[]>)
+      .map((call) => (call[0] as { command?: { name?: string } } | undefined)?.command?.name)
+      .filter((value): value is string => typeof value === "string");
+
+    expect(commandNames).toContain("status");
+    expect(commandNames).toContain("pair");
+    expect(clientHandleDeployRequestMock).toHaveBeenCalledTimes(1);
+    expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
+  });
+
   it("continues startup when Discord daily slash-command create quota is exhausted", async () => {
     const { RateLimitError } = await import("@buape/carbon");
     const { monitorDiscordProvider } = await import("./provider.js");
@@ -500,6 +548,18 @@ describe("monitorDiscordProvider", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("native command deploy skipped"),
     );
+  });
+
+  it("configures Carbon native deploy by default", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    expect(clientHandleDeployRequestMock).toHaveBeenCalledTimes(1);
+    expect(getConstructedClientOptions().eventQueue?.listenerTimeout).toBe(120_000);
   });
 
   it("reports connected status on startup and shutdown", async () => {

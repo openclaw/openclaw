@@ -3,13 +3,14 @@ import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
 
 type MemoryIndexModule = typeof import("./index.js");
 
 let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
+let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
 
 let embedBatchCalls = 0;
 let embedBatchInputCalls = 0;
@@ -125,14 +126,12 @@ describe("memory index", () => {
     }),
   ].join("\n");
 
-  // Perf: keep managers open across tests, but only reset the one a test uses.
-  const managersByCacheKey = new Map<string, MemoryIndexManager>();
   const managersForCleanup = new Set<MemoryIndexManager>();
 
   beforeAll(async () => {
     vi.resetModules();
     await import("./test-runtime-mocks.js");
-    ({ getMemorySearchManager } = await import("./index.js"));
+    ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-fixtures-"));
     workspaceDir = path.join(fixtureRoot, "workspace");
     memoryDir = path.join(workspaceDir, "memory");
@@ -158,6 +157,11 @@ describe("memory index", () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
+  afterEach(async () => {
+    await closeAllMemorySearchManagers();
+    managersForCleanup.clear();
+  });
+
   beforeEach(async () => {
     // Perf: most suites don't need atomic swap behavior for full reindexes.
     // Keep atomic reindex tests on the safe path.
@@ -166,7 +170,6 @@ describe("memory index", () => {
     embedBatchInputCalls = 0;
     providerCalls = [];
 
-    // Keep the workspace stable to allow manager reuse across tests.
     mkdirSync(memoryDir, { recursive: true });
 
     // Clean additional paths that may have been created by earlier cases.
@@ -176,10 +179,21 @@ describe("memory index", () => {
   function resetManagerForTest(manager: MemoryIndexManager) {
     // These tests reuse managers for performance. Clear the index + embedding
     // cache to keep each test fully isolated.
+    const db = (
+      manager as unknown as {
+        db: {
+          exec: (sql: string) => void;
+          prepare: (sql: string) => { get: (name: string) => { name?: string } | undefined };
+        };
+      }
+    ).db;
     (manager as unknown as { resetIndex: () => void }).resetIndex();
-    (manager as unknown as { db: { exec: (sql: string) => void } }).db.exec(
-      "DELETE FROM embedding_cache",
-    );
+    const embeddingCacheTable = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get("embedding_cache");
+    if (embeddingCacheTable?.name === "embedding_cache") {
+      db.exec("DELETE FROM embedding_cache");
+    }
     (manager as unknown as { dirty: boolean }).dirty = true;
     (manager as unknown as { sessionsDirty: boolean }).sessionsDirty = false;
   }
@@ -243,30 +257,9 @@ describe("memory index", () => {
     return result.manager as MemoryIndexManager;
   }
 
-  function getManagerCacheKey(cfg: TestCfg): string {
-    const memorySearch = cfg.agents?.defaults?.memorySearch;
-    const storePath = memorySearch?.store?.path;
-    if (!storePath) {
-      throw new Error("store path missing");
-    }
-    return JSON.stringify({
-      workspaceDir,
-      storePath,
-      memorySearch,
-    });
-  }
-
   async function getPersistentManager(cfg: TestCfg): Promise<MemoryIndexManager> {
-    const cacheKey = getManagerCacheKey(cfg);
-    const cached = managersByCacheKey.get(cacheKey);
-    if (cached) {
-      resetManagerForTest(cached);
-      return cached;
-    }
-
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     const manager = requireManager(result);
-    managersByCacheKey.set(cacheKey, manager);
     managersForCleanup.add(manager);
     resetManagerForTest(manager);
     return manager;
@@ -424,6 +417,7 @@ describe("memory index", () => {
     const firstManager = requireManager(first);
     await firstManager.sync?.({ reason: "test" });
     await firstManager.close?.();
+    const providerCallsBeforeStatus = providerCalls.length;
 
     const statusOnly = await getMemorySearchManager({
       cfg,
@@ -433,6 +427,8 @@ describe("memory index", () => {
     const statusManager = requireManager(statusOnly, "status manager missing");
     const status = statusManager.status();
     expect(status.dirty).toBe(false);
+    expect(status.provider).toBe("openai");
+    expect(providerCalls).toHaveLength(providerCallsBeforeStatus);
     await statusManager.close?.();
   });
 

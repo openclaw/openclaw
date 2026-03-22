@@ -157,12 +157,17 @@ async function bindSpawnedAcpSessionToThread(params: {
   }
 
   const senderId = commandParams.command.senderId?.trim() || "";
+  const parentConversationId = bindingContext.parentConversationId?.trim() || undefined;
+  const conversationRef = {
+    channel: spawnPolicy.channel,
+    accountId: spawnPolicy.accountId,
+    conversationId: currentConversationId,
+    ...(parentConversationId && parentConversationId !== currentConversationId
+      ? { parentConversationId }
+      : {}),
+  };
   if (placement === "current") {
-    const existingBinding = bindingService.resolveByConversation({
-      channel: spawnPolicy.channel,
-      accountId: spawnPolicy.accountId,
-      conversationId: currentConversationId,
-    });
+    const existingBinding = bindingService.resolveByConversation(conversationRef);
     const boundBy =
       typeof existingBinding?.metadata?.boundBy === "string"
         ? existingBinding.metadata.boundBy.trim()
@@ -176,17 +181,12 @@ async function bindSpawnedAcpSessionToThread(params: {
   }
 
   const label = params.label || params.agentId;
-  const conversationId = currentConversationId;
 
   try {
     const binding = await bindingService.bind({
       targetSessionKey: params.sessionKey,
       targetKind: "session",
-      conversation: {
-        channel: spawnPolicy.channel,
-        accountId: spawnPolicy.accountId,
-        conversationId,
-      },
+      conversation: conversationRef,
       placement,
       metadata: {
         threadName: resolveThreadBindingThreadName({
