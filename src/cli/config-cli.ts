@@ -73,7 +73,6 @@ const OLLAMA_PROVIDER_PATH: PathSegment[] = ["models", "providers", "ollama"];
 const GATEWAY_AUTH_MODE_PATH: PathSegment[] = ["gateway", "auth", "mode"];
 const GATEWAY_NODES_ALLOW_COMMANDS_PATH: PathSegment[] = ["gateway", "nodes", "allowCommands"];
 const GATEWAY_NODES_DENY_COMMANDS_PATH: PathSegment[] = ["gateway", "nodes", "denyCommands"];
-const GATEWAY_NODES_PATH: PathSegment[] = ["gateway", "nodes"];
 const SECRET_PROVIDER_PATH_PREFIX: PathSegment[] = ["secrets", "providers"];
 const CONFIG_SET_EXAMPLE_VALUE = formatCliCommand(
   "openclaw config set gateway.port 19001 --strict-json",
