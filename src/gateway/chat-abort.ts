@@ -1,4 +1,4 @@
-import { isAbortRequestText } from "../auto-reply/reply/abort.js";
+import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 
 export type ChatAbortControllerEntry = {
   controller: AbortController;
