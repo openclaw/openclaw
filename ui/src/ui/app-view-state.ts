@@ -78,6 +78,7 @@ export type AppViewState = {
   chatQueue: ChatQueueItem[];
   chatManualRefreshInFlight: boolean;
   newChatSessionPending: boolean;
+  chatActivityVersion: number;
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
   chatNewMessagesBelow: boolean;

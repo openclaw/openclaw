@@ -32,6 +32,7 @@ export type ChatHost = {
   chatModelOverrides: Record<string, ChatModelOverride | null>;
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
+  chatActivityVersion: number;
   updateComplete?: Promise<unknown>;
   refreshSessionsAfterChat: Set<string>;
   /** Callback for slash-command side effects that need app-level access. */
@@ -94,6 +95,7 @@ function enqueueChatMessage(
   if (!trimmed && !hasAttachments) {
     return;
   }
+  host.chatActivityVersion += 1;
   host.chatQueue = [
     ...host.chatQueue,
     {
@@ -120,6 +122,7 @@ async function sendChatMessageNow(
     refreshSessions?: boolean;
   },
 ) {
+  host.chatActivityVersion += 1;
   resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
   // Reset scroll state before sending to ensure auto-scroll works for the response
   resetChatScroll(host as unknown as Parameters<typeof resetChatScroll>[0]);
@@ -186,6 +189,10 @@ async function flushChatQueue(host: ChatHost) {
 }
 
 export function removeQueuedMessage(host: ChatHost, id: string) {
+  if (!host.chatQueue.some((item) => item.id === id)) {
+    return;
+  }
+  host.chatActivityVersion += 1;
   host.chatQueue = host.chatQueue.filter((item) => item.id !== id);
 }
 
@@ -290,6 +297,7 @@ async function dispatchSlashCommand(
       });
       return;
     case "clear":
+      host.chatActivityVersion += 1;
       await clearChatHistory(host);
       return;
     case "focus":
@@ -304,6 +312,7 @@ async function dispatchSlashCommand(
     return;
   }
 
+  host.chatActivityVersion += 1;
   const targetSessionKey = host.sessionKey;
   const result = await executeSlashCommand(host.client, targetSessionKey, name, args);
 

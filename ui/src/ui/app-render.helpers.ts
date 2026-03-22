@@ -585,6 +585,7 @@ async function createNewChatSession(state: AppViewState) {
   const agentId = parsed?.agentId ?? state.agentsList?.defaultId ?? "main";
   const originSessionKey = state.sessionKey;
   const composerSnapshot = cloneComposerSnapshot(state);
+  const activityVersionAtStart = state.chatActivityVersion;
   const startedWithComposerContent =
     composerSnapshot.message.trim().length > 0 || composerSnapshot.attachments.length > 0;
   state.newChatSessionPending = true;
@@ -596,8 +597,12 @@ async function createNewChatSession(state: AppViewState) {
     });
     if (result?.key) {
       const composerUnchanged = areComposerSnapshotsEqual(state, composerSnapshot);
+      const chatActivityUnchanged = state.chatActivityVersion === activityVersionAtStart;
       const safeToAutoSwitch =
-        state.sessionKey === originSessionKey && !startedWithComposerContent && composerUnchanged;
+        state.sessionKey === originSessionKey &&
+        !startedWithComposerContent &&
+        composerUnchanged &&
+        chatActivityUnchanged;
       if (safeToAutoSwitch) {
         state.chatAttachments = [];
         switchChatSession(state, result.key);
