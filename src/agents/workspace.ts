@@ -484,8 +484,20 @@ async function resolveMemoryBootstrapEntry(
   return null;
 }
 
+/** Widen the boundary to the workspace root for agent dirs inside it; otherwise use the agent dir. */
+function resolveWorkspaceBoundary(agentDir: string): string {
+  const resolved = path.resolve(agentDir);
+  const workspaceRoot = path.resolve(DEFAULT_AGENT_WORKSPACE_DIR);
+  const rel = path.relative(workspaceRoot, resolved);
+  if (rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))) {
+    return workspaceRoot;
+  }
+  return resolved;
+}
+
 export async function loadWorkspaceBootstrapFiles(dir: string): Promise<WorkspaceBootstrapFile[]> {
   const resolvedDir = resolveUserPath(dir);
+  const boundaryDir = resolveWorkspaceBoundary(resolvedDir);
 
   const entries: Array<{
     name: WorkspaceBootstrapFileName;
@@ -530,7 +542,7 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
   for (const entry of entries) {
     const loaded = await readWorkspaceFileWithGuards({
       filePath: entry.filePath,
-      workspaceDir: resolvedDir,
+      workspaceDir: boundaryDir,
     });
     if (loaded.ok) {
       result.push({
@@ -583,6 +595,7 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
     return { files: [], diagnostics: [] };
   }
   const resolvedDir = resolveUserPath(dir);
+  const boundaryDir = resolveWorkspaceBoundary(resolvedDir);
 
   // Resolve glob patterns into concrete file paths
   const resolvedPaths = new Set<string>();
@@ -618,7 +631,7 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
     }
     const loaded = await readWorkspaceFileWithGuards({
       filePath,
-      workspaceDir: resolvedDir,
+      workspaceDir: boundaryDir,
     });
     if (loaded.ok) {
       files.push({
