@@ -394,6 +394,7 @@ export async function runEmbeddedPiAgent(
         modelId,
         modelContextWindow: runtimeModel.contextWindow,
         defaultTokens: DEFAULT_CONTEXT_TOKENS,
+        agentId: params.agentId,
       });
       // Apply contextTokens cap to model so pi-coding-agent's auto-compaction
       // threshold uses the effective limit, not the native context window.

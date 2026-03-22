@@ -24,6 +24,7 @@ export function resolveContextWindowInfo(params: {
   modelId: string;
   modelContextWindow?: number;
   defaultTokens: number;
+  agentId?: string;
 }): ContextWindowInfo {
   const fromModelsConfig = (() => {
     const providers = params.cfg?.models?.providers as
@@ -40,6 +41,17 @@ export function resolveContextWindowInfo(params: {
     : fromModel
       ? { tokens: fromModel, source: "model" as const }
       : { tokens: Math.floor(params.defaultTokens), source: "default" as const };
+
+  // Per-agent contextTokens override takes priority over global defaults.
+  const agentEntry = params.agentId
+    ? (
+        params.cfg?.agents?.list as Array<{ id?: string; contextTokens?: number }> | undefined
+      )?.find((a) => a?.id === params.agentId)
+    : undefined;
+  const perAgentCap = normalizePositiveInt(agentEntry?.contextTokens);
+  if (perAgentCap && perAgentCap < baseInfo.tokens) {
+    return { tokens: perAgentCap, source: "agentContextTokens" };
+  }
 
   const capTokens = normalizePositiveInt(params.cfg?.agents?.defaults?.contextTokens);
   if (capTokens && capTokens < baseInfo.tokens) {

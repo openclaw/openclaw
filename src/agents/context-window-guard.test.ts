@@ -102,6 +102,44 @@ describe("context-window-guard", () => {
     expect(guard.shouldBlock).toBe(false);
   });
 
+  it("caps with per-agent contextTokens overriding defaults", () => {
+    const cfg = {
+      agents: {
+        defaults: { contextTokens: 200_000 },
+        list: [{ id: "frontdesk", contextTokens: 131_000 }],
+      },
+    } satisfies OpenClawConfig;
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "anthropic",
+      modelId: "whatever",
+      modelContextWindow: 200_000,
+      defaultTokens: 200_000,
+      agentId: "frontdesk",
+    });
+    expect(info.source).toBe("agentContextTokens");
+    expect(info.tokens).toBe(131_000);
+  });
+
+  it("falls back to defaults.contextTokens when agentId has no per-agent cap", () => {
+    const cfg = {
+      agents: {
+        defaults: { contextTokens: 100_000 },
+        list: [{ id: "frontdesk", contextTokens: 131_000 }],
+      },
+    } satisfies OpenClawConfig;
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "anthropic",
+      modelId: "whatever",
+      modelContextWindow: 200_000,
+      defaultTokens: 200_000,
+      agentId: "reviewer",
+    });
+    expect(info.source).toBe("agentContextTokens");
+    expect(info.tokens).toBe(100_000);
+  });
+
   it("does not override when cap exceeds base window", () => {
     const cfg = {
       agents: { defaults: { contextTokens: 128_000 } },
