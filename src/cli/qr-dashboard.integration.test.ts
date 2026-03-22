@@ -35,6 +35,9 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
+let registerQrCli: typeof import("./qr-cli.js").registerQrCli;
+let registerMaintenanceCommands: typeof import("./program/register.maintenance.js").registerMaintenanceCommands;
+
 function createGatewayTokenRefFixture() {
   return {
     secrets: {
@@ -78,28 +81,30 @@ function decodeSetupCode(setupCode: string): {
 }
 
 async function runCli(args: string[]): Promise<void> {
-  await withCliModules(async ({ registerQrCli, registerMaintenanceCommands }) => {
-    const program = new Command();
-    registerQrCli(program);
-    registerMaintenanceCommands(program);
-    await program.parseAsync(args, { from: "user" });
-  });
+  const program = new Command();
+  registerQrCli(program);
+  registerMaintenanceCommands(program);
+  await program.parseAsync(args, { from: "user" });
 }
 
-async function withCliModules<T>(
-  run: (modules: {
-    registerQrCli: typeof import("./qr-cli.js").registerQrCli;
-    registerMaintenanceCommands: typeof import("./program/register.maintenance.js").registerMaintenanceCommands;
-  }) => Promise<T>,
-): Promise<T> {
+const mockedModuleIds = ["../config/config.js", "../infra/clipboard.js", "../runtime.js"];
+
+const unmockedDependencyIds = [
+  "../commands/dashboard.js",
+  "../gateway/resolve-configured-secret-input-string.js",
+  "../pairing/setup-code.js",
+  "./command-secret-gateway.js",
+  "./program/register.maintenance.js",
+  "./qr-cli.js",
+];
+
+async function loadCliModules() {
   vi.resetModules();
-  try {
-    const { registerQrCli } = await import("./qr-cli.js");
-    const { registerMaintenanceCommands } = await import("./program/register.maintenance.js");
-    return await run({ registerQrCli, registerMaintenanceCommands });
-  } finally {
-    vi.restoreAllMocks();
+  for (const id of unmockedDependencyIds) {
+    vi.doUnmock(id);
   }
+  ({ registerQrCli } = await import("./qr-cli.js"));
+  ({ registerMaintenanceCommands } = await import("./program/register.maintenance.js"));
 }
 
 describe("cli integration: qr + dashboard token SecretRef", () => {
@@ -115,9 +120,19 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     ]);
   });
 
+  beforeAll(async () => {
+    await loadCliModules();
+  });
+
   afterAll(() => {
     envSnapshot.restore();
     vi.restoreAllMocks();
+    for (const id of mockedModuleIds) {
+      vi.doUnmock(id);
+    }
+    for (const id of unmockedDependencyIds) {
+      vi.doUnmock(id);
+    }
     vi.resetModules();
   });
 

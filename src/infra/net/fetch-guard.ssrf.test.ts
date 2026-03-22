@@ -1,4 +1,3 @@
-import { EnvHttpProxyAgent } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "./fetch-guard.js";
 
@@ -11,6 +10,14 @@ function redirectResponse(location: string): Response {
 
 function okResponse(body = "ok"): Response {
   return new Response(body, { status: 200 });
+}
+
+function getDispatcherClassName(value: unknown): string | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const ctor = (value as { constructor?: unknown }).constructor;
+  return typeof ctor === "function" && ctor.name ? ctor.name : null;
 }
 
 function getSecondRequestHeaders(fetchImpl: ReturnType<typeof vi.fn>): Headers {
@@ -70,10 +77,10 @@ describe("fetchWithSsrFGuard hardening", () => {
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const requestInit = init as RequestInit & { dispatcher?: unknown };
       if (params.expectEnvProxy) {
-        expect(requestInit.dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+        expect(getDispatcherClassName(requestInit.dispatcher)).toBe("EnvHttpProxyAgent");
       } else {
         expect(requestInit.dispatcher).toBeDefined();
-        expect(requestInit.dispatcher).not.toBeInstanceOf(EnvHttpProxyAgent);
+        expect(getDispatcherClassName(requestInit.dispatcher)).not.toBe("EnvHttpProxyAgent");
       }
       return okResponse();
     });
