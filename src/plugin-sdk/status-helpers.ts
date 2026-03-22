@@ -1,4 +1,7 @@
+import type { ChannelStatusAdapter } from "../channels/plugins/types.adapters.js";
+import type { ChannelAccountSnapshot } from "../channels/plugins/types.core.js";
 import type { ChannelStatusIssue } from "../channels/plugins/types.js";
+import type { OpenClawConfig } from "../config/config.js";
 export { isRecord } from "../channels/plugins/status-issues/shared.js";
 export {
   appendMatchMetadata,
@@ -18,6 +21,21 @@ type RuntimeLifecycleSnapshot = {
 };
 
 type StatusSnapshotExtra = Record<string, unknown>;
+
+type ComputedAccountStatusBase = {
+  accountId: string;
+  name?: string;
+  enabled?: boolean;
+  configured?: boolean;
+};
+
+type ComputedAccountStatusAdapterParams<ResolvedAccount, Probe, Audit> = {
+  account: ResolvedAccount;
+  cfg: OpenClawConfig;
+  runtime?: ChannelAccountSnapshot;
+  probe?: Probe;
+  audit?: Audit;
+};
 
 /** Create the baseline runtime snapshot shape used by channel/account status stores. */
 export function createDefaultChannelRuntimeState<T extends Record<string, unknown>>(
@@ -134,6 +152,50 @@ export function buildComputedAccountStatusSnapshot<TExtra extends StatusSnapshot
     },
     extra,
   );
+}
+
+/** Build a full status adapter when only configured/extras vary per account. */
+export function createComputedAccountStatusAdapter<
+  ResolvedAccount,
+  Probe = unknown,
+  Audit = unknown,
+  TExtra extends StatusSnapshotExtra = StatusSnapshotExtra,
+>(
+  options: Omit<ChannelStatusAdapter<ResolvedAccount, Probe, Audit>, "buildAccountSnapshot"> & {
+    resolveAccountSnapshot: (
+      params: ComputedAccountStatusAdapterParams<ResolvedAccount, Probe, Audit>,
+    ) => ComputedAccountStatusBase & { extra?: TExtra };
+  },
+): ChannelStatusAdapter<ResolvedAccount> {
+  return {
+    defaultRuntime: options.defaultRuntime,
+    buildChannelSummary: options.buildChannelSummary,
+    probeAccount: options.probeAccount,
+    formatCapabilitiesProbe:
+      options.formatCapabilitiesProbe as ChannelStatusAdapter<ResolvedAccount>["formatCapabilitiesProbe"],
+    auditAccount: options.auditAccount as ChannelStatusAdapter<ResolvedAccount>["auditAccount"],
+    buildCapabilitiesDiagnostics:
+      options.buildCapabilitiesDiagnostics as ChannelStatusAdapter<ResolvedAccount>["buildCapabilitiesDiagnostics"],
+    logSelfId: options.logSelfId,
+    resolveAccountState: options.resolveAccountState,
+    collectStatusIssues: options.collectStatusIssues,
+    buildAccountSnapshot: (params) => {
+      const typedParams = params as ComputedAccountStatusAdapterParams<
+        ResolvedAccount,
+        Probe,
+        Audit
+      >;
+      const { extra, ...snapshot } = options.resolveAccountSnapshot(typedParams);
+      return buildComputedAccountStatusSnapshot(
+        {
+          ...snapshot,
+          runtime: typedParams.runtime,
+          probe: typedParams.probe,
+        },
+        extra,
+      );
+    },
+  };
 }
 
 /** Normalize runtime-only account state into the shared status snapshot fields. */
