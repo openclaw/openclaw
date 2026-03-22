@@ -363,7 +363,9 @@ export async function runGreetingPromptForBareNewOrReset(params: {
   expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
   const prompt = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0]?.prompt ?? "";
   expect(prompt).toContain("A new session was started via /new or /reset");
-  expect(prompt).toContain("Run your Session Startup sequence");
+  expect(prompt).toContain("Execute your Session Startup sequence now");
+  expect(prompt).toContain("read the required workspace files before responding to the user");
+  expect(prompt).toContain("Never explain your reboot or setup process.");
 }
 
 export function installTriggerHandlingE2eTestHooks() {
