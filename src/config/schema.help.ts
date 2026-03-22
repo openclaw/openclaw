@@ -321,7 +321,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.exec.security":
     "Execution security posture selector controlling sandbox/approval expectations for command execution. Keep strict security mode for untrusted prompts and relax only for trusted operator workflows.",
   "tools.exec.ask":
-    "Approval strategy for when exec commands require human confirmation before running. Use stricter ask behavior in shared channels and lower-friction settings in private operator contexts.",
+    "Approval strategy for when exec commands require human confirmation before running. Use \"log\" to notify the active channel before running without requiring approval, \"on-miss\" to prompt only when no matching allowlist rule exists, \"always\" to require explicit approval for every command, and \"off\" to skip approval entirely. Use stricter ask behavior in shared channels and lower-friction settings in private operator contexts.",
   "tools.exec.node":
     "Node binding configuration for exec tooling when command execution is delegated through connected nodes. Use explicit node binding only when multi-node routing is required.",
   "tools.agentToAgent":
