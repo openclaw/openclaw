@@ -1,13 +1,21 @@
+import fs from "node:fs";
+import path from "node:path";
+import dotenv from "dotenv";
 import {
   loadAuthProfileStoreForSecretsRuntime,
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { collectConfigServiceEnvVars } from "../config/env-vars.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
+import {
+  isDangerousHostEnvOverrideVarName,
+  isDangerousHostEnvVarName,
+} from "../infra/host-env-security.js";
 import {
   emitDaemonInstallRuntimeWarning,
   resolveDaemonInstallRuntimeInputs,
@@ -17,6 +25,41 @@ import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 export { resolveGatewayDevMode } from "./daemon-install-plan.shared.js";
+
+/**
+ * Read and parse `~/.openclaw/.env` (or `$OPENCLAW_STATE_DIR/.env`), returning
+ * a filtered record of key-value pairs suitable for embedding in a service
+ * environment (LaunchAgent plist, systemd unit, Scheduled Task).
+ *
+ * Security: dangerous host env vars (NODE_OPTIONS, LD_PRELOAD, etc.) are
+ * dropped, matching the same policy applied to config env vars.
+ */
+export function readStateDirDotEnvVars(
+  env: Record<string, string | undefined>,
+): Record<string, string> {
+  const stateDir = resolveStateDir(env as NodeJS.ProcessEnv);
+  const dotEnvPath = path.join(stateDir, ".env");
+
+  let content: string;
+  try {
+    content = fs.readFileSync(dotEnvPath, "utf8");
+  } catch {
+    return {};
+  }
+
+  const parsed = dotenv.parse(content);
+  const entries: Record<string, string> = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (!key || !value?.trim()) {
+      continue;
+    }
+    if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
+      continue;
+    }
+    entries[key] = value;
+  }
+  return entries;
+}
 
 export type GatewayInstallPlan = {
   programArguments: string[];
@@ -93,9 +136,13 @@ export async function buildGatewayInstallPlan(params: {
     extraPathDirs: resolveDaemonNodeBinDir(nodePath),
   });
 
-  // Merge config env vars into the service environment (vars + inline env keys).
-  // Config env vars are added first so service-specific vars take precedence.
+  // Merge env sources into the service environment in ascending priority:
+  //   1. ~/.openclaw/.env file vars  (lowest — user secrets / fallback keys)
+  //   2. Config env vars              (openclaw.json env.vars + inline keys)
+  //   3. Auth-profile env refs        (credential store → env var lookups)
+  //   4. Service environment          (HOME, PATH, OPENCLAW_* — highest)
   const environment: Record<string, string | undefined> = {
+    ...readStateDirDotEnvVars(params.env),
     ...collectConfigServiceEnvVars(params.config),
     ...collectAuthProfileServiceEnvVars({
       env: params.env,
