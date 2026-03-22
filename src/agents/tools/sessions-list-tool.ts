@@ -24,10 +24,36 @@ import {
 } from "./sessions-helpers.js";
 
 const SessionsListToolSchema = Type.Object({
-  kinds: Type.Optional(Type.Array(Type.String())),
-  limit: Type.Optional(Type.Number({ minimum: 1 })),
-  activeMinutes: Type.Optional(Type.Number({ minimum: 1 })),
-  messageLimit: Type.Optional(Type.Number({ minimum: 0 })),
+  kinds: Type.Optional(
+    Type.Array(Type.String(), {
+      description:
+        'Filter by session kind. Valid values: "main", "group", "cron", "hook", "node", "other".',
+    }),
+  ),
+  limit: Type.Optional(
+    Type.Number({
+      minimum: 1,
+      maximum: 50,
+      description:
+        "Max sessions to return. Default: all. Start with 10-20 and increase only if needed.",
+    }),
+  ),
+  activeMinutes: Type.Optional(
+    Type.Number({
+      minimum: 1,
+      maximum: 10080,
+      description:
+        "Only include sessions active within the last N minutes. Use to narrow results. Max: 10080 (7 days).",
+    }),
+  ),
+  messageLimit: Type.Optional(
+    Type.Number({
+      minimum: 0,
+      maximum: 20,
+      description:
+        "Number of recent messages to include per session (0-20). Default: 0. Higher values increase response size significantly.",
+    }),
+  ),
 });
 
 export function createSessionsListTool(opts?: {
@@ -38,7 +64,8 @@ export function createSessionsListTool(opts?: {
   return {
     label: "Sessions",
     name: "sessions_list",
-    description: "List sessions with optional filters and last messages.",
+    description:
+      "List sessions with optional filters. Start with limit=10 and activeMinutes=60 to avoid large responses. Use kinds to filter by type. Set messageLimit only when you need message previews (each message adds to response size).",
     parameters: SessionsListToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

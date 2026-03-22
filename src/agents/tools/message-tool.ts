@@ -155,8 +155,8 @@ function buildReactionSchema() {
 
 function buildFetchSchema() {
   return {
-    limit: Type.Optional(Type.Number()),
-    pageSize: Type.Optional(Type.Number()),
+    limit: Type.Optional(Type.Number({ minimum: 1, maximum: 200 })),
+    pageSize: Type.Optional(Type.Number({ minimum: 1, maximum: 200 })),
     pageToken: Type.Optional(Type.String()),
     before: Type.Optional(Type.String()),
     after: Type.Optional(Type.String()),
@@ -226,7 +226,7 @@ function buildChannelTargetSchema() {
       Type.String({ description: "Chat id for chat-scoped metadata actions." }),
     ),
     channelIds: Type.Optional(
-      Type.Array(Type.String({ description: "Channel id filter (repeatable)." })),
+      Type.Array(Type.String({ description: "Channel id filter (repeatable)." }), { maxItems: 25 }),
     ),
     memberId: Type.Optional(Type.String()),
     memberIdType: Type.Optional(Type.String()),
@@ -235,9 +235,9 @@ function buildChannelTargetSchema() {
     openId: Type.Optional(Type.String()),
     unionId: Type.Optional(Type.String()),
     authorId: Type.Optional(Type.String()),
-    authorIds: Type.Optional(Type.Array(Type.String())),
+    authorIds: Type.Optional(Type.Array(Type.String(), { maxItems: 25 })),
     roleId: Type.Optional(Type.String()),
-    roleIds: Type.Optional(Type.Array(Type.String())),
+    roleIds: Type.Optional(Type.Array(Type.String(), { maxItems: 25 })),
     participant: Type.Optional(Type.String()),
     includeMembers: Type.Optional(Type.Boolean()),
     members: Type.Optional(Type.Boolean()),
@@ -249,7 +249,7 @@ function buildChannelTargetSchema() {
 function buildStickerSchema() {
   return {
     emojiName: Type.Optional(Type.String()),
-    stickerId: Type.Optional(Type.Array(Type.String())),
+    stickerId: Type.Optional(Type.Array(Type.String(), { maxItems: 10 })),
     stickerName: Type.Optional(Type.String()),
     stickerDesc: Type.Optional(Type.String()),
     stickerTags: Type.Optional(Type.String()),
@@ -259,8 +259,8 @@ function buildStickerSchema() {
 function buildThreadSchema() {
   return {
     threadName: Type.Optional(Type.String()),
-    autoArchiveMin: Type.Optional(Type.Number()),
-    appliedTags: Type.Optional(Type.Array(Type.String())),
+    autoArchiveMin: Type.Optional(Type.Number({ minimum: 60, maximum: 10080 })),
+    appliedTags: Type.Optional(Type.Array(Type.String(), { maxItems: 5 })),
   };
 }
 
@@ -273,7 +273,7 @@ function buildEventSchema() {
     endTime: Type.Optional(Type.String()),
     desc: Type.Optional(Type.String()),
     location: Type.Optional(Type.String()),
-    durationMin: Type.Optional(Type.Number()),
+    durationMin: Type.Optional(Type.Number({ minimum: 1, maximum: 10080 })),
     until: Type.Optional(Type.String()),
   };
 }
@@ -281,7 +281,7 @@ function buildEventSchema() {
 function buildModerationSchema() {
   return {
     reason: Type.Optional(Type.String()),
-    deleteDays: Type.Optional(Type.Number()),
+    deleteDays: Type.Optional(Type.Number({ minimum: 0, maximum: 7 })),
   };
 }
 
@@ -289,7 +289,7 @@ function buildGatewaySchema() {
   return {
     gatewayUrl: Type.Optional(Type.String()),
     gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
+    timeoutMs: Type.Optional(Type.Number({ minimum: 1000, maximum: 120_000 })),
   };
 }
 
@@ -326,12 +326,12 @@ function buildPresenceSchema() {
 function buildChannelManagementSchema() {
   return {
     name: Type.Optional(Type.String()),
-    type: Type.Optional(Type.Number()),
+    type: Type.Optional(Type.Number({ minimum: 0, maximum: 15 })),
     parentId: Type.Optional(Type.String()),
     topic: Type.Optional(Type.String()),
-    position: Type.Optional(Type.Number()),
+    position: Type.Optional(Type.Number({ minimum: 0, maximum: 1000 })),
     nsfw: Type.Optional(Type.Boolean()),
-    rateLimitPerUser: Type.Optional(Type.Number()),
+    rateLimitPerUser: Type.Optional(Type.Number({ minimum: 0, maximum: 21600 })),
     categoryId: Type.Optional(Type.String()),
     clearParent: Type.Optional(
       Type.Boolean({

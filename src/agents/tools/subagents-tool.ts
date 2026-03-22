@@ -22,10 +22,28 @@ const SUBAGENT_ACTIONS = ["list", "kill", "steer"] as const;
 type SubagentAction = (typeof SUBAGENT_ACTIONS)[number];
 
 const SubagentsToolSchema = Type.Object({
-  action: optionalStringEnum(SUBAGENT_ACTIONS),
-  target: Type.Optional(Type.String()),
-  message: Type.Optional(Type.String()),
-  recentMinutes: Type.Optional(Type.Number({ minimum: 1 })),
+  action: optionalStringEnum(SUBAGENT_ACTIONS, {
+    description:
+      'Action to perform: "list" (default), "kill" (terminate a subagent), or "steer" (send a message to a running subagent).',
+  }),
+  target: Type.Optional(
+    Type.String({
+      description: "Subagent session key or label. Required for kill/steer actions.",
+    }),
+  ),
+  message: Type.Optional(
+    Type.String({
+      description: "Message to send when using steer action. Max 4000 chars.",
+    }),
+  ),
+  recentMinutes: Type.Optional(
+    Type.Number({
+      minimum: 1,
+      maximum: 1440,
+      description:
+        "Only list subagents active within the last N minutes. Default: 30. Max: 1440 (24h).",
+    }),
+  ),
 });
 
 export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAgentTool {
