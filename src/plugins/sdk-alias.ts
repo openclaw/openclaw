@@ -205,6 +205,7 @@ export function resolvePluginSdkAliasFile(params: {
 }
 
 const cachedPluginSdkExportedSubpaths = new Map<string, string[]>();
+const cachedPluginSdkScopedAliasMaps = new Map<string, Record<string, string>>();
 
 export function listPluginSdkExportedSubpaths(params: { modulePath?: string } = {}): string[] {
   const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
@@ -224,17 +225,35 @@ export function listPluginSdkExportedSubpaths(params: { modulePath?: string } = 
 export function resolvePluginSdkScopedAliasMap(
   params: { modulePath?: string } = {},
 ): Record<string, string> {
+  const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
+  const packageRoot = resolveLoaderPluginSdkPackageRoot({ modulePath });
+  if (!packageRoot) {
+    return {};
+  }
+  const orderedKinds = resolvePluginSdkAliasCandidateOrder({
+    modulePath,
+    isProduction: process.env.NODE_ENV === "production",
+  });
+  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}`;
+  const cached = cachedPluginSdkScopedAliasMaps.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
   const aliasMap: Record<string, string> = {};
-  for (const subpath of listPluginSdkExportedSubpaths(params)) {
-    const resolved = resolvePluginSdkAliasFile({
-      srcFile: `${subpath}.ts`,
-      distFile: `${subpath}.js`,
-      modulePath: params.modulePath,
-    });
-    if (resolved) {
-      aliasMap[`openclaw/plugin-sdk/${subpath}`] = resolved;
+  for (const subpath of listPluginSdkExportedSubpaths({ modulePath })) {
+    const candidateMap = {
+      src: path.join(packageRoot, "src", "plugin-sdk", `${subpath}.ts`),
+      dist: path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`),
+    } as const;
+    for (const kind of orderedKinds) {
+      const candidate = candidateMap[kind];
+      if (fs.existsSync(candidate)) {
+        aliasMap[`openclaw/plugin-sdk/${subpath}`] = candidate;
+        break;
+      }
     }
   }
+  cachedPluginSdkScopedAliasMaps.set(cacheKey, aliasMap);
   return aliasMap;
 }
 
