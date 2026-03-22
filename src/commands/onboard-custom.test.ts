@@ -610,6 +610,45 @@ describe("applyCustomApiConfig", () => {
     expect(model?.reasoning).toBe(false);
   });
 
+  it("re-onboard upgrades text-only input for likely vision models", () => {
+    const result = applyCustomApiConfig({
+      config: {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://llm.example.com/v1",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "claude-sonnet-4-6",
+                  name: "Existing Claude",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 131072,
+                  maxTokens: 8192,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "claude-sonnet-4-6",
+      compatibility: "openai",
+      apiKey: "key",
+      providerId: "custom",
+    });
+
+    const model = result.config.models?.providers?.custom?.models?.find(
+      (m) => m.id === "claude-sonnet-4-6",
+    );
+    expect(model?.name).toBe("Existing Claude");
+    expect(model?.input).toEqual(["text", "image"]);
+    expect(model?.contextWindow).toBe(131072);
+    expect(model?.maxTokens).toBe(8192);
+  });
+
   it("re-onboard preserves user-customized fields for non-azure models", () => {
     const result = applyCustomApiConfig({
       config: {

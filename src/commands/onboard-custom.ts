@@ -3,7 +3,7 @@ import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { buildModelAliasIndex, modelKey } from "../agents/model-selection.js";
 import { OLLAMA_DEFAULT_BASE_URL } from "../agents/ollama-defaults.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { ModelProviderConfig } from "../config/types.models.js";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
@@ -684,12 +684,25 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         reasoning: false,
       };
+  const shouldUpgradeNonAzureVisionInput = (model: ModelDefinitionConfig): boolean => {
+    if (isAzure || !isLikelyVisionCapableModel || model.id !== modelId) {
+      return false;
+    }
+    if (!Array.isArray(model.input)) {
+      return false;
+    }
+    return model.input.length === 1 && model.input[0] === "text";
+  };
+
   const mergedModels = hasModel
     ? existingModels.map((model) =>
         model.id === modelId
           ? {
               ...model,
               ...(isAzure ? nextModel : {}),
+              ...(shouldUpgradeNonAzureVisionInput(model)
+                ? ({ input: ["text", "image"] } as { input: Array<"text" | "image"> })
+                : {}),
               name: model.name ?? nextModel.name,
               cost: model.cost ?? nextModel.cost,
               contextWindow: normalizeContextWindowForCustomModel(model.contextWindow),
