@@ -225,7 +225,12 @@ describe("thread binding lifecycle", () => {
 
       await vi.advanceTimersByTimeAsync(120_000);
 
-      expect(manager.getByThreadId("thread-1")).toBeDefined();
+      expect(requireBinding(manager, "thread-1")).toMatchObject({
+        threadId: "thread-1",
+        targetSessionKey: "agent:main:subagent:child",
+        webhookId: "wh-1",
+        webhookToken: "tok-1",
+      });
       expect(hoisted.sendWebhookMessageDiscord).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
