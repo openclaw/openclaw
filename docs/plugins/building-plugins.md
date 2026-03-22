@@ -344,6 +344,59 @@ Tips:
 - Use `optional: true` for tools that trigger side effects or require extra binaries
 - Users can enable all tools from a plugin by adding the plugin id to `tools.allow`
 
+## Registration modes
+
+OpenClaw may call your plugin's `register()` function in different
+**registration modes**. The mode tells you _why_ your plugin is being loaded
+and controls which API methods are active:
+
+| Mode              | When                                          | API behavior                                        |
+| ----------------- | --------------------------------------------- | --------------------------------------------------- |
+| `"full"`          | Normal runtime activation                     | All methods work                                    |
+| `"setup-only"`    | Channel setup UI (plugin disabled)            | Only `registerChannel` works; all others are no-ops |
+| `"setup-runtime"` | Startup for unconfigured or deferred channels | Only `registerChannel` works; all others are no-ops |
+
+Your plugin receives the current mode via `api.registrationMode`.
+
+### Why this matters
+
+`register()` may be called **multiple times** during the lifecycle of a
+gateway process — for example, once for full activation and again for snapshot
+inspection. If your plugin performs expensive initialization (opening database
+connections, spawning processes, allocating large buffers), those side effects
+run on every call.
+
+### Best practice
+
+Check `api.registrationMode` at the top of `register()` and return early when
+the mode does not require your plugin's work:
+
+```typescript
+export default definePluginEntry({
+  id: "my-plugin",
+  name: "My Plugin",
+  register(api) {
+    // Skip side effects for non-full registration modes
+    if (api.registrationMode !== "full") {
+      return;
+    }
+
+    // Expensive initialization only runs during full activation
+    api.registerTool({
+      /* ... */
+    });
+    initializeDatabaseConnection();
+  },
+});
+```
+
+<Info>
+  Channel plugins using `defineChannelPluginEntry` from `plugin-sdk/core`
+  already handle this automatically — the helper separates channel setup
+  (runs in all modes) from full registration (runs only in `"full"` mode).
+  You only need manual checks when using `definePluginEntry` directly.
+</Info>
+
 ## Lint enforcement (in-repo plugins)
 
 Three scripts enforce SDK boundaries for plugins in the OpenClaw repository:
