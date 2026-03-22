@@ -256,6 +256,46 @@ describe("session_status tool", () => {
     expect(details.sessionKey).toBe("main");
   });
 
+  it("prefers a literal current session key in session_status", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s-main",
+        updatedAt: 10,
+      },
+      "agent:main:current": {
+        sessionId: "s-current",
+        updatedAt: 20,
+      },
+    });
+
+    const tool = getSessionStatusTool();
+
+    const result = await tool.execute("call-current-literal-key", { sessionKey: "current" });
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:current");
+  });
+
+  it("resolves a literal current sessionId in session_status", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s-main",
+        updatedAt: 10,
+      },
+      "agent:main:other": {
+        sessionId: "current",
+        updatedAt: 20,
+      },
+    });
+
+    const tool = getSessionStatusTool();
+
+    const result = await tool.execute("call-current-literal-id", { sessionKey: "current" });
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:other");
+  });
+
   it("keeps sessionKey=current bound to the requester subagent session", async () => {
     resetSessionStore({
       "agent:main:main": {

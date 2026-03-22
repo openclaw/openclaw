@@ -69,18 +69,28 @@ function resolveSessionEntry(params: {
     requesterInternalKey: params.requesterInternalKey,
   });
 
-  const candidates = new Set<string>([keyRaw, internal]);
+  const candidates: string[] = [keyRaw];
   if (!keyRaw.startsWith("agent:")) {
-    candidates.add(`agent:${DEFAULT_AGENT_ID}:${keyRaw}`);
-    candidates.add(`agent:${DEFAULT_AGENT_ID}:${internal}`);
+    candidates.push(`agent:${DEFAULT_AGENT_ID}:${keyRaw}`);
+  }
+  if (internal !== keyRaw) {
+    candidates.push(internal);
+  }
+  if (!keyRaw.startsWith("agent:")) {
+    const agentInternal = `agent:${DEFAULT_AGENT_ID}:${internal}`;
+    const agentRaw = `agent:${DEFAULT_AGENT_ID}:${keyRaw}`;
+    if (agentInternal !== agentRaw) {
+      candidates.push(agentInternal);
+    }
   }
   if (keyRaw === "main" || keyRaw === "current") {
-    candidates.add(
-      buildAgentMainSessionKey({
-        agentId: DEFAULT_AGENT_ID,
-        mainKey: params.mainKey,
-      }),
-    );
+    const defaultMainKey = buildAgentMainSessionKey({
+      agentId: DEFAULT_AGENT_ID,
+      mainKey: params.mainKey,
+    });
+    if (!candidates.includes(defaultMainKey)) {
+      candidates.push(defaultMainKey);
+    }
   }
 
   for (const key of candidates) {
@@ -295,7 +305,10 @@ export function createSessionStatusTool(opts?: {
         requesterInternalKey: effectiveRequesterKey,
       });
 
-      if (!resolved && shouldResolveSessionIdInput(requestedKeyRaw)) {
+      if (
+        !resolved &&
+        (requestedKeyRaw === "current" || shouldResolveSessionIdInput(requestedKeyRaw))
+      ) {
         const resolvedKey = resolveSessionKeyFromSessionId({
           cfg,
           sessionId: requestedKeyRaw,
