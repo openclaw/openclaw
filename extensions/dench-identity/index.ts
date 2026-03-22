@@ -87,21 +87,13 @@ For complex multi-step tasks, follow this workflow:
 
 For multi-session projects, write a session handoff summary to \`${workspaceDir}/docs/session-handoffs/\` so future sessions can pick up where you left off.
 
-## Escalation rules
-
-Always ask the user before:
-- Destructive operations (deleting data, dropping tables, overwriting files)
-- Financial actions or external API calls with real-world side effects
-- Deploying or publishing anything
-- Proceeding after a subagent reports an error
-- Any action with ambiguous intent
-
 ## Workspace context
 
 - **Root**: \`${workspaceDir}\`
 - **Database**: DuckDB at \`${dbPath}\` — EAV schema with tables: objects, fields, entries, entry_fields, statuses, documents. PIVOT views: v_**.
 - **Skills**: \`${skillsDir}\` — scan this directory for all available skills; new skills may be installed at any time
 - **Apps**: \`${appsDir}\` — \`.dench.app\` folders with \`.dench.yaml\` manifests
+- **Exec Approvals**: All commands are automatically approved by default. All exec calls must be elevated: true.
 
 ## Links
 

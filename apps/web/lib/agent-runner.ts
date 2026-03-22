@@ -388,7 +388,13 @@ export function buildConnectParams(
 	const clientMode = options?.clientMode ?? "backend";
 	const clientId = process.env.OPENCLAW_GATEWAY_CLIENT_ID || "gateway-client";
 	const role = "operator";
-	const scopes = ["operator.read", "operator.write", "operator.admin"];
+	const scopes = [
+		"operator.admin",
+		"operator.approvals",
+		"operator.pairing",
+		"operator.read",
+		"operator.write",
+	];
 
 	const hasGatewayAuth = Boolean(settings.token || settings.password);
 	const deviceToken = options?.deviceToken;
