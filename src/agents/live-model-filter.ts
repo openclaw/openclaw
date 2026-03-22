@@ -10,7 +10,7 @@ const ANTHROPIC_PREFIXES = [
   "claude-sonnet-4-5",
   "claude-haiku-4-5",
 ];
-const OPENAI_MODELS = ["gpt-5.4", "gpt-5.2", "gpt-5.0"];
+const OPENAI_MODELS = ["gpt-5.4", "gpt-5.2", "gpt-5.0", "gpt-realtime-1.5", "gpt-realtime-mini"];
 const CODEX_MODELS = [
   "gpt-5.4",
   "gpt-5.2",
@@ -35,8 +35,12 @@ function matchesExactOrPrefix(id: string, values: string[]): boolean {
 }
 
 export function isModernModelRef(ref: ModelRef): boolean {
-  const provider = ref.provider?.trim().toLowerCase() ?? "";
+  const providerRaw = ref.provider?.trim().toLowerCase() ?? "";
   const id = ref.id?.trim().toLowerCase() ?? "";
+  const provider =
+    providerRaw === "azure-openai-responses" || providerRaw === "azure-openai-completions"
+      ? "openai"
+      : providerRaw;
   if (!provider || !id) {
     return false;
   }

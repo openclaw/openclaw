@@ -10,6 +10,11 @@ const OPENAI_GPT_54_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_GPT_54_MAX_TOKENS = 128_000;
 const OPENAI_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.2"] as const;
 const OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS = ["gpt-5.2-pro", "gpt-5.2"] as const;
+const OPENAI_GPT_REALTIME_15_MODEL_ID = "gpt-realtime-1.5";
+const OPENAI_GPT_REALTIME_MINI_MODEL_ID = "gpt-realtime-mini";
+const OPENAI_GPT_REALTIME_CONTEXT_TOKENS = 128_000;
+const OPENAI_GPT_REALTIME_MAX_TOKENS = 16_384;
+const OPENAI_GPT_REALTIME_TEMPLATE_MODEL_IDS = ["gpt-5.2", "gpt-4.1"] as const;
 
 const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
 const OPENAI_CODEX_GPT_54_CONTEXT_TOKENS = 1_050_000;
@@ -87,6 +92,53 @@ function resolveOpenAIGpt54ForwardCompatModel(
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: OPENAI_GPT_54_CONTEXT_TOKENS,
       maxTokens: OPENAI_GPT_54_MAX_TOKENS,
+    } as Model<Api>)
+  );
+}
+
+function resolveOpenAIRealtimeForwardCompatModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (normalizedProvider !== "openai") {
+    return undefined;
+  }
+
+  const trimmedModelId = modelId.trim();
+  const lower = trimmedModelId.toLowerCase();
+  if (lower !== OPENAI_GPT_REALTIME_15_MODEL_ID && lower !== OPENAI_GPT_REALTIME_MINI_MODEL_ID) {
+    return undefined;
+  }
+
+  return (
+    cloneFirstTemplateModel({
+      normalizedProvider,
+      trimmedModelId,
+      templateIds: [...OPENAI_GPT_REALTIME_TEMPLATE_MODEL_IDS],
+      modelRegistry,
+      patch: {
+        api: "openai-responses",
+        provider: normalizedProvider,
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: false,
+        input: ["text"],
+        contextWindow: OPENAI_GPT_REALTIME_CONTEXT_TOKENS,
+        maxTokens: OPENAI_GPT_REALTIME_MAX_TOKENS,
+      },
+    }) ??
+    normalizeModelCompat({
+      id: trimmedModelId,
+      name: trimmedModelId,
+      api: "openai-responses",
+      provider: normalizedProvider,
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: OPENAI_GPT_REALTIME_CONTEXT_TOKENS,
+      maxTokens: OPENAI_GPT_REALTIME_MAX_TOKENS,
     } as Model<Api>)
   );
 }
@@ -348,6 +400,7 @@ export function resolveForwardCompatModel(
 ): Model<Api> | undefined {
   return (
     resolveOpenAIGpt54ForwardCompatModel(provider, modelId, modelRegistry) ??
+    resolveOpenAIRealtimeForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveOpenAICodexForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??

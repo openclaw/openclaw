@@ -304,6 +304,16 @@ describe("isModernModelRef", () => {
     expect(isModernModelRef({ provider: "openai-codex", id: "gpt-5.4" })).toBe(true);
   });
 
+  it("includes Azure OpenAI gpt-5.4 variants in modern selection", () => {
+    expect(isModernModelRef({ provider: "azure-openai-responses", id: "gpt-5.4" })).toBe(true);
+    expect(isModernModelRef({ provider: "azure-openai-completions", id: "gpt-5.4" })).toBe(true);
+  });
+
+  it("includes OpenAI realtime variants in modern selection", () => {
+    expect(isModernModelRef({ provider: "openai", id: "gpt-realtime-1.5" })).toBe(true);
+    expect(isModernModelRef({ provider: "openai", id: "gpt-realtime-mini" })).toBe(true);
+  });
+
   it("excludes opencode minimax variants from modern selection", () => {
     expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.5" })).toBe(false);
     expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.5" })).toBe(false);
@@ -371,6 +381,30 @@ describe("resolveForwardCompatModel", () => {
     expect(model?.baseUrl).toBe("https://chatgpt.com/backend-api");
     expect(model?.contextWindow).toBe(1_050_000);
     expect(model?.maxTokens).toBe(128_000);
+  });
+
+  it("resolves openai gpt-realtime-1.5 via template fallback", () => {
+    const registry = createRegistry({
+      "openai/gpt-5.2": createOpenAITemplateModel("gpt-5.2"),
+    });
+    const model = resolveForwardCompatModel("openai", "gpt-realtime-1.5", registry);
+    expectResolvedForwardCompat(model, { provider: "openai", id: "gpt-realtime-1.5" });
+    expect(model?.api).toBe("openai-responses");
+    expect(model?.baseUrl).toBe("https://api.openai.com/v1");
+    expect(model?.reasoning).toBe(false);
+    expect(model?.input).toEqual(["text"]);
+  });
+
+  it("resolves openai gpt-realtime-mini via template fallback", () => {
+    const registry = createRegistry({
+      "openai/gpt-5.2": createOpenAITemplateModel("gpt-5.2"),
+    });
+    const model = resolveForwardCompatModel("openai", "gpt-realtime-mini", registry);
+    expectResolvedForwardCompat(model, { provider: "openai", id: "gpt-realtime-mini" });
+    expect(model?.api).toBe("openai-responses");
+    expect(model?.baseUrl).toBe("https://api.openai.com/v1");
+    expect(model?.reasoning).toBe(false);
+    expect(model?.input).toEqual(["text"]);
   });
 
   it("resolves anthropic opus 4.6 via 4.5 template", () => {

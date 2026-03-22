@@ -55,6 +55,11 @@ describe("listThinkingLevels", () => {
     expect(listThinkingLevels("openai", "gpt-5.4-pro")).toContain("xhigh");
   });
 
+  it("includes xhigh for azure-openai gpt-5.4 variants", () => {
+    expect(listThinkingLevels("azure-openai-responses", "gpt-5.4")).toContain("xhigh");
+    expect(listThinkingLevels("azure-openai-completions", "gpt-5.4")).toContain("xhigh");
+  });
+
   it("includes xhigh for openai-codex gpt-5.4", () => {
     expect(listThinkingLevels("openai-codex", "gpt-5.4")).toContain("xhigh");
   });

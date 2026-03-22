@@ -35,6 +35,7 @@ const OPENAI_MODEL_APIS = new Set([
   "openai",
   "openai-completions",
   "openai-responses",
+  "azure-openai-responses",
   "openai-codex-responses",
 ]);
 

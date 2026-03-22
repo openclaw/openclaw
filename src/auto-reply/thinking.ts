@@ -21,6 +21,9 @@ function normalizeProviderId(provider?: string | null): string {
   if (normalized === "z.ai" || normalized === "z-ai") {
     return "zai";
   }
+  if (normalized === "azure-openai-responses" || normalized === "azure-openai-completions") {
+    return "openai";
+  }
   if (normalized === "bedrock" || normalized === "aws-bedrock") {
     return "amazon-bedrock";
   }
@@ -95,7 +98,7 @@ export function supportsXHighThinking(provider?: string | null, model?: string |
   if (!modelKey) {
     return false;
   }
-  const providerKey = provider?.trim().toLowerCase();
+  const providerKey = normalizeProviderId(provider);
   if (providerKey) {
     return XHIGH_MODEL_SET.has(`${providerKey}/${modelKey}`);
   }

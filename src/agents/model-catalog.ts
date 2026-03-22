@@ -37,6 +37,8 @@ const CODEX_PROVIDER = "openai-codex";
 const OPENAI_PROVIDER = "openai";
 const OPENAI_GPT54_MODEL_ID = "gpt-5.4";
 const OPENAI_GPT54_PRO_MODEL_ID = "gpt-5.4-pro";
+const OPENAI_GPT_REALTIME_15_MODEL_ID = "gpt-realtime-1.5";
+const OPENAI_GPT_REALTIME_MINI_MODEL_ID = "gpt-realtime-mini";
 const OPENAI_CODEX_GPT53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_GPT53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const OPENAI_CODEX_GPT54_MODEL_ID = "gpt-5.4";
@@ -58,6 +60,16 @@ const SYNTHETIC_CATALOG_FALLBACKS: readonly SyntheticCatalogFallback[] = [
     provider: OPENAI_PROVIDER,
     id: OPENAI_GPT54_PRO_MODEL_ID,
     templateIds: ["gpt-5.2-pro", "gpt-5.2"],
+  },
+  {
+    provider: OPENAI_PROVIDER,
+    id: OPENAI_GPT_REALTIME_15_MODEL_ID,
+    templateIds: ["gpt-5.2", "gpt-4.1"],
+  },
+  {
+    provider: OPENAI_PROVIDER,
+    id: OPENAI_GPT_REALTIME_MINI_MODEL_ID,
+    templateIds: ["gpt-5.2", "gpt-4.1"],
   },
   {
     provider: CODEX_PROVIDER,

@@ -58,6 +58,68 @@ describe("pi embedded model e2e smoke", () => {
     expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
   });
 
+  it("builds an openai forward-compat fallback for gpt-realtime-1.5", () => {
+    mockDiscoveredModel({
+      provider: "openai",
+      modelId: "gpt-5.2",
+      templateModel: {
+        id: "gpt-5.2",
+        name: "gpt-5.2",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        input: ["text", "image"],
+        reasoning: true,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 400_000,
+        maxTokens: 32_768,
+      },
+    });
+
+    const result = resolveModel("openai", "gpt-realtime-1.5", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai",
+      id: "gpt-realtime-1.5",
+      name: "gpt-realtime-1.5",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text"],
+    });
+  });
+
+  it("builds an openai forward-compat fallback for gpt-realtime-mini", () => {
+    mockDiscoveredModel({
+      provider: "openai",
+      modelId: "gpt-5.2",
+      templateModel: {
+        id: "gpt-5.2",
+        name: "gpt-5.2",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        input: ["text", "image"],
+        reasoning: true,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 400_000,
+        maxTokens: 32_768,
+      },
+    });
+
+    const result = resolveModel("openai", "gpt-realtime-mini", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai",
+      id: "gpt-realtime-mini",
+      name: "gpt-realtime-mini",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text"],
+    });
+  });
+
   it("builds an openai-codex forward-compat fallback for gpt-5.3-codex-spark", () => {
     mockOpenAICodexTemplateModel();
 
