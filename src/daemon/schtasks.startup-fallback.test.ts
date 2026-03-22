@@ -291,7 +291,7 @@ describe("Windows startup fallback", () => {
         });
 
       const stdout = new PassThrough();
-      const envWithoutPort = { ...movedEnv };
+      const envWithoutPort: Record<string, string> = { ...movedEnv };
       delete envWithoutPort.OPENCLAW_GATEWAY_PORT;
       await stopScheduledTask({ env: envWithoutPort, stdout });
 
