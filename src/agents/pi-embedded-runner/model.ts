@@ -350,6 +350,9 @@ export async function resolveModelAsync(
   modelId: string,
   agentDir?: string,
   cfg?: OpenClawConfig,
+  options?: {
+    retryTransientProviderRuntimeMiss?: boolean;
+  },
 ): Promise<{
   model?: Model<Api>;
   error?: string;
@@ -406,7 +409,7 @@ export async function resolveModelAsync(
   };
   let model =
     explicitModel?.kind === "resolved" ? explicitModel.model : await resolveDynamicAttempt();
-  if (!model && !explicitModel) {
+  if (!model && !explicitModel && options?.retryTransientProviderRuntimeMiss) {
     // Startup can race the first provider-runtime snapshot load on a fresh
     // gateway boot. Retry once with a cleared hook cache before surfacing a
     // user-visible "Unknown model" that disappears on the next message.

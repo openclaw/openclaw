@@ -10,6 +10,7 @@ const resolveModelAsyncMock = vi.fn<
     modelId: unknown,
     agentDir: unknown,
     cfg: unknown,
+    options?: unknown,
   ) => Promise<{ model: { id: string; provider: string; api: string } }>
 >(async () => ({
   model: {
@@ -29,8 +30,13 @@ vi.mock("../agents/models-config.js", () => ({
 }));
 
 vi.mock("../agents/pi-embedded-runner/model.js", () => ({
-  resolveModelAsync: (provider: unknown, modelId: unknown, agentDir: unknown, cfg: unknown) =>
-    resolveModelAsyncMock(provider, modelId, agentDir, cfg),
+  resolveModelAsync: (
+    provider: unknown,
+    modelId: unknown,
+    agentDir: unknown,
+    cfg: unknown,
+    options?: unknown,
+  ) => resolveModelAsyncMock(provider, modelId, agentDir, cfg, options),
 }));
 
 describe("gateway startup primary model warmup", () => {
@@ -62,6 +68,9 @@ describe("gateway startup primary model warmup", () => {
       "gpt-5.4",
       "/tmp/agent",
       cfg,
+      {
+        retryTransientProviderRuntimeMiss: true,
+      },
     );
   });
 

@@ -51,7 +51,9 @@ async function prewarmConfiguredPrimaryModel(params: {
   const agentDir = resolveOpenClawAgentDir();
   try {
     await ensureOpenClawModelsJson(params.cfg, agentDir);
-    const resolved = await resolveModelAsync(provider, model, agentDir, params.cfg);
+    const resolved = await resolveModelAsync(provider, model, agentDir, params.cfg, {
+      retryTransientProviderRuntimeMiss: true,
+    });
     if (!resolved.model) {
       throw new Error(resolved.error ?? `Unknown model: ${provider}/${model}`);
     }

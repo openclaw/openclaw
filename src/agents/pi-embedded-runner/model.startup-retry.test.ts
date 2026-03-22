@@ -63,7 +63,15 @@ describe("resolveModelAsync startup retry", () => {
   it("retries once after clearing the provider-runtime hook cache", async () => {
     const { resolveModelAsync } = await import("./model.js");
 
-    const result = await resolveModelAsync("openai-codex", "gpt-5.4", "/tmp/agent", {});
+    const result = await resolveModelAsync(
+      "openai-codex",
+      "gpt-5.4",
+      "/tmp/agent",
+      {},
+      {
+        retryTransientProviderRuntimeMiss: true,
+      },
+    );
 
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject({
@@ -74,5 +82,17 @@ describe("resolveModelAsync startup retry", () => {
     expect(clearProviderRuntimeHookCacheMock).toHaveBeenCalledTimes(1);
     expect(resolveProviderRuntimePluginMock).toHaveBeenCalledTimes(2);
     expect(runProviderDynamicModelMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not clear the hook cache during steady-state misses", async () => {
+    const { resolveModelAsync } = await import("./model.js");
+
+    const result = await resolveModelAsync("openai-codex", "gpt-5.4", "/tmp/agent", {});
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe("Unknown model: openai-codex/gpt-5.4");
+    expect(clearProviderRuntimeHookCacheMock).not.toHaveBeenCalled();
+    expect(resolveProviderRuntimePluginMock).toHaveBeenCalledTimes(1);
+    expect(runProviderDynamicModelMock).toHaveBeenCalledTimes(1);
   });
 });
