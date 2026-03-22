@@ -25,15 +25,19 @@ export type UsageLike = {
   cache_read?: number;
   cache_write?: number;
   // Google Gemini native usageMetadata field names.
-  // NOTE: promptTokenCount INCLUDES cached content (unlike Anthropic/OpenAI where
-  // input tokens exclude the cached portion). cachedContentTokenCount is therefore
-  // NOT mapped to cacheRead to avoid double-counting in derivePromptTokens().
+  // NOTE: promptTokenCount INCLUDES cached content tokens. When
+  // cachedContentTokenCount is also present we split the two so that
+  // derivePromptTokens() and estimateUsageCost() handle them correctly.
   promptTokenCount?: number;
+  cachedContentTokenCount?: number;
   candidatesTokenCount?: number;
+  // Newer Gemini SDK uses responseTokenCount instead of candidatesTokenCount.
+  responseTokenCount?: number;
+  // totalTokenCount covers "prompt + response candidates + tool-use prompts"
+  // per the Gemini SDK — it does NOT include thoughtsTokenCount.
   totalTokenCount?: number;
-  // TODO: thoughtsTokenCount is intentionally not mapped to a normalized field.
-  // For Gemini thinking models, totalTokenCount = promptTokenCount + candidatesTokenCount + thoughtsTokenCount.
-  // The thinking tokens are captured implicitly via totalTokenCount → total.
+  // thoughtsTokenCount is billed separately and excluded from totalTokenCount.
+  // We add it to the normalized total so cost/usage reporting is complete.
   thoughtsTokenCount?: number;
 };
 
@@ -104,13 +108,24 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
   // Some providers (pi-ai OpenAI-format) pre-subtract cached_tokens from
   // prompt_tokens upstream.  When cached_tokens > prompt_tokens the result is
   // negative, which is nonsensical.  Clamp to 0.
+
+  // Google Gemini: promptTokenCount INCLUDES cachedContentTokenCount.
+  // When both are present, split them so cacheRead gets the cached portion
+  // and input gets only the non-cached prompt tokens.  This lets
+  // derivePromptTokens() (input + cacheRead + cacheWrite) stay correct and
+  // estimateUsageCost() apply the cheaper cache-read rate.
+  const geminiPrompt = asFiniteNumber(raw.promptTokenCount);
+  const geminiCached = asFiniteNumber(raw.cachedContentTokenCount);
+
   const rawInput = asFiniteNumber(
     raw.input ??
       raw.inputTokens ??
       raw.input_tokens ??
       raw.promptTokens ??
       raw.prompt_tokens ??
-      raw.promptTokenCount,
+      (geminiPrompt !== undefined && geminiCached !== undefined
+        ? geminiPrompt - geminiCached
+        : geminiPrompt),
   );
   const input = rawInput !== undefined && rawInput < 0 ? 0 : rawInput;
   const output = asFiniteNumber(
@@ -119,25 +134,29 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
       raw.output_tokens ??
       raw.completionTokens ??
       raw.completion_tokens ??
-      raw.candidatesTokenCount,
+      raw.candidatesTokenCount ??
+      raw.responseTokenCount,
   );
-  // NOTE: Google Gemini's cachedContentTokenCount is intentionally NOT mapped
-  // to cacheRead here. Unlike Anthropic/OpenAI where input excludes cached tokens,
-  // Gemini's promptTokenCount INCLUDES cached content. Mapping both would cause
-  // derivePromptTokens() (input + cacheRead + cacheWrite) to double-count.
   const cacheRead = asFiniteNumber(
     raw.cacheRead ??
       raw.cache_read ??
       raw.cache_read_input_tokens ??
       raw.cached_tokens ??
-      raw.prompt_tokens_details?.cached_tokens,
+      raw.prompt_tokens_details?.cached_tokens ??
+      geminiCached,
   );
   const cacheWrite = asFiniteNumber(
     raw.cacheWrite ?? raw.cache_write ?? raw.cache_creation_input_tokens,
   );
-  const total = asFiniteNumber(
+
+  // Gemini's totalTokenCount excludes thoughtsTokenCount (per SDK docs).
+  // Add thoughts back so the normalized total covers all billed tokens.
+  const geminiThoughts = asFiniteNumber(raw.thoughtsTokenCount);
+  const rawTotal = asFiniteNumber(
     raw.total ?? raw.totalTokens ?? raw.total_tokens ?? raw.totalTokenCount,
   );
+  const total =
+    rawTotal !== undefined && geminiThoughts !== undefined ? rawTotal + geminiThoughts : rawTotal;
 
   if (
     input === undefined &&

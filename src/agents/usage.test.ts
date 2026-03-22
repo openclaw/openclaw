@@ -135,21 +135,40 @@ describe("normalizeUsage", () => {
     });
   });
 
-  it("does not double-count Google Gemini cached content tokens", () => {
-    // Google's promptTokenCount already includes cachedContentTokenCount,
-    // so cachedContentTokenCount is intentionally NOT mapped to cacheRead
-    // to avoid double-counting in derivePromptTokens().
+  it("splits Google Gemini cached content tokens for correct pricing", () => {
+    // Google's promptTokenCount INCLUDES cachedContentTokenCount.
+    // We split them so estimateUsageCost() can apply the cheaper cache-read rate
+    // and derivePromptTokens() (input + cacheRead) stays correct.
     const usage = normalizeUsage({
       promptTokenCount: 200,
+      cachedContentTokenCount: 150,
       candidatesTokenCount: 80,
       totalTokenCount: 280,
     } as UsageLike);
     expect(usage).toEqual({
-      input: 200,
+      input: 50, // 200 - 150 (non-cached prompt tokens)
       output: 80,
-      cacheRead: undefined,
+      cacheRead: 150, // cachedContentTokenCount
       cacheWrite: undefined,
       total: 280,
+    });
+  });
+
+  it("adds Google Gemini thoughtsTokenCount to total", () => {
+    // totalTokenCount excludes thoughtsTokenCount per Gemini SDK docs.
+    // We add it back so the normalized total covers all billed tokens.
+    const usage = normalizeUsage({
+      promptTokenCount: 100,
+      candidatesTokenCount: 50,
+      thoughtsTokenCount: 300,
+      totalTokenCount: 150,
+    } as UsageLike);
+    expect(usage).toEqual({
+      input: 100,
+      output: 50,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: 450, // 150 + 300 (totalTokenCount + thoughtsTokenCount)
     });
   });
 
