@@ -3369,7 +3369,7 @@
           "exportName": "GatewayRequestHandlerOptions",
           "kind": "type",
           "source": {
-            "line": 111,
+            "line": 112,
             "path": "src/gateway/server-methods/types.ts"
           }
         },
