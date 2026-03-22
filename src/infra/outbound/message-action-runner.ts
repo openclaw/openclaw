@@ -40,7 +40,7 @@ import {
   readBooleanParam,
   resolveAttachmentMediaPolicy,
 } from "./message-action-params.js";
-import type { MessagePollResult, MessageSendResult } from "./message.js";
+import type { MessageLocationResult, MessagePollResult, MessageSendResult } from "./message.js";
 import {
   applyCrossContextDecoration,
   buildCrossContextDecoration,
@@ -48,7 +48,11 @@ import {
   enforceCrossContextPolicy,
   shouldApplyCrossContextMarker,
 } from "./outbound-policy.js";
-import { executePollAction, executeSendAction } from "./outbound-send-service.js";
+import {
+  executeLocationAction,
+  executePollAction,
+  executeSendAction,
+} from "./outbound-send-service.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 import { extractToolPayload } from "./tool-payload.js";
@@ -147,9 +151,20 @@ export type MessageActionRunResult =
       dryRun: boolean;
     }
   | {
+      kind: "location";
+      channel: ChannelId;
+      action: "location";
+      to: string;
+      handledBy: "plugin" | "core";
+      payload: unknown;
+      toolResult?: AgentToolResult<unknown>;
+      locationResult?: MessageLocationResult;
+      dryRun: boolean;
+    }
+  | {
       kind: "action";
       channel: ChannelId;
-      action: Exclude<ChannelMessageActionName, "send" | "poll">;
+      action: Exclude<ChannelMessageActionName, "send" | "poll" | "location">;
       handledBy: "plugin" | "dry-run";
       payload: unknown;
       toolResult?: AgentToolResult<unknown>;
@@ -663,10 +678,73 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
   };
 }
 
+async function handleLocationAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
+  const { cfg, params, channel, accountId, dryRun, gateway, abortSignal } = ctx;
+  throwIfAborted(abortSignal);
+  const action: ChannelMessageActionName = "location";
+  const to = readStringParam(params, "to", { required: true });
+
+  const latitudeRaw = readNumberParam(params, "latitude", { required: true });
+  const longitudeRaw = readNumberParam(params, "longitude", { required: true });
+  if (
+    latitudeRaw == null ||
+    !Number.isFinite(latitudeRaw) ||
+    latitudeRaw < -90 ||
+    latitudeRaw > 90
+  ) {
+    throw new Error("latitude must be a finite number between -90 and 90.");
+  }
+  if (
+    longitudeRaw == null ||
+    !Number.isFinite(longitudeRaw) ||
+    longitudeRaw < -180 ||
+    longitudeRaw > 180
+  ) {
+    throw new Error("longitude must be a finite number between -180 and 180.");
+  }
+  const latitude: number = latitudeRaw;
+  const longitude: number = longitudeRaw;
+
+  const locationName = readStringParam(params, "locationName");
+  const locationAddress = readStringParam(params, "locationAddress");
+
+  throwIfAborted(abortSignal);
+  const location = await executeLocationAction({
+    ctx: {
+      cfg,
+      channel,
+      params,
+      accountId: accountId ?? undefined,
+      gateway,
+      dryRun,
+    },
+    to,
+    latitude,
+    longitude,
+    name: locationName ?? undefined,
+    address: locationAddress ?? undefined,
+  });
+
+  return {
+    kind: "location",
+    channel,
+    action,
+    to,
+    handledBy: location.handledBy,
+    payload: location.payload,
+    toolResult: location.toolResult,
+    locationResult: location.locationResult,
+    dryRun,
+  };
+}
+
 async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
   const { cfg, params, channel, accountId, dryRun, gateway, input, abortSignal, agentId } = ctx;
   throwIfAborted(abortSignal);
-  const action = input.action as Exclude<ChannelMessageActionName, "send" | "poll" | "broadcast">;
+  const action = input.action as Exclude<
+    ChannelMessageActionName,
+    "send" | "poll" | "location" | "broadcast"
+  >;
   if (dryRun) {
     return {
       kind: "action",
@@ -809,6 +887,19 @@ export async function runMessageAction(
 
   if (action === "poll") {
     return handlePollAction({
+      cfg,
+      params,
+      channel,
+      accountId,
+      dryRun,
+      gateway,
+      input,
+      abortSignal: input.abortSignal,
+    });
+  }
+
+  if (action === "location") {
+    return handleLocationAction({
       cfg,
       params,
       channel,

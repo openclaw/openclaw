@@ -16,6 +16,8 @@ import type {
   ChannelHeartbeatDeps,
   ChannelLogSink,
   ChannelOutboundTargetMode,
+  ChannelLocationContext,
+  ChannelLocationResult,
   ChannelPollContext,
   ChannelPollResult,
   ChannelSecurityContext,
@@ -179,6 +181,7 @@ export type ChannelOutboundAdapter = {
   sendText?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;
   sendMedia?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;
   sendPoll?: (ctx: ChannelPollContext) => Promise<ChannelPollResult>;
+  sendLocation?: (ctx: ChannelLocationContext) => Promise<ChannelLocationResult>;
 };
 
 export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unknown> = {

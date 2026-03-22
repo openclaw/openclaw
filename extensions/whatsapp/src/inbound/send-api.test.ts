@@ -151,6 +151,55 @@ describe("createWebSendApi", () => {
     );
   });
 
+  it("sends location with required latitude and longitude", async () => {
+    const res = await api.sendLocation("+1555", 40.7128, -74.006);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      expect.objectContaining({
+        location: expect.objectContaining({
+          degreesLatitude: 40.7128,
+          degreesLongitude: -74.006,
+        }),
+      }),
+    );
+    expect(res.messageId).toBe("msg-1");
+    expect(recordChannelActivity).toHaveBeenCalledWith({
+      channel: "whatsapp",
+      accountId: "main",
+      direction: "outbound",
+    });
+  });
+
+  it("includes optional location fields when provided", async () => {
+    await api.sendLocation("+1555", 28.2723, -16.6424, {
+      name: "Teide",
+      address: "Parque Nacional del Teide, Tenerife",
+      accuracyInMeters: 10,
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      expect.objectContaining({
+        location: expect.objectContaining({
+          degreesLatitude: 28.2723,
+          degreesLongitude: -16.6424,
+          name: "Teide",
+          address: "Parque Nacional del Teide, Tenerife",
+          accuracyInMeters: 10,
+        }),
+      }),
+    );
+  });
+
+  it("omits undefined optional location fields from payload", async () => {
+    await api.sendLocation("+1555", 0, 0);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      expect.objectContaining({
+        location: { degreesLatitude: 0, degreesLongitude: 0 },
+      }),
+    );
+  });
+
   it("sends composing presence updates to the recipient JID", async () => {
     await api.sendComposingTo("+1555");
     expect(sendPresenceUpdate).toHaveBeenCalledWith("composing", "1555@s.whatsapp.net");
