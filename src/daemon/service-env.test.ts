@@ -8,6 +8,8 @@ import {
   buildServiceEnvironment,
   getMinimalServicePathParts,
   getMinimalServicePathPartsFromEnv,
+  isNodeVersionManagerRuntime,
+  resolveLinuxSystemCaBundle,
 } from "./service-env.js";
 
 describe("getMinimalServicePathParts - Linux user directories", () => {
@@ -529,5 +531,95 @@ describe("resolveGatewayStateDir", () => {
   it("preserves Windows absolute paths without HOME", () => {
     const env = { OPENCLAW_STATE_DIR: "C:\\State\\openclaw" };
     expect(resolveGatewayStateDir(env)).toBe("C:\\State\\openclaw");
+  });
+});
+
+describe("isNodeVersionManagerRuntime", () => {
+  it("returns true when NVM_DIR env var is set", () => {
+    expect(isNodeVersionManagerRuntime({ NVM_DIR: "/home/user/.nvm" })).toBe(true);
+  });
+
+  it("returns true when execPath contains /.nvm/", () => {
+    expect(isNodeVersionManagerRuntime({}, "/home/user/.nvm/versions/node/v22.22.0/bin/node")).toBe(
+      true,
+    );
+  });
+
+  it("returns false when neither NVM_DIR nor nvm execPath", () => {
+    expect(isNodeVersionManagerRuntime({}, "/usr/bin/node")).toBe(false);
+  });
+});
+
+describe("resolveLinuxSystemCaBundle", () => {
+  it("returns a known CA bundle path when one exists", () => {
+    const result = resolveLinuxSystemCaBundle();
+    if (process.platform === "linux") {
+      expect(result).toMatch(/\.(crt|pem)$/);
+    }
+  });
+});
+
+describe("shared Node TLS env defaults", () => {
+  it("sets macOS TLS defaults for gateway services", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/Users/test" },
+      port: 18789,
+      platform: "darwin",
+    });
+    expect(env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/cert.pem");
+    expect(env.NODE_USE_SYSTEM_CA).toBe("1");
+  });
+
+  it("sets macOS TLS defaults for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/Users/test" },
+      platform: "darwin",
+    });
+    expect(env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/cert.pem");
+    expect(env.NODE_USE_SYSTEM_CA).toBe("1");
+  });
+
+  it("defaults NODE_EXTRA_CA_CERTS on Linux when NVM_DIR is set", () => {
+    const expected = resolveLinuxSystemCaBundle();
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user", NVM_DIR: "/home/user/.nvm" },
+      port: 18789,
+      platform: "linux",
+      execPath: "/usr/bin/node",
+    });
+    expect(env.NODE_EXTRA_CA_CERTS).toBe(expected);
+  });
+
+  it("defaults NODE_EXTRA_CA_CERTS on Linux when execPath is under nvm", () => {
+    const expected = resolveLinuxSystemCaBundle();
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user" },
+      platform: "linux",
+      execPath: "/home/user/.nvm/versions/node/v22.22.0/bin/node",
+    });
+    expect(env.NODE_EXTRA_CA_CERTS).toBe(expected);
+  });
+
+  it("does not default NODE_EXTRA_CA_CERTS on Linux without nvm", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user" },
+      port: 18789,
+      platform: "linux",
+      execPath: "/usr/bin/node",
+    });
+    expect(env.NODE_EXTRA_CA_CERTS).toBeUndefined();
+  });
+
+  it("respects user-provided NODE_EXTRA_CA_CERTS on Linux with nvm", () => {
+    const env = buildNodeServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        NVM_DIR: "/home/user/.nvm",
+        NODE_EXTRA_CA_CERTS: "/custom/ca-bundle.crt",
+      },
+      platform: "linux",
+      execPath: "/home/user/.nvm/versions/node/v22.22.0/bin/node",
+    });
+    expect(env.NODE_EXTRA_CA_CERTS).toBe("/custom/ca-bundle.crt");
   });
 });

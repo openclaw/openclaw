@@ -115,7 +115,8 @@ is a small, self-contained module with a clear purpose and documented contract.
 <Accordion title="Full import path table">
   | Import path | Purpose | Key exports |
   | --- | --- | --- |
-  | `plugin-sdk/core` | Plugin entry definitions, base types | `defineChannelPluginEntry`, `definePluginEntry` |
+  | `plugin-sdk/plugin-entry` | Canonical plugin entry helper | `definePluginEntry` |
+  | `plugin-sdk/core` | Channel entry definitions, channel builders, base types | `defineChannelPluginEntry`, `createChatChannelPlugin` |
   | `plugin-sdk/channel-setup` | Setup wizard adapters | `createOptionalChannelSetupSurface` |
   | `plugin-sdk/channel-pairing` | DM pairing primitives | `createChannelPairingController` |
   | `plugin-sdk/channel-reply-pipeline` | Reply prefix + typing wiring | `createChannelReplyPipeline` |
@@ -164,5 +165,6 @@ This is a temporary escape hatch, not a permanent solution.
 ## Related
 
 - [Building Plugins](/plugins/building-plugins)
+- [Plugin SDK Overview](/plugins/sdk-overview)
 - [Plugin Internals](/plugins/architecture)
 - [Plugin Manifest](/plugins/manifest)

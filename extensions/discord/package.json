@@ -10,6 +10,17 @@
     "https-proxy-agent": "^8.0.0",
     "opusscript": "^0.1.1"
   },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.14"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"
@@ -28,7 +39,8 @@
     "install": {
       "npmSpec": "@openclaw/discord",
       "localPath": "extensions/discord",
-      "defaultChoice": "npm"
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.3.14"
     },
     "bundle": {
       "stageRuntimeDependencies": true
