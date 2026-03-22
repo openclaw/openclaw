@@ -363,6 +363,9 @@ describe("applyExtraParamsToAgent", () => {
       params.applyProvider,
       params.applyModelId,
       params.extraParamsOverride,
+      undefined,
+      undefined,
+      params.model.api,
     );
     const context: Context = { messages: [] };
     void agent.streamFn?.(params.model, context, {});
