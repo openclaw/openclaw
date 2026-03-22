@@ -77,18 +77,16 @@ type TelegramThreadBindingsState = {
  * binding lookups, and binding mutations all observe the same live registry.
  */
 const TELEGRAM_THREAD_BINDINGS_STATE_KEY = Symbol.for("openclaw.telegramThreadBindingsState");
-
-let threadBindingsState: TelegramThreadBindingsState | undefined;
+const threadBindingsState = resolveGlobalSingleton<TelegramThreadBindingsState>(
+  TELEGRAM_THREAD_BINDINGS_STATE_KEY,
+  () => ({
+    managersByAccountId: new Map<string, TelegramThreadBindingManager>(),
+    bindingsByAccountConversation: new Map<string, TelegramThreadBindingRecord>(),
+    persistQueueByAccountId: new Map<string, Promise<void>>(),
+  }),
+);
 
 function getThreadBindingsState(): TelegramThreadBindingsState {
-  threadBindingsState ??= resolveGlobalSingleton<TelegramThreadBindingsState>(
-    TELEGRAM_THREAD_BINDINGS_STATE_KEY,
-    () => ({
-      managersByAccountId: new Map<string, TelegramThreadBindingManager>(),
-      bindingsByAccountConversation: new Map<string, TelegramThreadBindingRecord>(),
-      persistQueueByAccountId: new Map<string, Promise<void>>(),
-    }),
-  );
   return threadBindingsState;
 }
 
