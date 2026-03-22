@@ -1,96 +1,62 @@
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import {
-  buildPluginSdkEntrySources,
-  buildPluginSdkPackageExports,
-  buildPluginSdkSpecifiers,
-  pluginSdkEntrypoints,
-} from "./entrypoints.js";
+import { buildPluginSdkEntrySources, pluginSdkEntrypoints } from "./entrypoints.js";
 
-const pluginSdkSpecifiers = buildPluginSdkSpecifiers();
 const require = createRequire(import.meta.url);
 const tsdownModuleUrl = pathToFileURL(require.resolve("tsdown")).href;
+const bundledRepresentativeEntrypoints = ["outbound-runtime", "matrix-runtime-heavy"] as const;
+const bundledCoverageEntrySources = buildPluginSdkEntrySources(bundledRepresentativeEntrypoints);
 
 describe("plugin-sdk bundled exports", () => {
-  it("emits importable bundled subpath entries", { timeout: 240_000 }, async () => {
-    const outDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-sdk-build-"));
-    const fixtureDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-sdk-consumer-"));
+  it("emits importable bundled subpath entries", { timeout: 120_000 }, async () => {
+    const bundleTempRoot = path.join(
+      process.cwd(),
+      "node_modules",
+      ".cache",
+      "openclaw-plugin-sdk-build",
+    );
+    await fs.mkdir(bundleTempRoot, { recursive: true });
+    const outDir = path.join(bundleTempRoot, "bundle");
+    await fs.rm(outDir, { recursive: true, force: true });
+    await fs.mkdir(outDir, { recursive: true });
 
-    try {
-      const { build } = await import(tsdownModuleUrl);
-      await build({
-        clean: true,
-        config: false,
-        dts: false,
-        entry: buildPluginSdkEntrySources(),
-        env: { NODE_ENV: "production" },
-        fixedExtension: false,
-        logLevel: "error",
-        outDir,
-        platform: "node",
-      });
-      await fs.symlink(
-        path.join(process.cwd(), "node_modules"),
-        path.join(outDir, "node_modules"),
-        "dir",
-      );
+    const { build } = await import(tsdownModuleUrl);
+    await build({
+      clean: false,
+      config: false,
+      dts: false,
+      // Full plugin-sdk coverage belongs to `pnpm build`, package contract
+      // guardrails, and `subpaths.test.ts`. This file only keeps the expensive
+      // bundler path honest across representative entrypoint families.
+      entry: bundledCoverageEntrySources,
+      env: { NODE_ENV: "production" },
+      fixedExtension: false,
+      logLevel: "error",
+      outDir,
+      platform: "node",
+    });
 
-      await Promise.all(
-        pluginSdkEntrypoints.map(async (entry) => {
-          await expect(fs.stat(path.join(outDir, `${entry}.js`))).resolves.toBeTruthy();
-        }),
-      );
+    expect(pluginSdkEntrypoints.length).toBeGreaterThan(bundledRepresentativeEntrypoints.length);
+    await Promise.all(
+      bundledRepresentativeEntrypoints.map(async (entry) => {
+        await expect(fs.stat(path.join(outDir, `${entry}.js`))).resolves.toBeTruthy();
+      }),
+    );
 
-      const packageDir = path.join(fixtureDir, "openclaw");
-      const consumerDir = path.join(fixtureDir, "consumer");
-      const consumerEntry = path.join(consumerDir, "import-plugin-sdk.mjs");
-
-      await fs.mkdir(path.join(packageDir, "dist"), { recursive: true });
-      await fs.symlink(outDir, path.join(packageDir, "dist", "plugin-sdk"), "dir");
-      // Mirror the installed package layout so subpaths can resolve root deps.
-      await fs.symlink(
-        path.join(process.cwd(), "node_modules"),
-        path.join(packageDir, "node_modules"),
-        "dir",
-      );
-      await fs.writeFile(
-        path.join(packageDir, "package.json"),
-        JSON.stringify(
-          {
-            exports: buildPluginSdkPackageExports(),
-            name: "openclaw",
-            type: "module",
-          },
-          null,
-          2,
-        ),
-      );
-
-      await fs.mkdir(path.join(consumerDir, "node_modules"), { recursive: true });
-      await fs.symlink(packageDir, path.join(consumerDir, "node_modules", "openclaw"), "dir");
-      await fs.writeFile(
-        consumerEntry,
-        [
-          `const specifiers = ${JSON.stringify(pluginSdkSpecifiers)};`,
-          "const results = {};",
-          "for (const specifier of specifiers) {",
-          "  results[specifier] = typeof (await import(specifier));",
-          "}",
-          "export default results;",
-        ].join("\n"),
-      );
-
-      const { default: importResults } = await import(pathToFileURL(consumerEntry).href);
-      expect(importResults).toEqual(
-        Object.fromEntries(pluginSdkSpecifiers.map((specifier: string) => [specifier, "object"])),
-      );
-    } finally {
-      await fs.rm(outDir, { recursive: true, force: true });
-      await fs.rm(fixtureDir, { recursive: true, force: true });
-    }
+    // Export list and package-specifier coverage already live in
+    // package-contract-guardrails.test.ts and subpaths.test.ts. Keep this file
+    // focused on the expensive part: can tsdown emit working bundle artifacts?
+    const importResults = await Promise.all(
+      bundledRepresentativeEntrypoints.map(async (entry) => [
+        entry,
+        typeof (await import(pathToFileURL(path.join(outDir, `${entry}.js`)).href)),
+      ]),
+    );
+    expect(Object.fromEntries(importResults)).toEqual(
+      Object.fromEntries(bundledRepresentativeEntrypoints.map((entry) => [entry, "object"])),
+    );
   });
 });

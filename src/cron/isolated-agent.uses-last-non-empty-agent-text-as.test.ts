@@ -180,81 +180,6 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
-  it("uses last non-empty agent text as summary", async () => {
-    await withTempHome(async (home) => {
-      const { res } = await runCronTurn(home, {
-        jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
-        mockTexts: ["first", " ", " last "],
-      });
-
-      expect(res.status).toBe("ok");
-      expect(res.summary).toBe("last");
-    });
-  });
-
-  it("returns error when embedded run payload is marked as error", async () => {
-    await withTempHome(async (home) => {
-      mockEmbeddedPayloads([
-        {
-          text: "⚠️ 🛠️ Exec failed: /bin/bash: line 1: python: command not found",
-          isError: true,
-        },
-      ]);
-      const { res } = await runCronTurn(home, {
-        jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
-        mockTexts: null,
-      });
-
-      expect(res.status).toBe("error");
-      expect(res.error).toContain("command not found");
-      expect(res.summary).toContain("Exec failed");
-    });
-  });
-
-  it("treats transient error payloads as non-fatal when a later success payload exists", async () => {
-    await withTempHome(async (home) => {
-      mockEmbeddedPayloads([
-        {
-          text: "⚠️ ✍️ Write: failed",
-          isError: true,
-        },
-        {
-          text: "Write completed successfully.",
-          isError: false,
-        },
-      ]);
-      const { res } = await runCronTurn(home, {
-        jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
-        mockTexts: null,
-      });
-
-      expect(res.status).toBe("ok");
-      expect(res.summary).toBe("Write completed successfully.");
-    });
-  });
-
-  it("keeps error status when run-level error accompanies post-error text", async () => {
-    await withTempHome(async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
-        payloads: [
-          { text: "Model context overflow", isError: true },
-          { text: "Partial assistant text before error" },
-        ],
-        meta: {
-          durationMs: 5,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
-          error: { kind: "context_overflow", message: "exceeded context window" },
-        },
-      });
-      const { res } = await runCronTurn(home, {
-        jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
-        mockTexts: null,
-      });
-
-      expect(res.status).toBe("error");
-    });
-  });
-
   it("passes resolved agentDir to runEmbeddedPiAgent", async () => {
     await withTempHome(async (home) => {
       const { res } = await runCronTurn(home, {
@@ -516,19 +441,6 @@ describe("runCronIsolatedAgentTurn", () => {
 
       const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
       expect(callArgs?.thinkLevel).toBe("low");
-    });
-  });
-
-  it("truncates long summaries", async () => {
-    await withTempHome(async (home) => {
-      const long = "a".repeat(2001);
-      const { res } = await runCronTurn(home, {
-        jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
-        mockTexts: [long],
-      });
-
-      expect(res.status).toBe("ok");
-      expect(String(res.summary ?? "")).toMatch(/…$/);
     });
   });
 

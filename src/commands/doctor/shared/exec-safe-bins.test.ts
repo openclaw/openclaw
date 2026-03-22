@@ -1,9 +1,11 @@
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
+  collectExecSafeBinCoverageWarnings,
+  collectExecSafeBinTrustedDirHintWarnings,
   maybeRepairExecSafeBinProfiles,
   scanExecSafeBinCoverage,
   scanExecSafeBinTrustedDirHints,
@@ -29,6 +31,22 @@ describe("doctor exec safe bin helpers", () => {
     expect(hits).toEqual([{ scopePath: "tools.exec", bin: "node", isInterpreter: true }]);
   });
 
+  it("formats coverage warnings", () => {
+    const warnings = collectExecSafeBinCoverageWarnings({
+      hits: [
+        { scopePath: "tools.exec", bin: "node", isInterpreter: true },
+        { scopePath: "agents.list.runner.tools.exec", bin: "jq", isInterpreter: false },
+      ],
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining("tools.exec.safeBins includes interpreter/runtime 'node'"),
+      expect.stringContaining("agents.list.runner.tools.exec.safeBins entry 'jq'"),
+      expect.stringContaining('Run "openclaw doctor --fix"'),
+    ]);
+  });
+
   it("scaffolds custom safeBin profiles but warns on interpreters", () => {
     const result = maybeRepairExecSafeBinProfiles({
       tools: {
@@ -52,7 +70,7 @@ describe("doctor exec safe bin helpers", () => {
     const binPath = join(tempDir, "custom-safe-bin");
     writeFileSync(binPath, "#!/bin/sh\nexit 0\n");
     chmodSync(binPath, 0o755);
-    process.env.PATH = `${tempDir}:${originalPath}`;
+    process.env.PATH = [tempDir, originalPath].filter((entry) => entry.length > 0).join(delimiter);
 
     const hits = scanExecSafeBinTrustedDirHints({
       tools: {
@@ -69,6 +87,13 @@ describe("doctor exec safe bin helpers", () => {
       bin: "custom-safe-bin",
       resolvedPath: binPath,
     });
+
+    expect(collectExecSafeBinTrustedDirHintWarnings(hits)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("tools.exec.safeBins entry 'custom-safe-bin'"),
+        expect.stringContaining("tools.exec.safeBinTrustedDirs"),
+      ]),
+    );
 
     rmSync(tempDir, { recursive: true, force: true });
   });
