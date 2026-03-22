@@ -133,7 +133,6 @@ describe("plugin-sdk subpath exports", () => {
     expect(pluginSdkSubpaths).not.toContain("secret-input-schema");
     expect(pluginSdkSubpaths).not.toContain("zai");
     expect(pluginSdkSubpaths).not.toContain("discord-core");
-    expect(pluginSdkSubpaths).not.toContain("slack-core");
     expect(pluginSdkSubpaths).not.toContain("provider-model-definitions");
   });
 
