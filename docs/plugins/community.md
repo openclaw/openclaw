@@ -10,11 +10,14 @@ title: "Community Plugins"
 
 Community plugins are third-party packages that extend OpenClaw with new
 channels, tools, providers, or other capabilities. They are built and maintained
-by the community, published on npm, and installable with a single command.
+by the community, published on [ClawHub](/tools/clawhub) or npm, and
+installable with a single command.
 
 ```bash
-openclaw plugins install <npm-spec>
+openclaw plugins install <package-name>
 ```
+
+OpenClaw checks ClawHub first and falls back to npm automatically.
 
 ## Listed plugins
 
@@ -99,8 +102,9 @@ openclaw plugins install @wecom/wecom-openclaw-plugin
 We welcome community plugins that are useful, documented, and safe to operate.
 
 <Steps>
-  <Step title="Publish to npm">
-    Your plugin must be installable via `openclaw plugins install \<npm-spec\>`.
+  <Step title="Publish to ClawHub or npm">
+    Your plugin must be installable via `openclaw plugins install \<package-name\>`.
+    Publish to [ClawHub](/tools/clawhub) (preferred) or npm.
     See [Building Plugins](/plugins/building-plugins) for the full guide.
 
   </Step>
@@ -127,7 +131,7 @@ We welcome community plugins that are useful, documented, and safe to operate.
 
 | Requirement          | Why                                           |
 | -------------------- | --------------------------------------------- |
-| Published on npm     | Users need `openclaw plugins install` to work |
+| Published on ClawHub or npm | Users need `openclaw plugins install` to work |
 | Public GitHub repo   | Source review, issue tracking, transparency   |
 | Setup and usage docs | Users need to know how to configure it        |
 | Active maintenance   | Recent updates or responsive issue handling   |
