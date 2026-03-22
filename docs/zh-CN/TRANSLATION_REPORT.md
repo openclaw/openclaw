@@ -20,7 +20,7 @@
 
 ### 术语处理
 - **保留英文的术语** (仅与 OpenClaw 相关的核心技术术语):
-  API、PR、Issue、CLI、Gateway、Canvas、Skills、WebChat、Node、DM、OAuth、TTS、PTT、WebSocket、WS、CDP、HTTP、HTTPS、SSH、Docker、Nix、npm、pnpm、bun、TypeScript、JavaScript、macOS、iOS、Android、Windows、Linux、Discord、Slack、Telegram、WhatsApp、Signal、iMessage、BlueBubbles、Matrix、LINE、Mattermost、Nextcloud、Nostr、Synology、Tlon、Twitch、Zalo、Gmail、Pub/Sub、Webhook、Cron、JWT、JSON、Markdown、UI、UX、IDE、Git、GitHub、CI/CD、Tailscale、Serve、Funnel、tailnet、launchd、systemd、stdout、stderr、ACL、REST、GraphQL、RPC、XML、YAML、TOML、CSV、SQL、NoSQL、RDBMS、ORM、SPA、PWA、SSR、CSR、SEO、SSL、TLS、SFTP、FTP、TCP、UDP、DNS、CDN、VPS、VM、MFA、2FA、OTP、TOTP、OIDC、SAML、LDAP、IAM、SCIM、JWK、JWKS、PKCE、PKI、CA、HSM、KMS、TPM、TEE、MPC、ZKP
+  API、PR、Issue、CLI、Gateway、Canvas、Skills、WebChat、Node、DM、OAuth、TTS、PTT、WebSocket、WS、CDP、HTTP、HTTPS、SSH、Docker、Nix、npm、pnpm、bun、TypeScript、JavaScript、macOS、iOS、Android、Windows、Linux、Discord、Slack、Telegram、WhatsApp、Signal、iMessage、BlueBubbles、Matrix、LINE、Mattermost、Nextcloud、Nostr、Synology、Tlon、Twitch、Zalo、Gmail、Pub/Sub、Webhook、Cron、JSON、Markdown、UI、UX、IDE、Git、GitHub、CI/CD、Tailscale、Serve、Funnel、tailnet、launchd、systemd、stdout、stderr、REST、RPC、VPS
 
 - **翻译的术语**:
   - Gateway → Gateway 网关（保留 Gateway 但添加中文注释）
