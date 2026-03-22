@@ -15,6 +15,9 @@ describe("config doc baseline integration", () => {
   let sharedRenderedPromise: Promise<
     Awaited<ReturnType<typeof renderConfigDocBaselineStatefile>>
   > | null = null;
+  let sharedByPathPromise: Promise<
+    Map<string, Awaited<ReturnType<typeof buildConfigDocBaseline>>["entries"][number]>
+  > | null = null;
 
   function getSharedBaseline() {
     sharedBaselinePromise ??= buildConfigDocBaseline();
@@ -26,6 +29,13 @@ describe("config doc baseline integration", () => {
     return sharedRenderedPromise;
   }
 
+  function getSharedByPath() {
+    sharedByPathPromise ??= getSharedBaseline().then(
+      (baseline) => new Map(baseline.entries.map((entry) => [entry.path, entry])),
+    );
+    return sharedByPathPromise;
+  }
+
   afterEach(async () => {
     await Promise.all(
       tempRoots.splice(0).map(async (tempRoot) => {
@@ -35,7 +45,7 @@ describe("config doc baseline integration", () => {
   });
 
   it("is deterministic across repeated runs", async () => {
-    const first = await renderConfigDocBaselineStatefile();
+    const first = await getSharedRendered();
     const second = await renderConfigDocBaselineStatefile();
 
     expect(second.json).toBe(first.json);
@@ -43,8 +53,7 @@ describe("config doc baseline integration", () => {
   });
 
   it("includes core, channel, and plugin config metadata", async () => {
-    const baseline = await getSharedBaseline();
-    const byPath = new Map(baseline.entries.map((entry) => [entry.path, entry]));
+    const byPath = await getSharedByPath();
 
     expect(byPath.get("gateway.auth.token")).toMatchObject({
       kind: "core",
@@ -61,8 +70,7 @@ describe("config doc baseline integration", () => {
   });
 
   it("preserves help text and tags from merged schema hints", async () => {
-    const baseline = await getSharedBaseline();
-    const byPath = new Map(baseline.entries.map((entry) => [entry.path, entry]));
+    const byPath = await getSharedByPath();
     const tokenEntry = byPath.get("gateway.auth.token");
 
     expect(tokenEntry?.help).toContain("gateway access");
@@ -71,8 +79,7 @@ describe("config doc baseline integration", () => {
   });
 
   it("uses human-readable channel metadata for top-level channel sections", async () => {
-    const baseline = await getSharedBaseline();
-    const byPath = new Map(baseline.entries.map((entry) => [entry.path, entry]));
+    const byPath = await getSharedByPath();
 
     expect(byPath.get("channels.discord")).toMatchObject({
       label: "Discord",
@@ -91,8 +98,7 @@ describe("config doc baseline integration", () => {
   });
 
   it("matches array help hints that still use [] notation", async () => {
-    const baseline = await getSharedBaseline();
-    const byPath = new Map(baseline.entries.map((entry) => [entry.path, entry]));
+    const byPath = await getSharedByPath();
 
     expect(byPath.get("session.sendPolicy.rules.*.match.keyPrefix")).toMatchObject({
       help: expect.stringContaining("prefer rawKeyPrefix when exact full-key matching is required"),
@@ -101,8 +107,7 @@ describe("config doc baseline integration", () => {
   });
 
   it("walks union branches for nested config keys", async () => {
-    const baseline = await getSharedBaseline();
-    const byPath = new Map(baseline.entries.map((entry) => [entry.path, entry]));
+    const byPath = await getSharedByPath();
 
     expect(byPath.get("bindings.*")).toMatchObject({
       hasChildren: true,
