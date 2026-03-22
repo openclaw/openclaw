@@ -61,25 +61,38 @@ function inferProviderFromSessionKey(params: {
   sessionKey: string;
 }): string | undefined {
   const parsed = parseAgentSessionKey(params.sessionKey);
-  if (!parsed) {
+  if (parsed) {
+    const rest = parsed.rest.trim();
+    if (!rest) {
+      return undefined;
+    }
+    const parts = rest.split(":").filter(Boolean);
+    if (parts.length === 0) {
+      return undefined;
+    }
+    const configuredMainKey = normalizeMainKey(params.cfg.session?.mainKey);
+    if (parts[0] === configuredMainKey) {
+      return undefined;
+    }
+    const candidate = parts[0]?.trim().toLowerCase();
+    if (!candidate) {
+      return undefined;
+    }
+    if (candidate === INTERNAL_MESSAGE_CHANNEL) {
+      return INTERNAL_MESSAGE_CHANNEL;
+    }
+    return normalizeAnyChannelId(candidate) ?? undefined;
+  }
+  // Handle bare channel-prefixed keys (e.g. telegram:slash:ID → telegram)
+  const raw = (params.sessionKey ?? "").trim().toLowerCase();
+  if (!raw) {
     return undefined;
   }
-  const rest = parsed.rest.trim();
-  if (!rest) {
+  const colonIdx = raw.indexOf(":");
+  if (colonIdx <= 0) {
     return undefined;
   }
-  const parts = rest.split(":").filter(Boolean);
-  if (parts.length === 0) {
-    return undefined;
-  }
-  const configuredMainKey = normalizeMainKey(params.cfg.session?.mainKey);
-  if (parts[0] === configuredMainKey) {
-    return undefined;
-  }
-  const candidate = parts[0]?.trim().toLowerCase();
-  if (!candidate) {
-    return undefined;
-  }
+  const candidate = raw.slice(0, colonIdx);
   if (candidate === INTERNAL_MESSAGE_CHANNEL) {
     return INTERNAL_MESSAGE_CHANNEL;
   }

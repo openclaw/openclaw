@@ -204,6 +204,13 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         userAgent?.toLowerCase().includes("swiftpm-testing-helper") && isLoopbackAddress(remote),
       );
 
+    // Node.js HTTP agent loopback short connections close immediately with code 1000/1005
+    const isNoisyNodeClientClose = (
+      _userAgent: string | undefined,
+      remote: string | undefined,
+      code: number | undefined,
+    ) => Boolean(isLoopbackAddress(remote) && (code === 1000 || code === 1005));
+
     socket.once("close", (code, reason) => {
       const durationMs = Date.now() - openedAt;
       const logForwardedFor = sanitizeLogValue(forwardedFor);
@@ -225,9 +232,11 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         ...closeMeta,
       };
       if (!client) {
-        const logFn = isNoisySwiftPmHelperClose(requestUserAgent, remoteAddr)
-          ? logWsControl.debug
-          : logWsControl.warn;
+        const logFn =
+          isNoisySwiftPmHelperClose(requestUserAgent, remoteAddr) ||
+          isNoisyNodeClientClose(requestUserAgent, remoteAddr, code)
+            ? logWsControl.debug
+            : logWsControl.warn;
         logFn(
           `closed before connect conn=${connId} remote=${remoteAddr ?? "?"} fwd=${logForwardedFor || "n/a"} origin=${logOrigin || "n/a"} host=${logHost || "n/a"} ua=${logUserAgent || "n/a"} code=${code ?? "n/a"} reason=${logReason || "n/a"}`,
           closeContext,

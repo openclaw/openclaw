@@ -3,12 +3,21 @@ import { describe, expect, it, vi } from "vitest";
 const SANDBOX_EXPLAIN_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 30_000;
 
 let mockCfg: unknown = {};
+let mockSessionStore: Record<string, unknown> = {};
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
   return {
     ...actual,
     loadConfig: vi.fn().mockImplementation(() => mockCfg),
+  };
+});
+
+vi.mock("../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions.js")>();
+  return {
+    ...actual,
+    loadSessionStore: vi.fn().mockImplementation(() => mockSessionStore),
   };
 });
 
@@ -45,4 +54,35 @@ describe("sandbox explain command", () => {
     expect(parsed.fixIt).toContain("agents.defaults.sandbox.mode=off");
     expect(parsed.fixIt).toContain("tools.sandbox.tools.deny");
   });
+
+  it(
+    "resolves telegram:slash:* session key to channel=telegram",
+    { timeout: SANDBOX_EXPLAIN_TEST_TIMEOUT_MS },
+    async () => {
+      mockCfg = {
+        agents: {
+          defaults: {
+            sandbox: { mode: "all", scope: "agent", workspaceAccess: "none" },
+          },
+        },
+        tools: {
+          elevated: { enabled: true, allowFrom: { telegram: ["123456"] } },
+        },
+        session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
+      };
+      // Empty store so resolveActiveChannel falls back to inferProviderFromSessionKey
+      mockSessionStore = {};
+
+      const logs: string[] = [];
+      await sandboxExplainCommand({ json: true, session: "telegram:slash:123456" }, {
+        log: (msg: string) => logs.push(msg),
+        error: (msg: string) => logs.push(msg),
+        exit: (_code: number) => {},
+      } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
+
+      const out = logs.join("");
+      const parsed = JSON.parse(out);
+      expect(parsed.elevated.channel).toBe("telegram");
+    },
+  );
 });
