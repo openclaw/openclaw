@@ -1725,6 +1725,11 @@ export const chatHandlers: GatewayRequestHandlers = {
       agentId: resolveSessionAgentId({ sessionKey: rawSessionKey, config: cfg }),
       createIfMissing: true,
     });
+    if (appended.ok && !appended.messageId) {
+      // Idempotency dedup: key already present in transcript, nothing to write.
+      respond(true, { deduplicated: true });
+      return;
+    }
     if (!appended.ok || !appended.messageId || !appended.message) {
       respond(
         false,
