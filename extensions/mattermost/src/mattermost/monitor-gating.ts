@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../runtime-api.js";
+import type { ChatType, OpenClawConfig } from "../runtime-api.js";
 import type { MattermostChatTypeKey } from "../types.js";
 
 export function mapMattermostChannelTypeToChatType(
