@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "../config/config.js";
-import type { ExplicitGatewayAuth } from "./call.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "./call.js";
 import type {
   GatewayCredentialMode,
@@ -8,6 +7,7 @@ import type {
   GatewayRemoteCredentialPrecedence,
 } from "./credentials.js";
 import { resolveGatewayCredentialsFromConfig } from "./credentials.js";
+import type { ExplicitGatewayAuth } from "./explicit-auth.js";
 
 export type GatewayConnectionAuthOptions = {
   config: OpenClawConfig;

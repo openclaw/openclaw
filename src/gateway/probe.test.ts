@@ -86,6 +86,16 @@ describe("probeGateway", () => {
     expect(gatewayClientState.options?.deviceIdentity).toBeNull();
   });
 
+  it("treats bracketed IPv6 loopback probes as local", async () => {
+    await probeGateway({
+      url: "ws://[::1]:18789",
+      timeoutMs: 1_000,
+      includeDetails: false,
+    });
+
+    expect(gatewayClientState.options?.deviceIdentity).toBeNull();
+  });
+
   it("skips detail RPCs for lightweight reachability probes", async () => {
     const result = await probeGateway({
       url: "ws://127.0.0.1:18789",
@@ -95,6 +105,20 @@ describe("probeGateway", () => {
 
     expect(result.ok).toBe(true);
     expect(gatewayClientState.requests).toEqual([]);
+  });
+
+  it("fetches only health for health-only probes", async () => {
+    const result = await probeGateway({
+      url: "ws://127.0.0.1:18789",
+      timeoutMs: 1_000,
+      detailLevel: "health",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(gatewayClientState.requests).toEqual(["health"]);
+    expect(result.status).toBeNull();
+    expect(result.presence).toBeNull();
+    expect(result.configSnapshot).toBeNull();
   });
 
   it("fetches only presence for presence-only probes", async () => {
@@ -109,5 +133,16 @@ describe("probeGateway", () => {
     expect(result.health).toBeNull();
     expect(result.status).toBeNull();
     expect(result.configSnapshot).toBeNull();
+  });
+
+  it("can keep device identity enabled for trusted loopback probes without shared auth", async () => {
+    await probeGateway({
+      url: "ws://127.0.0.1:18789",
+      timeoutMs: 1_000,
+      includeDetails: false,
+      allowLoopbackDeviceIdentity: true,
+    });
+
+    expect(gatewayClientState.options?.deviceIdentity).toBeUndefined();
   });
 });

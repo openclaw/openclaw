@@ -343,6 +343,8 @@ export async function gatherDaemonStatus(
         url: gateway.probeUrl,
         token: daemonProbeAuth?.token,
         password: daemonProbeAuth?.password,
+        explicitToken: opts.rpc.token,
+        explicitPassword: opts.rpc.password,
         tlsFingerprint:
           shouldUseLocalTlsRuntime && tlsRuntime?.enabled
             ? tlsRuntime.fingerprintSha256
@@ -350,6 +352,8 @@ export async function gatherDaemonStatus(
         timeoutMs,
         json: opts.rpc.json,
         configPath: daemonConfigSummary.path,
+        requireExplicitAuth: probeUrlOverride !== null,
+        allowLoopbackDeviceIdentity: probeUrlOverride === null,
       })
     : undefined;
   if (rpc?.ok) {

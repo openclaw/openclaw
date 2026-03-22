@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
-const callGateway = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
+const probeGateway = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
 const resolveGatewayProgramArguments = vi.fn(async (_opts?: unknown) => ({
   programArguments: ["/bin/node", "cli", "gateway", "--port", "18789"],
 }));
@@ -35,8 +35,8 @@ const buildGatewayInstallPlan = vi.fn(
 
 const { runtimeLogs, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
-vi.mock("../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => callGateway(opts),
+vi.mock("../gateway/probe.js", () => ({
+  probeGateway: (opts: unknown) => probeGateway(opts),
 }));
 
 vi.mock("../gateway/probe-auth.js", () => ({
@@ -143,19 +143,19 @@ describe("daemon-cli coverage", () => {
 
   it("probes gateway status by default", async () => {
     resetRuntimeCapture();
-    callGateway.mockClear();
+    probeGateway.mockClear();
 
     await runDaemonCommand(["daemon", "status"]);
 
-    expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({ method: "status" }));
+    expect(probeGateway).toHaveBeenCalledTimes(1);
+    expect(probeGateway).toHaveBeenCalledWith(expect.objectContaining({ detailLevel: "health" }));
     expect(findExtraGatewayServices).toHaveBeenCalled();
     expect(inspectPortUsage).toHaveBeenCalled();
   });
 
   it("derives probe URL from service args + env (json)", async () => {
     resetRuntimeCapture();
-    callGateway.mockClear();
+    probeGateway.mockClear();
     inspectPortUsage.mockClear();
 
     serviceReadCommand.mockResolvedValueOnce({
@@ -171,10 +171,10 @@ describe("daemon-cli coverage", () => {
 
     await runDaemonCommand(["daemon", "status", "--json"]);
 
-    expect(callGateway).toHaveBeenCalledWith(
+    expect(probeGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "ws://127.0.0.1:19001",
-        method: "status",
+        detailLevel: "health",
       }),
     );
     expect(inspectPortUsage).toHaveBeenCalledWith(19001);

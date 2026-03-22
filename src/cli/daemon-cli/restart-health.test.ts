@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayService } from "../../daemon/service.js";
 import type { PortListenerKind, PortUsage } from "../../infra/ports.js";
+import { DEFAULT_LOCAL_GATEWAY_REACHABILITY_TIMEOUT_MS } from "./restart-health.js";
 
 const inspectPortUsage = vi.hoisted(() => vi.fn<(port: number) => Promise<PortUsage>>());
 const classifyPortListener = vi.hoisted(() =>
@@ -99,6 +100,7 @@ describe("inspectGatewayRestart", () => {
 
   afterEach(() => {
     Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    vi.useRealTimers();
   });
 
   it("treats a gateway listener child pid as healthy ownership", async () => {
@@ -184,7 +186,10 @@ describe("inspectGatewayRestart", () => {
 
     expect(snapshot.healthy).toBe(true);
     expect(probeGateway).toHaveBeenCalledWith(
-      expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+        timeoutMs: DEFAULT_LOCAL_GATEWAY_REACHABILITY_TIMEOUT_MS,
+      }),
     );
   });
 
@@ -208,6 +213,12 @@ describe("inspectGatewayRestart", () => {
 
     expect(snapshot.healthy).toBe(true);
     expect(snapshot.staleGatewayPids).toEqual([]);
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+        timeoutMs: DEFAULT_LOCAL_GATEWAY_REACHABILITY_TIMEOUT_MS,
+      }),
+    );
   });
 
   it("treats auth-closed probe as healthy gateway reachability", async () => {
@@ -239,5 +250,53 @@ describe("inspectGatewayRestart", () => {
 
     expect(snapshot.healthy).toBe(true);
     expect(probeGateway).not.toHaveBeenCalled();
+  });
+
+  it("bounds restart probe timeouts to the remaining retry budget", async () => {
+    vi.useFakeTimers();
+    classifyPortListener.mockReturnValue("unknown");
+    probeGateway.mockResolvedValue({
+      ok: false,
+      close: null,
+    });
+
+    const service = makeGatewayService({ status: "running", pid: 8000 });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ commandLine: "" }],
+      hints: [],
+    });
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const promise = waitForGatewayHealthyRestart({
+      service,
+      port: 18789,
+      attempts: 3,
+      delayMs: 500,
+    });
+
+    await vi.runAllTimersAsync();
+    const snapshot = await promise;
+
+    expect(snapshot.healthy).toBe(false);
+    expect(probeGateway).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        timeoutMs: 1_500,
+      }),
+    );
+    expect(probeGateway).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        timeoutMs: 1_000,
+      }),
+    );
+    expect(probeGateway).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        timeoutMs: 500,
+      }),
+    );
   });
 });
