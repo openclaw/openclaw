@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import {
   buildPluginLoaderAliasMap,
@@ -52,12 +52,11 @@ function makeTempDir() {
 }
 
 function withCwd<T>(cwd: string, run: () => T): T {
-  const previousCwd = process.cwd();
-  process.chdir(cwd);
+  const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
   try {
     return run();
   } finally {
-    process.chdir(previousCwd);
+    cwdSpy.mockRestore();
   }
 }
 
