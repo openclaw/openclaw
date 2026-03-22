@@ -31,11 +31,10 @@ describe("browser chrome launch args", () => {
         cdpUrl: "http://127.0.0.1:18800",
         cdpPort: 18800,
         cdpHost: "127.0.0.1",
-        cdpProtocol: "http",
-        cdpPath: "",
         cdpIsLoopback: true,
         color: "#FF4500",
-        auth: undefined,
+        driver: "openclaw",
+        attachOnly: false,
       },
       userDataDir: "/tmp/openclaw-test-user-data",
     });
