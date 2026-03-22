@@ -139,6 +139,58 @@ Tool summaries can redact sensitive tokens before they hit the console:
 
 Redaction affects **console output only** and does not alter file logs.
 
+## Prompt / context observability in gateway logs
+
+If you need Render-visible logs that show how a run was assembled, enable the
+bundled `prompt-observer` plugin.
+
+It can log:
+
+- final `llm_input` metadata for each run
+- raw/truncated `systemPrompt`, user prompt, and recent history messages
+- selected tool calls/results (defaults: `memory_search`, `memory_get`,
+  `web_search`, `web_fetch`)
+- explicit bootstrap file selection when internal hooks are enabled
+
+Example:
+
+```json
+{
+  "logging": {
+    "level": "debug",
+    "consoleLevel": "debug",
+    "consoleStyle": "json"
+  },
+  "hooks": {
+    "internal": {
+      "enabled": true
+    }
+  },
+  "plugins": {
+    "entries": {
+      "prompt-observer": {
+        "enabled": true,
+        "config": {
+          "mode": "full",
+          "includeLlmOutput": true,
+          "maxCharsPerField": 8000
+        }
+      }
+    }
+  }
+}
+```
+
+Notes:
+
+- `mode: "summary"` keeps logs lightweight and only emits counts/metadata.
+- `mode: "full"` includes prompt text and detailed tool payloads with
+  truncation/redaction.
+- Exact bootstrap-file logging depends on `hooks.internal.enabled: true`.
+- `diagnostics.cacheTrace` is still the strongest side-file raw capture; the
+  observer plugin is the simplest path when you specifically want these payloads
+  in the normal gateway/Render log stream.
+
 ## Diagnostics + OpenTelemetry
 
 Diagnostics are structured, machine-readable events for model runs **and**

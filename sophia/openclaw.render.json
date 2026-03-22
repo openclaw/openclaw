@@ -31,6 +31,46 @@
   "cron": {
     "enabled": true
   },
+  "logging": {
+    "level": "debug",
+    "consoleLevel": "debug",
+    "consoleStyle": "json"
+  },
+  "diagnostics": {
+    "cacheTrace": {
+      "enabled": true,
+      "filePath": "/data/.openclaw/logs/cache-trace.jsonl",
+      "includeMessages": true,
+      "includePrompt": true,
+      "includeSystem": true
+    }
+  },
+  "hooks": {
+    "internal": {
+      "enabled": true
+    }
+  },
+  "plugins": {
+    "enabled": true,
+    "entries": {
+      "prompt-observer": {
+        "enabled": true,
+        "config": {
+          "mode": "full",
+          "includeSystemPrompt": true,
+          "includePrompt": true,
+          "includeHistoryMessages": true,
+          "includeLlmOutput": true,
+          "includeToolResults": true,
+          "includeBootstrapFiles": true,
+          "redactSensitive": true,
+          "maxCharsPerField": 8000,
+          "maxHistoryMessages": 12,
+          "toolNames": ["memory_search", "memory_get", "web_search", "web_fetch"]
+        }
+      }
+    }
+  },
   "gateway": {
     "mode": "local",
     "controlUi": {

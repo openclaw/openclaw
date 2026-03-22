@@ -445,6 +445,55 @@ describe("config plugin validation", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts prompt-observer config with full capture settings", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        entries: {
+          "prompt-observer": {
+            enabled: true,
+            config: {
+              mode: "full",
+              includeLlmOutput: true,
+              includeToolResults: true,
+              includeBootstrapFiles: true,
+              maxCharsPerField: 4096,
+              maxHistoryMessages: 8,
+              toolNames: ["memory_search", "web_search"],
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("surfaces prompt-observer enum validation issues", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        entries: {
+          "prompt-observer": {
+            enabled: true,
+            config: {
+              mode: "verbose",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      const issue = res.issues.find(
+        (entry) => entry.path === "plugins.entries.prompt-observer.config.mode",
+      );
+      expect(issue).toBeDefined();
+      expect(issue?.message).toContain('allowed: "summary", "full"');
+    }
+  });
+
   it("accepts known plugin ids and valid channel/heartbeat enums", async () => {
     const res = validateInSuite({
       agents: {

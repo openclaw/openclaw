@@ -102,6 +102,7 @@ These ship with OpenClaw and are enabled by default unless noted.
 **Other bundled:**
 
 - `copilot-proxy` -- VS Code Copilot Proxy bridge (disabled by default)
+- `prompt-observer` -- structured prompt/context/tool observability for incident debugging (disabled by default)
 
 ## Compatible bundles
 

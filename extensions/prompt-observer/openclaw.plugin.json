@@ -1,0 +1,101 @@
+{
+  "id": "prompt-observer",
+  "name": "Prompt Observer",
+  "description": "Structured prompt, context, and tool observability for production debugging.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "mode": {
+        "type": "string",
+        "enum": ["summary", "full"],
+        "default": "summary"
+      },
+      "includeSystemPrompt": {
+        "type": "boolean"
+      },
+      "includePrompt": {
+        "type": "boolean"
+      },
+      "includeHistoryMessages": {
+        "type": "boolean"
+      },
+      "includeLlmOutput": {
+        "type": "boolean"
+      },
+      "includeToolResults": {
+        "type": "boolean"
+      },
+      "includeBootstrapFiles": {
+        "type": "boolean"
+      },
+      "redactSensitive": {
+        "type": "boolean"
+      },
+      "maxCharsPerField": {
+        "type": "integer",
+        "minimum": 200,
+        "maximum": 100000,
+        "default": 8000
+      },
+      "maxHistoryMessages": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 100,
+        "default": 12
+      },
+      "toolNames": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "mode": {
+      "label": "Capture Mode",
+      "help": "summary logs counts and metadata, while full additionally logs prompt text and detailed tool/context payloads."
+    },
+    "includeSystemPrompt": {
+      "label": "Include System Prompt",
+      "help": "When unset, follows mode (enabled in full mode)."
+    },
+    "includePrompt": {
+      "label": "Include User Prompt",
+      "help": "When unset, follows mode (enabled in full mode)."
+    },
+    "includeHistoryMessages": {
+      "label": "Include History Messages",
+      "help": "When unset, follows mode (enabled in full mode)."
+    },
+    "includeLlmOutput": {
+      "label": "Include LLM Output",
+      "help": "Adds assistant output and usage events to the observer stream."
+    },
+    "includeToolResults": {
+      "label": "Include Tool Results",
+      "help": "When unset, follows mode (enabled in full mode)."
+    },
+    "includeBootstrapFiles": {
+      "label": "Include Bootstrap Files",
+      "help": "Logs explicit bootstrap file selection via agent:bootstrap when internal hooks are enabled."
+    },
+    "redactSensitive": {
+      "label": "Redact Sensitive Strings",
+      "help": "Masks common token/secret patterns before writing observer payloads to logs."
+    },
+    "maxCharsPerField": {
+      "label": "Max Characters Per Field",
+      "help": "Truncates large prompt, message, and tool-result fields to this size before logging."
+    },
+    "maxHistoryMessages": {
+      "label": "Max History Messages",
+      "help": "Limits how many recent history messages are included when detailed history capture is enabled."
+    },
+    "toolNames": {
+      "label": "Observed Tool Names",
+      "help": "Tool calls to log. Defaults to memory_search, memory_get, web_search, and web_fetch."
+    }
+  }
+}
