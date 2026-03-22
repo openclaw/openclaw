@@ -82,6 +82,11 @@ describe("campfire gateway", () => {
     await registered.onInbound(validPayload);
 
     expect(finalizeInboundContext).toHaveBeenCalled();
+    const finalizedCtx = finalizeInboundContext.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(finalizedCtx?.SessionKey).toMatch(/^agent:/);
+    expect(finalizedCtx?.SessionKey).toContain(":account:default");
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
     expect(sendText).toHaveBeenCalledWith(
       "https://campfire.example.com/rooms/7/42-AbCdEf/messages",
@@ -264,6 +269,59 @@ describe("campfire gateway", () => {
     });
 
     expect(finalizedCtx?.CommandAuthorized).toBe(true);
+
+    abort.abort();
+    await startPromise;
+  });
+
+  it("reloads config before computing command authorization", async () => {
+    const registerRoute = vi.fn().mockReturnValue(() => {});
+    const sendText = vi.fn().mockResolvedValue(undefined);
+    const loadConfig = vi.fn(() => ({ commands: { useAccessGroups: true } }));
+    let finalizedCtx: Record<string, unknown> | undefined;
+
+    const gateway = createCampfireGateway({ registerRoute, sendText, loadConfig } as never);
+    const abort = new AbortController();
+    const startPromise = gateway.startAccount({
+      cfg: {
+        commands: {
+          useAccessGroups: false,
+        },
+      },
+      accountId: "default",
+      account: createAccount({ allowFrom: [] }),
+      runtime: {
+        log: () => {},
+        error: () => {},
+        exit: () => {},
+      },
+      abortSignal: abort.signal,
+      getStatus: () => ({ accountId: "default" }),
+      setStatus: () => {},
+      channelRuntime: {
+        reply: {
+          finalizeInboundContext: vi.fn((ctx: Record<string, unknown>) => {
+            finalizedCtx = ctx;
+            return ctx;
+          }),
+          dispatchReplyWithBufferedBlockDispatcher: vi.fn().mockResolvedValue(undefined),
+        },
+      },
+    });
+
+    const registered = registerRoute.mock.calls[0]?.[0];
+    await registered.onInbound({
+      ...validPayload,
+      message: {
+        ...validPayload.message,
+        body: {
+          plain: "!status",
+        },
+      },
+    });
+
+    expect(loadConfig).toHaveBeenCalledTimes(1);
+    expect(finalizedCtx?.CommandAuthorized).toBe(false);
 
     abort.abort();
     await startPromise;

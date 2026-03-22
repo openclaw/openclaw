@@ -4,7 +4,9 @@ import {
   shouldComputeCommandAuthorized,
 } from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { registerCampfireWebhookRoute, type CampfireInboundHandler } from "../http/index.js";
+import { getCampfireRuntime } from "../runtime.js";
 import { sendCampfireText } from "../send.js";
 import type { ResolvedCampfireAccount } from "../types.js";
 import { buildCampfireInboundContext } from "./context.js";
@@ -76,12 +78,37 @@ type CampfireGatewayAdapter = {
   startAccount: (ctx: CampfireGatewayContext) => Promise<void>;
 };
 
+type CampfireConfigLoader = () => OpenClawConfig | Promise<OpenClawConfig>;
+
+async function resolveCampfireInboundConfig(params: {
+  fallback: OpenClawConfig;
+  loadConfigOverride?: CampfireConfigLoader;
+  log?: {
+    warn?: (message: string) => void;
+  };
+}): Promise<OpenClawConfig> {
+  const loadConfig =
+    params.loadConfigOverride ??
+    (() => {
+      return getCampfireRuntime().config.loadConfig();
+    });
+
+  try {
+    return await Promise.resolve(loadConfig());
+  } catch (err) {
+    params.log?.warn?.(`campfire: failed to reload config for inbound webhook: ${String(err)}`);
+    return params.fallback;
+  }
+}
+
 export function createCampfireGateway(params?: {
   registerRoute?: typeof registerCampfireWebhookRoute;
   sendText?: typeof sendCampfireText;
+  loadConfig?: CampfireConfigLoader;
 }): CampfireGatewayAdapter {
   const registerRoute = params?.registerRoute ?? registerCampfireWebhookRoute;
   const sendText = params?.sendText ?? sendCampfireText;
+  const loadConfig = params?.loadConfig;
 
   return {
     startAccount: async (ctx) => {
@@ -112,8 +139,25 @@ export function createCampfireGateway(params?: {
           return;
         }
 
+        const currentCfg = await resolveCampfireInboundConfig({
+          fallback: ctx.cfg,
+          loadConfigOverride: loadConfig,
+          log: ctx.log,
+        });
+
+        const route = resolveAgentRoute({
+          cfg: currentCfg,
+          channel: "campfire",
+          accountId: ctx.account.accountId,
+          peer: {
+            kind: "group",
+            id: inbound.roomId,
+          },
+        });
+        const sessionKey = `${route.sessionKey}:account:${route.accountId}`;
+
         const commandAuthorized = resolveCampfireCommandAuthorized({
-          cfg: ctx.cfg,
+          cfg: currentCfg,
           rawBody: inbound.text,
           allowFrom: ctx.account.allowFrom,
           senderId: inbound.sender.id,
@@ -126,8 +170,8 @@ export function createCampfireGateway(params?: {
           CommandBody: inbound.text,
           From: `campfire:${inbound.sender.id}`,
           To: `campfire:room:${inbound.roomId}`,
-          SessionKey: inbound.threadKey,
-          AccountId: ctx.account.accountId,
+          SessionKey: sessionKey,
+          AccountId: route.accountId,
           ChatType: "group",
           ConversationLabel: inbound.roomName,
           SenderId: inbound.sender.id,
@@ -145,7 +189,7 @@ export function createCampfireGateway(params?: {
 
         await channelRuntime.reply.dispatchReplyWithBufferedBlockDispatcher({
           ctx: msgCtx,
-          cfg: ctx.cfg,
+          cfg: currentCfg,
           dispatcherOptions: {
             deliver: async (replyPayload: { text?: string; body?: string }) => {
               const text =
