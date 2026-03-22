@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import { extractTextFromChatContent } from "../shared/chat-content.js";
+import { findCodeRegions } from "../shared/text/code-regions.js";
 import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
 import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
 import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
@@ -9,6 +9,9 @@ import { normalizeToolName } from "./tool-policy-shared.js";
 export function isAssistantMessage(msg: AgentMessage | undefined): msg is AssistantMessage {
   return msg?.role === "assistant";
 }
+
+// Zero-width space used to mark blocks that should be joined without a newline.
+const INLINE_GLUE = "\u200B";
 
 // Share these robust regex patterns across the module.
 const MINIMAX_INVOKE_RE = /<invoke\b([^>]*?)(?:\/>|>([\s\S]*?)<\/invoke>)/gi;
@@ -210,23 +213,42 @@ export function stripThinkingTagsFromText(text: string): string {
 }
 
 /**
- * Refined assistant text extraction that avoids artificial line breaks
- * introduced by thinking tag promotion.
+ * Assistant text extraction with smart block joining.
  */
 export function extractAssistantText(msg: AssistantMessage): string {
-  const extracted =
-    extractTextFromChatContent(msg.content, {
-      sanitizeText: (text) =>
-        stripThinkingTagsFromText(
-          stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
-        ).trim(),
-      // Use no-joiner strategy here because the blocks might be parts of a single
-      // sentence (e.g. Okay.<think>...</think>Done).
-      joinWith: "",
-      normalizeText: (text) => text, // Don't trim individual blocks to preserve spacing
-    }) ?? "";
+  const sanitize = (text: string) =>
+    stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text)));
+
+  let result = "";
+  if (Array.isArray(msg.content)) {
+    for (let i = 0; i < msg.content.length; i++) {
+      const block = msg.content[i];
+      if (block?.type === "text") {
+        const text = sanitize(block.text);
+        if (!text) {
+          continue;
+        }
+
+        if (result) {
+          // If the last block ends with INLINE_GLUE, join without newline.
+          // Otherwise, join with \n to satisfy block-sensitive directives like MEDIA:.
+          if (result.endsWith(INLINE_GLUE)) {
+            result = result.slice(0, -INLINE_GLUE.length) + text;
+          } else {
+            result += "\n" + text;
+          }
+        } else {
+          result = text;
+        }
+      }
+    }
+  } else if (typeof msg.content === "string") {
+    result = sanitize(msg.content);
+  }
+
+  const cleaned = stripThinkingTagsFromText(result).replace(new RegExp(INLINE_GLUE, "g"), "");
   const errorContext = msg.stopReason === "error";
-  return sanitizeUserFacingText(extracted.trim(), { errorContext });
+  return sanitizeUserFacingText(cleaned.trim(), { errorContext });
 }
 
 export function extractAssistantThinking(msg: AssistantMessage): string {
@@ -264,32 +286,31 @@ type ThinkTaggedSplitBlock =
   | { type: "thinking"; thinking: string }
   | { type: "text"; text: string };
 
-type MarkdownMaskRegion = { start: number; end: number; masked: boolean };
-
 /**
  * Identifies regions of text that are within Markdown code blocks or inline code.
  */
-function getMarkdownMaskRegions(text: string): MarkdownMaskRegion[] {
-  const regions: MarkdownMaskRegion[] = [];
-  // Regex covers both fenced code blocks (```) and inline code (`).
-  const maskRe = /(`{1,3})[\s\S]*?\1/g;
+function getMarkdownMaskRegions(
+  text: string,
+): Array<{ start: number; end: number; masked: boolean }> {
+  const regions: Array<{ start: number; end: number; masked: boolean }> = [];
+  const codeRegions = findCodeRegions(text);
   let lastIdx = 0;
-  for (const match of text.matchAll(maskRe)) {
-    const start = match.index ?? 0;
-    if (start > lastIdx) {
-      regions.push({ start: lastIdx, end: start, masked: false });
+  for (const region of codeRegions) {
+    if (region.start > lastIdx) {
+      regions.push({ start: lastIdx, end: region.start, masked: false });
     }
-    regions.push({ start, end: start + match[0].length, masked: true });
-    lastIdx = start + match[0].length;
+    regions.push({ start: region.start, end: region.end, masked: true });
+    lastIdx = region.end;
   }
   if (lastIdx < text.length) {
     regions.push({ start: lastIdx, end: text.length, masked: false });
   }
-  return regions.toSorted((a, b) => a.start - b.start);
+  return regions;
 }
 
 /**
  * Split text by thinking tags, avoiding tags inside Markdown code blocks.
+ * Marks inline splits with INLINE_GLUE.
  */
 export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
   const openRe = /<\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
@@ -319,7 +340,11 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
       const isClose = Boolean(match[1]?.includes("/"));
 
       if (!inThinking && !isClose) {
-        const prose = text.slice(cursor, index);
+        let prose = text.slice(cursor, index);
+        // If this is a mid-line split, mark it.
+        if (prose && !prose.endsWith("\n") && !prose.endsWith("\r")) {
+          prose += INLINE_GLUE;
+        }
         if (prose) {
           blocks.push({ type: "text", text: prose });
         }

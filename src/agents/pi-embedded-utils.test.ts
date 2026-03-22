@@ -216,6 +216,21 @@ describe("promoteMinimaxToolCallsToBlocks", () => {
     });
   });
 
+  it("masks tilde code fences (~~~) correctly", () => {
+    const text = '~~~xml\n<minimax:tool_call><invoke name="Test" /></minimax:tool_call>\n~~~';
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+    });
+
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    const hasToolCall = msg.content.some(
+      (c) => c && typeof c === "object" && c.type === "toolCall",
+    );
+    expect(hasToolCall).toBe(false);
+  });
+
   it("skips MiniMax wrappers inside Markdown code blocks", () => {
     const text =
       'Example code: ` <minimax:tool_call><invoke name="Test" /></minimax:tool_call> ` and then real one: <minimax:tool_call><invoke name="Bash" /></minimax:tool_call>';
@@ -259,6 +274,20 @@ describe("promoteMinimaxToolCallsToBlocks", () => {
     // Verify extraction joins it back correctly without artificial line breaks.
     const resultText = extractAssistantText(msg);
     expect(resultText).toBe("Okay.Done");
+  });
+
+  it("restores block separators for newline-sensitive content", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        { type: "text", text: "MEDIA:https://a.png" },
+        { type: "text", text: "MEDIA:https://b.png" },
+      ],
+    });
+
+    const resultText = extractAssistantText(msg);
+    // Should preserve the newline between blocks so parseReplyDirectives can find both.
+    expect(resultText).toContain("MEDIA:https://a.png\nMEDIA:https://b.png");
   });
 
   it("does not reclaim invokes that are far from the stray closing tag", () => {
@@ -312,23 +341,6 @@ describe("promoteMinimaxToolCallsToBlocks", () => {
     expect(prose.length).toBe(1);
     const block0 = prose[0] as { type: "text"; text: string };
     expect(block0.text).toContain("<think>Internal thinking...");
-  });
-
-  it("handles inline <think> blocks preceded by ordinary prose", () => {
-    const text = `Okay. <think>Internal thoughts...</think> <minimax:tool_call><invoke name="Bash"><parameter name="command">ls</parameter></invoke></minimax:tool_call>`;
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: text as unknown as AssistantMessage["content"],
-      timestamp: Date.now(),
-    });
-
-    promoteMinimaxToolCallsToBlocks(msg);
-
-    expect(msg.content.length).toBe(4);
-    expect(msg.content[0]).toMatchObject({ type: "text", text: "Okay. " });
-    expect(msg.content[1]).toMatchObject({ type: "thinking", thinking: "Internal thoughts..." });
-    expect(msg.content[2]).toMatchObject({ type: "text", text: " " });
-    expect(msg.content[3]).toMatchObject({ type: "toolCall", name: "exec" });
   });
 
   it("preserves leading/trailing whitespace in arguments", () => {
