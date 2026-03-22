@@ -1,5 +1,9 @@
-import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import {
+  createAccountListHelpers,
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  resolveAccountEntry,
+} from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedZalouserAccount, ZalouserAccountConfig, ZalouserConfig } from "./types.js";
 import { checkZaloAuthenticated, getZaloUserInfo } from "./zalo-js.js";
@@ -14,11 +18,12 @@ function resolveAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): ZalouserAccountConfig | undefined {
-  const accounts = (cfg.channels?.zalouser as ZalouserConfig | undefined)?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return undefined;
-  }
-  return accounts[accountId] as ZalouserAccountConfig | undefined;
+  return resolveAccountEntry(
+    (cfg.channels?.zalouser as ZalouserConfig | undefined)?.accounts as
+      | Record<string, ZalouserAccountConfig>
+      | undefined,
+    accountId,
+  );
 }
 
 function mergeZalouserAccountConfig(cfg: OpenClawConfig, accountId: string): ZalouserAccountConfig {
