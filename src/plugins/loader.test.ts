@@ -1097,6 +1097,60 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
     );
   });
 
+  it("uses 'discovery' registrationMode for non-activating loads", () => {
+    const plugin = writePlugin({
+      id: "discovery-mode-test",
+      body: `module.exports = {
+        id: "discovery-mode-test",
+        register(api) {
+          globalThis.__discoveryModeTest = (globalThis.__discoveryModeTest || []);
+          globalThis.__discoveryModeTest.push(api.registrationMode);
+          api.registerTool({
+            name: "discovery_tool",
+            description: "test",
+            parameters: {},
+            execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+          });
+        }
+      };`,
+    });
+
+    // Non-activating load: registrationMode should be "discovery"
+    const snapshotRegistry = loadOpenClawPlugins({
+      activate: false,
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["discovery-mode-test"],
+        },
+      },
+    });
+
+    expect((globalThis as Record<string, unknown>).__discoveryModeTest).toEqual(["discovery"]);
+    // Registration methods should still work in discovery mode
+    expect(snapshotRegistry.tools.find((t) => t.names.includes("discovery_tool"))).toBeTruthy();
+
+    // Activating load: registrationMode should be "full"
+    loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["discovery-mode-test"],
+        },
+      },
+    });
+
+    expect((globalThis as Record<string, unknown>).__discoveryModeTest).toEqual([
+      "discovery",
+      "full",
+    ]);
+
+    // Cleanup
+    delete (globalThis as Record<string, unknown>).__discoveryModeTest;
+  });
+
   it("re-initializes global hook runner when serving registry from cache", () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({

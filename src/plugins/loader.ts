@@ -964,7 +964,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           preferSetupRuntimeForChannelPlugins,
         })
         ? "setup-runtime"
-        : "full"
+        : shouldActivate
+          ? "full"
+          : "discovery"
       : includeSetupOnlyChannelPlugins && !validateOnly && manifestRecord.channels.length > 0
         ? "setup-only"
         : null;
@@ -1044,7 +1046,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     // Fast-path bundled memory plugins that are guaranteed disabled by slot policy.
     // This avoids opening/importing heavy memory plugin modules that will never register.
     if (
-      registrationMode === "full" &&
+      (registrationMode === "full" || registrationMode === "discovery") &&
       candidate.origin === "bundled" &&
       manifestRecord.kind === "memory"
     ) {
@@ -1162,7 +1164,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       memorySlotMatched = true;
     }
 
-    if (registrationMode === "full") {
+    if (registrationMode === "full" || registrationMode === "discovery") {
       const memoryDecision = resolveMemorySlotDecision({
         id: record.id,
         kind: record.kind,

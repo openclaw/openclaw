@@ -883,6 +883,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     },
   ): OpenClawPluginApi => {
     const registrationMode = params.registrationMode ?? "full";
+    // "full" and "discovery" both allow capability registration; "discovery" signals
+    // that the registry will not be globally activated, so plugins should skip
+    // expensive side effects (DB connections, background workers, etc.).
+    const canRegister = registrationMode === "full" || registrationMode === "discovery";
     return {
       id: record.id,
       name: record.name,
@@ -895,68 +899,54 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginConfig: params.pluginConfig,
       runtime: resolvePluginRuntime(record.id),
       logger: normalizeLogger(registryParams.logger),
-      registerTool:
-        registrationMode === "full" ? (tool, opts) => registerTool(record, tool, opts) : () => {},
-      registerHook:
-        registrationMode === "full"
-          ? (events, handler, opts) => registerHook(record, events, handler, opts, params.config)
-          : () => {},
-      registerHttpRoute:
-        registrationMode === "full" ? (params) => registerHttpRoute(record, params) : () => {},
+      registerTool: canRegister ? (tool, opts) => registerTool(record, tool, opts) : () => {},
+      registerHook: canRegister
+        ? (events, handler, opts) => registerHook(record, events, handler, opts, params.config)
+        : () => {},
+      registerHttpRoute: canRegister ? (params) => registerHttpRoute(record, params) : () => {},
       registerChannel: (registration) => registerChannel(record, registration, registrationMode),
-      registerProvider:
-        registrationMode === "full" ? (provider) => registerProvider(record, provider) : () => {},
-      registerSpeechProvider:
-        registrationMode === "full"
-          ? (provider) => registerSpeechProvider(record, provider)
-          : () => {},
-      registerMediaUnderstandingProvider:
-        registrationMode === "full"
-          ? (provider) => registerMediaUnderstandingProvider(record, provider)
-          : () => {},
-      registerImageGenerationProvider:
-        registrationMode === "full"
-          ? (provider) => registerImageGenerationProvider(record, provider)
-          : () => {},
-      registerWebSearchProvider:
-        registrationMode === "full"
-          ? (provider) => registerWebSearchProvider(record, provider)
-          : () => {},
-      registerGatewayMethod:
-        registrationMode === "full"
-          ? (method, handler) => registerGatewayMethod(record, method, handler)
-          : () => {},
-      registerCli:
-        registrationMode === "full"
-          ? (registrar, opts) => registerCli(record, registrar, opts)
-          : () => {},
-      registerService:
-        registrationMode === "full" ? (service) => registerService(record, service) : () => {},
-      registerInteractiveHandler:
-        registrationMode === "full"
-          ? (registration) => {
-              const result = registerPluginInteractiveHandler(record.id, registration, {
-                pluginName: record.name,
-                pluginRoot: record.rootDir,
+      registerProvider: canRegister ? (provider) => registerProvider(record, provider) : () => {},
+      registerSpeechProvider: canRegister
+        ? (provider) => registerSpeechProvider(record, provider)
+        : () => {},
+      registerMediaUnderstandingProvider: canRegister
+        ? (provider) => registerMediaUnderstandingProvider(record, provider)
+        : () => {},
+      registerImageGenerationProvider: canRegister
+        ? (provider) => registerImageGenerationProvider(record, provider)
+        : () => {},
+      registerWebSearchProvider: canRegister
+        ? (provider) => registerWebSearchProvider(record, provider)
+        : () => {},
+      registerGatewayMethod: canRegister
+        ? (method, handler) => registerGatewayMethod(record, method, handler)
+        : () => {},
+      registerCli: canRegister
+        ? (registrar, opts) => registerCli(record, registrar, opts)
+        : () => {},
+      registerService: canRegister ? (service) => registerService(record, service) : () => {},
+      registerInteractiveHandler: canRegister
+        ? (registration) => {
+            const result = registerPluginInteractiveHandler(record.id, registration, {
+              pluginName: record.name,
+              pluginRoot: record.rootDir,
+            });
+            if (!result.ok) {
+              pushDiagnostic({
+                level: "warn",
+                pluginId: record.id,
+                source: record.source,
+                message: result.error ?? "interactive handler registration failed",
               });
-              if (!result.ok) {
-                pushDiagnostic({
-                  level: "warn",
-                  pluginId: record.id,
-                  source: record.source,
-                  message: result.error ?? "interactive handler registration failed",
-                });
-              }
             }
-          : () => {},
-      onConversationBindingResolved:
-        registrationMode === "full"
-          ? (handler) => registerConversationBindingResolvedHandler(record, handler)
-          : () => {},
-      registerCommand:
-        registrationMode === "full" ? (command) => registerCommand(record, command) : () => {},
+          }
+        : () => {},
+      onConversationBindingResolved: canRegister
+        ? (handler) => registerConversationBindingResolvedHandler(record, handler)
+        : () => {},
+      registerCommand: canRegister ? (command) => registerCommand(record, command) : () => {},
       registerContextEngine: (id, factory) => {
-        if (registrationMode !== "full") {
+        if (!canRegister) {
           return;
         }
         if (id === defaultSlotIdForKey("contextEngine")) {
@@ -981,7 +971,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         }
       },
       registerMemoryPromptSection: (builder) => {
-        if (registrationMode !== "full") {
+        if (!canRegister) {
           return;
         }
         if (record.kind !== "memory") {
