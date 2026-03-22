@@ -6,10 +6,7 @@ import {
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
-import {
-  createPairingPrefixStripper,
-  createTextPairingAdapter,
-} from "openclaw/plugin-sdk/channel-pairing";
+import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createOpenGroupPolicyRestrictSendersWarningCollector,
   projectWarningCollector,
@@ -300,21 +297,23 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = crea
         hasRepliedRef,
       }),
     },
-    pairing: createTextPairingAdapter({
-      idLabel: "bluebubblesSenderId",
-      message: PAIRING_APPROVED_MESSAGE,
-      normalizeAllowEntry: createPairingPrefixStripper(
-        /^bluebubbles:/i,
-        normalizeBlueBubblesHandle,
-      ),
-      notify: async ({ cfg, id, message }) => {
-        await (
-          await loadBlueBubblesChannelRuntime()
-        ).sendMessageBlueBubbles(id, message, {
-          cfg: cfg,
-        });
+    pairing: {
+      text: {
+        idLabel: "bluebubblesSenderId",
+        message: PAIRING_APPROVED_MESSAGE,
+        normalizeAllowEntry: createPairingPrefixStripper(
+          /^bluebubbles:/i,
+          normalizeBlueBubblesHandle,
+        ),
+        notify: async ({ cfg, id, message }) => {
+          await (
+            await loadBlueBubblesChannelRuntime()
+          ).sendMessageBlueBubbles(id, message, {
+            cfg: cfg,
+          });
+        },
       },
-    }),
+    },
     outbound: {
       base: {
         deliveryMode: "direct",
