@@ -192,6 +192,37 @@ describe("Windows startup fallback", () => {
     });
   });
 
+  it("restarts the Startup fallback with the installed legacy script when OPENCLAW_HOME moves", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env, tmpDir }) => {
+      addStartupFallbackMissingResponses([
+        { code: 0, stdout: "", stderr: "" },
+        { code: 1, stdout: "", stderr: "not found" },
+      ]);
+      const legacyEnv = { ...env };
+      const movedEnv = { ...env, OPENCLAW_HOME: path.join(tmpDir, "moved-home") };
+      await writeGatewayScript(legacyEnv);
+      await writeStartupFallbackEntry(movedEnv);
+      inspectPortUsage.mockResolvedValue({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 5252, command: "node.exe" }],
+        hints: [],
+      });
+
+      const stdout = new PassThrough();
+      await expect(restartScheduledTask({ env: movedEnv, stdout })).resolves.toEqual({
+        outcome: "completed",
+      });
+
+      expectGatewayTermination(5252);
+      expect(spawn).toHaveBeenCalledWith(
+        "cmd.exe",
+        ["/d", "/s", "/c", quoteCmdScriptArg(resolveTaskScriptPath(legacyEnv))],
+        expect.objectContaining({ detached: true, stdio: "ignore", windowsHide: true }),
+      );
+    });
+  });
+
   it("kills the Startup fallback runtime even when the CLI env omits the gateway port", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       schtasksResponses.push({ code: 0, stdout: "", stderr: "" });
@@ -223,6 +254,48 @@ describe("Windows startup fallback", () => {
       await stopScheduledTask({ env: envWithoutPort, stdout });
 
       expectGatewayTermination(5151);
+    });
+  });
+
+  it("skips blank current scripts and keeps probing legacy candidates", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env, tmpDir }) => {
+      schtasksResponses.push({ code: 0, stdout: "", stderr: "" });
+      const legacyEnv = { ...env };
+      const movedEnv = { ...env, OPENCLAW_HOME: path.join(tmpDir, "moved-home") };
+      const currentScriptPath = resolveTaskScriptPath(movedEnv);
+      await fs.mkdir(path.dirname(currentScriptPath), { recursive: true });
+      await fs.writeFile(currentScriptPath, "@echo off\r\nrem blank current script\r\n", "utf8");
+      await writeGatewayScript(legacyEnv, 18789, {
+        includePortEnv: false,
+        includePortFlag: true,
+      });
+      await writeStartupFallbackEntry(movedEnv);
+      inspectPortUsage
+        .mockResolvedValueOnce({
+          port: 18789,
+          status: "busy",
+          listeners: [{ pid: 5353, command: "node.exe" }],
+          hints: [],
+        })
+        .mockResolvedValueOnce({
+          port: 18789,
+          status: "busy",
+          listeners: [{ pid: 5353, command: "node.exe" }],
+          hints: [],
+        })
+        .mockResolvedValueOnce({
+          port: 18789,
+          status: "free",
+          listeners: [],
+          hints: [],
+        });
+
+      const stdout = new PassThrough();
+      const envWithoutPort = { ...movedEnv };
+      delete envWithoutPort.OPENCLAW_GATEWAY_PORT;
+      await stopScheduledTask({ env: envWithoutPort, stdout });
+
+      expectGatewayTermination(5353);
     });
   });
 });

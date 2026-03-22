@@ -165,7 +165,7 @@ export async function readScheduledTaskCommand(
         break;
       }
       if (!commandLine) {
-        return null;
+        continue;
       }
       return {
         programArguments: parseCmdScriptCommandLine(commandLine),
@@ -178,6 +178,11 @@ export async function readScheduledTaskCommand(
     }
   }
   return null;
+}
+
+async function resolveInstalledTaskScriptPath(env: GatewayServiceEnv): Promise<string> {
+  const command = await readScheduledTaskCommand(env).catch(() => null);
+  return command?.sourcePath ?? resolveTaskScriptPath(env);
 }
 
 export type ScheduledTaskInfo = {
@@ -636,7 +641,7 @@ async function restartStartupEntry(
   if (typeof runtime.pid === "number" && runtime.pid > 0) {
     await terminateGatewayProcessTree(runtime.pid, 300);
   }
-  launchFallbackTaskScript(resolveTaskScriptPath(env));
+  launchFallbackTaskScript(await resolveInstalledTaskScriptPath(env));
   stdout.write(`${formatLine("Restarted Windows login item", resolveTaskName(env))}\n`);
   return { outcome: "completed" };
 }
