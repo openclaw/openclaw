@@ -70,8 +70,14 @@ function extractImageUrlFromContentBlock(block: Record<string, unknown>): ImageB
 }
 
 function extractImageUrlFromAttachment(attachment: Record<string, unknown>): ImageBlock | null {
+  const attachmentType =
+    typeof attachment.type === "string" ? attachment.type.trim().toLowerCase() : undefined;
   const mimeType = typeof attachment.mimeType === "string" ? attachment.mimeType.trim() : undefined;
-  if (mimeType && !mimeType.toLowerCase().startsWith("image/")) {
+  if (mimeType) {
+    if (!mimeType.toLowerCase().startsWith("image/")) {
+      return null;
+    }
+  } else if (attachmentType !== "image") {
     return null;
   }
   if (typeof attachment.url === "string" && attachment.url.trim()) {
