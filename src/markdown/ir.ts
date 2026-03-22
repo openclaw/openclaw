@@ -1,6 +1,6 @@
 import MarkdownIt from "markdown-it";
-import type { MarkdownTableMode } from "../config/types.base.js";
 import { chunkText } from "../auto-reply/chunk.js";
+import type { MarkdownTableMode } from "../config/types.base.js";
 
 type ListState = {
   type: "bullet" | "ordered";
@@ -24,7 +24,14 @@ type MarkdownToken = {
   attrGet?: (name: string) => string | null;
 };
 
-export type MarkdownStyle = "bold" | "italic" | "strikethrough" | "code" | "code_block" | "spoiler";
+export type MarkdownStyle =
+  | "bold"
+  | "italic"
+  | "strikethrough"
+  | "code"
+  | "code_block"
+  | "spoiler"
+  | "blockquote";
 
 export type MarkdownStyleSpan = {
   start: number;
@@ -137,8 +144,31 @@ function applySpoilerTokens(tokens: MarkdownToken[]): void {
 }
 
 function injectSpoilersIntoInline(tokens: MarkdownToken[]): MarkdownToken[] {
+  let totalDelims = 0;
+  for (const token of tokens) {
+    if (token.type !== "text") {
+      continue;
+    }
+    const content = token.content ?? "";
+    let i = 0;
+    while (i < content.length) {
+      const next = content.indexOf("||", i);
+      if (next === -1) {
+        break;
+      }
+      totalDelims += 1;
+      i = next + 2;
+    }
+  }
+
+  if (totalDelims < 2) {
+    return tokens;
+  }
+  const usableDelims = totalDelims - (totalDelims % 2);
+
   const result: MarkdownToken[] = [];
   const state = { spoilerOpen: false };
+  let consumedDelims = 0;
 
   for (const token of tokens) {
     if (token.type !== "text") {
@@ -161,9 +191,14 @@ function injectSpoilersIntoInline(tokens: MarkdownToken[]): MarkdownToken[] {
         }
         break;
       }
+      if (consumedDelims >= usableDelims) {
+        result.push(createTextToken(token, content.slice(index)));
+        break;
+      }
       if (next > index) {
         result.push(createTextToken(token, content.slice(index, next)));
       }
+      consumedDelims += 1;
       state.spoilerOpen = !state.spoilerOpen;
       result.push({
         type: state.spoilerOpen ? "spoiler_open" : "spoiler_close",
@@ -357,6 +392,38 @@ function appendCell(state: RenderState, cell: TableCell) {
   }
 }
 
+function appendCellTextOnly(state: RenderState, cell: TableCell) {
+  if (!cell.text) {
+    return;
+  }
+  state.text += cell.text;
+  // Do not append styles - this is used for code blocks where inner styles would overlap
+}
+
+function appendTableBulletValue(
+  state: RenderState,
+  params: {
+    header?: TableCell;
+    value?: TableCell;
+    columnIndex: number;
+    includeColumnFallback: boolean;
+  },
+) {
+  const { header, value, columnIndex, includeColumnFallback } = params;
+  if (!value?.text) {
+    return;
+  }
+  state.text += "• ";
+  if (header?.text) {
+    appendCell(state, header);
+    state.text += ": ";
+  } else if (includeColumnFallback) {
+    state.text += `Column ${columnIndex}: `;
+  }
+  appendCell(state, value);
+  state.text += "\n";
+}
+
 function renderTableAsBullets(state: RenderState) {
   if (!state.table) {
     return;
@@ -393,20 +460,12 @@ function renderTableAsBullets(state: RenderState) {
 
       // Add each column as a bullet point
       for (let i = 1; i < row.length; i++) {
-        const header = headers[i];
-        const value = row[i];
-        if (!value?.text) {
-          continue;
-        }
-        state.text += "• ";
-        if (header?.text) {
-          appendCell(state, header);
-          state.text += ": ";
-        } else {
-          state.text += `Column ${i}: `;
-        }
-        appendCell(state, value);
-        state.text += "\n";
+        appendTableBulletValue(state, {
+          header: headers[i],
+          value: row[i],
+          columnIndex: i,
+          includeColumnFallback: true,
+        });
       }
       state.text += "\n";
     }
@@ -414,18 +473,12 @@ function renderTableAsBullets(state: RenderState) {
     // Simple table: just list headers and values
     for (const row of rows) {
       for (let i = 0; i < row.length; i++) {
-        const header = headers[i];
-        const value = row[i];
-        if (!value?.text) {
-          continue;
-        }
-        state.text += "• ";
-        if (header?.text) {
-          appendCell(state, header);
-          state.text += ": ";
-        }
-        appendCell(state, value);
-        state.text += "\n";
+        appendTableBulletValue(state, {
+          header: headers[i],
+          value: row[i],
+          columnIndex: i,
+          includeColumnFallback: false,
+        });
       }
       state.text += "\n";
     }
@@ -467,7 +520,8 @@ function renderTableAsCode(state: RenderState) {
       state.text += " ";
       const cell = cells[i];
       if (cell) {
-        appendCell(state, cell);
+        // Use text-only append to avoid overlapping styles with code_block
+        appendCellTextOnly(state, cell);
       }
       const pad = widths[i] - (cell?.text.length ?? 0);
       if (pad > 0) {
@@ -578,29 +632,47 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         if (state.blockquotePrefix) {
           state.text += state.blockquotePrefix;
         }
+        openStyle(state, "blockquote");
         break;
       case "blockquote_close":
-        state.text += "\n";
+        closeStyle(state, "blockquote");
         break;
       case "bullet_list_open":
+        // Add newline before nested list starts (so nested items appear on new line)
+        if (state.env.listStack.length > 0) {
+          state.text += "\n";
+        }
         state.env.listStack.push({ type: "bullet", index: 0 });
         break;
       case "bullet_list_close":
         state.env.listStack.pop();
+        if (state.env.listStack.length === 0) {
+          state.text += "\n";
+        }
         break;
       case "ordered_list_open": {
+        // Add newline before nested list starts (so nested items appear on new line)
+        if (state.env.listStack.length > 0) {
+          state.text += "\n";
+        }
         const start = Number(getAttr(token, "start") ?? "1");
         state.env.listStack.push({ type: "ordered", index: start - 1 });
         break;
       }
       case "ordered_list_close":
         state.env.listStack.pop();
+        if (state.env.listStack.length === 0) {
+          state.text += "\n";
+        }
         break;
       case "list_item_open":
         appendListPrefix(state);
         break;
       case "list_item_close":
-        state.text += "\n";
+        // Avoid double newlines (nested list's last item already added newline)
+        if (!state.text.endsWith("\n")) {
+          state.text += "\n";
+        }
         break;
       case "code_block":
       case "fence":
@@ -671,7 +743,8 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         break;
 
       case "hr":
-        state.text += "\n";
+        // Render as a visual separator
+        state.text += "───\n\n";
         break;
       default:
         if (token.children) {
@@ -735,13 +808,32 @@ function mergeStyleSpans(spans: MarkdownStyleSpan[]): MarkdownStyleSpan[] {
   const merged: MarkdownStyleSpan[] = [];
   for (const span of sorted) {
     const prev = merged[merged.length - 1];
-    if (prev && prev.style === span.style && span.start <= prev.end) {
+    if (
+      prev &&
+      prev.style === span.style &&
+      // Blockquotes are container blocks. Adjacent blockquote spans should not merge or
+      // consecutive blockquotes can "style bleed" across the paragraph boundary.
+      (span.start < prev.end || (span.start === prev.end && span.style !== "blockquote"))
+    ) {
       prev.end = Math.max(prev.end, span.end);
       continue;
     }
     merged.push({ ...span });
   }
   return merged;
+}
+
+function resolveSliceBounds(
+  span: { start: number; end: number },
+  start: number,
+  end: number,
+): { start: number; end: number } | null {
+  const sliceStart = Math.max(span.start, start);
+  const sliceEnd = Math.min(span.end, end);
+  if (sliceEnd <= sliceStart) {
+    return null;
+  }
+  return { start: sliceStart, end: sliceEnd };
 }
 
 function sliceStyleSpans(
@@ -754,15 +846,15 @@ function sliceStyleSpans(
   }
   const sliced: MarkdownStyleSpan[] = [];
   for (const span of spans) {
-    const sliceStart = Math.max(span.start, start);
-    const sliceEnd = Math.min(span.end, end);
-    if (sliceEnd > sliceStart) {
-      sliced.push({
-        start: sliceStart - start,
-        end: sliceEnd - start,
-        style: span.style,
-      });
+    const bounds = resolveSliceBounds(span, start, end);
+    if (!bounds) {
+      continue;
     }
+    sliced.push({
+      start: bounds.start - start,
+      end: bounds.end - start,
+      style: span.style,
+    });
   }
   return mergeStyleSpans(sliced);
 }
@@ -773,15 +865,15 @@ function sliceLinkSpans(spans: MarkdownLinkSpan[], start: number, end: number): 
   }
   const sliced: MarkdownLinkSpan[] = [];
   for (const span of spans) {
-    const sliceStart = Math.max(span.start, start);
-    const sliceEnd = Math.min(span.end, end);
-    if (sliceEnd > sliceStart) {
-      sliced.push({
-        start: sliceStart - start,
-        end: sliceEnd - start,
-        href: span.href,
-      });
+    const bounds = resolveSliceBounds(span, start, end);
+    if (!bounds) {
+      continue;
     }
+    sliced.push({
+      start: bounds.start - start,
+      end: bounds.end - start,
+      href: span.href,
+    });
   }
   return sliced;
 }

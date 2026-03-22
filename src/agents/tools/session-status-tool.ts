@@ -1,9 +1,8 @@
 import { Type } from "@sinclair/typebox";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { AnyAgentTool } from "./common.js";
 import { normalizeGroupActivation } from "../../auto-reply/group-activation.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "../../auto-reply/reply/queue.js";
 import { buildStatusMessage } from "../../auto-reply/status.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -20,108 +19,37 @@ import {
 import {
   buildAgentMainSessionKey,
   DEFAULT_AGENT_ID,
+  parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
 import { resolveAgentDir } from "../agent-scope.js";
-import {
-  ensureAuthProfileStore,
-  resolveAuthProfileDisplayLabel,
-  resolveAuthProfileOrder,
-} from "../auth-profiles.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
-import { getCustomProviderApiKey, resolveEnvApiKey } from "../model-auth.js";
+import { resolveModelAuthLabel } from "../model-auth-label.js";
 import { loadModelCatalog } from "../model-catalog.js";
 import {
   buildAllowedModelSet,
   buildModelAliasIndex,
   modelKey,
-  normalizeProviderId,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../model-selection.js";
+import type { AnyAgentTool } from "./common.js";
 import { readStringParam } from "./common.js";
 import {
+  createSessionVisibilityGuard,
   shouldResolveSessionIdInput,
-  resolveInternalSessionKey,
-  resolveMainSessionAlias,
   createAgentToAgentPolicy,
+  resolveEffectiveSessionToolsVisibility,
+  resolveInternalSessionKey,
+  resolveSandboxedSessionToolContext,
 } from "./sessions-helpers.js";
 
 const SessionStatusToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
 });
-
-function formatApiKeySnippet(apiKey: string): string {
-  const compact = apiKey.replace(/\s+/g, "");
-  if (!compact) {
-    return "unknown";
-  }
-  const edge = compact.length >= 12 ? 6 : 4;
-  const head = compact.slice(0, edge);
-  const tail = compact.slice(-edge);
-  return `${head}…${tail}`;
-}
-
-function resolveModelAuthLabel(params: {
-  provider?: string;
-  cfg: OpenClawConfig;
-  sessionEntry?: SessionEntry;
-  agentDir?: string;
-}): string | undefined {
-  const resolvedProvider = params.provider?.trim();
-  if (!resolvedProvider) {
-    return undefined;
-  }
-
-  const providerKey = normalizeProviderId(resolvedProvider);
-  const store = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-  });
-  const profileOverride = params.sessionEntry?.authProfileOverride?.trim();
-  const order = resolveAuthProfileOrder({
-    cfg: params.cfg,
-    store,
-    provider: providerKey,
-    preferredProfile: profileOverride,
-  });
-  const candidates = [profileOverride, ...order].filter(Boolean) as string[];
-
-  for (const profileId of candidates) {
-    const profile = store.profiles[profileId];
-    if (!profile || normalizeProviderId(profile.provider) !== providerKey) {
-      continue;
-    }
-    const label = resolveAuthProfileDisplayLabel({
-      cfg: params.cfg,
-      store,
-      profileId,
-    });
-    if (profile.type === "oauth") {
-      return `oauth${label ? ` (${label})` : ""}`;
-    }
-    if (profile.type === "token") {
-      return `token ${formatApiKeySnippet(profile.token)}${label ? ` (${label})` : ""}`;
-    }
-    return `api-key ${formatApiKeySnippet(profile.key ?? "")}${label ? ` (${label})` : ""}`;
-  }
-
-  const envKey = resolveEnvApiKey(providerKey);
-  if (envKey?.apiKey) {
-    if (envKey.source.includes("OAUTH_TOKEN")) {
-      return `oauth (${envKey.source})`;
-    }
-    return `api-key ${formatApiKeySnippet(envKey.apiKey)} (${envKey.source})`;
-  }
-
-  const customKey = getCustomProviderApiKey(params.cfg, providerKey);
-  if (customKey) {
-    return `api-key ${formatApiKeySnippet(customKey)} (models.json)`;
-  }
-
-  return "unknown";
-}
 
 function resolveSessionEntry(params: {
   store: Record<string, SessionEntry>;
@@ -173,16 +101,12 @@ function resolveSessionKeyFromSessionId(params: {
     return null;
   }
   const { store } = loadCombinedSessionStoreForGateway(params.cfg);
-  const match = Object.entries(store).find(([key, entry]) => {
-    if (entry?.sessionId !== trimmed) {
-      return false;
-    }
-    if (!params.agentId) {
-      return true;
-    }
-    return resolveAgentIdFromSessionKey(key) === params.agentId;
-  });
-  return match?.[0] ?? null;
+  const matches = Object.entries(store).filter(
+    (entry): entry is [string, SessionEntry] =>
+      entry[1]?.sessionId === trimmed &&
+      (!params.agentId || resolveAgentIdFromSessionKey(entry[0]) === params.agentId),
+  );
+  return resolvePreferredSessionKeyForSessionIdMatches(matches, trimmed) ?? null;
 }
 
 async function resolveModelOverride(params: {
@@ -224,6 +148,7 @@ async function resolveModelOverride(params: {
     catalog,
     defaultProvider: currentProvider,
     defaultModel: currentModel,
+    agentId: params.agentId,
   });
 
   const resolved = resolveModelRefFromString({
@@ -251,6 +176,7 @@ async function resolveModelOverride(params: {
 export function createSessionStatusTool(opts?: {
   agentSessionKey?: string;
   config?: OpenClawConfig;
+  sandboxed?: boolean;
 }): AnyAgentTool {
   return {
     label: "Session Status",
@@ -261,18 +187,70 @@ export function createSessionStatusTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const cfg = opts?.config ?? loadConfig();
-      const { mainKey, alias } = resolveMainSessionAlias(cfg);
+      const { mainKey, alias, effectiveRequesterKey } = resolveSandboxedSessionToolContext({
+        cfg,
+        agentSessionKey: opts?.agentSessionKey,
+        sandboxed: opts?.sandboxed,
+      });
       const a2aPolicy = createAgentToAgentPolicy(cfg);
+      const requesterAgentId = resolveAgentIdFromSessionKey(
+        opts?.agentSessionKey ?? effectiveRequesterKey,
+      );
+      const visibilityRequesterKey = effectiveRequesterKey.trim();
+      const usesLegacyMainAlias = alias === mainKey;
+      const isLegacyMainVisibilityKey = (sessionKey: string) => {
+        const trimmed = sessionKey.trim();
+        return usesLegacyMainAlias && (trimmed === "main" || trimmed === mainKey);
+      };
+      const resolveVisibilityMainSessionKey = (sessionAgentId: string) => {
+        const requesterParsed = parseAgentSessionKey(visibilityRequesterKey);
+        if (
+          resolveAgentIdFromSessionKey(visibilityRequesterKey) === sessionAgentId &&
+          (requesterParsed?.rest === mainKey || isLegacyMainVisibilityKey(visibilityRequesterKey))
+        ) {
+          return visibilityRequesterKey;
+        }
+        return buildAgentMainSessionKey({
+          agentId: sessionAgentId,
+          mainKey,
+        });
+      };
+      const normalizeVisibilityTargetSessionKey = (sessionKey: string, sessionAgentId: string) => {
+        const trimmed = sessionKey.trim();
+        if (!trimmed) {
+          return trimmed;
+        }
+        if (trimmed.startsWith("agent:")) {
+          const parsed = parseAgentSessionKey(trimmed);
+          if (parsed?.rest === mainKey) {
+            return resolveVisibilityMainSessionKey(sessionAgentId);
+          }
+          return trimmed;
+        }
+        // Preserve legacy bare main keys for requester tree checks.
+        if (isLegacyMainVisibilityKey(trimmed)) {
+          return resolveVisibilityMainSessionKey(sessionAgentId);
+        }
+        return trimmed;
+      };
+      const visibilityGuard =
+        opts?.sandboxed === true
+          ? await createSessionVisibilityGuard({
+              action: "status",
+              requesterSessionKey: visibilityRequesterKey,
+              visibility: resolveEffectiveSessionToolsVisibility({
+                cfg,
+                sandboxed: true,
+              }),
+              a2aPolicy,
+            })
+          : null;
 
       const requestedKeyParam = readStringParam(params, "sessionKey");
       let requestedKeyRaw = requestedKeyParam ?? opts?.agentSessionKey;
       if (!requestedKeyRaw?.trim()) {
         throw new Error("sessionKey required");
       }
-
-      const requesterAgentId = resolveAgentIdFromSessionKey(
-        opts?.agentSessionKey ?? requestedKeyRaw,
-      );
       const ensureAgentAccess = (targetAgentId: string) => {
         if (targetAgentId === requesterAgentId) {
           return;
@@ -289,7 +267,14 @@ export function createSessionStatusTool(opts?: {
       };
 
       if (requestedKeyRaw.startsWith("agent:")) {
-        ensureAgentAccess(resolveAgentIdFromSessionKey(requestedKeyRaw));
+        const requestedAgentId = resolveAgentIdFromSessionKey(requestedKeyRaw);
+        ensureAgentAccess(requestedAgentId);
+        const access = visibilityGuard?.check(
+          normalizeVisibilityTargetSessionKey(requestedKeyRaw, requestedAgentId),
+        );
+        if (access && !access.allowed) {
+          throw new Error(access.error);
+        }
       }
 
       const isExplicitAgentKey = requestedKeyRaw.startsWith("agent:");
@@ -332,6 +317,15 @@ export function createSessionStatusTool(opts?: {
       if (!resolved) {
         const kind = shouldResolveSessionIdInput(requestedKeyRaw) ? "sessionId" : "sessionKey";
         throw new Error(`Unknown ${kind}: ${requestedKeyRaw}`);
+      }
+
+      if (visibilityGuard && !requestedKeyRaw.startsWith("agent:")) {
+        const access = visibilityGuard.check(
+          normalizeVisibilityTargetSessionKey(resolved.key, agentId),
+        );
+        if (!access.allowed) {
+          throw new Error(access.error);
+        }
       }
 
       const configured = resolveDefaultModelForAgent({ cfg, agentId });
@@ -436,8 +430,10 @@ export function createSessionStatusTool(opts?: {
           ...agentDefaults,
           model: agentModel,
         },
+        agentId,
         sessionEntry: resolved.entry,
         sessionKey: resolved.key,
+        sessionStorePath: storePath,
         groupActivation,
         modelAuth: resolveModelAuthLabel({
           provider: providerForCard,
@@ -455,7 +451,7 @@ export function createSessionStatusTool(opts?: {
           dropPolicy: queueSettings.dropPolicy,
           showDetails: queueOverrides,
         },
-        includeTranscriptUsage: false,
+        includeTranscriptUsage: true,
       });
 
       return {

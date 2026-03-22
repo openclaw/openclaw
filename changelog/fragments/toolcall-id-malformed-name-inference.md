@@ -1,0 +1,1 @@
+- runner: infer canonical tool names from malformed `toolCallId` variants (e.g. `functionsread3`, `functionswrite4`) when allowlist is present, preventing `Tool not found` regressions in strict routers.

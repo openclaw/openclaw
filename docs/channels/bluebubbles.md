@@ -44,6 +44,12 @@ Status: bundled plugin that talks to the BlueBubbles macOS server over HTTP. **R
 4. Point BlueBubbles webhooks to your gateway (example: `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`).
 5. Start the gateway; it will register the webhook handler and start pairing.
 
+Security note:
+
+- Always set a webhook password.
+- Webhook authentication is always required. OpenClaw rejects BlueBubbles webhook requests unless they include a password/guid that matches `channels.bluebubbles.password` (for example `?password=<password>` or `x-password`), regardless of loopback/proxy topology.
+- Password authentication is checked before reading/parsing full webhook bodies.
+
 ## Keeping Messages.app alive (VM / headless setups)
 
 Some macOS VM / always-on setups can end up with Messages.app going “idle” (incoming events stop until the app is opened/foregrounded). A simple workaround is to **poke Messages every 5 minutes** using an AppleScript + LaunchAgent.
@@ -120,7 +126,7 @@ launchctl load ~/Library/LaunchAgents/com.user.poke-messages.plist
 
 ## Onboarding
 
-BlueBubbles is available in the interactive setup wizard:
+BlueBubbles is available in interactive onboarding:
 
 ```
 openclaw onboard
@@ -277,7 +283,7 @@ Control whether responses are sent as a single message or streamed in blocks:
 ## Media + limits
 
 - Inbound attachments are downloaded and stored in the media cache.
-- Media cap via `channels.bluebubbles.mediaMaxMb` (default: 8 MB).
+- Media cap via `channels.bluebubbles.mediaMaxMb` for inbound and outbound media (default: 8 MB).
 - Outbound text is chunked to `channels.bluebubbles.textChunkLimit` (default: 4000 chars).
 
 ## Configuration reference
@@ -299,7 +305,8 @@ Provider options:
 - `channels.bluebubbles.blockStreaming`: Enable block streaming (default: `false`; required for streaming replies).
 - `channels.bluebubbles.textChunkLimit`: Outbound chunk size in chars (default: 4000).
 - `channels.bluebubbles.chunkMode`: `length` (default) splits only when exceeding `textChunkLimit`; `newline` splits on blank lines (paragraph boundaries) before length chunking.
-- `channels.bluebubbles.mediaMaxMb`: Inbound media cap in MB (default: 8).
+- `channels.bluebubbles.mediaMaxMb`: Inbound/outbound media cap in MB (default: 8).
+- `channels.bluebubbles.mediaLocalRoots`: Explicit allowlist of absolute local directories permitted for outbound local media paths. Local path sends are denied by default unless this is configured. Per-account override: `channels.bluebubbles.accounts.<accountId>.mediaLocalRoots`.
 - `channels.bluebubbles.historyLimit`: Max group messages for context (0 disables).
 - `channels.bluebubbles.dmHistoryLimit`: DM history limit.
 - `channels.bluebubbles.actions`: Enable/disable specific actions.

@@ -195,58 +195,133 @@ ensure_npm_packages &
 
 log "tool check complete."
 
-# ── Workspace versioning ──────────────────────────────────────────────────
-# Auto-commit and push Larry's workspace to a private GitHub repo on boot.
+# ── Ensure gateway.controlUi.allowedOrigins is set ───────────────────────
+# Required by upstream when --bind lan is used. Must be set before gateway starts.
+# Idempotent: only writes if the key is missing.
+GATEWAY_CONFIG="$DATA_DIR/openclaw.json"
+# Always enforce these settings so they survive upgrades and config syncs.
+# Add new allowed origins here — they'll be applied on every boot.
+if [ -f "$GATEWAY_CONFIG" ] && command -v python3 &>/dev/null; then
+  python3 - "$GATEWAY_CONFIG" <<'PYEOF' 2>/dev/null || true
+import json, sys
+path = sys.argv[1]
+with open(path) as f:
+    c = json.load(f)
+ui = c.setdefault('gateway', {}).setdefault('controlUi', {})
 
-WORKSPACE_DIR="$DATA_DIR/.openclaw/workspace"
+# Always ensure these origins are allowed — add new domains here
+required_origins = [
+    'https://openclaw-jhs.fly.dev',
+    'https://larry.jhsconsulting.net',
+    'https://od.jhsconsulting.net',
+    'https://oc.jhsconsulting.net',
+]
+existing = ui.get('allowedOrigins', [])
+merged = list(dict.fromkeys(existing + required_origins))  # deduplicate, preserve order
+ui['allowedOrigins'] = merged
 
-# Fix "dubious ownership" error (volume is owned by root, container runs as node)
-git config --global --add safe.directory "$WORKSPACE_DIR" 2>/dev/null || true
+# Personal deployment — gateway token handles auth, device pairing adds no value
+ui['dangerouslyDisableDeviceAuth'] = True
 
-if [ -d "$WORKSPACE_DIR" ] && [ -n "${GH_WORKSPACE_TOKEN:-}" ]; then
-  cd "$WORKSPACE_DIR"
+# Never set dangerouslyAllowHostHeaderOriginFallback on production
+ui.pop('dangerouslyAllowHostHeaderOriginFallback', None)
 
-  # Initialize git repo if not already one
-  if [ ! -d .git ]; then
-    git init
-    git checkout -b main 2>/dev/null || true
-  fi
+with open(path, 'w') as f:
+    json.dump(c, f, indent=2)
+PYEOF
+fi
 
-  # Configure remote with token auth
-  REMOTE_URL="https://x-access-token:${GH_WORKSPACE_TOKEN}@github.com/jhs129/larry-workspace.git"
-  if git remote get-url origin &>/dev/null; then
-    git remote set-url origin "$REMOTE_URL"
+# ── Agent workspace versioning ────────────────────────────────────────────
+# Clone or pull jhs129/openclaw-agents into /data/agents-config/ on every boot.
+# Workspace dirs (/data/workspace-larry etc.) are symlinked into the git checkout
+# so agents read/write directly in the versioned tree — no data duplication.
+# A background hourly loop commits and pushes any changes the agents made.
+
+AGENTS_CONFIG_DIR="$DATA_DIR/agents-config"
+AGENTS_REPO_URL="https://x-access-token:${GH_WORKSPACE_TOKEN:-}@github.com/jhs129/openclaw-agents.git"
+
+# Workspace dirs managed by the agents repo (one dir per agent, all content inside).
+# Note: /data/agents/ is openclaw's internal data dir (sessions, memory DB) —
+# NOT in the repo; managed by the platform, not version-controlled.
+AGENT_WORKSPACES="workspace-larry workspace-peterino workspace-joao"
+
+if [ -n "${GH_WORKSPACE_TOKEN:-}" ]; then
+  # Fix "dubious ownership" error — volume files may be owned by root
+  git config --global --add safe.directory "$AGENTS_CONFIG_DIR" 2>/dev/null || true
+
+  # ── Clone or pull ───────────────────────────────────────────────────────
+  if [ ! -d "$AGENTS_CONFIG_DIR/.git" ]; then
+    log "agents-config: cloning jhs129/openclaw-agents..."
+    git clone "$AGENTS_REPO_URL" "$AGENTS_CONFIG_DIR" 2>/dev/null \
+      && log "agents-config: clone complete" \
+      || log "agents-config: WARNING — clone failed, agents may start with stale data"
   else
-    git remote add origin "$REMOTE_URL"
+    log "agents-config: pulling latest..."
+    cd "$AGENTS_CONFIG_DIR"
+    git remote set-url origin "$AGENTS_REPO_URL" 2>/dev/null || true
+    git pull --ff-only origin main 2>/dev/null \
+      && log "agents-config: up to date" \
+      || log "agents-config: WARNING — pull failed (will use cached state)"
+    cd /app
   fi
 
-  # Set commit identity
-  git config user.email "larry@openclaw.dev"
-  git config user.name "Larry"
-
-  # Ensure .gitignore exists with sensible defaults
-  if [ ! -f .gitignore ]; then
-    cat > .gitignore <<'GITIGNORE'
-*.jsonl
-*.tmp
-*.bak
-client_secret.json
-GITIGNORE
+  # ── Set commit identity ─────────────────────────────────────────────────
+  if [ -d "$AGENTS_CONFIG_DIR/.git" ]; then
+    git -C "$AGENTS_CONFIG_DIR" config user.email "agents@openclaw.dev"
+    git -C "$AGENTS_CONFIG_DIR" config user.name "OpenClaw Agents"
   fi
 
-  # Auto-commit and push
-  git add -A
-  if ! git diff --cached --quiet; then
-    git commit -m "auto: workspace snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    log "workspace: committed changes"
-  fi
-  git push -u origin main 2>/dev/null && log "workspace: pushed to remote" || log "workspace: push skipped (remote may not exist yet)"
+  # ── Create symlinks: /data/workspace-* → /data/agents-config/workspace-* ──
+  # Agents read/write their workspace directly in the git working tree.
+  # Remove any gateway-seeded template dirs first (they have blank files).
+  for ws in $AGENT_WORKSPACES; do
+    TARGET="$AGENTS_CONFIG_DIR/$ws"
+    LINK="$DATA_DIR/$ws"
+    if [ -d "$TARGET" ]; then
+      # Remove existing dir (gateway-seeded templates) or stale symlink
+      if [ ! -L "$LINK" ]; then
+        rm -rf "$LINK"
+      fi
+      ln -sfn "$TARGET" "$LINK"
+    fi
+  done
 
-  cd /app
+  # ── Commit any changes that accumulated since the last hourly push ───────
+  if [ -d "$AGENTS_CONFIG_DIR/.git" ]; then
+    cd "$AGENTS_CONFIG_DIR"
+    git add -A 2>/dev/null || true
+    if ! git diff --cached --quiet 2>/dev/null; then
+      git commit -m "auto: boot snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)" 2>/dev/null \
+        && log "agents-config: committed boot snapshot"
+    fi
+    git push -u origin main 2>/dev/null \
+      && log "agents-config: pushed to remote" \
+      || log "agents-config: push skipped (will retry on next cron)"
+    cd /app
+  fi
+
+  # ── Hourly background commit loop ────────────────────────────────────────
+  # Commits and pushes any agent-written changes (memory notes, MEMORY.md updates)
+  # every hour. Runs as a background process — no crond needed.
+  (
+    while true; do
+      sleep 3600
+      if [ -d "$AGENTS_CONFIG_DIR/.git" ]; then
+        cd "$AGENTS_CONFIG_DIR"
+        git add -A 2>/dev/null || true
+        if ! git diff --cached --quiet 2>/dev/null; then
+          git commit -m "auto: hourly $(date -u +%Y-%m-%dT%H:%M:%SZ)" 2>/dev/null
+          git push origin main 2>/dev/null \
+            && echo "[fly-entrypoint] agents-config: hourly push complete" \
+            || echo "[fly-entrypoint] agents-config: hourly push failed"
+        fi
+        cd /app
+      fi
+    done
+  ) &
+
 else
-  if [ -z "${GH_WORKSPACE_TOKEN:-}" ]; then
-    log "workspace: GH_WORKSPACE_TOKEN not set, skipping versioning"
-  fi
+  log "agents-config: GH_WORKSPACE_TOKEN not set — skipping workspace versioning"
 fi
 
 log "starting application..."

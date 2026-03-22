@@ -1,5 +1,5 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { timingSafeEqual } from "node:crypto";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { HookMessageChannel } from "./hooks.js";
 import { readJsonBody } from "./hooks.js";

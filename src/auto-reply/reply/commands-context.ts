@@ -1,8 +1,8 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import type { MsgContext } from "../templating.js";
-import type { CommandContext } from "./commands-types.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import { normalizeCommandBody } from "../commands-registry.js";
+import type { MsgContext } from "../templating.js";
+import type { CommandContext } from "./commands-types.js";
 import { stripMentions } from "./mentions.js";
 
 export function buildCommandContext(params: {
@@ -26,6 +26,7 @@ export function buildCommandContext(params: {
   const rawBodyNormalized = triggerBodyNormalized;
   const commandBodyNormalized = normalizeCommandBody(
     isGroup ? stripMentions(rawBodyNormalized, ctx, cfg, agentId) : rawBodyNormalized,
+    { botUsername: ctx.BotUsername },
   );
 
   return {

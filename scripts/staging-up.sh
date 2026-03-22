@@ -3,15 +3,18 @@
 #
 # Usage: ./scripts/staging-up.sh [--skip-workspace-sync]
 #
-# On a fresh app creation:
-#   1. Creates the volume
-#   2. Loads all secrets from .fly-secrets
+# Steps:
+#   1. Creates the app + volume if needed
+#   2. Loads secrets from .fly-secrets (new apps only)
 #   3. Deploys the app
-#   4. Seeds stable workspace files from scripts/seed-workspace/ (git-controlled)
-#   5. Syncs dynamic workspace files from prod (MEMORY.md + business docs)
+#   4. Syncs agent workspaces from production (identity, memory, business docs)
+#   5. Copies production config (openclaw.json) to staging
+#
+# This ensures staging agents have the same identity and memories as production,
+# so you can test upgrades without agents losing who they are.
 #
 # Pass --skip-workspace-sync to skip steps 4+5 (e.g. for CI deploys where prod
-# may not be reachable or you want a blank-slate Larry).
+# may not be reachable or you want a blank-slate agent).
 
 set -euo pipefail
 
@@ -25,7 +28,6 @@ for arg in "$@"; do
 done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SEED_DIR="$SCRIPT_DIR/seed-workspace"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -67,66 +69,42 @@ fi
 log "Deploying $STAGING_APP..."
 fly deploy --config "$STAGING_CONFIG" --app "$STAGING_APP" --ha=false || fail "Deploy failed."
 
-# ── 4+5. Workspace sync (new app only, unless --skip-workspace-sync) ──────────
-if [ "$APP_IS_NEW" = true ] && [ "$SKIP_WORKSPACE_SYNC" = false ]; then
-  log "Seeding agent workspaces on staging..."
+# ── 4. Sync openclaw.json from production ────────────────────────────────────
+# Agent workspaces are now managed by git (jhs129/openclaw-agents) and restored
+# automatically by fly-entrypoint.sh on every boot — no manual tar sync needed.
+# We only need to patch openclaw.json with staging-specific overrides.
+if [ "$SKIP_WORKSPACE_SYNC" = false ]; then
+  log "Syncing openclaw.json from production (with staging overrides)..."
   SYNC_TMP="$(mktemp -d)"
 
-  # Helper: seed stable files from a git seed dir into a workspace on staging
-  seed_workspace() {
-    local workspace="$1" seed_dir="$2"
-    fly ssh console --app "$STAGING_APP" -C "mkdir -p /data/$workspace" 2>/dev/null || true
-    if [ -d "$seed_dir" ]; then
-      for f in "$seed_dir"/*.md; do
-        local fname
-        fname="$(basename "$f")"
-        fly ssh console --app "$STAGING_APP" -C "rm -f /data/$workspace/$fname" 2>/dev/null || true
-        fly sftp put --app "$STAGING_APP" "$f" "/data/$workspace/$fname" \
-          && log "    Seeded $fname" || warn "    Could not seed $fname"
-      done
-    else
-      warn "    $seed_dir not found — skipping"
-    fi
-  }
+  # Ensure machine is running — fly sftp requires a started machine
+  log "  Ensuring staging machine is running..."
+  fly machine start --app "$STAGING_APP" 2>/dev/null || true
+  fly machine wait --app "$STAGING_APP" --state started 2>/dev/null || true
 
-  # Helper: sync a single file from prod to staging
-  sync_from_prod() {
-    local workspace="$1" fname="$2"
-    if fly sftp get --app "$PROD_APP" "/data/$workspace/$fname" "$SYNC_TMP/$fname" 2>/dev/null; then
-      fly ssh console --app "$STAGING_APP" -C "rm -f /data/$workspace/$fname" 2>/dev/null || true
-      fly sftp put --app "$STAGING_APP" "$SYNC_TMP/$fname" "/data/$workspace/$fname" \
-        && log "    Synced $fname from prod" || warn "    Could not upload $fname"
-      rm -f "$SYNC_TMP/$fname"
-    else
-      warn "    $fname not found on prod — skipping"
-    fi
-  }
-
-  # ── Larry ────────────────────────────────────────────────────────────────
-  log "  Agent: workspace-larry"
-  seed_workspace "workspace-larry" "$SCRIPT_DIR/seed-workspace"
-  sync_from_prod "workspace-larry" "MEMORY.md"
-  sync_from_prod "workspace-larry" "EXECUTIVE-SUMMARY.md"
-  sync_from_prod "workspace-larry" "OPENCLAW-BUSINESS-STRATEGY-NOTES.md"
-  sync_from_prod "workspace-larry" "ROCKY-POINT-README.md"
-  sync_from_prod "workspace-larry" "JHS-Digital-Consulting-Accountable-Plan-2026.md"
-
-  # ── Peterino ─────────────────────────────────────────────────────────────
-  log "  Agent: workspace-peterino"
-  seed_workspace "workspace-peterino" "$SCRIPT_DIR/seed-workspace-peterino"
-  sync_from_prod "workspace-peterino" "MEMORY.md"
-
-  # ── Joao ─────────────────────────────────────────────────────────────────
-  log "  Agent: workspace-joao"
-  seed_workspace "workspace-joao" "$SCRIPT_DIR/seed-workspace-joao"
+  PROD_CONFIG="$SYNC_TMP/prod-openclaw.json"
+  if fly sftp get --app "$PROD_APP" "/data/openclaw.json" "$PROD_CONFIG" 2>/dev/null; then
+    python3 -c "
+import json, sys
+with open('$PROD_CONFIG') as f: prod = json.load(f)
+prod.setdefault('gateway', {}).setdefault('controlUi', {})['dangerouslyAllowHostHeaderOriginFallback'] = True
+prod['gateway']['controlUi']['dangerouslyDisableDeviceAuth'] = True
+json.dump(prod, sys.stdout, indent=2)
+" > "$SYNC_TMP/patched-openclaw.json" 2>/dev/null
+    fly ssh console --app "$STAGING_APP" -C "sh -c 'rm -f /data/openclaw.json'" 2>/dev/null || true
+    fly sftp put --app "$STAGING_APP" "$SYNC_TMP/patched-openclaw.json" "/data/openclaw.json" \
+      && log "  Config synced (prod config + staging overrides)" \
+      || warn "  Could not upload config"
+  else
+    warn "  Could not download prod config — staging will use bootstrap config"
+  fi
 
   rm -rf "$SYNC_TMP"
 
-  # fly sftp uploads files as root — fix ownership so the node process can write
-  log "  Fixing workspace file ownership..."
-  fly ssh console --app "$STAGING_APP" -C 'chown -R node:node /data/workspace-larry /data/workspace-peterino /data/workspace-joao' 2>/dev/null || true
-
-  log "Workspace sync complete."
+  # Restart so the gateway picks up the patched config and agents reload from git workspaces.
+  log "Restarting gateway..."
+  fly machine restart --app "$STAGING_APP" 2>/dev/null || true
+  log "Staging is up: https://$STAGING_APP.fly.dev/"
 fi
 
 log "Staging is up: https://$STAGING_APP.fly.dev/"

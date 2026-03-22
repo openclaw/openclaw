@@ -4,14 +4,17 @@
  */
 
 import crypto from "node:crypto";
+import type { SessionEntry } from "../api.js";
 import type { VoiceCallConfig } from "./config.js";
-import { loadCoreAgentDeps, type CoreConfig } from "./core-bridge.js";
+import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 
 export type VoiceResponseParams = {
   /** Voice call config */
   voiceConfig: VoiceCallConfig;
   /** Core OpenClaw config */
   coreConfig: CoreConfig;
+  /** Injected host agent runtime */
+  agentRuntime: CoreAgentDeps;
   /** Call ID for session tracking */
   callId: string;
   /** Caller's phone number */
@@ -27,11 +30,6 @@ export type VoiceResponseResult = {
   error?: string;
 };
 
-type SessionEntry = {
-  sessionId: string;
-  updatedAt: number;
-};
-
 /**
  * Generate a voice response using the embedded Pi agent with full tool support.
  * Uses the same agent infrastructure as messaging for consistent behavior.
@@ -39,20 +37,10 @@ type SessionEntry = {
 export async function generateVoiceResponse(
   params: VoiceResponseParams,
 ): Promise<VoiceResponseResult> {
-  const { voiceConfig, callId, from, transcript, userMessage, coreConfig } = params;
+  const { voiceConfig, callId, from, transcript, userMessage, coreConfig, agentRuntime } = params;
 
   if (!coreConfig) {
     return { text: null, error: "Core config unavailable for voice response" };
-  }
-
-  let deps: Awaited<ReturnType<typeof loadCoreAgentDeps>>;
-  try {
-    deps = await loadCoreAgentDeps();
-  } catch (err) {
-    return {
-      text: null,
-      error: err instanceof Error ? err.message : "Unable to load core agent dependencies",
-    };
   }
   const cfg = coreConfig;
 
@@ -62,15 +50,15 @@ export async function generateVoiceResponse(
   const agentId = "main";
 
   // Resolve paths
-  const storePath = deps.resolveStorePath(cfg.session?.store, { agentId });
-  const agentDir = deps.resolveAgentDir(cfg, agentId);
-  const workspaceDir = deps.resolveAgentWorkspaceDir(cfg, agentId);
+  const storePath = agentRuntime.session.resolveStorePath(cfg.session?.store, { agentId });
+  const agentDir = agentRuntime.resolveAgentDir(cfg, agentId);
+  const workspaceDir = agentRuntime.resolveAgentWorkspaceDir(cfg, agentId);
 
   // Ensure workspace exists
-  await deps.ensureAgentWorkspace({ dir: workspaceDir });
+  await agentRuntime.ensureAgentWorkspace({ dir: workspaceDir });
 
   // Load or create session entry
-  const sessionStore = deps.loadSessionStore(storePath);
+  const sessionStore = agentRuntime.session.loadSessionStore(storePath);
   const now = Date.now();
   let sessionEntry = sessionStore[sessionKey] as SessionEntry | undefined;
 
@@ -80,25 +68,27 @@ export async function generateVoiceResponse(
       updatedAt: now,
     };
     sessionStore[sessionKey] = sessionEntry;
-    await deps.saveSessionStore(storePath, sessionStore);
+    await agentRuntime.session.saveSessionStore(storePath, sessionStore);
   }
 
   const sessionId = sessionEntry.sessionId;
-  const sessionFile = deps.resolveSessionFilePath(sessionId, sessionEntry, {
+  const sessionFile = agentRuntime.session.resolveSessionFilePath(sessionId, sessionEntry, {
     agentId,
   });
 
   // Resolve model from config
-  const modelRef = voiceConfig.responseModel || `${deps.DEFAULT_PROVIDER}/${deps.DEFAULT_MODEL}`;
+  const modelRef =
+    voiceConfig.responseModel || `${agentRuntime.defaults.provider}/${agentRuntime.defaults.model}`;
   const slashIndex = modelRef.indexOf("/");
-  const provider = slashIndex === -1 ? deps.DEFAULT_PROVIDER : modelRef.slice(0, slashIndex);
+  const provider =
+    slashIndex === -1 ? agentRuntime.defaults.provider : modelRef.slice(0, slashIndex);
   const model = slashIndex === -1 ? modelRef : modelRef.slice(slashIndex + 1);
 
   // Resolve thinking level
-  const thinkLevel = deps.resolveThinkingDefault({ cfg, provider, model });
+  const thinkLevel = agentRuntime.resolveThinkingDefault({ cfg, provider, model });
 
   // Resolve agent identity for personalized prompt
-  const identity = deps.resolveAgentIdentity(cfg, agentId);
+  const identity = agentRuntime.resolveAgentIdentity(cfg, agentId);
   const agentName = identity?.name?.trim() || "assistant";
 
   // Build system prompt with conversation history
@@ -115,11 +105,11 @@ export async function generateVoiceResponse(
   }
 
   // Resolve timeout
-  const timeoutMs = voiceConfig.responseTimeoutMs ?? deps.resolveAgentTimeoutMs({ cfg });
+  const timeoutMs = voiceConfig.responseTimeoutMs ?? agentRuntime.resolveAgentTimeoutMs({ cfg });
   const runId = `voice:${callId}:${Date.now()}`;
 
   try {
-    const result = await deps.runEmbeddedPiAgent({
+    const result = await agentRuntime.runEmbeddedPiAgent({
       sessionId,
       sessionKey,
       messageProvider: "voice",
@@ -146,7 +136,7 @@ export async function generateVoiceResponse(
 
     const text = texts.join(" ") || null;
 
-    if (!text && result.meta.aborted) {
+    if (!text && result.meta?.aborted) {
       return { text: null, error: "Response generation was aborted" };
     }
 

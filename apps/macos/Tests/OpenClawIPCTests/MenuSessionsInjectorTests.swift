@@ -5,7 +5,7 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct MenuSessionsInjectorTests {
-    @Test func injectsDisconnectedMessage() {
+    @Test func `injects disconnected message`() {
         let injector = MenuSessionsInjector()
         injector.setTestingControlChannelConnected(false)
         injector.setTestingSnapshot(nil, errorText: nil)
@@ -19,7 +19,7 @@ struct MenuSessionsInjectorTests {
         #expect(menu.items.contains { $0.tag == 9_415_557 })
     }
 
-    @Test func injectsSessionRows() {
+    @Test func `injects session rows`() {
         let injector = MenuSessionsInjector()
         injector.setTestingControlChannelConnected(true)
 
@@ -92,5 +92,46 @@ struct MenuSessionsInjectorTests {
         injector.injectForTesting(into: menu)
         #expect(menu.items.contains { $0.tag == 9_415_557 })
         #expect(menu.items.contains { $0.tag == 9_415_557 && $0.isSeparatorItem })
+    }
+
+    @Test func `cost usage submenu does not use injector delegate`() {
+        let injector = MenuSessionsInjector()
+        injector.setTestingControlChannelConnected(true)
+
+        let summary = GatewayCostUsageSummary(
+            updatedAt: Date().timeIntervalSince1970 * 1000,
+            days: 1,
+            daily: [
+                GatewayCostUsageDay(
+                    date: "2026-02-24",
+                    input: 10,
+                    output: 20,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                    totalTokens: 30,
+                    totalCost: 0.12,
+                    missingCostEntries: 0),
+            ],
+            totals: GatewayCostUsageTotals(
+                input: 10,
+                output: 20,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 30,
+                totalCost: 0.12,
+                missingCostEntries: 0))
+        injector.setTestingCostUsageSummary(summary, errorText: nil)
+
+        let menu = NSMenu()
+        menu.addItem(NSMenuItem(title: "Header", action: nil, keyEquivalent: ""))
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Send Heartbeats", action: nil, keyEquivalent: ""))
+
+        injector.injectForTesting(into: menu)
+
+        let usageCostItem = menu.items.first { $0.title == "Usage cost (30 days)" }
+        #expect(usageCostItem != nil)
+        #expect(usageCostItem?.submenu != nil)
+        #expect(usageCostItem?.submenu?.delegate == nil)
     }
 }

@@ -1,4 +1,5 @@
 import { RateLimitError } from "@buape/carbon";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatErrorMessage } from "./errors.js";
 import { type RetryConfig, resolveRetryConfig, retryAsync } from "./retry.js";
 
@@ -19,6 +20,21 @@ export const TELEGRAM_RETRY_DEFAULTS = {
 };
 
 const TELEGRAM_RETRY_RE = /429|timeout|connect|reset|closed|unavailable|temporarily/i;
+const log = createSubsystemLogger("retry-policy");
+
+function resolveTelegramShouldRetry(params: {
+  shouldRetry?: (err: unknown) => boolean;
+  strictShouldRetry?: boolean;
+}) {
+  if (!params.shouldRetry) {
+    return (err: unknown) => TELEGRAM_RETRY_RE.test(formatErrorMessage(err));
+  }
+  if (params.strictShouldRetry) {
+    return params.shouldRetry;
+  }
+  return (err: unknown) =>
+    params.shouldRetry?.(err) || TELEGRAM_RETRY_RE.test(formatErrorMessage(err));
+}
 
 function getTelegramRetryAfterMs(err: unknown): number | undefined {
   if (!err || typeof err !== "object") {
@@ -61,7 +77,7 @@ export function createDiscordRetryRunner(params: {
         ? (info) => {
             const labelText = info.label ?? "request";
             const maxRetries = Math.max(1, info.maxAttempts - 1);
-            console.warn(
+            log.warn(
               `discord ${labelText} rate limited, retry ${info.attempt}/${maxRetries} in ${info.delayMs}ms`,
             );
           }
@@ -74,14 +90,19 @@ export function createTelegramRetryRunner(params: {
   configRetry?: RetryConfig;
   verbose?: boolean;
   shouldRetry?: (err: unknown) => boolean;
+  /**
+   * When true, the custom shouldRetry predicate is used exclusively —
+   * the default TELEGRAM_RETRY_RE fallback regex is NOT OR'd in.
+   * Use this for non-idempotent operations (e.g. sendMessage) where
+   * the regex fallback would cause duplicate message delivery.
+   */
+  strictShouldRetry?: boolean;
 }): RetryRunner {
   const retryConfig = resolveRetryConfig(TELEGRAM_RETRY_DEFAULTS, {
     ...params.configRetry,
     ...params.retry,
   });
-  const shouldRetry = params.shouldRetry
-    ? (err: unknown) => params.shouldRetry?.(err) || TELEGRAM_RETRY_RE.test(formatErrorMessage(err))
-    : (err: unknown) => TELEGRAM_RETRY_RE.test(formatErrorMessage(err));
+  const shouldRetry = resolveTelegramShouldRetry(params);
 
   return <T>(fn: () => Promise<T>, label?: string) =>
     retryAsync(fn, {
@@ -92,7 +113,7 @@ export function createTelegramRetryRunner(params: {
       onRetry: params.verbose
         ? (info) => {
             const maxRetries = Math.max(1, info.maxAttempts - 1);
-            console.warn(
+            log.warn(
               `telegram send retry ${info.attempt}/${maxRetries} for ${info.label ?? label ?? "request"} in ${info.delayMs}ms: ${formatErrorMessage(info.err)}`,
             );
           }

@@ -3,19 +3,8 @@ import type {
   BrowserActionPathResult,
   BrowserActionTabResult,
 } from "./client-actions-types.js";
+import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
 import { fetchBrowserJson } from "./client-fetch.js";
-
-function buildProfileQuery(profile?: string): string {
-  return profile ? `?profile=${encodeURIComponent(profile)}` : "";
-}
-
-function withBaseUrl(baseUrl: string | undefined, path: string): string {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return path;
-  }
-  return `${trimmed.replace(/\/$/, "")}${path}`;
-}
 
 export type BrowserFormField = {
   ref: string;
@@ -26,16 +15,19 @@ export type BrowserFormField = {
 export type BrowserActRequest =
   | {
       kind: "click";
-      ref: string;
+      ref?: string;
+      selector?: string;
       targetId?: string;
       doubleClick?: boolean;
       button?: string;
       modifiers?: string[];
+      delayMs?: number;
       timeoutMs?: number;
     }
   | {
       kind: "type";
-      ref: string;
+      ref?: string;
+      selector?: string;
       text: string;
       targetId?: string;
       submit?: boolean;
@@ -43,23 +35,33 @@ export type BrowserActRequest =
       timeoutMs?: number;
     }
   | { kind: "press"; key: string; targetId?: string; delayMs?: number }
-  | { kind: "hover"; ref: string; targetId?: string; timeoutMs?: number }
+  | {
+      kind: "hover";
+      ref?: string;
+      selector?: string;
+      targetId?: string;
+      timeoutMs?: number;
+    }
   | {
       kind: "scrollIntoView";
-      ref: string;
+      ref?: string;
+      selector?: string;
       targetId?: string;
       timeoutMs?: number;
     }
   | {
       kind: "drag";
-      startRef: string;
-      endRef: string;
+      startRef?: string;
+      startSelector?: string;
+      endRef?: string;
+      endSelector?: string;
       targetId?: string;
       timeoutMs?: number;
     }
   | {
       kind: "select";
-      ref: string;
+      ref?: string;
+      selector?: string;
       values: string[];
       targetId?: string;
       timeoutMs?: number;
@@ -83,14 +85,21 @@ export type BrowserActRequest =
       targetId?: string;
       timeoutMs?: number;
     }
-  | { kind: "evaluate"; fn: string; ref?: string; targetId?: string }
-  | { kind: "close"; targetId?: string };
+  | { kind: "evaluate"; fn: string; ref?: string; targetId?: string; timeoutMs?: number }
+  | { kind: "close"; targetId?: string }
+  | {
+      kind: "batch";
+      actions: BrowserActRequest[];
+      targetId?: string;
+      stopOnError?: boolean;
+    };
 
 export type BrowserActResponse = {
   ok: true;
   targetId: string;
   url?: string;
   result?: unknown;
+  results?: Array<{ ok: boolean; error?: string }>;
 };
 
 export type BrowserDownloadPayload = {
@@ -98,6 +107,23 @@ export type BrowserDownloadPayload = {
   suggestedFilename: string;
   path: string;
 };
+
+type BrowserDownloadResult = { ok: true; targetId: string; download: BrowserDownloadPayload };
+
+async function postDownloadRequest(
+  baseUrl: string | undefined,
+  route: "/wait/download" | "/download",
+  body: Record<string, unknown>,
+  profile?: string,
+): Promise<BrowserDownloadResult> {
+  const q = buildProfileQuery(profile);
+  return await fetchBrowserJson<BrowserDownloadResult>(withBaseUrl(baseUrl, `${route}${q}`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    timeoutMs: 20000,
+  });
+}
 
 export async function browserNavigate(
   baseUrl: string | undefined,
@@ -176,22 +202,17 @@ export async function browserWaitForDownload(
     timeoutMs?: number;
     profile?: string;
   },
-): Promise<{ ok: true; targetId: string; download: BrowserDownloadPayload }> {
-  const q = buildProfileQuery(opts.profile);
-  return await fetchBrowserJson<{
-    ok: true;
-    targetId: string;
-    download: BrowserDownloadPayload;
-  }>(withBaseUrl(baseUrl, `/wait/download${q}`), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+): Promise<BrowserDownloadResult> {
+  return await postDownloadRequest(
+    baseUrl,
+    "/wait/download",
+    {
       targetId: opts.targetId,
       path: opts.path,
       timeoutMs: opts.timeoutMs,
-    }),
-    timeoutMs: 20000,
-  });
+    },
+    opts.profile,
+  );
 }
 
 export async function browserDownload(
@@ -203,23 +224,18 @@ export async function browserDownload(
     timeoutMs?: number;
     profile?: string;
   },
-): Promise<{ ok: true; targetId: string; download: BrowserDownloadPayload }> {
-  const q = buildProfileQuery(opts.profile);
-  return await fetchBrowserJson<{
-    ok: true;
-    targetId: string;
-    download: BrowserDownloadPayload;
-  }>(withBaseUrl(baseUrl, `/download${q}`), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+): Promise<BrowserDownloadResult> {
+  return await postDownloadRequest(
+    baseUrl,
+    "/download",
+    {
       targetId: opts.targetId,
       ref: opts.ref,
       path: opts.path,
       timeoutMs: opts.timeoutMs,
-    }),
-    timeoutMs: 20000,
-  });
+    },
+    opts.profile,
+  );
 }
 
 export async function browserAct(

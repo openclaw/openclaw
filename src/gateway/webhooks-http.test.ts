@@ -1,5 +1,5 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { EventEmitter } from "node:events";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, test, vi } from "vitest";
 import type { WebhooksConfigResolved } from "./webhooks-http.js";
 import { createWebhooksRequestHandler } from "./webhooks-http.js";

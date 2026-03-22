@@ -1,8 +1,8 @@
-import type { OAuthCredentials, OAuthProvider } from "@mariozechner/pi-ai";
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { OAuthCredentials, OAuthProvider } from "@mariozechner/pi-ai";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
@@ -86,10 +86,42 @@ type ClaudeCliWriteOptions = ClaudeCliFileOptions & {
 };
 
 type ExecSyncFn = typeof execSync;
+type ExecFileSyncFn = typeof execFileSync;
 
 function resolveClaudeCliCredentialsPath(homeDir?: string) {
   const baseDir = homeDir ?? resolveUserPath("~");
   return path.join(baseDir, CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH);
+}
+
+function parseClaudeCliOauthCredential(claudeOauth: unknown): ClaudeCliCredential | null {
+  if (!claudeOauth || typeof claudeOauth !== "object") {
+    return null;
+  }
+  const accessToken = (claudeOauth as Record<string, unknown>).accessToken;
+  const refreshToken = (claudeOauth as Record<string, unknown>).refreshToken;
+  const expiresAt = (claudeOauth as Record<string, unknown>).expiresAt;
+
+  if (typeof accessToken !== "string" || !accessToken) {
+    return null;
+  }
+  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt) || expiresAt <= 0) {
+    return null;
+  }
+  if (typeof refreshToken === "string" && refreshToken) {
+    return {
+      type: "oauth",
+      provider: "anthropic",
+      access: accessToken,
+      refresh: refreshToken,
+      expires: expiresAt,
+    };
+  }
+  return {
+    type: "token",
+    provider: "anthropic",
+    token: accessToken,
+    expires: expiresAt,
+  };
 }
 
 function resolveCodexCliAuthPath() {
@@ -119,6 +151,22 @@ function resolveMiniMaxCliCredentialsPath(homeDir?: string) {
 function computeCodexKeychainAccount(codexHome: string) {
   const hash = createHash("sha256").update(codexHome).digest("hex");
   return `cli|${hash.slice(0, 16)}`;
+}
+
+function decodeJwtExpiryMs(token: string): number | null {
+  const parts = token.split(".");
+  if (parts.length < 2) {
+    return null;
+  }
+  try {
+    const payloadRaw = Buffer.from(parts[1], "base64url").toString("utf8");
+    const payload = JSON.parse(payloadRaw) as { exp?: unknown };
+    return typeof payload.exp === "number" && Number.isFinite(payload.exp) && payload.exp > 0
+      ? payload.exp * 1000
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function readCodexKeychainCredentials(options?: {
@@ -161,9 +209,10 @@ function readCodexKeychainCredentials(options?: {
       typeof lastRefreshRaw === "string" || typeof lastRefreshRaw === "number"
         ? new Date(lastRefreshRaw).getTime()
         : Date.now();
-    const expires = Number.isFinite(lastRefresh)
+    const fallbackExpiry = Number.isFinite(lastRefresh)
       ? lastRefresh + 60 * 60 * 1000
       : Date.now() + 60 * 60 * 1000;
+    const expires = decodeJwtExpiryMs(accessToken) ?? fallbackExpiry;
     const accountId = typeof tokens?.account_id === "string" ? tokens.account_id : undefined;
 
     log.info("read codex credentials from keychain", {
@@ -186,6 +235,13 @@ function readCodexKeychainCredentials(options?: {
 
 function readQwenCliCredentials(options?: { homeDir?: string }): QwenCliCredential | null {
   const credPath = resolveQwenCliCredentialsPath(options?.homeDir);
+  return readPortalCliOauthCredentials(credPath, "qwen-portal");
+}
+
+function readPortalCliOauthCredentials<TProvider extends string>(
+  credPath: string,
+  provider: TProvider,
+): { type: "oauth"; provider: TProvider; access: string; refresh: string; expires: number } | null {
   const raw = loadJsonFile(credPath);
   if (!raw || typeof raw !== "object") {
     return null;
@@ -207,7 +263,7 @@ function readQwenCliCredentials(options?: { homeDir?: string }): QwenCliCredenti
 
   return {
     type: "oauth",
-    provider: "qwen-portal",
+    provider,
     access: accessToken,
     refresh: refreshToken,
     expires: expiresAt,
@@ -216,32 +272,7 @@ function readQwenCliCredentials(options?: { homeDir?: string }): QwenCliCredenti
 
 function readMiniMaxCliCredentials(options?: { homeDir?: string }): MiniMaxCliCredential | null {
   const credPath = resolveMiniMaxCliCredentialsPath(options?.homeDir);
-  const raw = loadJsonFile(credPath);
-  if (!raw || typeof raw !== "object") {
-    return null;
-  }
-  const data = raw as Record<string, unknown>;
-  const accessToken = data.access_token;
-  const refreshToken = data.refresh_token;
-  const expiresAt = data.expiry_date;
-
-  if (typeof accessToken !== "string" || !accessToken) {
-    return null;
-  }
-  if (typeof refreshToken !== "string" || !refreshToken) {
-    return null;
-  }
-  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt)) {
-    return null;
-  }
-
-  return {
-    type: "oauth",
-    provider: "minimax-portal",
-    access: accessToken,
-    refresh: refreshToken,
-    expires: expiresAt,
-  };
+  return readPortalCliOauthCredentials(credPath, "minimax-portal");
 }
 
 function readClaudeCliKeychainCredentials(
@@ -254,38 +285,7 @@ function readClaudeCliKeychainCredentials(
     );
 
     const data = JSON.parse(result.trim());
-    const claudeOauth = data?.claudeAiOauth;
-    if (!claudeOauth || typeof claudeOauth !== "object") {
-      return null;
-    }
-
-    const accessToken = claudeOauth.accessToken;
-    const refreshToken = claudeOauth.refreshToken;
-    const expiresAt = claudeOauth.expiresAt;
-
-    if (typeof accessToken !== "string" || !accessToken) {
-      return null;
-    }
-    if (typeof expiresAt !== "number" || expiresAt <= 0) {
-      return null;
-    }
-
-    if (typeof refreshToken === "string" && refreshToken) {
-      return {
-        type: "oauth",
-        provider: "anthropic",
-        access: accessToken,
-        refresh: refreshToken,
-        expires: expiresAt,
-      };
-    }
-
-    return {
-      type: "token",
-      provider: "anthropic",
-      token: accessToken,
-      expires: expiresAt,
-    };
+    return parseClaudeCliOauthCredential(data?.claudeAiOauth);
   } catch {
     return null;
   }
@@ -315,38 +315,7 @@ export function readClaudeCliCredentials(options?: {
   }
 
   const data = raw as Record<string, unknown>;
-  const claudeOauth = data.claudeAiOauth as Record<string, unknown> | undefined;
-  if (!claudeOauth || typeof claudeOauth !== "object") {
-    return null;
-  }
-
-  const accessToken = claudeOauth.accessToken;
-  const refreshToken = claudeOauth.refreshToken;
-  const expiresAt = claudeOauth.expiresAt;
-
-  if (typeof accessToken !== "string" || !accessToken) {
-    return null;
-  }
-  if (typeof expiresAt !== "number" || expiresAt <= 0) {
-    return null;
-  }
-
-  if (typeof refreshToken === "string" && refreshToken) {
-    return {
-      type: "oauth",
-      provider: "anthropic",
-      access: accessToken,
-      refresh: refreshToken,
-      expires: expiresAt,
-    };
-  }
-
-  return {
-    type: "token",
-    provider: "anthropic",
-    token: accessToken,
-    expires: expiresAt,
-  };
+  return parseClaudeCliOauthCredential(data.claudeAiOauth);
 }
 
 export function readClaudeCliCredentialsCached(options?: {
@@ -381,12 +350,13 @@ export function readClaudeCliCredentialsCached(options?: {
 
 export function writeClaudeCliKeychainCredentials(
   newCredentials: OAuthCredentials,
-  options?: { execSync?: ExecSyncFn },
+  options?: { execFileSync?: ExecFileSyncFn },
 ): boolean {
-  const execSyncImpl = options?.execSync ?? execSync;
+  const execFileSyncImpl = options?.execFileSync ?? execFileSync;
   try {
-    const existingResult = execSyncImpl(
-      `security find-generic-password -s "${CLAUDE_CLI_KEYCHAIN_SERVICE}" -w 2>/dev/null`,
+    const existingResult = execFileSyncImpl(
+      "security",
+      ["find-generic-password", "-s", CLAUDE_CLI_KEYCHAIN_SERVICE, "-w"],
       { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
     );
 
@@ -405,8 +375,20 @@ export function writeClaudeCliKeychainCredentials(
 
     const newValue = JSON.stringify(existingData);
 
-    execSyncImpl(
-      `security add-generic-password -U -s "${CLAUDE_CLI_KEYCHAIN_SERVICE}" -a "${CLAUDE_CLI_KEYCHAIN_ACCOUNT}" -w '${newValue.replace(/'/g, "'\"'\"'")}'`,
+    // Use execFileSync to avoid shell interpretation of user-controlled token values.
+    // This prevents command injection via $() or backtick expansion in OAuth tokens.
+    execFileSyncImpl(
+      "security",
+      [
+        "add-generic-password",
+        "-U",
+        "-s",
+        CLAUDE_CLI_KEYCHAIN_SERVICE,
+        "-a",
+        CLAUDE_CLI_KEYCHAIN_ACCOUNT,
+        "-w",
+        newValue,
+      ],
       { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
     );
 
@@ -518,13 +500,14 @@ export function readCodexCliCredentials(options?: {
     return null;
   }
 
-  let expires: number;
+  let fallbackExpiry: number;
   try {
     const stat = fs.statSync(authPath);
-    expires = stat.mtimeMs + 60 * 60 * 1000;
+    fallbackExpiry = stat.mtimeMs + 60 * 60 * 1000;
   } catch {
-    expires = Date.now() + 60 * 60 * 1000;
+    fallbackExpiry = Date.now() + 60 * 60 * 1000;
   }
+  const expires = decodeJwtExpiryMs(accessToken) ?? fallbackExpiry;
 
   return {
     type: "oauth",

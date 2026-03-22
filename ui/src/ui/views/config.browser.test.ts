@@ -1,5 +1,6 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import type { ThemeMode, ThemeName } from "../theme.ts";
 import { renderConfig } from "./config.ts";
 
 describe("config view", () => {
@@ -20,6 +21,7 @@ describe("config view", () => {
     schemaLoading: false,
     uiHints: {},
     formMode: "form" as const,
+    showModeToggle: true,
     formValue: {},
     originalValue: {},
     searchQuery: "",
@@ -35,7 +37,25 @@ describe("config view", () => {
     onApply: vi.fn(),
     onUpdate: vi.fn(),
     onSubsectionChange: vi.fn(),
+    version: "2026.3.11",
+    theme: "claw" as ThemeName,
+    themeMode: "system" as ThemeMode,
+    setTheme: vi.fn(),
+    setThemeMode: vi.fn(),
+    gatewayUrl: "",
+    assistantName: "OpenClaw",
   });
+
+  function findActionButtons(container: HTMLElement): {
+    saveButton?: HTMLButtonElement;
+    applyButton?: HTMLButtonElement;
+  } {
+    const buttons = Array.from(container.querySelectorAll("button"));
+    return {
+      saveButton: buttons.find((btn) => btn.textContent?.trim() === "Save"),
+      applyButton: buttons.find((btn) => btn.textContent?.trim() === "Apply"),
+    };
+  }
 
   it("allows save when form is unsafe", () => {
     const container = document.createElement("div");
@@ -97,12 +117,7 @@ describe("config view", () => {
       container,
     );
 
-    const saveButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Save",
-    );
-    const applyButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Apply",
-    );
+    const { saveButton, applyButton } = findActionButtons(container);
     expect(saveButton).not.toBeUndefined();
     expect(applyButton).not.toBeUndefined();
     expect(saveButton?.disabled).toBe(true);
@@ -121,12 +136,7 @@ describe("config view", () => {
       container,
     );
 
-    const saveButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Save",
-    );
-    const applyButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Apply",
-    );
+    const { saveButton, applyButton } = findActionButtons(container);
     expect(saveButton).not.toBeUndefined();
     expect(applyButton).not.toBeUndefined();
     expect(saveButton?.disabled).toBe(false);
@@ -197,5 +207,57 @@ describe("config view", () => {
     (input as HTMLInputElement).value = "gateway";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onSearchChange).toHaveBeenCalledWith("gateway");
+  });
+
+  it("renders the top search icon inside the search input row", () => {
+    const container = document.createElement("div");
+    render(renderConfig(baseProps()), container);
+
+    const icon = container.querySelector<SVGElement>(".config-search__icon");
+    expect(icon).not.toBeNull();
+    expect(icon?.closest(".config-search__input-row")).not.toBeNull();
+  });
+
+  it("renders top tabs for root and available sections", () => {
+    const container = document.createElement("div");
+    render(
+      renderConfig({
+        ...baseProps(),
+        schema: {
+          type: "object",
+          properties: {
+            gateway: { type: "object", properties: {} },
+            agents: { type: "object", properties: {} },
+          },
+        },
+      }),
+      container,
+    );
+
+    const tabs = Array.from(container.querySelectorAll(".config-top-tabs__tab")).map((tab) =>
+      tab.textContent?.trim(),
+    );
+    expect(tabs).toContain("Settings");
+    expect(tabs).toContain("Agents");
+    expect(tabs).toContain("Gateway");
+    expect(tabs).toContain("Appearance");
+  });
+
+  it("clears the active search query", () => {
+    const container = document.createElement("div");
+    const onSearchChange = vi.fn();
+    render(
+      renderConfig({
+        ...baseProps(),
+        searchQuery: "gateway",
+        onSearchChange,
+      }),
+      container,
+    );
+
+    const clearButton = container.querySelector<HTMLButtonElement>(".config-search__clear");
+    expect(clearButton).toBeTruthy();
+    clearButton?.click();
+    expect(onSearchChange).toHaveBeenCalledWith("");
   });
 });

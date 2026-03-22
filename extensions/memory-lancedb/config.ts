@@ -5,18 +5,22 @@ import { join } from "node:path";
 export type MemoryConfig = {
   embedding: {
     provider: "openai";
-    model?: string;
+    model: string;
     apiKey: string;
+    baseUrl?: string;
+    dimensions?: number;
   };
   dbPath?: string;
   autoCapture?: boolean;
   autoRecall?: boolean;
+  captureMaxChars?: number;
 };
 
 export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "other"] as const;
 export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 
 const DEFAULT_MODEL = "text-embedding-3-small";
+export const DEFAULT_CAPTURE_MAX_CHARS = 500;
 const LEGACY_STATE_DIRS: string[] = [];
 
 function resolveDefaultDbPath(): string {
@@ -79,7 +83,9 @@ function resolveEnvVars(value: string): string {
 
 function resolveEmbeddingModel(embedding: Record<string, unknown>): string {
   const model = typeof embedding.model === "string" ? embedding.model : DEFAULT_MODEL;
-  vectorDimsForModel(model);
+  if (typeof embedding.dimensions !== "number") {
+    vectorDimsForModel(model);
+  }
   return model;
 }
 
@@ -89,25 +95,42 @@ export const memoryConfigSchema = {
       throw new Error("memory config required");
     }
     const cfg = value as Record<string, unknown>;
-    assertAllowedKeys(cfg, ["embedding", "dbPath", "autoCapture", "autoRecall"], "memory config");
+    assertAllowedKeys(
+      cfg,
+      ["embedding", "dbPath", "autoCapture", "autoRecall", "captureMaxChars"],
+      "memory config",
+    );
 
     const embedding = cfg.embedding as Record<string, unknown> | undefined;
     if (!embedding || typeof embedding.apiKey !== "string") {
       throw new Error("embedding.apiKey is required");
     }
-    assertAllowedKeys(embedding, ["apiKey", "model"], "embedding config");
+    assertAllowedKeys(embedding, ["apiKey", "model", "baseUrl", "dimensions"], "embedding config");
 
     const model = resolveEmbeddingModel(embedding);
+
+    const captureMaxChars =
+      typeof cfg.captureMaxChars === "number" ? Math.floor(cfg.captureMaxChars) : undefined;
+    if (
+      typeof captureMaxChars === "number" &&
+      (captureMaxChars < 100 || captureMaxChars > 10_000)
+    ) {
+      throw new Error("captureMaxChars must be between 100 and 10000");
+    }
 
     return {
       embedding: {
         provider: "openai",
         model,
         apiKey: resolveEnvVars(embedding.apiKey),
+        baseUrl:
+          typeof embedding.baseUrl === "string" ? resolveEnvVars(embedding.baseUrl) : undefined,
+        dimensions: typeof embedding.dimensions === "number" ? embedding.dimensions : undefined,
       },
       dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,
-      autoCapture: cfg.autoCapture !== false,
+      autoCapture: cfg.autoCapture === true,
       autoRecall: cfg.autoRecall !== false,
+      captureMaxChars: captureMaxChars ?? DEFAULT_CAPTURE_MAX_CHARS,
     };
   },
   uiHints: {
@@ -116,6 +139,18 @@ export const memoryConfigSchema = {
       sensitive: true,
       placeholder: "sk-proj-...",
       help: "API key for OpenAI embeddings (or use ${OPENAI_API_KEY})",
+    },
+    "embedding.baseUrl": {
+      label: "Base URL",
+      placeholder: "https://api.openai.com/v1",
+      help: "Base URL for compatible providers (e.g. http://localhost:11434/v1)",
+      advanced: true,
+    },
+    "embedding.dimensions": {
+      label: "Dimensions",
+      placeholder: "1536",
+      help: "Vector dimensions for custom models (required for non-standard models)",
+      advanced: true,
     },
     "embedding.model": {
       label: "Embedding Model",
@@ -134,6 +169,12 @@ export const memoryConfigSchema = {
     autoRecall: {
       label: "Auto-Recall",
       help: "Automatically inject relevant memories into context",
+    },
+    captureMaxChars: {
+      label: "Capture Max Chars",
+      help: "Maximum message length eligible for auto-capture",
+      advanced: true,
+      placeholder: String(DEFAULT_CAPTURE_MAX_CHARS),
     },
   },
 };
