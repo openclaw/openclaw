@@ -510,7 +510,7 @@ See [Configuration Reference](/gateway/configuration-reference).
 Install and enable plugin:
 
 ```bash
-openclaw plugins install acpx
+openclaw plugins install @openclaw/acpx-plugin
 openclaw config set plugins.entries.acpx.enabled true
 ```
 
@@ -528,7 +528,7 @@ Then verify backend health:
 
 ### acpx command and version configuration
 
-By default, the acpx plugin (published as `@openclaw/acpx`) uses the plugin-local pinned binary:
+By default, the acpx backend plugin package (`@openclaw/acpx-plugin`) uses the plugin-local pinned binary:
 
 1. Command defaults to `extensions/acpx/node_modules/.bin/acpx`.
 2. Expected version defaults to the extension pin.

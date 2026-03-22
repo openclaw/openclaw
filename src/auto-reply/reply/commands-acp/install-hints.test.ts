@@ -22,9 +22,11 @@ afterEach(() => {
 describe("ACP install hints", () => {
   it("prefers explicit runtime install command", () => {
     const cfg = withAcpConfig({
-      runtime: { installCommand: "pnpm openclaw plugins install acpx" },
+      runtime: { installCommand: "pnpm openclaw plugins install @openclaw/acpx-plugin" },
     });
-    expect(resolveAcpInstallCommandHint(cfg)).toBe("pnpm openclaw plugins install acpx");
+    expect(resolveAcpInstallCommandHint(cfg)).toBe(
+      "pnpm openclaw plugins install @openclaw/acpx-plugin",
+    );
   });
 
   it("uses local acpx extension path when present", () => {
@@ -39,13 +41,15 @@ describe("ACP install hints", () => {
     expect(hint).toContain(path.join("extensions", "acpx"));
   });
 
-  it("falls back to npm install hint for acpx when local extension is absent", () => {
+  it("falls back to scoped install hint for acpx when local extension is absent", () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "acp-install-hint-"));
     tempDirs.push(tempRoot);
     process.chdir(tempRoot);
 
     const cfg = withAcpConfig({ backend: "acpx" });
-    expect(resolveAcpInstallCommandHint(cfg)).toBe("openclaw plugins install acpx");
+    expect(resolveAcpInstallCommandHint(cfg)).toBe(
+      "openclaw plugins install @openclaw/acpx-plugin",
+    );
   });
 
   it("returns generic plugin hint for non-acpx backend", () => {

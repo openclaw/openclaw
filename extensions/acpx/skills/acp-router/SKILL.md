@@ -109,7 +109,7 @@ Do not default to subagent runtime for these requests.
 
 ## ACPX install and version policy (direct acpx path)
 
-For this repo, direct `acpx` calls must follow the same pinned policy as the `@openclaw/acpx` extension.
+For this repo, direct `acpx` calls must follow the same pinned policy as the `@openclaw/acpx-plugin` extension package.
 
 1. Prefer plugin-local binary, not global PATH:
    - `./extensions/acpx/node_modules/.bin/acpx`
