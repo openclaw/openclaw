@@ -229,20 +229,48 @@ export async function deleteBrowserProfile(state: BrowserState, name: string) {
 
 /**
  * Tap In — focuses the tab inside OpenClaw's managed browser (brings it to
- * front so the human can interact) and marks it as human-controlled so the
- * agent pauses and waits until Tap Out.
+ * front so the human can interact) and signals the gateway so agents know
+ * to pause and wait until Tap Out.
+ *
+ * Only marks the tab as human-controlled if the focus call succeeds; if the
+ * browser is not running or the tab is gone the badge is not shown and the
+ * agent is not stalled indefinitely.
  */
 export async function tapInBrowserTab(state: BrowserState, tab: BrowserTab, profile: string) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  // Clear any previous error so we can detect a fresh failure below
+  state.browserError = null;
   // Bring the tab to the front inside OpenClaw's browser
   await focusBrowserTab(state, profile, tab.targetId);
-  // Mark as human-controlled (agent will see this and wait)
+  // If focus failed, do not mark as human-controlled — agent should not stall
+  if (state.browserError) {
+    return;
+  }
+  // Signal the gateway so the browser agent can query and pause
+  try {
+    await state.client.request("browser.tapIn", { profile, targetId: tab.targetId });
+  } catch {
+    // Gateway signal is best-effort; still update local badge
+  }
   const next = new Set(state.browserTappedTabs);
   next.add(tab.targetId);
   state.browserTappedTabs = next;
 }
 
-/** Remove the "Human Viewing" badge — agent can resume */
-export function tapOutBrowserTab(state: BrowserState, targetId: string) {
+/**
+ * Tap Out — clears the human-control signal on the gateway and removes the
+ * "Human Viewing" badge so the agent can resume full control.
+ */
+export async function tapOutBrowserTab(state: BrowserState, targetId: string, profile: string) {
+  if (state.client && state.connected) {
+    try {
+      await state.client.request("browser.tapOut", { profile, targetId });
+    } catch {
+      // Best-effort; still clear local badge
+    }
+  }
   const next = new Set(state.browserTappedTabs);
   next.delete(targetId);
   state.browserTappedTabs = next;

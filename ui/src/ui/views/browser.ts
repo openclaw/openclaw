@@ -25,7 +25,7 @@ export type BrowserProps = {
   /** Tap in/out — signals human is viewing */
   tappedTabs: Set<string>;
   onTapIn: (tab: BrowserTab, profile: string) => void;
-  onTapOut: (targetId: string) => void;
+  onTapOut: (targetId: string, profile: string) => void;
   actionBusy: boolean;
   autoRefreshActive: boolean;
 };
@@ -274,7 +274,7 @@ export function renderBrowser(props: BrowserProps) {
                     ${
                       props.tappedTabs.has(t.targetId)
                         ? html`
-                            <button class="btn btn-sm" title="Hand back to agent" @click=${() => props.onTapOut(t.targetId)}>
+                            <button class="btn btn-sm" title="Hand back to agent" @click=${() => props.onTapOut(t.targetId, p.name)}>
                               Tap Out
                             </button>
                           `
@@ -360,14 +360,7 @@ export function renderBrowser(props: BrowserProps) {
                         >
                           Start
                         </button>
-                        <button
-                          class="btn btn-sm btn-danger"
-                          title="Delete profile"
-                          ?disabled=${props.actionBusy}
-                          @click=${() => props.onDeleteProfile(p.name)}
-                        >
-                          Delete
-                        </button>
+                        <!-- Profile deletion requires editing openclaw config; not available at runtime -->
                       </div>
                     </div>
                   `,
@@ -377,39 +370,10 @@ export function renderBrowser(props: BrowserProps) {
           : nothing
       }
 
-      <!-- Create new profile -->
-      <div style="margin-top:18px; border-top:1px solid var(--border); padding-top:14px;">
-        <div style="font-size:0.8rem; color:var(--fg-muted); margin-bottom:8px; font-weight:500;">
-          New Profile
-        </div>
-        <div class="row" style="gap:8px;">
-          <input
-            class="input input-sm"
-            style="flex:1;"
-            type="text"
-            placeholder="Profile name (e.g. work, research)"
-            .value=${props.newProfileName}
-            @input=${(e: Event) =>
-              props.onNewProfileNameChange((e.target as HTMLInputElement).value)}
-            @keydown=${(e: KeyboardEvent) => {
-              if (e.key === "Enter" && props.newProfileName.trim()) {
-                props.onCreateProfile(props.newProfileName.trim());
-              }
-            }}
-            ?disabled=${props.actionBusy}
-          />
-          <button
-            class="btn btn-sm btn-primary"
-            ?disabled=${props.actionBusy || !props.newProfileName.trim()}
-            @click=${() => {
-              if (props.newProfileName.trim()) {
-                props.onCreateProfile(props.newProfileName.trim());
-              }
-            }}
-          >
-            ${props.actionBusy ? "Working…" : "Create"}
-          </button>
-        </div>
+      <!-- Profile management requires openclaw config (not available at runtime via browser.request) -->
+      <div style="margin-top:18px; border-top:1px solid var(--border); padding-top:12px; font-size:0.8rem; color:var(--fg-muted);">
+        <strong>Add / remove profiles</strong> via config:<br />
+        <code style="font-size:0.75rem;">openclaw config set browser.profiles.&lt;name&gt;.driver=playwright</code>
       </div>
 
       <!-- Footer hint -->

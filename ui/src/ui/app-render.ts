@@ -2040,8 +2040,8 @@ export function renderApp(state: AppViewState) {
                   onTapIn: (tab, profile) => {
                     void tapInBrowserTab(state, tab, profile);
                   },
-                  onTapOut: (targetId) => {
-                    tapOutBrowserTab(state, targetId);
+                  onTapOut: (targetId, profile) => {
+                    void tapOutBrowserTab(state, targetId, profile);
                   },
                 }),
               )

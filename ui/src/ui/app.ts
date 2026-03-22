@@ -425,14 +425,14 @@ export class OpenClawApp extends LitElement {
   @state() browserActionBusy = false;
   @state() browserAutoRefreshActive = false;
   @state() browserTappedTabs: Set<string> = new Set();
-  private browserPollInterval: number | null = null;
+  browserPollInterval: number | null = null;
 
   @state() terminalLoading = false;
   @state() terminalError: string | null = null;
   @state() terminalSessions: Array<{ name: string; windows: number; attached: boolean }> = [];
   @state() terminalNewSessionName = "";
   @state() terminalActionBusy = false;
-  private terminalPollInterval: number | null = null;
+  terminalPollInterval: number | null = null;
 
   @state() logsLoading = false;
   @state() logsError: string | null = null;

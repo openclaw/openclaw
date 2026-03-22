@@ -82,7 +82,12 @@ export async function createTerminalSession(state: TerminalState, name: string) 
   state.terminalActionBusy = true;
   state.terminalError = null;
   try {
-    await execRun(state.client, "tmux", ["new-session", "-d", "-s", trimmed]);
+    const result = await execRun(state.client, "tmux", ["new-session", "-d", "-s", trimmed]);
+    // Surface tmux failures (duplicate name, missing binary, etc.) before clearing form
+    if (result.exitCode !== 0) {
+      state.terminalError = result.stderr.trim() || `tmux exited with code ${result.exitCode}`;
+      return;
+    }
     state.terminalNewSessionName = "";
     await loadTerminalSessions(state);
   } catch (err) {
@@ -99,7 +104,12 @@ export async function killTerminalSession(state: TerminalState, name: string) {
   state.terminalActionBusy = true;
   state.terminalError = null;
   try {
-    await execRun(state.client, "tmux", ["kill-session", "-t", name]);
+    const result = await execRun(state.client, "tmux", ["kill-session", "-t", name]);
+    if (result.exitCode !== 0) {
+      state.terminalError =
+        result.stderr.trim() || `tmux kill-session exited with code ${result.exitCode}`;
+      return;
+    }
     await loadTerminalSessions(state);
   } catch (err) {
     state.terminalError = String(err);

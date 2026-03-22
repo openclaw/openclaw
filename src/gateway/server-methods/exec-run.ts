@@ -5,6 +5,16 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * Allowlist of binaries exec.run is permitted to invoke.
+ * Only tmux management commands and the shell wrapper used to
+ * fan out tmux list-sessions across multiple sockets are needed
+ * by the terminal control UI. Restricting here prevents an
+ * authenticated operator from escalating to arbitrary execution
+ * on the gateway host.
+ */
+const EXEC_ALLOWED_COMMANDS = new Set(["tmux", "sh"]);
+
 export const execRunHandlers: GatewayRequestHandlers = {
   "exec.run": async ({ params, respond }) => {
     const command = typeof params.command === "string" ? params.command.trim() : "";
@@ -13,6 +23,18 @@ export const execRunHandlers: GatewayRequestHandlers = {
       : [];
     if (!command) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "command is required"));
+      return;
+    }
+    // Security: only allow the specific binaries required by the terminal UI.
+    if (!EXEC_ALLOWED_COMMANDS.has(command)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `exec.run: command "${command}" is not permitted (allowed: ${[...EXEC_ALLOWED_COMMANDS].join(", ")})`,
+        ),
+      );
       return;
     }
     try {
