@@ -2,21 +2,54 @@ name: Deploy Blink Claw
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main           # production deploy
+      - 'pre-release/**'  # smoke test only, no production update
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'pre-release-test = build :pre-release + run Fly smoke test (no production update). production = build :latest + update all agents.'
+        required: true
+        default: 'pre-release-test'
+        type: choice
+        options:
+          - pre-release-test
+          - production
 
 concurrency:
   group: deploy-blink-claw
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: Build & push → Update all agents
+  build:
+    name: Build & push image
     runs-on: ubuntu-24.04
+
+    outputs:
+      image_tag: ${{ steps.resolve_tag.outputs.image_tag }}
+      is_production: ${{ steps.resolve_tag.outputs.is_production }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      # Push to main always goes to :latest (production).
+      # Push to pre-release/* or manual dispatch (default) → :pre-release + smoke test only.
+      # Manual dispatch with mode=production → :latest + update all agents.
+      - name: Resolve image tag
+        id: resolve_tag
+        run: |
+          IS_MAIN_PUSH="${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}"
+          IS_PRODUCTION_DISPATCH="${{ inputs.mode == 'production' }}"
+          if [ "$IS_MAIN_PUSH" = "true" ] || [ "$IS_PRODUCTION_DISPATCH" = "true" ]; then
+            echo "image_tag=registry.fly.io/blink-claw:latest" >> "$GITHUB_OUTPUT"
+            echo "is_production=true" >> "$GITHUB_OUTPUT"
+            echo "Mode: PRODUCTION (:latest + update all agents)"
+          else
+            echo "image_tag=registry.fly.io/blink-claw:pre-release" >> "$GITHUB_OUTPUT"
+            echo "is_production=false" >> "$GITHUB_OUTPUT"
+            echo "Mode: PRE-RELEASE TEST (:pre-release, Fly smoke test only)"
+          fi
 
       - name: Set up Fly CLI
         uses: superfly/flyctl-actions/setup-flyctl@master
@@ -31,16 +64,12 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: flyctl auth docker
 
-      # Build with Docker Buildx and push as :latest directly.
-      # Uses registry-based layer cache for speed (~3-5 min after first build).
-      # This replaces the broken flyctl --build-only --push approach which
-      # pushed as a deployment tag that couldn't be resolved by flyctl machines update.
       - name: Build and push image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: registry.fly.io/blink-claw:latest
+          tags: ${{ steps.resolve_tag.outputs.image_tag }}
           build-args: |
             OPENCLAW_INSTALL_BROWSER=1
             OPENCLAW_EXTENSIONS=telegram discord slack whatsapp
@@ -48,6 +77,40 @@ jobs:
             OPENCLAW_INSTALL_BLINK_TOOLS=1
           cache-from: type=registry,ref=registry.fly.io/blink-claw:buildcache
           cache-to: type=registry,ref=registry.fly.io/blink-claw:buildcache,mode=max
+
+  smoke-test:
+    name: Fly smoke test (pre-release only)
+    runs-on: ubuntu-24.04
+    needs: build
+    # Only run smoke test for pre-release builds
+    if: needs.build.outputs.is_production == 'false'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Fly CLI
+        uses: superfly/flyctl-actions/setup-flyctl@master
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+      - name: Run Fly smoke test (WhatsApp QR + memory)
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: bash .github/scripts/fly-smoke-test.sh registry.fly.io/blink-claw:pre-release
+
+  deploy-production:
+    name: Update all production agents
+    runs-on: ubuntu-24.04
+    needs: build
+    # Only run for production builds
+    if: needs.build.outputs.is_production == 'true'
+
+    steps:
+      - name: Set up Fly CLI
+        uses: superfly/flyctl-actions/setup-flyctl@master
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
       # Zero-downtime update strategy:
       #   • Stopped machines  → updated immediately in parallel (no user impact)
@@ -66,7 +129,8 @@ jobs:
           APPS=$(flyctl apps list --org blink-new --json \
             | jq -r '.[].Name' \
             | grep "^blink-claw-" \
-            | grep -v "^blink-claw-manager$")
+            | grep -v "^blink-claw-manager$" \
+            | grep -v "^blink-claw-test-runner$")
 
           if [ -z "$APPS" ]; then
             echo "No agent apps found — nothing to update."
@@ -112,4 +176,4 @@ jobs:
       - name: Notify on failure
         if: failure()
         run: |
-          echo "::error::Deploy failed — check the logs above."
+          echo "::error::Production deploy failed — check the logs above."
