@@ -50,8 +50,13 @@ describe("CallManager verification on restore", () => {
       providerResult: { status: "in-progress", isTerminal: false },
     });
 
-    expect(manager.getActiveCalls()).toHaveLength(1);
-    expect(manager.getActiveCalls()[0]?.callId).toBe(call.callId);
+    const activeCalls = manager.getActiveCalls();
+    expect(activeCalls).toHaveLength(1);
+    const activeCall = activeCalls[0];
+    if (!activeCall) {
+      throw new Error("expected restored active call");
+    }
+    expect(activeCall.callId).toBe(call.callId);
   });
 
   it("keeps calls when provider returns unknown (transient error)", async () => {
