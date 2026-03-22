@@ -87,6 +87,9 @@ function resolveHookForToggle(
     );
   }
   if (opts?.requireEligible && !hook.eligible) {
+    if (hook.disabled && hook.requirementsSatisfied) {
+      return hook;
+    }
     throw new Error(`Hook "${hookName}" is not eligible (missing requirements)`);
   }
   return hook;

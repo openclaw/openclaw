@@ -268,7 +268,7 @@ function loadHookEntries(
     const resolved = resolveUserPath(dir);
     return loadHookEntriesFromDir({
       dir: resolved,
-      source: "openclaw-workspace", // Extra dirs treated as workspace
+      source: "openclaw-managed",
     });
   });
   const pluginHooks = pluginHookDirs.flatMap(({ dir, pluginId }) =>
@@ -302,6 +302,13 @@ function loadHookEntries(
     merged.set(entry.hook.name, entry);
   }
   for (const entry of workspaceHooks) {
+    const existing = merged.get(entry.hook.name);
+    if (existing && existing.hook.source !== "openclaw-workspace") {
+      log.warn(
+        `Ignoring workspace hook "${entry.hook.name}" because it collides with ${existing.hook.source} hook code`,
+      );
+      continue;
+    }
     merged.set(entry.hook.name, entry);
   }
 
