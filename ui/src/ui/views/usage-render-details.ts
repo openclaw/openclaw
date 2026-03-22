@@ -26,20 +26,6 @@ function pct(part: number, total: number): number {
   return (part / total) * 100;
 }
 
-function renderEmptyDetailState() {
-  return html`
-    <section class="card session-detail-empty">
-      <div class="session-detail-empty__title">${t("usage.details.emptyTitle")}</div>
-      <div class="card-sub session-detail-empty__subtitle">${t("usage.details.emptySubtitle")}</div>
-      <div class="session-detail-empty__features">
-        <span class="session-detail-empty__feature">${t("usage.details.emptyTimeline")}</span>
-        <span class="session-detail-empty__feature">${t("usage.details.emptyConversation")}</span>
-        <span class="session-detail-empty__feature">${t("usage.details.emptyContext")}</span>
-      </div>
-    </section>
-  `;
-}
-
 /** Normalize a log timestamp to milliseconds (handles seconds vs ms). */
 function normalizeLogTimestamp(ts: number): number {
   return ts < 1e12 ? ts * 1000 : ts;
@@ -1140,7 +1126,6 @@ function renderSessionLogsCompact(
 export {
   computeFilteredUsage,
   renderContextPanel,
-  renderEmptyDetailState,
   renderSessionDetailPanel,
   renderSessionLogsCompact,
   renderSessionSummary,

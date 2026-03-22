@@ -11,7 +11,6 @@
 .usage-page .card,
 .usage-page .stat,
 .usage-page .usage-insight-card,
-.usage-page .session-detail-empty,
 .usage-page .context-details-panel,
 .usage-page .session-logs-compact,
 .usage-page .session-timeseries-compact {
@@ -54,8 +53,7 @@
 .usage-mosaic,
 .usage-left-card,
 .sessions-card,
-.session-detail-panel,
-.session-detail-empty {
+.session-detail-panel {
   position: relative;
   overflow: clip;
 }
@@ -471,7 +469,6 @@ details.usage-filter-select summary::-webkit-details-marker,
 .usage-query-chips,
 .usage-query-suggestions,
 .usage-badges,
-.session-detail-empty__features,
 .usage-empty-state__features {
   display: flex;
   flex-wrap: wrap;
@@ -481,7 +478,6 @@ details.usage-filter-select summary::-webkit-details-marker,
 .usage-query-chip,
 .usage-query-suggestion,
 .usage-badge,
-.session-detail-empty__feature,
 .usage-empty-state__feature {
   display: inline-flex;
   align-items: center;
@@ -532,22 +528,19 @@ details.usage-filter-select summary::-webkit-details-marker,
   color: var(--text);
 }
 
-.usage-empty-state,
-.session-detail-empty {
+.usage-empty-state {
   display: grid;
   gap: 12px;
   justify-items: start;
 }
 
-.usage-empty-state__title,
-.session-detail-empty__title {
+.usage-empty-state__title {
   font-size: 20px;
   font-weight: 700;
   color: var(--text-strong);
 }
 
-.usage-empty-state__subtitle,
-.session-detail-empty__subtitle {
+.usage-empty-state__subtitle {
   max-width: 640px;
 }
 
@@ -892,9 +885,14 @@ details.usage-filter-select summary::-webkit-details-marker,
 
 .usage-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
   align-items: start;
+}
+
+/* Expand to two columns when the detail panel column is present */
+.usage-grid:has(.usage-grid-column:nth-child(2)) {
+  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
 }
 
 .usage-grid-column {

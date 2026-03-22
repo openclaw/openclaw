@@ -23,7 +23,7 @@ import {
   removeQueryToken,
   setQueryTokensForKey,
 } from "./usage-query.ts";
-import { renderEmptyDetailState, renderSessionDetailPanel } from "./usage-render-details.ts";
+import { renderSessionDetailPanel } from "./usage-render-details.ts";
 import {
   renderCostBreakdownCompact,
   renderDailyChartCompact,
@@ -815,10 +815,10 @@ export function renderUsage(props: UsageProps) {
                     filterActions.onClearSessions,
                   )}
                 </div>
-                <div class="usage-grid-column">
-                  ${
-                    primarySelectedEntry
-                      ? renderSessionDetailPanel(
+                ${
+                  primarySelectedEntry
+                    ? html`<div class="usage-grid-column">
+                        ${renderSessionDetailPanel(
                           primarySelectedEntry,
                           detail.timeSeries,
                           detail.timeSeriesLoading,
@@ -845,10 +845,10 @@ export function renderUsage(props: UsageProps) {
                           display.contextExpanded,
                           detailActions.onToggleContextExpanded,
                           filterActions.onClearSessions,
-                        )
-                      : renderEmptyDetailState()
-                  }
-                </div>
+                        )}
+                      </div>`
+                    : nothing
+                }
               </div>
             `
       }
