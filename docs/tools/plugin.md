@@ -251,7 +251,6 @@ Common registration methods:
 - [Tool Plugins](/plugins/sdk-tool-plugins) — build a tool, hook, or command plugin
 - [Plugin Bundles](/plugins/bundles) — Codex/Claude/Cursor bundle compatibility
 - [Plugin Manifest](/plugins/manifest) — manifest schema
-- [SDK Subpaths](/plugins/sdk-subpaths) — supported public import paths
 - [Plugin Troubleshooting](/plugins/sdk-troubleshooting) — debug load and config issues
 - [Plugin Internals](/plugins/architecture) — capability model and load pipeline
 - [Community Plugins](/plugins/community) — third-party listings

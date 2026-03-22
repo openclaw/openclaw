@@ -23,7 +23,7 @@ the interface itself.
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 ```
 
-Use focused subpaths for supporting types:
+Common supporting imports:
 
 - `openclaw/plugin-sdk/channel-contract` for shared channel contract types
 - `openclaw/plugin-sdk/channel-setup` for setup helpers
@@ -171,50 +171,22 @@ Common optional methods:
 | `setAccountEnabled` / `deleteAccount`  | Management flows               |
 | `resolveAllowFrom` / `formatAllowFrom` | Shared DM allowlist handling   |
 
-## Common optional adapters
+## Common additional sections
 
-Most channel plugins do not implement every adapter. These are the ones authors
-touch most often.
+Most channel plugins only need a few sections beyond `meta`, `capabilities`,
+and `config`.
 
-### Setup and security
+| Section                   | Use it for                               |
+| ------------------------- | ---------------------------------------- |
+| `setup`                   | Writing or validating account config     |
+| `configSchema`            | Channel config schema and setup UI hints |
+| `outbound`                | Sending text, media, and polls           |
+| `messaging` / `threading` | Message semantics and session routing    |
+| `status`                  | Probes, audits, and diagnostics          |
+| `pairing` / `security`    | DM approval, linking, and access policy  |
 
-| Field          | Use it for                                  |
-| -------------- | ------------------------------------------- |
-| `setupWizard`  | Guided setup UI and onboarding              |
-| `configSchema` | Channel config schema and UI hints          |
-| `setup`        | Writing or validating account config        |
-| `pairing`      | DM approval and linking flows               |
-| `security`     | DM policy, allowlists, and access checks    |
-| `auth`         | Channel-owned login/auth flows              |
-| `allowlist`    | Extra allowlist handling beyond base config |
-
-### Message flow
-
-| Field         | Use it for                                   |
-| ------------- | -------------------------------------------- |
-| `mentions`    | Mention stripping and mention detection      |
-| `outbound`    | Sending text, media, and polls               |
-| `messaging`   | Inbound/outbound message semantics           |
-| `threading`   | Reply threading and session routing          |
-| `actions`     | Channel-specific message actions and schemas |
-| `agentPrompt` | Channel-specific prompt shaping              |
-| `agentTools`  | Channel-owned tools such as login helpers    |
-
-### Runtime and operations
-
-| Field                 | Use it for                                |
-| --------------------- | ----------------------------------------- |
-| `status`              | Probes, audits, and status snapshots      |
-| `gateway`             | Long-running gateway connection lifecycle |
-| `lifecycle`           | Account start/stop lifecycle hooks        |
-| `streaming`           | Channel streaming behavior                |
-| `heartbeat`           | Health signals and connectivity hints     |
-| `directory`           | Directory and search integration          |
-| `resolver`            | Target/account resolution helpers         |
-| `bindings`            | Config-backed binding providers           |
-| `commands`            | Channel-native command behavior           |
-| `gatewayMethods`      | Plugin-owned gateway methods              |
-| `defaults` / `reload` | Small runtime defaults and reload rules   |
+The channel guide covers the full build path. This page stays focused on the
+main public shape authors usually implement directly.
 
 ## Interface expectations
 

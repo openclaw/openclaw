@@ -119,15 +119,11 @@ export const acmeProvider: ProviderPlugin = {
 Each entry is a `ProviderAuthMethod`, usually created with helpers such as
 `createProviderApiKeyAuthMethod(...)`.
 
-Related provider-owned auth hooks:
+Common supporting auth hooks:
 
-| Field                     | Use it for                                                       |
-| ------------------------- | ---------------------------------------------------------------- |
-| `formatApiKey`            | Convert stored auth-profile data into the runtime API key string |
-| `refreshOAuth`            | Provider-owned OAuth refresh logic                               |
-| `buildAuthDoctorHint`     | Better repair guidance when auth breaks                          |
-| `buildMissingAuthMessage` | Better missing-auth message for this provider                    |
-| `deprecatedProfileIds`    | Retiring old provider profile ids                                |
+- `formatApiKey` for runtime credential formatting
+- `refreshOAuth` for provider-owned OAuth refresh logic
+- `buildMissingAuthMessage` or `buildAuthDoctorHint` for better repair guidance
 
 ### Catalog and model resolution
 
@@ -145,32 +141,21 @@ These hooks decide which models exist and how OpenClaw resolves them.
 
 Prefer `catalog` for new code. `discovery` exists for compatibility.
 
-## Runtime hooks
+## Common additional hooks
 
-These hooks let the provider own runtime behavior without forking the generic
-runner.
+Most provider plugins only need a few extra hooks beyond `auth` and model
+resolution.
 
-| Field                | Use it for                                                    |
-| -------------------- | ------------------------------------------------------------- |
-| `prepareExtraParams` | Provider-specific request params before stream wrapping       |
-| `wrapStreamFn`       | Custom headers or body rewrites around the stream call        |
-| `prepareRuntimeAuth` | Exchange a stored credential into a short-lived runtime token |
-| `resolveUsageAuth`   | Usage/billing auth resolution                                 |
-| `fetchUsageSnapshot` | Usage/quota snapshot fetching                                 |
+| Hook                                      | Use it for                                                    |
+| ----------------------------------------- | ------------------------------------------------------------- |
+| `prepareRuntimeAuth`                      | Exchange a stored credential into a short-lived runtime token |
+| `prepareExtraParams` / `wrapStreamFn`     | Provider-specific request shaping around the stream call      |
+| `resolveUsageAuth` / `fetchUsageSnapshot` | Usage and billing snapshots                                   |
+| `capabilities`                            | Static capability overrides for transcript and tooling logic  |
+| `onModelSelected`                         | Provider reaction after model selection                       |
 
-## Policy and capability hooks
-
-These hooks keep provider-specific policy out of core command logic.
-
-| Field                         | Use it for                                                   |
-| ----------------------------- | ------------------------------------------------------------ |
-| `capabilities`                | Static capability overrides for transcript and tooling logic |
-| `isCacheTtlEligible`          | Prompt-caching eligibility                                   |
-| `isBinaryThinking`            | Binary on/off reasoning support                              |
-| `supportsXHighThinking`       | `xhigh` reasoning support                                    |
-| `resolveDefaultThinkingLevel` | Provider-owned default reasoning level                       |
-| `isModernModelRef`            | Preferred modern-model matching                              |
-| `onModelSelected`             | Provider reaction after model selection                      |
+The provider guide covers the larger workflow. This page stays focused on the
+main public hooks provider authors typically implement.
 
 ## Interface expectations
 

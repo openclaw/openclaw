@@ -249,7 +249,6 @@ surfaces, target resolution, or send/receive behavior.
 ## Next steps
 
 - [Plugin SDK Overview](/plugins/sdk-overview) — registration methods and API object
-- [SDK Subpaths](/plugins/sdk-subpaths) — supported `openclaw/plugin-sdk/*` imports
 - [Plugin Runtime Helpers](/plugins/sdk-runtime) — `api.runtime`, logging, config, subagents
 - [Plugin Testing](/plugins/sdk-testing) — test utilities and patterns
 - [Plugin Troubleshooting](/plugins/sdk-troubleshooting) — common load and config failures

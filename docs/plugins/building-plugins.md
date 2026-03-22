@@ -200,7 +200,7 @@ import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { ... } from "openclaw/plugin-sdk";
 ```
 
-For the full subpath reference, see [SDK Subpaths](/plugins/sdk-subpaths).
+For import guidance, see [SDK Overview](/plugins/sdk-overview).
 
 Within your plugin, use local barrel files (`api.ts`, `runtime-api.ts`) for
 internal imports — never import your own plugin through its SDK path.
@@ -229,9 +229,6 @@ internal imports — never import your own plugin through its SDK path.
   </Card>
   <Card title="SDK Overview" icon="book-open" href="/plugins/sdk-overview">
     Import map and registration API reference
-  </Card>
-  <Card title="SDK Subpaths" icon="list" href="/plugins/sdk-subpaths">
-    Supported `openclaw/plugin-sdk/*` imports
   </Card>
   <Card title="Runtime Helpers" icon="settings" href="/plugins/sdk-runtime">
     TTS, search, subagent via api.runtime

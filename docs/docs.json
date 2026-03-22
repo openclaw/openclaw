@@ -1054,13 +1054,13 @@
                     "group": "SDK Reference",
                     "pages": [
                       "plugins/sdk-overview",
-                      "plugins/sdk-subpaths",
                       "plugins/sdk-entrypoints",
                       "plugins/sdk-channel-interface",
                       "plugins/sdk-provider-interface",
                       "plugins/sdk-runtime",
                       "plugins/sdk-setup",
                       "plugins/sdk-testing",
+                      "plugins/sdk-subpaths",
                       "plugins/manifest",
                       "plugins/architecture"
                     ]

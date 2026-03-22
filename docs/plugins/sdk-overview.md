@@ -36,78 +36,19 @@ import { definePluginEntry } from "openclaw/plugin-sdk";
 Each subpath is a small, self-contained module. This keeps startup fast and
 prevents circular dependency issues.
 
-For the public import-path index, see [SDK Subpaths](/plugins/sdk-subpaths).
+For a short public import-path index, see [SDK Subpaths](/plugins/sdk-subpaths).
 
-## Common subpaths
+## Where imports usually start
 
-The most commonly used subpaths, grouped by purpose:
+| If you are building...          | Start here                         | Then read                                                                                                          |
+| ------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| a tool, hook, or command plugin | `openclaw/plugin-sdk/plugin-entry` | [Tool Plugins](/plugins/sdk-tool-plugins)                                                                          |
+| a channel plugin                | `openclaw/plugin-sdk/core`         | [Channel Plugins](/plugins/sdk-channel-plugins) and [Channel Plugin Interface](/plugins/sdk-channel-interface)     |
+| a provider plugin               | `openclaw/plugin-sdk/plugin-entry` | [Provider Plugins](/plugins/sdk-provider-plugins) and [Provider Plugin Interface](/plugins/sdk-provider-interface) |
+| setup/config surfaces           | `openclaw/plugin-sdk/core`         | [Plugin Setup and Config](/plugins/sdk-setup)                                                                      |
+| test helpers                    | `openclaw/plugin-sdk/testing`      | [Testing](/plugins/sdk-testing)                                                                                    |
 
-### Plugin entry
-
-| Subpath                   | Key exports                                                                                                                            |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `plugin-sdk/plugin-entry` | `definePluginEntry`                                                                                                                    |
-| `plugin-sdk/core`         | `defineChannelPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `defineSetupPluginEntry`, `buildChannelConfigSchema` |
-
-<AccordionGroup>
-  <Accordion title="Channel subpaths">
-    | Subpath | Key exports |
-    | --- | --- |
-    | `plugin-sdk/channel-setup` | `createOptionalChannelSetupSurface` |
-    | `plugin-sdk/channel-pairing` | `createChannelPairingController` |
-    | `plugin-sdk/channel-reply-pipeline` | `createChannelReplyPipeline` |
-    | `plugin-sdk/channel-config-helpers` | `createHybridChannelConfigAdapter` |
-    | `plugin-sdk/channel-config-schema` | Channel config schema types |
-    | `plugin-sdk/channel-policy` | `resolveChannelGroupRequireMention` |
-    | `plugin-sdk/channel-lifecycle` | `createAccountStatusSink` |
-    | `plugin-sdk/channel-inbound` | Debounce, mention matching, envelope helpers |
-    | `plugin-sdk/channel-send-result` | Reply result types |
-    | `plugin-sdk/channel-actions` | `createMessageToolButtonsSchema`, `createMessageToolCardSchema` |
-    | `plugin-sdk/channel-targets` | Target parsing/matching helpers |
-    | `plugin-sdk/channel-contract` | Channel contract types |
-    | `plugin-sdk/channel-feedback` | Feedback/reaction wiring |
-  </Accordion>
-
-  <Accordion title="Provider subpaths">
-    | Subpath | Key exports |
-    | --- | --- |
-    | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile` |
-    | `plugin-sdk/provider-models` | `normalizeModelCompat` |
-    | `plugin-sdk/provider-catalog` | Catalog type re-exports |
-    | `plugin-sdk/provider-usage` | `fetchClaudeUsage` and similar |
-    | `plugin-sdk/provider-stream` | Stream wrapper types |
-    | `plugin-sdk/provider-onboard` | Onboarding config patch helpers |
-  </Accordion>
-
-  <Accordion title="Auth and security subpaths">
-    | Subpath | Key exports |
-    | --- | --- |
-    | `plugin-sdk/command-auth` | `resolveControlCommandGate` |
-    | `plugin-sdk/allow-from` | `formatAllowFromLowercase` |
-    | `plugin-sdk/secret-input` | Secret input parsing helpers |
-    | `plugin-sdk/webhook-ingress` | Webhook request/target helpers |
-  </Accordion>
-
-  <Accordion title="Runtime and storage subpaths">
-    | Subpath | Key exports |
-    | --- | --- |
-    | `plugin-sdk/runtime-store` | `createPluginRuntimeStore` |
-    | `plugin-sdk/config-runtime` | Config load/write helpers |
-    | `plugin-sdk/infra-runtime` | System event/heartbeat helpers |
-    | `plugin-sdk/agent-runtime` | Agent dir/identity/workspace helpers |
-    | `plugin-sdk/directory-runtime` | Config-backed directory query/dedup |
-    | `plugin-sdk/keyed-async-queue` | `KeyedAsyncQueue` |
-  </Accordion>
-
-  <Accordion title="Capability and testing subpaths">
-    | Subpath | Key exports |
-    | --- | --- |
-    | `plugin-sdk/image-generation` | Image generation provider types |
-    | `plugin-sdk/media-understanding` | Media understanding provider types |
-    | `plugin-sdk/speech` | Speech provider types |
-    | `plugin-sdk/testing` | `installCommonResolveTargetErrorCases`, `shouldAckReaction` |
-  </Accordion>
-</AccordionGroup>
+Use the task-specific guides to choose the supporting imports for that job.
 
 ## Registration API
 

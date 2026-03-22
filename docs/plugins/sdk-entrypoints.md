@@ -156,7 +156,6 @@ Use `openclaw plugins inspect <id>` to see a plugin's shape.
 ## Related
 
 - [SDK Overview](/plugins/sdk-overview) — registration API and subpath reference
-- [SDK Subpaths](/plugins/sdk-subpaths) — supported import paths
 - [Channel Plugin Interface](/plugins/sdk-channel-interface) — public `ChannelPlugin` shape
 - [Provider Plugin Interface](/plugins/sdk-provider-interface) — public `ProviderPlugin` shape
 - [Runtime Helpers](/plugins/sdk-runtime) — `api.runtime` and `createPluginRuntimeStore`
