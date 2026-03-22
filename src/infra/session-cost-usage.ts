@@ -71,8 +71,9 @@ const sessionIdFromFilename = (name: string): string => {
   if (name.endsWith(".jsonl")) {
     return name.slice(0, -6);
   }
-  // Strip `.jsonl.reset.<timestamp>` suffix
-  const resetIdx = name.indexOf(".jsonl.reset.");
+  // Strip `.jsonl.reset.<timestamp>` suffix — use lastIndexOf so session IDs
+  // that happen to contain ".jsonl.reset." are handled correctly.
+  const resetIdx = name.lastIndexOf(".jsonl.reset.");
   return resetIdx !== -1 ? name.slice(0, resetIdx) : name;
 };
 
