@@ -117,42 +117,42 @@ Those belong in your plugin code and `package.json`.
 
 ## Top-level field reference
 
-| Field                 | Required | Type                             | What it means                                                                                                 |
-| --------------------- | -------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `id`                  | Yes      | `string`                         | Canonical plugin id. This is the id used in `plugins.entries.<id>`.                                           |
-| `configSchema`        | Yes      | `object`                         | Inline JSON Schema for this plugin's config.                                                                  |
-| `enabledByDefault`    | No       | `boolean`                        | Marks a bundled plugin as enabled by default when config does not explicitly override it.                     |
-| `kind`                | No       | `"memory"` \| `"context-engine"` | Declares an exclusive plugin kind used by `plugins.slots.*`.                                                  |
-| `channels`            | No       | `string[]`                       | Channel ids owned by this plugin. Used for discovery and config validation.                                   |
-| `providers`           | No       | `string[]`                       | Provider ids owned by this plugin.                                                                            |
-| `providerAuthEnvVars` | No       | `Record<string, string[]>`       | Cheap provider-auth env metadata that OpenClaw can inspect without loading plugin code.                       |
-| `providerAuthChoices` | No       | `object[]`                       | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring. |
-| `skills`              | No       | `string[]`                       | Skill directories to load, relative to the plugin root.                                                       |
-| `name`                | No       | `string`                         | Human-readable plugin name.                                                                                   |
-| `description`         | No       | `string`                         | Short summary shown in plugin surfaces.                                                                       |
-| `version`             | No       | `string`                         | Informational plugin version.                                                                                 |
-| `uiHints`             | No       | `Record<string, object>`         | UI labels, placeholders, and sensitivity hints for config fields.                                             |
+| Field                 | Required | Type                             | What it means                                                                                                                |
+| --------------------- | -------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `id`                  | Yes      | `string`                         | Canonical plugin id. This is the id used in `plugins.entries.<id>`.                                                          |
+| `configSchema`        | Yes      | `object`                         | Inline JSON Schema for this plugin's config.                                                                                 |
+| `enabledByDefault`    | No       | `true`                           | Marks a bundled plugin as enabled by default. Omit it, or set any non-`true` value, to leave the plugin disabled by default. |
+| `kind`                | No       | `"memory"` \| `"context-engine"` | Declares an exclusive plugin kind used by `plugins.slots.*`.                                                                 |
+| `channels`            | No       | `string[]`                       | Channel ids owned by this plugin. Used for discovery and config validation.                                                  |
+| `providers`           | No       | `string[]`                       | Provider ids owned by this plugin.                                                                                           |
+| `providerAuthEnvVars` | No       | `Record<string, string[]>`       | Cheap provider-auth env metadata that OpenClaw can inspect without loading plugin code.                                      |
+| `providerAuthChoices` | No       | `object[]`                       | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring.                |
+| `skills`              | No       | `string[]`                       | Skill directories to load, relative to the plugin root.                                                                      |
+| `name`                | No       | `string`                         | Human-readable plugin name.                                                                                                  |
+| `description`         | No       | `string`                         | Short summary shown in plugin surfaces.                                                                                      |
+| `version`             | No       | `string`                         | Informational plugin version.                                                                                                |
+| `uiHints`             | No       | `Record<string, object>`         | UI labels, placeholders, and sensitivity hints for config fields.                                                            |
 
 ## providerAuthChoices reference
 
 Each `providerAuthChoices` entry describes one onboarding or auth choice.
 OpenClaw reads this before provider runtime loads.
 
-| Field              | Required | Type                                             | What it means                                                                                            |
-| ------------------ | -------- | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| `provider`         | Yes      | `string`                                         | Provider id this choice belongs to.                                                                      |
-| `method`           | Yes      | `string`                                         | Auth method id to dispatch to.                                                                           |
-| `choiceId`         | Yes      | `string`                                         | Stable auth-choice id used by onboarding and CLI flows.                                                  |
-| `choiceLabel`      | No       | `string`                                         | User-facing label. If omitted, OpenClaw falls back to `choiceId`.                                        |
-| `choiceHint`       | No       | `string`                                         | Short helper text for the picker.                                                                        |
-| `groupId`          | No       | `string`                                         | Optional group id for grouping related choices.                                                          |
-| `groupLabel`       | No       | `string`                                         | User-facing label for that group.                                                                        |
-| `groupHint`        | No       | `string`                                         | Short helper text for the group.                                                                         |
-| `optionKey`        | No       | `string`                                         | Internal option key for simple one-flag auth flows.                                                      |
-| `cliFlag`          | No       | `string`                                         | CLI flag name, such as `--openrouter-api-key`.                                                           |
-| `cliOption`        | No       | `string`                                         | Full CLI option shape, such as `--openrouter-api-key <key>`.                                             |
-| `cliDescription`   | No       | `string`                                         | Description used in CLI help.                                                                            |
-| `onboardingScopes` | No       | `"text-inference"` \| `"image-generation"` array | Which onboarding surfaces this choice should appear in. If omitted, it defaults to `["text-inference"]`. |
+| Field              | Required | Type                                            | What it means                                                                                            |
+| ------------------ | -------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `provider`         | Yes      | `string`                                        | Provider id this choice belongs to.                                                                      |
+| `method`           | Yes      | `string`                                        | Auth method id to dispatch to.                                                                           |
+| `choiceId`         | Yes      | `string`                                        | Stable auth-choice id used by onboarding and CLI flows.                                                  |
+| `choiceLabel`      | No       | `string`                                        | User-facing label. If omitted, OpenClaw falls back to `choiceId`.                                        |
+| `choiceHint`       | No       | `string`                                        | Short helper text for the picker.                                                                        |
+| `groupId`          | No       | `string`                                        | Optional group id for grouping related choices.                                                          |
+| `groupLabel`       | No       | `string`                                        | User-facing label for that group.                                                                        |
+| `groupHint`        | No       | `string`                                        | Short helper text for the group.                                                                         |
+| `optionKey`        | No       | `string`                                        | Internal option key for simple one-flag auth flows.                                                      |
+| `cliFlag`          | No       | `string`                                        | CLI flag name, such as `--openrouter-api-key`.                                                           |
+| `cliOption`        | No       | `string`                                        | Full CLI option shape, such as `--openrouter-api-key <key>`.                                             |
+| `cliDescription`   | No       | `string`                                        | Description used in CLI help.                                                                            |
+| `onboardingScopes` | No       | `Array<"text-inference" \| "image-generation">` | Which onboarding surfaces this choice should appear in. If omitted, it defaults to `["text-inference"]`. |
 
 ## uiHints reference
 
