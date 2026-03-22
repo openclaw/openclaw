@@ -122,24 +122,6 @@ vi.mock("./route-reply.runtime.js", () => ({
   routeReply: mocks.routeReply,
 }));
 
-vi.mock("./route-reply.js", () => ({
-  isRoutableChannel: (channel: string | undefined) =>
-    Boolean(
-      channel &&
-      [
-        "telegram",
-        "slack",
-        "discord",
-        "signal",
-        "imessage",
-        "whatsapp",
-        "feishu",
-        "mattermost",
-      ].includes(channel),
-    ),
-  routeReply: mocks.routeReply,
-}));
-
 vi.mock("./abort.runtime.js", () => ({
   tryFastAbortFromMessage: mocks.tryFastAbortFromMessage,
   formatAbortReplyText: (stoppedSubagents?: number) => {
