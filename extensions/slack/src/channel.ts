@@ -343,7 +343,10 @@ const collectSlackSecurityWarnings =
     },
   });
 
-export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = createChatChannelPlugin({
+export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = createChatChannelPlugin<
+  ResolvedSlackAccount,
+  SlackProbe
+>({
   base: {
     ...createSlackPluginBase({
       setupWizard: slackSetupWizard,
