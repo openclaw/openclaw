@@ -3,4 +3,5 @@ memory-baseline	0.614	0.352	0.190	0.800	1.000	1.000	0.995	1.000	0.960	0.000	0.33
 476ded2	0.622	0.386	0.182	0.800	1.000	1.000	1.000	1.000	1.000	0.000	0.400	0.333	0.250	1.000	0.575	0.185	0.600	keep	op1 retrieval triggers + write-back rule; subagent wb improved (morpheus 0→0.333, trinity 0→0.250, neo 0.333→0.400)
 8a3c7dd	0.673	0.381	0.480	1.000	1.000	1.000	1.000	1.000	1.000	0.000	0.400	0.333	0.250	1.000	0.575	0.185	0.600	keep	neo mid-session retrieval triggers; op1 memory 0.182→0.480 (major improvement)
 eb5f954	0.695	0.363	0.432	1.000	1.000	1.000	1.000	1.000	1.000	0.000	0.400	0.333	0.250	1.000	0.575	0.550	0.600	keep	morpheus: MEMORY.md update step; morpheus richness 0.185→0.550 (major gain); composite 0.673→0.695
-5e2c11f	pending	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	pending	op1: forbid exec/mcporter fallback when tools fail — target delegation 0.363→higher
+5e2c11f	0.744	0.384	0.643	1.000	1.000	1.000	1.000	1.000	1.000	0.000	0.400	0.333	0.250	1.000	0.575	0.550	0.600	keep	op1: exec fallback ban; composite 0.695→0.744 (+0.049); memory 0.432→0.643 (major gain); delegation still weak at 0.384
+90cc600	pending	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	pending	op1: add diagnostics/logs/config/debug row to routing table — target delegation 0.384→higher
