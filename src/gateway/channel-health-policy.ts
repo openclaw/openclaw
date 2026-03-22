@@ -103,6 +103,14 @@ export function evaluateChannelHealth(
       return { healthy: true, reason: "startup-connect-grace" };
     }
   }
+  const normalizedMode = snapshot.mode?.trim().toLowerCase();
+  if (
+    policy.channelId === "telegram" &&
+    normalizedMode === "polling" &&
+    snapshot.connected !== true
+  ) {
+    return { healthy: false, reason: "disconnected" };
+  }
   if (snapshot.connected === false) {
     return { healthy: false, reason: "disconnected" };
   }
@@ -110,7 +118,6 @@ export function evaluateChannelHealth(
     typeof snapshot.lastEventAt === "number" && Number.isFinite(snapshot.lastEventAt)
       ? snapshot.lastEventAt
       : null;
-  const normalizedMode = snapshot.mode?.trim().toLowerCase();
   const shouldCheckStaleSocket =
     snapshot.connected === true &&
     lastEventAt != null &&

@@ -177,6 +177,26 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
   });
 
+  it("treats telegram polling accounts without a first successful poll as disconnected", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: 0,
+        lastEventAt: null,
+        mode: "polling",
+      },
+      {
+        channelId: "telegram",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "disconnected" });
+  });
+
   it("skips stale-socket detection for channels in webhook mode", () => {
     const evaluation = evaluateDiscordHealth({
       running: true,
