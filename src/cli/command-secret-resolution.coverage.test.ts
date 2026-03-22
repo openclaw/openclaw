@@ -27,7 +27,17 @@ async function readCommandSource(relativePath: string): Promise<string> {
     return `${source}\n${runtimeSource}`;
   }
   if (!reexportMatch) {
-    return source;
+    if (source.includes("resolveCommandSecretRefsViaGateway")) {
+      return source;
+    }
+    const runtimeImportMatch = source.match(/import\("(?<target>\.[^"]+\.runtime\.js)"\)/m)?.groups
+      ?.target;
+    if (!runtimeImportMatch) {
+      return source;
+    }
+    const resolvedTarget = path.join(path.dirname(absolutePath), runtimeImportMatch);
+    const tsResolvedTarget = resolvedTarget.replace(/\.js$/u, ".ts");
+    return await fs.readFile(tsResolvedTarget, "utf8");
   }
   const resolvedTarget = path.join(path.dirname(absolutePath), reexportMatch);
   const tsResolvedTarget = resolvedTarget.replace(/\.js$/u, ".ts");
