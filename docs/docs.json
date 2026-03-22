@@ -1046,6 +1046,18 @@
                 ]
               },
               {
+                "group": "Plugin SDK",
+                "pages": [
+                  "plugins/sdk-overview",
+                  "plugins/sdk-entrypoints",
+                  "plugins/sdk-runtime",
+                  "plugins/sdk-setup",
+                  "plugins/sdk-channel-plugins",
+                  "plugins/sdk-provider-plugins",
+                  "plugins/sdk-testing"
+                ]
+              },
+              {
                 "group": "Skills",
                 "pages": [
                   "tools/skills",
