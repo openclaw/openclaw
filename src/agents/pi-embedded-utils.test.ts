@@ -6,6 +6,7 @@ import {
   stripDowngradedToolCallText,
   promoteThinkingTagsToBlocks,
   extractAssistantText,
+  extractAssistantThinking,
 } from "./pi-embedded-utils.js";
 
 function makeAssistantMessage(msg: Partial<AssistantMessage>): AssistantMessage {
@@ -200,7 +201,7 @@ describe("promoteMinimaxToolCallsToBlocks", () => {
 
   it("skips code-fenced thinking tags but allows them inside real thinking", () => {
     const text =
-      "Example: \n```xml\n<think>This should not be promoted</think>\n```\nActual: <think>Real thinking with ```code``` inside</think>";
+      "Example: \n```xml\n<think>This should not be promoted</think>\n```\nActual: \n<think>Real thinking with ```code``` inside</think>";
     const msg = makeAssistantMessage({
       role: "assistant",
       content: [{ type: "text", text }],
@@ -373,6 +374,37 @@ describe("promoteMinimaxToolCallsToBlocks", () => {
     // Check for existence
     const toolCall = msg.content.find((c) => c && typeof c === "object" && c.type === "toolCall");
     expect(toolCall).toBeDefined();
+  });
+
+  it("skips literal inline <think> examples without promotion", () => {
+    // Codex P2: Don't treat literal inline <think> examples as hidden reasoning.
+    const text = "Use <think>hidden</think> in docs.";
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+    });
+
+    promoteThinkingTagsToBlocks(msg);
+
+    // Should remain as a single text block
+    expect(msg.content.length).toBe(1);
+    expect(msg.content[0]).toMatchObject({ type: "text", text });
+  });
+
+  it("preserves inline spacing when rejoining split reasoning blocks", () => {
+    // Codex P2: Preserve inline spacing when rejoining split reasoning blocks.
+    const text = `<think>Before <minimax:tool_call><invoke name="Bash" /></minimax:tool_call>After</think>`;
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+    });
+
+    promoteThinkingTagsToBlocks(msg);
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    // Should be [thinking(Before + glue), toolCall, thinking(After)]
+    const thinkingText = extractAssistantThinking(msg);
+    expect(thinkingText).toBe("Before After");
   });
 
   it("preserves leading/trailing whitespace in arguments", () => {

@@ -251,23 +251,42 @@ export function extractAssistantText(msg: AssistantMessage): string {
   return sanitizeUserFacingText(cleaned.trim(), { errorContext });
 }
 
+/**
+ * Assistant thinking extraction with smart block joining.
+ * Codex P2: Preserve inline spacing when rejoining split reasoning blocks.
+ */
 export function extractAssistantThinking(msg: AssistantMessage): string {
   if (!Array.isArray(msg.content)) {
     return "";
   }
+  let result = "";
   const blocks = msg.content
     .map((block) => {
       if (!block || typeof block !== "object") {
-        return "";
+        return null;
       }
       const record = block as unknown as Record<string, unknown>;
       if (record.type === "thinking" && typeof record.thinking === "string") {
-        return record.thinking.split(INLINE_GLUE).join("").trim();
+        return record.thinking;
       }
-      return "";
+      return null;
     })
-    .filter(Boolean);
-  return blocks.join("\n").trim();
+    .filter((t): t is string => t !== null);
+
+  for (let i = 0; i < blocks.length; i++) {
+    const text = blocks[i];
+    if (result) {
+      if (result.endsWith(INLINE_GLUE)) {
+        result = result.slice(0, -INLINE_GLUE.length) + text;
+      } else {
+        result += "\n" + text;
+      }
+    } else {
+      result = text;
+    }
+  }
+
+  return result.split(INLINE_GLUE).join("").trim();
 }
 
 export function formatReasoningMessage(text: string): string {
@@ -311,6 +330,9 @@ function getMarkdownMaskRegions(
 /**
  * Split text by thinking tags, avoiding tags inside Markdown code blocks.
  * Marks inline splits with INLINE_GLUE.
+ *
+ * Codex P2: Don't treat literal inline <think> examples as hidden reasoning.
+ * We now require the tag to be at the start of a block or preceded by whitespace.
  */
 export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
   const openRe = /<\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
@@ -340,6 +362,16 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
       const isClose = Boolean(match[1]?.includes("/"));
 
       if (!inThinking && !isClose) {
+        // Codex P2 Guard: Only promote if at the start of a line (or start of text).
+        const precedingText = text.slice(0, index);
+        const lastLineBreak = precedingText.lastIndexOf("\n");
+        const prefixOnLine =
+          lastLineBreak === -1 ? precedingText : precedingText.slice(lastLineBreak + 1);
+        const isLegitTag = !prefixOnLine.trim();
+        if (!isLegitTag) {
+          continue;
+        }
+
         let prose = text.slice(cursor, index);
         // If this is a mid-line split, mark it.
         if (prose && !prose.endsWith("\n") && !prose.endsWith("\r")) {
@@ -390,8 +422,6 @@ function mergeInlineTextBlocks(blocks: AssistantMessage["content"]): AssistantMe
     const last = next[next.length - 1];
     if (last?.type === "text" && block?.type === "text") {
       // Logic: If the preceding block ends with INLINE_GLUE, merge them.
-      // We DON'T strip glue here because extractAssistantText needs it to know
-      // not to add \n. Glue is stripped in the final extract... functions.
       if (last.text.endsWith(INLINE_GLUE)) {
         last.text += block.text;
         continue;
