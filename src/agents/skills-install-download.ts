@@ -83,11 +83,14 @@ async function downloadFile(params: {
   const timeoutMs = Math.max(1_000, params.timeoutMs);
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-  const { response, release } = await fetchWithSsrFGuard({
-    url: params.url,
-    signal: controller.signal,
-  });
+  let release: () => Promise<void> = async () => {};
   try {
+    const fetched = await fetchWithSsrFGuard({
+      url: params.url,
+      signal: controller.signal,
+    });
+    release = fetched.release;
+    const { response } = fetched;
     if (!response.ok || !response.body) {
       throw new Error(`Download failed (${response.status} ${response.statusText})`);
     }
