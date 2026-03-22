@@ -69,9 +69,9 @@ export async function prefetchMemoryIfNeeded(params: {
   }
 
   try {
-    // Dynamic import avoids a static circular dependency; memory/index is not
-    // imported anywhere else in the auto-reply module tree.
-    const { getMemorySearchManager } = await import("../../memory/index.js");
+    // Use runtime boundary to avoid [INEFFECTIVE_DYNAMIC_IMPORT] —
+    // memory/index.ts is statically imported elsewhere in the build.
+    const { getMemorySearchManager } = await import("../../memory/memory-prefetch.runtime.js");
     const { manager } = await getMemorySearchManager({
       cfg: params.config,
       agentId: params.agentId,
