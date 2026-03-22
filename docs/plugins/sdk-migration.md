@@ -164,7 +164,9 @@ This is a temporary escape hatch, not a permanent solution.
 
 ## Related
 
-- [Building Plugins](/plugins/building-plugins)
-- [Plugin SDK Overview](/plugins/sdk-overview)
-- [Plugin Internals](/plugins/architecture)
-- [Plugin Manifest](/plugins/manifest)
+- [Getting Started](/plugins/building-plugins) — build your first plugin
+- [SDK Overview](/plugins/sdk-overview) — full subpath import reference
+- [Channel Plugins](/plugins/sdk-channel-plugins) — building channel plugins
+- [Provider Plugins](/plugins/sdk-provider-plugins) — building provider plugins
+- [Plugin Internals](/plugins/architecture) — architecture deep dive
+- [Plugin Manifest](/plugins/manifest) — manifest schema reference
