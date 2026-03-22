@@ -48,17 +48,22 @@ fly_machine_state() {
 }
 
 create_machine() {
-  local init_cmd="$1"
+  # create_machine <init_entrypoint_json> <init_cmd_json>
+  # entrypoint: ["/app/blink-entrypoint.sh"] (default) or custom
+  # cmd: the CMD array for the container
+  local init_entrypoint="$1" init_cmd="$2"
   local payload
   payload=$(python3 -c "
 import json, sys
+entrypoint = json.loads(sys.argv[1])
+cmd = json.loads(sys.argv[2])
 config = {
-  'image': sys.argv[1],
-  'init': {'cmd': ['/bin/sh', '-c', sys.argv[2]]},
+  'image': sys.argv[3],
+  'init': {'entrypoint': entrypoint, 'cmd': cmd},
   'restart': {'policy': 'always'},
   'guest': {'cpu_kind': 'shared', 'cpus': 2, 'memory_mb': 2048},
   'env': {
-    'OPENCLAW_GATEWAY_TOKEN': sys.argv[3],
+    'OPENCLAW_GATEWAY_TOKEN': sys.argv[4],
     'OPENCLAW_STATE_DIR': '/data',
     'OPENCLAW_HEADLESS': 'true',
     'NODE_OPTIONS': '--max-old-space-size=1536',
@@ -66,8 +71,8 @@ config = {
   },
 }
 print(json.dumps({'region': 'iad', 'config': config}))
-" "$IMAGE" "$init_cmd" "$GATEWAY_TOKEN")
-  curl -sf -X POST \
+" "$init_entrypoint" "$init_cmd" "$IMAGE" "$GATEWAY_TOKEN")
+  curl -sf --max-time 30 -X POST \
     "$FLY_API/apps/$TEST_APP/machines" \
     -H "Authorization: Bearer $FLY_API_TOKEN" \
     -H "Content-Type: application/json" \
@@ -76,13 +81,13 @@ print(json.dumps({'region': 'iad', 'config': config}))
 
 wait_machine_started() {
   local mid="$1" label="$2"
-  for i in $(seq 1 60); do
+  for i in $(seq 1 120); do
     local state; state=$(fly_machine_state "$mid")
     [ "$state" = "started" ] && { echo "    $label started after ${i}s ✓"; return 0; }
     [ "$state" = "failed" ] && { echo "ERROR: $label crashed (state=failed)"; return 1; }
     sleep 1
   done
-  echo "ERROR: $label did not start within 60s"
+  echo "ERROR: $label did not start within 120s"
   return 1
 }
 
@@ -154,9 +159,11 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "MACHINE A: Baseline — no WhatsApp configured"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-BASELINE_INIT="exec gosu node node /app/openclaw.mjs gateway --allow-unconfigured"
+# Use default ENTRYPOINT (/app/blink-entrypoint.sh) + default CMD
 echo "==> Creating machine A..."
-MACHINE_A=$(create_machine "$BASELINE_INIT")
+MACHINE_A=$(create_machine \
+  '["/app/blink-entrypoint.sh"]' \
+  '["node", "openclaw.mjs", "gateway", "--allow-unconfigured"]')
 echo "    Machine A: $MACHINE_A"
 
 wait_machine_started "$MACHINE_A" "Machine A"
@@ -176,12 +183,16 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "MACHINE B: WhatsApp pre-configured (OOM test + QR test)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# Write WhatsApp config before starting OpenClaw
+# Custom entrypoint: write WhatsApp config, then call the real entrypoint.
+# blink-entrypoint.sh runs as root, preps /data, drops to node, execs CMD.
+# We inject the config BEFORE blink-entrypoint.sh runs so /data/openclaw.json
+# already has WhatsApp when OpenClaw boots.
 WA_CONFIG='{"agents":{"defaults":{"workspace":"/data/workspace"}},"gateway":{"auth":{"mode":"token"},"controlUi":{"dangerouslyAllowHostHeaderOriginFallback":true,"dangerouslyDisableDeviceAuth":true}},"browser":{"noSandbox":true},"channels":{"whatsapp":{"accounts":{"default":{"authDir":"/data/workspace/.whatsapp"}}}}}'
-WA_INIT="set -e && mkdir -p /data/workspace/.whatsapp /data/agents/main/agent /data/npm-global && printf '%s' '$WA_CONFIG' > /data/openclaw.json && chown -R node:node /data && exec gosu node node /app/openclaw.mjs gateway --allow-unconfigured"
 
 echo "==> Creating machine B (WhatsApp configured from boot)..."
-MACHINE_B=$(create_machine "$WA_INIT")
+MACHINE_B=$(create_machine \
+  '["/bin/sh", "-c"]' \
+  "[\"mkdir -p /data/workspace/.whatsapp /data/agents/main/agent /data/agents/main/sessions /data/scripts /data/npm-global && printf '%s' '${WA_CONFIG}' > /data/openclaw.json && chown -R node:node /data && exec /app/blink-entrypoint.sh node openclaw.mjs gateway --allow-unconfigured\"]")
 echo "    Machine B: $MACHINE_B"
 
 wait_machine_started "$MACHINE_B" "Machine B"
