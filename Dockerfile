@@ -227,9 +227,7 @@ ENV NODE_ENV=production
 # Write config and explicitly set OPENCLAW_CONFIG_PATH so the gateway finds it
 # regardless of HOME resolution.
 RUN mkdir -p /app/.openclaw && \
-    printf '{"gateway":{"controlUi":{"dangerouslyAllowHostHeaderOriginFallback":true}}}\n' \
-      > /app/.openclaw/openclaw.json && \
-    chown -R node:node /app/.openclaw
+printf '{"gateway":{"controlUi":{"dangerouslyAllowHostHeaderOriginFallback":true,"dangerouslyDisableDeviceAuth":true}}}\n' \
 ENV OPENCLAW_CONFIG_PATH=/app/.openclaw/openclaw.json
 
 # Security hardening: Run as non-root user
