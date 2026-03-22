@@ -192,6 +192,7 @@ export async function applyInlineDirectiveOverrides(params: {
       await loadDirectiveImpl()
     ).handleDirectiveOnly({
       ...createDirectiveHandlingBase(),
+      ctx,
       currentThinkLevel,
       currentFastMode,
       currentVerboseLevel,
@@ -286,6 +287,7 @@ export async function applyInlineDirectiveOverrides(params: {
     directives,
     effectiveModelDirective,
     cfg,
+    ctx,
     agentDir,
     sessionEntry,
     sessionStore,

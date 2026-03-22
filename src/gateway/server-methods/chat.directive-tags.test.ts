@@ -396,6 +396,27 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(register).not.toHaveBeenCalled();
   });
 
+  it("sets CommandAuthorized=false for operator.write chat.send callers", async () => {
+    createTranscriptFixture("openclaw-chat-send-write-scope-command-auth-");
+    mockState.finalText = "ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-write-scope-command-auth",
+      client: {
+        connect: {
+          scopes: ["operator.write"],
+        },
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx?.CommandAuthorized).toBe(false);
+  });
+
   it("chat.inject keeps message defined when directive tag is the only content", async () => {
     createTranscriptFixture("openclaw-chat-inject-directive-only-");
     const respond = vi.fn();

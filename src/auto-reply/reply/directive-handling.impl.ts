@@ -11,6 +11,8 @@ import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import type { MsgContext } from "../templating.js";
 import { formatThinkingLevels, formatXHighModelHint, supportsXHighThinking } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -55,6 +57,15 @@ function resolveExecDefaults(params: {
       "on-miss",
     node: params.sessionEntry?.execNode ?? agentExec?.node ?? globalExec?.node,
   };
+}
+
+function canPersistExecDefaults(ctx?: MsgContext): boolean {
+  const channel = (ctx?.Provider ?? ctx?.Surface ?? "").trim().toLowerCase();
+  if (!channel || !isInternalMessageChannel(channel)) {
+    return true;
+  }
+  const scopes = ctx?.GatewayClientScopes ?? [];
+  return scopes.includes("operator.admin");
 }
 
 export async function handleDirectiveOnly(
@@ -268,6 +279,11 @@ export async function handleDirectiveOnly(
         ),
       };
     }
+    if (directives.cleaned.trim().length === 0 && !canPersistExecDefaults(params.ctx)) {
+      return {
+        text: "/exec requires operator.admin for gateway clients.",
+      };
+    }
   }
 
   const queueAck = maybeHandleQueueDirective({
@@ -289,6 +305,9 @@ export async function handleDirectiveOnly(
       text: `Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`,
     };
   }
+
+  const execPersistenceBlocked =
+    directives.hasExecDirective && directives.hasExecOptions && !canPersistExecDefaults(params.ctx);
 
   const nextThinkLevel = directives.hasThinkDirective
     ? directives.thinkLevel
@@ -345,7 +364,7 @@ export async function handleDirectiveOnly(
       elevatedChanged ||
       (directives.elevatedLevel !== prevElevatedLevel && directives.elevatedLevel !== undefined);
   }
-  if (directives.hasExecDirective && directives.hasExecOptions) {
+  if (directives.hasExecDirective && directives.hasExecOptions && !execPersistenceBlocked) {
     if (directives.execHost) {
       sessionEntry.execHost = directives.execHost;
     }
@@ -455,21 +474,25 @@ export async function handleDirectiveOnly(
     }
   }
   if (directives.hasExecDirective && directives.hasExecOptions) {
-    const execParts: string[] = [];
-    if (directives.execHost) {
-      execParts.push(`host=${directives.execHost}`);
-    }
-    if (directives.execSecurity) {
-      execParts.push(`security=${directives.execSecurity}`);
-    }
-    if (directives.execAsk) {
-      execParts.push(`ask=${directives.execAsk}`);
-    }
-    if (directives.execNode) {
-      execParts.push(`node=${directives.execNode}`);
-    }
-    if (execParts.length > 0) {
-      parts.push(formatDirectiveAck(`Exec defaults set (${execParts.join(", ")}).`));
+    if (execPersistenceBlocked) {
+      parts.push("/exec requires operator.admin for gateway clients.");
+    } else {
+      const execParts: string[] = [];
+      if (directives.execHost) {
+        execParts.push(`host=${directives.execHost}`);
+      }
+      if (directives.execSecurity) {
+        execParts.push(`security=${directives.execSecurity}`);
+      }
+      if (directives.execAsk) {
+        execParts.push(`ask=${directives.execAsk}`);
+      }
+      if (directives.execNode) {
+        execParts.push(`node=${directives.execNode}`);
+      }
+      if (execParts.length > 0) {
+        parts.push(formatDirectiveAck(`Exec defaults set (${execParts.join(", ")}).`));
+      }
     }
   }
   if (shouldDowngradeXHigh) {

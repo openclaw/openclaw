@@ -14,6 +14,10 @@ import {
   getCurrentPluginConversationBinding,
   requestPluginConversationBinding,
 } from "./conversation-binding.js";
+import {
+  isPluginCommandScopeError,
+  withPluginRuntimeCommandScope,
+} from "./runtime/plugin-command-scope.js";
 import type {
   OpenClawPluginCommandDefinition,
   PluginCommandContext,
@@ -381,6 +385,7 @@ export async function executePluginCommand(params: {
   args?: string;
   senderId?: string;
   channel: string;
+  gatewayClientScopes?: string[];
   channelId?: PluginCommandContext["channelId"];
   isAuthorizedSender: boolean;
   commandBody: string;
@@ -462,12 +467,22 @@ export async function executePluginCommand(params: {
   // Lock registry during execution to prevent concurrent modifications
   state.registryLocked = true;
   try {
-    const result = await command.handler(ctx);
+    const result = await withPluginRuntimeCommandScope(
+      {
+        commandName: command.name,
+        channel,
+        gatewayClientScopes: params.gatewayClientScopes,
+      },
+      () => command.handler(ctx),
+    );
     logVerbose(
       `Plugin command /${command.name} executed successfully for ${senderId || "unknown"}`,
     );
     return result;
   } catch (err) {
+    if (isPluginCommandScopeError(err)) {
+      return { text: err.message };
+    }
     const error = err as Error;
     logVerbose(`Plugin command /${command.name} error: ${error.message}`);
     // Don't leak internal error details - return a safe generic message

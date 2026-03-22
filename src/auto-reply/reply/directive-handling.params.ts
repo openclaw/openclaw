@@ -7,6 +7,7 @@ import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./
 
 export type HandleDirectiveOnlyCoreParams = {
   cfg: OpenClawConfig;
+  ctx?: MsgContext;
   directives: InlineDirectives;
   sessionEntry: SessionEntry;
   sessionStore: Record<string, SessionEntry>;

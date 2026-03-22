@@ -1412,6 +1412,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       // See: https://github.com/moltbot/moltbot/issues/3658
       const stampedMessage = injectTimestamp(messageForAgent, timestampOptsFromConfig(cfg));
 
+      const commandAuthorized =
+        Array.isArray(client?.connect?.scopes) && client.connect.scopes.includes(ADMIN_SCOPE);
+
       const ctx: MsgContext = {
         Body: messageForAgent,
         BodyForAgent: stampedMessage,
@@ -1428,7 +1431,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         AccountId: accountId,
         MessageThreadId: messageThreadId,
         ChatType: "direct",
-        CommandAuthorized: true,
+        CommandAuthorized: commandAuthorized,
         MessageSid: clientRunId,
         SenderId: clientInfo?.id,
         SenderName: clientInfo?.displayName,
