@@ -14,6 +14,8 @@ services:
       - EMBEDDER_MODEL=${EMBEDDER_MODEL:-bge-m3}
       - EMBEDDER_DIMENSIONS=${EMBEDDER_DIMENSIONS:-1024}
       - FALKORDB_URL=redis://localhost:6379
+      - FALKORDB_DATABASE=global_user_memory
+      - GRAPHITI_GROUP_ID=global_user_memory
       - SEMAPHORE_LIMIT=1
       - LOG_LEVEL=DEBUG
     volumes:

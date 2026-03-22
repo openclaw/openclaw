@@ -12,6 +12,11 @@ interface GraphMemory {
   timestamp?: string | number | Date;
 }
 
+interface SearchTimings {
+  queriesMs?: number;
+  graphMs?: number;
+}
+
 export const handleRememberCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -28,17 +33,23 @@ export const handleRememberCommand: CommandHandler = async (params, allowTextCom
   const sessionFile = params.sessionEntry?.sessionFile;
 
   try {
-    const factsResult = await callGateway<{ facts: GraphMemory[]; query?: string }>({
+    const factsResult = await callGateway<{
+      facts: GraphMemory[];
+      query?: string;
+      timings?: SearchTimings;
+    }>({
       method: "narrative.searchFacts",
       params: query ? { query } : { sessionFile },
       clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       clientDisplayName: "remember command",
       mode: GATEWAY_CLIENT_MODES.BACKEND,
+      timeoutMs: 90_000,
     });
 
     const combined: GraphMemory[] = factsResult?.facts ?? [];
     // Use the query returned by the gateway (may be observer-generated when no query given)
     const displayQuery = factsResult?.query ?? query;
+    const timings = factsResult?.timings;
 
     if (combined.length === 0) {
       const label = displayQuery ? `_${displayQuery}_` : "el contexto actual";
@@ -60,10 +71,22 @@ export const handleRememberCommand: CommandHandler = async (params, allowTextCom
     });
 
     const label = displayQuery ? `_${displayQuery}_` : "el contexto actual";
+    const timingParts: string[] = [];
+    if (timings?.queriesMs) {
+      timingParts.push(`queries: ${timings.queriesMs}ms`);
+    }
+    if (timings?.graphMs != null) {
+      timingParts.push(`graphiti: ${timings.graphMs}ms`);
+    }
+    const totalMs = (timings?.queriesMs ?? 0) + (timings?.graphMs ?? 0);
+    if (totalMs > 0) {
+      timingParts.push(`total: ${totalMs}ms`);
+    }
+    const timingLine = timingParts.length > 0 ? `\n\n_⏱ ${timingParts.join(" · ")}_` : "";
     return {
       shouldContinue: false,
       reply: {
-        text: `🧠 *${combined.length} memorias* para ${label}:\n\n${lines.join("\n")}`,
+        text: `🧠 *${combined.length} memorias* para ${label}:\n\n${lines.join("\n")}${timingLine}`,
       },
     };
   } catch (e: unknown) {

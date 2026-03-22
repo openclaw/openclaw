@@ -499,11 +499,15 @@ export class GraphService {
     const safeQuery = this.sanitizeQuery(query);
 
     try {
-      const data = await this.callMcpTool("search_memory_facts", {
-        query: safeQuery,
-        group_ids: groupIds,
-        max_facts: 10,
-      });
+      const data = await this.callMcpTool(
+        "search_memory_facts",
+        {
+          query: safeQuery,
+          group_ids: groupIds,
+          max_facts: 10,
+        },
+        30_000,
+      );
 
       if (!data) {
         return [];
