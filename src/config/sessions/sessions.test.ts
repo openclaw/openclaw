@@ -3,14 +3,17 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempHome } from "../../../test/helpers/temp-home.js";
 import { upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import * as jsonFiles from "../../infra/json-files.js";
 import type { OpenClawConfig } from "../config.js";
 import {
   clearSessionStoreCacheForTest,
+  ensurePrivateSessionsDir,
   loadSessionStore,
   mergeSessionEntry,
   resolveAndPersistSessionFile,
+  saveSessionStore,
   updateSessionStore,
 } from "../sessions.js";
 import type { SessionConfig } from "../types.base.js";
@@ -44,6 +47,14 @@ function useTempSessionsFixture(prefix: string) {
     storePath: () => storePath,
     sessionsDir: () => sessionsDir,
   };
+}
+
+function expectPrivateDirMode(actual: number) {
+  if (process.platform === "win32") {
+    expect([0o700, 0o666, 0o777]).toContain(actual);
+    return;
+  }
+  expect(actual).toBe(0o700);
 }
 
 describe("session path safety", () => {
@@ -125,6 +136,84 @@ describe("session path safety", () => {
       expect(path.basename(resolved)).toBe("sess-1.jsonl");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("session directory permissions", () => {
+  it("creates a private sessions dir when saving a new session store", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, ".openclaw", "agents", "main", "sessions", "sessions.json");
+      await saveSessionStore(storePath, {
+        "agent:main:perms": {
+          sessionId: "sess-private",
+          updatedAt: Date.now(),
+        },
+      });
+
+      const mode = fs.statSync(path.dirname(storePath)).mode & 0o777;
+      expectPrivateDirMode(mode);
+    });
+  });
+
+  it("creates a private sessions dir for renamed managed session stores", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, ".openclaw", "agents", "main", "sessions", "custom.json");
+      await saveSessionStore(storePath, {
+        "agent:main:renamed-store": {
+          sessionId: "sess-renamed-store",
+          updatedAt: Date.now(),
+        },
+      });
+
+      const mode = fs.statSync(path.dirname(storePath)).mode & 0o777;
+      expectPrivateDirMode(mode);
+    });
+  });
+
+  it("does not tighten custom session store parent directories", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-custom-session-store-"));
+    try {
+      const customDir = path.join(tempDir, "shared-session-state");
+      fs.mkdirSync(customDir, { recursive: true, mode: 0o755 });
+      fs.chmodSync(customDir, 0o755);
+      const storePath = path.join(customDir, "sessions.json");
+
+      await saveSessionStore(storePath, {
+        "agent:main:custom-store": {
+          sessionId: "sess-custom",
+          updatedAt: Date.now(),
+        },
+      });
+
+      const mode = fs.statSync(customDir).mode & 0o777;
+      expect(mode).toBe(0o755);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects symlink session dirs before chmod", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-symlink-"));
+    try {
+      const realDir = path.join(tempDir, "real-sessions");
+      const symlinkDir = path.join(tempDir, "symlink-sessions");
+      fs.mkdirSync(realDir, { recursive: true });
+      fs.symlinkSync(realDir, symlinkDir, "dir");
+
+      await expect(ensurePrivateSessionsDir(symlinkDir)).rejects.toThrow(
+        /must not (be|traverse) a symlink/i,
+      );
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 });
@@ -426,6 +515,70 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(messageLine.message.role).toBe("assistant");
       expect(messageLine.message.content[0].type).toBe("text");
       expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
+    }
+  });
+
+  it("creates a private managed transcript dir when appending to the default store", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, ".openclaw", "agents", "main", "sessions", "sessions.json");
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId,
+            chatType: "direct",
+            channel: "discord",
+          },
+        }),
+        "utf-8",
+      );
+
+      const result = await appendAssistantMessageToSessionTranscript({
+        sessionKey,
+        text: "Hello from delivery mirror!",
+      });
+
+      expect(result.ok).toBe(true);
+      const mode = fs.statSync(path.dirname(storePath)).mode & 0o777;
+      expectPrivateDirMode(mode);
+    });
+  });
+
+  it("does not tighten custom transcript parent directories", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-custom-transcript-store-"));
+    try {
+      const customDir = path.join(tempDir, "shared-transcripts");
+      fs.mkdirSync(customDir, { recursive: true, mode: 0o755 });
+      fs.chmodSync(customDir, 0o755);
+      const storePath = path.join(customDir, "sessions.json");
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId,
+            chatType: "direct",
+            channel: "discord",
+          },
+        }),
+        "utf-8",
+      );
+
+      const result = await appendAssistantMessageToSessionTranscript({
+        sessionKey,
+        text: "Hello from delivery mirror!",
+        storePath,
+      });
+
+      expect(result.ok).toBe(true);
+      const mode = fs.statSync(customDir).mode & 0o777;
+      expect(mode).toBe(0o755);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 

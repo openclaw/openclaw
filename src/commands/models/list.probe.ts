@@ -23,6 +23,7 @@ import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  ensureSessionDirForFile,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptsDirForAgent,
 } from "../../config/sessions/paths.js";
@@ -417,7 +418,7 @@ async function probeTarget(params: {
   timeoutMs: number;
   maxTokens: number;
 }): Promise<AuthProbeResult> {
-  const { cfg, agentId, agentDir, workspaceDir, sessionDir, target, timeoutMs, maxTokens } = params;
+  const { cfg, agentId, agentDir, workspaceDir, target, timeoutMs, maxTokens } = params;
   if (!target.model) {
     return {
       provider: target.provider,
@@ -435,7 +436,7 @@ async function probeTarget(params: {
 
   const sessionId = `probe-${target.provider}-${crypto.randomUUID()}`;
   const sessionFile = resolveSessionTranscriptPath(sessionId, agentId);
-  await fs.mkdir(sessionDir, { recursive: true });
+  await ensureSessionDirForFile(sessionFile);
 
   const start = Date.now();
   const buildResult = (status: AuthProbeResult["status"], error?: string): AuthProbeResult => ({

@@ -15,7 +15,9 @@ const mocks = vi.hoisted(() => ({
   ensureAgentWorkspace: vi.fn(async () => {}),
   resolveAgentDir: vi.fn(() => "/agents/test-agent"),
   resolveAgentWorkspaceDir: vi.fn(() => "/workspace/test-agent"),
+  ensureSessionStoreDirForAgent: vi.fn(async () => "/managed/test-agent"),
   resolveSessionTranscriptsDirForAgent: vi.fn(() => "/transcripts/test-agent"),
+  ensureSessionTranscriptsDirForAgent: vi.fn(async () => "/transcripts/test-agent"),
   listAgentsForGateway: vi.fn(() => ({
     defaultId: "main",
     mainKey: "agent:main:main",
@@ -63,6 +65,8 @@ vi.mock("../../agents/workspace.js", async () => {
 });
 
 vi.mock("../../config/sessions/paths.js", () => ({
+  ensureSessionStoreDirForAgent: mocks.ensureSessionStoreDirForAgent,
+  ensureSessionTranscriptsDirForAgent: mocks.ensureSessionTranscriptsDirForAgent,
   resolveSessionTranscriptsDirForAgent: mocks.resolveSessionTranscriptsDirForAgent,
 }));
 
@@ -278,6 +282,26 @@ describe("agents.create", () => {
     );
     expect(mocks.ensureAgentWorkspace).toHaveBeenCalled();
     expect(mocks.writeConfigFile).toHaveBeenCalled();
+  });
+
+  it("bootstraps the configured managed session.store dir instead of the default transcripts dir", async () => {
+    mocks.loadConfigReturn = {
+      session: {
+        store: "/managed/{agentId}/sessions.json",
+      },
+    };
+    mocks.applyAgentConfig.mockImplementation((cfg) => cfg as Record<string, unknown>);
+
+    const { promise } = makeCall("agents.create", {
+      name: "Test Agent",
+      workspace: "/home/user/agents/test",
+    });
+    await promise;
+
+    expect(mocks.ensureSessionStoreDirForAgent).toHaveBeenCalledWith("test-agent", {
+      store: "/managed/{agentId}/sessions.json",
+    });
+    expect(mocks.ensureSessionTranscriptsDirForAgent).not.toHaveBeenCalled();
   });
 
   it("ensures workspace is set up before writing config", async () => {

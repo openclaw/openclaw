@@ -110,6 +110,40 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(loaded.fresh).toBeDefined();
   });
 
+  it("rejects symlinked managed store parents before acquiring the write lock", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const stateDir = await createCaseDir("managed-store-parent-link-state");
+    const realAgentDir = await createCaseDir("managed-store-parent-link-outside");
+    const linkedAgentDir = path.join(stateDir, "agents", "main");
+    const managedStorePath = path.join(linkedAgentDir, "sessions", "sessions.json");
+
+    await fs.mkdir(path.dirname(linkedAgentDir), { recursive: true });
+    await fs.symlink(realAgentDir, linkedAgentDir, "dir");
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    try {
+      await expect(
+        saveSessionStore(managedStorePath, {
+          "agent:main:symlink-store": {
+            sessionId: crypto.randomUUID(),
+            updatedAt: Date.now(),
+          },
+        }),
+      ).rejects.toThrow(/must not traverse a symlink/i);
+      await expect(fs.access(path.join(realAgentDir, "sessions"))).rejects.toThrow();
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+    }
+  });
+
   it("archives transcript files for stale sessions pruned on write", async () => {
     applyEnforcedMaintenanceConfig(mockLoadConfig);
 

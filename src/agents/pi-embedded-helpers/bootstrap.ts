@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
+import { ensureSessionDirForFile } from "../../config/sessions/paths.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { WorkspaceBootstrapFile } from "../workspace.js";
 import type { EmbeddedContextFile } from "./types.js";
@@ -183,7 +183,7 @@ export async function ensureSessionHeader(params: {
   } catch {
     // create
   }
-  await fs.mkdir(path.dirname(file), { recursive: true });
+  await ensureSessionDirForFile(file);
   const sessionVersion = 2;
   const entry = {
     type: "session",

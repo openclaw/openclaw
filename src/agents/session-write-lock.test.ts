@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { withTempHome } from "../../test/helpers/temp-home.js";
 
 // Mock getProcessStartTime so PID-recycling detection works on non-Linux
 // (macOS, CI runners). isPidAlive is left unmocked.
@@ -94,6 +95,14 @@ async function expectActiveInProcessLockIsNotReclaimed(params?: {
   });
 }
 
+function expectPrivateDirMode(actual: number) {
+  if (process.platform === "win32") {
+    expect([0o700, 0o666, 0o777]).toContain(actual);
+    return;
+  }
+  expect(actual).toBe(0o700);
+}
+
 describe("acquireSessionWriteLock", () => {
   it("reuses locks across symlinked session paths", async () => {
     if (process.platform === "win32") {
@@ -142,6 +151,20 @@ describe("acquireSessionWriteLock", () => {
         firstLock: lockA,
         secondLock: lockB,
       });
+    });
+  });
+
+  it("creates managed session dirs with private permissions before locking", async () => {
+    await withTempHome(async (home) => {
+      const sessionsDir = path.join(home, ".openclaw", "agents", "main", "sessions");
+      const sessionFile = path.join(sessionsDir, "probe.jsonl");
+      await fs.rm(sessionsDir, { recursive: true, force: true });
+
+      const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+      const mode = (await fs.stat(sessionsDir)).mode & 0o777;
+
+      expectPrivateDirMode(mode);
+      await lock.release();
     });
   });
 

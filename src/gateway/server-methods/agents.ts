@@ -26,7 +26,10 @@ import {
   pruneAgentConfig,
 } from "../../commands/agents.config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
-import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
+import {
+  ensureSessionStoreDirForAgent,
+  resolveSessionTranscriptsDirForAgent,
+} from "../../config/sessions/paths.js";
 import { sameFileIdentity } from "../../infra/file-identity.js";
 import { SafeOpenError, readLocalFileSafely, writeFileWithinRoot } from "../../infra/fs-safe.js";
 import { assertNoPathAliasEscape } from "../../infra/path-alias-guards.js";
@@ -521,11 +524,11 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const agentDir = resolveAgentDir(nextConfig, agentId);
     nextConfig = applyAgentConfig(nextConfig, { agentId, agentDir });
 
-    // Ensure workspace & transcripts exist BEFORE writing config so a failure
-    // here does not leave a broken config entry behind.
+    // Ensure workspace and the resolved managed sessions dir exist BEFORE writing
+    // config so a failure here does not leave a broken config entry behind.
     const skipBootstrap = Boolean(nextConfig.agents?.defaults?.skipBootstrap);
     await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: !skipBootstrap });
-    await fs.mkdir(resolveSessionTranscriptsDirForAgent(agentId), { recursive: true });
+    await ensureSessionStoreDirForAgent(agentId, { store: nextConfig.session?.store });
 
     await writeConfigFile(nextConfig);
 

@@ -1,5 +1,9 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withTempHome } from "../../test/helpers/temp-home.js";
 import {
+  ensureWorkspaceAndSessions,
   normalizeGatewayTokenInput,
   openUrl,
   resolveBrowserOpenCommand,
@@ -151,5 +155,68 @@ describe("validateGatewayPasswordInput", () => {
 
   it("accepts a normal password", () => {
     expect(validateGatewayPasswordInput(" secret ")).toBeUndefined();
+  });
+});
+
+describe("ensureWorkspaceAndSessions", () => {
+  const expectPrivateDirMode = (actual: number) => {
+    if (process.platform === "win32") {
+      expect([0o700, 0o666, 0o777]).toContain(actual);
+      return;
+    }
+    expect(actual).toBe(0o700);
+  };
+
+  it("bootstraps a configured managed session.store template instead of the default sessions dir", async () => {
+    await withTempHome(async (home) => {
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const workspaceDir = path.join(home, "workspace");
+      const managedSessionsDir = path.join(home, "managed-sessions", "coach");
+      const managedStore = path.join(home, "managed-sessions", "{agentId}", "sessions.json");
+      const defaultSessionsDir = path.join(home, ".openclaw", "agents", "coach", "sessions");
+
+      await ensureWorkspaceAndSessions(workspaceDir, runtime, {
+        agentId: "coach",
+        sessionStore: managedStore,
+      });
+
+      const sessionsMode = (await fs.stat(managedSessionsDir)).mode & 0o777;
+
+      expectPrivateDirMode(sessionsMode);
+      await expect(fs.stat(defaultSessionsDir)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("does not tighten arbitrary custom session.store parent directories", async () => {
+    if (process.platform === "win32") {
+      expect(true).toBe(true);
+      return;
+    }
+
+    await withTempHome(async (home) => {
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const workspaceDir = path.join(home, "workspace");
+      const customDir = path.join(home, "custom-store-root");
+      const customStore = path.join(customDir, "sessions-{agentId}.json");
+
+      await fs.mkdir(customDir, { recursive: true, mode: 0o755 });
+      await fs.chmod(customDir, 0o755);
+
+      await ensureWorkspaceAndSessions(workspaceDir, runtime, {
+        agentId: "coach",
+        sessionStore: customStore,
+      });
+
+      const mode = (await fs.stat(customDir)).mode & 0o777;
+      expect(mode).toBe(0o755);
+    });
   });
 });

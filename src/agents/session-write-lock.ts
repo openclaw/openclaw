@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { ensureSessionDirForFile } from "../config/sessions/paths.js";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveProcessScopedMap } from "../shared/process-scoped-map.js";
 
@@ -447,6 +448,7 @@ export async function acquireSessionWriteLock(params: {
   staleMs?: number;
   maxHoldMs?: number;
   allowReentrant?: boolean;
+  ensureDir?: boolean;
 }): Promise<{
   release: () => Promise<void>;
 }> {
@@ -456,7 +458,9 @@ export async function acquireSessionWriteLock(params: {
   const maxHoldMs = resolvePositiveMs(params.maxHoldMs, DEFAULT_MAX_HOLD_MS);
   const sessionFile = path.resolve(params.sessionFile);
   const sessionDir = path.dirname(sessionFile);
-  await fs.mkdir(sessionDir, { recursive: true });
+  if (params.ensureDir ?? true) {
+    await ensureSessionDirForFile(sessionFile);
+  }
   let normalizedDir = sessionDir;
   try {
     normalizedDir = await fs.realpath(sessionDir);

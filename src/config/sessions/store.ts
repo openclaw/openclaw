@@ -18,6 +18,7 @@ import {
 import { getFileStatSnapshot, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
 import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
+import { ensurePrivateSessionsDir, isManagedSessionStorePath } from "./paths.js";
 import {
   clearSessionStoreCaches,
   dropSessionStoreObjectCache,
@@ -518,7 +519,12 @@ async function saveSessionStoreUnlocked(
     }
   }
 
-  await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
+  const storeDir = path.dirname(storePath);
+  if (isManagedSessionStorePath(storePath)) {
+    await ensurePrivateSessionsDir(storeDir);
+  } else {
+    await fs.promises.mkdir(storeDir, { recursive: true });
+  }
   const json = JSON.stringify(store, null, 2);
   if (getSerializedSessionStore(storePath) === json) {
     updateSessionStoreWriteCaches({ storePath, store, serialized: json });
@@ -614,6 +620,7 @@ type SessionStoreLockTask = {
   reject: (reason: unknown) => void;
   timeoutMs?: number;
   staleMs: number;
+  ensureDir: boolean;
 };
 
 type SessionStoreLockQueue = {
@@ -736,6 +743,7 @@ async function drainSessionStoreLockQueue(storePath: string): Promise<void> {
           sessionFile: storePath,
           timeoutMs: remainingTimeoutMs,
           staleMs: task.staleMs,
+          ensureDir: task.ensureDir,
         });
         result = await task.fn();
       } catch (err) {
@@ -776,6 +784,10 @@ async function withSessionStoreLock<T>(
   const staleMs = opts.staleMs ?? 30_000;
   // `pollIntervalMs` is retained for API compatibility with older lock options.
   void opts.pollIntervalMs;
+  const ensureDir = !isManagedSessionStorePath(storePath);
+  if (!ensureDir) {
+    await ensurePrivateSessionsDir(path.dirname(storePath));
+  }
 
   const hasTimeout = timeoutMs > 0 && Number.isFinite(timeoutMs);
   const queue = getOrCreateLockQueue(storePath);
@@ -787,6 +799,7 @@ async function withSessionStoreLock<T>(
       reject,
       timeoutMs: hasTimeout ? timeoutMs : undefined,
       staleMs,
+      ensureDir,
     };
 
     queue.pending.push(task);
