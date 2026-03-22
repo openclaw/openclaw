@@ -798,6 +798,18 @@ function restoreSubagentRunsOnce() {
         // Ignore import failures — orphan recovery is best-effort.
       },
     );
+
+    // Clean up stale session lock files from previous gateway instances.
+    // These accumulate after SIGUSR1 restarts and can trigger false alarms
+    // in `openclaw doctor`. Dynamic import for minimal startup overhead. (#52289)
+    void import("./session-lock-startup-cleanup.js").then(
+      ({ scheduleStartupLockCleanup }) => {
+        scheduleStartupLockCleanup();
+      },
+      () => {
+        // Ignore import failures — lock cleanup is best-effort.
+      },
+    );
   } catch {
     // ignore restore failures
   }
