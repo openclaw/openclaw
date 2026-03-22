@@ -1,3 +1,4 @@
+import { Command } from "commander";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -447,6 +448,24 @@ describe("update-cli", () => {
       await updateStatusCommand(testCase.options);
       testCase.assert();
     }
+  });
+
+  it("parses update status --json as the subcommand option", async () => {
+    const program = new Command();
+    program.name("openclaw");
+    program.enablePositionalOptions();
+    let seenJson = false;
+    const update = program.command("update").option("--json", "", false);
+    update
+      .command("status")
+      .option("--json", "", false)
+      .action((opts) => {
+        seenJson = Boolean(opts.json);
+      });
+
+    await program.parseAsync(["node", "openclaw", "update", "status", "--json"]);
+
+    expect(seenJson).toBe(true);
   });
 
   it.each([
