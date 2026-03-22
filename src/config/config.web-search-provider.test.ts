@@ -165,6 +165,31 @@ describe("web search provider config", () => {
     );
   });
 
+  it("accepts tavily as a valid provider string without plugin config (regression: #52399)", () => {
+    // Previously the provider field was an enum that excluded "tavily", causing:
+    // "tools.web.search.provider: Invalid input (allowed: "brave", "perplexity", "grok", "gemini", "kimi")"
+    const res = validateConfigObjectWithPlugins({
+      tools: {
+        web: {
+          search: {
+            provider: "tavily",
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.config.tools?.web?.search?.provider).toBe("tavily");
+    // Must not produce the old "Invalid input (allowed: ...)" error
+    expect(res).not.toMatchObject({
+      issues: expect.arrayContaining([
+        expect.objectContaining({ path: "tools.web.search.provider" }),
+      ]),
+    });
+  });
+
   it("accepts perplexity provider and config", () => {
     const res = validateConfigObjectWithPlugins(
       buildWebSearchProviderConfig({
