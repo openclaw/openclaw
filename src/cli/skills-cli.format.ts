@@ -23,7 +23,7 @@ function appendClawHubHint(output: string, json?: boolean): string {
   if (json) {
     return output;
   }
-  return `${output}\n\nTip: use \`npx clawhub\` to search, install, and sync skills.`;
+  return `${output}\n\nTip: use \`openclaw skills search\`, \`openclaw skills install\`, and \`openclaw skills update\` for ClawHub-backed skills.`;
 }
 
 function formatSkillStatus(skill: SkillStatusEntry): string {
