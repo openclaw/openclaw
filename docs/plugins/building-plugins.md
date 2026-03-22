@@ -62,6 +62,23 @@ my-plugin/
     └── *.test.ts         # Colocated tests
 ```
 
+## In-repo bundled plugin naming
+
+For bundled plugins that live in this repo under `extensions/*`, choose one
+canonical plugin id and keep the repo-owned names derived from it.
+
+- The canonical id comes from `openclaw.plugin.json:id`.
+- The workspace directory should normally be `extensions/<id>`.
+- The package name should stay anchored to that id: `@openclaw/<id>` by default,
+  or `@openclaw/<id>-provider`, `@openclaw/<id>-plugin`,
+  `@openclaw/<id>-speech`, or `@openclaw/<id>-sandbox` when the package type
+  or disambiguation requires a suffix.
+- If `openclaw.install.npmSpec` is present, it must equal the package name.
+- If `openclaw.channel.id` is present, it must equal the canonical plugin id.
+
+Exceptions should be rare, called out in review, and reflected in the repo's
+bundled plugin naming invariant test.
+
 ## Create a plugin
 
 <Steps>
