@@ -1,5 +1,5 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { formatErrorMessage } from "./errors.js";
+import { formatErrorMessage, isErrno } from "./errors.js";
 import { type RetryConfig, resolveRetryConfig, retryAsync } from "./retry.js";
 
 export type RetryRunner = <T>(fn: () => Promise<T>, label?: string) => Promise<T>;
@@ -14,18 +14,35 @@ export const TELEGRAM_RETRY_DEFAULTS = {
 const TELEGRAM_RETRY_RE = /429|timeout|connect|reset|closed|unavailable|temporarily/i;
 const log = createSubsystemLogger("retry-policy");
 
+function formatErrorMessageWithCauses(err: unknown): string {
+  if (!(err instanceof Error)) {
+    return formatErrorMessage(err);
+  }
+  const parts: string[] = [formatErrorMessage(err)];
+  let cursor: unknown = err.cause;
+  let depth = 0;
+  while (cursor instanceof Error && depth < 8) {
+    const msg = formatErrorMessage(cursor);
+    const code = isErrno(cursor) && cursor.code ? String(cursor.code) : "";
+    parts.push(code ? `${msg} ${code}` : msg);
+    cursor = cursor.cause;
+    depth += 1;
+  }
+  return parts.join(" ");
+}
+
 function resolveTelegramShouldRetry(params: {
   shouldRetry?: (err: unknown) => boolean;
   strictShouldRetry?: boolean;
 }) {
   if (!params.shouldRetry) {
-    return (err: unknown) => TELEGRAM_RETRY_RE.test(formatErrorMessage(err));
+    return (err: unknown) => TELEGRAM_RETRY_RE.test(formatErrorMessageWithCauses(err));
   }
   if (params.strictShouldRetry) {
     return params.shouldRetry;
   }
   return (err: unknown) =>
-    params.shouldRetry?.(err) || TELEGRAM_RETRY_RE.test(formatErrorMessage(err));
+    params.shouldRetry?.(err) || TELEGRAM_RETRY_RE.test(formatErrorMessageWithCauses(err));
 }
 
 function getTelegramRetryAfterMs(err: unknown): number | undefined {

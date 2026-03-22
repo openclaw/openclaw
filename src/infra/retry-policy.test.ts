@@ -97,6 +97,25 @@ describe("createTelegramRetryRunner", () => {
         expectedCalls: 3,
         expectedError: "connection timeout",
       },
+      {
+        name: "retries grammY-style HttpError when errno lives on error.cause",
+        runnerOptions: {
+          retry: { ...ZERO_DELAY_RETRY, attempts: 2 },
+        },
+        fnSteps: [
+          {
+            type: "reject" as const,
+            value: Object.assign(new Error("Network request for 'sendMessage' failed!"), {
+              cause: Object.assign(new Error("read ECONNRESET"), {
+                code: "ECONNRESET",
+              }),
+            }),
+          },
+          { type: "resolve" as const, value: "ok" },
+        ],
+        expectedCalls: 2,
+        expectedValue: "ok",
+      },
     ])("$name", async ({ runnerOptions, fnSteps, expectedCalls, expectedValue, expectedError }) => {
       vi.useFakeTimers();
       const runner = createTelegramRetryRunner(runnerOptions);
