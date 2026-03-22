@@ -101,6 +101,7 @@ describe("discordMessageActions", () => {
     });
 
     expect(handleDiscordMessageActionMock).toHaveBeenCalledWith({
+      channel: "discord",
       action: "send",
       params: { to: "channel:123", text: "hello" },
       cfg,
