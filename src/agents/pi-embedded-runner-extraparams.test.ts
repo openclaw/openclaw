@@ -2370,4 +2370,42 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.prompt_cache_key).toBe("session-default");
     expect(payload.prompt_cache_retention).toBe("24h");
   });
+
+  it("injects OpenAI built-in web search tools for openai-responses payloads", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "qaq",
+      applyModelId: "gpt-5.4",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "qaq/gpt-5.4": {
+                params: {
+                  openaiWebSearch: true,
+                  openaiWebSearchToolType: "web_search",
+                  openaiWebSearchRequired: true,
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-responses",
+        provider: "qaq",
+        id: "gpt-5.4",
+        baseUrl: "https://example-proxy.invalid/v1",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        tools: [{ type: "function", name: "ping", parameters: {} }],
+      },
+    });
+
+    expect(payload.tools).toEqual([
+      { type: "function", name: "ping", parameters: {} },
+      { type: "web_search" },
+    ]);
+    expect(payload.tool_choice).toBe("required");
+  });
 });

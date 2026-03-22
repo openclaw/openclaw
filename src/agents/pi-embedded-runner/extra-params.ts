@@ -74,6 +74,37 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   openaiWsWarmup?: boolean;
 };
 
+function resolveOpenAIBuiltInTools(extraParams: Record<string, unknown> | undefined): Array<Record<string, unknown>> {
+  if (!extraParams) {
+    return [];
+  }
+
+  const configured: Array<Record<string, unknown>> = [];
+  const webSearchEnabled =
+    extraParams.openaiWebSearch === true || extraParams.openai_web_search === true;
+  if (webSearchEnabled) {
+    const rawToolType =
+      typeof extraParams.openaiWebSearchToolType === "string"
+        ? extraParams.openaiWebSearchToolType
+        : typeof extraParams.openai_web_search_tool_type === "string"
+          ? extraParams.openai_web_search_tool_type
+          : undefined;
+    const toolType = rawToolType?.trim() || "web_search_preview";
+    configured.push({ type: toolType });
+  }
+
+  const rawBuiltInTools = extraParams.openaiBuiltInTools ?? extraParams.openai_built_in_tools;
+  if (Array.isArray(rawBuiltInTools)) {
+    for (const entry of rawBuiltInTools) {
+      if (entry && typeof entry === "object") {
+        configured.push(entry as Record<string, unknown>);
+      }
+    }
+  }
+
+  return configured;
+}
+
 function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
@@ -104,19 +135,48 @@ function createStreamFnWithExtraParams(
   if (cacheRetention) {
     streamParams.cacheRetention = cacheRetention;
   }
+  const openaiBuiltInTools = resolveOpenAIBuiltInTools(extraParams);
+  const openaiWebSearchRequired =
+    extraParams.openaiWebSearchRequired === true ||
+    extraParams.openai_web_search_required === true;
 
-  if (Object.keys(streamParams).length === 0) {
+  if (Object.keys(streamParams).length === 0 && openaiBuiltInTools.length === 0) {
     return undefined;
   }
 
   log.debug(`creating streamFn wrapper with params: ${JSON.stringify(streamParams)}`);
+  if (openaiBuiltInTools.length > 0) {
+    log.debug(`OpenAI built-in tools enabled: ${JSON.stringify(openaiBuiltInTools)}`);
+  }
 
   const underlying = baseStreamFn ?? streamSimple;
   const wrappedStreamFn: StreamFn = (model, context, options) => {
-    return underlying(model, context, {
+    const nextOptions: SimpleStreamOptions = {
       ...streamParams,
       ...options,
-    });
+    };
+
+    if (
+      openaiBuiltInTools.length > 0 &&
+      (model.api === "openai-responses" || model.api === "openai-codex-responses")
+    ) {
+      const originalOnPayload = options?.onPayload;
+      nextOptions.onPayload = (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadRecord = payload as Record<string, unknown>;
+          const existingTools = Array.isArray(payloadRecord.tools)
+            ? (payloadRecord.tools as Array<Record<string, unknown>>)
+            : [];
+          payloadRecord.tools = [...existingTools, ...openaiBuiltInTools];
+          if (openaiWebSearchRequired) {
+            payloadRecord.tool_choice = "required";
+          }
+        }
+        return originalOnPayload?.(payload, model);
+      };
+    }
+
+    return underlying(model, context, nextOptions);
   };
 
   return wrappedStreamFn;
