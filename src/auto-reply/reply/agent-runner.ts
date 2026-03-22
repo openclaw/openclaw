@@ -57,6 +57,8 @@ import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-r
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
+const RECENT_MESSAGING_TOOL_DEDUPE_WINDOW_MS = 2 * 60 * 1000;
+
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 
 export async function runReplyAgent(params: {
@@ -413,6 +415,54 @@ export async function runReplyAgent(params: {
     }
 
     const payloadArray = runResult.payloads ?? [];
+
+    const sentTexts = runResult.messagingToolSentTexts ?? [];
+    const sentMediaUrls = runResult.messagingToolSentMediaUrls ?? [];
+    const sentTargets = runResult.messagingToolSentTargets ?? [];
+    const sessionDedupeEntry = activeSessionEntry;
+    if (sessionDedupeEntry) {
+      const now = Date.now();
+      if (sentTexts.length || sentMediaUrls.length || sentTargets.length) {
+        sessionDedupeEntry.lastMessagingToolSessionId = followupRun.run.sessionId;
+        sessionDedupeEntry.lastMessagingToolSentAt = now;
+        sessionDedupeEntry.lastMessagingToolSentTexts = sentTexts;
+        sessionDedupeEntry.lastMessagingToolSentMediaUrls = sentMediaUrls;
+        sessionDedupeEntry.lastMessagingToolSentTargets = sentTargets;
+      } else if (
+        typeof sessionDedupeEntry.lastMessagingToolSentAt === "number" &&
+        now - sessionDedupeEntry.lastMessagingToolSentAt > RECENT_MESSAGING_TOOL_DEDUPE_WINDOW_MS
+      ) {
+        delete sessionDedupeEntry.lastMessagingToolSessionId;
+        delete sessionDedupeEntry.lastMessagingToolSentAt;
+        delete sessionDedupeEntry.lastMessagingToolSentTexts;
+        delete sessionDedupeEntry.lastMessagingToolSentMediaUrls;
+        delete sessionDedupeEntry.lastMessagingToolSentTargets;
+      }
+      if (sessionKey && activeSessionStore) {
+        activeSessionStore[sessionKey] = sessionDedupeEntry;
+      }
+      if (sessionKey && storePath) {
+        try {
+          await updateSessionStoreEntry({
+            storePath,
+            sessionKey,
+            update: async () => ({
+              lastMessagingToolSessionId: sessionDedupeEntry.lastMessagingToolSessionId,
+              lastMessagingToolSentAt: sessionDedupeEntry.lastMessagingToolSentAt,
+              lastMessagingToolSentTexts: sessionDedupeEntry.lastMessagingToolSentTexts,
+              lastMessagingToolSentMediaUrls: sessionDedupeEntry.lastMessagingToolSentMediaUrls,
+              lastMessagingToolSentTargets: sessionDedupeEntry.lastMessagingToolSentTargets,
+            }),
+          });
+        } catch (error) {
+          console.warn(
+            "Failed to persist messaging-tool dedupe state for session",
+            sessionKey,
+            error,
+          );
+        }
+      }
+    }
 
     if (blockReplyPipeline) {
       await blockReplyPipeline.flush({ force: true });
