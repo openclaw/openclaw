@@ -887,19 +887,50 @@ describe("chat view", () => {
 
   it("refreshes session options when create returns without a session key", async () => {
     vi.stubGlobal("prompt", vi.fn().mockReturnValue("Session label"));
-    const { state, request } = createChatHeaderState({ createResult: { ok: true } });
-    const container = document.createElement("div");
-    render(renderChatSessionSelect(state), container);
+    try {
+      const { state, request } = createChatHeaderState({ createResult: { ok: true } });
+      const container = document.createElement("div");
+      render(renderChatSessionSelect(state), container);
 
-    const newChatButton = container.querySelector<HTMLButtonElement>(".chat-controls__new-chat");
-    expect(newChatButton).not.toBeNull();
+      const newChatButton = container.querySelector<HTMLButtonElement>(".chat-controls__new-chat");
+      expect(newChatButton).not.toBeNull();
 
-    newChatButton!.click();
-    await flushTasks();
+      newChatButton!.click();
+      await flushTasks();
 
-    expect(state.lastError).toBe("Session was created but no session key was returned.");
-    expect(request.mock.calls.map(([method]) => method)).toContain("sessions.list");
-    vi.unstubAllGlobals();
+      expect(state.lastError).toBe("Session was created but no session key was returned.");
+      expect(request.mock.calls.map(([method]) => method)).toContain("sessions.list");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("switches to the created session and clears pending state on success", async () => {
+    vi.stubGlobal("prompt", vi.fn().mockReturnValue("Session label"));
+    try {
+      const { state, request } = createChatHeaderState();
+      const container = document.createElement("div");
+      render(renderChatSessionSelect(state), container);
+
+      const newChatButton = container.querySelector<HTMLButtonElement>(".chat-controls__new-chat");
+      expect(newChatButton).not.toBeNull();
+
+      newChatButton!.click();
+      await flushTasks();
+
+      expect(state.sessionKey).toBe("new-session");
+      expect(state.settings.sessionKey).toBe("new-session");
+      expect(state.settings.lastActiveSessionKey).toBe("new-session");
+      expect(state.newChatSessionPending).toBe(false);
+      expect(request).toHaveBeenCalledWith("sessions.create", expect.anything());
+      expect(request).toHaveBeenCalledWith("chat.history", {
+        sessionKey: "new-session",
+        limit: 200,
+      });
+      expect(request.mock.calls.map(([method]) => method)).toContain("sessions.list");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("keeps the selected model visible when the active session is absent from sessions.list", async () => {
