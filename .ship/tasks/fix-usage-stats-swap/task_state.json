@@ -1,14 +1,14 @@
 {
   "task_id": "fix-usage-stats-swap",
   "title": "Fix swapped webchat/telegram usage statistics on /usage dashboard",
-  "stage": "implementing",
+  "stage": "handoff",
   "status": "active",
   "stories": [
-    { "id": "s1", "title": "Reproduce the swap with a failing test", "status": "active" },
-    { "id": "s2", "title": "Fix channel resolution in usage aggregation", "status": "pending" },
-    { "id": "s3", "title": "Verify client-side aggregation consistency", "status": "pending" },
-    { "id": "s4", "title": "Add regression tests", "status": "pending" },
-    { "id": "s5", "title": "Validate end-to-end", "status": "pending" }
+    { "id": "s1", "title": "Reproduce the swap with a failing test", "status": "done" },
+    { "id": "s2", "title": "Fix channel resolution in usage aggregation", "status": "done" },
+    { "id": "s3", "title": "Verify client-side aggregation consistency", "status": "done" },
+    { "id": "s4", "title": "Add regression tests", "status": "done" },
+    { "id": "s5", "title": "Validate end-to-end", "status": "done" }
   ],
   "issues": []
 }
