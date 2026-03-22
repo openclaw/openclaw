@@ -3,6 +3,14 @@
   "version": "2026.3.14",
   "description": "OpenClaw Zalo Personal Account plugin via native zca-js integration",
   "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48",
+    "zca-js": "2.1.2",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
   "peerDependencies": {
     "openclaw": ">=2026.3.14"
   },
@@ -10,11 +18,6 @@
     "openclaw": {
       "optional": true
     }
-  },
-  "dependencies": {
-    "@sinclair/typebox": "0.34.48",
-    "zca-js": "2.1.2",
-    "zod": "^4.3.6"
   },
   "openclaw": {
     "extensions": [

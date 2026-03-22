@@ -3,6 +3,12 @@
   "version": "2026.3.14",
   "description": "OpenClaw WhatsApp channel plugin",
   "type": "module",
+  "dependencies": {
+    "@whiskeysockets/baileys": "7.0.0-rc.9"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
   "peerDependencies": {
     "openclaw": ">=2026.3.14"
   },
@@ -10,9 +16,6 @@
     "openclaw": {
       "optional": true
     }
-  },
-  "dependencies": {
-    "@whiskeysockets/baileys": "7.0.0-rc.9"
   },
   "openclaw": {
     "extensions": [

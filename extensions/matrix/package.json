@@ -3,14 +3,6 @@
   "version": "2026.3.11",
   "description": "OpenClaw Matrix channel plugin",
   "type": "module",
-  "peerDependencies": {
-    "openclaw": ">=2026.3.14"
-  },
-  "peerDependenciesMeta": {
-    "openclaw": {
-      "optional": true
-    }
-  },
   "dependencies": {
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
     "fake-indexeddb": "^6.2.5",
@@ -21,6 +13,14 @@
   },
   "devDependencies": {
     "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.14"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
   },
   "openclaw": {
     "extensions": [

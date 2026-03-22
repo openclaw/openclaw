@@ -3,6 +3,15 @@
   "version": "2026.3.14",
   "description": "OpenClaw voice-call plugin",
   "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48",
+    "commander": "^14.0.3",
+    "ws": "^8.19.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
   "peerDependencies": {
     "openclaw": ">=2026.3.14"
   },
@@ -10,12 +19,6 @@
     "openclaw": {
       "optional": true
     }
-  },
-  "dependencies": {
-    "@sinclair/typebox": "0.34.48",
-    "commander": "^14.0.3",
-    "ws": "^8.19.0",
-    "zod": "^4.3.6"
   },
   "openclaw": {
     "extensions": [
