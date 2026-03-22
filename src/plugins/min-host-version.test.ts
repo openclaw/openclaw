@@ -27,12 +27,26 @@ describe("min-host-version", () => {
 
   it("rejects invalid floor syntax", () => {
     expect(validateMinHostVersion("2026.3.14")).toBe(MIN_HOST_VERSION_FORMAT);
+    expect(validateMinHostVersion(">=2026.3.14 garbage")).toBe(MIN_HOST_VERSION_FORMAT);
     expect(
       checkMinHostVersion({ currentVersion: "2026.3.14", minHostVersion: "2026.3.14" }),
     ).toEqual({
       ok: false,
       kind: "invalid",
       error: MIN_HOST_VERSION_FORMAT,
+    });
+  });
+
+  it("reports unknown host versions distinctly", () => {
+    expect(
+      checkMinHostVersion({ currentVersion: "unknown", minHostVersion: ">=2026.3.14" }),
+    ).toEqual({
+      ok: false,
+      kind: "unknown_host_version",
+      requirement: {
+        raw: ">=2026.3.14",
+        minimumLabel: "2026.3.14",
+      },
     });
   });
 

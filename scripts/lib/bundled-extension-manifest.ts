@@ -20,8 +20,9 @@ export function collectBundledExtensionManifestErrors(extensions: BundledExtensi
 
   for (const extension of extensions) {
     const install = extension.packageJson.openclaw?.install;
+    const hasNpmSpec = install && "npmSpec" in install;
     if (
-      install &&
+      hasNpmSpec &&
       (!install.npmSpec || typeof install.npmSpec !== "string" || !install.npmSpec.trim())
     ) {
       errors.push(

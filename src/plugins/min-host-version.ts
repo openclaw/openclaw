@@ -3,6 +3,7 @@ import { isAtLeast, parseSemver } from "../infra/runtime-guard.js";
 export const MIN_HOST_VERSION_PREFIX = ">=";
 export const MIN_HOST_VERSION_FORMAT =
   'openclaw.install.minHostVersion must use a semver floor in the form ">=x.y.z"';
+const MIN_HOST_VERSION_RE = /^>=(\d+)\.(\d+)\.(\d+)$/;
 
 export type MinHostVersionRequirement = {
   raw: string;
@@ -12,6 +13,7 @@ export type MinHostVersionRequirement = {
 export type MinHostVersionCheckResult =
   | { ok: true; requirement: MinHostVersionRequirement | null }
   | { ok: false; kind: "invalid"; error: string }
+  | { ok: false; kind: "unknown_host_version"; requirement: MinHostVersionRequirement }
   | {
       ok: false;
       kind: "incompatible";
@@ -26,11 +28,12 @@ export function parseMinHostVersionRequirement(
   if (!trimmed) {
     return null;
   }
-  if (!trimmed.startsWith(MIN_HOST_VERSION_PREFIX)) {
+  const match = trimmed.match(MIN_HOST_VERSION_RE);
+  if (!match) {
     return null;
   }
-  const minimumLabel = trimmed.slice(MIN_HOST_VERSION_PREFIX.length).trim();
-  if (!minimumLabel || !parseSemver(minimumLabel)) {
+  const minimumLabel = `${match[1]}.${match[2]}.${match[3]}`;
+  if (!parseSemver(minimumLabel)) {
     return null;
   }
   return {
@@ -61,8 +64,18 @@ export function checkMinHostVersion(params: {
   }
   const currentVersion = params.currentVersion?.trim() || "unknown";
   const currentSemver = parseSemver(currentVersion);
+  if (!currentSemver) {
+    return {
+      ok: false,
+      kind: "unknown_host_version",
+      requirement,
+    };
+  }
   const minimumSemver = parseSemver(requirement.minimumLabel);
-  if (!minimumSemver || !isAtLeast(currentSemver, minimumSemver)) {
+  if (!minimumSemver) {
+    return { ok: false, kind: "invalid", error: MIN_HOST_VERSION_FORMAT };
+  }
+  if (!isAtLeast(currentSemver, minimumSemver)) {
     return {
       ok: false,
       kind: "incompatible",

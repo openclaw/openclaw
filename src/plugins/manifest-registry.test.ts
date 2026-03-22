@@ -305,6 +305,38 @@ describe("loadPluginManifestRegistry", () => {
     ).toBe(true);
   });
 
+  it("warns distinctly when host version cannot be determined", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "synology-chat", configSchema: { type: "object" } });
+
+    const registry = loadPluginManifestRegistry({
+      cache: false,
+      env: { OPENCLAW_VERSION: "unknown" },
+      candidates: [
+        createPluginCandidate({
+          idHint: "synology-chat",
+          rootDir: dir,
+          packageDir: dir,
+          origin: "global",
+          packageManifest: {
+            install: {
+              npmSpec: "@openclaw/synology-chat",
+              minHostVersion: ">=2026.3.14",
+            },
+          },
+        }),
+      ],
+    });
+
+    expect(registry.plugins).toEqual([]);
+    expect(
+      registry.diagnostics.some((diag) =>
+        diag.message.includes("host version could not be determined"),
+      ),
+    ).toBe(true);
+    expect(registry.diagnostics.some((diag) => diag.level === "warn")).toBe(true);
+  });
+
   it("reports bundled plugins as the duplicate winner for auto-discovered globals", () => {
     const bundledDir = makeTempDir();
     const globalDir = makeTempDir();

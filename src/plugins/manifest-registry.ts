@@ -361,13 +361,15 @@ export function loadPluginManifestRegistry(
         "package.json",
       );
       diagnostics.push({
-        level: "error",
+        level: minHostVersionCheck.kind === "unknown_host_version" ? "warn" : "error",
         pluginId: manifest.id,
         source: packageManifestSource,
         message:
           minHostVersionCheck.kind === "invalid"
             ? `plugin manifest invalid | ${minHostVersionCheck.error}`
-            : `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}; skipping load`,
+            : minHostVersionCheck.kind === "unknown_host_version"
+              ? `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host version could not be determined; skipping load`
+              : `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}; skipping load`,
       });
       continue;
     }

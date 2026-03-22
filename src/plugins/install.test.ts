@@ -839,6 +839,36 @@ describe("installPluginFromDir", () => {
     expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
   });
 
+  it("reports unknown host versions distinctly for minHostVersion-gated plugins", async () => {
+    vi.stubEnv("OPENCLAW_VERSION", "unknown");
+    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
+    const packageJsonPath = path.join(pluginDir, "package.json");
+    const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
+      openclaw?: { install?: Record<string, unknown> };
+    };
+    manifest.openclaw = {
+      ...manifest.openclaw,
+      install: {
+        ...manifest.openclaw?.install,
+        minHostVersion: ">=2026.3.14",
+      },
+    };
+    fs.writeFileSync(packageJsonPath, JSON.stringify(manifest), "utf-8");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.UNKNOWN_HOST_VERSION);
+    expect(result.error).toContain("host version could not be determined");
+    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
+  });
+
   it("uses openclaw.plugin.json id as install key when it differs from package name", async () => {
     const { pluginDir, extensionsDir } = setupManifestInstallFixture({
       manifestId: "memory-cognee",

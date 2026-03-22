@@ -70,6 +70,21 @@ describe("collectBundledExtensionManifestErrors", () => {
       "bundled extension 'broken' manifest invalid | openclaw.install.minHostVersion must use a semver floor in the form \">=x.y.z\"",
     ]);
   });
+
+  it("allows install metadata without npmSpec when only non-publish metadata is present", () => {
+    expect(
+      collectBundledExtensionManifestErrors([
+        {
+          id: "irc",
+          packageJson: {
+            openclaw: {
+              install: { minHostVersion: ">=2026.3.14" },
+            },
+          },
+        },
+      ]),
+    ).toEqual([]);
+  });
 });
 
 describe("collectForbiddenPackPaths", () => {
