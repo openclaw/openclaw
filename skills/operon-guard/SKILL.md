@@ -1,7 +1,24 @@
 ---
 name: operon-guard
 description: "Pre-flight trust verification for AI agents. Verify behavior, detect injection vulnerabilities, check for PII leaks, and measure reliability before granting Write/Execute permissions."
-metadata: { "openclaw": { "emoji": "🛡️", "requires": { "bins": ["operon-guard"] }, "install": [{ "id": "uv", "kind": "uv", "package": "operon-guard", "bins": ["operon-guard"], "label": "Install operon-guard (uv)" }] } }
+metadata:
+  {
+    "openclaw":
+      {
+        "emoji": "🛡️",
+        "requires": { "bins": ["operon-guard"] },
+        "install":
+          [
+            {
+              "id": "uv",
+              "kind": "uv",
+              "package": "operon-guard",
+              "bins": ["operon-guard"],
+              "label": "Install operon-guard (uv)",
+            },
+          ],
+      },
+  }
 ---
 
 # Operon Guard — Agent Trust Verification
@@ -88,12 +105,14 @@ lines (`Using spec: ...`, `Adapter: ...`) to stdout before the JSON block — pi
 directly to `jq` or any JSON parser will fail. Isolate the JSON object:
 
 **macOS / Linux (bash):**
+
 ```bash
 set -o pipefail
 operon-guard test path/to/agent.py --json | grep -A9999 '^{'
 ```
 
 **Windows (PowerShell):**
+
 ```powershell
 $lines = operon-guard test path/to/agent.py --json
 $start = ($lines | Select-String -Pattern '^\{').LineNumber - 1
@@ -101,6 +120,7 @@ $lines[$start..($lines.Length - 1)] -join "`n"
 ```
 
 **Cross-platform (Python — works everywhere):**
+
 ```python
 import subprocess, sys
 proc = subprocess.run(
@@ -128,6 +148,7 @@ print("\n".join(proc.stdout.splitlines()[start:]))
 > For CI, either:
 >
 > **Option A — parse `passed` from the JSON output (bash):**
+>
 > ```bash
 > result=$(operon-guard test path/to/agent.py --json | grep -A9999 '^{')
 > passed=$(echo "$result" | python3 -c \
@@ -137,6 +158,7 @@ print("\n".join(proc.stdout.splitlines()[start:]))
 > ```
 >
 > **Option B — run without `--json` and rely on the exit code:**
+>
 > ```bash
 > operon-guard test path/to/agent.py   # exits 1 on failure, 0 on pass
 > ```
