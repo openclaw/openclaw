@@ -6,6 +6,17 @@
   "dependencies": {
     "@whiskeysockets/baileys": "7.0.0-rc.9"
   },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.14"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"
@@ -24,7 +35,8 @@
     "install": {
       "npmSpec": "@openclaw/whatsapp",
       "localPath": "extensions/whatsapp",
-      "defaultChoice": "npm"
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.3.14"
     },
     "release": {
       "publishToNpm": true

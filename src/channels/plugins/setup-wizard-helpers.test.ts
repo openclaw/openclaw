@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  resolveSetupWizardAllowFromEntries,
+  resolveSetupWizardGroupAllowlist,
+} from "../../../test/helpers/extensions/setup-wizard.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import {
@@ -1456,10 +1460,9 @@ describe("createAccountScopedAllowFromSection", () => {
 
     expect(section.credentialInputKey).toBe("token");
     await expect(
-      section.resolveEntries({
-        cfg: {},
+      resolveSetupWizardAllowFromEntries({
+        resolveEntries: section.resolveEntries,
         accountId: DEFAULT_ACCOUNT_ID,
-        credentialValues: {},
         entries: ["alice"],
       }),
     ).resolves.toEqual([{ input: "alice", resolved: true, id: "ALICE" }]);
@@ -1496,10 +1499,9 @@ describe("createAllowFromSection", () => {
 
     expect(section.helpTitle).toBe("LINE allowlist");
     await expect(
-      section.resolveEntries({
-        cfg: {},
+      resolveSetupWizardAllowFromEntries({
+        resolveEntries: section.resolveEntries,
         accountId: DEFAULT_ACCOUNT_ID,
-        credentialValues: {},
         entries: ["u1"],
       }),
     ).resolves.toEqual([{ input: "u1", resolved: true, id: "U1" }]);
@@ -1546,10 +1548,9 @@ describe("createAccountScopedGroupAccessSection", () => {
     expect(policyNext.channels?.slack?.groupPolicy).toBe("open");
 
     await expect(
-      section.resolveAllowlist?.({
-        cfg: {},
+      resolveSetupWizardGroupAllowlist({
+        resolveAllowlist: section.resolveAllowlist,
         accountId: DEFAULT_ACCOUNT_ID,
-        credentialValues: {},
         entries: ["general"],
         prompter,
       }),

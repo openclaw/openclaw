@@ -1,5 +1,5 @@
 import type { Bot } from "grammy";
-import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-runtime";
+import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-lifecycle";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/text-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import { isSafeToRetrySendError, isTelegramClientRejection } from "./network-errors.js";
@@ -27,7 +27,6 @@ type TelegramSendMessageDraft = (
  * lanes do not accidentally reuse draft ids when code-split entries coexist.
  */
 const TELEGRAM_DRAFT_STREAM_STATE_KEY = Symbol.for("openclaw.telegramDraftStreamState");
-
 const draftStreamState = resolveGlobalSingleton(TELEGRAM_DRAFT_STREAM_STATE_KEY, () => ({
   nextDraftId: 0,
 }));

@@ -303,6 +303,20 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
         },
       },
     },
+    list: [
+      {
+        id: "main",
+        default: true,
+        thinkingDefault: "high", // per-agent thinking override
+        reasoningDefault: "on", // per-agent reasoning visibility
+        fastModeDefault: false, // per-agent fast mode
+      },
+      {
+        id: "quick",
+        fastModeDefault: true, // this agent always runs fast
+        thinkingDefault: "off",
+      },
+    ],
   },
 
   tools: {
@@ -494,7 +508,7 @@ If more than one person can DM your bot (multiple entries in `allowFrom`, pairin
 }
 ```
 
-For Discord/Slack/Google Chat/MS Teams/Mattermost/IRC, sender authorization is ID-first by default.
+For Discord/Slack/Google Chat/Microsoft Teams/Mattermost/IRC, sender authorization is ID-first by default.
 Only enable direct mutable name/email/nick matching with each channel's `dangerouslyAllowNameMatching: true` if you explicitly accept that risk.
 
 ### OAuth with API key failover

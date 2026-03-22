@@ -486,6 +486,7 @@ export async function dispatchReplyFromConfig(params: {
       cfg,
       dispatcher,
       sessionKey: acpDispatchSessionKey,
+      abortSignal: params.replyOptions?.abortSignal,
       inboundAudio,
       sessionTtsAuto,
       ttsChannel,
@@ -582,8 +583,10 @@ export async function dispatchReplyFromConfig(params: {
             if (shouldSuppressReasoningPayload(payload)) {
               return;
             }
-            // Accumulate block text for TTS generation after streaming
-            if (payload.text) {
+            // Accumulate block text for TTS generation after streaming.
+            // Exclude compaction status notices — they are informational UI
+            // signals and must not be synthesised into the spoken reply.
+            if (payload.text && !payload.isCompactionNotice) {
               if (accumulatedBlockText.length > 0) {
                 accumulatedBlockText += "\n";
               }
@@ -619,6 +622,7 @@ export async function dispatchReplyFromConfig(params: {
         cfg,
         dispatcher,
         sessionKey: acpDispatchSessionKey,
+        abortSignal: params.replyOptions?.abortSignal,
         inboundAudio,
         sessionTtsAuto,
         ttsChannel,

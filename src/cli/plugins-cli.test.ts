@@ -19,6 +19,8 @@ const updateNpmInstalledPlugins = vi.fn();
 const promptYesNo = vi.fn();
 const installPluginFromNpmSpec = vi.fn();
 const installPluginFromPath = vi.fn();
+const installPluginFromClawHub = vi.fn();
+const parseClawHubPluginSpec = vi.fn();
 
 const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } =
   createCliRuntimeCapture();
@@ -27,22 +29,14 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime,
 }));
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: () => loadConfig(),
-    writeConfigFile: (config: OpenClawConfig) => writeConfigFile(config),
-  };
-});
+vi.mock("../config/config.js", () => ({
+  loadConfig: () => loadConfig(),
+  writeConfigFile: (config: OpenClawConfig) => writeConfigFile(config),
+}));
 
-vi.mock("../config/paths.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/paths.js")>();
-  return {
-    ...actual,
-    resolveStateDir: () => resolveStateDir(),
-  };
-});
+vi.mock("../config/paths.js", () => ({
+  resolveStateDir: () => resolveStateDir(),
+}));
 
 vi.mock("../plugins/marketplace.js", () => ({
   installPluginFromMarketplace: (...args: unknown[]) => installPluginFromMarketplace(...args),
@@ -63,25 +57,22 @@ vi.mock("../plugins/manifest-registry.js", () => ({
   clearPluginManifestRegistryCache: () => clearPluginManifestRegistryCache(),
 }));
 
-vi.mock("../plugins/status.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/status.js")>();
-  return {
-    ...actual,
-    buildPluginStatusReport: (...args: unknown[]) => buildPluginStatusReport(...args),
-  };
-});
+vi.mock("../plugins/status.js", () => ({
+  buildPluginStatusReport: (...args: unknown[]) => buildPluginStatusReport(...args),
+}));
 
 vi.mock("../plugins/slots.js", () => ({
   applyExclusiveSlotSelection: (...args: unknown[]) => applyExclusiveSlotSelection(...args),
 }));
 
-vi.mock("../plugins/uninstall.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/uninstall.js")>();
-  return {
-    ...actual,
-    uninstallPlugin: (...args: unknown[]) => uninstallPlugin(...args),
-  };
-});
+vi.mock("../plugins/uninstall.js", () => ({
+  uninstallPlugin: (...args: unknown[]) => uninstallPlugin(...args),
+  resolveUninstallDirectoryTarget: ({
+    installRecord,
+  }: {
+    installRecord?: { installPath?: string; sourcePath?: string };
+  }) => installRecord?.installPath ?? installRecord?.sourcePath ?? null,
+}));
 
 vi.mock("../plugins/update.js", () => ({
   updateNpmInstalledPlugins: (...args: unknown[]) => updateNpmInstalledPlugins(...args),
@@ -94,6 +85,16 @@ vi.mock("./prompt.js", () => ({
 vi.mock("../plugins/install.js", () => ({
   installPluginFromNpmSpec: (...args: unknown[]) => installPluginFromNpmSpec(...args),
   installPluginFromPath: (...args: unknown[]) => installPluginFromPath(...args),
+}));
+
+vi.mock("../plugins/clawhub.js", () => ({
+  installPluginFromClawHub: (...args: unknown[]) => installPluginFromClawHub(...args),
+  formatClawHubSpecifier: ({ name, version }: { name: string; version?: string }) =>
+    `clawhub:${name}${version ? `@${version}` : ""}`,
+}));
+
+vi.mock("../infra/clawhub.js", () => ({
+  parseClawHubPluginSpec: (...args: unknown[]) => parseClawHubPluginSpec(...args),
 }));
 
 const { registerPluginsCli } = await import("./plugins-cli.js");
@@ -126,6 +127,8 @@ describe("plugins cli", () => {
     promptYesNo.mockReset();
     installPluginFromNpmSpec.mockReset();
     installPluginFromPath.mockReset();
+    installPluginFromClawHub.mockReset();
+    parseClawHubPluginSpec.mockReset();
 
     loadConfig.mockReturnValue({} as OpenClawConfig);
     writeConfigFile.mockResolvedValue(undefined);
@@ -169,6 +172,11 @@ describe("plugins cli", () => {
       ok: false,
       error: "npm install disabled in test",
     });
+    installPluginFromClawHub.mockResolvedValue({
+      ok: false,
+      error: "clawhub install disabled in test",
+    });
+    parseClawHubPluginSpec.mockReturnValue(null);
   });
 
   it("exits when --marketplace is combined with --link", async () => {
@@ -249,6 +257,218 @@ describe("plugins cli", () => {
     expect(writeConfigFile).toHaveBeenCalledWith(installedCfg);
     expect(runtimeLogs.some((line) => line.includes("slot adjusted"))).toBe(true);
     expect(runtimeLogs.some((line) => line.includes("Installed plugin: alpha"))).toBe(true);
+  });
+
+  it("installs ClawHub plugins and persists source metadata", async () => {
+    const cfg = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledCfg = {
+      plugins: {
+        entries: {
+          demo: {
+            enabled: true,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const installedCfg = {
+      ...enabledCfg,
+      plugins: {
+        ...enabledCfg.plugins,
+        installs: {
+          demo: {
+            source: "clawhub",
+            spec: "clawhub:demo@1.2.3",
+            installPath: "/tmp/openclaw-state/extensions/demo",
+            clawhubPackage: "demo",
+            clawhubFamily: "code-plugin",
+            clawhubChannel: "official",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    loadConfig.mockReturnValue(cfg);
+    parseClawHubPluginSpec.mockReturnValue({ name: "demo" });
+    installPluginFromClawHub.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: "/tmp/openclaw-state/extensions/demo",
+      version: "1.2.3",
+      packageName: "demo",
+      clawhub: {
+        source: "clawhub",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "demo",
+        clawhubFamily: "code-plugin",
+        clawhubChannel: "official",
+        version: "1.2.3",
+        integrity: "sha256-abc",
+        resolvedAt: "2026-03-22T00:00:00.000Z",
+      },
+    });
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    recordPluginInstall.mockReturnValue(installedCfg);
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: installedCfg,
+      warnings: [],
+    });
+
+    await runCommand(["plugins", "install", "clawhub:demo"]);
+
+    expect(installPluginFromClawHub).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "clawhub:demo",
+      }),
+    );
+    expect(recordPluginInstall).toHaveBeenCalledWith(
+      enabledCfg,
+      expect.objectContaining({
+        pluginId: "demo",
+        source: "clawhub",
+        spec: "clawhub:demo@1.2.3",
+        clawhubPackage: "demo",
+        clawhubFamily: "code-plugin",
+        clawhubChannel: "official",
+      }),
+    );
+    expect(writeConfigFile).toHaveBeenCalledWith(installedCfg);
+    expect(runtimeLogs.some((line) => line.includes("Installed plugin: demo"))).toBe(true);
+    expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
+  });
+
+  it("prefers ClawHub before npm for bare plugin specs", async () => {
+    const cfg = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledCfg = {
+      plugins: {
+        entries: {
+          demo: {
+            enabled: true,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const installedCfg = {
+      ...enabledCfg,
+      plugins: {
+        ...enabledCfg.plugins,
+        installs: {
+          demo: {
+            source: "clawhub",
+            spec: "clawhub:demo@1.2.3",
+            installPath: "/tmp/openclaw-state/extensions/demo",
+            clawhubPackage: "demo",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromClawHub.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: "/tmp/openclaw-state/extensions/demo",
+      version: "1.2.3",
+      packageName: "demo",
+      clawhub: {
+        source: "clawhub",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "demo",
+        clawhubFamily: "code-plugin",
+        clawhubChannel: "community",
+        version: "1.2.3",
+        integrity: "sha256-abc",
+        resolvedAt: "2026-03-22T00:00:00.000Z",
+      },
+    });
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    recordPluginInstall.mockReturnValue(installedCfg);
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: installedCfg,
+      warnings: [],
+    });
+
+    await runCommand(["plugins", "install", "demo"]);
+
+    expect(installPluginFromClawHub).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "clawhub:demo",
+      }),
+    );
+    expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(writeConfigFile).toHaveBeenCalledWith(installedCfg);
+  });
+
+  it("falls back to npm when ClawHub does not have the package", async () => {
+    const cfg = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledCfg = {
+      plugins: {
+        entries: {
+          demo: {
+            enabled: true,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromClawHub.mockResolvedValue({
+      ok: false,
+      error: "ClawHub /api/v1/packages/demo failed (404): Package not found",
+    });
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: "/tmp/openclaw-state/extensions/demo",
+      version: "1.2.3",
+      npmResolution: {
+        packageName: "demo",
+        resolvedVersion: "1.2.3",
+        tarballUrl: "https://registry.npmjs.org/demo/-/demo-1.2.3.tgz",
+      },
+    });
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    recordPluginInstall.mockReturnValue(enabledCfg);
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: enabledCfg,
+      warnings: [],
+    });
+
+    await runCommand(["plugins", "install", "demo"]);
+
+    expect(installPluginFromClawHub).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "clawhub:demo",
+      }),
+    );
+    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "demo",
+      }),
+    );
+  });
+
+  it("does not fall back to npm when ClawHub rejects a real package", async () => {
+    installPluginFromClawHub.mockResolvedValue({
+      ok: false,
+      error: 'Use "openclaw skills install demo" instead.',
+    });
+
+    await expect(runCommand(["plugins", "install", "demo"])).rejects.toThrow("__exit__:1");
+
+    expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(runtimeErrors.at(-1)).toContain('Use "openclaw skills install demo" instead.');
   });
 
   it("shows uninstall dry-run preview without mutating config", async () => {

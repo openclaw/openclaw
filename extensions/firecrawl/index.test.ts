@@ -24,7 +24,9 @@ describe("firecrawl plugin", () => {
     expect(result.finalUrl).toBe("https://example.com/final");
     expect(result.status).toBe(200);
     expect(result.extractor).toBe("firecrawl");
-    expect(typeof result.text).toBe("string");
+    expect(String(result.text)).toContain("Hello");
+    expect(String(result.text)).toContain("World");
+    expect(result.truncated).toBe(false);
   });
 
   it("extracts search items from flexible Firecrawl payload shapes", () => {

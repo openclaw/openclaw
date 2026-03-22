@@ -290,7 +290,7 @@ Example (Telegram):
 Notes:
 
 - Group/channel tool restrictions are applied in addition to global/agent tool policy (deny still wins).
-- Some channels use different nesting for rooms/channels (e.g., Discord `guilds.*.channels.*`, Slack `channels.*`, MS Teams `teams.*.channels.*`).
+- Some channels use different nesting for rooms/channels (e.g., Discord `guilds.*.channels.*`, Slack `channels.*`, Microsoft Teams `teams.*.channels.*`).
 
 ## Group allowlists
 

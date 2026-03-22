@@ -1,7 +1,9 @@
 import { Type } from "@sinclair/typebox";
 import {
   enablePluginInConfig,
+  getScopedCredentialValue,
   resolveProviderWebSearchPluginConfig,
+  setScopedCredentialValue,
   setProviderWebSearchPluginConfigValue,
   type WebSearchProviderPlugin,
 } from "openclaw/plugin-sdk/provider-web-search";
@@ -21,31 +23,12 @@ const GenericTavilySearchSchema = Type.Object(
   { additionalProperties: false },
 );
 
-function getScopedCredentialValue(searchConfig?: Record<string, unknown>): unknown {
-  const scoped = searchConfig?.tavily;
-  if (!scoped || typeof scoped !== "object" || Array.isArray(scoped)) {
-    return undefined;
-  }
-  return (scoped as Record<string, unknown>).apiKey;
-}
-
-function setScopedCredentialValue(
-  searchConfigTarget: Record<string, unknown>,
-  value: unknown,
-): void {
-  const scoped = searchConfigTarget.tavily;
-  if (!scoped || typeof scoped !== "object" || Array.isArray(scoped)) {
-    searchConfigTarget.tavily = { apiKey: value };
-    return;
-  }
-  (scoped as Record<string, unknown>).apiKey = value;
-}
-
 export function createTavilyWebSearchProvider(): WebSearchProviderPlugin {
   return {
     id: "tavily",
     label: "Tavily Search",
     hint: "Structured results with domain filters and AI answer summaries",
+    credentialLabel: "Tavily API key",
     envVars: ["TAVILY_API_KEY"],
     placeholder: "tvly-...",
     signupUrl: "https://tavily.com/",
@@ -53,8 +36,9 @@ export function createTavilyWebSearchProvider(): WebSearchProviderPlugin {
     autoDetectOrder: 70,
     credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
     inactiveSecretPaths: ["plugins.entries.tavily.config.webSearch.apiKey"],
-    getCredentialValue: getScopedCredentialValue,
-    setCredentialValue: setScopedCredentialValue,
+    getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "tavily"),
+    setCredentialValue: (searchConfigTarget, value) =>
+      setScopedCredentialValue(searchConfigTarget, "tavily", value),
     getConfiguredCredentialValue: (config) =>
       resolveProviderWebSearchPluginConfig(config, "tavily")?.apiKey,
     setConfiguredCredentialValue: (configTarget, value) => {

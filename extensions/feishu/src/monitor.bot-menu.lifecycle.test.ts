@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
+import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { monitorSingleAccount } from "./monitor.account.js";
 import { setFeishuRuntime } from "./runtime.js";
@@ -133,14 +134,6 @@ function createLifecycleAccount(): ResolvedFeishuAccount {
   } as unknown as ResolvedFeishuAccount;
 }
 
-function createRuntimeEnv(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  } as RuntimeEnv;
-}
-
 function createBotMenuEvent(params: { eventKey: string; timestamp: string }) {
   return {
     event_key: params.eventKey,
@@ -153,13 +146,6 @@ function createBotMenuEvent(params: { eventKey: string; timestamp: string }) {
       },
     },
   };
-}
-
-async function settleAsyncWork(): Promise<void> {
-  for (let i = 0; i < 6; i += 1) {
-    await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
 }
 
 async function setupLifecycleMonitor() {
@@ -190,6 +176,7 @@ async function setupLifecycleMonitor() {
 
 describe("Feishu bot-menu lifecycle", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
     handlers = {};
     lastRuntime = null;
@@ -292,6 +279,7 @@ describe("Feishu bot-menu lifecycle", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     if (originalStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
       return;
@@ -307,9 +295,13 @@ describe("Feishu bot-menu lifecycle", () => {
     });
 
     await onBotMenu(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+    });
     await onBotMenu(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+    });
 
     expect(lastRuntime?.error).not.toHaveBeenCalled();
     expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
@@ -332,9 +324,16 @@ describe("Feishu bot-menu lifecycle", () => {
     sendCardFeishuMock.mockRejectedValueOnce(new Error("boom"));
 
     await onBotMenu(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+      expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+    });
     await onBotMenu(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+      expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+      expect(createFeishuReplyDispatcherMock).toHaveBeenCalledTimes(1);
+    });
 
     expect(lastRuntime?.error).not.toHaveBeenCalled();
     expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);

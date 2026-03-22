@@ -1,11 +1,13 @@
-import { sendTextMediaPayload } from "openclaw/plugin-sdk/channel-runtime";
-import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-runtime";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
 import {
+  type ChannelOutboundAdapter,
   createAttachedChannelResultAdapter,
   createEmptyChannelResult,
 } from "openclaw/plugin-sdk/channel-send-result";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
+import {
+  resolveSendableOutboundReplyParts,
+  sendTextMediaPayload,
+} from "openclaw/plugin-sdk/reply-payload";
 import { chunkText } from "openclaw/plugin-sdk/reply-runtime";
 import { shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveWhatsAppOutboundTarget } from "./runtime-api.js";
