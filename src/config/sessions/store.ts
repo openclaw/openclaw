@@ -942,7 +942,10 @@ export async function updateLastRoute(params: {
       lastThreadId: normalized.lastThreadId,
     };
     const next = existing
-      ? mergeSessionEntryPreserveActivity(existing, metaPatch ? { ...basePatch, ...metaPatch } : basePatch)
+      ? mergeSessionEntryPreserveActivity(
+          existing,
+          metaPatch ? { ...basePatch, ...metaPatch } : basePatch,
+        )
       : mergeSessionEntry(existing, metaPatch ? { ...basePatch, ...metaPatch } : basePatch);
     return await persistResolvedSessionEntry({
       storePath,
