@@ -774,36 +774,82 @@ async function readWorkspaceContextForSummary(): Promise<string> {
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions: eventInstructions, signal } = event;
+
+    // Diagnostic logging to help debug compaction issues
+    log.info(
+      `[compaction-diag] preparation received: ` +
+        `messagesToSummarize=${preparation.messagesToSummarize.length} ` +
+        `turnPrefixMessages=${preparation.turnPrefixMessages?.length ?? 0} ` +
+        `tokensBefore=${preparation.tokensBefore ?? "undefined"} ` +
+        `firstKeptEntryId=${preparation.firstKeptEntryId ?? "undefined"}`,
+    );
+
     const hasRealSummarizable = preparation.messagesToSummarize.some((message, index, messages) =>
       isRealConversationMessage(message, messages, index),
     );
     const hasRealTurnPrefix = preparation.turnPrefixMessages.some((message, index, messages) =>
       isRealConversationMessage(message, messages, index),
     );
-    if (!hasRealSummarizable && !hasRealTurnPrefix) {
-      // When there are no summarizable messages AND no real turn-prefix content,
-      // cancelling compaction leaves context unchanged but the SDK re-triggers
-      // _checkCompaction after every assistant response — creating a cancel loop
-      // that blocks cron lanes (#41981).
-      //
-      // Strategy: always return a minimal compaction result so the SDK writes a
-      // boundary entry. The SDK's prepareCompaction() returns undefined when the
-      // last entry is a compaction, which blocks immediate re-triggering within
-      // the same turn. After a new assistant message arrives, if the SDK triggers
-      // compaction again with an empty preparation, we write another boundary —
-      // this is bounded to at most one boundary per LLM round-trip, not a tight
-      // loop.
+
+    // Log when messages are present but fail the real-conversation check
+    if (!hasRealSummarizable && preparation.messagesToSummarize.length > 0) {
       log.info(
-        "Compaction safeguard: no real conversation messages to summarize; writing compaction boundary to suppress re-trigger loop.",
+        `[compaction-diag] ${preparation.messagesToSummarize.length} messages present but none passed isRealConversationMessage check`,
       );
-      const fallbackSummary = buildStructuredFallbackSummary(preparation.previousSummary);
-      return {
-        compaction: {
-          summary: fallbackSummary,
-          firstKeptEntryId: preparation.firstKeptEntryId,
-          tokensBefore: preparation.tokensBefore,
-        },
-      };
+    }
+
+    if (!hasRealSummarizable && !hasRealTurnPrefix) {
+      const tokensBefore = preparation.tokensBefore ?? 0;
+      const tokenThreshold = 50000; // ~31% of typical 160k available context
+
+      // Token-based override: if context is high despite no "real" messages,
+      // proceed with compaction anyway to prevent unbounded context growth.
+      // This handles cases where the SDK's prepareCompaction() or our
+      // isRealConversationMessage check incorrectly identifies messages as
+      // non-real, which can happen after the first compaction in some sessions
+      // (see issue #49272).
+      //
+      // The normal compaction flow (line 1005+) already handles empty
+      // messagesToSummarize arrays by using buildStructuredFallbackSummary
+      // (line 1005), but critically returns complete compaction metadata
+      // including tokensAfter, identifiers, and fileOps — which the SDK
+      // needs to properly prepare the next compaction. The minimal boundary
+      // below lacks this metadata, which may cause subsequent compactions
+      // to fail.
+      if (tokensBefore >= tokenThreshold) {
+        log.warn(
+          `[compaction-override] No real messages detected but tokensBefore=${tokensBefore} ` +
+            `exceeds threshold (${tokenThreshold}). Proceeding with compaction to prevent context growth. ` +
+            `This may indicate a bug in isRealConversationMessage or SDK preparation logic.`,
+        );
+        // DO NOT RETURN - fall through to normal compaction flow below,
+        // which will handle empty messages safely and return complete metadata
+      } else {
+        // Original behavior: write minimal compaction boundary for low-token cases.
+        // When there are no summarizable messages AND no real turn-prefix content,
+        // cancelling compaction leaves context unchanged but the SDK re-triggers
+        // _checkCompaction after every assistant response — creating a cancel loop
+        // that blocks cron lanes (#41981).
+        //
+        // Strategy: always return a minimal compaction result so the SDK writes a
+        // boundary entry. The SDK's prepareCompaction() returns undefined when the
+        // last entry is a compaction, which blocks immediate re-triggering within
+        // the same turn. After a new assistant message arrives, if the SDK triggers
+        // compaction again with an empty preparation, we write another boundary —
+        // this is bounded to at most one boundary per LLM round-trip, not a tight
+        // loop.
+        log.info(
+          "Compaction safeguard: no real conversation messages to summarize; writing compaction boundary to suppress re-trigger loop.",
+        );
+        const fallbackSummary = buildStructuredFallbackSummary(preparation.previousSummary);
+        return {
+          compaction: {
+            summary: fallbackSummary,
+            firstKeptEntryId: preparation.firstKeptEntryId,
+            tokensBefore: preparation.tokensBefore,
+          },
+        };
+      }
     }
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
