@@ -3,6 +3,7 @@ import Foundation
 enum CommandResolver {
     private static let projectRootDefaultsKey = "openclaw.gatewayProjectRootPath"
     private static let helperName = "openclaw"
+    private static let repoMarkers = ["openclaw.mjs", "package.json"]
 
     static func gatewayEntrypoint(in root: URL) -> String? {
         let distEntry = root.appendingPathComponent("dist/index.js").path
@@ -49,16 +50,22 @@ enum CommandResolver {
     static func projectRoot() -> URL {
         if let stored = UserDefaults.standard.string(forKey: self.projectRootDefaultsKey),
            let url = self.expandPath(stored),
-           FileManager().fileExists(atPath: url.path)
+           self.isRepoRoot(url)
         {
             return url
         }
-        let fallback = FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent("Projects/openclaw")
-        if FileManager().fileExists(atPath: fallback.path) {
+        if let inferred = self.inferProjectRoot(from: Bundle.main.bundleURL) {
+            return inferred
+        }
+        let home = FileManager().homeDirectoryForCurrentUser
+        let fallbacks = [
+            home.appendingPathComponent("Programming_Projects/openclaw"),
+            home.appendingPathComponent("Projects/openclaw"),
+        ]
+        for fallback in fallbacks where self.isRepoRoot(fallback) {
             return fallback
         }
-        return FileManager().homeDirectoryForCurrentUser
+        return home
     }
 
     static func setProjectRoot(_ path: String) {
@@ -67,6 +74,11 @@ enum CommandResolver {
 
     static func projectRootPath() -> String {
         self.projectRoot().path
+    }
+
+    static func projectRootEnvironmentHint() -> String? {
+        let root = self.projectRoot()
+        return self.isRepoRoot(root) ? root.path : nil
     }
 
     static func preferredPaths() -> [String] {
@@ -519,6 +531,27 @@ enum CommandResolver {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return trimmed
+    }
+
+    private static func isRepoRoot(_ url: URL) -> Bool {
+        self.repoMarkers.allSatisfy { marker in
+            FileManager().fileExists(atPath: url.appendingPathComponent(marker).path)
+        }
+    }
+
+    static func inferProjectRoot(from bundleURL: URL) -> URL? {
+        var candidate = bundleURL.resolvingSymlinksInPath().deletingLastPathComponent()
+        for _ in 0..<8 {
+            if self.isRepoRoot(candidate),
+               self.gatewayEntrypoint(in: candidate) != nil
+            {
+                return candidate
+            }
+            let parent = candidate.deletingLastPathComponent()
+            if parent.path == candidate.path { break }
+            candidate = parent
+        }
+        return nil
     }
 
     private static func isValidSSHComponent(_ value: String, allowLeadingDash: Bool = false) -> Bool {
