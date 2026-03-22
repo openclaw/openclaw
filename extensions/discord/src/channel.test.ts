@@ -46,6 +46,31 @@ function createCfg(): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function resolveAccount(cfg: OpenClawConfig): ResolvedDiscordAccount {
+  return discordPlugin.config.resolveAccount(cfg, "default") as ResolvedDiscordAccount;
+}
+
+function startDiscordAccount(cfg: OpenClawConfig) {
+  return discordPlugin.gateway!.startAccount!(
+    createStartAccountContext({
+      account: resolveAccount(cfg),
+      cfg,
+      runtime: createRuntimeEnv(),
+    }),
+  );
+}
+
+function installDiscordRuntime(discord: Record<string, unknown>) {
+  setDiscordRuntime({
+    channel: {
+      discord,
+    },
+    logging: {
+      shouldLogVerbose: () => false,
+    },
+  } as unknown as PluginRuntime);
+}
+
 afterEach(() => {
   probeDiscordMock.mockReset();
   monitorDiscordProviderMock.mockReset();
@@ -87,16 +112,9 @@ describe("discordPlugin outbound", () => {
     const runtimeProbeDiscord = vi.fn(async () => {
       throw new Error("runtime Discord probe should not be used");
     });
-    setDiscordRuntime({
-      channel: {
-        discord: {
-          probeDiscord: runtimeProbeDiscord,
-        },
-      },
-      logging: {
-        shouldLogVerbose: () => false,
-      },
-    } as unknown as PluginRuntime);
+    installDiscordRuntime({
+      probeDiscord: runtimeProbeDiscord,
+    });
     probeDiscordMock.mockResolvedValue({
       ok: true,
       bot: { username: "Bob" },
@@ -111,7 +129,7 @@ describe("discordPlugin outbound", () => {
     });
 
     const cfg = createCfg();
-    const account = discordPlugin.config.resolveAccount(cfg, "default");
+    const account = resolveAccount(cfg);
 
     await discordPlugin.status!.probeAccount!({
       account,
@@ -132,17 +150,10 @@ describe("discordPlugin outbound", () => {
     const runtimeMonitorDiscordProvider = vi.fn(async () => {
       throw new Error("runtime Discord monitor should not be used");
     });
-    setDiscordRuntime({
-      channel: {
-        discord: {
-          probeDiscord: runtimeProbeDiscord,
-          monitorDiscordProvider: runtimeMonitorDiscordProvider,
-        },
-      },
-      logging: {
-        shouldLogVerbose: () => false,
-      },
-    } as unknown as PluginRuntime);
+    installDiscordRuntime({
+      probeDiscord: runtimeProbeDiscord,
+      monitorDiscordProvider: runtimeMonitorDiscordProvider,
+    });
     probeDiscordMock.mockResolvedValue({
       ok: true,
       bot: { username: "Bob" },
@@ -158,13 +169,7 @@ describe("discordPlugin outbound", () => {
     monitorDiscordProviderMock.mockResolvedValue(undefined);
 
     const cfg = createCfg();
-    await discordPlugin.gateway!.startAccount!(
-      createStartAccountContext({
-        account: discordPlugin.config.resolveAccount(cfg, "default") as ResolvedDiscordAccount,
-        cfg,
-        runtime: createRuntimeEnv(),
-      }),
-    );
+    await startDiscordAccount(cfg);
 
     expect(probeDiscordMock).toHaveBeenCalledWith("discord-token", 2500, {
       includeApplication: true,
