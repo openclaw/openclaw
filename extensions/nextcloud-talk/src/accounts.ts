@@ -1,4 +1,7 @@
-import { mergeAccountConfig } from "openclaw/plugin-sdk/account-resolution";
+import {
+  mergeAccountConfig,
+  resolveNormalizedAccountEntry,
+} from "openclaw/plugin-sdk/account-resolution";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/infra-runtime";
 import {
   createAccountListHelpers,
@@ -48,17 +51,13 @@ function resolveAccountConfig(
   cfg: CoreConfig,
   accountId: string,
 ): NextcloudTalkAccountConfig | undefined {
-  const accounts = cfg.channels?.["nextcloud-talk"]?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return undefined;
-  }
-  const direct = accounts[accountId] as NextcloudTalkAccountConfig | undefined;
-  if (direct) {
-    return direct;
-  }
-  const normalized = normalizeAccountId(accountId);
-  const matchKey = Object.keys(accounts).find((key) => normalizeAccountId(key) === normalized);
-  return matchKey ? (accounts[matchKey] as NextcloudTalkAccountConfig | undefined) : undefined;
+  return resolveNormalizedAccountEntry(
+    cfg.channels?.["nextcloud-talk"]?.accounts as
+      | Record<string, NextcloudTalkAccountConfig>
+      | undefined,
+    accountId,
+    normalizeAccountId,
+  );
 }
 
 function mergeNextcloudTalkAccountConfig(
