@@ -168,11 +168,15 @@ export function wrapEditToolWithRecovery(
               newText,
             })
           ) {
-            return buildEditSuccessResult(pathParam);
+            return buildEditSuccessResult(pathParam ?? absolutePath);
           }
         }
 
-        if (typeof currentContent === "string" && shouldAddMismatchHint(err)) {
+        if (
+          typeof currentContent === "string" &&
+          err instanceof Error &&
+          shouldAddMismatchHint(err)
+        ) {
           throw appendMismatchHint(err, currentContent);
         }
 
