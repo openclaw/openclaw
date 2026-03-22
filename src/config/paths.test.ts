@@ -69,6 +69,31 @@ describe("state + config path candidates", () => {
     expect(env.OPENCLAW_STATE_DIR).toBe(path.resolve("."));
   });
 
+  it("pins a relative state-dir override to the cwd at normalization time", async () => {
+    await withTempDir({ prefix: "openclaw-state-normalize-" }, async (root) => {
+      const originalCwd = process.cwd();
+      const initialDir = path.join(root, "initial");
+      const laterDir = path.join(root, "later");
+      await fs.mkdir(initialDir, { recursive: true });
+      await fs.mkdir(laterDir, { recursive: true });
+
+      try {
+        process.chdir(initialDir);
+        const env = {
+          OPENCLAW_STATE_DIR: ".",
+          OPENCLAW_HOME: root,
+        } as NodeJS.ProcessEnv;
+
+        normalizeStateDirEnv(env);
+        process.chdir(laterDir);
+
+        expect(await fs.realpath(resolveStateDir(env, () => root))).toBe(await fs.realpath(initialDir));
+      } finally {
+        process.chdir(originalCwd);
+      }
+    });
+  });
+
   it("normalizes legacy CLAWDBOT_STATE_DIR overrides to absolute paths", () => {
     const env = {
       CLAWDBOT_STATE_DIR: "./state",

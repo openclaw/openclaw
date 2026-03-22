@@ -19,6 +19,7 @@ const runGatewayLoop = vi.fn(async ({ start }: { start: () => Promise<unknown> }
   await start();
 });
 const normalizeStateDirEnv = vi.fn((_env?: NodeJS.ProcessEnv) => undefined);
+const callOrder = vi.hoisted(() => [] as string[]);
 const configState = vi.hoisted(() => ({
   cfg: {} as Record<string, unknown>,
   snapshot: { exists: false } as Record<string, unknown>,
@@ -140,6 +141,7 @@ describe("gateway run option collisions", () => {
     ensureDevGatewayConfig.mockClear();
     runGatewayLoop.mockClear();
     normalizeStateDirEnv.mockClear();
+    callOrder.length = 0;
   });
 
   async function runGatewayCli(argv: string[]) {
@@ -158,6 +160,14 @@ describe("gateway run option collisions", () => {
   }
 
   it("forwards parent-captured options to `gateway run` subcommand", async () => {
+    normalizeStateDirEnv.mockImplementation((_env?: NodeJS.ProcessEnv) => {
+      callOrder.push("normalize");
+    });
+    startGatewayServer.mockImplementationOnce(async (_port: number, _opts?: unknown) => {
+      callOrder.push("start");
+      return { close: vi.fn(async () => {}) };
+    });
+
     await runGatewayCli([
       "gateway",
       "run",
@@ -184,6 +194,7 @@ describe("gateway run option collisions", () => {
       }),
     );
     expect(normalizeStateDirEnv).toHaveBeenCalledWith(process.env);
+    expect(callOrder).toEqual(["normalize", "start"]);
   });
 
   it("starts gateway when token mode has no configured token (startup bootstrap path)", async () => {
