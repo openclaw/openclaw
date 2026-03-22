@@ -729,7 +729,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const absTarget = path.join(this.workspaceDir, normalized);
     const resolvedTarget = await fs.realpath(path.dirname(absTarget)).catch(() => absTarget);
     const resolvedWorkspace = await fs.realpath(this.workspaceDir).catch(() => this.workspaceDir);
-    if (!resolvedTarget.startsWith(resolvedWorkspace)) {
+    if (
+      !resolvedTarget.startsWith(resolvedWorkspace + path.sep) &&
+      resolvedTarget !== resolvedWorkspace
+    ) {
       throw new Error(`writeMemoryFile: resolved path escapes workspace root`);
     }
 

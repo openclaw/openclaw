@@ -804,12 +804,67 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     entry: MemoryFileEntry | SessionFileEntry,
     options: { source: MemorySource; content?: string },
   ) {
-    // FTS-only mode: skip indexing if no provider
+    // FTS-only mode: chunk text and populate FTS index without embeddings
     if (!this.provider) {
-      log.debug("Skipping embedding indexing in FTS-only mode", {
-        path: entry.path,
-        source: options.source,
-      });
+      if ("kind" in entry && entry.kind === "multimodal") {
+        // Multimodal files need an embedding provider; skip in FTS-only mode
+        return;
+      }
+      const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
+      const chunks = chunkMarkdown(content, this.settings.chunking).filter(
+        (chunk) => chunk.text.trim().length > 0,
+      );
+      if (options.source === "sessions" && "lineMap" in entry) {
+        remapChunkLines(chunks, entry.lineMap);
+      }
+      const modelTag = "keyword-only";
+      const now = Date.now();
+      this.clearIndexedFileData(entry.path, options.source);
+      for (const chunk of chunks) {
+        const id = hashText(
+          `${options.source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${modelTag}`,
+        );
+        this.db
+          .prepare(
+            `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+               hash=excluded.hash,
+               model=excluded.model,
+               text=excluded.text,
+               embedding=excluded.embedding,
+               updated_at=excluded.updated_at`,
+          )
+          .run(
+            id,
+            entry.path,
+            options.source,
+            chunk.startLine,
+            chunk.endLine,
+            chunk.hash,
+            modelTag,
+            chunk.text,
+            JSON.stringify([]),
+            now,
+          );
+        if (this.fts.enabled && this.fts.available) {
+          this.db
+            .prepare(
+              `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
+                ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              chunk.text,
+              id,
+              entry.path,
+              options.source,
+              modelTag,
+              chunk.startLine,
+              chunk.endLine,
+            );
+        }
+      }
+      this.upsertFileRecord(entry, options.source);
       return;
     }
 
