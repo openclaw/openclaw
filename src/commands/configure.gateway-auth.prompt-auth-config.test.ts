@@ -44,7 +44,7 @@ vi.mock("./onboard-custom.js", () => ({
   promptCustomApiConfig: mocks.promptCustomApiConfig,
 }));
 
-vi.mock("../plugins/providers.js", () => ({
+vi.mock("../plugins/providers.runtime.js", () => ({
   resolvePluginProviders: mocks.resolvePluginProviders,
 }));
 
