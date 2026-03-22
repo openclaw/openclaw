@@ -2336,8 +2336,11 @@ export async function runEmbeddedAttempt(
         getCompactionCount,
       } = subscription;
 
-      // Use the outer queueHandle if provided (outer has already called setActiveEmbeddedRun).
-      // This ensures the outer finally clears the same object that was registered.
+      // Use the outer queueHandle when provided. This is the SAME object that outer
+      // registered with setActiveEmbeddedRun at the start of the run loop.
+      // Calling setActiveEmbeddedRun here with the same object is a no-op (duplicate
+      // registration), so it is safe. The key guarantee: the same handle is used for
+      // registration (by outer), lifetime (by attempt), and cleanup (by outer finally).
       const queueHandle: EmbeddedPiQueueHandle = params.queueHandle ?? {
         queueMessage: async (text: string) => {
           await activeSession.steer(text);
@@ -2346,9 +2349,9 @@ export async function runEmbeddedAttempt(
         isCompacting: () => subscription.isCompacting(),
         abort: abortRun,
       };
-      if (!params.queueHandle) {
-        setActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
-      }
+      // Always register; when params.queueHandle is provided it is the same object
+      // already registered by the outer, so this is a safe no-op duplicate registration.
+      setActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
       // ── Update attemptRef with live queueHandle (overwrites placeholder) ───
       // activeSession is now set up, so this queueHandle has real steering/streaming.
       // Outer wrapper will read this immediately after await returns.

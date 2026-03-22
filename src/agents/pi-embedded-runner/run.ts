@@ -1039,12 +1039,15 @@ export async function runEmbeddedPiAgent(
             // Retry/failover classification happens after the attempt returns.
             // Keep the run registered until this outer loop decides whether
             // to continue, so transient retry windows do not look idle.
-            // NOTE: queueHandle is NOT passed here. The attempt always creates its own
-            // local queueHandle. We retrieve it via attempt.queueHandle after the await
-            // returns, so the outer wrapper can forward to the current in-flight attempt.
-            // attemptRef is passed so the attempt can write its live handle synchronously
-            // before any await, enabling outer forwarding from the first attempt onward.
+            // queueHandle is passed to the attempt so it uses the SAME outer handle object
+            // for its entire lifetime. This guarantees:
+            //   1. setActiveEmbeddedRun registers the outer queueHandle (outer, before loop)
+            //   2. attempt uses the same outer queueHandle (no local creation)
+            //   3. outer finally clears the same outer queueHandle
+            // attemptRef is also passed so the attempt can write live handle / abortRun
+            // synchronously before any await, enabling outer forwarding immediately.
             attemptRef,
+            queueHandle,
             deferActiveRunCleanup: true,
             abortSignal: currentAbortController.signal,
             shouldEmitToolResult: params.shouldEmitToolResult,
