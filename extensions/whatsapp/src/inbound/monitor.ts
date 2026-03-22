@@ -478,7 +478,15 @@ export async function monitorWebInbox(options: {
           ev.removeListener("messages.upsert", messagesUpsertHandler);
           ev.removeListener("connection.update", connectionUpdateHandler);
         }
-        sock.ws?.close();
+        // Use Baileys' full cleanup (clears keepalive, removes WS listeners,
+        // emits connection.update close event). Falls back to raw WS close
+        // if end() is unavailable for backward compatibility.
+        const sockWithEnd = sock as unknown as { end?: (err?: Error) => void };
+        if (typeof sockWithEnd.end === "function") {
+          sockWithEnd.end(new Error("OpenClaw listener close"));
+        } else {
+          sock.ws?.close();
+        }
       } catch (err) {
         logVerbose(`Socket close failed: ${String(err)}`);
       }
