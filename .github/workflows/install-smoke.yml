@@ -37,9 +37,42 @@ jobs:
         id: check
         uses: ./.github/actions/detect-docs-changes
 
-  install-smoke:
+  changed-smoke:
     needs: [docs-scope]
-    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && needs.docs-scope.outputs.docs_only != 'true'
+    if: needs.docs-scope.outputs.docs_only != 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    outputs:
+      run_changed_smoke: ${{ steps.scope.outputs.run_changed_smoke }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+
+      - name: Ensure changed-smoke base commit
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+
+      - name: Detect changed smoke scope
+        id: scope
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            BASE="${{ github.event.before }}"
+          else
+            BASE="${{ github.event.pull_request.base.sha }}"
+          fi
+
+          node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
+
+  install-smoke:
+    needs: [docs-scope, changed-smoke]
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-smoke.outputs.run_changed_smoke == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     env:
       DOCKER_BUILD_SUMMARY: "false"
