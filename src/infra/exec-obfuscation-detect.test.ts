@@ -55,6 +55,11 @@ describe("detectCommandObfuscation", () => {
       expect(result.detected).toBe(true);
       expect(result.matchedPatterns).toContain("pipe-to-shell");
     });
+
+    it("does NOT flag logical OR followed by a shell token", () => {
+      const result = detectCommandObfuscation("false || sh -c 'echo hi'");
+      expect(result.matchedPatterns).not.toContain("pipe-to-shell");
+    });
   });
 
   describe("escape sequence obfuscation", () => {

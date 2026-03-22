@@ -118,7 +118,8 @@ const OBFUSCATION_PATTERNS: ObfuscationPattern[] = [
   {
     id: "pipe-to-shell",
     description: "Content piped directly to shell interpreter",
-    regex: /\|\s*(?:sh|bash|zsh|dash|ksh|fish)\b(?:\s+[^|;\n\r]+)?\s*$/im,
+    // Exclude `||` (logical OR) — the `|` in OR must not look like a pipe (#51908).
+    regex: /(?<!\|)\|\s*(?:sh|bash|zsh|dash|ksh|fish)\b(?:\s+[^|;\n\r]+)?\s*$/im,
   },
   {
     id: "command-substitution-decode-exec",
