@@ -38,6 +38,10 @@ function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
       }
     }
   }
+  // FastAPI/Starlette/Codex API error shape: {"detail": "..."}
+  if (typeof record.detail === "string") {
+    return true;
+  }
   return false;
 }
 
@@ -132,7 +136,12 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
         : undefined;
 
   const topType = typeof payload.type === "string" ? payload.type : undefined;
-  const topMessage = typeof payload.message === "string" ? payload.message : undefined;
+  const topMessage =
+    typeof payload.message === "string"
+      ? payload.message
+      : typeof payload.detail === "string"
+        ? payload.detail
+        : undefined;
 
   let errType: string | undefined;
   let errMessage: string | undefined;
