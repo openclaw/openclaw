@@ -36,6 +36,7 @@ Jobs are ordered so cheap checks fail before expensive ones run:
 3. Pushes to `main`: `build-artifacts` + `release-check` + Bun compat + `compat-node22`
 
 Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests in `src/scripts/ci-changed-scope.test.ts`.
+The same shared scope module also drives the separate `install-smoke` workflow through a narrower `changed-smoke` gate, so Docker/install smoke only runs for install, packaging, and container-relevant changes.
 
 ## Runners
 
