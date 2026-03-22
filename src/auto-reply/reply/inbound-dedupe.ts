@@ -115,9 +115,14 @@ function buildDiscordThreadContentCloneDedupeKey(ctx: MsgContext): string | null
   if (!normalizedBody) {
     return null;
   }
-  return [provider, ctx.AccountId?.trim() ?? "", sessionScope, peerId, threadId, normalizedBody].join(
-    "|",
-  );
+  return [
+    provider,
+    ctx.AccountId?.trim() ?? "",
+    sessionScope,
+    peerId,
+    threadId,
+    normalizedBody,
+  ].join("|");
 }
 
 export function shouldSkipDuplicateInbound(

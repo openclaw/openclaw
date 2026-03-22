@@ -119,6 +119,8 @@ describe("inbound dedupe", () => {
 
     expect(shouldSkipDuplicateInbound(first, { now: 100, cloneCache })).toBe(true);
     expect(cloneCache.check).toHaveBeenCalled();
-    expect(shouldSkipDuplicateInbound(second, { now: 101, cache: cloneCache, cloneCache })).toBe(true);
+    expect(shouldSkipDuplicateInbound(second, { now: 101, cache: cloneCache, cloneCache })).toBe(
+      true,
+    );
   });
 });
