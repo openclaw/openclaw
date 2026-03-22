@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   ackDelivery,
   enqueueDelivery,
+  ensureQueueDir,
   failDelivery,
   loadPendingDeliveries,
   moveToFailed,
@@ -125,6 +126,35 @@ describe("delivery-queue storage", () => {
       expect((entry.lastAttemptAt as number) > 0).toBe(true);
       expect(entry.lastError).toBe("connection refused");
     });
+
+    it("normalizes legacy entries before incrementing retry metadata", async () => {
+      const id = "legacy-fail-entry";
+      await ensureQueueDir(tmpDir());
+      fs.writeFileSync(
+        path.join(tmpDir(), "delivery-queue", `${id}.json`),
+        JSON.stringify(
+          {
+            id,
+            channel: "telegram",
+            to: "12345",
+            payload: { text: "legacy" },
+            attempt: 0,
+            createdAt: new Date("2026-03-22T12:00:00.000Z").toISOString(),
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      await failDelivery(id, "boom", tmpDir());
+
+      const entry = readQueuedEntry(tmpDir(), id);
+      expect(entry.retryCount).toBe(1);
+      expect(entry.lastError).toBe("boom");
+      expect(Array.isArray(entry.payloads)).toBe(true);
+      expect(entry.payloads[0]?.text).toBe("legacy");
+    });
   });
 
   describe("moveToFailed", () => {
@@ -191,6 +221,44 @@ describe("delivery-queue storage", () => {
 
       const persisted = readQueuedEntry(tmpDir(), id);
       expect(persisted.lastAttemptAt).toBe(persisted.enqueuedAt);
+    });
+
+    it("preserves mirror idempotency keys and forceDocument when normalizing legacy entries", async () => {
+      const id = "legacy-normalized-entry";
+      const filePath = path.join(tmpDir(), "delivery-queue", `${id}.json`);
+      await ensureQueueDir(tmpDir());
+      fs.writeFileSync(
+        filePath,
+        JSON.stringify(
+          {
+            id,
+            channel: "whatsapp",
+            target: "+1555",
+            payload: { text: "legacy" },
+            attempt: 0,
+            createdAt: new Date("2026-03-22T12:00:00.000Z").toISOString(),
+            forceDocument: true,
+            mirror: {
+              sessionKey: "agent:main:main",
+              idempotencyKey: "idem-legacy-1",
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const entries = await loadPendingDeliveries(tmpDir());
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.forceDocument).toBe(true);
+      expect(entries[0]?.mirror?.idempotencyKey).toBe("idem-legacy-1");
+
+      const persisted = readQueuedEntry(tmpDir(), id);
+      expect(persisted.forceDocument).toBe(true);
+      expect(persisted.mirror?.idempotencyKey).toBe("idem-legacy-1");
+      expect(Array.isArray(persisted.payloads)).toBe(true);
+      expect(persisted.retryCount).toBe(0);
     });
   });
 });
