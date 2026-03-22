@@ -19,9 +19,28 @@ const GenericTavilySearchSchema = Type.Object(
         maximum: 20,
       }),
     ),
+    freshness: Type.Optional(
+      Type.String({
+        description:
+          "Filter results by time range: 'pd' (day), 'pw' (week), 'pm' (month), 'py' (year).",
+      }),
+    ),
   },
   { additionalProperties: false },
 );
+
+function freshnessToTavilyDays(freshness: string | undefined): number | undefined {
+  if (!freshness) {
+    return undefined;
+  }
+  const map: Record<string, number> = {
+    pd: 1,
+    pw: 7,
+    pm: 30,
+    py: 365,
+  };
+  return map[freshness] ?? undefined;
+}
 
 export function createTavilyWebSearchProvider(): WebSearchProviderPlugin {
   return {
@@ -54,6 +73,9 @@ export function createTavilyWebSearchProvider(): WebSearchProviderPlugin {
           cfg: ctx.config,
           query: typeof args.query === "string" ? args.query : "",
           maxResults: typeof args.count === "number" ? args.count : undefined,
+          days: freshnessToTavilyDays(
+            typeof args.freshness === "string" ? args.freshness : undefined,
+          ),
         }),
     }),
   };

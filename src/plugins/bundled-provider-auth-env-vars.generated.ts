@@ -28,6 +28,7 @@ export const BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   perplexity: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
   qianfan: ["QIANFAN_API_KEY"],
   "qwen-portal": ["QWEN_OAUTH_TOKEN", "QWEN_PORTAL_API_KEY"],
+  searxng: ["SEARXNG_API_KEY"],
   sglang: ["SGLANG_API_KEY"],
   synthetic: ["SYNTHETIC_API_KEY"],
   tavily: ["TAVILY_API_KEY"],
