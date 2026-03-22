@@ -11,7 +11,7 @@ import {
   createPairingPrefixStripper,
 } from "openclaw/plugin-sdk/channel-pairing";
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
-import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
 import {
   buildBaseChannelStatusSummary,
@@ -107,218 +107,228 @@ const collectNextcloudTalkSecurityWarnings =
     },
   });
 
-export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = {
-  id: "nextcloud-talk",
-  meta,
-  setupWizard: nextcloudTalkSetupWizard,
-  pairing: {
-    idLabel: "nextcloudUserId",
-    normalizeAllowEntry: createPairingPrefixStripper(/^(nextcloud-talk|nc-talk|nc):/i, (entry) =>
-      entry.toLowerCase(),
-    ),
-    notifyApproval: createLoggedPairingApprovalNotifier(
-      ({ id }) => `[nextcloud-talk] User ${id} approved for pairing`,
-    ),
-  },
-  capabilities: {
-    chatTypes: ["direct", "group"],
-    reactions: true,
-    threads: false,
-    media: true,
-    nativeCommands: false,
-    blockStreaming: true,
-  },
-  reload: { configPrefixes: ["channels.nextcloud-talk"] },
-  configSchema: buildChannelConfigSchema(NextcloudTalkConfigSchema),
-  config: {
-    ...nextcloudTalkConfigAdapter,
-    isConfigured: (account) => Boolean(account.secret?.trim() && account.baseUrl?.trim()),
-    describeAccount: (account) =>
-      describeAccountSnapshot({
-        account,
-        configured: Boolean(account.secret?.trim() && account.baseUrl?.trim()),
-        extra: {
-          secretSource: account.secretSource,
-          baseUrl: account.baseUrl ? "[set]" : "[missing]",
-        },
-      }),
-  },
-  security: {
-    resolveDmPolicy: resolveNextcloudTalkDmPolicy,
-    collectWarnings: collectNextcloudTalkSecurityWarnings,
-  },
-  groups: {
-    resolveRequireMention: ({ cfg, accountId, groupId }) => {
-      const account = resolveNextcloudTalkAccount({ cfg: cfg as CoreConfig, accountId });
-      const rooms = account.config.rooms;
-      if (!rooms || !groupId) {
-        return true;
-      }
-
-      const roomConfig = rooms[groupId];
-      if (roomConfig?.requireMention !== undefined) {
-        return roomConfig.requireMention;
-      }
-
-      const wildcardConfig = rooms["*"];
-      if (wildcardConfig?.requireMention !== undefined) {
-        return wildcardConfig.requireMention;
-      }
-
-      return true;
-    },
-    resolveToolPolicy: resolveNextcloudTalkGroupToolPolicy,
-  },
-  messaging: {
-    normalizeTarget: normalizeNextcloudTalkMessagingTarget,
-    resolveOutboundSessionRoute: (params) => resolveNextcloudTalkOutboundSessionRoute(params),
-    targetResolver: {
-      looksLikeId: looksLikeNextcloudTalkTargetId,
-      hint: "<roomToken>",
-    },
-  },
-  setup: nextcloudTalkSetupAdapter,
-  outbound: {
-    deliveryMode: "direct",
-    chunker: (text, limit) => getNextcloudTalkRuntime().channel.text.chunkMarkdownText(text, limit),
-    chunkerMode: "markdown",
-    textChunkLimit: 4000,
-    ...createAttachedChannelResultAdapter({
-      channel: "nextcloud-talk",
-      sendText: async ({ cfg, to, text, accountId, replyToId }) =>
-        await sendMessageNextcloudTalk(to, text, {
-          accountId: accountId ?? undefined,
-          replyTo: replyToId ?? undefined,
-          cfg: cfg as CoreConfig,
-        }),
-      sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId }) =>
-        await sendMessageNextcloudTalk(to, mediaUrl ? `${text}\n\nAttachment: ${mediaUrl}` : text, {
-          accountId: accountId ?? undefined,
-          replyTo: replyToId ?? undefined,
-          cfg: cfg as CoreConfig,
-        }),
-    }),
-  },
-  status: {
-    defaultRuntime: {
-      accountId: DEFAULT_ACCOUNT_ID,
-      running: false,
-      lastStartAt: null,
-      lastStopAt: null,
-      lastError: null,
-    },
-    buildChannelSummary: ({ snapshot }) =>
-      buildBaseChannelStatusSummary(snapshot, {
-        secretSource: snapshot.secretSource ?? "none",
-        mode: "webhook",
-      }),
-    buildAccountSnapshot: ({ account, runtime }) => {
-      const configured = Boolean(account.secret?.trim() && account.baseUrl?.trim());
-      return buildRuntimeAccountStatusSnapshot(
-        { runtime },
-        {
-          accountId: account.accountId,
-          name: account.name,
-          enabled: account.enabled,
-          configured,
-          secretSource: account.secretSource,
-          baseUrl: account.baseUrl ? "[set]" : "[missing]",
-          mode: "webhook",
-          lastInboundAt: runtime?.lastInboundAt ?? null,
-          lastOutboundAt: runtime?.lastOutboundAt ?? null,
-        },
-      );
-    },
-  },
-  gateway: {
-    startAccount: async (ctx) => {
-      const account = ctx.account;
-      if (!account.secret || !account.baseUrl) {
-        throw new Error(
-          `Nextcloud Talk not configured for account "${account.accountId}" (missing secret or baseUrl)`,
-        );
-      }
-
-      ctx.log?.info(`[${account.accountId}] starting Nextcloud Talk webhook server`);
-
-      const statusSink = createAccountStatusSink({
-        accountId: ctx.accountId,
-        setStatus: ctx.setStatus,
-      });
-
-      await runStoppablePassiveMonitor({
-        abortSignal: ctx.abortSignal,
-        start: async () =>
-          await monitorNextcloudTalkProvider({
-            accountId: account.accountId,
-            config: ctx.cfg as CoreConfig,
-            runtime: ctx.runtime,
-            abortSignal: ctx.abortSignal,
-            statusSink,
+export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
+  createChatChannelPlugin({
+    base: {
+      id: "nextcloud-talk",
+      meta,
+      setupWizard: nextcloudTalkSetupWizard,
+      capabilities: {
+        chatTypes: ["direct", "group"],
+        reactions: true,
+        threads: false,
+        media: true,
+        nativeCommands: false,
+        blockStreaming: true,
+      },
+      reload: { configPrefixes: ["channels.nextcloud-talk"] },
+      configSchema: buildChannelConfigSchema(NextcloudTalkConfigSchema),
+      config: {
+        ...nextcloudTalkConfigAdapter,
+        isConfigured: (account) => Boolean(account.secret?.trim() && account.baseUrl?.trim()),
+        describeAccount: (account) =>
+          describeAccountSnapshot({
+            account,
+            configured: Boolean(account.secret?.trim() && account.baseUrl?.trim()),
+            extra: {
+              secretSource: account.secretSource,
+              baseUrl: account.baseUrl ? "[set]" : "[missing]",
+            },
           }),
-      });
+      },
+      groups: {
+        resolveRequireMention: ({ cfg, accountId, groupId }) => {
+          const account = resolveNextcloudTalkAccount({ cfg: cfg as CoreConfig, accountId });
+          const rooms = account.config.rooms;
+          if (!rooms || !groupId) {
+            return true;
+          }
+
+          const roomConfig = rooms[groupId];
+          if (roomConfig?.requireMention !== undefined) {
+            return roomConfig.requireMention;
+          }
+
+          const wildcardConfig = rooms["*"];
+          if (wildcardConfig?.requireMention !== undefined) {
+            return wildcardConfig.requireMention;
+          }
+
+          return true;
+        },
+        resolveToolPolicy: resolveNextcloudTalkGroupToolPolicy,
+      },
+      messaging: {
+        normalizeTarget: normalizeNextcloudTalkMessagingTarget,
+        resolveOutboundSessionRoute: (params) => resolveNextcloudTalkOutboundSessionRoute(params),
+        targetResolver: {
+          looksLikeId: looksLikeNextcloudTalkTargetId,
+          hint: "<roomToken>",
+        },
+      },
+      setup: nextcloudTalkSetupAdapter,
+      status: {
+        defaultRuntime: {
+          accountId: DEFAULT_ACCOUNT_ID,
+          running: false,
+          lastStartAt: null,
+          lastStopAt: null,
+          lastError: null,
+        },
+        buildChannelSummary: ({ snapshot }) =>
+          buildBaseChannelStatusSummary(snapshot, {
+            secretSource: snapshot.secretSource ?? "none",
+            mode: "webhook",
+          }),
+        buildAccountSnapshot: ({ account, runtime }) => {
+          const configured = Boolean(account.secret?.trim() && account.baseUrl?.trim());
+          return buildRuntimeAccountStatusSnapshot(
+            { runtime },
+            {
+              accountId: account.accountId,
+              name: account.name,
+              enabled: account.enabled,
+              configured,
+              secretSource: account.secretSource,
+              baseUrl: account.baseUrl ? "[set]" : "[missing]",
+              mode: "webhook",
+              lastInboundAt: runtime?.lastInboundAt ?? null,
+              lastOutboundAt: runtime?.lastOutboundAt ?? null,
+            },
+          );
+        },
+      },
+      gateway: {
+        startAccount: async (ctx) => {
+          const account = ctx.account;
+          if (!account.secret || !account.baseUrl) {
+            throw new Error(
+              `Nextcloud Talk not configured for account "${account.accountId}" (missing secret or baseUrl)`,
+            );
+          }
+
+          ctx.log?.info(`[${account.accountId}] starting Nextcloud Talk webhook server`);
+
+          const statusSink = createAccountStatusSink({
+            accountId: ctx.accountId,
+            setStatus: ctx.setStatus,
+          });
+
+          await runStoppablePassiveMonitor({
+            abortSignal: ctx.abortSignal,
+            start: async () =>
+              await monitorNextcloudTalkProvider({
+                accountId: account.accountId,
+                config: ctx.cfg as CoreConfig,
+                runtime: ctx.runtime,
+                abortSignal: ctx.abortSignal,
+                statusSink,
+              }),
+          });
+        },
+        logoutAccount: async ({ accountId, cfg }) => {
+          const nextCfg = { ...cfg } as OpenClawConfig;
+          const nextSection = cfg.channels?.["nextcloud-talk"]
+            ? { ...cfg.channels["nextcloud-talk"] }
+            : undefined;
+          let cleared = false;
+          let changed = false;
+
+          if (nextSection) {
+            if (accountId === DEFAULT_ACCOUNT_ID && nextSection.botSecret) {
+              delete nextSection.botSecret;
+              cleared = true;
+              changed = true;
+            }
+            const accountCleanup = clearAccountEntryFields({
+              accounts: nextSection.accounts,
+              accountId,
+              fields: ["botSecret"],
+            });
+            if (accountCleanup.changed) {
+              changed = true;
+              if (accountCleanup.cleared) {
+                cleared = true;
+              }
+              if (accountCleanup.nextAccounts) {
+                nextSection.accounts = accountCleanup.nextAccounts;
+              } else {
+                delete nextSection.accounts;
+              }
+            }
+          }
+
+          if (changed) {
+            if (nextSection && Object.keys(nextSection).length > 0) {
+              nextCfg.channels = { ...nextCfg.channels, "nextcloud-talk": nextSection };
+            } else {
+              const nextChannels = { ...nextCfg.channels } as Record<string, unknown>;
+              delete nextChannels["nextcloud-talk"];
+              if (Object.keys(nextChannels).length > 0) {
+                nextCfg.channels = nextChannels as OpenClawConfig["channels"];
+              } else {
+                delete nextCfg.channels;
+              }
+            }
+          }
+
+          const resolved = resolveNextcloudTalkAccount({
+            cfg: changed ? (nextCfg as CoreConfig) : (cfg as CoreConfig),
+            accountId,
+          });
+          const loggedOut = resolved.secretSource === "none";
+
+          if (changed) {
+            await getNextcloudTalkRuntime().config.writeConfigFile(nextCfg);
+          }
+
+          return {
+            cleared,
+            envSecret: Boolean(process.env.NEXTCLOUD_TALK_BOT_SECRET?.trim()),
+            loggedOut,
+          };
+        },
+      },
     },
-    logoutAccount: async ({ accountId, cfg }) => {
-      const nextCfg = { ...cfg } as OpenClawConfig;
-      const nextSection = cfg.channels?.["nextcloud-talk"]
-        ? { ...cfg.channels["nextcloud-talk"] }
-        : undefined;
-      let cleared = false;
-      let changed = false;
-
-      if (nextSection) {
-        if (accountId === DEFAULT_ACCOUNT_ID && nextSection.botSecret) {
-          delete nextSection.botSecret;
-          cleared = true;
-          changed = true;
-        }
-        const accountCleanup = clearAccountEntryFields({
-          accounts: nextSection.accounts,
-          accountId,
-          fields: ["botSecret"],
-        });
-        if (accountCleanup.changed) {
-          changed = true;
-          if (accountCleanup.cleared) {
-            cleared = true;
-          }
-          if (accountCleanup.nextAccounts) {
-            nextSection.accounts = accountCleanup.nextAccounts;
-          } else {
-            delete nextSection.accounts;
-          }
-        }
-      }
-
-      if (changed) {
-        if (nextSection && Object.keys(nextSection).length > 0) {
-          nextCfg.channels = { ...nextCfg.channels, "nextcloud-talk": nextSection };
-        } else {
-          const nextChannels = { ...nextCfg.channels } as Record<string, unknown>;
-          delete nextChannels["nextcloud-talk"];
-          if (Object.keys(nextChannels).length > 0) {
-            nextCfg.channels = nextChannels as OpenClawConfig["channels"];
-          } else {
-            delete nextCfg.channels;
-          }
-        }
-      }
-
-      const resolved = resolveNextcloudTalkAccount({
-        cfg: changed ? (nextCfg as CoreConfig) : (cfg as CoreConfig),
-        accountId,
-      });
-      const loggedOut = resolved.secretSource === "none";
-
-      if (changed) {
-        await getNextcloudTalkRuntime().config.writeConfigFile(nextCfg);
-      }
-
-      return {
-        cleared,
-        envSecret: Boolean(process.env.NEXTCLOUD_TALK_BOT_SECRET?.trim()),
-        loggedOut,
-      };
+    pairing: {
+      idLabel: "nextcloudUserId",
+      normalizeAllowEntry: createPairingPrefixStripper(/^(nextcloud-talk|nc-talk|nc):/i, (entry) =>
+        entry.toLowerCase(),
+      ),
+      notifyApproval: createLoggedPairingApprovalNotifier(
+        ({ id }) => `[nextcloud-talk] User ${id} approved for pairing`,
+      ),
     },
-  },
-};
+    security: {
+      resolveDmPolicy: resolveNextcloudTalkDmPolicy,
+      collectWarnings: collectNextcloudTalkSecurityWarnings,
+    },
+    outbound: {
+      base: {
+        deliveryMode: "direct",
+        chunker: (text, limit) =>
+          getNextcloudTalkRuntime().channel.text.chunkMarkdownText(text, limit),
+        chunkerMode: "markdown",
+        textChunkLimit: 4000,
+      },
+      attachedResults: {
+        channel: "nextcloud-talk",
+        sendText: async ({ cfg, to, text, accountId, replyToId }) =>
+          await sendMessageNextcloudTalk(to, text, {
+            accountId: accountId ?? undefined,
+            replyTo: replyToId ?? undefined,
+            cfg: cfg as CoreConfig,
+          }),
+        sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId }) =>
+          await sendMessageNextcloudTalk(
+            to,
+            mediaUrl ? `${text}\n\nAttachment: ${mediaUrl}` : text,
+            {
+              accountId: accountId ?? undefined,
+              replyTo: replyToId ?? undefined,
+              cfg: cfg as CoreConfig,
+            },
+          ),
+      },
+    },
+  });
