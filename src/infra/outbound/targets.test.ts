@@ -18,7 +18,6 @@ import {
   createTargetsTestRegistry,
   createTelegramTestPlugin,
   createWhatsAppTestPlugin,
-  telegramMessagingForTest,
 } from "./targets.test-helpers.js";
 
 runResolveOutboundTargetCoreTests();

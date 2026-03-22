@@ -7,23 +7,31 @@ import type {
   SessionBindingAdapter,
   SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
+import type { PluginRegistry } from "./registry.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-binding-"));
 const approvalsPath = path.join(tempRoot, "plugin-binding-approvals.json");
 
-type PluginBindingRegistryStub = {
-  conversationBindingResolvedHandlers: Array<{
-    pluginId: string;
-    pluginRoot?: string;
-    handler: (event: unknown) => void | Promise<void>;
-    source: string;
-    rootDir?: string;
-  }>;
-};
-
-function createEmptyPluginRegistry(): PluginBindingRegistryStub {
+function createEmptyPluginRegistry(): PluginRegistry {
   return {
+    plugins: [],
+    tools: [],
+    hooks: [],
+    typedHooks: [],
+    channels: [],
+    channelSetups: [],
+    providers: [],
+    speechProviders: [],
+    mediaUnderstandingProviders: [],
+    imageGenerationProviders: [],
+    webSearchProviders: [],
+    gatewayHandlers: {},
+    httpRoutes: [],
+    cliRegistrars: [],
+    services: [],
+    commands: [],
     conversationBindingResolvedHandlers: [],
+    diagnostics: [],
   };
 }
 
@@ -98,7 +106,7 @@ const sessionBindingState = vi.hoisted(() => {
 });
 
 const pluginRuntimeState = vi.hoisted(() => ({
-  registry: createEmptyPluginRegistry() as PluginBindingRegistryStub,
+  registry: createEmptyPluginRegistry(),
 }));
 
 vi.mock("../infra/home-dir.js", async (importOriginal) => {
@@ -116,7 +124,7 @@ vi.mock("../infra/home-dir.js", async (importOriginal) => {
 
 vi.mock("./runtime.js", () => ({
   getActivePluginRegistry: () => pluginRuntimeState.registry,
-  setActivePluginRegistry: (registry: PluginBindingRegistryStub) => {
+  setActivePluginRegistry: (registry: ReturnType<typeof createEmptyPluginRegistry>) => {
     pluginRuntimeState.registry = registry;
   },
 }));
