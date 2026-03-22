@@ -382,10 +382,6 @@ describe("installHooksFromNpmSpec", () => {
     expect(fs.existsSync(packTmpDir)).toBe(false);
   });
 
-  it("rejects non-registry npm specs", async () => {
-    await expectUnsupportedNpmSpec((spec) => installHooksFromNpmSpec({ spec }));
-  });
-
   it("aborts when integrity drift callback rejects the fetched artifact", async () => {
     const run = vi.mocked(runCommandWithTimeout);
     mockNpmPackMetadataResult(run, {
@@ -411,7 +407,9 @@ describe("installHooksFromNpmSpec", () => {
     });
   });
 
-  it("rejects bare npm specs that resolve to prerelease versions", async () => {
+  it("rejects invalid npm spec shapes", async () => {
+    await expectUnsupportedNpmSpec((spec) => installHooksFromNpmSpec({ spec }));
+
     const run = vi.mocked(runCommandWithTimeout);
     mockNpmPackMetadataResult(run, {
       id: "@openclaw/test-hooks@0.0.2-beta.1",
