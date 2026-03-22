@@ -1,6 +1,9 @@
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { createMessageToolCardSchema } from "openclaw/plugin-sdk/channel-actions";
-import { createHybridChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
+import {
+  adaptScopedAccountAccessor,
+  createHybridChannelConfigAdapter,
+} from "openclaw/plugin-sdk/channel-config-helpers";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageToolDiscovery,
@@ -164,7 +167,7 @@ const feishuConfigAdapter = createHybridChannelConfigAdapter<
 >({
   sectionKey: "feishu",
   listAccountIds: listFeishuAccountIds,
-  resolveAccount: (cfg, accountId) => resolveFeishuAccount({ cfg, accountId }),
+  resolveAccount: adaptScopedAccountAccessor(resolveFeishuAccount),
   defaultAccountId: resolveDefaultFeishuAccountId,
   clearBaseFields: [],
   resolveAllowFrom: (account) => account.config.allowFrom,
