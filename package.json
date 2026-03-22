@@ -603,7 +603,7 @@
     "dup:check:json": "jscpd src extensions test scripts --format typescript,javascript --pattern \"**/*.{ts,tsx,js,mjs,cjs}\" --gitignore --noSymlinks --ignore \"**/node_modules/**,**/dist/**,**/.git/**,**/coverage/**,**/build/**,**/.build/**,**/.artifacts/**\" --min-lines 12 --min-tokens 80 --reporters json --output .artifacts/jscpd",
     "format": "oxfmt --write",
     "format:all": "pnpm format && pnpm format:swift",
-    "format:check": "oxfmt --check",
+    "format:check": "oxfmt --check --threads=1",
     "format:diff": "oxfmt --write && git --no-pager diff",
     "format:docs": "git ls-files 'docs/**/*.md' 'docs/**/*.mdx' 'README.md' | xargs oxfmt --write",
     "format:docs:check": "git ls-files 'docs/**/*.md' 'docs/**/*.mdx' 'README.md' | xargs oxfmt --check",
