@@ -12,8 +12,8 @@ const {
   botCtorSpy,
   commandSpy,
   dispatchReplyWithBufferedBlockDispatcher,
-  getLoadWebMediaMock,
   getLoadConfigMock,
+  getLoadWebMediaMock,
   getOnHandler,
   getReadChannelAllowFromStoreMock,
   getUpsertChannelPairingRequestMock,
@@ -51,6 +51,7 @@ const createTelegramBot = (opts: Parameters<typeof createTelegramBotBase>[0]) =>
   });
 
 const loadConfig = getLoadConfigMock();
+const loadWebMedia = getLoadWebMediaMock();
 const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
 const upsertChannelPairingRequest = getUpsertChannelPairingRequestMock();
 
