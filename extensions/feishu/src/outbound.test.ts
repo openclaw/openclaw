@@ -435,7 +435,7 @@ describe("feishuOutbound.sendText markdown image extraction", () => {
     // Remaining text should still be sent
     expect(sendMessageFeishuMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        text: expect.stringContaining("Check this:"),
+        text: expect.stringContaining("📎 https://example.com/broken.png"),
       }),
     );
   });

@@ -41,7 +41,7 @@ function normalizePossibleLocalImagePath(text: string | undefined): string | nul
 }
 
 /** Markdown image pattern: ![alt](url) — only HTTP(S) URLs. */
-const MARKDOWN_IMAGE_RE = /!\[([^\]]*)\]\((https?:\/\/[^)]+)\)/g;
+const MARKDOWN_IMAGE_RE = /!\[([^\]]*)\]\((https?:\/\/(?:[^)(]|\((?:[^)(]*)\))*)\)/g;
 
 /**
  * Extract markdown image URLs from text and return cleaned text with
@@ -135,6 +135,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       // Feishu images instead of sending them as plain text links.
       const extracted = extractMarkdownImageUrls(text);
       if (extracted.imageUrls.length > 0) {
+        let remainingText = extracted.cleanedText;
         let lastMediaResult: Awaited<ReturnType<typeof sendMediaFeishu>> | undefined;
         for (const url of extracted.imageUrls) {
           try {
@@ -144,18 +145,21 @@ export const feishuOutbound: ChannelOutboundAdapter = {
               mediaUrl: url,
               accountId: accountId ?? undefined,
               replyToMessageId,
+              replyInThread: threadId != null && !replyToId,
               mediaLocalRoots,
             });
           } catch (err) {
             console.error(`[feishu] image URL upload failed for ${url}:`, err);
+            // Preserve the URL as a plain link so the user still sees it.
+            remainingText = [remainingText, `📎 ${url}`].filter(Boolean).join("\n\n");
           }
         }
         // Send remaining text if any content is left after removing image references.
-        if (extracted.cleanedText) {
+        if (remainingText) {
           return await sendOutboundText({
             cfg,
             to,
-            text: extracted.cleanedText,
+            text: remainingText,
             accountId: accountId ?? undefined,
             replyToMessageId,
           });
