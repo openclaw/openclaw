@@ -341,10 +341,15 @@ def cmd_run():
         })
         return
 
-    # 6. Post reply (with human delay)
-    print("\nPhase 3: Posting...")
-    time.sleep(random.uniform(2, 5))  # Think before posting
-    success = post_reply(tweet['url'], reply)
+    # 6. Shadow mode — generate only, don't post
+    # Real posting unlocked when 100 consecutive replies score >= 8.0
+    SHADOW_MODE = True
+    QUALITY_GATE = 8.0
+    CONSECUTIVE_REQUIRED = 100
+
+    if SHADOW_MODE:
+        print("\nPhase 3: SHADOW MODE (not posting)")
+        success = True  # Simulate success for tracking
 
     if success:
         state["replies_today"] += 1
