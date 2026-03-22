@@ -506,7 +506,10 @@ export const registerTelegramHandlers = ({
 
   // autoEditPending: keyed by query.id — resolves with inline_message_id when the user selects
   // a timeout-path result, enabling the bot to auto-edit the message when the LLM finishes.
-  const autoEditPending = new Map<string, (inlineMessageId: string) => void>();
+  const autoEditPending = new Map<
+    string,
+    { resolve: (inlineMessageId: string) => void; reject: (reason?: unknown) => void }
+  >();
   // ─────────────────────────────────────────────────────────────────────────
 
   const resolveReplyMediaForMessage = async (
@@ -2336,11 +2339,20 @@ export const registerTelegramHandlers = ({
 
       // Register in autoEditPending so chosen_inline_result can deliver the inline_message_id.
       // The LLM is still running — when it finishes and we have the message id, we auto-edit.
-      const inlineMessageIdPromise = new Promise<string>((resolve) => {
-        autoEditPending.set(query.id, resolve);
+      const inlineMessageIdPromise = new Promise<string>((resolve, reject) => {
+        autoEditPending.set(query.id, { resolve, reject });
       });
-      // Clean up if the user never selects the result (10 min TTL)
-      const autoEditCleanup = setTimeout(() => autoEditPending.delete(query.id), 10 * 60 * 1000);
+      // Clean up if the user never selects the result (10 min TTL) — reject so Promise.all settles
+      const autoEditCleanup = setTimeout(
+        () => {
+          const entry = autoEditPending.get(query.id);
+          if (entry) {
+            autoEditPending.delete(query.id);
+            entry.reject(new Error("inline_message_id never received"));
+          }
+        },
+        10 * 60 * 1000,
+      );
 
       await bot.api
         .answerInlineQuery(
@@ -2414,10 +2426,10 @@ export const registerTelegramHandlers = ({
   bot.on("chosen_inline_result", async (ctx) => {
     const result = ctx.chosenInlineResult;
     if (!result?.inline_message_id) return;
-    const resolve = autoEditPending.get(result.result_id);
-    if (!resolve) return;
+    const entry = autoEditPending.get(result.result_id);
+    if (!entry) return;
     autoEditPending.delete(result.result_id);
-    resolve(result.inline_message_id);
+    entry.resolve(result.inline_message_id);
     runtime.log?.(
       `[telegram] chosen_inline_result: resolved auto-edit for result_id=${result.result_id}`,
     );
