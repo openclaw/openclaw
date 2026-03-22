@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   addAllowlistEntry,
   type ExecAsk,
@@ -15,7 +16,7 @@ import {
 } from "../infra/exec-inline-eval.js";
 import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
-import { logInfo } from "../logger.js";
+import { logInfo, logWarn } from "../logger.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
   buildExecApprovalRequesterContext,
@@ -128,7 +129,7 @@ export async function processGatewayAllowlist(
     logInfo(`exec: obfuscation detected (gateway): ${obfuscation.reasons.join(", ")}`);
     params.warnings.push(`⚠️ Obfuscated command detected: ${obfuscation.reasons.join("; ")}`);
   }
-  const recordMatchedAllowlistUse = async (resolvedPath?: string) => {
+  const recordMatchedAllowlistUse = (resolvedPath?: string) => {
     if (allowlistMatches.length === 0) {
       return;
     }
@@ -138,7 +139,13 @@ export async function processGatewayAllowlist(
         continue;
       }
       seen.add(match.pattern);
-      await recordAllowlistUse(params.agentId, match, params.command, resolvedPath);
+      void recordAllowlistUse(params.agentId, match, params.command, resolvedPath).catch(
+        (error) => {
+          logWarn(
+            `exec: gateway allowlist usage record failed (agent=${params.agentId ?? "main"}, pattern=${match.pattern}): ${formatErrorMessage(error)}`,
+          );
+        },
+      );
     }
   };
   const hasHeredocSegment = allowlistEval.segments.some((segment) =>
@@ -257,7 +264,11 @@ export async function processGatewayAllowlist(
           });
           for (const pattern of patterns) {
             if (pattern) {
-              await addAllowlistEntry(params.agentId, pattern);
+              void addAllowlistEntry(params.agentId, pattern).catch((error) => {
+                logWarn(
+                  `exec: gateway allow-always persist failed (agent=${params.agentId ?? "main"}, pattern=${pattern}): ${formatErrorMessage(error)}`,
+                );
+              });
             }
           }
         }
@@ -275,7 +286,7 @@ export async function processGatewayAllowlist(
         return;
       }
 
-      await recordMatchedAllowlistUse(resolvedPath ?? undefined);
+      recordMatchedAllowlistUse(resolvedPath ?? undefined);
 
       let run: Awaited<ReturnType<typeof runExecProcess>> | null = null;
       try {
@@ -337,7 +348,7 @@ export async function processGatewayAllowlist(
     throw new Error("exec denied: allowlist miss");
   }
 
-  await recordMatchedAllowlistUse(allowlistEval.segments[0]?.resolution?.resolvedPath);
+  recordMatchedAllowlistUse(allowlistEval.segments[0]?.resolution?.resolvedPath);
 
   return { execCommandOverride: enforcedCommand };
 }

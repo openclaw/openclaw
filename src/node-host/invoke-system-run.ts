@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import type { GatewayClient } from "../gateway/client.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   addAllowlistEntry,
   recordAllowlistUse,
@@ -557,7 +558,11 @@ async function executeSystemRunPhase(
       });
       for (const pattern of patterns) {
         if (pattern) {
-          await addAllowlistEntry(phase.agentId, pattern);
+          void addAllowlistEntry(phase.agentId, pattern).catch((error) => {
+            logWarn(
+              `exec: node allow-always persist failed (agent=${phase.agentId ?? "main"}, pattern=${pattern}): ${formatErrorMessage(error)}`,
+            );
+          });
         }
       }
     }
@@ -570,12 +575,16 @@ async function executeSystemRunPhase(
         continue;
       }
       seen.add(match.pattern);
-      await recordAllowlistUse(
+      void recordAllowlistUse(
         phase.agentId,
         match,
         phase.commandText,
         phase.segments[0]?.resolution?.resolvedPath,
-      );
+      ).catch((error) => {
+        logWarn(
+          `exec: node allowlist usage record failed (agent=${phase.agentId ?? "main"}, pattern=${match.pattern}): ${formatErrorMessage(error)}`,
+        );
+      });
     }
   }
 
