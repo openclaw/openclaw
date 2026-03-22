@@ -8,11 +8,11 @@ describe("compaction identifier policy", () => {
     expect(built).toContain("UUIDs");
   });
 
-  it("can disable identifier preservation with off policy", () => {
+  it("still includes standing instruction preservation when identifier policy is off", () => {
     const built = buildCompactionSummarizationInstructions(undefined, {
       identifierPolicy: "off",
     });
-    expect(built).toBeUndefined();
+    expect(built).toContain("standing user instructions");
   });
 
   it("supports custom identifier instructions", () => {
@@ -33,10 +33,11 @@ describe("compaction identifier policy", () => {
     expect(built).toContain("Preserve all opaque identifiers exactly as written");
   });
 
-  it("keeps custom focus text when identifier policy is off", () => {
+  it("keeps custom focus text and standing instruction preservation when identifier policy is off", () => {
     const built = buildCompactionSummarizationInstructions("Track release blockers.", {
       identifierPolicy: "off",
     });
-    expect(built).toBe("Additional focus:\nTrack release blockers.");
+    expect(built).toContain("Additional focus:\nTrack release blockers.");
+    expect(built).toContain("standing user instructions");
   });
 });

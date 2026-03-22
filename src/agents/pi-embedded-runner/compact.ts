@@ -1276,7 +1276,7 @@ export async function compactEmbeddedPiSession(
         }
         // Re-inject AGENTS.md critical sections (Session Startup, Red Lines) for the
         // next agent turn — mirrors auto-reply path (agent-runner.ts).
-        if (result.ok && result.compacted && params.sessionKey) {
+        if (engineOwnsCompaction && result.ok && result.compacted && params.sessionKey) {
           try {
             const contextContent = await readPostCompactionContext(
               params.workspaceDir,

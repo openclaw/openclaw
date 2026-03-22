@@ -53,22 +53,30 @@ function resolveIdentifierPreservationInstructions(
   return IDENTIFIER_PRESERVATION_INSTRUCTIONS;
 }
 
+const STANDING_INSTRUCTIONS_PRESERVATION =
+  "Preserve any standing user instructions or recurring directives verbatim.";
+
 export function buildCompactionSummarizationInstructions(
   customInstructions?: string,
   instructions?: CompactionSummarizationInstructions,
 ): string | undefined {
   const custom = customInstructions?.trim();
   const identifierPreservation = resolveIdentifierPreservationInstructions(instructions);
-  if (!identifierPreservation && !custom) {
+  // Always include standing instruction preservation so custom/event
+  // instructions don't silently drop the directive.
+  const needsStandingPreservation = !custom?.includes("standing user instructions");
+  const standingLine = needsStandingPreservation ? STANDING_INSTRUCTIONS_PRESERVATION : undefined;
+  if (!identifierPreservation && !custom && !standingLine) {
     return undefined;
   }
+  const parts = [identifierPreservation, standingLine].filter(Boolean).join("\n");
   if (!custom) {
-    return identifierPreservation;
+    return parts || undefined;
   }
-  if (!identifierPreservation) {
+  if (!parts) {
     return `Additional focus:\n${custom}`;
   }
-  return `${identifierPreservation}\n\nAdditional focus:\n${custom}`;
+  return `${parts}\n\nAdditional focus:\n${custom}`;
 }
 
 export function estimateMessagesTokens(messages: AgentMessage[]): number {
