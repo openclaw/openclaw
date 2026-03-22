@@ -1311,7 +1311,11 @@ export const chatHandlers: GatewayRequestHandlers = {
     // This ensures non-vision models don't fail when users send images via Dashboard.
     let imageModelOverride: string | undefined;
     if (parsedImages.length > 0) {
-      const imageModelPrimary = cfg.agents?.defaults?.imageModel?.primary?.trim();
+      const imageModelConfig = cfg.agents?.defaults?.imageModel;
+      const imageModelPrimary =
+        typeof imageModelConfig === "string"
+          ? imageModelConfig.trim()
+          : imageModelConfig?.primary?.trim();
       if (imageModelPrimary) {
         imageModelOverride = imageModelPrimary;
         context.logGateway.debug(
