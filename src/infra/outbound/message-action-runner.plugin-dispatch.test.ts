@@ -217,6 +217,66 @@ describe("runMessageAction plugin dispatch", () => {
         }),
       );
     });
+
+    it("does not misclassify send as poll when zero-valued poll params are present", async () => {
+      const sendMedia = vi.fn().mockResolvedValue({
+        channel: "testchat",
+        messageId: "m2",
+        chatId: "c1",
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "testchat",
+            source: "test",
+            plugin: createOutboundTestPlugin({
+              id: "testchat",
+              outbound: {
+                deliveryMode: "direct",
+                sendText: vi.fn().mockResolvedValue({
+                  channel: "testchat",
+                  messageId: "t2",
+                  chatId: "c1",
+                }),
+                sendMedia,
+              },
+            }),
+          },
+        ]),
+      );
+      const cfg = {
+        channels: {
+          testchat: {
+            enabled: true,
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = await runMessageAction({
+        cfg,
+        action: "send",
+        params: {
+          channel: "testchat",
+          target: "channel:abc",
+          media: "https://example.com/file.txt",
+          message: "hello",
+          pollDurationHours: 0,
+          pollDurationSeconds: 0,
+          pollMulti: false,
+          pollQuestion: "",
+          pollOption: [],
+        },
+        dryRun: false,
+      });
+
+      expect(result.kind).toBe("send");
+      expect(sendMedia).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "hello",
+          mediaUrl: "https://example.com/file.txt",
+        }),
+      );
+    });
   });
 
   describe("card-only send behavior", () => {
