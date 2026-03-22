@@ -30,15 +30,22 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Network-first for HTML / API; cache-first for hashed assets.
+  // Skip API requests — they should never be cached.
+  if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/rpc")) {
+    return;
+  }
+
+  // Cache-first for hashed assets; network-first for HTML/other.
   if (url.pathname.includes("/assets/")) {
     event.respondWith(
       caches.match(event.request).then(
         (cached) =>
           cached ||
           fetch(event.request).then((response) => {
-            const clone = response.clone();
-            void caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+            if (response.ok) {
+              const clone = response.clone();
+              void caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+            }
             return response;
           }),
       ),
@@ -47,8 +54,10 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(event.request)
         .then((response) => {
-          const clone = response.clone();
-          void caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          if (response.ok) {
+            const clone = response.clone();
+            void caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          }
           return response;
         })
         .catch(() => caches.match(event.request)),

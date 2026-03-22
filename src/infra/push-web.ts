@@ -151,10 +151,10 @@ export async function registerWebPushSubscription(
   const { endpoint, keys, baseDir } = params;
 
   if (!isValidEndpoint(endpoint)) {
-    throw new Error("invalid push subscription endpoint");
+    throw new Error("Invalid push subscription endpoint: must be an HTTPS URL under 2048 chars");
   }
   if (!isValidKey(keys.p256dh) || !isValidKey(keys.auth)) {
-    throw new Error("invalid push subscription keys");
+    throw new Error("Invalid push subscription keys: must be non-empty strings under 512 chars");
   }
 
   return await withLock(async () => {
@@ -244,8 +244,6 @@ export async function sendWebPushNotification(
 ): Promise<WebPushSendResult> {
   const keys = vapidKeys ?? (await resolveVapidKeys());
 
-  webPush.setVapidDetails(keys.subject, keys.publicKey, keys.privateKey);
-
   const pushSubscription = {
     endpoint: subscription.endpoint,
     keys: {
@@ -289,11 +287,15 @@ export async function broadcastWebPush(
   }
 
   const vapidKeys = await resolveVapidKeys(baseDir);
+
+  // Set VAPID details once before fanning out concurrent sends.
+  webPush.setVapidDetails(vapidKeys.subject, vapidKeys.publicKey, vapidKeys.privateKey);
+
   const results = await Promise.allSettled(
     subscriptions.map((sub) => sendWebPushNotification(sub, payload, vapidKeys)),
   );
 
-  return results.map((r, i) =>
+  const mapped = results.map((r, i) =>
     r.status === "fulfilled"
       ? r.value
       : {
@@ -302,4 +304,18 @@ export async function broadcastWebPush(
           error: r.reason instanceof Error ? r.reason.message : "unknown error",
         },
   );
+
+  // Clean up expired subscriptions (HTTP 410 Gone) per Web Push spec.
+  const expiredEndpoints = mapped
+    .map((result, i) => ({ result, sub: subscriptions[i] }))
+    .filter(({ result }) => !result.ok && result.statusCode === 410)
+    .map(({ sub }) => sub.endpoint);
+
+  if (expiredEndpoints.length > 0) {
+    await Promise.allSettled(
+      expiredEndpoints.map((endpoint) => clearWebPushSubscriptionByEndpoint(endpoint, baseDir)),
+    );
+  }
+
+  return mapped;
 }

@@ -31,8 +31,8 @@ export const PushTestResultSchema = Type.Object(
 
 const WebPushKeysSchema = Type.Object(
   {
-    p256dh: NonEmptyString,
-    auth: NonEmptyString,
+    p256dh: Type.String({ minLength: 1, maxLength: 512 }),
+    auth: Type.String({ minLength: 1, maxLength: 512 }),
   },
   { additionalProperties: false },
 );
@@ -41,7 +41,7 @@ export const WebPushVapidPublicKeyParamsSchema = Type.Object({}, { additionalPro
 
 export const WebPushSubscribeParamsSchema = Type.Object(
   {
-    endpoint: Type.String({ minLength: 1, maxLength: 2048 }),
+    endpoint: Type.String({ minLength: 1, maxLength: 2048, pattern: "^https://" }),
     keys: WebPushKeysSchema,
   },
   { additionalProperties: false },
@@ -49,7 +49,7 @@ export const WebPushSubscribeParamsSchema = Type.Object(
 
 export const WebPushUnsubscribeParamsSchema = Type.Object(
   {
-    endpoint: Type.String({ minLength: 1, maxLength: 2048 }),
+    endpoint: Type.String({ minLength: 1, maxLength: 2048, pattern: "^https://" }),
   },
   { additionalProperties: false },
 );

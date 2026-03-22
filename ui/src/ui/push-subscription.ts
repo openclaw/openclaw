@@ -7,29 +7,6 @@ export type WebPushState = {
   loading: boolean;
 };
 
-const DEFAULT_STATE: WebPushState = {
-  supported: false,
-  permission: "unsupported",
-  subscribed: false,
-  loading: false,
-};
-
-export function detectWebPushState(): WebPushState {
-  const supported =
-    "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
-
-  if (!supported) {
-    return DEFAULT_STATE;
-  }
-
-  return {
-    supported: true,
-    permission: Notification.permission,
-    subscribed: false,
-    loading: false,
-  };
-}
-
 /** Timeout (ms) for service-worker readiness. */
 const SW_READY_TIMEOUT = 10_000;
 
@@ -75,7 +52,8 @@ export async function getExistingSubscription(): Promise<PushSubscription | null
  * Subscribe to web push notifications.
  * Requests notification permission if not already granted, fetches VAPID key
  * from the gateway, subscribes with the PushManager, and registers with the
- * gateway.
+ * gateway.  If gateway registration fails, the local PushManager subscription
+ * is rolled back to avoid local/server state divergence.
  */
 export async function subscribeToWebPush(
   client: GatewayBrowserClient,
@@ -105,31 +83,46 @@ export async function subscribeToWebPush(
     throw new Error("Invalid push subscription from browser");
   }
 
-  // Register with gateway.
-  const registerRes = await client.request("push.web.subscribe", {
-    endpoint: subJson.endpoint,
-    keys: {
-      p256dh: subJson.keys.p256dh,
-      auth: subJson.keys.auth,
-    },
-  });
+  // Register with gateway — roll back local subscription on failure.
+  try {
+    const registerRes = await client.request("push.web.subscribe", {
+      endpoint: subJson.endpoint,
+      keys: {
+        p256dh: subJson.keys.p256dh,
+        auth: subJson.keys.auth,
+      },
+    });
 
-  return registerRes as { subscriptionId: string };
+    return registerRes as { subscriptionId: string };
+  } catch (err) {
+    // Gateway registration failed — unsubscribe locally to keep state consistent.
+    try {
+      await pushSubscription.unsubscribe();
+    } catch {
+      // Best-effort rollback.
+    }
+    throw err;
+  }
 }
 
 /**
  * Unsubscribe from web push notifications.
+ * Always unsubscribes locally even if the gateway request fails, to avoid
+ * leaving the browser subscribed with no server-side record.
  */
 export async function unsubscribeFromWebPush(client: GatewayBrowserClient): Promise<void> {
   const registration = await swReady();
   const subscription = await registration.pushManager.getSubscription();
 
   if (subscription) {
-    // Notify gateway first.
-    await client.request("push.web.unsubscribe", {
-      endpoint: subscription.endpoint,
-    });
-    // Then unsubscribe locally.
+    // Notify gateway (best-effort — always unsubscribe locally afterward).
+    try {
+      await client.request("push.web.unsubscribe", {
+        endpoint: subscription.endpoint,
+      });
+    } catch {
+      // Gateway may be unreachable; still unsubscribe locally.
+    }
     await subscription.unsubscribe();
   }
 }
