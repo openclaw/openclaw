@@ -485,6 +485,9 @@ List and inspect available skills plus readiness info.
 
 Subcommands:
 
+- `skills search [query...]`: search ClawHub skills.
+- `skills install <slug>`: install a skill from ClawHub into the active workspace.
+- `skills update <slug|--all>`: update tracked ClawHub skills.
 - `skills list`: list skills (default when no subcommand).
 - `skills info <name>`: show details for one skill.
 - `skills check`: summary of ready vs missing requirements.
@@ -495,7 +498,7 @@ Options:
 - `--json`: output JSON (no styling).
 - `-v`, `--verbose`: include missing requirements detail.
 
-Tip: use `npx clawhub` to search, install, and sync skills.
+Tip: use `openclaw skills search`, `openclaw skills install`, and `openclaw skills update` for ClawHub-backed skills.
 
 ### `pairing`
 
