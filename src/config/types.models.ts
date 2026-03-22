@@ -6,6 +6,7 @@ export const MODEL_APIS = [
   "openai-responses",
   "openai-codex-responses",
   "anthropic-messages",
+  "azure-openai-responses",
   "google-generative-ai",
   "github-copilot",
   "bedrock-converse-stream",

@@ -36,6 +36,7 @@ const OPENAI_MODEL_APIS = new Set([
   "openai-completions",
   "openai-responses",
   "openai-codex-responses",
+  "azure-openai-responses",
 ]);
 
 function isOpenAiApi(modelApi?: string | null): boolean {
