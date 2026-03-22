@@ -959,16 +959,19 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       }),
     probeAccount: async ({ account }) =>
       await (await loadFeishuChannelRuntime()).probeFeishu(account),
-    buildAccountSnapshot: ({ account, runtime, probe }) => ({
-      accountId: account.accountId,
-      enabled: account.enabled,
-      configured: account.configured,
-      name: account.name,
-      appId: account.appId,
-      domain: account.domain,
-      ...buildRuntimeAccountStatusSnapshot({ runtime, probe }),
-      port: runtime?.port ?? null,
-    }),
+    buildAccountSnapshot: ({ account, runtime, probe }) =>
+      buildRuntimeAccountStatusSnapshot(
+        { runtime, probe },
+        {
+          accountId: account.accountId,
+          enabled: account.enabled,
+          configured: account.configured,
+          name: account.name,
+          appId: account.appId,
+          domain: account.domain,
+          port: runtime?.port ?? null,
+        },
+      ),
   },
   gateway: {
     startAccount: async (ctx) => {
