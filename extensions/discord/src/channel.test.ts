@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
-import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
 import type { ResolvedDiscordAccount } from "./accounts.js";
 import { discordPlugin } from "./channel.js";
@@ -55,7 +54,6 @@ function startDiscordAccount(cfg: OpenClawConfig) {
     createStartAccountContext({
       account: resolveAccount(cfg),
       cfg,
-      runtime: createRuntimeEnv(),
     }),
   );
 }
@@ -80,13 +78,9 @@ afterEach(() => {
 describe("discordPlugin outbound", () => {
   it("forwards mediaLocalRoots to sendMessageDiscord", async () => {
     const sendMessageDiscord = vi.fn(async () => ({ messageId: "m1" }));
-    setDiscordRuntime({
-      channel: {
-        discord: {
-          sendMessageDiscord,
-        },
-      },
-    } as unknown as PluginRuntime);
+    installDiscordRuntime({
+      sendMessageDiscord,
+    });
 
     const result = await discordPlugin.outbound!.sendMedia!({
       cfg: {} as OpenClawConfig,
