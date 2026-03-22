@@ -1,15 +1,28 @@
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
-  listInspectedDirectoryEntriesFromSources,
+  listResolvedDirectoryEntriesFromSources,
   type DirectoryConfigParams,
 } from "openclaw/plugin-sdk/directory-runtime";
-import { inspectDiscordAccount, type InspectedDiscordAccount } from "./account-inspect.js";
+import { mergeDiscordAccountConfig, resolveDefaultDiscordAccountId } from "./accounts.js";
+
+function resolveDiscordDirectoryConfigAccount(
+  cfg: DirectoryConfigParams["cfg"],
+  accountId?: string | null,
+) {
+  const resolvedAccountId = normalizeAccountId(accountId ?? resolveDefaultDiscordAccountId(cfg));
+  const config = mergeDiscordAccountConfig(cfg, resolvedAccountId);
+  return {
+    accountId: resolvedAccountId,
+    config,
+    dm: config.dm,
+  };
+}
 
 export async function listDiscordDirectoryPeersFromConfig(params: DirectoryConfigParams) {
-  return listInspectedDirectoryEntriesFromSources({
+  return listResolvedDirectoryEntriesFromSources({
     ...params,
     kind: "user",
-    inspectAccount: (cfg, accountId) =>
-      inspectDiscordAccount({ cfg, accountId }) as InspectedDiscordAccount | null,
+    resolveAccount: (cfg, accountId) => resolveDiscordDirectoryConfigAccount(cfg, accountId),
     resolveSources: (account) => {
       const allowFrom = account.config.allowFrom ?? account.config.dm?.allowFrom ?? [];
       const guildUsers = Object.values(account.config.guilds ?? {}).flatMap((guild) => [
@@ -27,11 +40,10 @@ export async function listDiscordDirectoryPeersFromConfig(params: DirectoryConfi
 }
 
 export async function listDiscordDirectoryGroupsFromConfig(params: DirectoryConfigParams) {
-  return listInspectedDirectoryEntriesFromSources({
+  return listResolvedDirectoryEntriesFromSources({
     ...params,
     kind: "group",
-    inspectAccount: (cfg, accountId) =>
-      inspectDiscordAccount({ cfg, accountId }) as InspectedDiscordAccount | null,
+    resolveAccount: (cfg, accountId) => resolveDiscordDirectoryConfigAccount(cfg, accountId),
     resolveSources: (account) =>
       Object.values(account.config.guilds ?? {}).map((guild) => Object.keys(guild.channels ?? {})),
     normalizeId: (raw) => {
