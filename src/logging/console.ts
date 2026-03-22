@@ -116,6 +116,11 @@ export function routeLogsToStderr(): void {
   loggingState.forceConsoleToStderr = true;
 }
 
+// Restore console output to stdout after a temporary stderr routing window.
+export function restoreLogsToStdout(): void {
+  loggingState.forceConsoleToStderr = false;
+}
+
 export function setConsoleSubsystemFilter(filters?: string[] | null): void {
   if (!filters || filters.length === 0) {
     loggingState.consoleSubsystemFilter = null;

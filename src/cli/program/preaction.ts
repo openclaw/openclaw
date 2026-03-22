@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { setVerbose } from "../../globals.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
-import { routeLogsToStderr } from "../../logging/console.js";
+import { restoreLogsToStdout, routeLogsToStderr } from "../../logging/console.js";
 import type { LogLevel } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -144,20 +144,27 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (shouldBypassConfigGuard(commandPath)) {
       return;
     }
-    const suppressDoctorStdout = isJsonOutputMode(commandPath, argv);
-    if (suppressDoctorStdout) {
-      routeLogsToStderr();
-    }
+    const isJsonMode = isJsonOutputMode(commandPath, argv);
     const { ensureConfigReady } = await loadConfigGuardModule();
     await ensureConfigReady({
       runtime: defaultRuntime,
       commandPath,
-      ...(suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
+      ...(isJsonMode ? { suppressDoctorStdout: true } : {}),
     });
-    // Load plugins for commands that need channel access
+    // Load plugins for commands that need channel access.
+    // Temporarily route logs to stderr during plugin loading so that
+    // plugin console.log noise does not pollute --json stdout output.
+    // The routing is restored afterwards so that command handlers can
+    // still emit their JSON payload via runtime.log (→ console.log).
     if (shouldLoadPluginsForCommand(commandPath, argv)) {
+      if (isJsonMode) {
+        routeLogsToStderr();
+      }
       const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
       ensurePluginRegistryLoaded({ scope: resolvePluginRegistryScope(commandPath) });
+      if (isJsonMode) {
+        restoreLogsToStdout();
+      }
     }
   });
 }

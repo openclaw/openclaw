@@ -21,6 +21,10 @@ async function prepareRoutedCommand(params: {
   const shouldLoadPlugins =
     typeof params.loadPlugins === "function" ? params.loadPlugins(params.argv) : params.loadPlugins;
   if (shouldLoadPlugins) {
+    if (suppressDoctorStdout) {
+      const { routeLogsToStderr } = await import("../logging/console.js");
+      routeLogsToStderr();
+    }
     const { ensurePluginRegistryLoaded } = await import("./plugin-registry.js");
     ensurePluginRegistryLoaded({
       scope:
@@ -28,6 +32,10 @@ async function prepareRoutedCommand(params: {
           ? "channels"
           : "all",
     });
+    if (suppressDoctorStdout) {
+      const { restoreLogsToStdout } = await import("../logging/console.js");
+      restoreLogsToStdout();
+    }
   }
 }
 
