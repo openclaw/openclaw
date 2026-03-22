@@ -36,6 +36,14 @@ export const CORE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     groupHint: "Unified LLM gateway (100+ providers)",
   },
   {
+    value: "azure-openai-api-key",
+    label: "Azure OpenAI",
+    hint: "Azure OpenAI / AI Foundry endpoint + deployment name",
+    groupId: "azure",
+    groupLabel: "Azure",
+    groupHint: "Azure OpenAI Service and Azure AI Foundry",
+  },
+  {
     value: "custom-api-key",
     label: "Custom Provider",
     hint: "Any OpenAI or Anthropic compatible endpoint",

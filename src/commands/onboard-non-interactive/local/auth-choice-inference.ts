@@ -35,6 +35,14 @@ export function inferAuthChoiceFromFlags(opts: OnboardOptions): AuthChoiceInfere
       label: flag.cliFlag,
     }));
 
+  if (hasStringValue(opts.azureOpenaiApiKey)) {
+    matches.push({
+      optionKey: "azureOpenaiApiKey",
+      authChoice: "azure-openai-api-key",
+      label: "--azure-openai-api-key",
+    });
+  }
+
   if (
     hasStringValue(opts.customBaseUrl) ||
     hasStringValue(opts.customModelId) ||

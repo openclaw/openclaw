@@ -1,6 +1,6 @@
 import type { AuthChoice, OnboardOptions } from "./onboard-types.js";
 
-type OnboardCoreAuthOptionKey = keyof Pick<OnboardOptions, "litellmApiKey">;
+type OnboardCoreAuthOptionKey = keyof Pick<OnboardOptions, "litellmApiKey" | "azureOpenaiApiKey">;
 
 export type OnboardCoreAuthFlag = {
   optionKey: OnboardCoreAuthOptionKey;
@@ -11,6 +11,13 @@ export type OnboardCoreAuthFlag = {
 };
 
 export const CORE_ONBOARD_AUTH_FLAGS: ReadonlyArray<OnboardCoreAuthFlag> = [
+  {
+    optionKey: "azureOpenaiApiKey",
+    authChoice: "azure-openai-api-key",
+    cliFlag: "--azure-openai-api-key",
+    cliOption: "--azure-openai-api-key <key>",
+    description: "Azure OpenAI API key (resource key)",
+  },
   {
     optionKey: "litellmApiKey",
     authChoice: "litellm-api-key",

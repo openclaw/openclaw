@@ -4,6 +4,7 @@ import { resolveManifestProviderAuthChoice } from "./provider-auth-choices.js";
 const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<string, string>> = {
   chutes: "chutes",
   "litellm-api-key": "litellm",
+  "azure-openai-api-key": "azure-openai",
   "custom-api-key": "custom",
 };
 

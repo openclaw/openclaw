@@ -50,6 +50,7 @@ export type BuiltInAuthChoice =
   | "qianfan-api-key"
   | "modelstudio-api-key-cn"
   | "modelstudio-api-key"
+  | "azure-openai-api-key"
   | "custom-api-key"
   | "skip";
 export type AuthChoice = BuiltInAuthChoice | (string & {});
@@ -81,6 +82,7 @@ export type BuiltInAuthChoiceGroupId =
   | "xai"
   | "volcengine"
   | "byteplus"
+  | "azure"
   | "custom";
 export type AuthChoiceGroupId = BuiltInAuthChoiceGroupId | (string & {});
 export type GatewayAuthChoice = "token" | "password";
@@ -144,6 +146,8 @@ export type OnboardOptions = {
   modelstudioApiKey?: string;
   customBaseUrl?: string;
   customApiKey?: string;
+  /** Non-interactive Azure OpenAI key flag (`--azure-openai-api-key`). */
+  azureOpenaiApiKey?: string;
   customModelId?: string;
   customProviderId?: string;
   customCompatibility?: "openai" | "anthropic";

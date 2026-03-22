@@ -701,4 +701,23 @@ describe("parseNonInteractiveCustomApiFlags", () => {
   ])("rejects $name", ({ flags, expectedMessage }) => {
     expect(() => parseNonInteractiveCustomApiFlags(flags)).toThrow(expectedMessage);
   });
+
+  it("uses azure-openai-api-key hint when requireAzureHost and fields are missing", () => {
+    expect(() =>
+      parseNonInteractiveCustomApiFlags({
+        baseUrl: "https://res.openai.azure.com",
+        requireAzureHost: true,
+      }),
+    ).toThrow('Auth choice "azure-openai-api-key" requires a base URL and model ID.');
+  });
+
+  it("rejects non-Azure host when requireAzureHost is set", () => {
+    expect(() =>
+      parseNonInteractiveCustomApiFlags({
+        baseUrl: "https://api.openai.com/v1",
+        modelId: "gpt-4o",
+        requireAzureHost: true,
+      }),
+    ).toThrow(/requires an Azure endpoint URL/);
+  });
 });

@@ -53,6 +53,11 @@ function isAzureUrl(baseUrl: string): boolean {
   return isAzureFoundryUrl(baseUrl) || isAzureOpenAiUrl(baseUrl);
 }
 
+/** Azure OpenAI Service or Azure AI Foundry OpenAI-compatible base URLs. */
+export function isAzureHostedLlmBaseUrl(baseUrl: string): boolean {
+  return isAzureUrl(baseUrl);
+}
+
 /**
  * Transforms an Azure AI Foundry/OpenAI URL to include the deployment path.
  * Azure requires: https://host/openai/deployments/<model-id>/chat/completions?api-version=2024-xx-xx-preview
@@ -123,6 +128,8 @@ export type ParseNonInteractiveCustomApiFlagsParams = {
   compatibility?: string;
   apiKey?: string;
   providerId?: string;
+  /** When true, `baseUrl` host must be an Azure OpenAI / AI Foundry endpoint. */
+  requireAzureHost?: boolean;
 };
 
 export type ParsedNonInteractiveCustomApiFlags = {
@@ -432,11 +439,15 @@ async function promptBaseUrlAndKey(params: {
   config: OpenClawConfig;
   secretInputMode?: SecretInputMode;
   initialBaseUrl?: string;
+  baseUrlPlaceholder?: string;
+  apiKeyProviderHint?: string;
+  apiKeyEnvLabel?: string;
+  apiKeyPromptMessage?: string;
 }): Promise<{ baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string }> {
   const baseUrlInput = await params.prompter.text({
     message: "API Base URL",
     initialValue: params.initialBaseUrl ?? OLLAMA_DEFAULT_BASE_URL,
-    placeholder: "https://api.example.com/v1",
+    placeholder: params.baseUrlPlaceholder ?? "https://api.example.com/v1",
     validate: (val) => {
       try {
         new URL(val);
@@ -447,13 +458,13 @@ async function promptBaseUrlAndKey(params: {
     },
   });
   const baseUrl = baseUrlInput.trim();
-  const providerHint = buildEndpointIdFromUrl(baseUrl) || "custom";
+  const providerHint = params.apiKeyProviderHint ?? (buildEndpointIdFromUrl(baseUrl) || "custom");
   let apiKeyInput: SecretInput | undefined;
   const resolvedApiKey = await ensureApiKeyFromEnvOrPrompt({
     config: params.config,
     provider: providerHint,
-    envLabel: "CUSTOM_API_KEY",
-    promptMessage: "API Key (leave blank if not required)",
+    envLabel: params.apiKeyEnvLabel ?? "CUSTOM_API_KEY",
+    promptMessage: params.apiKeyPromptMessage ?? "API Key (leave blank if not required)",
     normalize: normalizeSecretInput,
     validate: () => undefined,
     prompter: params.prompter,
@@ -482,12 +493,17 @@ async function promptCustomApiRetryChoice(prompter: WizardPrompter): Promise<Cus
   });
 }
 
-async function promptCustomApiModelId(prompter: WizardPrompter): Promise<string> {
+async function promptCustomApiModelId(
+  prompter: WizardPrompter,
+  opts?: { azureDeployment?: boolean },
+): Promise<string> {
+  const azure = opts?.azureDeployment === true;
   return (
     await prompter.text({
-      message: "Model ID",
-      placeholder: "e.g. llama3, claude-3-7-sonnet",
-      validate: (val) => (val.trim() ? undefined : "Model ID is required"),
+      message: azure ? "Deployment name" : "Model ID",
+      placeholder: azure ? "e.g. gpt-4o, gpt-5" : "e.g. llama3, claude-3-7-sonnet",
+      validate: (val) =>
+        val.trim() ? undefined : azure ? "Deployment name is required" : "Model ID is required",
     })
   ).trim();
 }
@@ -496,6 +512,7 @@ async function applyCustomApiRetryChoice(params: {
   prompter: WizardPrompter;
   config: OpenClawConfig;
   secretInputMode?: SecretInputMode;
+  azurePreset?: boolean;
   retryChoice: CustomApiRetryChoice;
   current: { baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string; modelId: string };
 }): Promise<{ baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string; modelId: string }> {
@@ -506,13 +523,23 @@ async function applyCustomApiRetryChoice(params: {
       config: params.config,
       secretInputMode: params.secretInputMode,
       initialBaseUrl: baseUrl,
+      ...(params.azurePreset
+        ? {
+            baseUrlPlaceholder: "https://your-resource.openai.azure.com",
+            apiKeyProviderHint: "azure-openai",
+            apiKeyEnvLabel: "AZURE_OPENAI_API_KEY",
+            apiKeyPromptMessage: "Azure OpenAI API key (resource key)",
+          }
+        : {}),
     });
     baseUrl = retryInput.baseUrl;
     apiKey = retryInput.apiKey;
     resolvedApiKey = retryInput.resolvedApiKey;
   }
   if (params.retryChoice === "model" || params.retryChoice === "both") {
-    modelId = await promptCustomApiModelId(params.prompter);
+    modelId = await promptCustomApiModelId(params.prompter, {
+      azureDeployment: params.azurePreset,
+    });
   }
   return { baseUrl, apiKey, resolvedApiKey, modelId };
 }
@@ -571,12 +598,23 @@ export function parseNonInteractiveCustomApiFlags(
 ): ParsedNonInteractiveCustomApiFlags {
   const baseUrl = params.baseUrl?.trim() ?? "";
   const modelId = params.modelId?.trim() ?? "";
+  const authHint = params.requireAzureHost ? "azure-openai-api-key" : "custom-api-key";
   if (!baseUrl || !modelId) {
     throw new CustomApiError(
       "missing_required",
       [
-        'Auth choice "custom-api-key" requires a base URL and model ID.',
+        `Auth choice "${authHint}" requires a base URL and model ID.`,
         "Use --custom-base-url and --custom-model-id.",
+      ].join("\n"),
+    );
+  }
+
+  if (params.requireAzureHost && !isAzureUrl(baseUrl)) {
+    throw new CustomApiError(
+      "invalid_base_url",
+      [
+        `Auth choice "${authHint}" requires an Azure endpoint URL.`,
+        'Use a host ending in ".openai.azure.com" (Azure OpenAI) or ".services.ai.azure.com" (Azure AI Foundry).',
       ].join("\n"),
     );
   }
@@ -770,13 +808,25 @@ export async function promptCustomApiConfig(params: {
   runtime: RuntimeEnv;
   config: OpenClawConfig;
   secretInputMode?: SecretInputMode;
+  /** Use Azure-focused defaults (URL placeholder, `AZURE_OPENAI_API_KEY`). */
+  preset?: "azure-openai";
 }): Promise<CustomApiResult> {
   const { prompter, runtime, config } = params;
+  const azurePreset = params.preset === "azure-openai";
 
   const baseInput = await promptBaseUrlAndKey({
     prompter,
     config,
     secretInputMode: params.secretInputMode,
+    ...(azurePreset
+      ? {
+          initialBaseUrl: "https://your-resource.openai.azure.com",
+          baseUrlPlaceholder: "https://your-resource.openai.azure.com",
+          apiKeyProviderHint: "azure-openai",
+          apiKeyEnvLabel: "AZURE_OPENAI_API_KEY",
+          apiKeyPromptMessage: "Azure OpenAI API key (resource key)",
+        }
+      : {}),
   });
   let baseUrl = baseInput.baseUrl;
   let apiKey = baseInput.apiKey;
@@ -791,7 +841,7 @@ export async function promptCustomApiConfig(params: {
     })),
   });
 
-  let modelId = await promptCustomApiModelId(prompter);
+  let modelId = await promptCustomApiModelId(prompter, { azureDeployment: azurePreset });
 
   let compatibility: CustomApiCompatibility | null =
     compatibilityChoice === "unknown" ? null : compatibilityChoice;
@@ -830,6 +880,7 @@ export async function promptCustomApiConfig(params: {
             prompter,
             config,
             secretInputMode: params.secretInputMode,
+            azurePreset,
             retryChoice,
             current: { baseUrl, apiKey, resolvedApiKey, modelId },
           }));
@@ -861,6 +912,7 @@ export async function promptCustomApiConfig(params: {
       prompter,
       config,
       secretInputMode: params.secretInputMode,
+      azurePreset,
       retryChoice,
       current: { baseUrl, apiKey, resolvedApiKey, modelId },
     }));
@@ -916,6 +968,10 @@ export async function promptCustomApiConfig(params: {
     );
   }
 
-  runtime.log(`Configured custom provider: ${result.providerId}/${result.modelId}`);
+  runtime.log(
+    azurePreset
+      ? `Configured Azure OpenAI provider: ${result.providerId}/${result.modelId}`
+      : `Configured custom provider: ${result.providerId}/${result.modelId}`,
+  );
   return result;
 }

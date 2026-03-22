@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/azure-blob",
+  "version": "2026.3.14",
+  "private": true,
+  "description": "OpenClaw plugin to read files from Azure Blob Storage",
+  "type": "module",
+  "dependencies": {
+    "@azure/storage-blob": "^12.31.0",
+    "@sinclair/typebox": "0.34.48"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

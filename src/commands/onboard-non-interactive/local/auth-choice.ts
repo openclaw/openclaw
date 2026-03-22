@@ -253,6 +253,81 @@ export async function applyNonInteractiveAuthChoice(params: {
     return null;
   }
 
+  if (authChoice === "azure-openai-api-key") {
+    try {
+      const customAuth = parseNonInteractiveCustomApiFlags({
+        baseUrl: opts.customBaseUrl,
+        modelId: opts.customModelId,
+        compatibility: opts.customCompatibility,
+        apiKey: opts.azureOpenaiApiKey ?? opts.customApiKey,
+        providerId: opts.customProviderId,
+        requireAzureHost: true,
+      });
+      const resolvedProviderId = resolveCustomProviderId({
+        config: nextConfig,
+        baseUrl: customAuth.baseUrl,
+        providerId: customAuth.providerId,
+      });
+      const keyFlagHint = opts.azureOpenaiApiKey ? "--azure-openai-api-key" : "--custom-api-key";
+      const resolvedCustomApiKey = await resolveApiKey({
+        provider: resolvedProviderId.providerId,
+        cfg: baseConfig,
+        flagValue: customAuth.apiKey,
+        flagName: keyFlagHint,
+        envVar: "AZURE_OPENAI_API_KEY",
+        envVarName: "AZURE_OPENAI_API_KEY",
+        runtime,
+        required: false,
+      });
+      let customApiKeyInput: SecretInput | undefined;
+      if (resolvedCustomApiKey) {
+        const storeCustomApiKeyAsRef = requestedSecretInputMode === "ref"; // pragma: allowlist secret
+        if (storeCustomApiKeyAsRef) {
+          const stored = toStoredSecretInput(resolvedCustomApiKey);
+          if (!stored) {
+            return null;
+          }
+          customApiKeyInput = stored;
+        } else {
+          customApiKeyInput = resolvedCustomApiKey.key;
+        }
+      }
+      const result = applyCustomApiConfig({
+        config: nextConfig,
+        baseUrl: customAuth.baseUrl,
+        modelId: customAuth.modelId,
+        compatibility: customAuth.compatibility,
+        apiKey: customApiKeyInput,
+        providerId: customAuth.providerId,
+      });
+      if (result.providerIdRenamedFrom && result.providerId) {
+        runtime.log(
+          `Custom provider ID "${result.providerIdRenamedFrom}" already exists for a different base URL. Using "${result.providerId}".`,
+        );
+      }
+      return result.config;
+    } catch (err) {
+      if (err instanceof CustomApiError) {
+        switch (err.code) {
+          case "missing_required":
+          case "invalid_compatibility":
+          case "invalid_base_url":
+            runtime.error(err.message);
+            break;
+          default:
+            runtime.error(`Invalid Azure OpenAI provider config: ${err.message}`);
+            break;
+        }
+        runtime.exit(1);
+        return null;
+      }
+      const reason = err instanceof Error ? err.message : String(err);
+      runtime.error(`Invalid Azure OpenAI provider config: ${reason}`);
+      runtime.exit(1);
+      return null;
+    }
+  }
+
   if (authChoice === "custom-api-key") {
     try {
       const customAuth = parseNonInteractiveCustomApiFlags({

@@ -242,6 +242,7 @@ describe("buildAuthChoiceOptions", () => {
     expect(cliChoices).toContain("openai-api-key");
     expect(cliChoices).toContain("chutes");
     expect(cliChoices).toContain("litellm-api-key");
+    expect(cliChoices).toContain("azure-openai-api-key");
     expect(cliChoices).toContain("custom-api-key");
     expect(cliChoices).toContain("skip");
     expect(options.some((option) => option.value === "ollama")).toBe(true);

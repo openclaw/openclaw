@@ -110,7 +110,15 @@ export async function promptAuthConfig(
   });
 
   let next = cfg;
-  if (authChoice === "custom-api-key") {
+  if (authChoice === "azure-openai-api-key") {
+    const customResult = await promptCustomApiConfig({
+      prompter,
+      runtime,
+      config: next,
+      preset: "azure-openai",
+    });
+    next = customResult.config;
+  } else if (authChoice === "custom-api-key") {
     const customResult = await promptCustomApiConfig({ prompter, runtime, config: next });
     next = customResult.config;
   } else if (authChoice !== "skip") {
@@ -144,7 +152,7 @@ export async function promptAuthConfig(
     }
   }
 
-  if (authChoice !== "custom-api-key") {
+  if (authChoice !== "custom-api-key" && authChoice !== "azure-openai-api-key") {
     const modelAllowlist = resolveProviderChoiceModelAllowlist({
       authChoice,
       config: next,

@@ -455,7 +455,16 @@ export async function runSetupWizard(
       workspaceDir,
     }));
 
-  if (authChoice === "custom-api-key") {
+  if (authChoice === "azure-openai-api-key") {
+    const customResult = await promptCustomApiConfig({
+      prompter,
+      runtime,
+      config: nextConfig,
+      secretInputMode: opts.secretInputMode,
+      preset: "azure-openai",
+    });
+    nextConfig = customResult.config;
+  } else if (authChoice === "custom-api-key") {
     const customResult = await promptCustomApiConfig({
       prompter,
       runtime,
@@ -483,7 +492,9 @@ export async function runSetupWizard(
   }
 
   const shouldPromptModelSelection =
-    authChoice !== "custom-api-key" && (authChoiceFromPrompt || authChoice === "ollama");
+    authChoice !== "custom-api-key" &&
+    authChoice !== "azure-openai-api-key" &&
+    (authChoiceFromPrompt || authChoice === "ollama");
   if (shouldPromptModelSelection) {
     const modelSelection = await promptDefaultModel({
       config: nextConfig,
