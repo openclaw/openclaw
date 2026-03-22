@@ -373,6 +373,9 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   flex-shrink: 0;
+  /* overflow: hidden removed — it clipped the absolutely-positioned .slash-menu
+     (bottom: 100%) that must render above the input container. border-radius
+     still rounds the box's own background/border without a clipping context. */
   transition:
     border-color var(--duration-fast) ease,
     box-shadow var(--duration-fast) ease;
