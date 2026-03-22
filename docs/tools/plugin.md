@@ -248,8 +248,8 @@ Plugins can register two types of hooks:
 
 ### Internal Hooks (command and gateway events)
 
-Use `api.registerHook()` for command and gateway events. Requires `hooks.internal.enabled: true`
-in your config, and a `name` option to identify the hook:
+Use `api.registerHook()` for command, gateway, message, and agent events.
+Requires `hooks.internal.enabled: true` in your config, and a `name` option to identify the hook:
 
 ```typescript
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
@@ -258,15 +258,20 @@ export default definePluginEntry({
   id: "my-plugin",
   name: "My Plugin",
   register(api) {
-    api.registerHook("command:new", async () => {
-      // Triggered when user issues /new command
-      api.logger.info("New session started");
-    }, { name: "my-plugin.command-new" });
+    api.registerHook(
+      "command:new",
+      async () => {
+        // Triggered when user issues /new command
+        api.logger.info("New session started");
+      },
+      { name: "my-plugin.command-new" },
+    );
   },
 });
 ```
 
-Common internal hook events: `command:new`, `command:reset`, `command:stop`, `gateway:startup`
+Common internal hook events: `command:new`, `command:reset`, `command:stop`,
+`message:received`, `message:sent`, `agent:bootstrap`, `gateway:startup`
 
 Config prerequisite:
 
@@ -278,7 +283,7 @@ Config prerequisite:
 
 ### Plugin Lifecycle Hooks (agent and tool events)
 
-Use `api.on()` for agent lifecycle and tool execution events. No extra config required:
+Use `api.on()` for typed agent lifecycle and tool execution events:
 
 ```typescript
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
@@ -294,6 +299,7 @@ export default definePluginEntry({
     });
 
     // Prompt injection hook
+    // Note: requires plugins.entries.<id>.hooks.allowPromptInjection to be true (default)
     api.on("before_prompt_build", async (event, ctx) => {
       return {
         prependContext: "Additional context for this turn",
