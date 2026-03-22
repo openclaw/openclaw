@@ -120,10 +120,21 @@ export async function acquireFileLock(
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       const handle = await fs.open(lockPath, "wx");
-      await handle.writeFile(
-        JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }, null, 2),
-        "utf8",
-      );
+      // FIX: file handle acquired -- must be closed on ALL paths.
+      // If writeFile() throws below, the handle never reaches HELD_LOCKS
+      // so releaseHeldLock() will never find or close it, leaking the FD.
+      try {
+        await handle.writeFile(
+          JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }, null, 2),
+          "utf8",
+        );
+      } catch (writeErr) {
+        // Close the handle and remove the partial lock file before
+        // propagating -- prevents FD leak and stale lock on disk.
+        await handle.close().catch(() => undefined);
+        await fs.rm(lockPath, { force: true }).catch(() => undefined);
+        throw writeErr;
+      }
       HELD_LOCKS.set(normalizedFile, { count: 1, handle, lockPath });
       return {
         lockPath,

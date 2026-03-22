@@ -196,16 +196,29 @@ export async function acquireGatewayLock(
   while (Date.now() - startedAt < timeoutMs) {
     try {
       const handle = await fs.open(lockPath, "wx");
-      const startTime = platform === "linux" ? readLinuxStartTime(process.pid) : null;
-      const payload: LockPayload = {
-        pid: process.pid,
-        createdAt: new Date().toISOString(),
-        configPath,
-      };
-      if (typeof startTime === "number" && Number.isFinite(startTime)) {
-        payload.startTime = startTime;
+      // FIX: file handle acquired -- must be closed on ALL paths.
+      // If writeFile() throws (disk full, I/O error), the handle would
+      // leak because release() is only returned on the success path.
+      // Wrap in try/catch to guarantee cleanup on failure.
+      try {
+        const startTime = platform === "linux" ? readLinuxStartTime(process.pid) : null;
+        const payload: LockPayload = {
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          configPath,
+        };
+        if (typeof startTime === "number" && Number.isFinite(startTime)) {
+          payload.startTime = startTime;
+        }
+        await handle.writeFile(JSON.stringify(payload), "utf8");
+      } catch (writeErr) {
+        // Close the file handle before propagating -- without this,
+        // an I/O error during writeFile leaves an open FD and an
+        // empty/partial lock file on disk.
+        await handle.close().catch(() => undefined);
+        await fs.rm(lockPath, { force: true }).catch(() => undefined);
+        throw writeErr;
       }
-      await handle.writeFile(JSON.stringify(payload), "utf8");
       return {
         lockPath,
         configPath,
