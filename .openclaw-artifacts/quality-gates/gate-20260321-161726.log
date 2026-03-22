@@ -1,0 +1,27 @@
+quality gate started: 2026-03-21T21:17:26Z
+repo: /Users/newdldewdl/openclaw-contrib
+umask: 0022 (was 0077)
+[INFO] node_modules already present
+==== pnpm build ====
+
+> openclaw@2026.3.14 build /Users/newdldewdl/openclaw-contrib
+> pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts
+
+
+> openclaw@2026.3.14 canvas:a2ui:bundle /Users/newdldewdl/openclaw-contrib
+> bash scripts/bundle-a2ui.sh
+
+A2UI bundle up to date; skipping.
+node_modules/.pnpm/@whiskeysockets+baileys@7.0.0-rc.9_audio-decode@2.2.3_sharp@0.34.5/node_modules/@whiskeysockets/baileys/lib/Utils/messages-media.js (18:52) [33m[UNRESOLVED_IMPORT] Warning:[0m Could not resolve 'jimp' in node_modules/.pnpm/@whiskeysockets+baileys@7.0.0-rc.9_audio-decode@2.2.3_sharp@0.34.5/node_modules/@whiskeysockets/baileys/lib/Utils/messages-media.js
+    [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m node_modules/.pnpm/@whiskeysockets+baileys@7.0.0-rc.9_audio-decode@2.2.3_sharp@0.34.5/node_modules/@whiskeysockets/baileys/lib/Utils/messages-media.js:18:53 [38;5;246m][0m
+    [38;5;246m│[0m
+ [38;5;246m18 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249mc[0m[38;5;249mo[0m[38;5;249mn[0m[38;5;249ms[0m[38;5;249mt[0m[38;5;249m [0m[38;5;249m[[0m[38;5;249mj[0m[38;5;249mi[0m[38;5;249mm[0m[38;5;249mp[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249ms[0m[38;5;249mh[0m[38;5;249ma[0m[38;5;249mr[0m[38;5;249mp[0m[38;5;249m][0m[38;5;249m [0m[38;5;249m=[0m[38;5;249m [0m[38;5;249ma[0m[38;5;249mw[0m[38;5;249ma[0m[38;5;249mi[0m[38;5;249mt[0m[38;5;249m [0m[38;5;249mP[0m[38;5;249mr[0m[38;5;249mo[0m[38;5;249mm[0m[38;5;249mi[0m[38;5;249ms[0m[38;5;249me[0m[38;5;249m.[0m[38;5;249ma[0m[38;5;249ml[0m[38;5;249ml[0m[38;5;249m([0m[38;5;249m[[0m[38;5;249mi[0m[38;5;249mm[0m[38;5;249mp[0m[38;5;249mo[0m[38;5;249mr[0m[38;5;249mt[0m[38;5;249m([0m'jimp'[38;5;249m)[0m[38;5;249m.[0m[38;5;249mc[0m[38;5;249ma[0m[38;5;249mt[0m[38;5;249mc[0m[38;5;249mh[0m[38;5;249m([0m[38;5;249m([0m[38;5;249m)[0m[38;5;249m [0m[38;5;249m=[0m[38;5;249m>[0m[38;5;249m [0m[38;5;249m{[0m[38;5;249m [0m[38;5;249m}[0m[38;5;249m)[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249mi[0m[38;5;249mm[0m[38;5;249mp[0m[38;5;249mo[0m[38;5;249mr[0m[38;5;249mt[0m[38;5;249m([0m[38;5;249m'[0m[38;5;249ms[0m[38;5;249mh[0m[38;5;249ma[0m[38;5;249mr[0m[38;5;249mp[0m[38;5;249m'[0m[38;5;249m)[0m[38;5;249m.[0m[38;5;249mc[0m[38;5;249ma[0m[38;5;249mt[0m[38;5;249mc[0m[38;5;249mh[0m[38;5;249m([0m[38;5;249m([0m[38;5;249m)[0m[38;5;249m [0m[38;5;249m=[0m[38;5;249m>[0m[38;5;249m [0m[38;5;249m{[0m[38;5;249m [0m[38;5;249m}[0m[38;5;249m)[0m[38;5;249m][0m[38;5;249m)[0m[38;5;249m;[0m
+ [38;5;240m   │[0m                                                     ───┬──  
+ [38;5;240m   │[0m                                                        ╰──── Module not found, treating it as an external dependency
+[38;5;246m────╯[0m
+
+Build emitted [UNRESOLVED_IMPORT] outside extensions: node_modules/.pnpm/@whiskeysockets+baileys@7.0.0-rc.9_audio-decode@2.2.3_sharp@0.34.5/node_modules/@whiskeysockets/baileys/lib/Utils/messages-media.js (18:52) [UNRESOLVED_IMPORT] Warning: Could not resolve 'jimp' in node_modules/.pnpm/@whiskeysockets+baileys@7.0.0-rc.9_audio-decode@2.2.3_sharp@0.34.5/node_modules/@whiskeysockets/baileys/lib/Utils/messages-media.js
+ ELIFECYCLE  Command failed with exit code 1.
+[FAIL] pnpm build
+[FAIL] Quality gate stopped at: pnpm build
+log: /Users/newdldewdl/openclaw-contrib/.openclaw-artifacts/quality-gates/gate-20260321-161726.log

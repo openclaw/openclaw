@@ -1,0 +1,1452 @@
+quality gate started: 2026-03-22T03:43:38Z
+repo: .
+umask: 0022 (was 0077)
+[INFO] node_modules already present
+==== pnpm build ====
+
+> openclaw@2026.3.14 build /Users/newdldewdl/openclaw-contrib
+> pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts
+
+
+> openclaw@2026.3.14 canvas:a2ui:bundle /Users/newdldewdl/openclaw-contrib
+> bash scripts/bundle-a2ui.sh
+
+<DIR>/a2ui.bundle.js  chunk │ size: 474.70 kB
+
+✔ rolldown v1.0.0-rc.9 Finished in 37.68 ms
+
+> openclaw@2026.3.14 build:plugin-sdk:dts /Users/newdldewdl/openclaw-contrib
+> tsc -p tsconfig.plugin-sdk.dts.json
+
+[copy-hook-metadata] Copied 4 hook metadata files.
+[copy-export-html-templates] Copied 5 export-html assets.
+[PASS] pnpm build
+==== pnpm format:check (advisory) ====
+
+> openclaw@2026.3.14 format:check /Users/newdldewdl/openclaw-contrib
+> oxfmt --check
+
+Checking formatting...
+
+All matched files use the correct format.
+Finished in 4483ms on 8434 files using 8 threads.
+[PASS] pnpm format:check
+==== pnpm tsgo ====
+[PASS] pnpm tsgo
+==== pnpm lint ====
+
+> openclaw@2026.3.14 lint /Users/newdldewdl/openclaw-contrib
+> oxlint --type-aware
+
+Found 0 warnings and 0 errors.
+Finished in 5.9s on 5336 files with 136 rules using 8 threads.
+[PASS] pnpm lint
+==== pnpm test ====
+
+> openclaw@2026.3.14 test /Users/newdldewdl/openclaw-contrib
+> node scripts/test-parallel.mjs
+
+[test-parallel] start unit-fast workers=2 filters=all
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/cron/isolated-agent.delivery-target-thread-session.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 7197[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/message-action-runner.threading.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 7241[2mms[22m[39m
+ [32m✓[39m test/extension-plugin-sdk-boundary.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 1199[2mms[22m[39m
+     [33m[2m✓[22m[39m is currently empty [33m 1196[2mms[22m[39m
+ [32m✓[39m src/secrets/resolve.test.ts [2m([22m[2m17 tests[22m[2m)[22m[33m 1568[2mms[22m[39m
+     [33m[2m✓[22m[39m resolves exec refs with protocolVersion 1 response [33m 310[2mms[22m[39m
+ [32m✓[39m src/hooks/bundled/session-memory/handler.test.ts [2m([22m[2m17 tests[22m[2m)[22m[33m 962[2mms[22m[39m
+     [33m[2m✓[22m[39m creates memory file with session content on /new command [33m 373[2mms[22m[39m
+ [32m✓[39m src/config/schema.test.ts [2m([22m[2m22 tests[22m[2m)[22m[33m 807[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/subpaths.test.ts [2m([22m[2m50 tests[22m[2m)[22m[33m 576[2mms[22m[39m
+     [33m[2m✓[22m[39m resolves every curated public subpath [33m 543[2mms[22m[39m
+ [32m✓[39m src/install-sh-version.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 587[2mms[22m[39m
+ [32m✓[39m test/scripts/committer.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 770[2mms[22m[39m
+     [33m[2m✓[22m[39m accepts a single space-delimited path blob [33m 305[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/channel-import-guardrails.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 579[2mms[22m[39m
+ [32m✓[39m test/scripts/ios-team-id.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 566[2mms[22m[39m
+     [33m[2m✓[22m[39m resolves a fallback team ID from Xcode team listings (smoke) [33m 499[2mms[22m[39m
+ [32m✓[39m src/plugins/loader.test.ts [2m([22m[2m56 tests[22m[2m)[22m[33m 589[2mms[22m[39m
+ [32m✓[39m src/secrets/audit.test.ts [2m([22m[2m18 tests[22m[2m)[22m[33m 491[2mms[22m[39m
+ [32m✓[39m src/cli/gateway-cli/run.option-collisions.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 436[2mms[22m[39m
+ [32m✓[39m src/infra/fs-safe.test.ts [2m([22m[2m27 tests[22m[2m)[22m[33m 478[2mms[22m[39m
+ [32m✓[39m src/memory/manager.atomic-reindex.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 392[2mms[22m[39m
+ [32m✓[39m test/architecture-smells.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 336[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent.model-formatting.test.ts [2m([22m[2m22 tests[22m[2m)[22m[33m 448[2mms[22m[39m
+ [32m✓[39m src/security/audit.test.ts [2m([22m[2m65 tests[22m[2m)[22m[33m 315[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.auth.plugin.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 333[2mms[22m[39m
+     [33m[2m✓[22m[39m prefers plugin-owned usage auth when available [33m 331[2mms[22m[39m
+ [32m✓[39m src/config/config.plugin-validation.test.ts [2m([22m[2m15 tests[22m[2m)[22m[33m 322[2mms[22m[39m
+ [32m✓[39m test/web-search-provider-boundary.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 304[2mms[22m[39m
+     [33m[2m✓[22m[39m has no remaining production inventory in core [33m 302[2mms[22m[39m
+ [32m✓[39m src/infra/host-env-security.test.ts [2m([22m[2m18 tests[22m[2m)[22m[33m 312[2mms[22m[39m
+ [32m✓[39m src/memory/embeddings.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 248[2mms[22m[39m
+ [32m✓[39m test/git-hooks-pre-commit.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 293[2mms[22m[39m
+ [32m✓[39m src/hooks/loader.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 279[2mms[22m[39m
+ [32m✓[39m src/cli/program/preaction.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 246[2mms[22m[39m
+ [32m✓[39m src/cli/mcp-cli.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 224[2mms[22m[39m
+ [32m✓[39m test/scripts/test-extension.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 245[2mms[22m[39m
+ [32m✓[39m src/infra/fs-pinned-write-helper.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 231[2mms[22m[39m
+ [32m✓[39m src/infra/archive.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 211[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 275[2mms[22m[39m
+ [32m✓[39m src/acp/server.startup.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 194[2mms[22m[39m
+ [32m✓[39m src/tui/gateway-chat.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 202[2mms[22m[39m
+ [32m✓[39m src/cli/nodes-cli.coverage.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 191[2mms[22m[39m
+ [32m✓[39m src/entry.version-fast-path.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 196[2mms[22m[39m
+ [32m✓[39m src/memory/manager.async-search.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli/install.integration.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 174[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent.delivers-response-has-heartbeat-ok-but-includes.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 162[2mms[22m[39m
+ [32m✓[39m test/plugin-extension-import-boundary.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 171[2mms[22m[39m
+ [32m✓[39m src/infra/archive-staging.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 167[2mms[22m[39m
+ [32m✓[39m src/logger.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/plugins/sdk-alias.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 160[2mms[22m[39m
+ [32m✓[39m src/media/store.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 149[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.load.plugin.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 148[2mms[22m[39m
+ [32m✓[39m src/infra/run-node.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 143[2mms[22m[39m
+ [32m✓[39m src/memory/batch-gemini.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 189[2mms[22m[39m
+ [32m✓[39m src/media/store.outside-workspace.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 114[2mms[22m[39m
+ [32m✓[39m src/hooks/plugin-hooks.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 116[2mms[22m[39m
+ [32m✓[39m src/cli/gateway-cli.coverage.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 159[2mms[22m[39m
+ [32m✓[39m src/media/read-response-with-limit.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 107[2mms[22m[39m
+ [32m✓[39m src/plugins/copy-bundled-plugin-metadata.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 69[2mms[22m[39m
+ [32m✓[39m src/security/windows-acl.test.ts [2m([22m[2m48 tests[22m[2m)[22m[32m 95[2mms[22m[39m
+ [32m✓[39m src/plugins/bundle-mcp.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 98[2mms[22m[39m
+ [32m✓[39m src/infra/gateway-lock.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 95[2mms[22m[39m
+ [32m✓[39m src/plugins/manifest-registry.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 92[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 92[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent.subagent-model.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 111[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/channel-lifecycle.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 84[2mms[22m[39m
+ [32m✓[39m src/config/config.nix-integration-u3-u5-u9.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 87[2mms[22m[39m
+ [32m✓[39m src/pairing/setup-code.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 94[2mms[22m[39m
+ [32m✓[39m src/media/input-files.fetch-guard.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 82[2mms[22m[39m
+ [32m✓[39m src/cli/memory-cli.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 80[2mms[22m[39m
+ [32m✓[39m src/plugins/marketplace.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 76[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent.lane.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 85[2mms[22m[39m
+ [32m✓[39m src/wizard/setup.gateway-config.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 73[2mms[22m[39m
+ [32m✓[39m src/process/command-queue.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 87[2mms[22m[39m
+ [32m✓[39m src/infra/update-check.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 74[2mms[22m[39m
+ [32m✓[39m src/infra/system-presence.version.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 72[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent.direct-delivery-forum-topics.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 75[2mms[22m[39m
+ [32m✓[39m src/config/io.write-config.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 76[2mms[22m[39m
+ [32m✓[39m src/canvas-host/server.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 68[2mms[22m[39m
+ [32m✓[39m src/scripts/ci-changed-scope.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 67[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/run.owner-auth.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 73[2mms[22m[39m
+ [32m✓[39m src/plugins/status.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 72[2mms[22m[39m
+ [32m✓[39m src/daemon/schtasks.startup-fallback.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 62[2mms[22m[39m
+ [32m✓[39m src/plugins/contracts/auth-choice.contract.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 68[2mms[22m[39m
+ [32m✓[39m src/cli/program.smoke.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 57[2mms[22m[39m
+ [32m✓[39m src/infra/jsonl-socket.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 61[2mms[22m[39m
+ [32m✓[39m src/cli/pairing-cli.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 61[2mms[22m[39m
+ [32m✓[39m src/pairing/pairing-store.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 59[2mms[22m[39m
+ [32m✓[39m src/media-understanding/runner.skip-tiny-audio.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 67[2mms[22m[39m
+ [32m✓[39m src/cli/devices-cli.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 55[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/keyed-async-queue.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 57[2mms[22m[39m
+ [32m✓[39m src/infra/device-pairing.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 54[2mms[22m[39m
+ [32m✓[39m src/config/config.web-search-provider.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 54[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/outbound.test.ts [2m([22m[2m65 tests[22m[2m)[22m[32m 64[2mms[22m[39m
+ [32m✓[39m src/memory/batch-voyage.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 59[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli/lifecycle-core.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 57[2mms[22m[39m
+ [32m✓[39m src/media-understanding/runner.auto-audio.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 56[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli/lifecycle-core.config-guard.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 55[2mms[22m[39m
+ [32m✓[39m src/infra/session-maintenance-warning.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 60[2mms[22m[39m
+ [32m✓[39m src/hooks/hooks-install.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 55[2mms[22m[39m
+ [32m✓[39m src/routing/resolve-route.test.ts [2m([22m[2m41 tests[22m[2m)[22m[32m 52[2mms[22m[39m
+ [32m✓[39m src/media/server.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 45[2mms[22m[39m
+ [32m✓[39m src/node-host/invoke-system-run-plan.test.ts [2m([22m[2m41 tests[22m[2m)[22m[32m 65[2mms[22m[39m
+ [32m✓[39m src/plugins/bundle-commands.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 52[2mms[22m[39m
+ [32m✓[39m src/logging/log-file-size-cap.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 51[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/acp-bindings.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 51[2mms[22m[39m
+ [32m✓[39m src/plugins/tools.optional.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 52[2mms[22m[39m
+ [32m✓[39m src/config/sessions/sessions.test.ts [2m([22m[2m23 tests[22m[2m)[22m[32m 49[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/outbound-send-service.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 44[2mms[22m[39m
+ [32m✓[39m src/media-understanding/runner.proxy.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 54[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/delivery-queue.test.ts [2m([22m[2m36 tests[22m[2m)[22m[32m 45[2mms[22m[39m
+ [32m✓[39m src/infra/matrix-legacy-crypto.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 44[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli/lifecycle.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 45[2mms[22m[39m
+ [32m✓[39m src/config/config.legacy-config-detection.accepts-imessage-dmpolicy.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 46[2mms[22m[39m
+ [32m✓[39m src/plugins/discovery.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 47[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent.auth-profile-propagation.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 50[2mms[22m[39m
+ [32m✓[39m src/memory/embeddings-voyage.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/plugins/providers.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 45[2mms[22m[39m
+ [32m✓[39m src/media-understanding/runner.deepgram.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 45[2mms[22m[39m
+ [32m✓[39m src/config/sessions.test.ts [2m([22m[2m37 tests[22m[2m)[22m[32m 48[2mms[22m[39m
+ [32m✓[39m src/infra/ports.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 44[2mms[22m[39m
+ [32m✓[39m src/security/fix.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 49[2mms[22m[39m
+ [32m✓[39m src/image-generation/providers/google.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m src/cli/plugin-registry.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 42[2mms[22m[39m
+ [32m✓[39m src/cli/program/config-guard.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 37[2mms[22m[39m
+ [32m✓[39m src/infra/control-ui-assets.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 42[2mms[22m[39m
+ [32m✓[39m src/cli/route.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m src/config/plugins-runtime-boundary.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/process/supervisor/supervisor.pty-command.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 47[2mms[22m[39m
+ [32m✓[39m src/plugins/contracts/registry.contract.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 42[2mms[22m[39m
+ [32m✓[39m src/config/sessions/store.pruning.integration.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 34[2mms[22m[39m
+ [32m✓[39m src/plugins/contracts/loader.contract.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m src/config/sessions/targets.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m src/infra/update-startup.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 37[2mms[22m[39m
+ [32m✓[39m src/config/io.runtime-snapshot-write.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 37[2mms[22m[39m
+ [32m✓[39m src/process/exec.windows.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 35[2mms[22m[39m
+ [32m✓[39m src/cron/service.restart-catchup.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m src/hooks/workspace.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/plugins/web-search-providers.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 37[2mms[22m[39m
+ [32m✓[39m src/media-understanding/runtime.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 38[2mms[22m[39m
+ [32m✓[39m src/cron/service.failure-alert.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 43[2mms[22m[39m
+ [32m✓[39m src/media/fetch.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 39[2mms[22m[39m
+ [32m✓[39m src/plugins/web-search-providers.runtime.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 33[2mms[22m[39m
+ [32m✓[39m src/plugins/hook-runner-global.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 38[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/whatsapp-heartbeat.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 35[2mms[22m[39m
+ [32m✓[39m src/infra/net/proxy-fetch.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.fetch.shared.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/plugins/bundled-web-search.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.fetch.claude.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/media-understanding/runner.vision-skip.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 38[2mms[22m[39m
+ [32m✓[39m src/cli/models-cli.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 33[2mms[22m[39m
+ [32m✓[39m src/infra/device-bootstrap.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/media-understanding/providers/index.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/process/exec.no-output-timer.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 34[2mms[22m[39m
+ [32m✓[39m src/plugins/stage-bundled-plugin-runtime.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 34[2mms[22m[39m
+ [32m✓[39m src/cron/service.store.migration.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approvals-store.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 32[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.fetch.zai.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 33[2mms[22m[39m
+ [32m✓[39m src/infra/fetch.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 32[2mms[22m[39m
+ [32m✓[39m src/cli/acp-cli.option-collisions.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 33[2mms[22m[39m
+ [32m✓[39m src/config/config.legacy-config-detection.rejects-routing-allowfrom.test.ts [2m([22m[2m28 tests[22m[2m)[22m[32m 33[2mms[22m[39m
+ [32m✓[39m src/infra/matrix-plugin-helper.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/cron/service.persists-delivered-status.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 34[2mms[22m[39m
+ [32m✓[39m src/infra/json-files.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.fetch.minimax.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 35[2mms[22m[39m
+ [32m✓[39m src/daemon/service-audit.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/plugins/schema-validator.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 32[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.fetch.codex.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/config/env-preserve-io.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/memory/post-json.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.fetch.gemini.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/fetch-auth.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/plugins/provider-runtime.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 32[2mms[22m[39m
+ [32m✓[39m src/config/config.identity-defaults.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/targets.channel-resolution.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 32[2mms[22m[39m
+ [32m✓[39m src/infra/boundary-path.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/channel-resolution.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/config/io.compat.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/cli/program/register.onboard.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/cron/service.store-migration.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 33[2mms[22m[39m
+ [32m✓[39m src/config/mcp-config.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/cli/banner.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m src/cron/run-log.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 28[2mms[22m[39m
+ [32m✓[39m src/infra/transport-ready.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 32[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli.coverage.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/acp/persistent-bindings.lifecycle.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/cron/service.issue-16156-list-skips-cron.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/infra/install-package-dir.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/infra/matrix-migration-snapshot.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 28[2mms[22m[39m
+ [32m✓[39m src/logging/logger-settings.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/cli/program/register.message.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/cron/service.jobs.test.ts [2m([22m[2m35 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/node-host/invoke-browser.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/run.message-tool-policy.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 33[2mms[22m[39m
+ [32m✓[39m src/infra/infra-runtime.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/logging/console-settings.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/cli/program/register.backup.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/cli/program/register.agent.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/cron/schedule.test.ts [2m([22m[2m22 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/cli/program/register.maintenance.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/cli/browser-cli-inspect.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/config/config.pruning-defaults.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/media/server.outside-workspace.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/run.fast-mode.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/cli/skills-cli.commands.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/run.interim-retry.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/run.payload-fallbacks.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/config/config-misc.test.ts [2m([22m[2m38 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/memory/internal.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/cron/service/jobs.schedule-error-isolation.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/cli/update-cli.option-collisions.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/cron/service.session-reaper-in-finally.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/cli/program/register.setup.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/infra/matrix-legacy-state.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/config/io.owner-display-secret.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/infra/session-cost-usage.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/cli/program/register.configure.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/contracts/inbound.contract.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/cron/service.read-ops-nonblocking.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/config/config.talk-validation.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m src/infra/format-time/format-time.test.ts [2m([22m[2m42 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/security/skill-scanner.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m src/config/config.backup-rotation.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/config/includes.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/process/supervisor/supervisor.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/cli/cron-cli.test.ts [2m([22m[2m35 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/contracts/session-binding.contract.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 28[2mms[22m[39m
+ [32m✓[39m src/config/logging.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli/restart-health.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m src/cli/program/register.status-health-sessions.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/config/config.compaction-settings.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m src/i18n/registry.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m src/cron/service.jobs.top-of-hour-stagger.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m src/infra/state-migrations.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m src/media/store.redirect.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/cron/session-reaper.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/plugins/interactive.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/plugins/contracts/provider.contract.test.ts [2m([22m[2m38 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/config/legacy-migrate.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/markdown/ir.table-bullets.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/infra/push-apns.store.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/process/exec.test.ts [2m([22m[2m8 tests[22m[2m | [22m[33m2 skipped[39m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/cron/service.skips-main-jobs-empty-systemevent-text.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/infra/system-events.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/config/config.allowlist-requires-allowfrom.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/cli/prompt.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/logging/timestamps.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/plugins/bundle-manifest.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/cli/update-cli.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/logging/console-capture.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m src/config/talk.normalize.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/plugins/bundled-provider-auth-env-vars.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-active-hours.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/wizard/setup.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m src/version.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/persistent-dedupe.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/logging/logger.browser-import.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/infra/system-presence.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/cron/service.delivery-plan.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/runtime-api-guardrails.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/config/sessions/store.session-key-normalization.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/infra/secret-file.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/infra/matrix-migration-config.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/hooks/frontmatter.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/media-understanding/runner.video.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/infra/install-source-utils.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m test/ui.presenter-next-run.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/tui/components/chat-log.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/session-binding-service.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/config/io.validation-fails-closed.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/cli/program/help.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/cron/service.heartbeat-ok-summary-suppressed.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/config/talk-defaults.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/infra/net/fetch-guard.ssrf.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/cli/nodes-camera.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/plugins/uninstall.test.ts [2m([22m[2m23 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/config/config.discord.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/media-understanding/media-understanding-misc.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/daemon/schtasks.test.ts [2m([22m[2m23 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/cron/service.main-job-passes-heartbeat-target-last.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approvals-allow-always.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/infra/net/ssrf.dispatcher.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/infra/windows-task-restart.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/secrets/target-registry.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/channel-selection.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/media/fetch.telegram-network.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/cli/qr-cli.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/target-resolver.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/cli/run-main.profile-env.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/secrets/configure-plan.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/markdown/ir.nested-lists.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m test/scripts/check-file-utils.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/config/config.schema-regressions.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/cron/service.prevents-duplicate-timers.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/daemon/schtasks.stop.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/infra/node-pairing.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-runner.scheduler.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/channels/status-reactions.test.ts [2m([22m[2m37 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/utils.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/markdown/ir.blockquote-spacing.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/infra/archive-helpers.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/cli/secrets-cli.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/cron/service.get-job.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/memory/embeddings-gemini.test.ts [2m([22m[2m31 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/infra/system-run-approval-binding.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/cli/cli-utils.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/cli/update-cli/restart-helper.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approval-surface.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/cli/program.force.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/markdown/ir.hr-spacing.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/account-helpers.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/channels/typing.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/cli/qr-dashboard.integration.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/infra/device-identity.state-dir.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/infra/brew.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approvals-safe-bins.test.ts [2m([22m[2m47 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/tui/theme/theme.test.ts [2m([22m[2m25 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/config/thread-bindings-config-keys.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/config/config.acp-binding-cutover.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/utils/usage-format.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m ui/src/ui/views/agents-utils.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/config/doc-baseline.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/cron/service.store-load-invalid-main-job.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/cli/exec-approvals-cli.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/infra/gaxios-fetch-compat.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/hooks/bundled/bootstrap-extra-files/handler.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/contracts/outbound-payload.contract.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/config/config.agent-concurrency-defaults.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-wake.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/message-action-params.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli/status.gather.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/secrets/target-registry-pattern.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/infra/install-safe-path.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m ui/src/ui/controllers/chat.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/contracts/surface.contract.test.ts [2m([22m[2m87 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/cli/logs-cli.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/shared/usage-aggregates.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/docker-image-digests.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/plugins/bundle-claude-inspect.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/cron/service.rearm-timer-when-running.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/infra/retry.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/config/config.sandbox-docker.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/plugins/wired-hooks-compaction.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approvals-analysis.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/infra/errors.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/config/config.multi-agent-agentdir-validation.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/logging/logger-timestamp.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/secrets/exec-secret-ref-id-parity.test.ts [2m([22m[2m33 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/config/config.secrets-schema.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/config/config.identity-avatar.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/infra/unhandled-rejections.fatal-detection.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/infra/bonjour.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/cli/gateway-cli/run-loop.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/infra/pairing-token.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/cron/service.issue-35195-backup-timing.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/daemon/schtasks.install.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/plugins/update.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/infra/restart-sentinel.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/cron/normalize.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/logging/diagnostic.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m test/scripts/check-channel-agnostic-boundaries.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/daemon/launchd.test.ts [2m([22m[2m25 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/media/mime.test.ts [2m([22m[2m44 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/tui/components/searchable-select-list.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/cfg-threading.guard.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/config/sessions/store.pruning.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/infra/tls/gateway.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-events.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/markdown/frontmatter.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/infra/ports-probe.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/cron/service.issue-13992-regression.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.shared.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/logging/console-timestamp.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/docker-build-cache.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/infra/agent-events.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/infra/net/ssrf.pinning.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/scripts/canvas-a2ui-copy.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/config/sessions/disk-budget.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/infra/update-global.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/target-normalization.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/infra/device-identity.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/memory/qmd-process.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/security/external-content.test.ts [2m([22m[2m45 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/process/supervisor/adapters/pty.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/config/paths.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/terminal/table.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/memory/search-manager.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/memory/session-files.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/infra/path-alias-guards.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/infra/exec-obfuscation-detect.test.ts [2m([22m[2m31 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/config/config.dm-policy-alias.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/memory/embeddings-ollama.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/cli/ports.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/device-auth-store.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/plugins/bundled-dir.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/cli/browser-cli-state.option-collisions.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/infra/tailscale.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/subagent-followup.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/config/load-channel-config-surface.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/infra/json-utf8-bytes.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/infra/retry-policy.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/media-understanding/providers/deepgram/audio.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/config/slack-http-config.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/markdown/ir.table-code.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/daemon/service-env.test.ts [2m([22m[2m61 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/media-understanding/providers/openai/audio.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/config/telegram-webhook-secret.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/infra/machine-name.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/infra/widearea-dns.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.load.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/hooks/internal-hooks.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/security/dm-policy-shared.test.ts [2m([22m[2m66 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/canvas-host/server.state-dir.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/cli/program/register.subclis.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/config/validation.allowed-values.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/plugins/voice-call.plugin.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/plugins/contracts/catalog.contract.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/infra/openclaw-root.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/acp/translator.cancel-scoping.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/infra/package-json.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/infra/install-flow.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/cli/program/message/helpers.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/cli/program/routes.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/infra/net/ssrf.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/infra/git-root.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/infra/dotenv.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.format.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/voicewake.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/cli/program/command-registry.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/tui/components/btw-inline-message.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/infra/tmp-openclaw-dir.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/config/config.irc.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/safe-open-sync.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m test/scripts/check-no-raw-window-open.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/media-understanding/providers/moonshot/video.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli/install.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/config/slack-token-validation.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/test-helpers/state-dir-env.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/plugins-channel.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/http-body.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/cron/service.issue-17852-daily-skip.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/node-host/invoke.sanitize-env.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/cron/service.armtimer-tight-loop.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/config/config.env-vars.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/shell-env.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/state-migrations.state-dir.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/reply-payload.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/wizard/setup.finalize.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approvals-parity.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/config/config.tools-alsoAllow.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/bootstrap/node-startup-env.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m test/scripts/check-no-random-messaging-tmp.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/push-apns.relay.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/infra/npm-pack-install.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/process/kill-tree.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/config/config.discord-presence.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/memory/temporal-decay.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/config/config.discord-agent-components.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/config/config.telegram-topic-agentid.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/cli/browser-cli-manage.timeout-option.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/config/telegram-actions-poll.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/whatsapp/resolve-outbound-target.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/cli/skills-cli.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approvals.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/push-apns.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/plugin-install-path-warnings.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/exec-safe-bin-policy.test.ts [2m([22m[2m87 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/cli/gateway-cli/register.option-collisions.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/cli/channel-options.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/cli/system-cli.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/hardlink-guards.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/exec-command-resolution.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/plugins/runtime/index.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/memory/query-expansion.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/hooks/message-hooks.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/acp/translator.prompt-prefix.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/config/zod-schema.signal-groups.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/cli/browser-cli-manage.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m test/vitest-unit-paths.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approvals-config.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/daemon/runtime-hints.windows-paths.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/json-file.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/root-alias.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/process-respawn.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/exec-safe-bin-runtime-policy.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/plugins/runtime/runtime-telegram-typing.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/infra/push-apns.auth.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/plugins/services.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/cli/security-cli.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/infra/wsl.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/config/config.meta-timestamp-coercion.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/outbound/slack.sendpayload.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/config/telegram-webhook-port.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/config/config.hooks-module-paths.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/media-understanding/providers/mistral/index.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/bonjour-discovery.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/config/normalize-paths.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/contracts/actions.contract.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/infra/watch-node.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/infra/ssh-config.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/cron/cron-protocol-conformance.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/infra/boundary-file-read.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/process/supervisor/adapters/child.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/cron/delivery.failure-notify.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/shared/entry-status.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cli/program/build-program.version-alias.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/cli/directory-cli.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/config/config.gateway-tailscale-bind.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/ssrf-policy.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/plugins/contracts/web-search-provider.contract.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approval-session-target.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/link-understanding/detect.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/node-host/runner.credentials.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/cli/channel-auth.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/temp-path.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/logging/redact.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/media-understanding/providers/google/video.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/system-run-command.test.ts [2m([22m[2m31 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/acp/control-plane/runtime-cache.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/env.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/memory/batch-http.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/config/config.msteams.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/shared/net/ip.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/infra/restart.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/config/config.telegram-audio-preflight.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/session-context.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/cli/nodes-cli/register.invoke.nodes-run-approval-timeout.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/plugins/runtime/runtime-discord-typing.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/contracts/directory.contract.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/infra/executable-path.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/config/config.telegram-custom-commands.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/image-generation/providers/fal.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/infra/diagnostic-events.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/infra/install-target.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/hooks/gmail-setup-utils.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/config/zod-schema.talk.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/binding-targets.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/contracts/plugin.contract.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/infra/infra-store.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/logging/subsystem.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/cli/skills-cli.formatting.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli/register-service-commands.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/channels/session.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/channel-config-helpers.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/infra/exec-wrapper-resolution.test.ts [2m([22m[2m45 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/secret-input.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/providers/google-shared.preserves-parameters-type-is-missing.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/infra/detect-package-manager.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/outbound/slack.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/tui/tui-formatters.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/infra/path-env.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/config/zod-schema.typing-mode.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/infra/tailnet.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/channels/inbound-debounce-policy.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/cli/argv.test.ts [2m([22m[2m51 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/config/env-substitution.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/hooks/import-url.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/daemon/runtime-paths.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/tool-payload.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/tts/providers/microsoft.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/message-actions.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/media/host.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/memory/mmr.test.ts [2m([22m[2m25 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/infra/net/undici-global-dispatcher.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m test/openclaw-npm-release-check.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m test/plugin-npm-release.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/tui/osc8-hyperlinks.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/infra/restart.deferral-timeout.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/channels/transport/stall-watchdog.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/plugin-entry-guardrails.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/message.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/setup-helpers.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/config/zod-schema.session-maintenance-extensions.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/config/zod-schema.cron-retention.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/group-policy-warnings.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/utils/run-with-concurrency.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/hooks/bundled/boot-md/handler.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/acp/translator.set-session-mode.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/contracts/group-policy.contract.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/state-migrations.fs.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/cli/config-set-input.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/webhook-request-guards.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/config/logging-max-file-bytes.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m ui/src/ui/app-chat.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/shared/pid-alive.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/test-utils/temp-home.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/infra/runtime-guard.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/setup-group-access.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/config/group-policy.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/cli/command-secret-resolution.coverage.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/plugins/wired-hooks-subagent.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m ui/src/ui/controllers/agents.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/plugins/wired-hooks-inbound-claim.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m test/scripts/test-parallel.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/image-generation/providers/openai.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/plugins/cli.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/infra/matrix-account-selection.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/config/sessions/delivery-info.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/outbound-policy.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/stable-node-path.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/session.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/setup-wizard-proxy.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/memory/embeddings-remote-fetch.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/config/zod-schema.logging-levels.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/shared/device-auth-store.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/memory/hybrid.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/contracts/status.contract.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/plugins/wired-hooks-message.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m test/vitest-unit-config.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/unhandled-rejections.test.ts [2m([22m[2m33 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/allowlist-config-edit.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/tui/tui-session-actions.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/channel-pairing.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/secure-random.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/memory/qmd-query-parser.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/tui/tui-stream-assembler.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/outbound-media.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/shared/tailscale-status.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/cli/hooks-cli.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/setup-group-access-configure.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/exec-safe-bin-trust.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/shared/config-eval.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/gateway-processes.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/channel-activity.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/shared/text/reasoning-tags.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/pairing/pairing-challenge.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/channels/channel-config.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/outbound/imessage.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugins/provider-wizard.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/cli/cron-cli/shared.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/config/config.skills-entries-config.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugins/wired-hooks-llm.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugins/hooks.model-override-wiring.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/npm-integrity.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/identity.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/infra/update-channels.test.ts [2m([22m[2m32 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/channels/allowlists/resolve-utils.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/exec-host.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/cli/profile.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/memory/backend-config.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/shared/frontmatter.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/infra/abort-pattern.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/contracts/threading.contract.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/outbound/signal.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/contracts/setup.contract.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/scp-host.test.ts [2m([22m[2m37 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/docs/slash-commands-doc.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/channels/channels-misc.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/logging/logger-env.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/cli/program/helpers.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/channels/draft-stream-controls.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/tts/edge-tts-validation.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugins/config-state.test.ts [2m([22m[2m22 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/routing/session-key.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/secrets/runtime-gateway-auth-surfaces.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/process/spawn-utils.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/config-schema.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/config/zod-schema.tts.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/test-utils/env.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/archive-path.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/sanitize-text.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/cli/plugin-install-plan.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/backoff.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/package-contract-guardrails.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/cli/command-options.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugins/contracts/shape.contract.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/hooks/message-hook-mappers.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/dockerfile.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/group-access.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/secrets/ref-contract.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/utils/delivery-context.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/system-run-approval-context.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/tui/tui-input-history.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/message-action-normalization.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/channel-setup.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/agent-delivery.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/outbound/interactive.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/config/zod-schema.agent-defaults.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/outbound/direct-text-media.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/secrets/path-utils.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/npm-registry-spec.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/secret-input-schema.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/utils/utils-misc.test.ts [2m([22m[2m22 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/tui/commands.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/config/merge-patch.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/cli/run-main.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/daemon/constants.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/channel-reply-pipeline.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/daemon/program-args.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/media/parse.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/cli/program/action-reparse.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/binaries.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/runtime-forwarders.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/media-understanding/transcribe-audio.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/config/io.eacces.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/webhook-memory-guards.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/helpers.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/channel-send-result.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/run.sandbox-config-preserved.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugins/bundled-runtime-deps.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/shared/requirements.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/cron/service.issue-19676-at-reschedule.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/channels/typing-start-guard.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/security/dm-policy-channel-smoke.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/daemon/cmd-argv.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/clipboard.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/config/env-preserve.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/bonjour-ciao.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/secrets/plan.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/system-run-command.contract.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/acp/runtime/registry.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/cron/store-migration.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/tui/tui-local-shell.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/config/runtime-group-policy.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/hooks/gmail.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/plugins/wired-hooks-gateway.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/shared/node-match.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugins/wired-hooks-session.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/channels/run-state-machine.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/memory/batch-status.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/plugins/installs.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/directory-config-helpers.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cli/completion-cli.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/polls.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approval-reply.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/infra/parse-finite-number.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/format.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/acp/session-mapper.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/sessions/transcript-events.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/pairing-files.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/infra/pairing-pending.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cli/run-main.exit.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/wizard/setup.secret-input.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/install-from-npm-spec.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/sessions/session-lifecycle-events.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/providers/github-copilot-models.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-visibility.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/message-actions.security.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/envelope.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/image-generation/runtime.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/wizard/setup.completion.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/pairing-adapters.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cli/browser-cli.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cli/browser-cli-actions-input/shared.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli/status.print.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/wizard/session.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/providers/google-shared.ensures-function-call-comes-after-user-turn.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/hooks/gmail-watcher-lifecycle.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m test/scripts/test-report-utils.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/skills-remote.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/ports-lsof.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/ports-format.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/config/model-alias-defaults.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/plugins/provider-discovery.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/daemon/schtasks-exec.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/plugins/hooks.before-agent-start.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/acp/session.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/secrets/configure.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/message-capability-matrix.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m test/release-check.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/memory/embedding-chunk-limits.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cli/command-secret-targets.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-reason.test.ts [2m([22m[2m31 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/acp/runtime/session-identifiers.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/channel-adapters.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/config/runtime-overrides.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/allow-from.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/media/audio.test.ts [2m([22m[2m23 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/runtime.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cron/stagger.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/pairing/pairing-messages.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/home-dir.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/host-env-security.policy-parity.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/setup-wizard-binary.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/status-helpers.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cli/message-secret-scope.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/shared/node-resolve.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/poll-params.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cron/service.list-page-sort-guards.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m test/appcast.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cli/config-set-mode.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-events-filter.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/channels-status-issues.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/security/safe-regex.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/process/supervisor/registry.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/abort-signal.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/directory-cache.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/secrets/command-config.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/plugins/provider-validation.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/utils/queue-helpers.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/node-host/exec-policy.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/config/channel-capabilities.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/acp/runtime/session-meta.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/plugins/pi-package-graph.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/plugins/bundled-sources.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/config/sessions/artifacts.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/cli-root-options.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/path-guards.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/web-search/runtime.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/acp/runtime/errors.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/shared/gateway-bind-url.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cli/npm-resolution.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/channels/ack-reactions.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/whatsapp/normalize.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/plugins/runtime/gateway-request-scope.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m test/scripts/test-runner-manifest.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/shared/text/assistant-visible-text.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/media/inbound-path-policy.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/plugins/slots.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/plugins/source-display.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/test-utils/channel-plugins.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/directory-adapters.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cli/program/context.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/daemon/service.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/image-generation/live-test-helpers.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cli/program/build-program.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/shared/global-singleton.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/hooks/fire-and-forget.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/terminal/restore.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/canvas-host-url.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m ui/src/ui/views/usage-render-details.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/shared/avatar-policy.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/media-understanding/defaults.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/channels/sender-label.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/helpers.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cli/deps.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/hooks/bundled/boot-md/handler.gateway-startup.integration.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/bound-delivery-router.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/channels/config-presence.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/shared/operator-scope-compat.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/shared/subagents-format.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli/gateway-token-drift.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/gateway-process-argv.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/daemon/inspect.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/config/commands.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cli/update-cli/shared.command-runner.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/channels/allow-from.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/path-prepend.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/shared/string-normalization.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/plugins/enable.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli/status.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/interactive/payload.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cli/parse-timeout.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/channel-target.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/fixed-window-rate-limit.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/status-issues/bluebubbles.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/shared/text/code-regions.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/tsdown-config.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/terminal/prompt-select-styled.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/media-understanding/runner.entries.guards.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/delivery-dispatch.named-agent.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/routing/session-key.continuity.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/exec-allowlist-pattern.test.ts [2m([22m[2m10 tests[22m[2m | [22m[33m1 skipped[39m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/utils/transcript-tools.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/terminal/ansi.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/tui/tui-overlays.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/target-parsing.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m test/scripts/ui.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/security/audit-extra.sync.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/config/allowed-values.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/diagnostic-flags.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/os-summary.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/config/issue-format.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/plugins/provider-catalog.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/utils/directive-tags.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/media-understanding/attachments.guards.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/conversation-id.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/plugins/runtime/types.contract.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/install-mode-options.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/warning-filter.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/routing/account-id.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/plain-object.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/channels/targets.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cli/program/command-tree.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/path-safety.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/secrets/provider-env-vars.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/message-action-spec.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/abort.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/acp/policy.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/channels/command-gating.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/shared/text-chunking.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/config/agent-dirs.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/daemon/systemd-hints.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/is-main.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/supervisor-markers.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/memory/qmd-scope.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/plugins/logger.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/daemon/launchd-restart-handoff.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/memory/batch-output.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/config-helpers.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cli/plugins-config.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/shared/chat-envelope.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/threading-helpers.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/shared/net/ipv4.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/terminal/stream-writer.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/config/config.talk-api-key-fallback.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/dedupe.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/net/proxy-env.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/openclaw-exec-env.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/channels/model-overrides.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/bootstrap/node-extra-ca-certs.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/system-message.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/tts/prepare-text.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/utils/reaction-level.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/plugins/provider-model-helpers.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/command-auth.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/daemon/systemd-unit.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/shared/entry-metadata.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/target-resolvers.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approvals-policy.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/markdown/whatsapp.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli-compat.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cron/heartbeat-policy.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/sessions/model-overrides.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/daemon/runtime-binary.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/config/sessions/session-key.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/entry.respawn.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approval-command-display.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/plugins/provider-auth-choices.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/channels/allowlist-match.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/acp/event-mapper.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/normalize/targets.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/shared/text/join-segments.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/ssh-tunnel.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/channels/location.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cli/progress.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/extensionAPI.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/memory/prompt-section.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/text-chunking.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/shell-inline-command.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/media/image-ops.helpers.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/system-run-normalize.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/daemon/runtime-hints.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/shared/node-list-parse.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/entry.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cli/update-cli/progress.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/sessions/send-policy.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/channels/conversation-label.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/exec-allowlist-matching.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/memory/embeddings-mistral.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/gemini-auth.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/media/ffmpeg-exec.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/config/merge-patch.proto-pollution.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/media-understanding/format.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/plugins/runtime.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/config/sessions/explicit-session-key-normalization.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/utils/normalize-secret-input.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/file-identity.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/package-tag.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/run.session-key.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/shared/device-auth.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/target-errors.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/shared/process-scoped-map.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cli/log-level-option.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cli/tagline.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cli/nodes-media-utils.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/shared/chat-content.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/channels/registry.helpers.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/utils/message-channel.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cli/outbound-send-mapping.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/backup-create.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/shared/string-sample.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/map-size.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/media/load-options.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cli/program/program-context.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/channels/native-command-session-targets.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/system-run-approval-mismatch.contract.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/node-shell.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/config/sessions/cache-fields.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/scripts/docs-link-audit.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/allowlist-resolution.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/hooks/module-loader.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/logging/parse-log-line.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cli/completion-fish.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/media/file-context.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/shared/assistant-identity-values.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/channels/account-snapshot-fields.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/shared/model-param-b.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/runtime-status.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/channels/mention-gating.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/shared/chat-message-content.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/config/markdown-tables.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cron/service.issue-22895-every-next-run.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/tls/fingerprint.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/wizard/clack-prompter.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/thread-id.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/ws.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/config/schema.shared.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/routing/account-lookup.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cron/service/timeout-policy.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/logging/logger.settings.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/index.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/memory/batch-error-utils.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/exec-safety.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/tui/tui-waiting.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/account-action-gate.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/net/hostname.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/media/base64.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/utils/mask-api-key.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/bonjour-errors.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/actions/reaction-message-id.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/process/windows-command.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli/shared.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/channels/thread-binding-id.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/terminal/safe-text.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/memory/embeddings-model-normalize.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/request-url.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cli/program.nodes-test-helpers.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/acp/runtime/error-text.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/config/cache-utils.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/sessions/session-id.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/acp/secret-file.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/config/legacy.shared.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/prototype-keys.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 3[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1007 passed[39m[22m[90m (1007)[39m
+[2m      Tests [22m [1m[32m7963 passed[39m[22m[2m | [22m[33m3 skipped[39m[90m (7966)[39m
+[2m   Start at [22m 22:44:25
+[2m   Duration [22m 232.81s[2m (transform 19.31s, setup 10.48s, import 286.71s, tests 44.74s, environment 687ms)[22m
+
+[test-parallel] done unit-fast code=0 elapsed=234.1s
+[test-parallel] start unit-isolated workers=1 filters=4
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/config/doc-baseline.integration.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 6915[2mms[22m[39m
+     [33m[2m✓[22m[39m is deterministic across repeated runs [33m 6898[2mms[22m[39m
+ [32m✓[39m src/infra/git-commit.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 240[2mms[22m[39m
+ [32m✓[39m src/security/temp-path-guard.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 186[2mms[22m[39m
+ [32m✓[39m src/plugins/contracts/runtime.contract.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m4 passed[39m[22m[90m (4)[39m
+[2m      Tests [22m [1m[32m50 passed[39m[22m[90m (50)[39m
+[2m   Start at [22m 22:48:18
+[2m   Duration [22m 9.77s[2m (transform 10.80s, setup 65ms, import 1.89s, tests 7.36s, environment 0ms)[22m
+
+[test-parallel] done unit-isolated code=0 elapsed=10.4s
+[test-parallel] start unit-heavy-1 workers=1 filters=1
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/hooks/install.test.ts [2m([22m[2m15 tests[22m[2m)[22m[33m 589[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m15 passed[39m[22m[90m (15)[39m
+[2m   Start at [22m 22:48:29
+[2m   Duration [22m 1.83s[2m (transform 551ms, setup 38ms, import 1.08s, tests 589ms, environment 0ms)[22m
+
+[test-parallel] done unit-heavy-1 code=0 elapsed=2.4s
+[test-parallel] start unit-singleton-1 workers=1 filters=1
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/plugin-sdk/index.bundle.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 3779[2mms[22m[39m
+     [33m[2m✓[22m[39m emits importable bundled subpath entries [33m 3777[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m   Start at [22m 22:48:31
+[2m   Duration [22m 3.94s[2m (transform 3.02s, setup 38ms, import 9ms, tests 3.78s, environment 0ms)[22m
+
+[test-parallel] done unit-singleton-1 code=0 elapsed=4.6s
+[test-parallel] start unit-singleton-2 workers=1 filters=13
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/secrets/apply.test.ts [2m([22m[2m15 tests[22m[2m)[22m[33m 425[2mms[22m[39m
+     [33m[2m✓[22m[39m skips exec SecretRef checks during dry-run unless explicitly allowed [33m 330[2mms[22m[39m
+ [32m✓[39m src/memory/manager.embedding-batches.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 396[2mms[22m[39m
+ [32m✓[39m src/cron/service.issue-regressions.test.ts [2m([22m[2m38 tests[22m[2m)[22m[33m 325[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-runner.returns-default-unset.test.ts [2m([22m[2m25 tests[22m[2m)[22m[32m 76[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-runner.model-override.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 38[2mms[22m[39m
+ [32m✓[39m src/cron/service.runs-one-shot-main-job-disables-it.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/plugins/commands.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/memory/manager.readonly-recovery.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approval-forwarder.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/plugins/contracts/auth.contract.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/tui/tui-event-handlers.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/config/redact-snapshot.schema.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/cron/delivery.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m13 passed[39m[22m[90m (13)[39m
+[2m      Tests [22m [1m[32m169 passed[39m[22m[90m (169)[39m
+[2m   Start at [22m 22:48:36
+[2m   Duration [22m 24.87s[2m (transform 5.19s, setup 150ms, import 21.87s, tests 1.36s, environment 1ms)[22m
+
+[test-parallel] done unit-singleton-2 code=0 elapsed=25.5s
+[test-parallel] start unit-singleton-3 workers=1 filters=14
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/memory/manager.get-concurrency.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 1348[2mms[22m[39m
+ [32m✓[39m src/media-understanding/apply.test.ts [2m([22m[2m32 tests[22m[2m)[22m[33m 329[2mms[22m[39m
+ [32m✓[39m src/memory/manager.watcher-config.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 349[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent.direct-delivery-core-channels.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 105[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/plugins-core.test.ts [2m([22m[2m39 tests[22m[2m)[22m[32m 85[2mms[22m[39m
+ [32m✓[39m src/secrets/runtime.test.ts [2m([22m[2m55 tests[22m[2m)[22m[32m 49[2mms[22m[39m
+ [32m✓[39m src/context-engine/context-engine.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 55[2mms[22m[39m
+ [32m✓[39m src/memory/manager.mistral-provider.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 74[2mms[22m[39m
+ [32m✓[39m src/config/sessions.cache.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/acp/translator.session-rate-limit.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/config/redact-snapshot.restore.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/delivery-target.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/media-understanding/providers/image.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/acp/translator.stop-reason.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m14 passed[39m[22m[90m (14)[39m
+[2m      Tests [22m [1m[32m234 passed[39m[22m[90m (234)[39m
+[2m   Start at [22m 22:49:01
+[2m   Duration [22m 23.40s[2m (transform 5.12s, setup 158ms, import 19.18s, tests 2.46s, environment 1ms)[22m
+
+[test-parallel] done unit-singleton-3 code=0 elapsed=24.1s
+[test-parallel] start unit-singleton-4 workers=1 filters=14
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/infra/outbound/message-action-runner.media.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 6172[2mms[22m[39m
+ [32m✓[39m src/memory/manager.vector-dedupe.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 354[2mms[22m[39m
+ [32m✓[39m src/media-understanding/apply.echo-transcript.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 293[2mms[22m[39m
+ [32m✓[39m src/secrets/runtime.integration.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 127[2mms[22m[39m
+ [32m✓[39m src/memory/qmd-manager.test.ts [2m([22m[2m57 tests[22m[2m)[22m[32m 121[2mms[22m[39m
+ [32m✓[39m src/config/plugin-auto-enable.test.ts [2m([22m[2m25 tests[22m[2m)[22m[32m 96[2mms[22m[39m
+ [32m✓[39m src/cli/config-cli.integration.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 91[2mms[22m[39m
+ [32m✓[39m src/config/schema.hints.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 46[2mms[22m[39m
+ [32m✓[39m src/config/redact-snapshot.test.ts [2m([22m[2m28 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/daemon/systemd.test.ts [2m([22m[2m43 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/cli/plugins-cli.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/tui/tui-command-handlers.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/payloads.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/contracts/registry.contract.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 3[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m14 passed[39m[22m[90m (14)[39m
+[2m      Tests [22m [1m[32m216 passed[39m[22m[90m (216)[39m
+[2m   Start at [22m 22:49:25
+[2m   Duration [22m 19.72s[2m (transform 4.91s, setup 154ms, import 10.61s, tests 7.35s, environment 1ms)[22m
+
+[test-parallel] done unit-singleton-4 code=0 elapsed=20.4s
+[test-parallel] start unit-singleton-5 workers=1 filters=14
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/memory/index.test.ts [2m([22m[2m21 tests[22m[2m | [22m[33m3 skipped[39m[2m)[22m[33m 1247[2mms[22m[39m
+ [32m✓[39m src/cli/config-cli.test.ts [2m([22m[2m48 tests[22m[2m)[22m[33m 305[2mms[22m[39m
+ [32m✓[39m src/plugins/loader.git-path-regression.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 188[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-runner.respects-ackmaxchars-heartbeat-acks.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 75[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-runner.ghost-reminder.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 43[2mms[22m[39m
+ [32m✓[39m src/cron/service.every-jobs-fire.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 32[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/setup-wizard-helpers.test.ts [2m([22m[2m83 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/message-action-runner.plugin-dispatch.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m src/secrets/runtime.coverage.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/webhook-targets.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/tui/tui.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/outbound-session.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/infra/channel-summary.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugins/hooks.phase-hooks.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m14 passed[39m[22m[90m (14)[39m
+[2m      Tests [22m [1m[32m241 passed[39m[22m[2m | [22m[33m3 skipped[39m[90m (244)[39m
+[2m   Start at [22m 22:49:46
+[2m   Duration [22m 24.33s[2m (transform 6.17s, setup 159ms, import 20.60s, tests 1.98s, environment 1ms)[22m
+
+[test-parallel] done unit-singleton-5 code=0 elapsed=25.0s
+[test-parallel] start unit-singleton-6 workers=1 filters=14
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/plugins/contracts/discovery.contract.test.ts [2m([22m[2m15 tests[22m[2m)[22m[33m 6326[2mms[22m[39m
+ [32m✓[39m src/memory/manager.batch.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 401[2mms[22m[39m
+ [32m✓[39m src/memory/manager.read-file.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 345[2mms[22m[39m
+ [32m✓[39m src/acp/control-plane/manager.test.ts [2m([22m[2m35 tests[22m[2m)[22m[32m 229[2mms[22m[39m
+ [32m✓[39m src/cli/command-secret-gateway.test.ts [2m([22m[2m23 tests[22m[2m)[22m[32m 193[2mms[22m[39m
+ [32m✓[39m src/node-host/invoke-system-run.test.ts [2m([22m[2m37 tests[22m[2m)[22m[32m 56[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-runner.transcript-prune.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-runner.sender-prefers-delivery-target.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/infra/restart-stale-pids.test.ts [2m([22m[2m37 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/cron/store.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/acp/persistent-bindings.test.ts [2m([22m[2m29 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/plugins/http-registry.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/index.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/memory/manager.sync-errors-do-not-crash.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 6[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m14 passed[39m[22m[90m (14)[39m
+[2m      Tests [22m [1m[32m208 passed[39m[22m[90m (208)[39m
+[2m   Start at [22m 22:50:11
+[2m   Duration [22m 17.16s[2m (transform 5.23s, setup 158ms, import 7.70s, tests 7.68s, environment 1ms)[22m
+
+[test-parallel] done unit-singleton-6 code=0 elapsed=17.8s
+[test-parallel] start schema.help.quality-isolated workers=1 filters=1
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/config/schema.help.quality.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m20 passed[39m[22m[90m (20)[39m
+[2m   Start at [22m 22:50:29
+[2m   Duration [22m 244ms[2m (transform 83ms, setup 37ms, import 68ms, tests 21ms, environment 0ms)[22m
+
+[test-parallel] done schema.help.quality-isolated code=0 elapsed=814ms
+[test-parallel] start conversation-binding-isolated workers=1 filters=1
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/plugins/conversation-binding.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 48[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m15 passed[39m[22m[90m (15)[39m
+[2m   Start at [22m 22:50:29
+[2m   Duration [22m 6.44s[2m (transform 4.47s, setup 39ms, import 6.24s, tests 48ms, environment 0ms)[22m
+
+[test-parallel] done conversation-binding-isolated code=0 elapsed=7.1s
+[test-parallel] start targets-isolated workers=1 filters=1
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/infra/outbound/targets.test.ts [2m([22m[2m49 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m49 passed[39m[22m[90m (49)[39m
+[2m   Start at [22m 22:50:36
+[2m   Duration [22m 6.93s[2m (transform 4.78s, setup 38ms, import 6.76s, tests 11ms, environment 0ms)[22m
+
+[test-parallel] done targets-isolated code=0 elapsed=7.5s
+[test-parallel] start wizard.contract-isolated workers=1 filters=1
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/plugins/contracts/wizard.contract.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m3 passed[39m[22m[90m (3)[39m
+[2m   Start at [22m 22:50:44
+[2m   Duration [22m 6.54s[2m (transform 4.59s, setup 38ms, import 6.38s, tests 10ms, environment 0ms)[22m
+
+[test-parallel] done wizard.contract-isolated code=0 elapsed=7.2s
+[test-parallel] start chat-isolated workers=1 filters=1
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m ui/src/ui/views/chat.test.ts [2m([22m[2m32 tests[22m[2m)[22m[32m 176[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m32 passed[39m[22m[90m (32)[39m
+[2m   Start at [22m 22:50:51
+[2m   Duration [22m 1.31s[2m (transform 319ms, setup 45ms, import 380ms, tests 176ms, environment 591ms)[22m
+
+[test-parallel] done chat-isolated code=0 elapsed=1.9s
+[test-parallel] start isolated-agent.uses-last-non-empty-agent-text-as-isolated workers=1 filters=1
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/cron/isolated-agent.uses-last-non-empty-agent-text-as.test.ts [2m([22m[2m18 tests[22m[2m)[22m[33m 375[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m18 passed[39m[22m[90m (18)[39m
+[2m   Start at [22m 22:50:53
+[2m   Duration [22m 6.65s[2m (transform 4.29s, setup 38ms, import 6.12s, tests 375ms, environment 0ms)[22m
+
+[test-parallel] done isolated-agent.uses-last-non-empty-agent-text-as-isolated code=0 elapsed=7.3s
+[test-parallel] start install-isolated workers=1 filters=1
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/plugins/install.test.ts [2m([22m[2m34 tests[22m[2m)[22m[33m 1136[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m34 passed[39m[22m[90m (34)[39m
+[2m   Start at [22m 22:51:00
+[2m   Duration [22m 1.55s[2m (transform 210ms, setup 39ms, import 258ms, tests 1.14s, environment 0ms)[22m
+
+[test-parallel] done install-isolated code=0 elapsed=2.1s
+[test-parallel] start tui.submit-handler-isolated workers=1 filters=1
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/tui/tui.submit-handler.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m11 passed[39m[22m[90m (11)[39m
+[2m   Start at [22m 22:51:02
+[2m   Duration [22m 6.49s[2m (transform 4.50s, setup 39ms, import 6.33s, tests 6ms, environment 0ms)[22m
+
+[test-parallel] done tui.submit-handler-isolated code=0 elapsed=7.1s
+[test-parallel] start resolve-isolated workers=1 filters=1
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/media-understanding/resolve.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m6 passed[39m[22m[90m (6)[39m
+[2m   Start at [22m 22:51:09
+[2m   Duration [22m 6.43s[2m (transform 4.49s, setup 37ms, import 6.27s, tests 5ms, environment 0ms)[22m
+
+[test-parallel] done resolve-isolated code=0 elapsed=7.0s
+[test-parallel] start provider-usage.auth.normalizes-keys-isolated workers=1 filters=1
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/infra/provider-usage.auth.normalizes-keys.test.ts [2m([22m[2m19 tests[22m[2m)[22m[33m 1117[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m19 passed[39m[22m[90m (19)[39m
+[2m   Start at [22m 22:51:17
+[2m   Duration [22m 1.30s[2m (transform 559ms, setup 39ms, import 31ms, tests 1.12s, environment 0ms)[22m
+
+[test-parallel] done provider-usage.auth.normalizes-keys-isolated code=0 elapsed=1.9s
+[test-parallel] start client-isolated workers=1 filters=1
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/acp/client.test.ts [2m([22m[2m44 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m44 passed[39m[22m[90m (44)[39m
+[2m   Start at [22m 22:51:18
+[2m   Duration [22m 344ms[2m (transform 122ms, setup 38ms, import 171ms, tests 17ms, environment 0ms)[22m
+
+[test-parallel] done client-isolated code=0 elapsed=921ms
+[test-parallel] start update-runner-isolated workers=1 filters=1
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/infra/update-runner.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 38[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m20 passed[39m[22m[90m (20)[39m
+[2m   Start at [22m 22:51:19
+[2m   Duration [22m 355ms[2m (transform 144ms, setup 39ms, import 160ms, tests 38ms, environment 0ms)[22m
+
+[test-parallel] done update-runner-isolated code=0 elapsed=916ms
+[test-parallel] start runtime-web-tools-isolated workers=1 filters=1
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/secrets/runtime-web-tools.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m16 passed[39m[22m[90m (16)[39m
+[2m   Start at [22m 22:51:20
+[2m   Duration [22m 6.37s[2m (transform 4.42s, setup 39ms, import 6.20s, tests 12ms, environment 0ms)[22m
+
+[test-parallel] done runtime-web-tools-isolated code=0 elapsed=7.0s
+[test-parallel] start run.cron-model-override-isolated workers=1 filters=1
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/cron/isolated-agent/run.cron-model-override.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m6 passed[39m[22m[90m (6)[39m
+[2m   Start at [22m 22:51:27
+[2m   Duration [22m 6.47s[2m (transform 4.47s, setup 38ms, import 6.29s, tests 27ms, environment 0ms)[22m
+
+[test-parallel] done run.cron-model-override-isolated code=0 elapsed=7.1s
+[test-parallel] start isolated-agent.skips-delivery-without-whatsapp-recipient-besteffortdeliver-true-isolated workers=1 filters=1
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/cron/isolated-agent.skips-delivery-without-whatsapp-recipient-besteffortdeliver-true.test.ts [2m([22m[2m15 tests[22m[2m)[22m[33m 334[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m15 passed[39m[22m[90m (15)[39m
+[2m   Start at [22m 22:51:34
+[2m   Duration [22m 6.84s[2m (transform 4.46s, setup 39ms, import 6.35s, tests 334ms, environment 0ms)[22m
+
+[test-parallel] done isolated-agent.skips-delivery-without-whatsapp-recipient-besteffortdeliver-true-isolated code=0 elapsed=7.5s
+[test-parallel] start run.skill-filter-isolated workers=1 filters=1
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/cron/isolated-agent/run.skill-filter.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m13 passed[39m[22m[90m (13)[39m
+[2m   Start at [22m 22:51:42
+[2m   Duration [22m 6.53s[2m (transform 4.55s, setup 39ms, import 6.35s, tests 30ms, environment 0ms)[22m
+
+[test-parallel] done run.skill-filter-isolated code=0 elapsed=7.1s
+[test-parallel] start unit-threads workers=1 filters=7
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/channels/plugins/actions/actions.test.ts [2m([22m[2m25 tests[22m[2m)[22m[33m 5238[2mms[22m[39m
+ [32m✓[39m src/tts/tts.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 56[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/deliver.test.ts [2m([22m[2m44 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/message-action-runner.context.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/message.channels.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/deliver.lifecycle.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/message-action-runner.poll.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m7 passed[39m[22m[90m (7)[39m
+[2m      Tests [22m [1m[32m144 passed[39m[22m[90m (144)[39m
+[2m   Start at [22m 22:51:49
+[2m   Duration [22m 14.86s[2m (transform 3.90s, setup 90ms, import 8.97s, tests 5.37s, environment 0ms)[22m
+
+[test-parallel] done unit-threads code=0 elapsed=15.4s
+[PASS] pnpm test
+[PASS] Full quality gate

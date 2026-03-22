@@ -68,6 +68,15 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       return jsonError(res, 503, "browser server not started");
     }
 
+    // Check if browser hosting is enabled in gateway config
+    if (!current.resolved.enabled) {
+      return jsonError(
+        res,
+        400,
+        "browser hosting is not enabled. Configure browser.hosting in your gateway config and restart the gateway.",
+      );
+    }
+
     const profileCtx = getProfileContext(req, ctx);
     if ("error" in profileCtx) {
       return jsonError(res, profileCtx.status, profileCtx.error);
