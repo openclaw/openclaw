@@ -17,8 +17,11 @@ import { auditGatewayServiceConfig } from "../../daemon/service-audit.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { isGatewaySecretRefUnavailableError, trimToUndefined } from "../../gateway/credentials.js";
-import { resolveGatewayBindHost } from "../../gateway/net.js";
 import { resolveGatewayProbeAuthWithSecretInputs } from "../../gateway/probe-auth.js";
+import {
+  inspectBestEffortPrimaryTailnetIPv4,
+  resolveBestEffortGatewayBindHostForDisplay,
+} from "../../infra/network-discovery-display.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import {
   formatPortDiagnostics,
@@ -26,7 +29,6 @@ import {
   type PortListener,
   type PortUsageStatus,
 } from "../../infra/ports.js";
-import { pickPrimaryTailnetIPv4 } from "../../infra/tailnet.js";
 import { loadGatewayTlsRuntime } from "../../infra/tls/gateway.js";
 import { probeGatewayStatus } from "./probe.js";
 import { inspectGatewayRestart } from "./restart-health.js";
@@ -74,26 +76,6 @@ type ResolvedGatewayStatus = {
   probeUrlOverride: string | null;
 };
 
-function summarizeDisplayNetworkError(error: unknown): string {
-  if (error instanceof Error) {
-    const message = error.message.trim();
-    if (message) {
-      return message;
-    }
-  }
-  return "network interface discovery failed";
-}
-
-function fallbackBindHostForStatus(bindMode: GatewayBindMode, customBindHost?: string): string {
-  if (bindMode === "lan") {
-    return "0.0.0.0";
-  }
-  if (bindMode === "custom") {
-    return customBindHost?.trim() || "0.0.0.0";
-  }
-  return "127.0.0.1";
-}
-
 function appendProbeNote(
   existing: string | undefined,
   extra: string | undefined,
@@ -104,7 +86,6 @@ function appendProbeNote(
   }
   return [...new Set(values)].join(" ");
 }
-
 export type DaemonStatus = {
   service: {
     label: string;
@@ -232,23 +213,14 @@ async function resolveGatewayStatusSummary(params: {
     : "env/config";
   const bindMode: GatewayBindMode = params.daemonCfg.gateway?.bind ?? "loopback";
   const customBindHost = params.daemonCfg.gateway?.customBindHost;
-  let bindHost: string;
-  let networkWarning: string | undefined;
-  try {
-    bindHost = await resolveGatewayBindHost(bindMode, customBindHost);
-  } catch (error) {
-    bindHost = fallbackBindHostForStatus(bindMode, customBindHost);
-    networkWarning = `Status is using fallback network details because interface discovery failed: ${summarizeDisplayNetworkError(error)}.`;
-  }
-  let tailnetIPv4: string | undefined;
-  try {
-    tailnetIPv4 = pickPrimaryTailnetIPv4();
-  } catch (error) {
-    networkWarning = appendProbeNote(
-      networkWarning,
-      `Status could not inspect tailnet addresses: ${summarizeDisplayNetworkError(error)}.`,
-    );
-  }
+  const { bindHost, warning: bindHostWarning } = await resolveBestEffortGatewayBindHostForDisplay({
+    bindMode,
+    customBindHost,
+    warningPrefix: "Status is using fallback network details because interface discovery failed",
+  });
+  const { tailnetIPv4, warning: tailnetWarning } = inspectBestEffortPrimaryTailnetIPv4({
+    warningPrefix: "Status could not inspect tailnet addresses",
+  });
   const probeHost = pickProbeHostForBind(bindMode, tailnetIPv4, customBindHost);
   const probeUrlOverride = trimToUndefined(params.rpcUrlOverride) ?? null;
   const scheme = params.daemonCfg.gateway?.tls?.enabled === true ? "wss" : "ws";
@@ -259,7 +231,8 @@ async function resolveGatewayStatusSummary(params: {
       : !probeUrlOverride && bindMode === "loopback"
         ? "Loopback-only gateway; only local clients can connect."
         : undefined;
-  probeNote = appendProbeNote(probeNote, networkWarning);
+  probeNote = appendProbeNote(probeNote, bindHostWarning);
+  probeNote = appendProbeNote(probeNote, tailnetWarning);
 
   return {
     gateway: {
