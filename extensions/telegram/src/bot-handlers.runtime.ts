@@ -498,10 +498,17 @@ export const registerTelegramHandlers = ({
 
     const allMedia: TelegramMediaRef[] = [];
     const succeededEntries = new Set<typeof primaryEntry>();
+    let captionDispatchedViaPlaceholder = false;
     for (const item of entry.messages) {
       const { ctx: itemCtx, msg: itemMsg } = item;
       try {
-        const media = await resolveMedia(itemCtx, mediaMaxBytes, opts.token, telegramTransport);
+        const media = await resolveMedia(
+          itemCtx,
+          mediaMaxBytes,
+          opts.token,
+          telegramTransport,
+          telegramCfg.apiRoot,
+        );
         if (media) {
           allMedia.push({
             path: media.path,
@@ -540,6 +547,9 @@ export const registerTelegramHandlers = ({
       }
 
       const placeholderMedia = await resolveReplyMediaForMessage(itemCtx, itemMsg);
+      if (item === primaryEntry || item.msg.caption || item.msg.text) {
+        captionDispatchedViaPlaceholder = true;
+      }
       await processMessage(itemCtx, [], storeAllowFrom, undefined, placeholderMedia);
     }
 
@@ -552,7 +562,10 @@ export const registerTelegramHandlers = ({
         primaryEntry);
 
     const captionText = effectivePrimary.msg.text ?? effectivePrimary.msg.caption ?? "";
-    if (!captionText.trim() && allMedia.length === 0) {
+    if (
+      (!captionText.trim() && allMedia.length === 0) ||
+      (allMedia.length === 0 && captionDispatchedViaPlaceholder)
+    ) {
       return;
     }
 
