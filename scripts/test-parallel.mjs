@@ -259,8 +259,7 @@ const allKnownTestFiles = [
 ];
 const defaultUnitPool = parsePoolOverride(process.env.OPENCLAW_TEST_UNIT_DEFAULT_POOL, "threads");
 const isTargetedIsolatedUnitFile = (fileFilter) =>
-  unitForkIsolatedFiles.includes(fileFilter) ||
-  unitMemoryIsolatedFiles.includes(fileFilter);
+  unitForkIsolatedFiles.includes(fileFilter) || unitMemoryIsolatedFiles.includes(fileFilter);
 const inferTarget = (fileFilter) => {
   const isolated = isTargetedIsolatedUnitFile(fileFilter);
   if (isUnitConfigTestFile(fileFilter)) {
@@ -393,7 +392,9 @@ const unitFastExcludedFileSet = new Set(unitFastExcludedFiles);
 const unitFastCandidateFiles = allKnownUnitFiles.filter(
   (file) => !unitFastExcludedFileSet.has(file),
 );
-const extensionSharedCandidateFiles = allKnownTestFiles.filter((file) => file.startsWith("extensions/"));
+const extensionSharedCandidateFiles = allKnownTestFiles.filter((file) =>
+  file.startsWith("extensions/"),
+);
 const defaultUnitFastLaneCount = isCI && !isWindows ? 3 : 1;
 const unitFastLaneCount = Math.max(
   1,
@@ -477,14 +478,7 @@ const baseRuns = [
         ...unitHeavyEntries,
         ...unitMemoryIsolatedFiles.map((file) => ({
           name: `unit-${path.basename(file, ".test.ts")}-memory-isolated`,
-          args: [
-            "vitest",
-            "run",
-            "--config",
-            "vitest.unit.config.ts",
-            "--pool=forks",
-            file,
-          ],
+          args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=forks", file],
         })),
         ...unitThreadEntries,
         ...channelSingletonFiles.map((file) => ({
@@ -518,12 +512,7 @@ const baseRuns = [
                   ),
                 }
               : undefined,
-          args: [
-            "vitest",
-            "run",
-            "--config",
-            "vitest.extensions.config.ts",
-          ],
+          args: ["vitest", "run", "--config", "vitest.extensions.config.ts"],
         },
       ]
     : []),
@@ -646,8 +635,8 @@ const createPerFileTargetedEntry = (file) => {
   const owner = isThreadPinnedUnitFile(file)
     ? "unit-threads"
     : isBaseThreadPinnedFile(file)
-        ? "base-threads"
-        : target.owner;
+      ? "base-threads"
+      : target.owner;
   return {
     ...createTargetedEntry(owner, target.isolated, [file]),
     name: `${formatPerFileEntryName(owner, file)}${target.isolated ? "-isolated" : ""}`,
@@ -665,8 +654,8 @@ const targetedEntries = (() => {
       const owner = isThreadPinnedUnitFile(normalizedFile)
         ? "unit-threads"
         : isBaseThreadPinnedFile(normalizedFile)
-            ? "base-threads"
-            : target.owner;
+          ? "base-threads"
+          : target.owner;
       const key = `${owner}:${target.isolated ? "isolated" : "default"}`;
       const files = acc.get(key) ?? [];
       files.push(normalizedFile);
@@ -678,8 +667,8 @@ const targetedEntries = (() => {
       const owner = isThreadPinnedUnitFile(matchedFile)
         ? "unit-threads"
         : isBaseThreadPinnedFile(matchedFile)
-            ? "base-threads"
-            : target.owner;
+          ? "base-threads"
+          : target.owner;
       const key = `${owner}:${target.isolated ? "isolated" : "default"}`;
       const files = acc.get(key) ?? [];
       files.push(matchedFile);
