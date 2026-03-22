@@ -192,6 +192,104 @@ static void test_restart_clears_payload_fields(void) {
     g_free(hs.probe_url);
 }
 
+static void test_repeated_running_stopped_transitions(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    
+    // 1st transition to running
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+    
+    // 1st transition to stopped
+    sys.active = FALSE;
+    state_update_systemd(&sys);
+    g_assert_cmpint(state_get_current(), ==, STATE_STOPPED);
+    
+    // 2nd transition to running
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+    
+    // 2nd transition to stopped
+    sys.active = FALSE;
+    state_update_systemd(&sys);
+    g_assert_cmpint(state_get_current(), ==, STATE_STOPPED);
+}
+
+static void test_transition_into_systemd_unavailable(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+    
+    sys.systemd_unavailable = TRUE;
+    state_update_systemd(&sys);
+    g_assert_cmpint(state_get_current(), ==, STATE_USER_SYSTEMD_UNAVAILABLE);
+}
+
+static void test_repeated_unit_retargets(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    
+    sys.unit_name = "unitA.service";
+    state_update_systemd(&sys);
+    guint64 gen1 = state_get_health_generation();
+    
+    sys.unit_name = "unitB.service";
+    state_update_systemd(&sys);
+    guint64 gen2 = state_get_health_generation();
+    g_assert_cmpuint(gen2, >, gen1);
+    
+    sys.unit_name = "unitC.service";
+    state_update_systemd(&sys);
+    guint64 gen3 = state_get_health_generation();
+    g_assert_cmpuint(gen3, >, gen2);
+    
+    // Retargeting to the same unit shouldn't bump generation unnecessarily, but state_update_systemd
+    // does check `g_strcmp0(current_sys_state.unit_name, sys_state->unit_name) != 0`
+    sys.unit_name = "unitC.service";
+    state_update_systemd(&sys);
+    guint64 gen4 = state_get_health_generation();
+    g_assert_cmpuint(gen4, ==, gen3);
+}
+
+static void test_consecutive_freshness_invalidation_idempotence(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+    
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.loaded = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.health_healthy = TRUE;
+    hs.bind_host = g_strdup("127.0.0.1");
+    hs.probe_url = g_strdup("http://localhost");
+    state_update_health(&hs);
+    
+    // First stop invalidates
+    sys.active = FALSE;
+    state_update_systemd(&sys);
+    g_assert_cmpint(state_get_health()->rpc_ok, ==, FALSE);
+    g_assert_null(state_get_health()->bind_host);
+    
+    // Second consecutive stop update shouldn't crash or leak, should be idempotent
+    state_update_systemd(&sys);
+    g_assert_cmpint(state_get_health()->rpc_ok, ==, FALSE);
+    g_assert_null(state_get_health()->bind_host);
+    
+    g_free(hs.bind_host);
+    g_free(hs.probe_url);
+}
+
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     
@@ -205,6 +303,10 @@ int main(int argc, char **argv) {
     g_test_add_func("/state/unit_retarget_bumps_generation", test_unit_retarget_bumps_generation);
     g_test_add_func("/state/probe_disabled_transition_bumps_generation", test_probe_disabled_transition_bumps_generation);
     g_test_add_func("/state/restart_clears_payload_fields", test_restart_clears_payload_fields);
+    g_test_add_func("/state/repeated_running_stopped_transitions", test_repeated_running_stopped_transitions);
+    g_test_add_func("/state/transition_into_systemd_unavailable", test_transition_into_systemd_unavailable);
+    g_test_add_func("/state/repeated_unit_retargets", test_repeated_unit_retargets);
+    g_test_add_func("/state/consecutive_freshness_invalidation_idempotence", test_consecutive_freshness_invalidation_idempotence);
     
     return g_test_run();
 }

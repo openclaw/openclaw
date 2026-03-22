@@ -18,6 +18,7 @@
 #include <json-glib/json-glib.h>
 #include <string.h>
 #include "state.h"
+#include "health_helpers.h"
 
 static gboolean pending_health_probe = FALSE;
 static gboolean pending_deep_probe = FALSE;
@@ -28,42 +29,6 @@ static void internal_health_run_deep_probe(gboolean is_eager);
 void health_init(void) {
     pending_health_probe = FALSE;
     pending_deep_probe = FALSE;
-}
-
-void health_parse_probe_stdout(const gchar *stdout_buf, ProbeState *ps) {
-    if (!ps) return;
-    if (stdout_buf) {
-        gchar **lines = g_strsplit(stdout_buf, "\n", -1);
-        for (gint i = 0; lines[i] != NULL; i++) {
-            gchar *line = lines[i];
-            if (strstr(line, "Connect:")) {
-                if (strstr(line, "Connect: ok")) {
-                    ps->connect_ok = TRUE;
-                    ps->reachable = TRUE;
-                }
-            }
-            if (strstr(line, "RPC: ok")) {
-                ps->rpc_ok = TRUE;
-            }
-            if (strstr(line, "timeout") || strstr(line, "timed out")) {
-                ps->timed_out = TRUE;
-            }
-        }
-        g_strfreev(lines);
-        
-        // Synthesize summary strings based on the combination of connectivity booleans
-        if (ps->reachable && ps->rpc_ok) {
-            ps->summary = g_strdup("Fully reachable");
-        } else if (ps->connect_ok && ps->timed_out) {
-            ps->summary = g_strdup("Connect OK, but RPC timed out");
-        } else if (!ps->reachable) {
-            ps->summary = g_strdup("Not reachable");
-        } else {
-            ps->summary = g_strdup("Unknown or mixed probe result");
-        }
-    } else {
-        ps->summary = g_strdup("No output from probe");
-    }
 }
 
 static gchar** resolve_openclaw_argv(const gchar *subcommand) {

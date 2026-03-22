@@ -30,7 +30,9 @@ sources = [
   'src/main.c',
   'src/tray.c',
   'src/systemd.c',
+  'src/systemd_helpers.c',
   'src/health.c',
+  'src/health_helpers.c',
   'src/state.c',
   'src/notify.c',
   'src/diagnostics.c'
@@ -63,11 +65,11 @@ test_state_exe = executable('test_state',
 test('state', test_state_exe)
 
 test_systemd_exe = executable('test_systemd_helpers',
-  ['tests/test_systemd_helpers.c', 'src/systemd.c'],
+  ['tests/test_systemd_helpers.c', 'src/systemd_helpers.c'],
   dependencies : [glib_dep, gio_dep, gio_unix_dep])
 test('systemd_helpers', test_systemd_exe)
 
 test_health_exe = executable('test_health_parse',
-  ['tests/test_health_parse.c', 'src/health.c'],
+  ['tests/test_health_parse.c', 'src/health_helpers.c'],
   dependencies : [glib_dep, gio_dep, json_glib_dep])
 test('health_parse', test_health_exe)

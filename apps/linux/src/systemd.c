@@ -20,6 +20,8 @@
 #include <string.h>
 #include "state.h"
 
+#include "systemd_helpers.h"
+
 static GDBusProxy *manager_proxy = NULL;
 static GDBusProxy *unit_proxy = NULL;
 static gchar *cached_exec_start = NULL;
@@ -30,25 +32,6 @@ static guint properties_changed_signal_id = 0;
 
 static void fetch_unit_properties(void);
 extern void systemd_refresh(void);
-
-gboolean systemd_is_gateway_unit(const gchar *filename, const gchar *contents) {
-    if (!contents) return FALSE;
-    
-    // Must be a gateway (explicit kind marker or legacy/default filename pattern)
-    gboolean is_gateway = FALSE;
-    if (strstr(contents, "OPENCLAW_SERVICE_KIND=gateway")) {
-        is_gateway = TRUE;
-    } else if (filename && (g_str_has_prefix(filename, "openclaw-gateway") ||
-                            g_str_has_prefix(filename, "clawdbot-gateway") ||
-                            g_str_has_prefix(filename, "moltbot-gateway"))) {
-        // Fallback for older units or manual installs missing the KIND marker
-        is_gateway = TRUE;
-    }
-    
-    // If it has the new kind marker, that implies it's ours.
-    // If it only has the general marker, it MUST match the gateway prefix to filter out node services.
-    return is_gateway;
-}
 
 static gboolean check_system_scope_units(void) {
     const gchar *paths[] = {"/etc/systemd/system", "/usr/lib/systemd/system", "/lib/systemd/system"};
@@ -79,82 +62,7 @@ static gint sort_marked_units(gconstpointer a, gconstpointer b) {
     return g_strcmp0(*(const gchar **)a, *(const gchar **)b);
 }
 
-static const gchar* discover_canonical_unit_name(void);
-
 const gchar* systemd_get_canonical_unit_name(void) {
-    // If we have a cached name, return it. Otherwise, compute it inline.
-    if (cached_unit_name) {
-        return cached_unit_name;
-    }
-    return discover_canonical_unit_name();
-}
-
-static void get_unit_preference_score(const gchar *unit_name, gboolean *is_active, gboolean *is_enabled) {
-    *is_active = FALSE;
-    *is_enabled = FALSE;
-    if (!manager_proxy) return;
-    
-    // Check UnitFileState (enabled/disabled)
-    g_autoptr(GError) err1 = NULL;
-    g_autoptr(GVariant) fs_res = g_dbus_proxy_call_sync(manager_proxy, "GetUnitFileState", 
-                                                        g_variant_new("(s)", unit_name), 
-                                                        G_DBUS_CALL_FLAGS_NONE, -1, NULL, &err1);
-    if (fs_res) {
-        const gchar *state_str = NULL;
-        g_variant_get(fs_res, "(&s)", &state_str);
-        if (g_strcmp0(state_str, "enabled") == 0) *is_enabled = TRUE;
-    }
-    
-    // Check ActiveState by getting unit path, then property
-    g_autoptr(GError) err2 = NULL;
-    g_autoptr(GVariant) u_res = g_dbus_proxy_call_sync(manager_proxy, "GetUnit",
-                                                       g_variant_new("(s)", unit_name),
-                                                       G_DBUS_CALL_FLAGS_NONE, -1, NULL, &err2);
-    if (u_res) {
-        const gchar *path = NULL;
-        g_variant_get(u_res, "(&o)", &path);
-        if (path) {
-            g_autoptr(GDBusProxy) uproxy = g_dbus_proxy_new_sync(g_dbus_proxy_get_connection(manager_proxy), G_DBUS_PROXY_FLAGS_NONE, NULL, "org.freedesktop.systemd1", path, "org.freedesktop.systemd1.Unit", NULL, NULL);
-            if (uproxy) {
-                g_autoptr(GVariant) as_var = g_dbus_proxy_get_cached_property(uproxy, "ActiveState");
-                if (as_var) {
-                    if (g_strcmp0(g_variant_get_string(as_var, NULL), "active") == 0) *is_active = TRUE;
-                }
-            }
-        }
-    }
-}
-
-gchar* systemd_normalize_unit_override(const gchar *raw_unit) {
-    if (!raw_unit) return NULL;
-    gchar *trimmed = g_strstrip(g_strdup(raw_unit));
-    if (strlen(trimmed) > 0) {
-        if (g_str_has_suffix(trimmed, ".service")) {
-            return trimmed;
-        } else {
-            gchar *res = g_strdup_printf("%s.service", trimmed);
-            g_free(trimmed);
-            return res;
-        }
-    }
-    g_free(trimmed);
-    return NULL;
-}
-
-gchar* systemd_normalize_profile(const gchar *raw_profile) {
-    if (!raw_profile) return NULL;
-    gchar *trimmed = g_strstrip(g_strdup(raw_profile));
-    gchar *res = NULL;
-    if (strlen(trimmed) == 0 || g_strcmp0(trimmed, "default") == 0) {
-        res = g_strdup("openclaw-gateway.service");
-    } else {
-        res = g_strdup_printf("openclaw-gateway-%s.service", trimmed);
-    }
-    g_free(trimmed);
-    return res;
-}
-
-static const gchar* discover_canonical_unit_name(void) {
     if (cached_unit_name) return cached_unit_name;
 
     const gchar *home_dir = g_get_home_dir();
@@ -232,7 +140,37 @@ static const gchar* discover_canonical_unit_name(void) {
         for (guint i = 0; i < marked_units->len; i++) {
             const gchar *candidate = g_ptr_array_index(marked_units, i);
             gboolean active = FALSE, enabled = FALSE;
-            get_unit_preference_score(candidate, &active, &enabled);
+            
+            // Inline get_unit_preference_score
+            if (manager_proxy) {
+                g_autoptr(GError) err1 = NULL;
+                g_autoptr(GVariant) fs_res = g_dbus_proxy_call_sync(manager_proxy, "GetUnitFileState", 
+                                                                    g_variant_new("(s)", candidate), 
+                                                                    G_DBUS_CALL_FLAGS_NONE, -1, NULL, &err1);
+                if (fs_res) {
+                    const gchar *state_str = NULL;
+                    g_variant_get(fs_res, "(&s)", &state_str);
+                    if (g_strcmp0(state_str, "enabled") == 0) enabled = TRUE;
+                }
+                
+                g_autoptr(GError) err2 = NULL;
+                g_autoptr(GVariant) u_res = g_dbus_proxy_call_sync(manager_proxy, "GetUnit",
+                                                                   g_variant_new("(s)", candidate),
+                                                                   G_DBUS_CALL_FLAGS_NONE, -1, NULL, &err2);
+                if (u_res) {
+                    const gchar *path = NULL;
+                    g_variant_get(u_res, "(&o)", &path);
+                    if (path) {
+                        g_autoptr(GDBusProxy) uproxy = g_dbus_proxy_new_sync(g_dbus_proxy_get_connection(manager_proxy), G_DBUS_PROXY_FLAGS_NONE, NULL, "org.freedesktop.systemd1", path, "org.freedesktop.systemd1.Unit", NULL, NULL);
+                        if (uproxy) {
+                            g_autoptr(GVariant) as_var = g_dbus_proxy_get_cached_property(uproxy, "ActiveState");
+                            if (as_var) {
+                                if (g_strcmp0(g_variant_get_string(as_var, NULL), "active") == 0) active = TRUE;
+                            }
+                        }
+                    }
+                }
+            }
             
             if (!best_candidate) {
                 best_candidate = candidate;
@@ -271,7 +209,7 @@ static void extract_service_config_from_file(gchar **exec_start_out, gchar ***en
     const gchar *home_dir = g_get_home_dir();
     if (!home_dir) return;
 
-    const gchar *unit_name = discover_canonical_unit_name();
+    const gchar *unit_name = systemd_get_canonical_unit_name();
     g_autofree gchar *unit_path = g_build_filename(home_dir, ".config", "systemd", "user", unit_name, NULL);
     
     g_autofree gchar *contents = NULL;
@@ -518,7 +456,7 @@ static void fetch_unit_properties(void) {
         sys_state.environment = g_strdupv(cached_environment);
     }
     
-    sys_state.unit_name = g_strdup(discover_canonical_unit_name());
+    sys_state.unit_name = g_strdup(systemd_get_canonical_unit_name());
 
     state_update_systemd(&sys_state);
 
@@ -613,7 +551,7 @@ static void on_get_unit_ready(GObject *source_object, GAsyncResult *res, gpointe
             sys_state.environment = g_strdupv(cached_environment);
         }
         
-        sys_state.unit_name = g_strdup(discover_canonical_unit_name());
+        sys_state.unit_name = g_strdup(systemd_get_canonical_unit_name());
         
         state_update_systemd(&sys_state);
         g_free(sys_state.unit_name);
@@ -683,14 +621,14 @@ static void on_get_unit_file_state_ready(GObject *source_object, GAsyncResult *r
         if (check_system_scope_units()) {
             sys_state.system_installed_unsupported = TRUE;
         }
-        sys_state.unit_name = g_strdup(discover_canonical_unit_name());
+        sys_state.unit_name = g_strdup(systemd_get_canonical_unit_name());
         state_update_systemd(&sys_state);
         g_free(sys_state.unit_name);
         return;
     }
 
     // 3. Fetch runtime unit path asynchronously
-    const gchar *current_unit = discover_canonical_unit_name();
+    const gchar *current_unit = systemd_get_canonical_unit_name();
     g_dbus_proxy_call(
         manager_proxy, "GetUnit",
         g_variant_new("(s)", current_unit),
@@ -703,7 +641,7 @@ void systemd_refresh(void) {
 
     g_free(cached_unit_name);
     cached_unit_name = NULL;
-    const gchar *unit_name = discover_canonical_unit_name();
+    const gchar *unit_name = systemd_get_canonical_unit_name();
 
     // 1. Start async check if unit file exists/is installed at all
     g_dbus_proxy_call(
@@ -717,7 +655,7 @@ void systemd_start_gateway(void) {
     if (!manager_proxy) return;
     g_dbus_proxy_call(
         manager_proxy, "StartUnit",
-        g_variant_new("(ss)", discover_canonical_unit_name(), "replace"),
+        g_variant_new("(ss)", systemd_get_canonical_unit_name(), "replace"),
         G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL, NULL); 
 }
 
@@ -725,7 +663,7 @@ void systemd_stop_gateway(void) {
     if (!manager_proxy) return;
     g_dbus_proxy_call(
         manager_proxy, "StopUnit",
-        g_variant_new("(ss)", discover_canonical_unit_name(), "replace"),
+        g_variant_new("(ss)", systemd_get_canonical_unit_name(), "replace"),
         G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL, NULL);
 }
 
@@ -733,6 +671,6 @@ void systemd_restart_gateway(void) {
     if (!manager_proxy) return;
     g_dbus_proxy_call(
         manager_proxy, "RestartUnit",
-        g_variant_new("(ss)", discover_canonical_unit_name(), "replace"),
+        g_variant_new("(ss)", systemd_get_canonical_unit_name(), "replace"),
         G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL, NULL);
 }
