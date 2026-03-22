@@ -241,10 +241,13 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
       collectWarnings: collectZaloSecurityWarnings,
     },
     pairing: {
-      idLabel: "zaloUserId",
-      normalizeAllowEntry: (entry) => entry.trim().replace(/^(zalo|zl):/i, ""),
-      notifyApproval: async (params) =>
-        await (await loadZaloChannelRuntime()).notifyZaloPairingApproval(params),
+      text: {
+        idLabel: "zaloUserId",
+        message: "Your pairing request has been approved.",
+        normalizeAllowEntry: (entry) => entry.trim().replace(/^(zalo|zl):/i, ""),
+        notify: async (params) =>
+          await (await loadZaloChannelRuntime()).notifyZaloPairingApproval(params),
+      },
     },
     threading: {
       resolveReplyToMode: createStaticReplyToModeResolver("off"),
