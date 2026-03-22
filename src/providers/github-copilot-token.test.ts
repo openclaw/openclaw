@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  ENTERPRISE_COPILOT_API_BASE_URL,
   deriveCopilotApiBaseUrlFromToken,
+  isGitHubPAT,
   resolveCopilotApiToken,
 } from "./github-copilot-token.js";
 
@@ -97,19 +99,10 @@ describe("github-copilot token", () => {
     expect(headers.Authorization).toBe("Bearer ghu_abc123");
   });
 
-  it("uses token prefix for PATs (github_pat_)", async () => {
-    loadJsonFile.mockReturnValue(undefined);
+  it("skips token exchange for PATs (github_pat_) and returns direct token", async () => {
+    const fetchImpl = vi.fn();
 
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        token: "result-token",
-        expires_at: Math.floor(Date.now() / 1000) + 3600,
-      }),
-    });
-
-    await resolveCopilotApiToken({
+    const res = await resolveCopilotApiToken({
       githubToken: "github_pat_abc123",
       cachePath,
       loadJsonFileImpl: loadJsonFile,
@@ -117,23 +110,16 @@ describe("github-copilot token", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
 
-    const headers = fetchImpl.mock.calls[0][1].headers;
-    expect(headers.Authorization).toBe("token github_pat_abc123");
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(res.token).toBe("github_pat_abc123");
+    expect(res.baseUrl).toBe(ENTERPRISE_COPILOT_API_BASE_URL);
+    expect(res.source).toBe("pat:direct");
   });
 
-  it("uses token prefix for classic PATs (ghp_)", async () => {
-    loadJsonFile.mockReturnValue(undefined);
+  it("skips token exchange for classic PATs (ghp_) and returns direct token", async () => {
+    const fetchImpl = vi.fn();
 
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        token: "result-token",
-        expires_at: Math.floor(Date.now() / 1000) + 3600,
-      }),
-    });
-
-    await resolveCopilotApiToken({
+    const res = await resolveCopilotApiToken({
       githubToken: "ghp_abc123",
       cachePath,
       loadJsonFileImpl: loadJsonFile,
@@ -141,7 +127,16 @@ describe("github-copilot token", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
 
-    const headers = fetchImpl.mock.calls[0][1].headers;
-    expect(headers.Authorization).toBe("token ghp_abc123");
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(res.token).toBe("ghp_abc123");
+    expect(res.baseUrl).toBe(ENTERPRISE_COPILOT_API_BASE_URL);
+  });
+
+  it("isGitHubPAT detects token types correctly", () => {
+    expect(isGitHubPAT("github_pat_abc")).toBe(true);
+    expect(isGitHubPAT("ghp_abc")).toBe(true);
+    expect(isGitHubPAT("ghu_abc")).toBe(false);
+    expect(isGitHubPAT("gho_abc")).toBe(false);
+    expect(isGitHubPAT("some-random-token")).toBe(false);
   });
 });

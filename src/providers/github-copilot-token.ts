@@ -54,6 +54,22 @@ function parseCopilotTokenResponse(value: unknown): {
 
 export const DEFAULT_COPILOT_API_BASE_URL = "https://api.individual.githubcopilot.com";
 
+/** Enterprise endpoint supports the full model catalogue (Claude, GPT, Gemini). */
+export const ENTERPRISE_COPILOT_API_BASE_URL = "https://api.enterprise.githubcopilot.com";
+
+/** Editor-identification headers required when sending PATs directly to the Copilot API. */
+export const COPILOT_EDITOR_HEADERS = {
+  "User-Agent": "copilot/0.0.410",
+  "Copilot-Integration-Id": "copilot-developer-cli",
+  "Editor-Version": "copilot/0.0.410",
+  "Editor-Plugin-Version": "copilot/0.0.410",
+} as const;
+
+/** Returns true for GitHub PATs (github_pat_ or ghp_) which skip token exchange. */
+export function isGitHubPAT(token: string): boolean {
+  return token.startsWith("github_pat_") || token.startsWith("ghp_");
+}
+
 export function deriveCopilotApiBaseUrlFromToken(token: string): string | null {
   const trimmed = token.trim();
   if (!trimmed) {
@@ -95,6 +111,19 @@ export async function resolveCopilotApiToken(params: {
   const cachePath = params.cachePath?.trim() || resolveCopilotTokenCachePath(env);
   const loadJsonFileFn = params.loadJsonFileImpl ?? loadJsonFile;
   const saveJsonFileFn = params.saveJsonFileImpl ?? saveJsonFile;
+
+  // PATs (github_pat_, ghp_) are sent directly to the Copilot API with editor
+  // headers — no /v2/token exchange needed. Use the enterprise endpoint which
+  // exposes the full model catalogue (Claude, GPT, Gemini).
+  if (isGitHubPAT(params.githubToken)) {
+    return {
+      token: params.githubToken,
+      expiresAt: Number.MAX_SAFE_INTEGER,
+      source: "pat:direct",
+      baseUrl: ENTERPRISE_COPILOT_API_BASE_URL,
+    };
+  }
+
   const cached = loadJsonFileFn(cachePath) as CachedCopilotToken | undefined;
   if (cached && typeof cached.token === "string" && typeof cached.expiresAt === "number") {
     if (isTokenUsable(cached)) {
@@ -108,13 +137,11 @@ export async function resolveCopilotApiToken(params: {
   }
 
   const fetchImpl = params.fetchImpl ?? fetch;
-  // PATs (github_pat_, ghp_) use "token" prefix; OAuth tokens (ghu_) use "Bearer".
-  const authPrefix = params.githubToken.startsWith("ghu_") ? "Bearer" : "token";
   const res = await fetchImpl(COPILOT_TOKEN_URL, {
     method: "GET",
     headers: {
       Accept: "application/json",
-      Authorization: `${authPrefix} ${params.githubToken}`,
+      Authorization: `Bearer ${params.githubToken}`,
     },
   });
 

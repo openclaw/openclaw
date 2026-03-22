@@ -1,7 +1,9 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import {
+  COPILOT_EDITOR_HEADERS,
   DEFAULT_COPILOT_API_BASE_URL,
+  isGitHubPAT,
   resolveCopilotApiToken,
 } from "../providers/github-copilot-token.js";
 import { isRecord } from "../utils.js";
@@ -942,6 +944,8 @@ export async function resolveImplicitCopilotProvider(params: {
   }
 
   let baseUrl = DEFAULT_COPILOT_API_BASE_URL;
+  // PATs are sent directly to the enterprise endpoint with editor headers.
+  const needsEditorHeaders = selectedGithubToken ? isGitHubPAT(selectedGithubToken) : false;
   if (selectedGithubToken) {
     try {
       const token = await resolveCopilotApiToken({
@@ -963,6 +967,7 @@ export async function resolveImplicitCopilotProvider(params: {
   return {
     baseUrl,
     models: [],
+    ...(needsEditorHeaders ? { headers: { ...COPILOT_EDITOR_HEADERS } } : {}),
   } satisfies ProviderConfig;
 }
 
