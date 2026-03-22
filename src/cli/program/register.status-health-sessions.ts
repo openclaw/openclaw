@@ -9,7 +9,7 @@ import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatHelpExamples } from "../help-format.js";
-import { parsePositiveIntOrUndefined } from "./helpers.js";
+import { collectOption, parsePositiveIntOrUndefined } from "./helpers.js";
 
 function resolveVerbose(opts: { verbose?: boolean; debug?: boolean }): boolean {
   return Boolean(opts.verbose || opts.debug);
@@ -121,6 +121,11 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--agent <id>", "Agent id to inspect (default: configured default agent)")
     .option("--all-agents", "Aggregate sessions across all configured agents", false)
     .option("--active <minutes>", "Only show sessions updated within the past N minutes")
+    .option(
+      "--kind <type>",
+      "Filter by session kind (repeatable: direct, group, global, unknown)",
+      collectOption,
+    )
     .addHelpText(
       "after",
       () =>
@@ -129,6 +134,8 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           ["openclaw sessions --agent work", "List sessions for one agent."],
           ["openclaw sessions --all-agents", "Aggregate sessions across agents."],
           ["openclaw sessions --active 120", "Only last 2 hours."],
+          ["openclaw sessions --kind group", "Only group and channel sessions."],
+          ["openclaw sessions --kind direct --kind global", "Combine multiple session kinds."],
           ["openclaw sessions --json", "Machine-readable output."],
           ["openclaw sessions --store ./tmp/sessions.json", "Use a specific session store."],
         ])}\n\n${theme.muted(
@@ -149,6 +156,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           agent: opts.agent as string | undefined,
           allAgents: Boolean(opts.allAgents),
           active: opts.active as string | undefined,
+          kind: opts.kind as string[] | undefined,
         },
         defaultRuntime,
       );

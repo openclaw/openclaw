@@ -8,6 +8,7 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { isRich, theme } from "../terminal/theme.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
+import { resolveSessionKinds } from "./sessions-kind.js";
 import {
   formatSessionAgeCell,
   formatSessionFlagsCell,
@@ -85,7 +86,14 @@ const formatKindCell = (kind: SessionRow["kind"], rich: boolean) => {
 };
 
 export async function sessionsCommand(
-  opts: { json?: boolean; store?: string; active?: string; agent?: string; allAgents?: boolean },
+  opts: {
+    json?: boolean;
+    store?: string;
+    active?: string;
+    agent?: string;
+    allAgents?: boolean;
+    kind?: string[];
+  },
   runtime: RuntimeEnv,
 ) {
   const aggregateAgents = opts.allAgents === true;
@@ -119,6 +127,11 @@ export async function sessionsCommand(
     activeMinutes = parsed;
   }
 
+  const allowedKinds = resolveSessionKinds(opts.kind, runtime);
+  if (opts.kind && allowedKinds === null) {
+    return;
+  }
+
   const rows = targets
     .flatMap((target) => {
       const store = loadSessionStore(target.storePath);
@@ -130,12 +143,15 @@ export async function sessionsCommand(
     })
     .filter((row) => {
       if (activeMinutes === undefined) {
-        return true;
+        return allowedKinds ? allowedKinds.has(row.kind) : true;
       }
       if (!row.updatedAt) {
         return false;
       }
-      return Date.now() - row.updatedAt <= activeMinutes * 60_000;
+      if (Date.now() - row.updatedAt > activeMinutes * 60_000) {
+        return false;
+      }
+      return allowedKinds ? allowedKinds.has(row.kind) : true;
     })
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 
@@ -155,6 +171,7 @@ export async function sessionsCommand(
           allAgents: aggregateAgents ? true : undefined,
           count: rows.length,
           activeMinutes: activeMinutes ?? null,
+          kinds: allowedKinds ? Array.from(allowedKinds) : null,
           sessions: rows.map((r) => {
             const model = resolveSessionDisplayModel(cfg, r, displayDefaults);
             return {
@@ -185,6 +202,9 @@ export async function sessionsCommand(
   runtime.log(info(`Sessions listed: ${rows.length}`));
   if (activeMinutes) {
     runtime.log(info(`Filtered to last ${activeMinutes} minute(s)`));
+  }
+  if (allowedKinds) {
+    runtime.log(info(`Kinds: ${Array.from(allowedKinds).join(", ")}`));
   }
   if (rows.length === 0) {
     runtime.log("No sessions found.");
