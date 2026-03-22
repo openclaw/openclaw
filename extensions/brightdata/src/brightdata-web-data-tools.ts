@@ -1,6 +1,7 @@
 import { Type, type TSchema } from "@sinclair/typebox";
-import { jsonResult, readStringParam } from "openclaw/plugin-sdk/agent-runtime";
+import { readStringParam } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
+import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { runBrightDataWebData } from "./brightdata-client.js";
 
 type BrightDataDatasetDefinition = {
@@ -442,6 +443,39 @@ function readDatasetInputs(
   return input;
 }
 
+function brightDataDatasetResult(
+  payload: Record<string, unknown>,
+  definition: BrightDataDatasetDefinition,
+) {
+  const wrappedText = wrapExternalContent(JSON.stringify(payload, null, 2), {
+    source: "api",
+    includeWarning: true,
+  });
+  const externalContent = {
+    untrusted: true,
+    source: "api",
+    provider: "brightdata",
+    kind: "dataset",
+    datasetId:
+      typeof payload.datasetId === "string" && payload.datasetId
+        ? payload.datasetId
+        : definition.datasetId,
+    wrapped: true,
+  };
+  return {
+    content: [{ type: "text" as const, text: wrappedText }],
+    details: {
+      ...payload,
+      externalContent: {
+        ...(payload.externalContent && typeof payload.externalContent === "object"
+          ? (payload.externalContent as Record<string, unknown>)
+          : {}),
+        ...externalContent,
+      },
+    },
+  };
+}
+
 export function createBrightDataWebDataTools(api: OpenClawPluginApi) {
   return BRIGHTDATA_DATASET_DEFINITIONS.map((definition) => {
     const toolName = `brightdata_${definition.id}`;
@@ -451,7 +485,7 @@ export function createBrightDataWebDataTools(api: OpenClawPluginApi) {
       description: definition.description,
       parameters: buildDatasetParameters(definition),
       execute: async (_toolCallId: string, rawParams: Record<string, unknown>) =>
-        jsonResult(
+        brightDataDatasetResult(
           await runBrightDataWebData({
             cfg: api.config,
             datasetId: definition.datasetId,
@@ -460,6 +494,7 @@ export function createBrightDataWebDataTools(api: OpenClawPluginApi) {
             triggerParams: definition.triggerParams,
             toolName,
           }),
+          definition,
         ),
     };
   });
