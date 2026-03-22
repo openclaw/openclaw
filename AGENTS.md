@@ -71,6 +71,10 @@
 - Format check: `pnpm format` (oxfmt --check)
 - Format fix: `pnpm format:fix` (oxfmt --write)
 - Tests: `pnpm test` (vitest); coverage: `pnpm test:coverage`
+- Generated baseline artifacts live together under `docs/.generated/`.
+- Config schema drift uses `pnpm config:docs:gen` / `pnpm config:docs:check`.
+- Plugin SDK API drift uses `pnpm plugin-sdk:api:gen` / `pnpm plugin-sdk:api:check`.
+- If you change config schema/help or the public Plugin SDK surface, update the matching baseline artifact and keep the two drift-check flows adjacent in scripts/workflows/docs guidance rather than inventing a third pattern.
 - For narrowly scoped changes, prefer narrowly scoped tests that directly validate the touched behavior. If no meaningful scoped test exists, say so explicitly and use the next most direct validation available.
 - Preferred landing bar for pushes to `main`: `pnpm check` and `pnpm test`, with a green result when feasible.
 - Scoped tests prove the change itself. `pnpm test` remains the default `main` landing bar; scoped tests do not replace full-suite gates by default.
