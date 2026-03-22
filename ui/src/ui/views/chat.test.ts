@@ -277,6 +277,30 @@ describe("chat view", () => {
     expect(image?.getAttribute("src")).toBe("data:image/png;base64,QUJDRA==");
   });
 
+  it("renders image-only tool result messages inline", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "toolResult",
+              toolCallId: "tool-read-image-2",
+              toolName: "read_image",
+              content: [{ type: "image", data: "Rk9PQg==", mimeType: "image/png" }],
+              timestamp: 1000,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const image = container.querySelector<HTMLImageElement>(".chat-message-image");
+    expect(image).not.toBeNull();
+    expect(image?.getAttribute("src")).toBe("data:image/png;base64,Rk9PQg==");
+  });
+
   it("hides the context notice when only cumulative inputTokens exceed the limit", () => {
     const container = document.createElement("div");
     render(
