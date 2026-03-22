@@ -2999,6 +2999,30 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.rules",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Rules",
+      "help": "An array of rule strings injected as a numbered list into the agent system prompt after workspace bootstrap files. Each entry becomes a separate rule line. Supports per-agent override via agents.list.",
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.rules.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.sandbox",
       "kind": "core",
       "type": "object",
@@ -3981,6 +4005,20 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.systemPrompt",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "System Prompt",
+      "help": "A block of text appended to the agent system prompt after workspace bootstrap files. Use this to inject behavioral rules or safety guidelines from config. Supports per-agent override via agents.list.",
       "hasChildren": false
     },
     {
@@ -5260,6 +5298,29 @@
       "hasChildren": false
     },
     {
+      "path": "agents.list.*.rules",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Rules",
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.rules.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.list.*.runtime",
       "kind": "core",
       "type": "object",
@@ -6318,6 +6379,19 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.systemPrompt",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "System Prompt",
       "hasChildren": false
     },
     {

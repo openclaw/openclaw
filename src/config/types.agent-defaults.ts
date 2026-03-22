@@ -293,6 +293,19 @@ export type AgentDefaultsConfig = {
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
+  /**
+   * A block of text appended to the agent system prompt after workspace
+   * bootstrap files (AGENTS.md, SOUL.md, etc.). Use this to inject
+   * behavioral rules or safety guidelines from config instead of (or in
+   * addition to) workspace files.
+   */
+  systemPrompt?: string;
+  /**
+   * An array of rule strings injected into the agent system prompt after
+   * workspace bootstrap files. Each entry becomes a separate numbered rule.
+   * Use this for structured behavioral guidelines manageable via config.
+   */
+  rules?: string[];
 };
 
 export type AgentCompactionMode = "default" | "safeguard";

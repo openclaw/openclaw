@@ -93,6 +93,16 @@ export type AgentConfig = {
   tools?: AgentToolsConfig;
   /** Optional runtime descriptor for this agent. */
   runtime?: AgentRuntimeConfig;
+  /**
+   * Per-agent system prompt override. When set, takes precedence over
+   * agents.defaults.systemPrompt for this agent.
+   */
+  systemPrompt?: string;
+  /**
+   * Per-agent rules override. When set, takes precedence over
+   * agents.defaults.rules for this agent.
+   */
+  rules?: string[];
 };
 
 export type AgentsConfig = {

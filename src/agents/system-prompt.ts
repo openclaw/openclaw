@@ -178,6 +178,8 @@ export function buildAgentSystemPrompt(params: {
   defaultThinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
   extraSystemPrompt?: string;
+  /** Config-injected system prompt (agents.defaults.systemPrompt / rules). Placed after Project Context. */
+  configSystemPrompt?: string;
   ownerNumbers?: string[];
   ownerDisplay?: OwnerIdDisplay;
   ownerDisplaySecret?: string;
@@ -624,6 +626,11 @@ export function buildAgentSystemPrompt(params: {
     for (const file of validContextFiles) {
       lines.push(`## ${file.path}`, "", file.content, "");
     }
+  }
+
+  const configSystemPrompt = params.configSystemPrompt?.trim();
+  if (configSystemPrompt) {
+    lines.push("## Config Rules", configSystemPrompt, "");
   }
 
   // Skip silent replies for subagent/none modes

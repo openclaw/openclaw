@@ -800,6 +800,8 @@ export const AgentEntrySchema = z
     params: z.record(z.string(), z.unknown()).optional(),
     tools: AgentToolsSchema,
     runtime: AgentRuntimeSchema,
+    systemPrompt: z.string().optional(),
+    rules: z.array(z.string()).optional(),
   })
   .strict();
 
