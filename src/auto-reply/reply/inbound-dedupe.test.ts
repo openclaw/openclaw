@@ -114,6 +114,9 @@ describe("inbound dedupe", () => {
     };
     const cloneCache: DedupeCache = {
       check: vi.fn((key: string | null | undefined) => (key ?? "").includes("same body")),
+      peek: vi.fn(() => false),
+      delete: vi.fn(() => false),
+      size: vi.fn(() => 0),
       clear: vi.fn(),
     };
 
