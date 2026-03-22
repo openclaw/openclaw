@@ -1,34 +1,33 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
+import {
+  createTestWizardPrompter,
+  runSetupWizardFinalize,
+  runSetupWizardPrepare,
+} from "../../../test/helpers/extensions/setup-wizard.js";
 import { telegramSetupWizard } from "./setup-surface.js";
 
 async function runPrepare(cfg: OpenClawConfig, accountId: string) {
-  return await telegramSetupWizard.prepare?.({
+  return await runSetupWizardPrepare({
+    prepare: telegramSetupWizard.prepare,
     cfg,
     accountId,
-    credentialValues: {},
-    runtime: {} as never,
-    prompter: {} as never,
     options: {},
   });
 }
 
 async function runFinalize(cfg: OpenClawConfig, accountId: string) {
-  const prompter = {
-    note: vi.fn(async () => undefined),
-  };
+  const note = vi.fn(async () => undefined);
 
-  await telegramSetupWizard.finalize?.({
+  await runSetupWizardFinalize({
+    finalize: telegramSetupWizard.finalize,
     cfg,
     accountId,
-    credentialValues: {},
-    runtime: {} as never,
-    prompter: prompter as never,
-    forceAllowFrom: false,
+    prompter: createTestWizardPrompter({ note }),
   });
 
-  return prompter.note;
+  return note;
 }
 
 function expectPreparedResult(
