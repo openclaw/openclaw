@@ -185,14 +185,14 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 
 # Custom entrypoint: write WhatsApp config, then call the real entrypoint.
 # blink-entrypoint.sh runs as root, preps /data, drops to node, execs CMD.
-# We inject the config BEFORE blink-entrypoint.sh runs so /data/openclaw.json
-# already has WhatsApp when OpenClaw boots.
-WA_CONFIG='{"agents":{"defaults":{"workspace":"/data/workspace"}},"gateway":{"auth":{"mode":"token"},"controlUi":{"dangerouslyAllowHostHeaderOriginFallback":true,"dangerouslyDisableDeviceAuth":true}},"browser":{"noSandbox":true},"channels":{"whatsapp":{"accounts":{"default":{"authDir":"/data/workspace/.whatsapp"}}}}}'
+# Base64-encode the config to avoid shell quoting issues.
+WA_CONFIG_B64=$(printf '%s' '{"agents":{"defaults":{"workspace":"/data/workspace"}},"gateway":{"auth":{"mode":"token"},"controlUi":{"dangerouslyAllowHostHeaderOriginFallback":true,"dangerouslyDisableDeviceAuth":true}},"browser":{"noSandbox":true},"channels":{"whatsapp":{"accounts":{"default":{"authDir":"/data/workspace/.whatsapp"}}}}}' | base64 | tr -d '\n')
 
 echo "==> Creating machine B (WhatsApp configured from boot)..."
+WA_CMD="mkdir -p /data/workspace/.whatsapp /data/agents/main/agent /data/agents/main/sessions /data/scripts /data/npm-global && printf '%s' '${WA_CONFIG_B64}' | base64 -d > /data/openclaw.json && chown -R node:node /data && exec /app/blink-entrypoint.sh node openclaw.mjs gateway --allow-unconfigured"
 MACHINE_B=$(create_machine \
-  '["/bin/sh", "-c"]' \
-  "[\"mkdir -p /data/workspace/.whatsapp /data/agents/main/agent /data/agents/main/sessions /data/scripts /data/npm-global && printf '%s' '${WA_CONFIG}' > /data/openclaw.json && chown -R node:node /data && exec /app/blink-entrypoint.sh node openclaw.mjs gateway --allow-unconfigured\"]")
+  '[ "/bin/sh", "-c" ]' \
+  "$(python3 -c "import json; print(json.dumps(['''$WA_CMD''']))")")
 echo "    Machine B: $MACHINE_B"
 
 wait_machine_started "$MACHINE_B" "Machine B"
