@@ -822,7 +822,9 @@ class TalkModeManager(
       return
     }
     if (resetInterrupt) {
-      val currentMs = player.get()?.currentPosition?.toDouble() ?: 0.0
+      val currentMs = try {
+        player.get()?.currentPosition?.toDouble() ?: 0.0
+      } catch (_: IllegalStateException) { 0.0 }
       lastInterruptedAtSeconds = currentMs / 1000.0
     }
     cleanupPlayer()
