@@ -39,7 +39,7 @@ function printJsonResult(parent: BrowserParentOpts, result: unknown): boolean {
   if (!parent.json) {
     return false;
   }
-  defaultRuntime.log(JSON.stringify(result, null, 2));
+  defaultRuntime.writeJson(result);
   return true;
 }
 
