@@ -2175,13 +2175,12 @@ export const registerTelegramHandlers = ({
           runtime.error?.(danger(`[telegram] inline image dispatch error: ${String(err)}`));
         });
 
-        // Wait for both generation to finish AND user to select the result
+        // Wait for user to select the result (to get inline_message_id)
         let inlineMessageId: string;
         try {
-          const [, msgId] = await Promise.all([genPromise, inlineMessageIdPromise]);
+          inlineMessageId = await inlineMessageIdPromise;
           clearTimeout(autoEditCleanup2);
           autoEditPending.delete(query.id);
-          inlineMessageId = msgId;
         } catch {
           clearTimeout(autoEditCleanup2);
           autoEditPending.delete(query.id);
@@ -2191,10 +2190,10 @@ export const registerTelegramHandlers = ({
           return;
         }
 
-        // Start spinner now that we have the inline_message_id
+        // Start spinner immediately once we have inline_message_id
         const SPINNER_FRAMES_IMG = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
         let spinnerIdxImg = 0;
-        let spinnerActiveImg = !detectedImagePath;
+        let spinnerActiveImg = true;
         const spinnerIntervalImg = setInterval(() => {
           if (!spinnerActiveImg) return;
           spinnerIdxImg = (spinnerIdxImg + 1) % SPINNER_FRAMES_IMG.length;
@@ -2208,7 +2207,7 @@ export const registerTelegramHandlers = ({
             .catch(() => {});
         }, 1000);
 
-        // Wait for gen to finish if not already done
+        // Wait for generation to finish
         await genPromise;
         spinnerActiveImg = false;
         clearInterval(spinnerIntervalImg);
