@@ -4,7 +4,10 @@ import path from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
-import { truncateSessionAfterCompaction } from "./session-truncation.js";
+import {
+  pruneSessionTranscriptRollingWindow,
+  truncateSessionAfterCompaction,
+} from "./session-truncation.js";
 
 let tmpDir: string;
 
@@ -24,6 +27,38 @@ function makeAssistant(text: string, timestamp: number) {
     content: [{ type: "text", text }],
     timestamp,
   });
+}
+
+function extractMessageText(content: unknown): string | undefined {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const firstText = content.find(
+    (block) => block && typeof block === "object" && (block as { type?: string }).type === "text",
+  ) as { text?: string } | undefined;
+  return typeof firstText?.text === "string" ? firstText.text : undefined;
+}
+
+function getBranchMessageRoles(sessionManager: SessionManager): string[] {
+  return sessionManager
+    .getBranch()
+    .filter((entry) => entry.type === "message")
+    .map((entry) => entry.message.role);
+}
+
+function getBranchMessageTexts(sessionManager: SessionManager): string[] {
+  return sessionManager
+    .getBranch()
+    .filter((entry) => entry.type === "message")
+    .map((entry) => {
+      if ("content" in entry.message) {
+        return extractMessageText(entry.message.content) ?? entry.message.role;
+      }
+      return entry.message.role;
+    });
 }
 
 function createSessionWithCompaction(sessionDir: string): string {
@@ -364,5 +399,192 @@ describe("truncateSessionAfterCompaction", () => {
     // Total entries should be less (main branch messages removed) but not zero
     expect(allAfter.length).toBeGreaterThan(0);
     expect(allAfter.length).toBeLessThan(entriesBefore.length);
+  });
+});
+
+describe("pruneSessionTranscriptRollingWindow", () => {
+  it("skips pruning when the transcript is below or exactly at the configured threshold", async () => {
+    const dir = await createTmpDir();
+    const sm = SessionManager.create(dir, dir);
+    sm.appendMessage({ role: "user", content: "hello", timestamp: 1 });
+    sm.appendMessage(makeAssistant("hi", 2));
+    const sessionFile = sm.getSessionFile()!;
+    const bytes = (await fs.stat(sessionFile)).size;
+
+    const result = await pruneSessionTranscriptRollingWindow({
+      sessionFile,
+      maxBytes: bytes,
+      keepRecentMessages: 1,
+    });
+
+    expect(result.pruned).toBe(false);
+    expect(result.reason).toBe("below threshold");
+    expect(SessionManager.open(sessionFile).getEntries()).toHaveLength(2);
+  });
+
+  it("prunes ordinary sessions without compaction and keeps the latest rolling window", async () => {
+    const dir = await createTmpDir();
+    const sm = SessionManager.create(dir, dir);
+    sm.appendSessionInfo("rolling");
+    for (let i = 1; i <= 5; i++) {
+      sm.appendMessage({ role: "user", content: `user-${i}`, timestamp: i * 10 });
+      sm.appendMessage(makeAssistant(`assistant-${i}`, i * 10 + 1));
+    }
+    sm.appendCustomMessageEntry("note", [{ type: "text", text: "custom-note" }], false, {
+      marker: true,
+    });
+    const sessionFile = sm.getSessionFile()!;
+
+    const result = await pruneSessionTranscriptRollingWindow({
+      sessionFile,
+      maxBytes: 1,
+      keepRecentMessages: 4,
+    });
+
+    expect(result.pruned).toBe(true);
+    expect(result.entriesRemoved).toBeGreaterThan(0);
+    expect(result.bytesAfter).toBeLessThan(result.bytesBefore!);
+
+    const smAfter = SessionManager.open(sessionFile);
+    expect(getBranchMessageTexts(smAfter)).toEqual([
+      "user-4",
+      "assistant-4",
+      "user-5",
+      "assistant-5",
+    ]);
+    expect(smAfter.getEntries().some((entry) => entry.type === "session_info")).toBe(true);
+    expect(smAfter.getEntries().some((entry) => entry.type === "custom_message")).toBe(true);
+    expect(smAfter.buildSessionContext().messages.length).toBeGreaterThan(0);
+  });
+
+  it("backs up the keep window so tool results never survive without their assistant tool turn", async () => {
+    const dir = await createTmpDir();
+    const sm = SessionManager.create(dir, dir);
+    sm.appendMessage({ role: "user", content: "seed", timestamp: 1 });
+    sm.appendMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call_1", name: "read", arguments: { path: "a.txt" } }],
+      stopReason: "toolUse",
+      api: "openai-responses",
+      provider: "openai",
+      model: "mock-1",
+      timestamp: 2,
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    });
+    sm.appendMessage({
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "read",
+      content: [{ type: "text", text: "tool output" }],
+      isError: false,
+      timestamp: 3,
+    });
+    sm.appendMessage(makeAssistant("done", 4));
+    sm.appendMessage({ role: "user", content: "latest user", timestamp: 5 });
+    sm.appendMessage(makeAssistant("latest assistant", 6));
+    const sessionFile = sm.getSessionFile()!;
+
+    const result = await pruneSessionTranscriptRollingWindow({
+      sessionFile,
+      maxBytes: 1,
+      keepRecentMessages: 4,
+    });
+
+    expect(result.pruned).toBe(true);
+
+    const smAfter = SessionManager.open(sessionFile);
+    expect(getBranchMessageRoles(smAfter)).toEqual([
+      "assistant",
+      "toolResult",
+      "assistant",
+      "user",
+      "assistant",
+    ]);
+    const ctxRoles = smAfter.buildSessionContext().messages.map((message) => message.role);
+    expect(ctxRoles[0]).toBe("assistant");
+    expect(ctxRoles[1]).toBe("toolResult");
+  });
+
+  it("preserves compaction tails and non-message state while pruning older post-compaction messages", async () => {
+    const dir = await createTmpDir();
+    const sm = SessionManager.create(dir, dir);
+    sm.appendMessage({ role: "user", content: "u1", timestamp: 1 });
+    sm.appendMessage(makeAssistant("a1", 2));
+    sm.appendMessage({ role: "user", content: "u2", timestamp: 3 });
+    const protectedAssistantId = sm.appendMessage(makeAssistant("a2", 4));
+    sm.appendCompaction("Summary.", protectedAssistantId, 5000);
+    sm.appendSessionInfo("named");
+    sm.appendCustomEntry("marker", { keep: true });
+    sm.appendCustomMessageEntry("note", [{ type: "text", text: "custom" }], false, {
+      hidden: true,
+    });
+    sm.appendMessage({ role: "user", content: "u3", timestamp: 5 });
+    sm.appendMessage(makeAssistant("a3", 6));
+    sm.appendMessage({ role: "user", content: "u4", timestamp: 7 });
+    sm.appendMessage(makeAssistant("a4", 8));
+    const sessionFile = sm.getSessionFile()!;
+
+    const result = await pruneSessionTranscriptRollingWindow({
+      sessionFile,
+      maxBytes: 1,
+      keepRecentMessages: 2,
+    });
+
+    expect(result.pruned).toBe(true);
+
+    const smAfter = SessionManager.open(sessionFile);
+    const branchTexts = getBranchMessageTexts(smAfter);
+    expect(branchTexts).toContain("a2");
+    expect(branchTexts).toContain("u4");
+    expect(branchTexts).toContain("a4");
+    expect(branchTexts).not.toContain("u3");
+    expect(smAfter.getEntries().some((entry) => entry.type === "compaction")).toBe(true);
+    expect(smAfter.getEntries().some((entry) => entry.type === "session_info")).toBe(true);
+    expect(smAfter.getEntries().some((entry) => entry.type === "custom")).toBe(true);
+    expect(smAfter.getEntries().some((entry) => entry.type === "custom_message")).toBe(true);
+    expect(smAfter.buildSessionContext().messages.length).toBeGreaterThan(0);
+  });
+
+  it("preserves sibling branches while pruning the active branch window", async () => {
+    const dir = await createTmpDir();
+    const sm = SessionManager.create(dir, dir);
+    sm.appendMessage({ role: "user", content: "root", timestamp: 1 });
+    const branchPoint = sm.appendMessage(makeAssistant("root-assistant", 2));
+
+    sm.appendMessage({ role: "user", content: "main-1", timestamp: 3 });
+    sm.appendMessage(makeAssistant("main-1-assistant", 4));
+    sm.appendMessage({ role: "user", content: "main-2", timestamp: 5 });
+    sm.appendMessage(makeAssistant("main-2-assistant", 6));
+    const mainLeaf = sm.getLeafId();
+
+    sm.branch(branchPoint);
+    const siblingId = sm.appendMessage({ role: "user", content: "sibling-user", timestamp: 7 });
+    sm.appendMessage(makeAssistant("sibling-assistant", 8));
+
+    if (mainLeaf) {
+      sm.branch(mainLeaf);
+    }
+    sm.appendMessage({ role: "user", content: "main-3", timestamp: 9 });
+    sm.appendMessage(makeAssistant("main-3-assistant", 10));
+    const sessionFile = sm.getSessionFile()!;
+
+    const result = await pruneSessionTranscriptRollingWindow({
+      sessionFile,
+      maxBytes: 1,
+      keepRecentMessages: 2,
+    });
+
+    expect(result.pruned).toBe(true);
+
+    const smAfter = SessionManager.open(sessionFile);
+    expect(smAfter.getEntries().find((entry) => entry.id === siblingId)).toBeDefined();
+    expect(getBranchMessageTexts(smAfter)).toEqual(["main-3", "main-3-assistant"]);
   });
 });

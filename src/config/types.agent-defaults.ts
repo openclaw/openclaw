@@ -305,6 +305,20 @@ export type AgentCompactionQualityGuardConfig = {
   maxRetries?: number;
 };
 
+export type AgentTranscriptPruningConfig = {
+  /**
+   * Maximum persisted transcript size before rolling pruning runs.
+   * Accepts bytes or byte-size strings like "2mb". Unset or 0 disables pruning.
+   */
+  maxBytes?: number | string;
+  /**
+   * Number of most recent persisted message entries kept on the active branch
+   * when rolling pruning runs. Tool-result spans and compaction keep markers
+   * may extend the effective retained window.
+   */
+  keepRecentMessages?: number;
+};
+
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
@@ -348,6 +362,12 @@ export type AgentCompactionConfig = {
    * Default: false (existing behavior preserved).
    */
   truncateAfterCompaction?: boolean;
+  /**
+   * Rolling transcript pruning for persisted session files, independent of
+   * compaction. Disabled by default to preserve full-history transcripts unless
+   * operators opt into on-disk size limits.
+   */
+  transcriptPruning?: AgentTranscriptPruningConfig;
 };
 
 export type AgentCompactionMemoryFlushConfig = {

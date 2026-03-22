@@ -324,6 +324,68 @@ describe("runEmbeddedPiAgent", () => {
     },
   );
 
+  it(
+    "prunes oversized ordinary session transcripts after a normal user turn when enabled",
+    { timeout: 7_000 },
+    async () => {
+      const sessionFile = nextSessionFile();
+      const sessionKey = nextSessionKey();
+      const sessionManager = SessionManager.open(sessionFile);
+      for (let i = 1; i <= 4; i++) {
+        sessionManager.appendMessage({
+          role: "user",
+          content: [{ type: "text", text: `seed-user-${i}` }],
+          timestamp: Date.now() + i,
+        });
+        sessionManager.appendMessage({
+          role: "assistant",
+          content: [{ type: "text", text: `seed-assistant-${i}` }],
+          stopReason: "stop",
+          api: "openai-responses",
+          provider: "openai",
+          model: "mock-1",
+          usage: createMockUsage(1, 1),
+          timestamp: Date.now() + i + 100,
+        });
+      }
+
+      const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
+      cfg.agents = {
+        ...cfg.agents,
+        defaults: {
+          ...cfg.agents?.defaults,
+          compaction: {
+            ...cfg.agents?.defaults?.compaction,
+            transcriptPruning: {
+              maxBytes: 1,
+              keepRecentMessages: 4,
+            },
+          },
+        },
+      };
+
+      await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey,
+        sessionFile,
+        workspaceDir,
+        config: cfg,
+        prompt: "fresh prompt",
+        provider: "openai",
+        model: "mock-1",
+        timeoutMs: 5_000,
+        agentDir,
+        runId: nextRunId("rolling-prune"),
+        enqueue: immediateEnqueue,
+      });
+
+      const messages = await readSessionMessages(sessionFile);
+      const texts = messages.map((message) => textFromContent(message?.content));
+
+      expect(texts).toEqual(["seed-user-4", "seed-assistant-4", "fresh prompt", "ok"]);
+    },
+  );
+
   it("repairs orphaned user messages and continues", async () => {
     const result = await runWithOrphanedSingleUserMessage("orphaned user", nextSessionKey());
 

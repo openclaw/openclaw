@@ -1061,6 +1061,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional provider/model override used only for compaction summarization. Set this when you want compaction to run on a different model than the session default, and leave it unset to keep using the primary agent model.",
   "agents.defaults.compaction.truncateAfterCompaction":
     "When enabled, rewrites the session JSONL file after compaction to remove entries that were summarized. Prevents unbounded file growth in long-running sessions with many compaction cycles. Default: false.",
+  "agents.defaults.compaction.transcriptPruning":
+    "Rolling transcript pruning settings for persisted session JSONL files. Use this only when you want bounded on-disk transcript history for normal agent turns, and keep it unset otherwise so full transcript history stays preserved.",
+  "agents.defaults.compaction.transcriptPruning.maxBytes":
+    'Maximum transcript file size before rolling pruning runs (bytes or strings like "2mb"). Unset or 0 disables this behavior. Default: disabled.',
+  "agents.defaults.compaction.transcriptPruning.keepRecentMessages":
+    "Number of most recent persisted message entries kept on the active branch when rolling pruning runs (default: 40). Tool-result spans and compaction keep markers may extend the actual retained window to preserve transcript integrity.",
   "agents.defaults.compaction.memoryFlush":
     "Pre-compaction memory flush settings that run an agentic memory write before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
   "agents.defaults.compaction.memoryFlush.enabled":

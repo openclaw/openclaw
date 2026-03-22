@@ -473,6 +473,10 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.timeoutSeconds": "Compaction Timeout (Seconds)",
   "agents.defaults.compaction.model": "Compaction Model Override",
   "agents.defaults.compaction.truncateAfterCompaction": "Truncate After Compaction",
+  "agents.defaults.compaction.transcriptPruning": "Transcript Pruning",
+  "agents.defaults.compaction.transcriptPruning.maxBytes": "Transcript Pruning Max Size",
+  "agents.defaults.compaction.transcriptPruning.keepRecentMessages":
+    "Transcript Pruning Keep Recent Messages",
   "agents.defaults.compaction.memoryFlush": "Compaction Memory Flush",
   "agents.defaults.compaction.memoryFlush.enabled": "Compaction Memory Flush Enabled",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":

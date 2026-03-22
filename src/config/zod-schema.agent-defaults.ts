@@ -109,6 +109,20 @@ export const AgentDefaultsSchema = z
         postCompactionSections: z.array(z.string()).optional(),
         model: z.string().optional(),
         timeoutSeconds: z.number().int().positive().optional(),
+        transcriptPruning: z
+          .object({
+            maxBytes: z
+              .union([
+                z.number().int().nonnegative(),
+                z
+                  .string()
+                  .refine(isValidNonNegativeByteSizeString, "Expected byte size string like 2mb"),
+              ])
+              .optional(),
+            keepRecentMessages: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
         memoryFlush: z
           .object({
             enabled: z.boolean().optional(),

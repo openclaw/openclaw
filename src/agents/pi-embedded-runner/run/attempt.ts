@@ -12,6 +12,7 @@ import {
   resolveTelegramReactionLevel,
 } from "../../../../extensions/telegram/api.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
+import { parseNonNegativeByteSize } from "../../../config/byte-size.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
@@ -28,6 +29,7 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
+import { emitSessionTranscriptUpdate } from "../../../sessions/transcript-events.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
 import { resolveUserPath } from "../../../utils.js";
@@ -127,6 +129,10 @@ import {
 import { buildEmbeddedSandboxInfo } from "../sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
+import {
+  DEFAULT_ROLLING_TRANSCRIPT_KEEP_RECENT_MESSAGES,
+  pruneSessionTranscriptRollingWindow,
+} from "../session-truncation.js";
 import { resolveEmbeddedRunSkillEntries } from "../skills-runtime.js";
 import {
   applySystemPromptOverrideToSession,
@@ -173,6 +179,26 @@ type PromptBuildHookRunner = {
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforeAgentStartResult | undefined>;
 };
+
+function resolveRollingTranscriptPruningConfig(
+  config?: OpenClawConfig,
+): { maxBytes: number; keepRecentMessages: number } | null {
+  const pruning = config?.agents?.defaults?.compaction?.transcriptPruning;
+  const maxBytes = parseNonNegativeByteSize(pruning?.maxBytes) ?? 0;
+  if (maxBytes <= 0) {
+    return null;
+  }
+
+  const keepRecentMessagesRaw = pruning?.keepRecentMessages;
+  const keepRecentMessages =
+    typeof keepRecentMessagesRaw === "number" &&
+    Number.isFinite(keepRecentMessagesRaw) &&
+    keepRecentMessagesRaw > 0
+      ? Math.floor(keepRecentMessagesRaw)
+      : DEFAULT_ROLLING_TRANSCRIPT_KEEP_RECENT_MESSAGES;
+
+  return { maxBytes, keepRecentMessages };
+}
 
 const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt";
 const SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE = "openclaw.sessions_yield";
@@ -3229,6 +3255,18 @@ export async function runEmbeddedAttempt(
         clearPendingOnTimeout: true,
       });
       session?.dispose();
+      const rollingTranscriptPruning = resolveRollingTranscriptPruningConfig(params.config);
+      if (sessionManager && rollingTranscriptPruning) {
+        const pruneResult = await pruneSessionTranscriptRollingWindow({
+          sessionFile: params.sessionFile,
+          sessionManager,
+          maxBytes: rollingTranscriptPruning.maxBytes,
+          keepRecentMessages: rollingTranscriptPruning.keepRecentMessages,
+        });
+        if (pruneResult.pruned) {
+          emitSessionTranscriptUpdate(params.sessionFile);
+        }
+      }
       releaseWsSession(params.sessionId);
       await bundleMcpRuntime?.dispose();
       await bundleLspRuntime?.dispose();
