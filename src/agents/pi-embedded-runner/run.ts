@@ -890,26 +890,26 @@ export async function runEmbeddedPiAgent(
       // queueHandle.abort is stable but calls the CURRENT controller's abort.
       // After each retry, we swap the controller so the next iteration gets a fresh signal.
       let currentAbortController = new AbortController();
-      // Tracks the current attempt's queueHandle so outer handle methods can delegate.
-      // Updated synchronously via attemptRef after each attempt returns.
-      let currentAttemptHandle: EmbeddedPiQueueHandle | undefined;
       // Mutable container passed to the attempt. The attempt writes its live
       // queueHandle and abortRun here SYNCHRONOUSLY (before any await), so the outer
       // wrapper can forward queueMessage/isStreaming/isCompacting/abort to the in-flight
       // attempt immediately — not just after the await returns.
       const attemptRef: { current?: { queueHandle: EmbeddedPiQueueHandle; abortRun: (isTimeout?: boolean, reason?: unknown) => void } } = {};
+      // Stable outer wrapper. All forwarding reads directly from attemptRef.current
+      // (the live in-flight attempt handle), so it works even during first attempt.
       const queueHandle: EmbeddedPiQueueHandle = {
         queueMessage: async (text: string) => {
-          // Forward to the current attempt if one is running; otherwise a no-op.
-          if (currentAttemptHandle) {
-            await currentAttemptHandle.queueMessage(text);
+          // Forward to the current attempt's live handle; no-op if no attempt is running.
+          if (attemptRef.current?.queueHandle) {
+            await attemptRef.current.queueHandle.queueMessage(text);
           }
         },
-        isStreaming: () => currentAttemptHandle?.isStreaming() ?? false,
-        isCompacting: () => currentAttemptHandle?.isCompacting() ?? false,
+        isStreaming: () => attemptRef.current?.queueHandle?.isStreaming() ?? false,
+        isCompacting: () => attemptRef.current?.queueHandle?.isCompacting() ?? false,
         abort: () => {
-          // Forward abort to the attempt's abortRun if available; otherwise abort
-          // the current controller (for the window before attemptRef is populated).
+          // Forward to the attempt's real abortRun if available (has full semantics:
+          // sets aborted/timedOut, cancels compaction, aborts activeSession).
+          // Falls back to currentAbortController.abort() before the attempt writes its abortRun.
           if (attemptRef.current?.abortRun) {
             attemptRef.current.abortRun();
           } else {
@@ -1078,10 +1078,9 @@ export async function runEmbeddedPiAgent(
             lastAssistant,
           } = attempt;
 
-          // Store the attempt's queueHandle so outer handle methods can delegate to it.
-          // The attempt wrote this to attemptRef synchronously before any await, so it's
-          // available immediately after the await returns (even for first attempt).
-          currentAttemptHandle = attemptRef.current?.queueHandle;
+          // The attempt wrote queueHandle/abortRun to attemptRef synchronously.
+          // The outer wrapper reads attemptRef.current directly for forwarding, so no
+          // separate currentAttemptHandle tracking is needed.
 
           // Swap to a fresh abort controller for the next retry iteration.
           // This ensures each retry starts with an un-aborted signal.

@@ -2264,6 +2264,12 @@ export async function runEmbeddedAttempt(
         abortCompaction();
         void activeSession.abort();
       };
+      // ── Point attemptRef.abortRun at the real abortRun immediately ───
+      // This replaces the placeholder set at the top of the function.
+      // From this point on, outer abort → attemptRef.abortRun → real abortRun with full semantics.
+      if (params.attemptRef?.current) {
+        params.attemptRef.current.abortRun = abortRun;
+      }
       const abortable = <T>(promise: Promise<T>): Promise<T> => {
         const signal = runAbortController.signal;
         if (signal.aborted) {
@@ -2330,8 +2336,8 @@ export async function runEmbeddedAttempt(
         getCompactionCount,
       } = subscription;
 
-      // Use the stable queueHandle from the outer run if provided; otherwise create one locally.
-      // When provided, the outer run has already called setActiveEmbeddedRun.
+      // Use the outer queueHandle if provided (outer has already called setActiveEmbeddedRun).
+      // This ensures the outer finally clears the same object that was registered.
       const queueHandle: EmbeddedPiQueueHandle = params.queueHandle ?? {
         queueMessage: async (text: string) => {
           await activeSession.steer(text);
@@ -2343,9 +2349,9 @@ export async function runEmbeddedAttempt(
       if (!params.queueHandle) {
         setActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
       }
-      // ── Update attemptRef with real queueHandle (overwrites placeholder) ───
-      // This happens before any retry await, so from the NEXT iteration onward,
-      // the outer wrapper correctly forwards queueMessage/isStreaming/isCompacting.
+      // ── Update attemptRef with live queueHandle (overwrites placeholder) ───
+      // activeSession is now set up, so this queueHandle has real steering/streaming.
+      // Outer wrapper will read this immediately after await returns.
       if (params.attemptRef?.current) {
         params.attemptRef.current.queueHandle = queueHandle;
       }
