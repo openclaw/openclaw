@@ -372,7 +372,7 @@ export function createSessionStatusTool(opts?: {
         throw new Error(`Unknown ${kind}: ${requestedKeyRaw}`);
       }
 
-      if (visibilityGuard && !requestedKeyRaw.startsWith("agent:")) {
+      if (visibilityGuard && !isExplicitAgentKey) {
         const access = visibilityGuard.check(
           normalizeVisibilityTargetSessionKey(resolved.key, agentId),
         );
