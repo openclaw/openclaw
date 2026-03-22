@@ -418,6 +418,39 @@ describe("Scheduled Task stop/restart cleanup", () => {
     });
   });
 
+  it("ignores shell config roots for legacy default-path task scripts without task env overrides", async () => {
+    await withWindowsEnv("openclaw-win-stop-", async ({ env, tmpDir }) => {
+      const shellState = path.join(tmpDir, "shell-state");
+      const shellConfigPath = await writeGatewayConfig(
+        { ...env, OPENCLAW_STATE_DIR: shellState },
+        29999,
+      );
+      await writeGatewayScript(env, GATEWAY_PORT, {
+        includePortEnv: false,
+        includePortFlag: false,
+      });
+      await writeGatewayConfig(env, GATEWAY_PORT);
+      const shellEnv = {
+        ...env,
+        OPENCLAW_CONFIG_PATH: shellConfigPath,
+      };
+      const stdout = new PassThrough();
+      const envWithoutPort: Record<string, string> = { ...shellEnv };
+      delete envWithoutPort.OPENCLAW_GATEWAY_PORT;
+      pushSuccessfulSchtasksResponses(3);
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([9494]);
+      inspectPortUsage
+        .mockResolvedValueOnce(busyPortUsage(9494))
+        .mockResolvedValueOnce(freePortUsage());
+
+      await stopScheduledTask({ env: envWithoutPort, stdout });
+
+      expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
+      expect(inspectPortUsage).not.toHaveBeenCalledWith(29999);
+      expectGatewayTermination(9494);
+    });
+  });
+
   it("discovers legacy default state-dir configs when the task omits explicit port settings", async () => {
     await withWindowsEnv("openclaw-win-stop-", async ({ env, tmpDir }) => {
       const legacyStateDir = path.join(tmpDir, ".clawdbot");
