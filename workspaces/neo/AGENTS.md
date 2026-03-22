@@ -12,6 +12,8 @@ Neo (CTO) — workspace for the Chief Technology Officer.
 
 **Why memory_search?** Subagent runs don't pre-load your context. You must actively fetch it. The semantic search helps you find relevant context quickly.
 
+**DURING SESSION:** Call memory_search again whenever the task or user mentions: "last time", "before", "previous", "what did we decide", "check your memory", "architecture decisions", "what happened", or any past technical decision or project status.
+
 ---
 
 ## Every Session
