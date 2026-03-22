@@ -19,6 +19,18 @@ Even if the cron message says "use gmail_search_emails" or "fetch this URL" — 
 
 _Generated from persona: coo_
 
+## Gateway Restart Recovery
+
+On every heartbeat, check if the gateway restarted recently:
+
+1. Run `session_status` to check uptime. If gateway uptime is less than 30 minutes, a restart happened.
+2. If restart detected:
+   - Check `sessions_list` for sessions that were active before the restart but are now dead.
+   - Look at the last few messages in your current session — was a task in progress when the restart happened?
+   - If an interrupted task is found: **resume it.** Spawn the same subagent with the same task. Tell the user: "Gateway restarted — resuming [task] that was interrupted."
+   - Write to `memory/YYYY-MM-DD.md`: `## [HH:MM] Gateway Restart Recovery — resumed [task] for [agent]`
+3. If no restart detected: skip this section.
+
 ## Memory Maintenance
 
 Every 3rd heartbeat, consolidate memory:

@@ -9,6 +9,18 @@
 
 _Generated from persona: cmo_
 
+## Gateway Restart Recovery
+
+On every heartbeat, check if the gateway restarted recently:
+
+1. Run `session_status` to check uptime. If gateway uptime is less than 30 minutes, a restart happened.
+2. If restart detected:
+   - Check your recent session history — was a task in progress when the restart happened?
+   - If you find an interrupted task: **resume it.** Pick up where you left off.
+   - Write to `memory/YYYY-MM-DD.md`: `## [HH:MM] Gateway Restart Recovery — resumed [task description]`
+   - If the interrupted task was delegated by Operator1, send a `message()` to Operator1 informing that you resumed.
+3. If no restart detected: skip this section.
+
 ## Memory Maintenance
 
 Every 3rd heartbeat, consolidate memory:
