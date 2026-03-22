@@ -1,8 +1,9 @@
+import { resolve as resolvePath } from "node:path";
 import type { Command } from "commander";
 import { messageCommand } from "../../../commands/message.js";
 import { danger, setVerbose } from "../../../globals.js";
 import { CHANNEL_TARGET_DESCRIPTION } from "../../../infra/outbound/channel-target.js";
-import { callGateway, randomIdempotencyKey } from "../../../gateway/call.js";
+import { buildGatewayConnectionDetails, callGateway, randomIdempotencyKey } from "../../../gateway/call.js";
 import { runGlobalGatewayStopSafely } from "../../../plugins/hook-runner-global.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { runCommandWithRuntime } from "../../cli-utils.js";
@@ -86,7 +87,14 @@ async function trySendViaGateway(opts: Record<string, unknown>): Promise<
   const message = typeof opts.message === "string" ? opts.message : "";
   const channel = typeof opts.channel === "string" ? opts.channel : undefined;
   const accountId = typeof opts.accountId === "string" ? opts.accountId : undefined;
-  const mediaUrl = typeof opts.media === "string" ? opts.media : undefined;
+  // Resolve relative media paths to absolute so the gateway process (which may
+  // have a different cwd) can locate the file correctly.
+  const rawMedia = typeof opts.media === "string" ? opts.media : undefined;
+  const mediaUrl = rawMedia
+    ? rawMedia.startsWith("http://") || rawMedia.startsWith("https://") || rawMedia.startsWith("/")
+      ? rawMedia
+      : resolvePath(process.cwd(), rawMedia)
+    : undefined;
   const threadId = typeof opts.threadId === "string" ? opts.threadId : undefined;
   const gifPlayback = typeof opts.gifPlayback === "boolean" ? opts.gifPlayback : undefined;
 
@@ -152,9 +160,20 @@ export function createMessageCliHelpers(
       const gatewayResult = await trySendViaGateway(normalized);
 
       if (gatewayResult.ok) {
-        // Gateway delivered successfully — emit output respecting --json flag
+        // Gateway delivered successfully — emit output using the stable CLI JSON envelope
+        // so programmatic consumers that parse action/channel/dryRun/handledBy/payload
+        // continue to work correctly.
         if (opts.json) {
-          defaultRuntime.log(JSON.stringify({ ok: true, result: gatewayResult.result }));
+          const channel =
+            typeof normalized.channel === "string" ? normalized.channel : "unknown";
+          const envelope = {
+            action: "send",
+            channel,
+            dryRun: false,
+            handledBy: "gateway" as const,
+            payload: gatewayResult.result,
+          };
+          defaultRuntime.log(JSON.stringify(envelope));
         }
         // Run gateway_stop hooks before exit so plugin-backed channels can
         // perform cleanup (e.g. releasing one-shot CLI connections).
@@ -171,7 +190,28 @@ export function createMessageCliHelpers(
         return;
       }
 
-      // reason === "unreachable": gateway not running — fall through to local plugin path
+      // reason === "unreachable": gateway not running.
+      // Safety check: if the active gateway URL came from a remote source
+      // (config gateway.remote.url or env/cli override), the local plugin path
+      // would not be the right fallback — the user explicitly configured a remote
+      // gateway. Surface an error rather than silently falling through to a local
+      // plugin that almost certainly cannot reach the intended channel either.
+      const connDetails = buildGatewayConnectionDetails({
+        url: typeof normalized.url === "string" ? normalized.url : undefined,
+      });
+      if (connDetails.urlSource !== "local loopback") {
+        defaultRuntime.error(
+          danger(
+            `Gateway is unreachable (${connDetails.urlSource}: ${connDetails.url}). ` +
+              `Cannot fall back to local plugin when a remote gateway is configured.`,
+          ),
+        );
+        await runPluginStopHooks();
+        defaultRuntime.exit(1);
+        return;
+      }
+
+      // Local loopback gateway not running — fall through to local plugin path
     }
 
     ensurePluginRegistryLoaded();
