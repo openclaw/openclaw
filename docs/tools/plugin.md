@@ -226,21 +226,21 @@ export default definePluginEntry({
 
 Common registration methods:
 
-| Method                               | What it registers    |
-| ------------------------------------ | -------------------- |
-| `registerProvider`                   | Model provider (LLM) |
-| `registerChannel`                    | Chat channel         |
-| `registerTool`                       | Agent tool           |
-| `registerHook`                       | Command / gateway hooks|
-| `on(...)`                            | Agent lifecycle hooks|
-| `registerSpeechProvider`             | Text-to-speech / STT |
-| `registerMediaUnderstandingProvider` | Image/audio analysis |
-| `registerImageGenerationProvider`    | Image generation     |
-| `registerWebSearchProvider`          | Web search           |
-| `registerHttpRoute`                  | HTTP endpoint        |
-| `registerCommand` / `registerCli`    | CLI commands         |
-| `registerContextEngine`              | Context engine       |
-| `registerService`                    | Background service   |
+| Method                               | What it registers       |
+| ------------------------------------ | ----------------------- |
+| `registerProvider`                   | Model provider (LLM)    |
+| `registerChannel`                    | Chat channel            |
+| `registerTool`                       | Agent tool              |
+| `registerHook`                       | Command / gateway hooks |
+| `on(...)`                            | Agent lifecycle hooks   |
+| `registerSpeechProvider`             | Text-to-speech / STT    |
+| `registerMediaUnderstandingProvider` | Image/audio analysis    |
+| `registerImageGenerationProvider`    | Image generation        |
+| `registerWebSearchProvider`          | Web search              |
+| `registerHttpRoute`                  | HTTP endpoint           |
+| `registerCommand` / `registerCli`    | CLI commands            |
+| `registerContextEngine`              | Context engine          |
+| `registerService`                    | Background service      |
 
 ## Hook systems
 
