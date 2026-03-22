@@ -102,8 +102,6 @@ ui-next/next-env.d.ts
 !.agent/workflows/
 /local/
 package-lock.json
-.claude/*
-!.claude/agents/
 .agents/
 .agents
 .agent/
