@@ -95,7 +95,9 @@ export class TelegramPollingSession {
     while (!this.opts.abortSignal?.aborted) {
       this.opts.setStatus?.({
         mode: "polling",
-        ...(this.#hasSeenSuccessfulPoll ? {} : { connected: false }),
+        connected: false,
+        lastEventAt: null,
+        ...(this.#hasSeenSuccessfulPoll ? {} : { lastConnectedAt: null }),
       });
       const bot = await this.#createPollingBot();
       if (!bot) {

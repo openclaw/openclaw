@@ -177,13 +177,35 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
   });
 
-  it("treats telegram polling accounts without a first successful poll as disconnected", () => {
+  it("treats telegram polling accounts without a first successful poll as stale-socket", () => {
     const evaluation = evaluateChannelHealth(
       {
         running: true,
         enabled: true,
         configured: true,
         lastStartAt: 0,
+        lastEventAt: null,
+        mode: "polling",
+      },
+      {
+        channelId: "telegram",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
+  });
+
+  it("treats previously connected telegram polling accounts that drop offline as disconnected", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: false,
+        enabled: true,
+        configured: true,
+        lastStartAt: 0,
+        lastConnectedAt: 50_000,
         lastEventAt: null,
         mode: "polling",
       },

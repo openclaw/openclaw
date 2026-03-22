@@ -9,6 +9,7 @@ export type ChannelHealthSnapshot = {
   busy?: boolean;
   activeRuns?: number;
   lastRunActivityAt?: number | null;
+  lastConnectedAt?: number | null;
   lastEventAt?: number | null;
   lastStartAt?: number | null;
   reconnectAttempts?: number;
@@ -77,6 +78,10 @@ export function evaluateChannelHealth(
     typeof snapshot.lastRunActivityAt === "number" && Number.isFinite(snapshot.lastRunActivityAt)
       ? snapshot.lastRunActivityAt
       : null;
+  const lastConnectedAt =
+    typeof snapshot.lastConnectedAt === "number" && Number.isFinite(snapshot.lastConnectedAt)
+      ? snapshot.lastConnectedAt
+      : null;
   const busyStateInitializedForLifecycle =
     lastStartAt == null || (lastRunActivityAt != null && lastRunActivityAt >= lastStartAt);
 
@@ -109,7 +114,7 @@ export function evaluateChannelHealth(
     normalizedMode === "polling" &&
     snapshot.connected !== true
   ) {
-    return { healthy: false, reason: "disconnected" };
+    return { healthy: false, reason: lastConnectedAt == null ? "stale-socket" : "disconnected" };
   }
   if (snapshot.connected === false) {
     return { healthy: false, reason: "disconnected" };
