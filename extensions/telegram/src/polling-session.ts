@@ -280,6 +280,7 @@ export class TelegramPollingSession {
     let stopPromise: Promise<void> | undefined;
     let stalledRestart = false;
     let forceCycleTimer: ReturnType<typeof setTimeout> | undefined;
+    let forceCycleRestarted = false;
     let forceCycleResolve: (() => void) | undefined;
     const forceCyclePromise = new Promise<void>((resolve) => {
       forceCycleResolve = resolve;
@@ -292,6 +293,7 @@ export class TelegramPollingSession {
         if (this.opts.abortSignal?.aborted) {
           return;
         }
+        forceCycleRestarted = true;
         const cause =
           reason === "outbound" ? "outbound-triggered polling restart" : "polling stall restart";
         this.opts.log(
@@ -387,8 +389,15 @@ export class TelegramPollingSession {
         this.#scheduleForceCycleRestart = undefined;
       }
       this.opts.abortSignal?.removeEventListener("abort", stopOnAbort);
-      await waitForGracefulStop(stopRunner);
-      await waitForGracefulStop(stopBot);
+      if (forceCycleRestarted) {
+        // Force-cycle path already waited POLL_STOP_GRACE_MS for stuck stop handlers.
+        // Avoid compounding two more grace waits before next-cycle restart.
+        void stopRunner();
+        void stopBot();
+      } else {
+        await waitForGracefulStop(stopRunner);
+        await waitForGracefulStop(stopBot);
+      }
       this.#activeRunner = undefined;
       if (this.#activePollCycleId === pollCycleId) {
         this.#activePollCycleId = 0;

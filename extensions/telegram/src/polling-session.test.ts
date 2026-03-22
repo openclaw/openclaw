@@ -272,7 +272,7 @@ describe("TelegramPollingSession", () => {
       consecutiveFailures: 2,
     });
 
-    await vi.advanceTimersByTimeAsync(35_000);
+    await vi.advanceTimersByTimeAsync(20_000);
     await vi.waitFor(() => {
       expect(runMock).toHaveBeenCalledTimes(2);
     });

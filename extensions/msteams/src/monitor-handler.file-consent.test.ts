@@ -174,7 +174,8 @@ describe("msteams file consent invoke authz", () => {
       action: "accept",
     });
 
-    await handler.run(context);
+    expect(handler.run).toBeDefined();
+    await handler.run!(context);
 
     // invokeResponse should be sent immediately
     expect(sendActivity).toHaveBeenCalledWith(
@@ -199,7 +200,8 @@ describe("msteams file consent invoke authz", () => {
       action: "accept",
     });
 
-    await handler.run(context);
+    expect(handler.run).toBeDefined();
+    await handler.run!(context);
 
     // invokeResponse should be sent immediately
     expect(sendActivity).toHaveBeenCalledWith(
@@ -226,7 +228,8 @@ describe("msteams file consent invoke authz", () => {
       action: "decline",
     });
 
-    await handler.run(context);
+    expect(handler.run).toBeDefined();
+    await handler.run!(context);
 
     // invokeResponse should be sent immediately
     expect(sendActivity).toHaveBeenCalledWith(
