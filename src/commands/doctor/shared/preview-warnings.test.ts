@@ -22,4 +22,27 @@ describe("doctor preview warnings", () => {
       expect.stringContaining('channels.signal.allowFrom: set to ["*"]'),
     ]);
   });
+
+  it("sanitizes empty-allowlist warning paths before returning preview output", () => {
+    const warnings = collectDoctorPreviewWarnings({
+      cfg: {
+        channels: {
+          signal: {
+            accounts: {
+              "ops\u001B[31m-team\u001B[0m\r\nnext": {
+                dmPolicy: "allowlist",
+              },
+            },
+          },
+        },
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining("channels.signal.accounts.ops-teamnext.dmPolicy"),
+    ]);
+    expect(warnings[0]).not.toContain("\u001B");
+    expect(warnings[0]).not.toContain("\r");
+  });
 });
