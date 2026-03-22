@@ -55,6 +55,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
 - Scheduler note:
   - `pnpm test` now keeps a small checked-in behavioral manifest for true pool/isolation overrides and a separate timing snapshot for the slowest unit files.
   - Shared unit coverage now defaults to `threads`, while the manifest keeps the measured fork-only exceptions and heavy singleton lanes explicit.
+  - The extension suite (`vitest.extensions.config.ts`) also now defaults to `threads`; the March 22, 2026 direct full-suite control run passed clean without extension-specific fork exceptions.
   - The wrapper peels the heaviest measured files into dedicated lanes instead of relying on a growing hand-maintained exclusion list.
   - Refresh the timing snapshot with `pnpm test:perf:update-timings` after major suite shape changes.
 - Embedded runner note:
@@ -69,7 +70,9 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
     through the real `run.ts` / `compact.ts` paths; helper-only tests are not a
     sufficient substitute for those integration paths.
 - Pool note:
-  - OpenClaw uses Vitest `forks` by default for unit shards.
+  - Base Vitest config still defaults to `forks`.
+  - Unit wrapper lanes default to `threads`, with explicit manifest fork/vmFork exceptions.
+  - Extension scoped config defaults to `threads`.
   - `pnpm test` also defaults to `--isolate=false` at the wrapper level for faster file startup.
   - Opt back into Vitest file isolation with `OPENCLAW_TEST_ISOLATE=1 pnpm test`.
   - `OPENCLAW_TEST_NO_ISOLATE=0` or `OPENCLAW_TEST_NO_ISOLATE=false` also force isolated runs.
