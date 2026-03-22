@@ -61,6 +61,16 @@ export function shouldUseShellForCommand(cmd, platform = process.platform) {
   return WINDOWS_SHELL_EXTENSIONS.has(extension);
 }
 
+export function quoteWindowsShellCommand(cmd, platform = process.platform) {
+  if (!shouldUseShellForCommand(cmd, platform) || !/\s/.test(cmd)) {
+    return cmd;
+  }
+  if (cmd.startsWith('"') && cmd.endsWith('"')) {
+    return cmd;
+  }
+  return `"${cmd}"`;
+}
+
 export function assertSafeWindowsShellArgs(args, platform = process.platform) {
   if (platform !== "win32") {
     return;
@@ -91,8 +101,9 @@ function createSpawnOptions(cmd, args, envOverride) {
 
 function run(cmd, args) {
   let child;
+  const actualCmd = quoteWindowsShellCommand(cmd);
   try {
-    child = spawn(cmd, args, createSpawnOptions(cmd, args));
+    child = spawn(actualCmd, args, createSpawnOptions(cmd, args));
   } catch (err) {
     console.error(`Failed to launch ${cmd}:`, err);
     process.exit(1);
@@ -112,8 +123,9 @@ function run(cmd, args) {
 
 function runSync(cmd, args, envOverride) {
   let result;
+  const actualCmd = quoteWindowsShellCommand(cmd);
   try {
-    result = spawnSync(cmd, args, createSpawnOptions(cmd, args, envOverride));
+    result = spawnSync(actualCmd, args, createSpawnOptions(cmd, args, envOverride));
   } catch (err) {
     console.error(`Failed to launch ${cmd}:`, err);
     process.exit(1);
@@ -184,10 +196,7 @@ export function main(argv = process.argv.slice(2)) {
   }
 
   if (!depsInstalled(action === "test" ? "test" : "build")) {
-    const installEnv =
-      action === "build" ? { ...process.env, NODE_ENV: "production" } : process.env;
-    const installArgs = action === "build" ? ["install", "--prod"] : ["install"];
-    runSync(runner.cmd, installArgs, installEnv);
+    runSync(runner.cmd, ["install"]);
   }
 
   run(runner.cmd, ["run", script, ...rest]);
