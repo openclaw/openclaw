@@ -448,6 +448,12 @@ describe("TelegramPollingSession", () => {
 
     expect(setStatus).toHaveBeenCalledWith(
       expect.objectContaining({
+        connected: false,
+        mode: "polling",
+      }),
+    );
+    expect(setStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
         connected: true,
         mode: "polling",
       }),
@@ -534,6 +540,55 @@ describe("TelegramPollingSession", () => {
       setStatus.mock.calls.filter(
         ([patch]) => (patch as { connected?: boolean }).connected === false,
       ),
-    ).toHaveLength(1);
+    ).toHaveLength(3);
+  });
+
+  it("marks polling mode before the first successful getUpdates response", async () => {
+    const abort = new AbortController();
+    const runnerStop = vi.fn(async () => undefined);
+    const setStatus = vi.fn();
+    const bot = {
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        getUpdates: vi.fn(async () => []),
+        config: {
+          use: vi.fn(),
+        },
+      },
+      stop: vi.fn(async () => undefined),
+    };
+    createTelegramBotMock.mockReturnValue(bot);
+
+    runMock.mockImplementation(() => ({
+      task: async () => {
+        abort.abort();
+      },
+      stop: runnerStop,
+      isRunning: () => false,
+    }));
+
+    const session = new TelegramPollingSession({
+      token: "tok",
+      config: {},
+      accountId: "default",
+      runtime: undefined,
+      proxyFetch: undefined,
+      abortSignal: abort.signal,
+      runnerOptions: {},
+      getLastUpdateId: () => null,
+      persistUpdateId: async () => undefined,
+      log: () => undefined,
+      setStatus,
+      telegramTransport: undefined,
+    });
+
+    await session.runUntilAbort();
+
+    expect(setStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connected: false,
+        mode: "polling",
+      }),
+    );
   });
 });

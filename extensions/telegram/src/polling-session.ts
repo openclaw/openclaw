@@ -201,6 +201,10 @@ export class TelegramPollingSession {
   }
 
   async #runPollingCycle(bot: TelegramBot): Promise<"continue" | "exit"> {
+    this.opts.setStatus?.({
+      mode: "polling",
+      connected: false,
+    });
     await this.#confirmPersistedOffset(bot);
 
     let lastGetUpdatesAt = Date.now();
