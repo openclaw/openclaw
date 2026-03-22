@@ -326,7 +326,7 @@ describe("createLaneTextDeliverer", () => {
     expect(sleepWithAbort).toHaveBeenCalledTimes(1);
   });
 
-  it("retains preview when an ambiguous retry chain later ends with 4xx rejection", async () => {
+  it("falls back to send when an ambiguous retry chain later ends with 4xx rejection", async () => {
     computeBackoff.mockClear();
     sleepWithAbort.mockClear();
     const harness = createHarness({ answerMessageId: 999 });
@@ -337,10 +337,16 @@ describe("createLaneTextDeliverer", () => {
       .mockRejectedValueOnce(new Error("timeout after Telegram accepted send"))
       .mockRejectedValueOnce(rejectionErr);
 
-    await expectFinalPreviewRetained({
-      harness,
-      expectedLogSnippet: "failed after ambiguous network retry chain; keeping existing preview",
-    });
+    const result = await deliverFinalAnswer(harness, HELLO_FINAL);
+    expect(result.kind).toBe("sent");
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({ text: HELLO_FINAL }),
+    );
+    expect(harness.log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "preview final edit rejected by Telegram after ambiguous retry chain; falling back to standard send",
+      ),
+    );
 
     expect(harness.editPreview).toHaveBeenCalledTimes(2);
     expect(computeBackoff).toHaveBeenCalledTimes(1);

@@ -837,6 +837,37 @@ describe("monitorTelegramProvider (grammY)", () => {
     vi.useRealTimers();
   });
 
+  it("honors high 60-89s poll stall thresholds without large watchdog overshoot", async () => {
+    const { monitorTelegramProvider } = await import("./monitor.js");
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    loadConfig.mockReturnValueOnce({
+      agents: { defaults: { maxConcurrent: 2 } },
+      channels: {
+        telegram: {
+          network: {
+            pollStallThresholdMs: 89_000,
+          },
+        },
+      },
+    });
+    const abort = new AbortController();
+    const { stop } = mockRunOnceWithStalledPollingRunner();
+    mockRunOnceAndAbort(abort);
+
+    const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+    await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
+
+    vi.advanceTimersByTime(90_000);
+    await Promise.resolve();
+    expect(stop).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(6_000);
+    await monitor;
+    expect(stop).toHaveBeenCalled();
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
   it("does not force-restart stalled polling while updates are still in flight", async () => {
     const { monitorTelegramProvider } = await import("./monitor.js");
     vi.useFakeTimers({ shouldAdvanceTime: true });

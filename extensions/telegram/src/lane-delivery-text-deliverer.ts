@@ -408,6 +408,12 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           return "retained";
         }
         if (hasPreviewEditFailureKind(err, PREVIEW_EDIT_FAILED_AFTER_AMBIGUOUS_RETRY)) {
+          if (isTelegramClientRejection(err)) {
+            params.log(
+              `telegram: ${args.laneName} preview final edit rejected by Telegram after ambiguous retry chain; falling back to standard send (${String(err)})`,
+            );
+            return "fallback";
+          }
           params.log(
             `telegram: ${args.laneName} preview final edit failed after ambiguous network retry chain; keeping existing preview (${String(err)})`,
           );

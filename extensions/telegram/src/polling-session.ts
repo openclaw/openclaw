@@ -37,7 +37,7 @@ const resolvePollWatchdogIntervalMs = (pollStallThresholdMs: number): number => 
   // recovery windows are not delayed to the next 90s watchdog tick.
   return Math.min(
     POLL_WATCHDOG_INTERVAL_MS,
-    Math.max(1_000, Math.floor(stallBudgetBeyondLongPollMs / 2)),
+    Math.max(1_000, Math.floor(stallBudgetBeyondLongPollMs / 3)),
   );
 };
 
