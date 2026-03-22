@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HookStatusReport } from "../hooks/hooks-status.js";
-import { formatHooksCheck, formatHooksList } from "./hooks-cli.js";
+import { formatHookInfo, formatHooksCheck, formatHooksList } from "./hooks-cli.js";
 import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
 
 const report: HookStatusReport = {
@@ -72,5 +72,38 @@ describe("hooks cli formatting", () => {
 
     const output = formatHooksList(pluginReport, {});
     expect(output).toContain("plugin:voice-call");
+  });
+
+  it("shows plugin-managed details in hook info", () => {
+    const pluginReport: HookStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedHooksDir: "/tmp/hooks",
+      hooks: [
+        {
+          name: "plugin-hook",
+          description: "Hook from plugin",
+          source: "openclaw-plugin",
+          pluginId: "voice-call",
+          filePath: "/tmp/hooks/plugin-hook/HOOK.md",
+          baseDir: "/tmp/hooks/plugin-hook",
+          handlerPath: "/tmp/hooks/plugin-hook/handler.js",
+          hookKey: "plugin-hook",
+          emoji: "🔗",
+          homepage: undefined,
+          events: ["command:new"],
+          always: false,
+          enabledByConfig: true,
+          requirementsSatisfied: true,
+          loadable: true,
+          blockedReason: undefined,
+          managedByPlugin: true,
+          ...createEmptyInstallChecks(),
+        },
+      ],
+    };
+
+    const output = formatHookInfo(pluginReport, "plugin-hook", {});
+    expect(output).toContain("voice-call");
+    expect(output).toContain("Managed by plugin");
   });
 });
