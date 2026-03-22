@@ -1,0 +1,32 @@
+{
+  "scan_time": "2026-03-22T12:00:00-07:00",
+  "agent": "linus",
+  "repos_scanned": [
+    {
+      "repo": "openclaw/openclaw",
+      "commits_today": 0,
+      "daily_max": 10,
+      "quota_ok": true,
+      "issues_scanned": 5,
+      "issues_evaluated": [
+        {"number": 52438, "title": "CI broken on main — TypeScript error in zod-schema.core.ts", "verdict": "skip", "reason": "Strategy prohibits PRs for main branch CI/test failures"},
+        {"number": 52435, "title": "OpenAI WebSocket stream never terminates on success", "verdict": "skip", "reason": "Competing PR #52437 by warren618"},
+        {"number": 52391, "title": "Weixin proactive sends marked delivered when user receives nothing", "verdict": "below_threshold", "score": 7, "reason": "Real bug but complex delivery pipeline, requires Weixin account to verify, high risk of touching cross-channel code"},
+        {"number": 52335, "title": "minimax-portal OAuth usage tracker reports 0% left despite full balance", "verdict": "skip", "reason": "Competing PR #52349 by IVY-AI-gif"},
+        {"number": 52420, "title": "[Feature]: require", "verdict": "skip", "reason": "Feature request, not in scope (types: bug-fix, ci-fix, refactor)"}
+      ]
+    },
+    {
+      "repo": "block/goose",
+      "commits_today": 0,
+      "daily_max": 3,
+      "quota_ok": true,
+      "issues_scanned": 1,
+      "issues_evaluated": [
+        {"number": 8061, "title": "NanoGPT provider appears unable to call tools/extensions", "verdict": "below_threshold", "score": 6, "reason": "Provider-specific compatibility issue, uncertain root cause, hard to reproduce and verify without NanoGPT account"}
+      ]
+    }
+  ],
+  "opportunities_found": 0,
+  "summary": "Zero qualifying opportunities. Most openclaw issues have competing PRs or violate strategy rules. Goose had only 1 new issue which was too uncertain."
+}

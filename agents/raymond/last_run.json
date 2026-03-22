@@ -1,6 +1,6 @@
 {
   "agent": "raymond",
-  "ran_at": "2026-03-17T12:26:00-07:00",
+  "ran_at": "2026-03-22T00:20:00-07:00",
   "timezone": "America/Los_Angeles",
   "mode": "pr-ops",
   "repos_processed": [
@@ -21,7 +21,7 @@
       "daily_max_prs": 1,
       "commits_today": 0,
       "daily_max_commits": 3,
-      "open_prs": 1,
+      "open_prs": 2,
       "max_open_prs": 2
     }
   },
@@ -32,23 +32,40 @@
       "repo": "openclaw/openclaw",
       "pr_number": 48455,
       "url": "https://github.com/openclaw/openclaw/pull/48455",
-      "status": "review_feedback_addressed_awaiting_merge",
-      "notes": "CI green. xkonjin review positive (COMMENTED, not CHANGES_REQUESTED). extrasmall0 answered all 3 questions. Still needs dead-code cleanup commit (Knuth). No new maintainer activity since last run."
+      "status": "ci_failing",
+      "notes": "CI failures: build-smoke, check, check-additional, 3 windows shards. mergeable_state=unknown. Bot review comments from chatgpt-codex-connector suggesting design concerns (disable persistence, crash-reporting path, update restart preflight). xkonjin positive review from Mar 16. Needs: rebase onto main, address CI failures, potentially respond to bot-raised design concerns. Knuth task."
+    },
+    {
+      "repo": "block/goose",
+      "pr_number": 7996,
+      "url": "https://github.com/block/goose/pull/7996",
+      "status": "ci_failing",
+      "notes": "Refactor commit pushed Mar 21 (extract markers into constants) per DOsinga's feedback. But CI still failing: Rust format check + DCO check. Knuth needs to fix formatting and add DCO sign-off."
     },
     {
       "repo": "block/goose",
       "pr_number": 7888,
       "url": "https://github.com/block/goose/pull/7888",
-      "status": "ci_green_awaiting_review",
-      "notes": "CI green. Day 4 awaiting human review. Only bot review (codex-connector). No intervention needed."
+      "status": "approved_awaiting_merge",
+      "notes": "APPROVED by DOsinga. CI all green. mergeable_state=clean. Waiting for maintainer to merge. No action needed."
     }
   ],
   "issues_scanned": {
-    "openclaw/openclaw": 20,
-    "block/goose": 15
+    "openclaw/openclaw": 0,
+    "block/goose": 0
   },
+  "opportunities_evaluated": [],
   "blockers": [
-    "openclaw/openclaw #48455: Still needs Knuth to push dead-code cleanup (simplify inner no-such-process check)"
+    {
+      "repo": "openclaw/openclaw",
+      "pr": 48455,
+      "blocker": "CI failures + mergeable_state unknown. Needs rebase and CI fix. Knuth task."
+    },
+    {
+      "repo": "block/goose",
+      "pr": 7996,
+      "blocker": "Rust format check + DCO check failing after refactor commit. Knuth task."
+    }
   ],
-  "notes": "No high-confidence new opportunities found. openclaw issues mostly Windows-specific or complex auth/model issues. block/goose issues are model behavior (not code-fixable) or enhancement requests. Both in-flight PRs stable, no action required from Raymond this round."
+  "notes": "No new PRs opened — no opportunities above score threshold (8). block/goose at max_open_prs (2/2). openclaw/openclaw has quota but no scan this round (Linus hasn't surfaced new high-score opportunities). All action items are Knuth tasks: fix CI on #48455 and #7996. #7888 in great shape, just awaiting maintainer merge."
 }

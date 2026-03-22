@@ -1,28 +1,50 @@
 {
   "agent": "knuth",
-  "ran_at": "2026-03-19T09:01:00-07:00",
+  "ran_at": "2026-03-22T09:13:00-07:00",
   "timezone": "America/Los_Angeles",
-  "repos_processed": ["openclaw/openclaw", "block/goose"],
-  "actions": [
-    {
-      "repo": "openclaw/openclaw",
-      "pr": 50301,
-      "action": "rebase_push",
-      "commit": "af470a4c811fb4ec4a14d5c16fee221557a87806",
-      "description": "Force-pushed rebased branch onto upstream main. Previous CI run (23284301554) was failing across all jobs due to SSH access denied for tloncorp/api-beta during pnpm install — infrastructure issue, not our change. Fresh CI triggered."
-    }
+  "mode": "repair",
+  "repos_processed": [
+    "openclaw/openclaw",
+    "block/goose"
   ],
-  "skipped": [
+  "quotas": {
+    "openclaw/openclaw": {
+      "commits_today": 1,
+      "daily_max_commits": 10,
+      "open_prs": 1,
+      "max_open_prs": 5
+    },
+    "block/goose": {
+      "commits_today": 1,
+      "daily_max_commits": 3,
+      "open_prs": 2,
+      "max_open_prs": 2
+    }
+  },
+  "tasks_completed": [
     {
       "repo": "block/goose",
       "pr": 7996,
-      "reason": "CI all green"
+      "action": "ci_fix",
+      "details": "Fixed rustfmt failure (import line too long) and DCO check failure (missing Signed-off-by on top commit). Amended and force-pushed."
     },
+    {
+      "repo": "openclaw/openclaw",
+      "pr": 52355,
+      "action": "new_pr",
+      "details": "Fix for #52299: edge-tts produces 0-byte files for Chinese text. Added CJK detection to auto-switch from en-US-MichelleNeural to zh-CN-XiaoxiaoNeural when text is CJK-dominant. Tests added."
+    }
+  ],
+  "tasks_skipped": [
     {
       "repo": "block/goose",
       "pr": 7888,
-      "reason": "CI all green, no review feedback"
+      "reason": "Approved by DOsinga, CI green. Awaiting maintainer merge."
+    },
+    {
+      "repo": "block/goose",
+      "reason": "max_open_prs (2/2) reached, no new PRs."
     }
   ],
-  "notes": "openclaw PR #50301 had fully red CI from a stale run with infra-level pnpm SSH failure. Rebased onto fresh upstream/main and force-pushed; CI now re-running. block/goose PRs #7996 and #7888 both green, no action needed."
+  "notes": "Fixed CI failures on goose #7996 (format + DCO). Opened new PR openclaw/openclaw#52355 for Chinese TTS fix. Multiple openclaw bugs already have competing PRs (#52339, #52250, #52208). Goose at PR cap."
 }

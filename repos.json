@@ -12,7 +12,6 @@
       "branch_prefix": "raymond",
       "types": [
         "bug-fix",
-        "test-fix",
         "ci-fix",
         "refactor"
       ],
