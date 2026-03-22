@@ -65,6 +65,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/usage: improve usage overview styling, localization, and responsive chat/context-notice presentation, including safer theme color handling and unclipped usage-header menus. (#51951) Thanks @BunsDev.
 - Agents: add per-agent thinking/reasoning/fast defaults and auto-revert disallowed model overrides to the agent's default selection. Thanks @xuanmingguo and @vincentkoc.
 - Control UI/usage: drop the empty session-detail placeholder card so the usage view stays single-column until a real session detail panel is selected. (#52013) Thanks @BunsDev.
+- Hooks/workspace: keep repo-local `<workspace>/hooks` disabled until explicitly enabled, block workspace hook name collisions from shadowing bundled/managed/plugin hooks, and treat `hooks.internal.load.extraDirs` as trusted managed hook sources.
 
 ### Fixes
 

@@ -3,7 +3,12 @@ import type { OpenClawConfig } from "../config/config.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "../shared/entry-status.js";
 import type { RequirementConfigCheck, Requirements } from "../shared/requirements.js";
 import { CONFIG_DIR } from "../utils.js";
-import { hasBinary, isConfigPathTruthy, resolveHookConfig } from "./config.js";
+import {
+  hasBinary,
+  isConfigPathTruthy,
+  isHookDisabledByConfig,
+  resolveHookConfig,
+} from "./config.js";
 import type { HookEligibilityContext, HookEntry, HookInstallSpec } from "./types.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
@@ -31,6 +36,7 @@ export type HookStatusEntry = {
   always: boolean;
   disabled: boolean;
   eligible: boolean;
+  requirementsSatisfied: boolean;
   managedByPlugin: boolean;
   requirements: Requirements;
   missing: Requirements;
@@ -84,7 +90,7 @@ function buildHookStatus(
   const hookKey = resolveHookKey(entry);
   const hookConfig = resolveHookConfig(config, hookKey);
   const managedByPlugin = entry.hook.source === "openclaw-plugin";
-  const disabled = managedByPlugin ? false : hookConfig?.enabled === false;
+  const disabled = isHookDisabledByConfig({ entry, config, hookConfig });
   const always = entry.metadata?.always === true;
   const events = entry.metadata?.events ?? [];
   const isEnvSatisfied = (envName: string) =>
@@ -118,6 +124,7 @@ function buildHookStatus(
     always,
     disabled,
     eligible,
+    requirementsSatisfied,
     managedByPlugin,
     requirements: required,
     missing,
