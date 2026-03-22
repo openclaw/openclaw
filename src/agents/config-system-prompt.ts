@@ -20,8 +20,11 @@ export function resolveConfigSystemPrompt(cfg: OpenClawConfig, agentId: string):
     parts.push(systemPrompt.trim());
   }
   if (rules && rules.length > 0) {
-    const numbered = rules.map((r, i) => `${i + 1}. ${r}`).join("\n");
-    parts.push(numbered);
+    const filtered = rules.filter((r) => r.trim());
+    if (filtered.length > 0) {
+      const numbered = filtered.map((r, i) => `${i + 1}. ${r}`).join("\n");
+      parts.push(numbered);
+    }
   }
   return parts.join("\n\n");
 }

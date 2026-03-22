@@ -82,4 +82,18 @@ describe("resolveConfigSystemPrompt", () => {
     } as OpenClawConfig;
     expect(resolveConfigSystemPrompt(cfg, "main")).toBe("");
   });
+
+  it("filters out whitespace-only rule entries", () => {
+    const cfg = {
+      agents: { defaults: { rules: ["Rule A", "  ", "", "Rule B"] } },
+    } as OpenClawConfig;
+    expect(resolveConfigSystemPrompt(cfg, "main")).toBe("1. Rule A\n2. Rule B");
+  });
+
+  it("returns empty when all rules are whitespace-only", () => {
+    const cfg = {
+      agents: { defaults: { rules: ["  ", "", " \t "] } },
+    } as OpenClawConfig;
+    expect(resolveConfigSystemPrompt(cfg, "main")).toBe("");
+  });
 });
