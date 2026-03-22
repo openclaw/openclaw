@@ -92,9 +92,8 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", () => {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const actual = require("../../src/plugin-sdk/infra-runtime.ts");
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
   return {
     ...actual,
     enqueueSystemEvent: enqueueSystemEventMock,
