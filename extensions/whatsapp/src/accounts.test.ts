@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveWhatsAppAuthDir } from "./accounts.js";
+import { resolveWhatsAppAccount, resolveWhatsAppAuthDir } from "./accounts.js";
 
 describe("resolveWhatsAppAuthDir", () => {
   const stubCfg = { channels: { whatsapp: { accounts: {} } } } as Parameters<
@@ -43,5 +43,32 @@ describe("resolveWhatsAppAuthDir", () => {
       accountId: "my-account-1",
     });
     expect(authDir).toMatch(/whatsapp[/\\]my-account-1$/);
+  });
+
+  it("merges top-level and account-specific config through shared helpers", () => {
+    const resolved = resolveWhatsAppAccount({
+      cfg: {
+        messages: {
+          messagePrefix: "[global]",
+        },
+        channels: {
+          whatsapp: {
+            sendReadReceipts: false,
+            messagePrefix: "[root]",
+            debounceMs: 100,
+            accounts: {
+              work: {
+                debounceMs: 250,
+              },
+            },
+          },
+        },
+      } as Parameters<typeof resolveWhatsAppAccount>[0]["cfg"],
+      accountId: "work",
+    });
+
+    expect(resolved.sendReadReceipts).toBe(false);
+    expect(resolved.messagePrefix).toBe("[root]");
+    expect(resolved.debounceMs).toBe(250);
   });
 });

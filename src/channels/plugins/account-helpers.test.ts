@@ -111,6 +111,16 @@ describe("createAccountListHelpers", () => {
     it('returns "default" for empty config', () => {
       expect(resolveDefaultAccountId({} as OpenClawConfig)).toBe("default");
     });
+
+    it("can preserve configured defaults that are not present in accounts", () => {
+      const preserveDefault = createAccountListHelpers("testchannel", {
+        allowUnlistedDefaultAccount: true,
+      });
+
+      expect(preserveDefault.resolveDefaultAccountId(cfg({ default: {}, zeta: {} }, "ops"))).toBe(
+        "ops",
+      );
+    });
   });
 });
 
