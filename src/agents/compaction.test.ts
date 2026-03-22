@@ -276,4 +276,61 @@ describe("pruneHistoryForContextShare", () => {
     // droppedMessagesList only has the assistant message
     expect(pruned.droppedMessages).toBe(pruned.droppedMessagesList.length + 2);
   });
+
+  // Regression test for https://github.com/openclaw/openclaw/issues/52024
+  // The context trimmer can split tool_use/tool_result pairs when the tool_result
+  // is embedded in a user message (role: "user") rather than a standalone tool_result message.
+  // This produces orphaned tool_result blocks that cause API rejection:
+  // "unexpected tool_use_id found in tool_result blocks"
+  it("drops orphaned tool_results embedded in user messages during pruning", () => {
+    // Simulate a transcript where tool_result content ended up inside a user message
+    // (e.g., after compaction repair moved it incorrectly, or session restore corruption)
+    type ToolResultBlock = { type: "toolResult"; tool_use_id: string; content: Array<{ type: "text"; text: string }> };
+    type TextBlock = { type: "text"; text: string };
+
+    const messages: AgentMessage[] = [
+      // Chunk 1 (will be dropped) - assistant with tool_use
+      makeAssistantToolCall(1, "call_abc", "searching..."),
+      // Chunk 2 (will be kept) - user message WITH embedded orphaned tool_result
+      // This is the pattern that triggers the bug: tool_result as content block in user role
+      {
+        role: "user",
+        content: [
+          {
+            type: "toolResult",
+            tool_use_id: "call_abc",
+            content: [{ type: "text", text: "search result here" }],
+          } as ToolResultBlock | TextBlock,
+          { type: "text", text: "please check this" } as ToolResultBlock | TextBlock,
+        ],
+        timestamp: 2,
+      } as unknown as AgentMessage,
+      // Another user turn after the orphaned result
+      {
+        role: "user",
+        content: "what else?",
+        timestamp: 3,
+      },
+    ];
+
+    const pruned = pruneHistoryForContextShare({
+      messages,
+      maxContextTokens: 2000,
+      maxHistoryShare: 0.5,
+      parts: 2,
+    });
+
+    // The orphaned tool_result block inside the user message should be removed
+    // or the user message should be cleaned to prevent API errors
+    // Check that no content block references the dropped tool_use_id
+    for (const msg of pruned.messages) {
+      if (msg.role === "user" && Array.isArray((msg as { content: unknown }).content)) {
+        const content = (msg as { content: Array<{ type?: string; tool_use_id?: string }> }).content;
+        const hasOrphanedToolResult = content.some(
+          (block) => block.type === "toolResult" && block.tool_use_id === "call_abc",
+        );
+        expect(hasOrphanedToolResult).toBe(false);
+      }
+    }
+  });
 });
