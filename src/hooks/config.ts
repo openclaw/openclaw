@@ -36,6 +36,23 @@ export function resolveHookConfig(
   return entry;
 }
 
+export function isHookDisabledByConfig(params: {
+  entry: HookEntry;
+  config?: OpenClawConfig;
+  hookConfig?: HookConfig;
+}): boolean {
+  const { entry, config } = params;
+  const hookKey = resolveHookKey(entry.hook.name, entry);
+  const hookConfig = params.hookConfig ?? resolveHookConfig(config, hookKey);
+  if (entry.hook.source === "openclaw-plugin") {
+    return false;
+  }
+  if (hookConfig?.enabled === false) {
+    return true;
+  }
+  return entry.hook.source === "openclaw-workspace" && hookConfig?.enabled !== true;
+}
+
 function evaluateHookRuntimeEligibility(params: {
   entry: HookEntry;
   config?: OpenClawConfig;
@@ -66,12 +83,8 @@ export function shouldIncludeHook(params: {
   eligibility?: HookEligibilityContext;
 }): boolean {
   const { entry, config, eligibility } = params;
-  const hookKey = resolveHookKey(entry.hook.name, entry);
-  const hookConfig = resolveHookConfig(config, hookKey);
-  const pluginManaged = entry.hook.source === "openclaw-plugin";
-
-  // Check if explicitly disabled
-  if (!pluginManaged && hookConfig?.enabled === false) {
+  const hookConfig = resolveHookConfig(config, resolveHookKey(entry.hook.name, entry));
+  if (isHookDisabledByConfig({ entry, config, hookConfig })) {
     return false;
   }
 

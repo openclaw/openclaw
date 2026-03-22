@@ -60,6 +60,7 @@ describe("onboard-hooks", () => {
     always: false,
     disabled: false,
     eligible,
+    requirementsSatisfied: eligible,
     managedByPlugin: false,
     requirements: {
       bins: [],
