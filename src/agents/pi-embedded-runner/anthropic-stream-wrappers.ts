@@ -336,8 +336,9 @@ function shouldUseAnthropicAuthorizationHeader(
   if (typeof provider !== "string" || !provider.trim()) {
     return false;
   }
-  if (cfg?.models?.providers?.[provider]?.authHeader === true) {
-    return true;
+  const explicitProvider = cfg?.models?.providers?.[provider];
+  if (explicitProvider && "authHeader" in explicitProvider) {
+    return explicitProvider.authHeader === true;
   }
   return IMPLICIT_ANTHROPIC_AUTH_HEADER_PROVIDERS.has(provider);
 }

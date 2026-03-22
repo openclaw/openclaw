@@ -1533,6 +1533,44 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
+  it("respects explicit authHeader false overrides for implicit minimax providers", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      models: {
+        providers: {
+          minimax: {
+            baseUrl: "https://proxy.example.com",
+            api: "anthropic-messages",
+            authHeader: false,
+            models: [],
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "minimax", "MiniMax-M2.5");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "minimax",
+      id: "MiniMax-M2.5",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {
+      apiKey: "sk-minimax-test",
+      headers: { "anthropic-version": "2023-06-01", "x-api-key": "stale", "X-Custom": "1" },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.apiKey).toBe("sk-minimax-test");
+    expect(calls[0]?.headers).toEqual({
+      "anthropic-version": "2023-06-01",
+      "x-api-key": "stale",
+      "X-Custom": "1",
+    });
+  });
+
   it("keeps apiKey auth mode for anthropic-compatible custom providers when authHeader is disabled", () => {
     const { calls, agent } = createOptionsCaptureAgent();
     const cfg = {
