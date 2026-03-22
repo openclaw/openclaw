@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry, SessionScope } from "../../config/sessions.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 
 const createEmptyDirectives = (cleaned = "") => ({
@@ -155,6 +155,7 @@ vi.mock("./reply-inline.js", () => ({
 }));
 
 const { resolveReplyDirectives } = await import("./get-reply-directives.js");
+type ResolveReplyDirectivesParams = Parameters<typeof resolveReplyDirectives>[0];
 
 function buildCtx(overrides: Partial<MsgContext> = {}): MsgContext {
   return {
@@ -189,7 +190,18 @@ function buildSessionCtx(overrides: Partial<TemplateContext> = {}): TemplateCont
   } as TemplateContext;
 }
 
-function buildParams(sessionEntry: SessionEntry, reasoningDefault?: "on" | "stream") {
+function buildSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
+  return {
+    sessionId: "session-1",
+    updatedAt: 1710000000000,
+    ...overrides,
+  };
+}
+
+function buildParams(
+  sessionEntryOverrides: Partial<SessionEntry> = {},
+  reasoningDefault?: "on" | "stream",
+): ResolveReplyDirectivesParams {
   return {
     ctx: buildCtx(),
     cfg: {
@@ -206,11 +218,11 @@ function buildParams(sessionEntry: SessionEntry, reasoningDefault?: "on" | "stre
       reasoningDefault,
     },
     sessionCtx: buildSessionCtx(),
-    sessionEntry,
+    sessionEntry: buildSessionEntry(sessionEntryOverrides),
     sessionStore: {},
     sessionKey: "agent:main:telegram:direct:7878536106",
     storePath: "/tmp/sessions.json",
-    sessionScope: "per-chat" as const,
+    sessionScope: "per-sender" satisfies SessionScope,
     groupResolution: undefined,
     isGroup: false,
     triggerBodyNormalized: "hello",

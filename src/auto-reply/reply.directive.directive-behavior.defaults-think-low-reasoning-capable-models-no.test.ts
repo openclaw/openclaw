@@ -83,8 +83,9 @@ function mockReasoningCapableCatalog() {
 async function runReasoningDefaultCase(params: {
   home: string;
   expectedThinkLevel: "low" | "off";
-  expectedReasoningLevel: "off" | "on";
+  expectedReasoningLevel: "off" | "on" | "stream";
   thinkingDefault?: "off" | "low" | "medium" | "high";
+  reasoningDefault?: "off" | "on" | "stream";
 }) {
   vi.mocked(runEmbeddedPiAgent).mockClear();
   mockEmbeddedTextResult("done");
@@ -100,6 +101,7 @@ async function runReasoningDefaultCase(params: {
     makeWhatsAppDirectiveConfig(params.home, {
       model: { primary: "anthropic/claude-opus-4-5" },
       ...(params.thinkingDefault ? { thinkingDefault: params.thinkingDefault } : {}),
+      ...(params.reasoningDefault ? { reasoningDefault: params.reasoningDefault } : {}),
     }),
   );
 
