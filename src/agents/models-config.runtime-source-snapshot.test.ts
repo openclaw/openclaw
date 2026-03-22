@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   clearConfigCache,
@@ -11,10 +11,14 @@ import {
   installModelsConfigTestHooks,
   withModelsTempHome as withTempHome,
 } from "./models-config.e2e-harness.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
+import { ensureOpenClawModelsJson, resetModelsJsonReadyCacheForTest } from "./models-config.js";
 import { readGeneratedModelsJson } from "./models-config.test-utils.js";
 
 installModelsConfigTestHooks();
+
+afterEach(() => {
+  resetModelsJsonReadyCacheForTest();
+});
 
 function createOpenAiApiKeySourceConfig(): OpenClawConfig {
   return {
@@ -208,6 +212,55 @@ describe("models-config runtime source snapshot", () => {
         setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
         await ensureOpenClawModelsJson(clonedRuntimeConfig);
         await expectGeneratedProviderApiKey("openai", "OPENAI_API_KEY"); // pragma: allowlist secret
+      } finally {
+        clearRuntimeConfigSnapshot();
+        clearConfigCache();
+      }
+    });
+  });
+
+  it("invalidates cached readiness when projected config changes under the same runtime snapshot", async () => {
+    await withTempHome(async () => {
+      const sourceConfig = createOpenAiApiKeySourceConfig();
+      const runtimeConfig = createOpenAiApiKeyRuntimeConfig();
+      const firstCandidate: OpenClawConfig = {
+        ...runtimeConfig,
+        models: {
+          providers: {
+            openai: {
+              ...runtimeConfig.models!.providers!.openai,
+              baseUrl: "https://api.openai.com/v1",
+            },
+          },
+        },
+      };
+      const secondCandidate: OpenClawConfig = {
+        ...runtimeConfig,
+        models: {
+          providers: {
+            openai: {
+              ...runtimeConfig.models!.providers!.openai,
+              baseUrl: "https://mirror.example/v1",
+            },
+          },
+        },
+      };
+
+      try {
+        setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+        await ensureOpenClawModelsJson(firstCandidate);
+        let parsed = await readGeneratedModelsJson<{
+          providers: Record<string, { baseUrl?: string; apiKey?: string }>;
+        }>();
+        expect(parsed.providers.openai?.baseUrl).toBe("https://api.openai.com/v1");
+        expect(parsed.providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+
+        await ensureOpenClawModelsJson(secondCandidate);
+        parsed = await readGeneratedModelsJson<{
+          providers: Record<string, { baseUrl?: string; apiKey?: string }>;
+        }>();
+        expect(parsed.providers.openai?.baseUrl).toBe("https://mirror.example/v1");
+        expect(parsed.providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
       } finally {
         clearRuntimeConfigSnapshot();
         clearConfigCache();
