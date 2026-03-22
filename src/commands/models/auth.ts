@@ -5,6 +5,14 @@ import {
   select as clackSelect,
   text as clackText,
 } from "@clack/prompts";
+import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type {
+  ProviderAuthMethod,
+  ProviderAuthResult,
+  ProviderPlugin,
+} from "../../plugins/types.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -16,21 +24,13 @@ import {
   loadAuthProfileStoreForRuntime,
   upsertAuthProfile,
 } from "../../agents/auth-profiles.js";
-import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
 import { resolvePluginProviders } from "../../plugins/providers.js";
-import type {
-  ProviderAuthMethod,
-  ProviderAuthResult,
-  ProviderPlugin,
-} from "../../plugins/types.js";
-import type { RuntimeEnv } from "../../runtime.js";
 import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { isRemoteEnvironment } from "../oauth-env.js";
@@ -354,6 +354,7 @@ export async function modelsAuthSetupTokenCommand(
 export async function modelsAuthPasteTokenCommand(
   opts: {
     provider?: string;
+    token?: string;
     profileId?: string;
     expiresIn?: string;
   },
@@ -366,11 +367,21 @@ export async function modelsAuthPasteTokenCommand(
   const provider = normalizeProviderId(rawProvider);
   const profileId = opts.profileId?.trim() || resolveDefaultTokenProfileId(provider);
 
-  const tokenInput = await text({
-    message: `Paste token for ${provider}`,
-    validate: (value) => (value?.trim() ? undefined : "Required"),
-  });
-  const token = String(tokenInput ?? "").trim();
+  let token: string;
+  if (opts.token?.trim()) {
+    token = opts.token.trim();
+  } else {
+    if (!process.stdin.isTTY) {
+      throw new Error(
+        "paste-token requires --token <value> when running in a non-interactive environment (no TTY).",
+      );
+    }
+    const tokenInput = await text({
+      message: `Paste token for ${provider}`,
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    token = String(tokenInput ?? "").trim();
+  }
 
   const expires =
     opts.expiresIn?.trim() && opts.expiresIn.trim().length > 0

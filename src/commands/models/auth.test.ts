@@ -315,6 +315,77 @@ describe("modelsAuthLoginCommand", () => {
     }
   });
 
+  it("uses --token directly and skips interactive prompt", async () => {
+    const runtime = createRuntime();
+
+    await modelsAuthPasteTokenCommand(
+      { provider: "anthropic", token: "sk-ant-test-token-123" },
+      runtime,
+    );
+
+    expect(mocks.clackText).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+      profileId: "anthropic:manual",
+      credential: {
+        type: "token",
+        provider: "anthropic",
+        token: "sk-ant-test-token-123",
+      },
+    });
+    expect(mocks.updateConfig).toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith("Auth profile: anthropic:manual (anthropic/token)");
+  });
+
+  it("throws when no TTY and no --token provided", async () => {
+    const runtime = createRuntime();
+    const stdin = process.stdin as NodeJS.ReadStream & { isTTY?: boolean };
+    const savedDescriptor = Object.getOwnPropertyDescriptor(stdin, "isTTY");
+    Object.defineProperty(stdin, "isTTY", {
+      configurable: true,
+      enumerable: true,
+      get: () => false,
+    });
+    try {
+      await expect(modelsAuthPasteTokenCommand({ provider: "anthropic" }, runtime)).rejects.toThrow(
+        "paste-token requires --token <value> when running in a non-interactive",
+      );
+      expect(mocks.clackText).not.toHaveBeenCalled();
+      expect(mocks.upsertAuthProfile).not.toHaveBeenCalled();
+    } finally {
+      if (savedDescriptor) {
+        Object.defineProperty(stdin, "isTTY", savedDescriptor);
+      } else {
+        delete (stdin as { isTTY?: boolean }).isTTY;
+      }
+    }
+  });
+
+  it("uses --token with custom --profile-id and --expires-in", async () => {
+    const runtime = createRuntime();
+
+    await modelsAuthPasteTokenCommand(
+      {
+        provider: "openai",
+        token: "sk-test-token",
+        profileId: "openai:ci",
+        expiresIn: "30d",
+      },
+      runtime,
+    );
+
+    expect(mocks.clackText).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+      profileId: "openai:ci",
+      credential: expect.objectContaining({
+        type: "token",
+        provider: "openai",
+        token: "sk-test-token",
+        expires: expect.any(Number),
+      }),
+    });
+    expect(runtime.log).toHaveBeenCalledWith("Auth profile: openai:ci (openai/token)");
+  });
+
   it("runs token auth for any token-capable provider plugin", async () => {
     const runtime = createRuntime();
     const runTokenAuth = vi.fn().mockResolvedValue({
