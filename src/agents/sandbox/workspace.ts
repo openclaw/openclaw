@@ -34,7 +34,9 @@ const SANDBOX_NON_BOOTSTRAP_SKIP = new Set([
   "memory",
 ]);
 
-async function copyIfMissing(src: string, dest: string) {
+const SANDBOX_ALLOWED_AUTHORITY_LINKS = new Set(["README.md", "CLAUDE.md", "docs", "voro-docs"]);
+
+async function copyAuthorityTreeIfMissing(src: string, dest: string) {
   try {
     await fs.access(dest);
     return;
@@ -42,8 +44,12 @@ async function copyIfMissing(src: string, dest: string) {
     // missing; continue
   }
 
-  const stat = await fs.stat(src).catch(() => null);
+  const stat = await fs.lstat(src).catch(() => null);
   if (!stat) {
+    return;
+  }
+
+  if (stat.isSymbolicLink()) {
     return;
   }
 
@@ -53,19 +59,25 @@ async function copyIfMissing(src: string, dest: string) {
   }
 
   if (stat.isDirectory()) {
-    await fs.cp(src, dest, {
-      recursive: true,
-      force: false,
-      errorOnExist: true,
-      dereference: true,
-    });
+    await fs.mkdir(dest, { recursive: false });
+    const entries = await fs.readdir(src, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) {
+        continue;
+      }
+      await copyAuthorityTreeIfMissing(path.join(src, entry.name), path.join(dest, entry.name));
+    }
   }
 }
 
 async function materializeExplicitWorkspaceLinks(workspaceDir: string, seedFrom: string) {
   const entries = await fs.readdir(seedFrom, { withFileTypes: true }).catch(() => []);
   for (const entry of entries) {
-    if (!entry.isSymbolicLink() || SANDBOX_NON_BOOTSTRAP_SKIP.has(entry.name)) {
+    if (
+      !entry.isSymbolicLink() ||
+      SANDBOX_NON_BOOTSTRAP_SKIP.has(entry.name) ||
+      !SANDBOX_ALLOWED_AUTHORITY_LINKS.has(entry.name)
+    ) {
       continue;
     }
 
@@ -76,7 +88,7 @@ async function materializeExplicitWorkspaceLinks(workspaceDir: string, seedFrom:
       continue;
     }
 
-    await copyIfMissing(resolved, dest).catch(() => {
+    await copyAuthorityTreeIfMissing(resolved, dest).catch(() => {
       // Ignore invalid or unreadable explicit links; sandbox seeding should stay best-effort.
     });
   }

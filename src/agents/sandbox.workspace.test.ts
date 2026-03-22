@@ -76,4 +76,56 @@ describe("ensureSandboxWorkspace", () => {
     await expect(fs.stat(path.join(sandboxWorkspace, "README.md"))).rejects.toBeTruthy();
     await expect(fs.stat(path.join(sandboxWorkspace, "docs"))).rejects.toBeTruthy();
   });
+
+  it("materializes only approved top-level authority link names", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-workspace-"));
+    const sourceWorkspace = path.join(tmpRoot, "workspace");
+    const sandboxWorkspace = path.join(tmpRoot, "sandbox");
+    const authorityRoot = path.join(tmpRoot, "authority");
+    const privateDir = path.join(authorityRoot, "private-notes");
+
+    await fs.mkdir(sourceWorkspace, { recursive: true });
+    await fs.mkdir(privateDir, { recursive: true });
+    await fs.writeFile(path.join(sourceWorkspace, "AGENTS.md"), "# Agent\n", "utf-8");
+    await fs.writeFile(path.join(authorityRoot, "README.md"), "repo readme\n", "utf-8");
+    await fs.writeFile(path.join(privateDir, "note.md"), "secret\n", "utf-8");
+
+    await fs.symlink(
+      path.join(authorityRoot, "README.md"),
+      path.join(sourceWorkspace, "README.md"),
+    );
+    await fs.symlink(privateDir, path.join(sourceWorkspace, "private-notes"));
+
+    await ensureSandboxWorkspace(sandboxWorkspace, sourceWorkspace, true);
+
+    await expect(fs.readFile(path.join(sandboxWorkspace, "README.md"), "utf-8")).resolves.toBe(
+      "repo readme\n",
+    );
+    await expect(fs.stat(path.join(sandboxWorkspace, "private-notes"))).rejects.toBeTruthy();
+  });
+
+  it("does not dereference nested symlinks inside allowed authority directories", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-workspace-"));
+    const sourceWorkspace = path.join(tmpRoot, "workspace");
+    const sandboxWorkspace = path.join(tmpRoot, "sandbox");
+    const authorityRoot = path.join(tmpRoot, "authority");
+    const authorityDocs = path.join(authorityRoot, "docs");
+    const externalRoot = path.join(tmpRoot, "external");
+
+    await fs.mkdir(sourceWorkspace, { recursive: true });
+    await fs.mkdir(authorityDocs, { recursive: true });
+    await fs.mkdir(externalRoot, { recursive: true });
+    await fs.writeFile(path.join(sourceWorkspace, "AGENTS.md"), "# Agent\n", "utf-8");
+    await fs.writeFile(path.join(authorityDocs, "CODEBASE_MAP.md"), "map\n", "utf-8");
+    await fs.writeFile(path.join(externalRoot, "secret.txt"), "top secret\n", "utf-8");
+    await fs.symlink(path.join(externalRoot, "secret.txt"), path.join(authorityDocs, "secret.txt"));
+    await fs.symlink(authorityDocs, path.join(sourceWorkspace, "docs"));
+
+    await ensureSandboxWorkspace(sandboxWorkspace, sourceWorkspace, true);
+
+    await expect(
+      fs.readFile(path.join(sandboxWorkspace, "docs", "CODEBASE_MAP.md"), "utf-8"),
+    ).resolves.toBe("map\n");
+    await expect(fs.stat(path.join(sandboxWorkspace, "docs", "secret.txt"))).rejects.toBeTruthy();
+  });
 });
