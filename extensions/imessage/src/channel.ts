@@ -4,6 +4,7 @@ import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/exte
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
 import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
+import { createDefaultChannelRuntimeState } from "openclaw/plugin-sdk/status-helpers";
 import {
   buildComputedAccountStatusSnapshot,
   collectStatusIssuesFromLastError,
@@ -150,15 +151,10 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
         },
       },
       status: {
-        defaultRuntime: {
-          accountId: DEFAULT_ACCOUNT_ID,
-          running: false,
-          lastStartAt: null,
-          lastStopAt: null,
-          lastError: null,
+        defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, {
           cliPath: null,
           dbPath: null,
-        },
+        }),
         collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("imessage", accounts),
         buildChannelSummary: ({ snapshot }) =>
           buildPassiveProbedChannelStatusSummary(snapshot, {
