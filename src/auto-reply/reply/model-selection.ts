@@ -416,12 +416,13 @@ export async function createModelSelectionState(params: {
     parentSessionKey,
   });
   // Skip stored session model override only when an explicit heartbeat.model
-  // was resolved, or when images triggered a model switch to imageModel.
+  // was resolved. For image-triggered model switches, we still respect stored
+  // overrides - if the user explicitly selected a model with /model, honor it.
   // Heartbeat runs without heartbeat.model should still inherit
   // the regular session/parent model override behavior.
-  const skipStoredOverride =
-    params.hasResolvedHeartbeatModelOverride === true ||
-    params.hasAppliedImageModelOverride === true;
+  const skipStoredOverride = params.hasResolvedHeartbeatModelOverride === true;
+  // Track if we're using a stored override (for auth profile logic below)
+  let usingStoredOverride = false;
   if (storedOverride?.model && !skipStoredOverride) {
     const normalizedStoredOverride = normalizeModelRef(
       storedOverride.provider || defaultProvider,
@@ -431,17 +432,22 @@ export async function createModelSelectionState(params: {
     if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
       provider = normalizedStoredOverride.provider;
       model = normalizedStoredOverride.model;
+      usingStoredOverride = true;
     }
   }
 
-  // Skip auth profile override clear when image model is temporarily switched.
+  // Skip auth profile override clear when image model is temporarily switched
+  // AND we're not using a user-selected stored override.
   // The provider change is transient and should not clear saved credentials.
+  // When using stored override, the user explicitly chose a model, so auth profile
+  // checks should proceed normally.
+  const skipAuthProfileClear = params.hasAppliedImageModelOverride && !usingStoredOverride;
   if (
     sessionEntry &&
     sessionStore &&
     sessionKey &&
     sessionEntry.authProfileOverride &&
-    !params.hasAppliedImageModelOverride
+    !skipAuthProfileClear
   ) {
     const { ensureAuthProfileStore } = await import("../../agents/auth-profiles.runtime.js");
     const store = ensureAuthProfileStore(undefined, {

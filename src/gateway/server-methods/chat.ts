@@ -1318,12 +1318,15 @@ export const chatHandlers: GatewayRequestHandlers = {
       const imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
       if (imageModelPrimary) {
         imageModelOverride = imageModelPrimary;
-        // Also resolve image model fallbacks for proper failover behavior
+        // Resolve image model fallbacks. If no fallbacks are configured,
+        // use an empty array to prevent falling back to text-only models.
         if (typeof imageModelConfig === "object" && Array.isArray(imageModelConfig.fallbacks)) {
           imageModelFallbacks = imageModelConfig.fallbacks;
+        } else {
+          imageModelFallbacks = []; // No fallbacks = don't use text model fallbacks
         }
         context.logGateway.debug(
-          `[image-model-switch] Detected ${parsedImages.length} image(s), switching to model: ${imageModelOverride}${imageModelFallbacks ? ` with ${imageModelFallbacks.length} fallback(s)` : ""}`,
+          `[image-model-switch] Detected ${parsedImages.length} image(s), switching to model: ${imageModelOverride}${imageModelFallbacks && imageModelFallbacks.length > 0 ? ` with ${imageModelFallbacks.length} fallback(s)` : " (no fallbacks)"}`,
         );
       }
     }
