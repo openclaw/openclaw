@@ -7,6 +7,7 @@ const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set([
   "action-runtime.runtime.js",
   "action-runtime-api.js",
+  "allow-from.js",
   "api.js",
   "auth-presence.js",
   "index.js",
