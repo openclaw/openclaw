@@ -169,6 +169,17 @@ describe("resolveMattermostEffectiveReplyToId", () => {
     ).toBe("thread-root-456");
   });
 
+  it("suppresses existing thread roots when replyToMode is off", () => {
+    expect(
+      resolveMattermostEffectiveReplyToId({
+        kind: "channel",
+        postId: "post-123",
+        replyToMode: "off",
+        threadRootId: "thread-root-456",
+      }),
+    ).toBeUndefined();
+  });
+
   it("starts a thread for top-level channel messages when replyToMode is all", () => {
     expect(
       resolveMattermostEffectiveReplyToId({
@@ -229,6 +240,22 @@ describe("resolveMattermostThreadSessionContext", () => {
       effectiveReplyToId: "root-456",
       sessionKey: "agent:main:mattermost:default:chan-1:thread:root-456",
       parentSessionKey: "agent:main:mattermost:default:chan-1",
+    });
+  });
+
+  it("keeps threaded messages top-level when replyToMode is off", () => {
+    expect(
+      resolveMattermostThreadSessionContext({
+        baseSessionKey: "agent:main:mattermost:default:chan-1",
+        kind: "group",
+        postId: "post-123",
+        replyToMode: "off",
+        threadRootId: "root-456",
+      }),
+    ).toEqual({
+      effectiveReplyToId: undefined,
+      sessionKey: "agent:main:mattermost:default:chan-1",
+      parentSessionKey: undefined,
     });
   });
 
