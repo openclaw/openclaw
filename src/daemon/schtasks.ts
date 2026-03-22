@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createConfigIO, resolveConfigPath } from "../config/config.js";
+import { createConfigIO } from "../config/config.js";
 import { isGatewayArgv } from "../infra/gateway-process-argv.js";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
 import { inspectPortUsage } from "../infra/ports.js";
@@ -323,8 +323,7 @@ async function resolveConfiguredGatewayPort(env: GatewayServiceEnv): Promise<num
     }
   }
   try {
-    const configPath = resolveConfigPath(env, resolveGatewayStateDir(env));
-    const io = createConfigIO({ env, configPath });
+    const io = createConfigIO({ env });
     const snapshot = await io.readConfigFileSnapshot();
     if (!snapshot.exists || !snapshot.valid) {
       return null;
