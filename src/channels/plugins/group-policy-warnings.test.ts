@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   collectAllowlistProviderGroupPolicyWarnings,
   collectAllowlistProviderRestrictSendersWarnings,
@@ -11,6 +12,10 @@ import {
   createOpenGroupPolicyRestrictSendersWarningCollector,
   createOpenProviderGroupPolicyWarningCollector,
   createOpenProviderConfiguredRouteWarningCollector,
+  projectAccountConfigWarningCollector,
+  projectAccountWarningCollector,
+  projectConfigAccountIdWarningCollector,
+  projectConfigWarningCollector,
   projectWarningCollector,
   collectOpenGroupPolicyConfiguredRouteWarnings,
   collectOpenProviderGroupPolicyWarnings,
@@ -40,6 +45,62 @@ describe("group policy warning builders", () => {
     );
 
     expect(collect({ value: "abc" })).toEqual(["ABC"]);
+  });
+
+  it("projects cfg-only warning collector inputs", () => {
+    const collect = projectConfigWarningCollector<{ cfg: OpenClawConfig; accountId: string }>(
+      ({ cfg }) => [cfg.channels ? "configured" : "none"],
+    );
+
+    expect(
+      collect({
+        cfg: { channels: { slack: {} } } as OpenClawConfig,
+        accountId: "acct-1",
+      }),
+    ).toEqual(["configured"]);
+  });
+
+  it("projects cfg+accountId warning collector inputs", () => {
+    const collect = projectConfigAccountIdWarningCollector<{
+      cfg: OpenClawConfig;
+      accountId?: string | null;
+      account: { accountId: string };
+    }>(({ accountId }) => [accountId ?? "default"]);
+
+    expect(
+      collect({
+        cfg: {} as OpenClawConfig,
+        accountId: "acct-1",
+        account: { accountId: "ignored" },
+      }),
+    ).toEqual(["acct-1"]);
+  });
+
+  it("projects account-only warning collector inputs", () => {
+    const collect = projectAccountWarningCollector<
+      { accountId: string },
+      { account: { accountId: string } }
+    >((account) => [account.accountId]);
+
+    expect(collect({ account: { accountId: "acct-1" } })).toEqual(["acct-1"]);
+  });
+
+  it("projects account+cfg warning collector inputs", () => {
+    const collect = projectAccountConfigWarningCollector<
+      { accountId: string },
+      Record<string, unknown>,
+      { account: { accountId: string }; cfg: OpenClawConfig }
+    >(
+      (cfg: OpenClawConfig) => cfg.channels ?? {},
+      ({ account, cfg }) => [String(account.accountId), Object.keys(cfg).join(",") || "none"],
+    );
+
+    expect(
+      collect({
+        account: { accountId: "acct-1" },
+        cfg: { channels: { slack: {} } } as OpenClawConfig,
+      }),
+    ).toEqual(["acct-1", "slack"]);
   });
 
   it("builds conditional warning collectors", () => {
