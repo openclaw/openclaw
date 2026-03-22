@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loggingState } from "../logging/state.js";
 
 const mocks = vi.hoisted(() => ({
   resolveConfigPath: vi.fn(() => `/tmp/openclaw-status-fast-json-missing-${process.pid}.json`),
@@ -18,8 +19,12 @@ const mocks = vi.hoisted(() => ({
   buildPluginCompatibilityNotices: vi.fn(() => []),
 }));
 
+let originalForceStderr: boolean;
+
 beforeEach(() => {
   vi.clearAllMocks();
+  originalForceStderr = loggingState.forceConsoleToStderr;
+  loggingState.forceConsoleToStderr = false;
   mocks.hasPotentialConfiguredChannels.mockReturnValue(false);
   mocks.readBestEffortConfig.mockResolvedValue({
     session: {},
@@ -170,7 +175,26 @@ vi.mock("../plugins/status.js", () => ({
 
 const { scanStatusJsonFast } = await import("./status.scan.fast-json.js");
 
+afterEach(() => {
+  loggingState.forceConsoleToStderr = originalForceStderr;
+});
+
 describe("scanStatusJsonFast", () => {
+  it("routes plugin logs to stderr during deferred plugin loading", async () => {
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+
+    let stderrDuringLoad = false;
+    mocks.ensurePluginRegistryLoaded.mockImplementation(() => {
+      stderrDuringLoad = loggingState.forceConsoleToStderr;
+    });
+
+    await scanStatusJsonFast({}, {} as never);
+
+    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalled();
+    expect(stderrDuringLoad).toBe(true);
+    expect(loggingState.forceConsoleToStderr).toBe(false);
+  });
+
   it("skips memory inspection for the lean status --json fast path", async () => {
     const result = await scanStatusJsonFast({}, {} as never);
 
