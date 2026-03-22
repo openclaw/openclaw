@@ -1724,6 +1724,52 @@ describe("followup queue drain restart after idle window", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toBe("before-idle");
   });
+
+  it("pauses preserved followups until the queue is resumed", async () => {
+    const key = `test-pause-followups-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const firstProcessed = createDeferred<void>();
+    const releaseFirst = createDeferred<void>();
+
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length === 1) {
+        firstProcessed.resolve();
+        await releaseFirst.promise;
+      }
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "before-reset" }), settings);
+    scheduleFollowupDrain(key, runFollowup);
+    await firstProcessed.promise;
+
+    enqueueFollowupRun(key, createRun({ prompt: "after-reset" }), settings);
+
+    const { clearSessionQueues, resumeFollowupDrain } = await import("./queue.js");
+    clearSessionQueues([key], {
+      clearFollowups: false,
+      clearDrainCallbacks: false,
+      clearLanes: false,
+      pauseFollowups: true,
+    });
+
+    releaseFirst.resolve();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(calls).toHaveLength(1);
+
+    resumeFollowupDrain(key);
+
+    await vi.waitFor(
+      () => {
+        expect(calls).toHaveLength(2);
+      },
+      { timeout: 1_000 },
+    );
+
+    expect(calls[0]?.prompt).toBe("before-reset");
+    expect(calls[1]?.prompt).toBe("after-reset");
+  });
 });
 
 const emptyCfg = {} as OpenClawConfig;

@@ -4,7 +4,8 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../agents/pi-embedded.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
-import { clearSessionQueues } from "../auto-reply/reply/queue.js";
+import { clearSessionQueues, resumeFollowupDrain } from "../auto-reply/reply/queue.js";
+import { closeTrackedBrowserTabsForSessions } from "../browser/session-tab-registry.js";
 import { loadConfig } from "../config/config.js";
 import {
   snapshotSessionOrigin,
@@ -49,6 +50,18 @@ function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined 
     contextTokens: undefined,
     systemPromptReport: undefined,
   };
+}
+
+function resolveSessionQueueKeys(params: {
+  target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
+  sessionId?: string;
+}): string[] {
+  const queueKeys = new Set<string>(params.target.storeKeys);
+  queueKeys.add(params.target.canonicalKey);
+  if (params.sessionId) {
+    queueKeys.add(params.sessionId);
+  }
+  return [...queueKeys];
 }
 
 export function archiveSessionTranscriptsForSession(params: {
@@ -126,18 +139,18 @@ async function ensureSessionRuntimeCleanup(params: {
     });
   };
 
-  const queueKeys = new Set<string>(params.target.storeKeys);
-  queueKeys.add(params.target.canonicalKey);
-  if (params.sessionId) {
-    queueKeys.add(params.sessionId);
-  }
+  const queueKeys = resolveSessionQueueKeys({
+    target: params.target,
+    sessionId: params.sessionId,
+  });
   clearSessionQueues(
-    [...queueKeys],
+    queueKeys,
     params.reason === "session-reset"
       ? {
           clearFollowups: false,
           clearDrainCallbacks: false,
           clearLanes: true,
+          pauseFollowups: true,
         }
       : undefined,
   );
@@ -276,6 +289,10 @@ export async function performGatewaySessionReset(params: {
   })();
   const { entry, legacyKey, canonicalKey } = loadSessionEntry(params.key);
   const hadExistingEntry = Boolean(entry);
+  const queueKeys = resolveSessionQueueKeys({
+    target,
+    sessionId: entry?.sessionId,
+  });
   const hookEvent = createInternalHookEvent(
     "command",
     params.reason,
@@ -379,6 +396,10 @@ export async function performGatewaySessionReset(params: {
     store[primaryKey] = nextEntry;
     return nextEntry;
   });
+
+  for (const queueKey of queueKeys) {
+    resumeFollowupDrain(queueKey);
+  }
 
   archiveSessionTranscriptsForSession({
     sessionId: oldSessionId,

@@ -1,12 +1,13 @@
 import { resolveEmbeddedSessionLane } from "../../../agents/pi-embedded.js";
 import { clearCommandLane } from "../../../process/command-queue.js";
 import { clearFollowupDrainCallback } from "./drain.js";
-import { clearFollowupQueue } from "./state.js";
+import { clearFollowupQueue, pauseFollowupQueue } from "./state.js";
 
 export type ClearSessionQueuesOptions = {
   clearFollowups?: boolean;
   clearDrainCallbacks?: boolean;
   clearLanes?: boolean;
+  pauseFollowups?: boolean;
 };
 
 export type ClearSessionQueueResult = {
@@ -59,6 +60,8 @@ export function clearSessionQueues(
     clearedKeys.push(cleaned);
     if (clearFollowups) {
       followupCleared += clearFollowupQueue(cleaned);
+    } else if (options?.pauseFollowups) {
+      pauseFollowupQueue(cleaned);
     }
     if (clearDrainCallbacks) {
       clearFollowupDrainCallback(cleaned);

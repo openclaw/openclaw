@@ -11,7 +11,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { loadSessionStore, type SessionEntry } from "../../config/sessions.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -168,8 +168,23 @@ export function createFollowupRunner(params: {
 
   return async (queued: FollowupRun) => {
     try {
+      const loadLatestSessionEntry = () => {
+        if (!sessionKey || !storePath) {
+          return undefined;
+        }
+        const latestEntry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+        if (!latestEntry) {
+          return undefined;
+        }
+        if (sessionStore) {
+          sessionStore[sessionKey] = latestEntry;
+        }
+        return latestEntry;
+      };
       const resolveLatestSessionEntry = () =>
-        (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry;
+        loadLatestSessionEntry() ??
+        (sessionKey ? sessionStore?.[sessionKey] : undefined) ??
+        sessionEntry;
       const rebindQueuedRunToCurrentSession = () => {
         const latestEntry = resolveLatestSessionEntry();
         const latestSessionId = latestEntry?.sessionId?.trim();

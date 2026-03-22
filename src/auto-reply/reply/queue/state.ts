@@ -5,6 +5,7 @@ import type { FollowupRun, QueueDropPolicy, QueueMode, QueueSettings } from "./t
 export type FollowupQueueState = {
   items: FollowupRun[];
   draining: boolean;
+  paused: boolean;
   lastEnqueuedAt: number;
   mode: QueueMode;
   debounceMs: number;
@@ -48,6 +49,7 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
   const created: FollowupQueueState = {
     items: [],
     draining: false,
+    paused: false,
     lastEnqueuedAt: 0,
     mode: settings.mode,
     debounceMs:
@@ -118,4 +120,22 @@ export function refreshQueuedFollowupSession(params: {
   for (const item of queue.items) {
     rewriteRun(item.run);
   }
+}
+
+export function pauseFollowupQueue(key: string): boolean {
+  const queue = getExistingFollowupQueue(key.trim());
+  if (!queue) {
+    return false;
+  }
+  queue.paused = true;
+  return true;
+}
+
+export function resumeFollowupQueue(key: string): boolean {
+  const queue = getExistingFollowupQueue(key.trim());
+  if (!queue) {
+    return false;
+  }
+  queue.paused = false;
+  return queue.items.length > 0 || queue.droppedCount > 0;
 }

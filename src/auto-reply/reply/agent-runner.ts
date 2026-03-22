@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
@@ -6,6 +7,7 @@ import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
+  loadSessionStore,
   resolveAgentIdFromSessionKey,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -65,6 +67,32 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+
+function transplantSessionFilePath(params: {
+  previousSessionId?: string;
+  previousSessionFile?: string;
+  nextSessionId: string;
+}): string | undefined {
+  const previousSessionId = params.previousSessionId?.trim();
+  const previousSessionFile = params.previousSessionFile?.trim();
+  if (!previousSessionId || !previousSessionFile) {
+    return undefined;
+  }
+  const parsed = path.parse(previousSessionFile);
+  if (!parsed.name) {
+    return undefined;
+  }
+  if (parsed.name === previousSessionId) {
+    return path.join(parsed.dir, `${params.nextSessionId}${parsed.ext}`);
+  }
+  if (!parsed.name.startsWith(`${previousSessionId}-`)) {
+    return undefined;
+  }
+  return path.join(
+    parsed.dir,
+    `${params.nextSessionId}${parsed.name.slice(previousSessionId.length)}${parsed.ext}`,
+  );
+}
 
 export async function runReplyAgent(params: {
   commandBody: string;
@@ -129,8 +157,24 @@ export async function runReplyAgent(params: {
   let activeSessionEntry = sessionEntry;
   const activeSessionStore = sessionStore;
   let activeIsNewSession = isNewSession;
+  const loadLatestSessionEntry = () => {
+    if (!sessionKey || !storePath) {
+      return undefined;
+    }
+    const latestEntry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+    if (!latestEntry) {
+      return undefined;
+    }
+    activeSessionEntry = latestEntry;
+    if (activeSessionStore) {
+      activeSessionStore[sessionKey] = latestEntry;
+    }
+    return latestEntry;
+  };
   const resolveCurrentSessionEntry = () =>
-    (sessionKey ? activeSessionStore?.[sessionKey] : undefined) ?? activeSessionEntry;
+    loadLatestSessionEntry() ??
+    (sessionKey ? activeSessionStore?.[sessionKey] : undefined) ??
+    activeSessionEntry;
   const rebindFollowupRunToCurrentSession = () => {
     const latestEntry = resolveCurrentSessionEntry();
     const latestSessionId = latestEntry?.sessionId?.trim();
@@ -140,10 +184,20 @@ export async function runReplyAgent(params: {
     if (!latestSessionId || latestSessionId === followupRun.run.sessionId) {
       return;
     }
+    const previousSessionId = followupRun.run.sessionId;
+    const previousSessionFile = followupRun.run.sessionFile;
     followupRun.run.sessionId = latestSessionId;
     followupRun.run.sessionFile = resolveSessionFilePath(
       latestSessionId,
-      latestEntry,
+      latestEntry?.sessionFile?.trim()
+        ? latestEntry
+        : {
+            sessionFile: transplantSessionFilePath({
+              previousSessionId,
+              previousSessionFile,
+              nextSessionId: latestSessionId,
+            }),
+          },
       resolveSessionFilePathOptions({
         agentId: resolveAgentIdFromSessionKey(sessionKey),
         storePath,

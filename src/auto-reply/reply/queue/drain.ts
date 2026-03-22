@@ -11,7 +11,7 @@ import {
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
-import { FOLLOWUP_QUEUES } from "./state.js";
+import { FOLLOWUP_QUEUES, resumeFollowupQueue } from "./state.js";
 import type { FollowupRun } from "./types.js";
 
 // Persists the most recent runFollowup callback per queue key so that
@@ -40,6 +40,13 @@ export function kickFollowupDrainIfIdle(key: string): void {
     return;
   }
   scheduleFollowupDrain(key, cb);
+}
+
+export function resumeFollowupDrain(key: string): void {
+  if (!resumeFollowupQueue(key)) {
+    return;
+  }
+  kickFollowupDrainIfIdle(key);
 }
 
 type OriginRoutingMetadata = Pick<
@@ -79,6 +86,10 @@ export function scheduleFollowupDrain(
   key: string,
   runFollowup: (run: FollowupRun) => Promise<void>,
 ): void {
+  const existing = FOLLOWUP_QUEUES.get(key);
+  if (!existing || existing.paused) {
+    return;
+  }
   const queue = beginQueueDrain(FOLLOWUP_QUEUES, key);
   if (!queue) {
     return;
@@ -91,7 +102,13 @@ export function scheduleFollowupDrain(
     try {
       const collectState = { forceIndividualCollect: false };
       while (queue.items.length > 0 || queue.droppedCount > 0) {
+        if (queue.paused) {
+          break;
+        }
         await waitForQueueDebounce(queue);
+        if (queue.paused) {
+          break;
+        }
         if (queue.mode === "collect") {
           // Once the batch is mixed, never collect again within this drain.
           // Prevents “collect after shift” collapsing different targets.
