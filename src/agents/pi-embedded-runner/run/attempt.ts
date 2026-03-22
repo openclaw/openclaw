@@ -1223,7 +1223,7 @@ export async function runEmbeddedAttempt(
         onAgentEvent: params.onAgentEvent,
         enforceFinalTag: params.enforceFinalTag,
         config: params.config,
-        currentChannelProvider: params.messageProvider,
+        currentChannelProvider: routeMessageProvider,
         currentChannelId: params.currentChannelId,
         currentThreadTs: params.currentThreadTs,
         sessionKey: sandboxSessionKey,
