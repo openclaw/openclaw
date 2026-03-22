@@ -1,24 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeSecurityAccount, registerPluginHttpRouteMock } from "./channel.test-mocks.js";
+import { sendMessage } from "./client.js";
 
 vi.mock("./webhook-handler.js", () => ({
   createWebhookHandler: vi.fn(() => vi.fn()),
 }));
 
 const { createSynologyChatPlugin } = await import("./channel.js");
+const mockSendMessage = vi.mocked(sendMessage);
 
 describe("createSynologyChatPlugin", () => {
-  it("returns a plugin object with all required sections", () => {
-    const plugin = createSynologyChatPlugin();
-    expect(plugin.id).toBe("synology-chat");
-    expect(plugin.meta).toBeDefined();
-    expect(plugin.capabilities).toBeDefined();
-    expect(plugin.config).toBeDefined();
-    expect(plugin.setup).toBeDefined();
-    expect(plugin.setupWizard).toBeDefined();
-    expect(plugin.security).toBeDefined();
-    expect(plugin.outbound).toBeDefined();
-    expect(plugin.gateway).toBeDefined();
+  beforeEach(() => {
+    mockSendMessage.mockClear();
   });
 
   describe("meta", () => {
@@ -40,17 +33,52 @@ describe("createSynologyChatPlugin", () => {
   });
 
   describe("config", () => {
-    it("listAccountIds delegates to accounts module", () => {
+    it("listAccountIds includes default and named accounts when configured", () => {
       const plugin = createSynologyChatPlugin();
-      const result = plugin.config.listAccountIds({});
-      expect(Array.isArray(result)).toBe(true);
+      const result = plugin.config.listAccountIds({
+        channels: {
+          "synology-chat": {
+            token: "base-token",
+            accounts: {
+              office: { token: "office-token" },
+            },
+          },
+        },
+      });
+      expect(result).toEqual(["default", "office"]);
     });
 
-    it("resolveAccount returns account config", () => {
-      const cfg = { channels: { "synology-chat": { token: "t1" } } };
+    it("resolveAccount merges account overrides with base config defaults", () => {
+      const cfg = {
+        channels: {
+          "synology-chat": {
+            token: "base-token",
+            incomingUrl: "https://nas/base",
+            nasHost: "nas-base",
+            allowedUserIds: ["base-user"],
+            rateLimitPerMinute: 45,
+            botName: "Base Bot",
+            accounts: {
+              office: {
+                token: "office-token",
+                allowInsecureSsl: true,
+              },
+            },
+          },
+        },
+      };
       const plugin = createSynologyChatPlugin();
-      const account = plugin.config.resolveAccount(cfg, "default");
-      expect(account.accountId).toBe("default");
+      const account = plugin.config.resolveAccount(cfg, "office");
+      expect(account).toMatchObject({
+        accountId: "office",
+        token: "office-token",
+        incomingUrl: "https://nas/base",
+        nasHost: "nas-base",
+        allowedUserIds: ["base-user"],
+        rateLimitPerMinute: 45,
+        botName: "Base Bot",
+        allowInsecureSsl: true,
+      });
     });
 
     it("defaultAccountId returns 'default'", () => {
@@ -86,23 +114,45 @@ describe("createSynologyChatPlugin", () => {
         allowInsecureSsl: true,
       };
       const result = plugin.security.resolveDmPolicy({ cfg: {}, account });
+      if (!result) {
+        throw new Error("resolveDmPolicy returned null");
+      }
       expect(result.policy).toBe("allowlist");
       expect(result.allowFrom).toEqual(["user1"]);
-      expect(typeof result.normalizeEntry).toBe("function");
       expect(result.normalizeEntry?.("  USER1  ")).toBe("user1");
     });
   });
 
   describe("pairing", () => {
-    it("has notifyApproval and normalizeAllowEntry", () => {
+    it("normalizes entries and notifies approved users", async () => {
       const plugin = createSynologyChatPlugin();
       expect(plugin.pairing.idLabel).toBe("synologyChatUserId");
       const normalize = plugin.pairing.normalizeAllowEntry;
-      expect(typeof normalize).toBe("function");
-      if (normalize) {
-        expect(normalize("  USER1  ")).toBe("user1");
+      const notifyApproval = plugin.pairing.notifyApproval;
+      if (!normalize || !notifyApproval) {
+        throw new Error("synology-chat pairing helpers unavailable");
       }
-      expect(typeof plugin.pairing.notifyApproval).toBe("function");
+      expect(normalize("  USER1  ")).toBe("user1");
+
+      await notifyApproval({
+        cfg: {
+          channels: {
+            "synology-chat": {
+              token: "t",
+              incomingUrl: "https://nas/incoming",
+              allowInsecureSsl: true,
+            },
+          },
+        },
+        id: "USER1",
+      });
+
+      expect(mockSendMessage).toHaveBeenCalledWith(
+        "https://nas/incoming",
+        "OpenClaw: your access has been approved.",
+        "USER1",
+        true,
+      );
     });
   });
 
@@ -174,9 +224,9 @@ describe("createSynologyChatPlugin", () => {
     it("returns formatting hints", () => {
       const plugin = createSynologyChatPlugin();
       const hints = plugin.agentPrompt.messageToolHints();
-      expect(Array.isArray(hints)).toBe(true);
-      expect(hints.length).toBeGreaterThan(5);
-      expect(hints.some((h: string) => h.includes("<URL|display text>"))).toBe(true);
+      expect(hints).toContain("### Synology Chat Formatting");
+      expect(hints).toContain("**Links**: Use `<URL|display text>` to create clickable links.");
+      expect(hints).toContain("- No buttons, cards, or interactive elements");
     });
   });
 
@@ -212,9 +262,11 @@ describe("createSynologyChatPlugin", () => {
         text: "hello",
         to: "user1",
       });
-      expect(result.channel).toBe("synology-chat");
-      expect(result.messageId).toBeDefined();
-      expect(result.chatId).toBe("user1");
+      expect(result).toMatchObject({
+        channel: "synology-chat",
+        chatId: "user1",
+      });
+      expect(result.messageId).toMatch(/^sc-\d+$/);
     });
 
     it("sendMedia throws when missing incomingUrl", async () => {

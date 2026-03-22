@@ -1,7 +1,7 @@
 import {
   DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
   DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
-} from "../../extensions/discord/runtime-api.js";
+} from "../../extensions/discord/timeouts.js";
 import { MEDIA_AUDIO_FIELD_HELP } from "./media-audio-field-metadata.js";
 import { IRC_FIELD_HELP } from "./schema.irc.js";
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
@@ -214,6 +214,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Shared default settings inherited by agents unless overridden per entry in agents.list. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
   "agents.list":
     "Explicit list of configured agents with IDs and optional overrides for model, tools, identity, and workspace. Keep IDs stable over time so bindings, approvals, and session routing remain deterministic.",
+  "agents.list[].thinkingDefault":
+    "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
+  "agents.list[].reasoningDefault":
+    "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
+  "agents.list[].fastModeDefault":
+    "Optional per-agent default for fast mode. Applies when no per-message or session fast-mode override is set.",
   "agents.list[].runtime":
     "Optional runtime descriptor for this agent. Use embedded for default OpenClaw execution or acp for external ACP harness defaults.",
   "agents.list[].runtime.type":
@@ -1534,6 +1540,12 @@ export const FIELD_HELP: Record<string, string> = {
     "When true, Telegram bot replies marked as errors are sent silently (no notification sound). Default: false.",
   "channels.telegram.apiRoot":
     "Custom Telegram Bot API root URL. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
+  "channels.telegram.autoTopicLabel":
+    "Auto-rename DM forum topics on first message using LLM. Default: true. Set to false to disable, or use object form { enabled: true, prompt: '...' } for custom prompt.",
+  "channels.telegram.autoTopicLabel.enabled":
+    "Whether auto topic labeling is enabled. Default: true.",
+  "channels.telegram.autoTopicLabel.prompt":
+    "Custom prompt for LLM-based topic naming. The user message is appended after the prompt.",
   "channels.telegram.threadBindings.enabled":
     "Enable Telegram conversation binding features (/focus, /unfocus, /agents, and /session idle|max-age). Overrides session.threadBindings.enabled when set.",
   "channels.telegram.threadBindings.idleHours":
