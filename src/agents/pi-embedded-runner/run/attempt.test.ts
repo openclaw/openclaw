@@ -13,6 +13,7 @@ import {
   isOllamaCompatProvider,
   prependSystemPromptAddition,
   queueSessionsYieldInterruptMessage,
+  resolveRouteMessageProvider,
   resolveAttemptFsWorkspaceOnly,
   resolveOllamaCompatNumCtxEnabled,
   resolvePromptBuildHookResult,
@@ -382,6 +383,34 @@ describe("shouldInjectHeartbeatPrompt", () => {
     expect(prompt).not.toContain("## Heartbeats");
     expect(prompt).not.toContain("HEARTBEAT_OK");
     expect(prompt).not.toContain("Read HEARTBEAT.md");
+  });
+});
+
+describe("resolveRouteMessageProvider", () => {
+  it("prefers canonical messageProvider when provider is not synthetic", () => {
+    expect(
+      resolveRouteMessageProvider({
+        messageProvider: "bluebubbles",
+        messageChannel: "imessage",
+      }),
+    ).toBe("bluebubbles");
+  });
+
+  it("prefers messageChannel when provider is synthetic", () => {
+    expect(
+      resolveRouteMessageProvider({
+        messageProvider: "heartbeat",
+        messageChannel: "telegram",
+      }),
+    ).toBe("telegram");
+  });
+
+  it("falls back to messageChannel when canonical provider is absent", () => {
+    expect(
+      resolveRouteMessageProvider({
+        messageChannel: "telegram",
+      }),
+    ).toBe("telegram");
   });
 });
 
