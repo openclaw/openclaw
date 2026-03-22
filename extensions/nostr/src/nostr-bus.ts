@@ -33,6 +33,13 @@ import { createSeenTracker, type SeenTracker } from "./seen-tracker.js";
 const STARTUP_LOOKBACK_SEC = 120; // tolerate relay lag / clock skew
 const MAX_PERSISTED_EVENT_IDS = 5000;
 const STATE_PERSIST_DEBOUNCE_MS = 5000; // Debounce state writes
+const MAX_EVENT_FUTURE_SKEW_SEC = 120;
+const MAX_CIPHERTEXT_BYTES = 16 * 1024;
+const MAX_PLAINTEXT_BYTES = 8 * 1024;
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const MAX_EVENTS_PER_SENDER_PER_WINDOW = 20;
+const MAX_EVENTS_GLOBAL_PER_WINDOW = 200;
+const MAX_TRACKED_RATE_LIMIT_KEYS = 4096;
 
 // Circuit breaker configuration
 const CIRCUIT_BREAKER_THRESHOLD = 5; // failures before opening
@@ -57,7 +64,13 @@ export interface NostrBusOptions {
     pubkey: string,
     text: string,
     reply: (text: string) => Promise<void>,
+    meta: { eventId: string; createdAt: number },
   ) => Promise<void>;
+  /** Called before expensive crypto to allow sender policy checks (optional) */
+  authorizeSender?: (params: {
+    senderPubkey: string;
+    reply: (text: string) => Promise<void>;
+  }) => Promise<"allow" | "block" | "pairing">;
   /** Called on errors (optional) */
   onError?: (error: Error, context: string) => void;
   /** Called on connection status changes (optional) */
@@ -72,6 +85,62 @@ export interface NostrBusOptions {
   maxSeenEntries?: number;
   /** Seen tracker TTL in ms (default: 1 hour) */
   seenTtlMs?: number;
+}
+
+type FixedWindowRateLimiter = {
+  isRateLimited: (key: string, nowMs?: number) => boolean;
+  size: () => number;
+  clear: () => void;
+};
+
+function createFixedWindowRateLimiter(params: {
+  windowMs: number;
+  maxRequests: number;
+  maxTrackedKeys: number;
+}): FixedWindowRateLimiter {
+  const windowMs = Math.max(1, Math.floor(params.windowMs));
+  const maxRequests = Math.max(1, Math.floor(params.maxRequests));
+  const maxTrackedKeys = Math.max(1, Math.floor(params.maxTrackedKeys));
+  const state = new Map<string, { count: number; windowStartMs: number }>();
+
+  const touch = (key: string, value: { count: number; windowStartMs: number }) => {
+    state.delete(key);
+    state.set(key, value);
+  };
+
+  const prune = (nowMs: number) => {
+    for (const [key, entry] of state) {
+      if (nowMs - entry.windowStartMs >= windowMs) {
+        state.delete(key);
+      }
+    }
+    while (state.size > maxTrackedKeys) {
+      const oldest = state.keys().next().value;
+      if (!oldest) {
+        break;
+      }
+      state.delete(oldest);
+    }
+  };
+
+  return {
+    isRateLimited: (key: string, nowMs = Date.now()) => {
+      if (!key) {
+        return false;
+      }
+      prune(nowMs);
+      const existing = state.get(key);
+      if (!existing || nowMs - existing.windowStartMs >= windowMs) {
+        touch(key, { count: 1, windowStartMs: nowMs });
+        return false;
+      }
+      const nextCount = existing.count + 1;
+      touch(key, { count: nextCount, windowStartMs: existing.windowStartMs });
+      return nextCount > maxRequests;
+    },
+    size: () => state.size,
+    clear: () => state.clear(),
+  };
 }
 
 export interface NostrBusHandle {
@@ -322,6 +391,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     privateKey,
     relays = DEFAULT_RELAYS,
     onMessage,
+    authorizeSender,
     onError,
     onEose,
     onMetric,
@@ -396,6 +466,23 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
   }
 
   const inflight = new Set<string>();
+  const perSenderRateLimiter = createFixedWindowRateLimiter({
+    windowMs: RATE_LIMIT_WINDOW_MS,
+    maxRequests: MAX_EVENTS_PER_SENDER_PER_WINDOW,
+    maxTrackedKeys: MAX_TRACKED_RATE_LIMIT_KEYS,
+  });
+  const globalRateLimiter = createFixedWindowRateLimiter({
+    windowMs: RATE_LIMIT_WINDOW_MS,
+    maxRequests: MAX_EVENTS_GLOBAL_PER_WINDOW,
+    maxTrackedKeys: 1,
+  });
+
+  const updateRateLimiterSizeMetric = () => {
+    metrics.emit(
+      "memory.rate_limiter_entries",
+      perSenderRateLimiter.size() + globalRateLimiter.size(),
+    );
+  };
 
   // Event handler
   async function handleEvent(event: Event): Promise<void> {
@@ -421,6 +508,16 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         return;
       }
 
+      if (event.created_at > Math.floor(Date.now() / 1000) + MAX_EVENT_FUTURE_SKEW_SEC) {
+        metrics.emit("event.rejected.future");
+        return;
+      }
+
+      if (event.kind !== 4) {
+        metrics.emit("event.rejected.wrong_kind");
+        return;
+      }
+
       // Fast p-tag check BEFORE crypto (no allocation, cheaper)
       let targetsUs = false;
       for (const t of event.tags) {
@@ -431,6 +528,50 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       }
       if (!targetsUs) {
         metrics.emit("event.rejected.wrong_kind");
+        return;
+      }
+
+      const replyTo = async (text: string): Promise<void> => {
+        await sendEncryptedDm(
+          pool,
+          sk,
+          event.pubkey,
+          text,
+          relays,
+          metrics,
+          circuitBreakers,
+          healthTracker,
+          onError,
+        );
+      };
+
+      if (authorizeSender) {
+        const decision = await authorizeSender({
+          senderPubkey: event.pubkey,
+          reply: replyTo,
+        });
+        if (decision !== "allow") {
+          return;
+        }
+      }
+
+      updateRateLimiterSizeMetric();
+      if (globalRateLimiter.isRateLimited("global")) {
+        metrics.emit("rate_limit.global");
+        metrics.emit("event.rejected.rate_limited");
+        updateRateLimiterSizeMetric();
+        return;
+      }
+      if (perSenderRateLimiter.isRateLimited(event.pubkey)) {
+        metrics.emit("rate_limit.per_sender");
+        metrics.emit("event.rejected.rate_limited");
+        updateRateLimiterSizeMetric();
+        return;
+      }
+      updateRateLimiterSizeMetric();
+
+      if (Buffer.byteLength(event.content, "utf8") > MAX_CIPHERTEXT_BYTES) {
+        metrics.emit("event.rejected.oversized_ciphertext");
         return;
       }
 
@@ -457,23 +598,16 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         return;
       }
 
-      // Create reply function (try relays by health score)
-      const replyTo = async (text: string): Promise<void> => {
-        await sendEncryptedDm(
-          pool,
-          sk,
-          event.pubkey,
-          text,
-          relays,
-          metrics,
-          circuitBreakers,
-          healthTracker,
-          onError,
-        );
-      };
+      if (Buffer.byteLength(plaintext, "utf8") > MAX_PLAINTEXT_BYTES) {
+        metrics.emit("event.rejected.oversized_plaintext");
+        return;
+      }
 
       // Call the message handler
-      await onMessage(event.pubkey, plaintext, replyTo);
+      await onMessage(event.pubkey, plaintext, replyTo, {
+        eventId: event.id,
+        createdAt: event.created_at,
+      });
 
       // Mark as processed
       metrics.emit("event.processed");
@@ -568,6 +702,8 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     close: () => {
       sub.close();
       seen.stop();
+      perSenderRateLimiter.clear();
+      globalRateLimiter.clear();
       // Flush pending state write synchronously on close
       if (pendingWrite) {
         clearTimeout(pendingWrite);
