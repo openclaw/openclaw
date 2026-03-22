@@ -9,6 +9,7 @@ export type TelegramSequentialKeyContext = {
   message?: Message;
   channelPost?: Message;
   editedChannelPost?: Message;
+  inlineQuery?: unknown;
   update?: {
     message?: Message;
     edited_message?: Message;
@@ -19,7 +20,9 @@ export type TelegramSequentialKeyContext = {
   };
 };
 
-export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): string {
+export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): string | string[] {
+  // Inline queries have no chat context and must not be serialized
+  if (ctx.inlineQuery) return [];
   const reaction = ctx.update?.message_reaction;
   if (reaction?.chat?.id) {
     return `telegram:${reaction.chat.id}`;

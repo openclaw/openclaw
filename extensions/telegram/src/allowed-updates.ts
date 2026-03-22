@@ -10,5 +10,11 @@ export function resolveTelegramAllowedUpdates(): ReadonlyArray<TelegramUpdateTyp
   if (!updates.includes("channel_post")) {
     updates.push("channel_post");
   }
+  if (!updates.includes("inline_query")) {
+    updates.push("inline_query");
+  }
+  if (!updates.includes("chosen_inline_result")) {
+    updates.push("chosen_inline_result");
+  }
   return updates;
 }

@@ -330,6 +330,13 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     }
   });
 
+  // Record inline query received time before sequentialize so handlers can compute deadline
+  bot.use((ctx, next) => {
+    if (ctx.inlineQuery)
+      (ctx as typeof ctx & { inlineQueryReceivedAt?: number }).inlineQueryReceivedAt = Date.now();
+    return next();
+  });
+
   bot.use(botRuntime.sequentialize(getTelegramSequentialKey));
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
