@@ -3,8 +3,6 @@ import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 import {
   resolveHeartbeatDeliveryTarget,
   resolveOutboundTarget,
@@ -12,30 +10,18 @@ import {
 } from "./targets.js";
 import type { SessionDeliveryTarget } from "./targets.js";
 import {
-  inferTelegramTestChatType,
   installResolveOutboundTargetPluginRegistryHooks,
-  parseTelegramTestMessagingTarget,
   runResolveOutboundTargetCoreTests,
-  telegramOutboundStub,
-  whatsappOutboundStub,
 } from "./targets.shared-test.js";
+import {
+  createNoopOutboundChannelPlugin,
+  createTargetsTestRegistry,
+  createTelegramTestPlugin,
+  createWhatsAppTestPlugin,
+  telegramMessagingForTest,
+} from "./targets.test-helpers.js";
 
 runResolveOutboundTargetCoreTests();
-
-const telegramMessaging = {
-  parseExplicitTarget: ({ raw }: { raw: string }) => parseTelegramTestMessagingTarget(raw),
-  inferTargetChatType: ({ to }: { to: string }) => inferTelegramTestChatType(to),
-};
-
-const whatsappMessaging = {
-  inferTargetChatType: ({ to }: { to: string }) => {
-    const normalized = normalizeWhatsAppTarget(to);
-    if (!normalized) {
-      return undefined;
-    }
-    return isWhatsAppGroupJid(normalized) ? ("group" as const) : ("direct" as const);
-  },
-};
 
 const noopOutbound = (channel: "discord" | "imessage" | "slack"): ChannelOutboundAdapter => ({
   deliveryMode: "direct",
@@ -44,40 +30,21 @@ const noopOutbound = (channel: "discord" | "imessage" | "slack"): ChannelOutboun
 
 beforeEach(() => {
   setActivePluginRegistry(
-    createTestRegistry([
+    createTargetsTestRegistry([
       {
-        pluginId: "discord",
-        plugin: createOutboundTestPlugin({ id: "discord", outbound: noopOutbound("discord") }),
-        source: "test",
+        ...createNoopOutboundChannelPlugin("discord"),
+        outbound: noopOutbound("discord"),
       },
       {
-        pluginId: "imessage",
-        plugin: createOutboundTestPlugin({ id: "imessage", outbound: noopOutbound("imessage") }),
-        source: "test",
+        ...createNoopOutboundChannelPlugin("imessage"),
+        outbound: noopOutbound("imessage"),
       },
       {
-        pluginId: "slack",
-        plugin: createOutboundTestPlugin({ id: "slack", outbound: noopOutbound("slack") }),
-        source: "test",
+        ...createNoopOutboundChannelPlugin("slack"),
+        outbound: noopOutbound("slack"),
       },
-      {
-        pluginId: "telegram",
-        plugin: createOutboundTestPlugin({
-          id: "telegram",
-          outbound: telegramOutboundStub,
-          messaging: telegramMessaging,
-        }),
-        source: "test",
-      },
-      {
-        pluginId: "whatsapp",
-        plugin: createOutboundTestPlugin({
-          id: "whatsapp",
-          outbound: whatsappOutboundStub,
-          messaging: whatsappMessaging,
-        }),
-        source: "test",
-      },
+      createTelegramTestPlugin(),
+      createWhatsAppTestPlugin(),
     ]),
   );
 });
@@ -135,7 +102,7 @@ describe("resolveOutboundTarget defaultTo config fallback", () => {
   });
 
   it("falls back to the active registry when the cached channel map is stale", () => {
-    const registry = createTestRegistry([]);
+    const registry = createTargetsTestRegistry([]);
     setActivePluginRegistry(registry, "stale-registry-test");
 
     // Warm the cached channel map before mutating the registry in place.
@@ -145,11 +112,7 @@ describe("resolveOutboundTarget defaultTo config fallback", () => {
 
     registry.channels.push({
       pluginId: "telegram",
-      plugin: createOutboundTestPlugin({
-        id: "telegram",
-        outbound: telegramOutboundStub,
-        messaging: telegramMessaging,
-      }),
+      plugin: createTelegramTestPlugin(),
       source: "test",
     });
 
@@ -380,7 +343,7 @@ describe("resolveSessionDeliveryTarget", () => {
   });
 
   it("keeps raw :topic: targets when the telegram plugin registry is unavailable", () => {
-    setActivePluginRegistry(createTestRegistry([]));
+    setActivePluginRegistry(createTargetsTestRegistry([]));
 
     const resolved = resolveSessionDeliveryTarget({
       entry: {
