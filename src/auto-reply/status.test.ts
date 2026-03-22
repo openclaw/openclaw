@@ -91,6 +91,102 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Queue: collect");
   });
 
+  it("prefers accumulated estimatedCostUsd over recalculation", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            anthropic: {
+              apiKey: "test-key",
+              models: [
+                {
+                  id: "claude-sonnet",
+                  cost: {
+                    input: 3,
+                    output: 15,
+                    cacheRead: 0.3,
+                    cacheWrite: 3.75,
+                  },
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "anthropic/claude-sonnet",
+        contextTokens: 200_000,
+      },
+      sessionEntry: {
+        sessionId: "cost-test",
+        updatedAt: 0,
+        inputTokens: 50,
+        outputTokens: 300,
+        cacheRead: 180_000,
+        cacheWrite: 500,
+        totalTokens: 180_550,
+        estimatedCostUsd: 0.060525,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+    const normalized = normalizeTestText(text);
+
+    // Per-component costs in consistent 4-decimal precision, parts add up
+    expect(normalized).toMatch(/Tokens:.*\$0\.0046/);
+    expect(normalized).toMatch(/Cache:.*\$0\.0559/);
+    expect(normalized).toContain("Cost: $0.0605");
+  });
+
+  it("recalculates cost with cache tokens when estimatedCostUsd is absent", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            anthropic: {
+              apiKey: "test-key",
+              models: [
+                {
+                  id: "claude-sonnet",
+                  cost: {
+                    input: 3,
+                    output: 15,
+                    cacheRead: 0.3,
+                    cacheWrite: 3.75,
+                  },
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "anthropic/claude-sonnet",
+        contextTokens: 200_000,
+      },
+      sessionEntry: {
+        sessionId: "cost-test-2",
+        updatedAt: 0,
+        inputTokens: 50,
+        outputTokens: 300,
+        cacheRead: 180_000,
+        cacheWrite: 500,
+        totalTokens: 180_550,
+        // no estimatedCostUsd — should fall back to recalculation
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+    const normalized = normalizeTestText(text);
+
+    // Recalculated with consistent 4-decimal precision
+    expect(normalized).toMatch(/Tokens:.*\$0\.0046/);
+    expect(normalized).toMatch(/Cache:.*\$0\.0559/);
+    expect(normalized).toContain("Cost: $0.0605");
+  });
+
   it("falls back to sessionEntry levels when resolved levels are not passed", () => {
     const text = buildStatusMessage({
       agent: {
