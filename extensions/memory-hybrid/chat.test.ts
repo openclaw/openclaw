@@ -76,10 +76,7 @@ describe("ChatModel", () => {
       json: async () => mockResponse,
     });
 
-    const result = await chatModel.checkForContradiction(
-      "User likes Python",
-      "User lives in Kyiv",
-    );
+    const result = await chatModel.checkForContradiction("User likes Python", "User lives in Kyiv");
 
     expect(result.contradiction).toBe(false);
     expect(result.action).toBe("keep_both");

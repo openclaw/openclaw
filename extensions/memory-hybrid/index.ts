@@ -649,9 +649,6 @@ const memoryPlugin = {
       `memory-hybrid: registered (db: ${resolvedDbPath}, model: ${cfg.embedding.model}, provider: ${cfg.embedding.provider})`,
     );
 
-    // Start Dream Mode Background Service
-    dreamService.start();
-
     // ======================================================================
     // Tool: memory_recall
     // ======================================================================

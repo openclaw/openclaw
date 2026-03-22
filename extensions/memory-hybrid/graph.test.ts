@@ -60,9 +60,7 @@ describe("GraphDB.traverse", () => {
     const graph = makeGraph();
     const result = graph.traverse(["Vova"], 3);
 
-    const edgeKeys = result.edges.map(
-      (e) => `${e.source}-${e.relation}-${e.target}`,
-    );
+    const edgeKeys = result.edges.map((e) => `${e.source}-${e.relation}-${e.target}`);
     const unique = new Set(edgeKeys);
     expect(unique.size).toBe(edgeKeys.length);
   });

@@ -10,8 +10,8 @@
     },
     "embedding.model": {
       "label": "Embedding Model",
-      "placeholder": "gemini-embedding-001",
-      "help": "Embedding model: gemini-embedding-001 (Google, free) or text-embedding-3-small (OpenAI)"
+      "placeholder": "gemini-embedding-2-preview",
+      "help": "Embedding model: gemini-embedding-2-preview (Google, free, 3072 dims) or text-embedding-3-small (OpenAI)"
     },
     "chatModel": {
       "label": "Chat Model",
@@ -57,7 +57,12 @@
           },
           "model": {
             "type": "string",
-            "enum": ["gemini-embedding-001", "text-embedding-3-small", "text-embedding-3-large"]
+            "enum": [
+              "gemini-embedding-001",
+              "gemini-embedding-2-preview",
+              "text-embedding-3-small",
+              "text-embedding-3-large"
+            ]
           }
         },
         "required": ["apiKey"]
