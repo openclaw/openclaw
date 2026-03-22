@@ -32769,6 +32769,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.accounts.*.network.pollStallThresholdMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.accounts.*.proxy",
       "kind": "channel",
       "type": "string",
@@ -34844,6 +34854,21 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.network.pollStallThresholdMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Telegram Poll Stall Threshold (ms)",
+      "help": "Polling stall watchdog threshold in milliseconds. If Telegram polling sees no getUpdates activity for longer than this, OpenClaw force-restarts the polling runner. Lower this only when your network/proxy frequently blackholes long polls and you want faster recovery.",
       "hasChildren": false
     },
     {

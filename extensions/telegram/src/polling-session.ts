@@ -86,6 +86,8 @@ export class TelegramPollingSession {
   #activePollCycleId = 0;
   #activeRunner: ReturnType<typeof run> | undefined;
   #activeFetchAbort: AbortController | undefined;
+  #scheduleForceCycleRestart: ((reason: "stall" | "outbound") => void) | undefined;
+  #warnedPollStallThresholdClamp = false;
 
   constructor(private readonly opts: TelegramPollingSessionOpts) {}
 
@@ -121,6 +123,7 @@ export class TelegramPollingSession {
       `[telegram] Restarting polling after outbound network error: ${formatErrorMessage(err)}`,
     );
     this.abortActiveFetch();
+    this.#scheduleForceCycleRestart?.("outbound");
     void activeRunner.stop().catch(() => {});
   }
 
@@ -242,8 +245,21 @@ export class TelegramPollingSession {
     this.#outboundRestartSignaled = false;
     const pollCycleId = ++this.#pollCycleCounter;
     this.#activePollCycleId = pollCycleId;
+    const configuredPollStallThresholdMs = this.opts.pollStallThresholdMs;
     const pollStallThresholdMs = resolvePollStallThresholdMs(this.opts.pollStallThresholdMs);
     const pollWatchdogIntervalMs = resolvePollWatchdogIntervalMs(pollStallThresholdMs);
+    if (
+      !this.#warnedPollStallThresholdClamp &&
+      typeof configuredPollStallThresholdMs === "number" &&
+      Number.isFinite(configuredPollStallThresholdMs) &&
+      configuredPollStallThresholdMs > 0 &&
+      configuredPollStallThresholdMs < MIN_POLL_STALL_THRESHOLD_MS
+    ) {
+      this.#warnedPollStallThresholdClamp = true;
+      this.opts.log(
+        `[telegram] channels.telegram.network.pollStallThresholdMs=${Math.floor(configuredPollStallThresholdMs)} is below minimum ${MIN_POLL_STALL_THRESHOLD_MS}; using ${MIN_POLL_STALL_THRESHOLD_MS}.`,
+      );
+    }
 
     let lastGetUpdatesAt = Date.now();
     bot.api.config.use(async (prev, method, payload, signal) => {
@@ -268,6 +284,24 @@ export class TelegramPollingSession {
     const forceCyclePromise = new Promise<void>((resolve) => {
       forceCycleResolve = resolve;
     });
+    const scheduleForceCycleRestart = (reason: "stall" | "outbound") => {
+      if (forceCycleTimer || this.opts.abortSignal?.aborted) {
+        return;
+      }
+      forceCycleTimer = setTimeout(() => {
+        if (this.opts.abortSignal?.aborted) {
+          return;
+        }
+        const cause =
+          reason === "outbound" ? "outbound-triggered polling restart" : "polling stall restart";
+        this.opts.log(
+          `[telegram] ${cause} timed out after ${formatDurationPrecise(POLL_STOP_GRACE_MS)}; forcing restart cycle.`,
+        );
+        forceCycleResolve?.();
+      }, POLL_STOP_GRACE_MS);
+      forceCycleTimer.unref?.();
+    };
+    this.#scheduleForceCycleRestart = scheduleForceCycleRestart;
     const stopRunner = () => {
       fetchAbortController?.abort();
       stopPromise ??= Promise.resolve(runner.stop())
@@ -305,17 +339,7 @@ export class TelegramPollingSession {
         );
         void stopRunner();
         void stopBot();
-        if (!forceCycleTimer) {
-          forceCycleTimer = setTimeout(() => {
-            if (this.opts.abortSignal?.aborted) {
-              return;
-            }
-            this.opts.log(
-              `[telegram] Polling runner stop timed out after ${formatDurationPrecise(POLL_STOP_GRACE_MS)}; forcing restart cycle.`,
-            );
-            forceCycleResolve?.();
-          }, POLL_STOP_GRACE_MS);
-        }
+        scheduleForceCycleRestart("stall");
       }
     }, pollWatchdogIntervalMs);
 
@@ -358,6 +382,9 @@ export class TelegramPollingSession {
       clearInterval(watchdog);
       if (forceCycleTimer) {
         clearTimeout(forceCycleTimer);
+      }
+      if (this.#scheduleForceCycleRestart === scheduleForceCycleRestart) {
+        this.#scheduleForceCycleRestart = undefined;
       }
       this.opts.abortSignal?.removeEventListener("abort", stopOnAbort);
       await waitForGracefulStop(stopRunner);

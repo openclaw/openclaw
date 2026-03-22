@@ -201,4 +201,127 @@ describe("TelegramPollingSession", () => {
     });
     await runPromise;
   });
+
+  it("forces outbound-triggered restart when runner stop does not settle", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const abort = new AbortController();
+    const cycleCallbacks: Array<(params: { error: unknown; consecutiveFailures: number }) => void> =
+      [];
+    const makeBot = () => ({
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        getUpdates: vi.fn(async () => []),
+        config: { use: vi.fn() },
+      },
+      stop: vi.fn(async () => undefined),
+    });
+    createTelegramBotMock
+      .mockImplementationOnce((opts) => {
+        cycleCallbacks.push(opts.onRecoverableSendChatActionNetworkFailure);
+        return makeBot();
+      })
+      .mockImplementationOnce((opts) => {
+        cycleCallbacks.push(opts.onRecoverableSendChatActionNetworkFailure);
+        return makeBot();
+      });
+
+    const firstTask = createDeferred();
+    let firstRunning = true;
+    const firstRunnerStop = vi.fn(async () => {
+      firstRunning = false;
+      await new Promise<void>(() => undefined);
+    });
+
+    runMock
+      .mockImplementationOnce(() => ({
+        task: () => firstTask.promise,
+        stop: firstRunnerStop,
+        isRunning: () => firstRunning,
+      }))
+      .mockImplementationOnce(() => ({
+        task: async () => {
+          abort.abort();
+        },
+        stop: vi.fn(async () => undefined),
+        isRunning: () => false,
+      }));
+
+    const session = new TelegramPollingSession({
+      token: "tok",
+      config: {},
+      accountId: "default",
+      runtime: undefined,
+      proxyFetch: undefined,
+      abortSignal: abort.signal,
+      runnerOptions: {},
+      getLastUpdateId: () => null,
+      persistUpdateId: async () => undefined,
+      log: () => undefined,
+      telegramTransport: undefined,
+    });
+
+    const runPromise = session.runUntilAbort();
+    await vi.waitFor(() => {
+      expect(cycleCallbacks).toHaveLength(1);
+      expect(runMock).toHaveBeenCalledTimes(1);
+    });
+    await Promise.resolve();
+
+    cycleCallbacks[0]?.({
+      error: new Error("outbound failure"),
+      consecutiveFailures: 2,
+    });
+
+    await vi.advanceTimersByTimeAsync(35_000);
+    await vi.waitFor(() => {
+      expect(runMock).toHaveBeenCalledTimes(2);
+    });
+
+    firstTask.resolve();
+    await runPromise;
+    vi.useRealTimers();
+  });
+
+  it("logs once when poll stall threshold is clamped to safety minimum", async () => {
+    const abort = new AbortController();
+    const log = vi.fn();
+    createTelegramBotMock.mockReturnValue({
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        getUpdates: vi.fn(async () => []),
+        config: { use: vi.fn() },
+      },
+      stop: vi.fn(async () => undefined),
+    });
+    runMock.mockImplementation(() => ({
+      task: async () => {
+        abort.abort();
+      },
+      stop: vi.fn(async () => undefined),
+      isRunning: () => false,
+    }));
+
+    const session = new TelegramPollingSession({
+      token: "tok",
+      config: {},
+      accountId: "default",
+      runtime: undefined,
+      proxyFetch: undefined,
+      abortSignal: abort.signal,
+      runnerOptions: {},
+      getLastUpdateId: () => null,
+      persistUpdateId: async () => undefined,
+      log,
+      telegramTransport: undefined,
+      pollStallThresholdMs: 5_000,
+    });
+
+    await session.runUntilAbort();
+
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "channels.telegram.network.pollStallThresholdMs=5000 is below minimum 60000; using 60000.",
+      ),
+    );
+  });
 });
