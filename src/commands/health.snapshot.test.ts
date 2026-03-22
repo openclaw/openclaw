@@ -178,11 +178,23 @@ describe("getHealthSnapshot", () => {
     const { calls, telegram } = await runSuccessfulTelegramProbe({
       channels: { telegram: { botToken: "t-1" } },
     });
+    const telegramProbe = telegram.probe as
+      | {
+          ok?: boolean;
+          bot?: { username?: string };
+          webhook?: { url?: string };
+          timings?: {
+            getMeMs?: number;
+            getWebhookInfoMs?: number;
+            totalMs?: number;
+          };
+        }
+      | undefined;
     expect(telegram.configured).toBe(true);
-    expect(telegram.probe?.ok).toBe(true);
-    expect(telegram.probe?.bot?.username).toBe("bot");
-    expect(telegram.probe?.webhook?.url).toMatch(/^https:/);
-    expect(telegram.probe?.timings).toMatchObject({
+    expect(telegramProbe?.ok).toBe(true);
+    expect(telegramProbe?.bot?.username).toBe("bot");
+    expect(telegramProbe?.webhook?.url).toMatch(/^https:/);
+    expect(telegramProbe?.timings).toMatchObject({
       getMeMs: expect.any(Number),
       getWebhookInfoMs: expect.any(Number),
       totalMs: expect.any(Number),

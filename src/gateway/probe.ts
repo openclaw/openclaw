@@ -47,7 +47,7 @@ function trackBestEffort<T>(promise: Promise<T>): () => SettledState<T> {
       value = null;
     },
   );
-  return () => ({ settled, value });
+  return () => (settled ? { settled: true, value } : { settled: false, value: null });
 }
 
 export function clampProbeTimeoutMs(timeoutMs: number): number {

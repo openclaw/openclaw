@@ -816,7 +816,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
       await stopScheduledTask({ env: envWithoutPort, stdout });
 
       expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
-      expect(inspectPortUsage).not.toHaveBeenCalledWith(29999);
+      expect(inspectPortUsage).toHaveBeenCalledWith(GATEWAY_PORT);
       expectGatewayTermination(9898);
     });
   });
