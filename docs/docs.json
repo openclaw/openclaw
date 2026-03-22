@@ -1044,7 +1044,8 @@
                     "pages": [
                       "plugins/building-plugins",
                       "plugins/sdk-channel-plugins",
-                      "plugins/sdk-provider-plugins"
+                      "plugins/sdk-provider-plugins",
+                      "plugins/sdk-migration"
                     ]
                   },
                   {
@@ -1055,7 +1056,6 @@
                       "plugins/sdk-runtime",
                       "plugins/sdk-setup",
                       "plugins/sdk-testing",
-                      "plugins/sdk-migration",
                       "plugins/manifest",
                       "plugins/architecture"
                     ]
