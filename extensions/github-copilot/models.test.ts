@@ -26,6 +26,14 @@ function createMockCtx(
   } as unknown as ProviderResolveDynamicModelContext;
 }
 
+function requireResolvedModel(ctx: ProviderResolveDynamicModelContext) {
+  const result = resolveCopilotForwardCompatModel(ctx);
+  if (!result) {
+    throw new Error(`expected model ${ctx.modelId} to resolve`);
+  }
+  return result;
+}
+
 describe("resolveCopilotForwardCompatModel", () => {
   it("returns undefined for empty modelId", () => {
     expect(resolveCopilotForwardCompatModel(createMockCtx(""))).toBeUndefined();
@@ -51,26 +59,23 @@ describe("resolveCopilotForwardCompatModel", () => {
     const ctx = createMockCtx("gpt-5.3-codex", {
       "github-copilot/gpt-5.2-codex": template,
     });
-    const result = resolveCopilotForwardCompatModel(ctx);
-    expect(result).toBeDefined();
-    expect(result!.id).toBe("gpt-5.3-codex");
-    expect(result!.name).toBe("gpt-5.3-codex");
+    const result = requireResolvedModel(ctx);
+    expect(result.id).toBe("gpt-5.3-codex");
+    expect(result.name).toBe("gpt-5.3-codex");
     expect((result as unknown as Record<string, unknown>).reasoning).toBe(true);
   });
 
   it("falls through to synthetic catch-all when codex template is missing", () => {
     const ctx = createMockCtx("gpt-5.3-codex");
-    const result = resolveCopilotForwardCompatModel(ctx);
-    expect(result).toBeDefined();
-    expect(result!.id).toBe("gpt-5.3-codex");
+    const result = requireResolvedModel(ctx);
+    expect(result.id).toBe("gpt-5.3-codex");
   });
 
   it("creates synthetic model for arbitrary unknown model ID", () => {
     const ctx = createMockCtx("gpt-5.4-mini");
-    const result = resolveCopilotForwardCompatModel(ctx);
-    expect(result).toBeDefined();
-    expect(result!.id).toBe("gpt-5.4-mini");
-    expect(result!.name).toBe("gpt-5.4-mini");
+    const result = requireResolvedModel(ctx);
+    expect(result.id).toBe("gpt-5.4-mini");
+    expect(result.name).toBe("gpt-5.4-mini");
     expect((result as unknown as Record<string, unknown>).api).toBe("openai-responses");
     expect((result as unknown as Record<string, unknown>).input).toEqual(["text", "image"]);
   });
@@ -78,8 +83,7 @@ describe("resolveCopilotForwardCompatModel", () => {
   it("infers reasoning=true for o1/o3 model IDs", () => {
     for (const id of ["o1", "o3", "o3-mini", "o1-preview"]) {
       const ctx = createMockCtx(id);
-      const result = resolveCopilotForwardCompatModel(ctx);
-      expect(result).toBeDefined();
+      const result = requireResolvedModel(ctx);
       expect((result as unknown as Record<string, unknown>).reasoning).toBe(true);
     }
   });
@@ -93,8 +97,7 @@ describe("resolveCopilotForwardCompatModel", () => {
       "turbo-o3-voice",
     ]) {
       const ctx = createMockCtx(id);
-      const result = resolveCopilotForwardCompatModel(ctx);
-      expect(result).toBeDefined();
+      const result = requireResolvedModel(ctx);
       expect((result as unknown as Record<string, unknown>).reasoning).toBe(false);
     }
   });
