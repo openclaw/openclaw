@@ -19,6 +19,7 @@
 #include <glib/gstdio.h>
 #include <string.h>
 #include "state.h"
+#include "log.h"
 
 #include "systemd_helpers.h"
 
@@ -32,6 +33,7 @@ static guint properties_changed_signal_id = 0;
 
 static void fetch_unit_properties(void);
 extern void systemd_refresh(void);
+static void clear_unit_subscription(const gchar *reason);
 
 static gboolean check_system_scope_units(void) {
     const gchar *paths[] = {"/etc/systemd/system", "/usr/lib/systemd/system", "/lib/systemd/system"};
@@ -126,7 +128,7 @@ const gchar* systemd_get_canonical_unit_name(void) {
                     return cached_unit_name;
                 }
             }
-            g_warning("Environment requested unit '%s' but it was not discovered as a valid gateway; falling back to discovery.", env_override);
+            OC_LOG_WARN(OPENCLAW_LOG_CAT_SYSTEMD, "Environment requested unit '%s' but it was not discovered as a valid gateway; falling back to discovery.", env_override);
             g_free(env_override);
         }
         
@@ -188,7 +190,7 @@ const gchar* systemd_get_canonical_unit_name(void) {
         }
         
         if (!best_is_active && !best_is_enabled) {
-            g_warning("Multiple OpenClaw systemd units found but none are active or enabled. "
+            OC_LOG_WARN(OPENCLAW_LOG_CAT_SYSTEMD, "Multiple OpenClaw systemd units found but none are active or enabled. "
                       "Deterministically selecting '%s' via lexical fallback.", best_candidate);
         }
         
@@ -209,8 +211,7 @@ static void extract_service_config_from_file(gchar **exec_start_out, gchar ***en
     const gchar *home_dir = g_get_home_dir();
     if (!home_dir) return;
 
-    const gchar *unit_name = systemd_get_canonical_unit_name();
-    g_autofree gchar *unit_path = g_build_filename(home_dir, ".config", "systemd", "user", unit_name, NULL);
+    g_autofree gchar *unit_path = g_build_filename(home_dir, ".config", "systemd", "user", systemd_get_canonical_unit_name(), NULL);
     
     g_autofree gchar *contents = NULL;
     g_autoptr(GError) error = NULL;
@@ -328,7 +329,7 @@ static void extract_service_config_from_file(gchar **exec_start_out, gchar ***en
                             g_strfreev(env_lines);
                             g_free(file_contents);
                         } else if (!is_optional) {
-                            g_warning("Failed to read EnvironmentFile: %s", env_file);
+                            OC_LOG_WARN(OPENCLAW_LOG_CAT_SYSTEMD, "Failed to read EnvironmentFile: %s", env_file);
                         }
                         
                         g_free(expanded_h);
@@ -366,25 +367,40 @@ static void extract_service_config_from_file(gchar **exec_start_out, gchar ***en
     }
 }
 
+static void clear_unit_subscription(const gchar *reason) {
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "clear-start reason=%s proxy=%p signal_id=%u unit=%s",
+              reason, (void *)unit_proxy, properties_changed_signal_id,
+              systemd_get_canonical_unit_name());
+
+    if (unit_proxy && properties_changed_signal_id > 0) {
+        g_signal_handler_disconnect(unit_proxy, properties_changed_signal_id);
+    }
+    properties_changed_signal_id = 0;
+
+    if (unit_proxy) {
+        g_object_unref(unit_proxy);
+        unit_proxy = NULL;
+    }
+
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "clear-done reason=%s proxy=%p signal_id=%u", reason, (void *)unit_proxy, properties_changed_signal_id);
+}
+
 static void on_unit_properties_changed(GDBusProxy *proxy, GVariant *changed_properties, const gchar* const *invalidated_properties, gpointer user_data) {
-    (void)proxy;
     (void)changed_properties;
     (void)invalidated_properties;
     (void)user_data;
     
+    OC_LOG_TRACE(OPENCLAW_LOG_CAT_SYSTEMD, "on_unit_properties_changed entry proxy=%p signal_id=%u", (void *)proxy, properties_changed_signal_id);
+
     // We simply re-fetch the properties whenever they change
     fetch_unit_properties();
 }
 
 static void subscribe_to_unit(GDBusConnection *bus, const gchar *unit_path) {
-    if (unit_proxy) {
-        if (properties_changed_signal_id > 0) {
-            g_signal_handler_disconnect(unit_proxy, properties_changed_signal_id);
-            properties_changed_signal_id = 0;
-        }
-        g_object_unref(unit_proxy);
-        unit_proxy = NULL;
-    }
+    GDBusProxy *old_proxy = unit_proxy;
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "subscribe-enter old_proxy=%p unit_path=%s", (void *)old_proxy, unit_path);
+
+    clear_unit_subscription("re-subscribe");
 
     g_autoptr(GError) error = NULL;
     unit_proxy = g_dbus_proxy_new_sync(
@@ -395,13 +411,19 @@ static void subscribe_to_unit(GDBusConnection *bus, const gchar *unit_path) {
         NULL, &error);
 
     if (!unit_proxy) {
-        g_warning("Failed to create Unit proxy: %s", error->message);
+        OC_LOG_WARN(OPENCLAW_LOG_CAT_SYSTEMD, "Failed to create Unit proxy: %s", error->message);
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "subscribe-failed unit_path=%s error=%s",
+                  unit_path, error->message);
         return;
     }
 
     properties_changed_signal_id = g_signal_connect(unit_proxy, "g-properties-changed", G_CALLBACK(on_unit_properties_changed), NULL);
+
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "subscribe-acquired new_proxy=%p signal_id=%u unit_path=%s", (void *)unit_proxy, properties_changed_signal_id, unit_path);
     
     fetch_unit_properties();
+
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "subscribe-exit owned_proxy=%p unit_path=%s", (void *)unit_proxy, unit_path);
 }
 
 static void on_manager_signal(GDBusProxy *proxy, gchar *sender_name, gchar *signal_name, GVariant *parameters, gpointer user_data) {
@@ -412,12 +434,19 @@ static void on_manager_signal(GDBusProxy *proxy, gchar *sender_name, gchar *sign
 
     // If unit files changed or a new unit appeared, re-evaluate our connection
     if (g_strcmp0(signal_name, "UnitNew") == 0 || g_strcmp0(signal_name, "UnitFilesChanged") == 0) {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "on_manager_signal signal=%s unit=%s proxy=%p",
+                  signal_name, systemd_get_canonical_unit_name(), (void *)unit_proxy);
         systemd_refresh(); 
     }
 }
 
 static void fetch_unit_properties(void) {
-    if (!unit_proxy) return;
+    OC_LOG_TRACE(OPENCLAW_LOG_CAT_SYSTEMD, "fetch_unit_properties entry proxy=%p signal_id=%u", (void *)unit_proxy, properties_changed_signal_id);
+
+    if (!unit_proxy) {
+        OC_LOG_TRACE(OPENCLAW_LOG_CAT_SYSTEMD, "fetch_unit_properties skip proxy=%p", (void *)unit_proxy);
+        return;
+    }
 
     g_autoptr(GVariant) active_state_v = g_dbus_proxy_get_cached_property(unit_proxy, "ActiveState");
     g_autoptr(GVariant) sub_state_v = g_dbus_proxy_get_cached_property(unit_proxy, "SubState");
@@ -460,6 +489,11 @@ static void fetch_unit_properties(void) {
 
     state_update_systemd(&sys_state);
 
+    OC_LOG_TRACE(OPENCLAW_LOG_CAT_SYSTEMD, "fetch_unit_properties exit active_state=%s sub_state=%s proxy=%p",
+              sys_state.active_state ? sys_state.active_state : "(null)",
+              sys_state.sub_state ? sys_state.sub_state : "(null)",
+              (void *)unit_proxy);
+
     g_free(sys_state.unit_name);
     g_free(sys_state.working_directory);
     g_free(sys_state.active_state);
@@ -472,7 +506,7 @@ void systemd_init(void) {
     g_autoptr(GError) error = NULL;
     g_autoptr(GDBusConnection) session_bus = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, &error);
     if (!session_bus) {
-        g_warning("Failed to connect to session bus: %s", error->message);
+        OC_LOG_WARN(OPENCLAW_LOG_CAT_SYSTEMD, "Failed to connect to session bus: %s", error->message);
         SystemdState sys_state = {0};
         sys_state.systemd_unavailable = TRUE;
         state_update_systemd(&sys_state);
@@ -487,7 +521,7 @@ void systemd_init(void) {
         NULL, &error);
 
     if (!manager_proxy) {
-        g_warning("Failed to create systemd Manager proxy: %s", error->message);
+        OC_LOG_WARN(OPENCLAW_LOG_CAT_SYSTEMD, "Failed to create systemd Manager proxy: %s", error->message);
         SystemdState sys_state = {0};
         sys_state.systemd_unavailable = TRUE;
         state_update_systemd(&sys_state);
@@ -507,9 +541,16 @@ static void on_get_unit_ready(GObject *source_object, GAsyncResult *res, gpointe
     g_autoptr(GError) error = NULL;
     g_autoptr(GVariant) result = g_dbus_proxy_call_finish(G_DBUS_PROXY(source_object), res, &error);
 
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "on_get_unit_ready entry requested=%s current=%s proxy=%p",
+              requested_unit_name ? requested_unit_name : "(null)",
+              systemd_get_canonical_unit_name(),
+              (void *)unit_proxy);
+
     // If the canonical unit has changed since we requested this unit, discard the stale reply
     if (requested_unit_name) {
         if (g_strcmp0(requested_unit_name, systemd_get_canonical_unit_name()) != 0) {
+            OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "on_get_unit_ready stale-discard requested=%s current=%s",
+                      requested_unit_name, systemd_get_canonical_unit_name());
             g_free(requested_unit_name);
             return;
         }
@@ -518,15 +559,10 @@ static void on_get_unit_ready(GObject *source_object, GAsyncResult *res, gpointe
 
     // 3 (continued). Evaluate runtime state result
     if (!result) {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "on_get_unit_ready !result proxy=%p error=%s",
+                  (void *)unit_proxy, error ? error->message : "(null)");
         // Drop the previous unit subscription when retargeting to an unloaded unit
-        if (unit_proxy) {
-            if (properties_changed_signal_id > 0) {
-                g_signal_handler_disconnect(unit_proxy, properties_changed_signal_id);
-                properties_changed_signal_id = 0;
-            }
-            g_object_unref(unit_proxy);
-            unit_proxy = NULL;
-        }
+        clear_unit_subscription("unit-unloaded");
 
         // Unit is installed but completely stopped/inactive/unloaded
         SystemdState sys_state = {0};
@@ -567,6 +603,9 @@ static void on_get_unit_ready(GObject *source_object, GAsyncResult *res, gpointe
     const gchar *unit_path = NULL;
     g_variant_get(result, "(&o)", &unit_path);
 
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "on_get_unit_ready success unit_path=%s proxy=%p",
+              unit_path ? unit_path : "(null)", (void *)unit_proxy);
+
     if (unit_path) {
         subscribe_to_unit(g_dbus_proxy_get_connection(manager_proxy), unit_path);
     }
@@ -577,9 +616,16 @@ static void on_get_unit_file_state_ready(GObject *source_object, GAsyncResult *r
     g_autoptr(GError) error = NULL;
     g_autoptr(GVariant) result = g_dbus_proxy_call_finish(G_DBUS_PROXY(source_object), res, &error);
 
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "on_get_unit_file_state_ready entry requested=%s current=%s proxy=%p",
+              requested_unit_name ? requested_unit_name : "(null)",
+              systemd_get_canonical_unit_name(),
+              (void *)unit_proxy);
+
     // If the canonical unit has changed since we requested this unit, discard the stale reply
     if (requested_unit_name) {
         if (g_strcmp0(requested_unit_name, systemd_get_canonical_unit_name()) != 0) {
+            OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "on_get_unit_file_state_ready stale-discard requested=%s current=%s",
+                      requested_unit_name, systemd_get_canonical_unit_name());
             g_free(requested_unit_name);
             return;
         }
@@ -606,15 +652,10 @@ static void on_get_unit_file_state_ready(GObject *source_object, GAsyncResult *r
 
     // 2. If GetUnitFileState fails or state is "not-found", treat as not installed
     if (!is_installed) {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "on_get_unit_file_state_ready !is_installed proxy=%p",
+                  (void *)unit_proxy);
         // Drop the previous unit subscription if the selected unit is no longer installed
-        if (unit_proxy) {
-            if (properties_changed_signal_id > 0) {
-                g_signal_handler_disconnect(unit_proxy, properties_changed_signal_id);
-                properties_changed_signal_id = 0;
-            }
-            g_object_unref(unit_proxy);
-            unit_proxy = NULL;
-        }
+        clear_unit_subscription("unit-not-installed");
 
         // Failed to get file state or unit not found -> assume not installed
         SystemdState sys_state = {0};
@@ -626,6 +667,9 @@ static void on_get_unit_file_state_ready(GObject *source_object, GAsyncResult *r
         g_free(sys_state.unit_name);
         return;
     }
+
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "on_get_unit_file_state_ready is_installed proxy=%p",
+              (void *)unit_proxy);
 
     // 3. Fetch runtime unit path asynchronously
     const gchar *current_unit = systemd_get_canonical_unit_name();
@@ -641,7 +685,12 @@ void systemd_refresh(void) {
 
     g_free(cached_unit_name);
     cached_unit_name = NULL;
+
     const gchar *unit_name = systemd_get_canonical_unit_name();
+    OC_LOG_TRACE(OPENCLAW_LOG_CAT_SYSTEMD, "systemd_refresh entry proxy=%p signal_id=%u unit=%s",
+              (void *)unit_proxy, properties_changed_signal_id, unit_name ? unit_name : "(null)");
+
+    if (!unit_name) return;
 
     // 1. Start async check if unit file exists/is installed at all
     g_dbus_proxy_call(
@@ -651,26 +700,52 @@ void systemd_refresh(void) {
         on_get_unit_file_state_ready, g_strdup(unit_name));
 }
 
+static void on_manager_unit_action_finished(GObject *source_object, GAsyncResult *res, gpointer user_data) {
+    const gchar *method = (const gchar *)user_data;
+    g_autoptr(GError) error = NULL;
+    g_autoptr(GVariant) result = g_dbus_proxy_call_finish(G_DBUS_PROXY(source_object), res, &error);
+
+    if (result) {
+        const gchar *job_path = NULL;
+        g_variant_get(result, "(&o)", &job_path);
+        OC_LOG_INFO(OPENCLAW_LOG_CAT_SYSTEMD, "on_manager_unit_action_finished success method=%s job=%s manager=%p unit=%s",
+                  method, job_path ? job_path : "(null)",
+                  (void *)manager_proxy, systemd_get_canonical_unit_name());
+    } else {
+        OC_LOG_WARN(OPENCLAW_LOG_CAT_SYSTEMD, "on_manager_unit_action_finished error method=%s manager=%p unit=%s error=%s",
+                  method, (void *)manager_proxy, systemd_get_canonical_unit_name(), error ? error->message : "(null)");
+    }
+}
+
 void systemd_start_gateway(void) {
     if (!manager_proxy) return;
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "systemd_start_gateway pre-call manager=%p unit=%s",
+              (void *)manager_proxy, systemd_get_canonical_unit_name());
     g_dbus_proxy_call(
         manager_proxy, "StartUnit",
         g_variant_new("(ss)", systemd_get_canonical_unit_name(), "replace"),
-        G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL, NULL); 
+        G_DBUS_CALL_FLAGS_NONE, -1, NULL,
+        on_manager_unit_action_finished, (gpointer)"StartUnit");
 }
 
 void systemd_stop_gateway(void) {
     if (!manager_proxy) return;
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "systemd_stop_gateway pre-call manager=%p unit=%s",
+              (void *)manager_proxy, systemd_get_canonical_unit_name());
     g_dbus_proxy_call(
         manager_proxy, "StopUnit",
         g_variant_new("(ss)", systemd_get_canonical_unit_name(), "replace"),
-        G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL, NULL);
+        G_DBUS_CALL_FLAGS_NONE, -1, NULL,
+        on_manager_unit_action_finished, (gpointer)"StopUnit");
 }
 
 void systemd_restart_gateway(void) {
     if (!manager_proxy) return;
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "systemd_restart_gateway pre-call manager=%p unit=%s",
+              (void *)manager_proxy, systemd_get_canonical_unit_name());
     g_dbus_proxy_call(
         manager_proxy, "RestartUnit",
         g_variant_new("(ss)", systemd_get_canonical_unit_name(), "replace"),
-        G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL, NULL);
+        G_DBUS_CALL_FLAGS_NONE, -1, NULL,
+        on_manager_unit_action_finished, (gpointer)"RestartUnit");
 }

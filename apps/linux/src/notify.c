@@ -15,6 +15,7 @@
 #include <glib.h>
 #include <gtk/gtk.h>
 #include "state.h"
+#include "log.h"
 
 void notify_init(void) {
     // Basic init, application holds notification scope
@@ -22,9 +23,13 @@ void notify_init(void) {
 
 void notify_on_transition(AppState old_state, AppState new_state) {
     GApplication *app = g_application_get_default();
+
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_NOTIFY, "notify_on_transition entry old=%d new=%d app=%p registered=%d",
+              old_state, new_state, (void *)app, app ? g_application_get_is_registered(app) : 0);
     
     // Safety guard: do not send notifications before app is registered
     if (!app || !g_application_get_is_registered(app)) {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_NOTIFY, "notify_on_transition skip (not registered)");
         return;
     }
 
@@ -50,8 +55,12 @@ void notify_on_transition(AppState old_state, AppState new_state) {
     }
 
     if (should_notify) {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_NOTIFY, "notify_on_transition pre-send body='%s'", body);
         g_autoptr(GNotification) notification = g_notification_new(title);
         g_notification_set_body(notification, body);
         g_application_send_notification(app, "openclaw-status", notification);
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_NOTIFY, "notify_on_transition post-send");
+    } else {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_NOTIFY, "notify_on_transition no-send");
     }
 }
