@@ -2039,6 +2039,432 @@
         ]
       },
       {
+        "language": "ko",
+        "tabs": [
+          {
+            "tab": "시작하기",
+            "groups": [
+              {
+                "group": "개요",
+                "pages": ["ko-KR/index", "ko-KR/start/showcase", "ko-KR/concepts/features"]
+              },
+              {
+                "group": "첫 설정",
+                "pages": [
+                  "ko-KR/start/getting-started",
+                  "ko-KR/start/onboarding-overview",
+                  "ko-KR/start/wizard",
+                  "ko-KR/start/onboarding"
+                ]
+              },
+              {
+                "group": "가이드",
+                "pages": [
+                  "ko-KR/start/openclaw",
+                  "ko-KR/start/wizard-cli-reference",
+                  "ko-KR/start/wizard-cli-automation"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "설치",
+            "groups": [
+              {
+                "group": "설치 개요",
+                "pages": ["ko-KR/install/index", "ko-KR/install/installer", "ko-KR/install/node"]
+              },
+              {
+                "group": "컨테이너",
+                "pages": [
+                  "ko-KR/install/ansible",
+                  "ko-KR/install/bun",
+                  "ko-KR/install/docker",
+                  "ko-KR/install/nix",
+                  "ko-KR/install/podman"
+                ]
+              },
+              {
+                "group": "호스팅",
+                "pages": [
+                  "ko-KR/install/azure",
+                  "ko-KR/install/digitalocean",
+                  "ko-KR/install/docker-vm-runtime",
+                  "ko-KR/install/exe-dev",
+                  "ko-KR/install/fly",
+                  "ko-KR/install/gcp",
+                  "ko-KR/install/hetzner",
+                  "ko-KR/install/kubernetes",
+                  "ko-KR/install/macos-vm",
+                  "ko-KR/install/northflank",
+                  "ko-KR/install/oracle",
+                  "ko-KR/install/railway",
+                  "ko-KR/install/raspberry-pi"
+                ]
+              },
+              {
+                "group": "유지보수",
+                "pages": [
+                  "ko-KR/install/updating",
+                  "ko-KR/install/migrating",
+                  "ko-KR/install/uninstall",
+                  "ko-KR/install/development-channels"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "채널",
+            "groups": [
+              {
+                "group": "개요",
+                "pages": ["ko-KR/channels/index"]
+              },
+              {
+                "group": "메시징 플랫폼",
+                "pages": [
+                  "ko-KR/channels/googlechat",
+                  "ko-KR/channels/imessage",
+                  "ko-KR/channels/irc",
+                  "ko-KR/channels/line",
+                  "ko-KR/channels/mattermost",
+                  "ko-KR/channels/nextcloud-talk",
+                  "ko-KR/channels/nostr",
+                  "ko-KR/channels/signal",
+                  "ko-KR/channels/synology-chat",
+                  "ko-KR/channels/tlon",
+                  "ko-KR/channels/twitch",
+                  "ko-KR/plugins/voice-call",
+                  "ko-KR/channels/zalo",
+                  "ko-KR/channels/zalouser"
+                ]
+              },
+              {
+                "group": "설정",
+                "pages": [
+                  "ko-KR/channels/pairing",
+                  "ko-KR/channels/group-messages",
+                  "ko-KR/channels/groups",
+                  "ko-KR/channels/broadcast-groups",
+                  "ko-KR/channels/channel-routing",
+                  "ko-KR/channels/location",
+                  "ko-KR/channels/troubleshooting"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "에이전트",
+            "groups": [
+              {
+                "group": "기초",
+                "pages": [
+                  "ko-KR/concepts/architecture",
+                  "ko-KR/concepts/agent",
+                  "ko-KR/concepts/agent-loop",
+                  "ko-KR/concepts/system-prompt",
+                  "ko-KR/concepts/context",
+                  "ko-KR/concepts/context-engine",
+                  "ko-KR/start/bootstrapping"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "도구 & 플러그인",
+            "groups": [
+              {
+                "group": "개요",
+                "pages": ["ko-KR/tools/index"]
+              },
+              {
+                "group": "플러그인",
+                "pages": [
+                  "ko-KR/tools/plugin",
+                  "ko-KR/plugins/community",
+                  "ko-KR/plugins/bundles",
+                  "ko-KR/plugins/manifest",
+                  "ko-KR/plugins/sdk-migration"
+                ]
+              },
+              {
+                "group": "Skills",
+                "pages": ["ko-KR/tools/creating-skills", "ko-KR/tools/skills-config", "ko-KR/prose"]
+              },
+              {
+                "group": "자동화",
+                "pages": [
+                  "ko-KR/automation/cron-vs-heartbeat",
+                  "ko-KR/automation/troubleshooting",
+                  "ko-KR/automation/poll",
+                  "ko-KR/automation/auth-monitoring"
+                ]
+              },
+              {
+                "group": "도구",
+                "pages": [
+                  "ko-KR/tools/apply-patch",
+                  {
+                    "group": "브라우저",
+                    "pages": [
+                      "ko-KR/tools/browser-login",
+                      "ko-KR/tools/browser-linux-troubleshooting",
+                      "ko-KR/tools/browser-wsl2-windows-remote-cdp-troubleshooting"
+                    ]
+                  },
+                  "ko-KR/tools/btw",
+                  "ko-KR/tools/elevated",
+                  "ko-KR/tools/llm-task",
+                  "ko-KR/tools/loop-detection",
+                  "ko-KR/tools/pdf",
+                  "ko-KR/tools/reactions",
+                  "ko-KR/tools/thinking",
+                  {
+                    "group": "웹과 검색",
+                    "pages": [
+                      "ko-KR/tools/brave-search",
+                      "ko-KR/tools/firecrawl",
+                      "ko-KR/tools/perplexity-search",
+                      "ko-KR/tools/tavily"
+                    ]
+                  }
+                ]
+              },
+              {
+                "group": "에이전트 협업",
+                "pages": ["ko-KR/tools/agent-send"]
+              }
+            ]
+          },
+          {
+            "tab": "모델",
+            "groups": [
+              {
+                "group": "개요",
+                "pages": ["ko-KR/providers/index", "ko-KR/providers/models"]
+              },
+              {
+                "group": "프로바이더",
+                "pages": [
+                  "ko-KR/providers/anthropic",
+                  "ko-KR/providers/bedrock",
+                  "ko-KR/providers/cloudflare-ai-gateway",
+                  "ko-KR/providers/claude-max-api-proxy",
+                  "ko-KR/providers/deepgram",
+                  "ko-KR/providers/github-copilot",
+                  "ko-KR/providers/google",
+                  "ko-KR/providers/groq",
+                  "ko-KR/providers/huggingface",
+                  "ko-KR/providers/kilocode",
+                  "ko-KR/providers/litellm",
+                  "ko-KR/providers/glm",
+                  "ko-KR/providers/minimax",
+                  "ko-KR/providers/modelstudio",
+                  "ko-KR/providers/moonshot",
+                  "ko-KR/providers/mistral",
+                  "ko-KR/providers/nvidia",
+                  "ko-KR/providers/ollama",
+                  "ko-KR/providers/openai",
+                  "ko-KR/providers/opencode-go",
+                  "ko-KR/providers/opencode",
+                  "ko-KR/providers/openrouter",
+                  "ko-KR/providers/perplexity-provider",
+                  "ko-KR/providers/qianfan",
+                  "ko-KR/providers/qwen",
+                  "ko-KR/providers/sglang",
+                  "ko-KR/providers/synthetic",
+                  "ko-KR/providers/together",
+                  "ko-KR/providers/vercel-ai-gateway",
+                  "ko-KR/providers/venice",
+                  "ko-KR/providers/vllm",
+                  "ko-KR/providers/volcengine",
+                  "ko-KR/providers/xai",
+                  "ko-KR/providers/xiaomi",
+                  "ko-KR/providers/zai"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "플랫폼",
+            "groups": [
+              {
+                "group": "플랫폼 개요",
+                "pages": [
+                  "ko-KR/platforms/index",
+                  "ko-KR/platforms/macos",
+                  "ko-KR/platforms/linux",
+                  "ko-KR/platforms/windows",
+                  "ko-KR/platforms/android",
+                  "ko-KR/platforms/ios"
+                ]
+              },
+              {
+                "group": "macOS 컴패니언 앱",
+                "pages": [
+                  "ko-KR/platforms/mac/dev-setup",
+                  "ko-KR/platforms/mac/menu-bar",
+                  "ko-KR/platforms/mac/voicewake",
+                  "ko-KR/platforms/mac/voice-overlay",
+                  "ko-KR/platforms/mac/webchat",
+                  "ko-KR/platforms/mac/canvas",
+                  "ko-KR/platforms/mac/child-process",
+                  "ko-KR/platforms/mac/health",
+                  "ko-KR/platforms/mac/icon",
+                  "ko-KR/platforms/mac/logging",
+                  "ko-KR/platforms/mac/permissions",
+                  "ko-KR/platforms/mac/remote",
+                  "ko-KR/platforms/mac/signing",
+                  "ko-KR/platforms/mac/bundled-gateway",
+                  "ko-KR/platforms/mac/xpc",
+                  "ko-KR/platforms/mac/skills",
+                  "ko-KR/platforms/mac/peekaboo"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "Gateway & 운영",
+            "groups": [
+              {
+                "group": "Gateway",
+                "pages": [
+                  "ko-KR/gateway/index",
+                  {
+                    "group": "설정과 운영",
+                    "pages": [
+                      "ko-KR/gateway/authentication",
+                      "ko-KR/auth-credential-semantics",
+                      "ko-KR/gateway/secrets-plan-contract",
+                      "ko-KR/gateway/health",
+                      "ko-KR/gateway/logging",
+                      "ko-KR/gateway/gateway-lock",
+                      "ko-KR/gateway/background-process",
+                      "ko-KR/gateway/multiple-gateways"
+                    ]
+                  },
+                  {
+                    "group": "보안과 샌드박스",
+                    "pages": ["ko-KR/gateway/sandbox-vs-tool-policy-vs-elevated"]
+                  },
+                  {
+                    "group": "프로토콜과 API",
+                    "pages": [
+                      "ko-KR/gateway/protocol",
+                      "ko-KR/gateway/bridge-protocol",
+                      "ko-KR/gateway/openai-http-api",
+                      "ko-KR/gateway/tools-invoke-http-api",
+                      "ko-KR/gateway/cli-backends",
+                      "ko-KR/gateway/local-models"
+                    ]
+                  },
+                  {
+                    "group": "네트워킹과 디스커버리",
+                    "pages": [
+                      "ko-KR/network",
+                      "ko-KR/gateway/network-model",
+                      "ko-KR/gateway/pairing"
+                    ]
+                  }
+                ]
+              },
+              {
+                "group": "원격 접속",
+                "pages": ["ko-KR/gateway/remote-gateway-readme", "ko-KR/gateway/tailscale"]
+              }
+            ]
+          },
+          {
+            "tab": "참고자료",
+            "groups": [
+              {
+                "group": "CLI 명령어",
+                "pages": [
+                  {
+                    "group": "Gateway 와 서비스",
+                    "pages": [
+                      "ko-KR/cli/backup",
+                      "ko-KR/cli/daemon",
+                      "ko-KR/cli/doctor",
+                      "ko-KR/cli/health",
+                      "ko-KR/cli/logs",
+                      "ko-KR/cli/reset",
+                      "ko-KR/cli/security",
+                      "ko-KR/cli/setup",
+                      "ko-KR/cli/status",
+                      "ko-KR/cli/uninstall",
+                      "ko-KR/cli/update"
+                    ]
+                  },
+                  {
+                    "group": "에이전트와 세션",
+                    "pages": [
+                      "ko-KR/cli/agent",
+                      "ko-KR/cli/memory",
+                      "ko-KR/cli/models",
+                      "ko-KR/cli/sessions",
+                      "ko-KR/cli/system"
+                    ]
+                  },
+                  {
+                    "group": "채널과 메시징",
+                    "pages": [
+                      "ko-KR/cli/channels",
+                      "ko-KR/cli/directory",
+                      "ko-KR/cli/pairing",
+                      "ko-KR/cli/qr",
+                      "ko-KR/cli/voicecall"
+                    ]
+                  },
+                  {
+                    "group": "도구와 실행",
+                    "pages": ["ko-KR/cli/approvals", "ko-KR/cli/nodes"]
+                  },
+                  {
+                    "group": "설정",
+                    "pages": ["ko-KR/cli/configure", "ko-KR/cli/webhooks"]
+                  },
+                  {
+                    "group": "플러그인과 Skills",
+                    "pages": ["ko-KR/cli/skills"]
+                  },
+                  {
+                    "group": "인터페이스",
+                    "pages": ["ko-KR/cli/dashboard", "ko-KR/cli/tui"]
+                  },
+                  {
+                    "group": "유틸리티",
+                    "pages": [
+                      "ko-KR/cli/clawbot",
+                      "ko-KR/cli/completion",
+                      "ko-KR/cli/dns",
+                      "ko-KR/cli/docs"
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "도움말",
+            "groups": [
+              {
+                "group": "커뮤니티",
+                "pages": ["ko-KR/start/lore"]
+              },
+              {
+                "group": "개발자 설정",
+                "pages": ["ko-KR/start/setup"]
+              },
+              {
+                "group": "문서 메타",
+                "pages": ["ko-KR/start/hubs", "ko-KR/start/docs-directory"]
+              }
+            ]
+          }
+        ]
+      },
+      {
         "language": "ja",
         "tabs": [
           {
