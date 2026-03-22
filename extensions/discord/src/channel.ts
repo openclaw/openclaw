@@ -46,7 +46,6 @@ import {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
 } from "./group-policy.js";
-import { monitorDiscordProvider } from "./monitor.js";
 import {
   looksLikeDiscordTargetId,
   normalizeDiscordMessagingTarget,
@@ -78,6 +77,15 @@ type DiscordSendFn = ReturnType<
   typeof getDiscordRuntime
 >["channel"]["discord"]["sendMessageDiscord"];
 
+let discordProviderRuntimePromise:
+  | Promise<typeof import("./monitor/provider.runtime.js")>
+  | undefined;
+
+async function loadDiscordProviderRuntime() {
+  discordProviderRuntimePromise ??= import("./monitor/provider.runtime.js");
+  return await discordProviderRuntimePromise;
+}
+
 const meta = getChatChannelMeta("discord");
 const REQUIRED_DISCORD_PERMISSIONS = ["ViewChannel", "SendMessages"] as const;
 
@@ -86,7 +94,11 @@ const resolveDiscordDmPolicy = createScopedDmSecurityResolver<ResolvedDiscordAcc
   resolvePolicy: (account) => account.config.dm?.policy,
   resolveAllowFrom: (account) => account.config.dm?.allowFrom,
   allowFromPathSuffix: "dm.",
-  normalizeEntry: (raw) => raw.replace(/^(discord|user):/i, "").replace(/^<@!?(\d+)>$/, "$1"),
+  normalizeEntry: (raw) =>
+    raw
+      .trim()
+      .replace(/^(discord|user):/i, "")
+      .replace(/^<@!?(\d+)>$/, "$1"),
 });
 
 function formatDiscordIntents(intents?: {
@@ -157,7 +169,7 @@ const resolveDiscordAllowlistGroupOverrides = createNestedAllowlistOverrideResol
 });
 
 const resolveDiscordAllowlistNames = createAccountScopedAllowlistNameResolver({
-  resolveAccount: ({ cfg, accountId }) => resolveDiscordAccount({ cfg, accountId }),
+  resolveAccount: resolveDiscordAccount,
   resolveToken: (account: ResolvedDiscordAccount) => account.token,
   resolveNames: ({ token, entries }) => resolveDiscordUserAllowlist({ token, entries }),
 });
@@ -313,7 +325,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   allowlist: {
     ...buildLegacyDmAccountAllowlistAdapter({
       channelId: "discord",
-      resolveAccount: ({ cfg, accountId }) => resolveDiscordAccount({ cfg, accountId }),
+      resolveAccount: resolveDiscordAccount,
       normalize: ({ cfg, accountId, values }) =>
         discordConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
       resolveDmAllowFrom: (account) => account.config.allowFrom ?? account.config.dm?.allowFrom,
@@ -623,26 +635,27 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
         resolveConfiguredFromCredentialStatuses(account) ?? Boolean(account.token?.trim());
       const app = runtime?.application ?? (probe as { application?: unknown })?.application;
       const bot = runtime?.bot ?? (probe as { bot?: unknown })?.bot;
-      const base = buildComputedAccountStatusSnapshot({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured,
-        runtime,
-        probe,
-      });
-      return {
-        ...base,
-        ...projectCredentialSnapshotFields(account),
-        connected: runtime?.connected ?? false,
-        reconnectAttempts: runtime?.reconnectAttempts,
-        lastConnectedAt: runtime?.lastConnectedAt ?? null,
-        lastDisconnect: runtime?.lastDisconnect ?? null,
-        lastEventAt: runtime?.lastEventAt ?? null,
-        application: app ?? undefined,
-        bot: bot ?? undefined,
-        audit,
-      };
+      return buildComputedAccountStatusSnapshot(
+        {
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured,
+          runtime,
+          probe,
+        },
+        {
+          ...projectCredentialSnapshotFields(account),
+          connected: runtime?.connected ?? false,
+          reconnectAttempts: runtime?.reconnectAttempts,
+          lastConnectedAt: runtime?.lastConnectedAt ?? null,
+          lastDisconnect: runtime?.lastDisconnect ?? null,
+          lastEventAt: runtime?.lastEventAt ?? null,
+          application: app ?? undefined,
+          bot: bot ?? undefined,
+          audit,
+        },
+      );
     },
   },
   gateway: {
@@ -679,7 +692,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
         }
       }
       ctx.log?.info(`[${account.accountId}] starting provider${discordBotLabel}`);
-      return monitorDiscordProvider({
+      return (await loadDiscordProviderRuntime()).monitorDiscordProvider({
         token,
         accountId: account.accountId,
         config: ctx.cfg,

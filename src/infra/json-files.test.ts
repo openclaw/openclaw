@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { createAsyncLock, readJsonFile, writeJsonAtomic, writeTextAtomic } from "./json-files.js";
 
@@ -50,7 +51,7 @@ describe("json file helpers", () => {
 
     const first = withLock(async () => {
       events.push("first:start");
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await sleep(20);
       events.push("first:end");
       throw new Error("boom");
     });

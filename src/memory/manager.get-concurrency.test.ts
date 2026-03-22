@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import "./test-runtime-mocks.js";
@@ -18,7 +19,7 @@ vi.mock("./embeddings.js", () => ({
   createEmbeddingProvider: async () => {
     hoisted.providerCreateCalls += 1;
     if (hoisted.providerDelayMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, hoisted.providerDelayMs));
+      await sleep(hoisted.providerDelayMs);
     }
     return {
       requestedProvider: "openai",
@@ -119,7 +120,7 @@ describe("memory manager cache hydration", () => {
     await secondManager?.close?.();
   });
 
-  it("does not cache status-only managers when no full manager exists", async () => {
+  it("caches status-only managers separately from full managers", async () => {
     const indexPath = path.join(workspaceDir, "index.sqlite");
     const cfg = createMemoryConcurrencyConfig(indexPath);
 
@@ -128,10 +129,9 @@ describe("memory manager cache hydration", () => {
 
     expect(first).toBeTruthy();
     expect(second).toBeTruthy();
-    expect(Object.is(second, first)).toBe(false);
+    expect(Object.is(second, first)).toBe(true);
     expect(hoisted.providerCreateCalls).toBe(0);
 
     await first?.close?.();
-    await second?.close?.();
   });
 });

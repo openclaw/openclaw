@@ -1,51 +1,20 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
+import { buildMemoryPromptSection, registerMemoryPromptSection } from "../memory/prompt-section.js";
 import { withEnv } from "../test-utils/env.js";
-
-async function importFreshPluginTestModules() {
-  vi.resetModules();
-  vi.doUnmock("node:fs");
-  vi.doUnmock("node:fs/promises");
-  vi.doUnmock("node:module");
-  vi.doUnmock("./hook-runner-global.js");
-  vi.doUnmock("./hooks.js");
-  vi.doUnmock("./loader.js");
-  vi.doUnmock("jiti");
-  const [loader, hookRunnerGlobal, hooks, runtime, registry, promptSection] = await Promise.all([
-    import("./loader.js"),
-    import("./hook-runner-global.js"),
-    import("./hooks.js"),
-    import("./runtime.js"),
-    import("./registry.js"),
-    import("../memory/prompt-section.js"),
-  ]);
-  return {
-    ...loader,
-    ...hookRunnerGlobal,
-    ...hooks,
-    ...runtime,
-    ...registry,
-    ...promptSection,
-  };
-}
-
-const {
-  __testing,
-  buildMemoryPromptSection,
-  clearPluginLoaderCache,
-  createHookRunner,
-  createEmptyPluginRegistry,
+import { clearPluginCommands, getPluginCommandSpecs } from "./command-registry-state.js";
+import { getGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
+import { createHookRunner } from "./hooks.js";
+import { __testing, clearPluginLoaderCache, loadOpenClawPlugins } from "./loader.js";
+import { createEmptyPluginRegistry } from "./registry.js";
+import {
   getActivePluginRegistry,
   getActivePluginRegistryKey,
-  getGlobalHookRunner,
-  loadOpenClawPlugins,
-  registerMemoryPromptSection,
-  resetGlobalHookRunner,
   setActivePluginRegistry,
-} = await importFreshPluginTestModules();
+} from "./runtime.js";
 
 type TempPlugin = { dir: string; file: string; id: string };
 type PluginLoadConfig = NonNullable<Parameters<typeof loadOpenClawPlugins>[0]>["config"];
@@ -1009,8 +978,6 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
         },
       };`,
     });
-    const { clearPluginCommands, getPluginCommandSpecs } = await import("./commands.js");
-
     clearPluginCommands();
 
     const scoped = loadOpenClawPlugins({
@@ -1395,6 +1362,8 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
       filename: "cache-eviction.cjs",
       body: `module.exports = { id: "cache-eviction", register() {} };`,
     });
+    const previousCacheCap = __testing.maxPluginRegistryCacheEntries;
+    __testing.setMaxPluginRegistryCacheEntriesForTest(4);
     const stateDirs = Array.from({ length: __testing.maxPluginRegistryCacheEntries + 1 }, () =>
       makeTempDir(),
     );
@@ -1416,17 +1385,21 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
         },
       });
 
-    const first = loadWithStateDir(stateDirs[0] ?? makeTempDir());
-    const second = loadWithStateDir(stateDirs[1] ?? makeTempDir());
+    try {
+      const first = loadWithStateDir(stateDirs[0] ?? makeTempDir());
+      const second = loadWithStateDir(stateDirs[1] ?? makeTempDir());
 
-    expect(loadWithStateDir(stateDirs[0] ?? makeTempDir())).toBe(first);
+      expect(loadWithStateDir(stateDirs[0] ?? makeTempDir())).toBe(first);
 
-    for (const stateDir of stateDirs.slice(2)) {
-      loadWithStateDir(stateDir);
+      for (const stateDir of stateDirs.slice(2)) {
+        loadWithStateDir(stateDir);
+      }
+
+      expect(loadWithStateDir(stateDirs[0] ?? makeTempDir())).toBe(first);
+      expect(loadWithStateDir(stateDirs[1] ?? makeTempDir())).not.toBe(second);
+    } finally {
+      __testing.setMaxPluginRegistryCacheEntriesForTest(previousCacheCap);
     }
-
-    expect(loadWithStateDir(stateDirs[0] ?? makeTempDir())).toBe(first);
-    expect(loadWithStateDir(stateDirs[1] ?? makeTempDir())).not.toBe(second);
   });
 
   it("normalizes bundled plugin env overrides against the provided env", () => {

@@ -20,11 +20,9 @@ vi.mock("./backup-verify.js", () => ({
 
 describe("backup commands", () => {
   let tempHome: TempHomeEnv;
-  let previousCwd: string;
 
   beforeEach(async () => {
     tempHome = await createTempHomeEnv("openclaw-backup-test-");
-    previousCwd = process.cwd();
     backupVerifyCommandMock.mockReset();
     backupVerifyCommandMock.mockResolvedValue({
       ok: true,
@@ -38,7 +36,7 @@ describe("backup commands", () => {
   });
 
   afterEach(async () => {
-    process.chdir(previousCwd);
+    vi.restoreAllMocks();
     await tempHome.restore();
   });
 
@@ -269,7 +267,7 @@ describe("backup commands", () => {
     await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "# soul\n", "utf8");
-    process.chdir(workspaceDir);
+    vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
 
     const runtime = createRuntime();
 
@@ -296,7 +294,7 @@ describe("backup commands", () => {
       await fs.mkdir(workspaceDir, { recursive: true });
       await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "# soul\n", "utf8");
       await fs.symlink(workspaceDir, workspaceLink);
-      process.chdir(workspaceLink);
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceLink);
 
       const runtime = createRuntime();
 

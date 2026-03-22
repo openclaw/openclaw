@@ -56,6 +56,9 @@ OpenClaw recognizes two plugin formats:
 
 Both show up under `openclaw plugins list`. See [Plugin Bundles](/plugins/bundles) for bundle details.
 
+If you are writing a native plugin, start with [Building Plugins](/plugins/building-plugins)
+and the [Plugin SDK Overview](/plugins/sdk-overview).
+
 ## Official plugins
 
 ### Installable (npm)
@@ -190,7 +193,8 @@ openclaw plugins inspect <id> --json     # machine-readable
 openclaw plugins status                  # operational summary
 openclaw plugins doctor                  # diagnostics
 
-openclaw plugins install <npm-spec>      # install from npm
+openclaw plugins install <package>        # install (ClawHub first, then npm)
+openclaw plugins install clawhub:<pkg>   # install from ClawHub only
 openclaw plugins install <path>          # install from local path
 openclaw plugins install -l <path>       # link (no copy) for dev
 openclaw plugins update <id>             # update one plugin

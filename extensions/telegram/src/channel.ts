@@ -9,7 +9,10 @@ import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { resolveExecApprovalCommandDisplay } from "openclaw/plugin-sdk/infra-runtime";
 import { buildExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/infra-runtime";
-import { resolveOutboundSendDep, type OutboundSendDeps } from "openclaw/plugin-sdk/infra-runtime";
+import {
+  resolveOutboundSendDep,
+  type OutboundSendDeps,
+} from "openclaw/plugin-sdk/outbound-runtime";
 import {
   buildOutboundBaseSessionKey,
   normalizeMessageChannel,
@@ -309,7 +312,7 @@ export const telegramPlugin = createChatChannelPlugin({
     }),
     allowlist: buildDmGroupAccountAllowlistAdapter({
       channelId: "telegram",
-      resolveAccount: ({ cfg, accountId }) => resolveTelegramAccount({ cfg, accountId }),
+      resolveAccount: resolveTelegramAccount,
       normalize: ({ cfg, accountId, values }) =>
         telegramConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
       resolveDmAllowFrom: (account) => account.config.allowFrom,

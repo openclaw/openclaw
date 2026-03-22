@@ -15,10 +15,16 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
   };
 });
 
-vi.mock("@mariozechner/pi-ai/oauth", () => ({
-  getOAuthProviders: () => [],
-  getOAuthApiKey: vi.fn(async () => null),
-}));
+vi.mock("@mariozechner/pi-ai/oauth", async () => {
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
+    "@mariozechner/pi-ai/oauth",
+  );
+  return {
+    ...actual,
+    getOAuthProviders: () => [],
+    getOAuthApiKey: vi.fn(async () => null),
+  };
+});
 
 function createResolvedModel(provider: string, modelId: string, api = "openai-completions") {
   return {

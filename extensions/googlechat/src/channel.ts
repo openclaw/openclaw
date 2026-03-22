@@ -1,5 +1,9 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
-import { createScopedChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
+import {
+  adaptScopedAccountAccessor,
+  createScopedChannelConfigAdapter,
+} from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   composeWarningCollectors,
   createAllowlistProviderGroupPolicyWarningCollector,
@@ -65,7 +69,7 @@ const formatAllowFromEntry = (entry: string) =>
 const googleChatConfigAdapter = createScopedChannelConfigAdapter<ResolvedGoogleChatAccount>({
   sectionKey: "googlechat",
   listAccountIds: listGoogleChatAccountIds,
-  resolveAccount: (cfg, accountId) => resolveGoogleChatAccount({ cfg, accountId }),
+  resolveAccount: adaptScopedAccountAccessor(resolveGoogleChatAccount),
   defaultAccountId: resolveDefaultGoogleChatAccountId,
   clearBaseFields: [
     "serviceAccount",
@@ -143,13 +147,14 @@ export const googlechatPlugin = createChatChannelPlugin({
     config: {
       ...googleChatConfigAdapter,
       isConfigured: (account) => account.credentialSource !== "none",
-      describeAccount: (account) => ({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: account.credentialSource !== "none",
-        credentialSource: account.credentialSource,
-      }),
+      describeAccount: (account) =>
+        describeAccountSnapshot({
+          account,
+          configured: account.credentialSource !== "none",
+          extra: {
+            credentialSource: account.credentialSource,
+          },
+        }),
     },
     groups: {
       resolveRequireMention: resolveGoogleChatGroupRequireMention,
@@ -166,16 +171,16 @@ export const googlechatPlugin = createChatChannelPlugin({
     },
     directory: createChannelDirectoryAdapter({
       listPeers: async (params) =>
-        listResolvedDirectoryUserEntriesFromAllowFrom({
+        listResolvedDirectoryUserEntriesFromAllowFrom<ResolvedGoogleChatAccount>({
           ...params,
-          resolveAccount: (cfg, accountId) => resolveGoogleChatAccount({ cfg, accountId }),
+          resolveAccount: adaptScopedAccountAccessor(resolveGoogleChatAccount),
           resolveAllowFrom: (account) => account.config.dm?.allowFrom,
           normalizeId: (entry) => normalizeGoogleChatTarget(entry) ?? entry,
         }),
       listGroups: async (params) =>
-        listResolvedDirectoryGroupEntriesFromMapKeys({
+        listResolvedDirectoryGroupEntriesFromMapKeys<ResolvedGoogleChatAccount>({
           ...params,
-          resolveAccount: (cfg, accountId) => resolveGoogleChatAccount({ cfg, accountId }),
+          resolveAccount: adaptScopedAccountAccessor(resolveGoogleChatAccount),
           resolveGroups: (account) => account.config.groups,
         }),
     }),
@@ -249,25 +254,25 @@ export const googlechatPlugin = createChatChannelPlugin({
         }),
       probeAccount: async ({ account }) =>
         (await loadGoogleChatChannelRuntime()).probeGoogleChat(account),
-      buildAccountSnapshot: ({ account, runtime, probe }) => {
-        const base = buildComputedAccountStatusSnapshot({
-          accountId: account.accountId,
-          name: account.name,
-          enabled: account.enabled,
-          configured: account.credentialSource !== "none",
-          runtime,
-          probe,
-        });
-        return {
-          ...base,
-          credentialSource: account.credentialSource,
-          audienceType: account.config.audienceType,
-          audience: account.config.audience,
-          webhookPath: account.config.webhookPath,
-          webhookUrl: account.config.webhookUrl,
-          dmPolicy: account.config.dm?.policy ?? "pairing",
-        };
-      },
+      buildAccountSnapshot: ({ account, runtime, probe }) =>
+        buildComputedAccountStatusSnapshot(
+          {
+            accountId: account.accountId,
+            name: account.name,
+            enabled: account.enabled,
+            configured: account.credentialSource !== "none",
+            runtime,
+            probe,
+          },
+          {
+            credentialSource: account.credentialSource,
+            audienceType: account.config.audienceType,
+            audience: account.config.audience,
+            webhookPath: account.config.webhookPath,
+            webhookUrl: account.config.webhookUrl,
+            dmPolicy: account.config.dm?.policy ?? "pairing",
+          },
+        ),
     },
     gateway: {
       startAccount: async (ctx) => {

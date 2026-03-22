@@ -3,7 +3,10 @@ import {
   createAccountScopedAllowlistNameResolver,
   createFlatAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
-import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
+import {
+  adaptScopedAccountAccessor,
+  createScopedDmSecurityResolver,
+} from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   createPairingPrefixStripper,
   createTextPairingAdapter,
@@ -20,7 +23,7 @@ import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/exte
 import {
   createRuntimeOutboundDelegates,
   resolveOutboundSendDep,
-} from "openclaw/plugin-sdk/infra-runtime";
+} from "openclaw/plugin-sdk/outbound-runtime";
 import {
   buildOutboundBaseSessionKey,
   normalizeOutboundThreadId,
@@ -77,7 +80,11 @@ const resolveSlackDmPolicy = createScopedDmSecurityResolver<ResolvedSlackAccount
   resolvePolicy: (account) => account.dm?.policy,
   resolveAllowFrom: (account) => account.dm?.allowFrom,
   allowFromPathSuffix: "dm.",
-  normalizeEntry: (raw) => raw.replace(/^(slack|user):/i, ""),
+  normalizeEntry: (raw) =>
+    raw
+      .trim()
+      .replace(/^(slack|user):/i, "")
+      .trim(),
 });
 
 // Select the appropriate Slack token for read/write operations.
@@ -311,7 +318,7 @@ const resolveSlackAllowlistGroupOverrides = createFlatAllowlistOverrideResolver(
 });
 
 const resolveSlackAllowlistNames = createAccountScopedAllowlistNameResolver({
-  resolveAccount: ({ cfg, accountId }) => resolveSlackAccount({ cfg, accountId }),
+  resolveAccount: resolveSlackAccount,
   resolveToken: (account: ResolvedSlackAccount) =>
     account.config.userToken?.trim() || account.botToken?.trim(),
   resolveNames: ({ token, entries }) => resolveSlackUserAllowlist({ token, entries }),
@@ -367,7 +374,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   allowlist: {
     ...buildLegacyDmAccountAllowlistAdapter({
       channelId: "slack",
-      resolveAccount: ({ cfg, accountId }) => resolveSlackAccount({ cfg, accountId }),
+      resolveAccount: resolveSlackAccount,
       normalize: ({ cfg, accountId, values }) =>
         slackConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
       resolveDmAllowFrom: (account) => account.config.allowFrom ?? account.config.dm?.allowFrom,
@@ -385,8 +392,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     resolveToolPolicy: resolveSlackGroupToolPolicy,
   },
   threading: {
-    resolveReplyToMode: createScopedAccountReplyToModeResolver({
-      resolveAccount: (cfg, accountId) => resolveSlackAccount({ cfg, accountId }),
+    resolveReplyToMode: createScopedAccountReplyToModeResolver<ResolvedSlackAccount>({
+      resolveAccount: adaptScopedAccountAccessor(resolveSlackAccount),
       resolveReplyToMode: (account, chatType) => resolveSlackReplyToMode(account, chatType),
     }),
     allowExplicitReplyTagsWhenOff: false,
@@ -610,18 +617,19 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
               "botTokenStatus",
               "appTokenStatus",
             ])) ?? isSlackPluginAccountConfigured(account);
-      const base = buildComputedAccountStatusSnapshot({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured,
-        runtime,
-        probe,
-      });
-      return {
-        ...base,
-        ...projectCredentialSnapshotFields(account),
-      };
+      return buildComputedAccountStatusSnapshot(
+        {
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured,
+          runtime,
+          probe,
+        },
+        {
+          ...projectCredentialSnapshotFields(account),
+        },
+      );
     },
   },
   gateway: {

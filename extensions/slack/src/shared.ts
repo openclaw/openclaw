@@ -1,5 +1,9 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
-import { createScopedChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
+import {
+  adaptScopedAccountAccessor,
+  createScopedChannelConfigAdapter,
+} from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
 import {
   formatDocsLink,
@@ -145,8 +149,8 @@ export function isSlackSetupAccountConfigured(account: ResolvedSlackAccount): bo
 export const slackConfigAdapter = createScopedChannelConfigAdapter<ResolvedSlackAccount>({
   sectionKey: SLACK_CHANNEL,
   listAccountIds: listSlackAccountIds,
-  resolveAccount: (cfg, accountId) => resolveSlackAccount({ cfg, accountId }),
-  inspectAccount: (cfg, accountId) => inspectSlackAccount({ cfg, accountId }),
+  resolveAccount: adaptScopedAccountAccessor(resolveSlackAccount),
+  inspectAccount: adaptScopedAccountAccessor(inspectSlackAccount),
   defaultAccountId: resolveDefaultSlackAccountId,
   clearBaseFields: ["botToken", "appToken", "name"],
   resolveAllowFrom: (account: ResolvedSlackAccount) => account.dm?.allowFrom,
@@ -203,14 +207,15 @@ export function createSlackPluginBase(params: {
     config: {
       ...slackConfigAdapter,
       isConfigured: (account) => isSlackPluginAccountConfigured(account),
-      describeAccount: (account) => ({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: isSlackPluginAccountConfigured(account),
-        botTokenSource: account.botTokenSource,
-        appTokenSource: account.appTokenSource,
-      }),
+      describeAccount: (account) =>
+        describeAccountSnapshot({
+          account,
+          configured: isSlackPluginAccountConfigured(account),
+          extra: {
+            botTokenSource: account.botTokenSource,
+            appTokenSource: account.appTokenSource,
+          },
+        }),
     },
     setup: params.setup,
   }) as Pick<

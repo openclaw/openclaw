@@ -192,10 +192,16 @@ export async function loadCompactHooksHarness(): Promise<{
     };
   });
 
-  vi.doMock("@mariozechner/pi-ai/oauth", () => ({
-    getOAuthApiKey: vi.fn(),
-    getOAuthProviders: vi.fn(() => []),
-  }));
+  vi.doMock("@mariozechner/pi-ai/oauth", async () => {
+    const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
+      "@mariozechner/pi-ai/oauth",
+    );
+    return {
+      ...actual,
+      getOAuthApiKey: vi.fn(),
+      getOAuthProviders: vi.fn(() => []),
+    };
+  });
 
   vi.doMock("@mariozechner/pi-coding-agent", () => ({
     AuthStorage: class AuthStorage {},

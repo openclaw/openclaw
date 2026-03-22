@@ -142,6 +142,15 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
         `Normalized ${params.pathPrefix}.streaming (${beforeStreaming}) → (${resolved}).`,
       );
     }
+    if (
+      params.pathPrefix.startsWith("channels.discord") &&
+      resolved === "off" &&
+      hadLegacyStreamMode
+    ) {
+      changes.push(
+        `${params.pathPrefix}.streaming remains off by default to avoid Discord preview-edit rate limits; set ${params.pathPrefix}.streaming="partial" to opt in explicitly.`,
+      );
+    }
 
     return { entry: updated, changed };
   };

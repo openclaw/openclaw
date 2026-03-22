@@ -45,6 +45,11 @@ tar -C /src \
   -cf - . | tar -C "$tmp_dir" -xf -
 ln -s /app/node_modules "$tmp_dir/node_modules"
 ln -s /app/dist "$tmp_dir/dist"
+if [ -d /app/dist-runtime/extensions ]; then
+  export OPENCLAW_BUNDLED_PLUGINS_DIR=/app/dist-runtime/extensions
+elif [ -d /app/dist/extensions ]; then
+  export OPENCLAW_BUNDLED_PLUGINS_DIR=/app/dist/extensions
+fi
 cd "$tmp_dir"
 pnpm test:live
 EOF

@@ -398,11 +398,13 @@ jobs:
             const invalidLabel = "invalid";
             const spamLabel = "r: spam";
             const dirtyLabel = "dirty";
+            const badBarnacleLabel = "bad-barnacle";
             const noisyPrMessage =
               "Closing this PR because it looks dirty (too many unrelated or unexpected changes). This usually happens when a branch picks up unrelated commits or a merge went sideways. Please recreate the PR from a clean branch.";
 
             if (pullRequest) {
-              if (labelSet.has(dirtyLabel)) {
+              // `bad-barnacle` exempts PRs that Barnacle incorrectly marked dirty.
+              if (labelSet.has(dirtyLabel) && !labelSet.has(badBarnacleLabel)) {
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,

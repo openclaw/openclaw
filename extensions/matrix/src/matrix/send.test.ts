@@ -1,6 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
-import { setMatrixRuntime } from "../runtime.js";
 
 const loadWebMediaMock = vi.fn().mockResolvedValue({
   buffer: Buffer.from("media"),
@@ -48,6 +47,14 @@ let sendMessageMatrix: typeof import("./send.js").sendMessageMatrix;
 let sendTypingMatrix: typeof import("./send.js").sendTypingMatrix;
 let voteMatrixPoll: typeof import("./actions/polls.js").voteMatrixPoll;
 
+async function loadMatrixSendModules() {
+  vi.resetModules();
+  const runtimeModule = await import("../runtime.js");
+  runtimeModule.setMatrixRuntime(runtimeStub);
+  ({ sendMessageMatrix } = await import("./send.js"));
+  ({ sendTypingMatrix } = await import("./send.js"));
+  ({ voteMatrixPoll } = await import("./actions/polls.js"));
+}
 const makeClient = () => {
   const sendMessage = vi.fn().mockResolvedValue("evt1");
   const sendEvent = vi.fn().mockResolvedValue("evt-poll-vote");
@@ -69,13 +76,10 @@ const makeClient = () => {
 
 describe("sendMessageMatrix media", () => {
   beforeAll(async () => {
-    setMatrixRuntime(runtimeStub);
-    ({ sendMessageMatrix } = await import("./send.js"));
-    ({ sendTypingMatrix } = await import("./send.js"));
-    ({ voteMatrixPoll } = await import("./actions/polls.js"));
+    await loadMatrixSendModules();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     loadWebMediaMock.mockReset().mockResolvedValue({
       buffer: Buffer.from("media"),
       fileName: "photo.png",
@@ -88,7 +92,7 @@ describe("sendMessageMatrix media", () => {
     mediaKindFromMimeMock.mockReset().mockReturnValue("image");
     isVoiceCompatibleAudioMock.mockReset().mockReturnValue(false);
     resolveTextChunkLimitMock.mockReset().mockReturnValue(4000);
-    setMatrixRuntime(runtimeStub);
+    await loadMatrixSendModules();
   });
 
   it("uploads media with url payloads", async () => {
@@ -326,19 +330,12 @@ describe("sendMessageMatrix media", () => {
 });
 
 describe("sendMessageMatrix threads", () => {
-  beforeAll(async () => {
-    setMatrixRuntime(runtimeStub);
-    ({ sendMessageMatrix } = await import("./send.js"));
-    ({ sendTypingMatrix } = await import("./send.js"));
-    ({ voteMatrixPoll } = await import("./actions/polls.js"));
-  });
-
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     loadConfigMock.mockReset().mockReturnValue({});
     mediaKindFromMimeMock.mockReset().mockReturnValue("image");
     isVoiceCompatibleAudioMock.mockReset().mockReturnValue(false);
-    setMatrixRuntime(runtimeStub);
+    await loadMatrixSendModules();
   });
 
   it("includes thread relation metadata when threadId is set", async () => {
@@ -378,16 +375,15 @@ describe("sendMessageMatrix threads", () => {
 
 describe("voteMatrixPoll", () => {
   beforeAll(async () => {
-    setMatrixRuntime(runtimeStub);
-    ({ voteMatrixPoll } = await import("./actions/polls.js"));
+    await loadMatrixSendModules();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     loadConfigMock.mockReset().mockReturnValue({});
     mediaKindFromMimeMock.mockReset().mockReturnValue("image");
     isVoiceCompatibleAudioMock.mockReset().mockReturnValue(false);
-    setMatrixRuntime(runtimeStub);
+    await loadMatrixSendModules();
   });
 
   it("maps 1-based option indexes to Matrix poll answer ids", async () => {
@@ -524,16 +520,15 @@ describe("voteMatrixPoll", () => {
 
 describe("sendTypingMatrix", () => {
   beforeAll(async () => {
-    setMatrixRuntime(runtimeStub);
-    ({ sendTypingMatrix } = await import("./send.js"));
+    await loadMatrixSendModules();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     loadConfigMock.mockReset().mockReturnValue({});
     mediaKindFromMimeMock.mockReset().mockReturnValue("image");
     isVoiceCompatibleAudioMock.mockReset().mockReturnValue(false);
-    setMatrixRuntime(runtimeStub);
+    await loadMatrixSendModules();
   });
 
   it("normalizes room-prefixed targets before sending typing state", async () => {

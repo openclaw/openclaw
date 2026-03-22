@@ -1,5 +1,7 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import {
+  adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
@@ -64,7 +66,7 @@ const ircConfigAdapter = createScopedChannelConfigAdapter<
 >({
   sectionKey: "irc",
   listAccountIds: listIrcAccountIds,
-  resolveAccount: (cfg, accountId) => resolveIrcAccount({ cfg, accountId }),
+  resolveAccount: adaptScopedAccountAccessor(resolveIrcAccount),
   defaultAccountId: resolveDefaultIrcAccountId,
   clearBaseFields: [
     "name",
@@ -155,17 +157,18 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
   config: {
     ...ircConfigAdapter,
     isConfigured: (account) => account.configured,
-    describeAccount: (account) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
-      host: account.host,
-      port: account.port,
-      tls: account.tls,
-      nick: account.nick,
-      passwordSource: account.passwordSource,
-    }),
+    describeAccount: (account) =>
+      describeAccountSnapshot({
+        account,
+        configured: account.configured,
+        extra: {
+          host: account.host,
+          port: account.port,
+          tls: account.tls,
+          nick: account.nick,
+          passwordSource: account.passwordSource,
+        },
+      }),
   },
   security: {
     resolveDmPolicy: resolveIrcDmPolicy,
@@ -237,11 +240,10 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
   },
   directory: createChannelDirectoryAdapter({
     listPeers: async (params) =>
-      listResolvedDirectoryEntriesFromSources({
+      listResolvedDirectoryEntriesFromSources<ResolvedIrcAccount>({
         ...params,
         kind: "user",
-        resolveAccount: (cfg, accountId) =>
-          resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }),
+        resolveAccount: adaptScopedAccountAccessor(resolveIrcAccount),
         resolveSources: (account) => [
           account.config.allowFrom ?? [],
           account.config.groupAllowFrom ?? [],
@@ -250,11 +252,10 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
         normalizeId: (entry) => normalizePairingTarget(entry) || null,
       }),
     listGroups: async (params) => {
-      const entries = listResolvedDirectoryEntriesFromSources({
+      const entries = listResolvedDirectoryEntriesFromSources<ResolvedIrcAccount>({
         ...params,
         kind: "group",
-        resolveAccount: (cfg, accountId) =>
-          resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }),
+        resolveAccount: adaptScopedAccountAccessor(resolveIrcAccount),
         resolveSources: (account) => [
           account.config.channels ?? [],
           Object.keys(account.config.groups ?? {}),
@@ -307,14 +308,17 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
     }),
     probeAccount: async ({ cfg, account, timeoutMs }) =>
       probeIrc(cfg as CoreConfig, { accountId: account.accountId, timeoutMs }),
-    buildAccountSnapshot: ({ account, runtime, probe }) => ({
-      ...buildBaseAccountStatusSnapshot({ account, runtime, probe }),
-      host: account.host,
-      port: account.port,
-      tls: account.tls,
-      nick: account.nick,
-      passwordSource: account.passwordSource,
-    }),
+    buildAccountSnapshot: ({ account, runtime, probe }) =>
+      buildBaseAccountStatusSnapshot(
+        { account, runtime, probe },
+        {
+          host: account.host,
+          port: account.port,
+          tls: account.tls,
+          nick: account.nick,
+          passwordSource: account.passwordSource,
+        },
+      ),
   },
   gateway: {
     startAccount: async (ctx) => {
