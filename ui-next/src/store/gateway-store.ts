@@ -18,6 +18,7 @@ export type GatewayState = {
   // Connection
   connectionStatus: ConnectionStatus;
   lastError: string | null;
+  disconnectReason: string | null;
   hello: GatewayHelloOk | null;
 
   // Snapshot data
@@ -33,6 +34,7 @@ export type GatewayState = {
   // Actions
   setConnectionStatus: (status: ConnectionStatus) => void;
   setLastError: (error: string | null) => void;
+  setDisconnectReason: (reason: string | null) => void;
   setHello: (hello: GatewayHelloOk) => void;
   applySnapshot: (hello: GatewayHelloOk) => void;
   setPresenceEntries: (entries: PresenceEntry[]) => void;
@@ -45,6 +47,7 @@ export type GatewayState = {
 const initialState = {
   connectionStatus: "disconnected" as ConnectionStatus,
   lastError: null as string | null,
+  disconnectReason: null as string | null,
   hello: null as GatewayHelloOk | null,
   presenceEntries: [] as PresenceEntry[],
   healthSnapshot: null as unknown | null,
@@ -59,6 +62,8 @@ export const useGatewayStore = create<GatewayState>((set) => ({
 
   setLastError: (error) => set({ lastError: error }),
 
+  setDisconnectReason: (reason) => set({ disconnectReason: reason }),
+
   setHello: (hello) => set({ hello }),
 
   applySnapshot: (hello) => {
@@ -68,6 +73,7 @@ export const useGatewayStore = create<GatewayState>((set) => ({
       hello,
       connectionStatus: "connected",
       lastError: null,
+      disconnectReason: null,
       presenceEntries: Array.isArray(snapshot?.presence)
         ? snapshot.presence
         : state.presenceEntries,

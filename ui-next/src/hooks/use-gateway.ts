@@ -5,6 +5,30 @@ import { normalizeSessionKey, useChatStore } from "@/store/chat-store";
 import { useGatewayStore } from "@/store/gateway-store";
 import { useVisualizeStore } from "@/store/visualize-store";
 
+/** Map WebSocket close code + reason string to a human-readable disconnect reason. */
+function resolveDisconnectReason(code: number, reason: string): string {
+  // If the server sent an explicit reason string, use it directly.
+  if (reason && reason.trim()) {
+    return reason.trim();
+  }
+  switch (code) {
+    case 1000:
+      return "Gateway shutting down";
+    case 1001:
+      return "Gateway restarting";
+    case 1005:
+      return "Connection lost unexpectedly";
+    case 1006:
+      return "Gateway crashed or network error";
+    case 1012:
+      return "Gateway restarting";
+    case 4008:
+      return "Authentication failed";
+    default:
+      return `Connection closed (code ${code})`;
+  }
+}
+
 /** Extract token/session/gatewayUrl/password from query string or hash fragment, save to settings, strip from URL. */
 function applyUrlParams() {
   const url = new URL(window.location.href);
@@ -108,6 +132,7 @@ export function useGatewayConnection(): GatewayContextValue {
         if (code !== 1012) {
           store.setLastError(`disconnected (${code}): ${reason || "no reason"}`);
         }
+        store.setDisconnectReason(resolveDisconnectReason(code, reason));
         store.setConnectionStatus("disconnected");
         // Clear stale streaming state for all active sessions — the run is gone if the connection dropped
         const chatState = useChatStore.getState();

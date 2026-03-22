@@ -10,6 +10,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { GatewayContext, useGatewayConnection } from "@/hooks/use-gateway";
+import { ReconnectBanner } from "@/components/layout/reconnect-banner";
 
 const PAGE_TITLES: Record<string, string> = {
   "/chat": "Chat",
@@ -73,6 +74,7 @@ export function Shell() {
             {/* Portal target for page-specific header content */}
             <div id="shell-header-extra" className="flex items-center gap-2 ml-auto" />
           </header>
+          <ReconnectBanner />
           <main
             className={
               isFullHeight ? "flex-1 overflow-hidden" : "flex-1 overflow-y-auto p-3 sm:p-4 md:p-6"
