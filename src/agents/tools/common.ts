@@ -251,19 +251,29 @@ export async function imageResult(params: {
   imageSanitization?: ImageSanitizationLimits;
 }): Promise<AgentToolResult<unknown>> {
   const content: AgentToolResult<unknown>["content"] = [
-    {
-      type: "text",
-      text: params.extraText ?? `MEDIA:${params.path}`,
-    },
+    ...(params.extraText ? [{ type: "text" as const, text: params.extraText }] : []),
     {
       type: "image",
       data: params.base64,
       mimeType: params.mimeType,
     },
   ];
+  const detailsMedia =
+    params.details?.media &&
+    typeof params.details.media === "object" &&
+    !Array.isArray(params.details.media)
+      ? (params.details.media as Record<string, unknown>)
+      : undefined;
   const result: AgentToolResult<unknown> = {
     content,
-    details: { path: params.path, ...params.details },
+    details: {
+      path: params.path,
+      ...params.details,
+      media: {
+        ...detailsMedia,
+        mediaUrl: params.path,
+      },
+    },
   };
   return await sanitizeToolResultImages(result, params.label, params.imageSanitization);
 }
