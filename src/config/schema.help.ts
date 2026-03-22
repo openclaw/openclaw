@@ -1471,6 +1471,40 @@ export const FIELD_HELP: Record<string, string> = {
     "Legacy Slack preview mode alias (replace | status_final | append); auto-migrated to channels.slack.streaming.",
   "channels.telegram.customCommands":
     "Additional Telegram bot menu commands (merged with native; conflicts ignored).",
+  "channels.telegram.jitsi":
+    "Optional Telegram Jitsi bridge integration for /jitsi and /meet command workflows.",
+  "channels.telegram.jitsi.enabled":
+    "Enable Telegram Jitsi control commands explicitly. If omitted, bridgeUrl presence can still auto-enable.",
+  "channels.telegram.jitsi.bridgeUrl":
+    "Base URL for the Jitsi bridge HTTP service used by /jitsi and /meet commands.",
+  "channels.telegram.jitsi.autoJoin":
+    "When true (default), creating a room also triggers the bot join flow immediately when startUrl is not used.",
+  "channels.telegram.jitsi.inviteEmail":
+    "Optional invite email stored with created rooms for downstream meeting workflows.",
+  "channels.telegram.jitsi.realtimeModel":
+    "Optional Azure Realtime model override for rooms created via Telegram Jitsi commands.",
+  "channels.telegram.jitsi.labels":
+    "Optional per-account text labels for Telegram Jitsi panel buttons and hints.",
+  "channels.telegram.jitsi.labels.createButton":
+    "Button text for creating a new meeting from the Telegram panel.",
+  "channels.telegram.jitsi.labels.joinButton":
+    "Button text for joining the active meeting from the Telegram panel.",
+  "channels.telegram.jitsi.labels.briefingButton":
+    "Button text for adding a briefing via Telegram panel.",
+  "channels.telegram.jitsi.labels.questionButton":
+    "Button text for sending a test question via Telegram panel.",
+  "channels.telegram.jitsi.labels.refreshButton":
+    "Button text for refreshing active meeting state via Telegram panel.",
+  "channels.telegram.jitsi.labels.clearButton":
+    "Button text for clearing the active meeting binding in Telegram panel.",
+  "channels.telegram.jitsi.labels.emptyPanelText":
+    "Primary text shown in /meet panel when no active meeting exists.",
+  "channels.telegram.jitsi.labels.emptyPanelHint":
+    "Secondary hint text shown in /meet panel when no active meeting exists.",
+  "channels.telegram.jitsi.labels.pendingBriefingHint":
+    "Hint shown after selecting the briefing action, before sending the next message.",
+  "channels.telegram.jitsi.labels.pendingQuestionHint":
+    "Hint shown after selecting the question action, before sending the next message.",
   "messages.suppressToolErrors":
     "When true, suppress ⚠️ tool-error warnings from being shown to the user. The agent already sees errors in context and can retry. Default: false.",
   "messages.ackReaction": "Emoji reaction used to acknowledge inbound messages (empty disables).",

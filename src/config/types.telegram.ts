@@ -67,6 +67,28 @@ export type TelegramCustomCommand = {
   description: string;
 };
 
+export type TelegramJitsiLabelsConfig = {
+  createButton?: string;
+  joinButton?: string;
+  briefingButton?: string;
+  questionButton?: string;
+  refreshButton?: string;
+  clearButton?: string;
+  emptyPanelText?: string;
+  emptyPanelHint?: string;
+  pendingBriefingHint?: string;
+  pendingQuestionHint?: string;
+};
+
+export type TelegramJitsiConfig = {
+  enabled?: boolean;
+  bridgeUrl?: string;
+  autoJoin?: boolean;
+  inviteEmail?: string;
+  realtimeModel?: string;
+  labels?: TelegramJitsiLabelsConfig;
+};
+
 export type TelegramAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -78,6 +100,8 @@ export type TelegramAccountConfig = {
   markdown?: MarkdownConfig;
   /** Override native command registration for Telegram (bool or "auto"). */
   commands?: ProviderCommandsConfig;
+  /** Optional Jitsi bridge integration for `/jitsi` and `/meet` command flow. */
+  jitsi?: TelegramJitsiConfig;
   /** Custom commands to register in Telegram's command menu (merged with native). */
   customCommands?: TelegramCustomCommand[];
   /** Allow channel-initiated config writes (default: true). */

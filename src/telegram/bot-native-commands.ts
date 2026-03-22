@@ -71,6 +71,14 @@ import {
   evaluateTelegramGroupPolicyAccess,
 } from "./group-access.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
+import {
+  buildTelegramJitsiStateKey,
+  buildTelegramJitsiHelpText,
+  buildTelegramMeetPanel,
+  parseTelegramJitsiCommand,
+  resolveTelegramJitsiConfig,
+  runTelegramJitsiCommand,
+} from "./jitsi-command.js";
 import { buildInlineKeyboard } from "./send.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
@@ -396,10 +404,12 @@ export const registerTelegramNativeCommands = ({
     runtime.error?.(danger(issue.message));
   }
   const customCommands = customResolution.commands;
+  const telegramJitsi = resolveTelegramJitsiConfig(telegramCfg);
   const pluginCommandSpecs = getPluginCommandSpecs("telegram");
   const existingCommands = new Set(
     [
       ...nativeCommands.map((command) => normalizeTelegramCommandName(command.name)),
+      ...(telegramJitsi.enabled ? ["jitsi", "meet"] : []),
       ...customCommands.map((command) => command.command),
     ].map((command) => command.toLowerCase()),
   );
@@ -429,6 +439,12 @@ export const registerTelegramNativeCommands = ({
       })
       .filter((cmd): cmd is { command: string; description: string } => cmd !== null),
     ...(nativeEnabled ? pluginCatalog.commands : []),
+    ...(nativeEnabled && telegramJitsi.enabled
+      ? [
+          { command: "meet", description: "Open the meeting control panel" },
+          { command: "jitsi", description: "Power-user Jitsi bridge controls" },
+        ]
+      : []),
     ...customCommands,
   ];
   const { commandsToRegister, totalCommands, maxCommands, overflowCount } =
@@ -887,6 +903,127 @@ export const registerTelegramNativeCommands = ({
               ...deliveryBaseOptions,
             });
           }
+        });
+      }
+
+      if (telegramJitsi.enabled) {
+        bot.command("meet", async (ctx: TelegramNativeCommandContext) => {
+          const msg = ctx.message;
+          if (!msg) {
+            return;
+          }
+          if (shouldSkipUpdate(ctx)) {
+            return;
+          }
+          const auth = await resolveTelegramCommandAuth({
+            msg,
+            bot,
+            cfg,
+            accountId,
+            telegramCfg,
+            allowFrom,
+            groupAllowFrom,
+            useAccessGroups,
+            resolveGroupPolicy,
+            resolveTelegramGroupConfig,
+            requireAuth: true,
+          });
+          if (!auth) {
+            return;
+          }
+          const threadSpec = resolveTelegramThreadSpec({
+            isGroup: auth.isGroup,
+            isForum: auth.isForum,
+            messageThreadId: (msg as { message_thread_id?: number }).message_thread_id,
+          });
+          const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
+          const stateKey = buildTelegramJitsiStateKey({
+            chatId: auth.chatId,
+            threadId: threadSpec.id,
+          });
+          const rawText = ctx.match?.trim() ?? "";
+          if (rawText) {
+            const command = parseTelegramJitsiCommand(rawText);
+            const sendText = await runTelegramJitsiCommand({
+              config: telegramJitsi,
+              command,
+              stateKey,
+            }).catch((error: unknown) => `Meeting command failed: ${String(error)}`);
+            await withTelegramApiErrorLogging({
+              operation: "sendMessage",
+              runtime,
+              fn: () => bot.api.sendMessage(auth.chatId, sendText, threadParams),
+            });
+            return;
+          }
+          const panel = await buildTelegramMeetPanel({
+            config: telegramJitsi,
+            stateKey,
+          }).catch((error: unknown) => ({
+            text: `Meeting panel failed: ${String(error)}`,
+            buttons: [],
+          }));
+          const replyMarkup = buildInlineKeyboard(panel.buttons);
+          await withTelegramApiErrorLogging({
+            operation: "sendMessage",
+            runtime,
+            fn: () =>
+              bot.api.sendMessage(auth.chatId, panel.text, {
+                ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+                ...threadParams,
+              }),
+          });
+        });
+
+        bot.command("jitsi", async (ctx: TelegramNativeCommandContext) => {
+          const msg = ctx.message;
+          if (!msg) {
+            return;
+          }
+          if (shouldSkipUpdate(ctx)) {
+            return;
+          }
+          const auth = await resolveTelegramCommandAuth({
+            msg,
+            bot,
+            cfg,
+            accountId,
+            telegramCfg,
+            allowFrom,
+            groupAllowFrom,
+            useAccessGroups,
+            resolveGroupPolicy,
+            resolveTelegramGroupConfig,
+            requireAuth: true,
+          });
+          if (!auth) {
+            return;
+          }
+          const threadSpec = resolveTelegramThreadSpec({
+            isGroup: auth.isGroup,
+            isForum: auth.isForum,
+            messageThreadId: (msg as { message_thread_id?: number }).message_thread_id,
+          });
+          const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
+          const stateKey = buildTelegramJitsiStateKey({
+            chatId: auth.chatId,
+            threadId: threadSpec.id,
+          });
+          const rawText = ctx.match?.trim() ?? "";
+          const command = parseTelegramJitsiCommand(rawText);
+          const sendText =
+            command.kind === "help" && rawText
+              ? `${buildTelegramJitsiHelpText()}\n\nInvalid syntax.`
+              : await runTelegramJitsiCommand({
+                  config: telegramJitsi,
+                  command,
+                  stateKey,
+                }).catch((error: unknown) => `Jitsi command failed: ${String(error)}`);
+          await withTelegramApiErrorLogging({
+            operation: "sendMessage",
+            runtime,
+            fn: () => bot.api.sendMessage(auth.chatId, sendText, threadParams),
+          });
         });
       }
     }

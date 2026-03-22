@@ -167,6 +167,31 @@ export const TelegramAccountSchemaBase = z
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
     commands: ProviderCommandsSchema,
+    jitsi: z
+      .object({
+        enabled: z.boolean().optional(),
+        bridgeUrl: z.string().optional(),
+        autoJoin: z.boolean().optional(),
+        inviteEmail: z.string().optional(),
+        realtimeModel: z.string().optional(),
+        labels: z
+          .object({
+            createButton: z.string().optional(),
+            joinButton: z.string().optional(),
+            briefingButton: z.string().optional(),
+            questionButton: z.string().optional(),
+            refreshButton: z.string().optional(),
+            clearButton: z.string().optional(),
+            emptyPanelText: z.string().optional(),
+            emptyPanelHint: z.string().optional(),
+            pendingBriefingHint: z.string().optional(),
+            pendingQuestionHint: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     customCommands: z.array(TelegramCustomCommandSchema).optional(),
     configWrites: z.boolean().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
