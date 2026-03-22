@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { resolveThinkingDefault } from "../../agents/model-selection.js";
+import {
+  buildModelAliasIndex,
+  resolveModelRefFromString,
+  resolveThinkingDefault,
+} from "../../agents/model-selection.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
@@ -10,7 +14,6 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
@@ -1322,23 +1325,52 @@ export const chatHandlers: GatewayRequestHandlers = {
         const sessionModelOverride = entry?.modelOverride;
         const sessionProviderOverride = entry?.providerOverride;
         if (sessionModelOverride) {
-          // Collect all image model keys for checking
+          // Build alias index for resolving model aliases
+          const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "" });
+
+          // Collect all image model keys for checking (resolve aliases to full provider/model format)
           const imageModelKeys = new Set<string>();
+
+          // Helper to resolve and add model key
+          const addResolvedModelKey = (rawModel: string) => {
+            const resolved = resolveModelRefFromString({
+              raw: rawModel.trim(),
+              defaultProvider: "",
+              aliasIndex,
+            });
+            if (resolved) {
+              const key = `${resolved.ref.provider}/${resolved.ref.model}`;
+              imageModelKeys.add(key);
+            }
+            // Also add the raw string for backward compatibility
+            imageModelKeys.add(rawModel.trim());
+          };
+
           if (imageModelPrimary) {
-            imageModelKeys.add(imageModelPrimary);
+            addResolvedModelKey(imageModelPrimary);
           }
           if (typeof imageModelConfig === "object" && Array.isArray(imageModelConfig.fallbacks)) {
             for (const fb of imageModelConfig.fallbacks) {
               if (fb?.trim()) {
-                imageModelKeys.add(fb.trim());
+                addResolvedModelKey(fb);
               }
             }
           }
-          // Check if user's stored model is an image model
-          const userModelKey = sessionProviderOverride
+
+          // Resolve user's stored model to full provider/model format
+          const userRawModel = sessionProviderOverride
             ? `${sessionProviderOverride}/${sessionModelOverride}`
             : sessionModelOverride;
-          if (imageModelKeys.has(userModelKey) || imageModelKeys.has(sessionModelOverride)) {
+          const userResolved = resolveModelRefFromString({
+            raw: userRawModel,
+            defaultProvider: "",
+            aliasIndex,
+          });
+          const userModelKey = userResolved
+            ? `${userResolved.ref.provider}/${userResolved.ref.model}`
+            : userRawModel;
+
+          if (imageModelKeys.has(userModelKey)) {
             context.logGateway.info(
               `[image-model-switch] User's stored model ${userModelKey} is already an image model, respecting user choice`,
             );
