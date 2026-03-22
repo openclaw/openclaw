@@ -72,7 +72,7 @@ jobs:
       - name: Disallow direct inputs interpolation in composite run blocks
         run: python3 scripts/check-composite-action-input-interpolation.py
 
-  config-docs-drift:
+  generated-doc-baselines:
     if: github.event_name == 'workflow_dispatch'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
@@ -87,3 +87,6 @@ jobs:
 
       - name: Check config docs drift statefile
         run: pnpm config:docs:check
+
+      - name: Check plugin SDK API baseline drift
+        run: pnpm plugin-sdk:api:check
