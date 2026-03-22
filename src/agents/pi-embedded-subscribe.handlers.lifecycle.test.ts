@@ -11,16 +11,20 @@ function createContext(
   lastAssistant: unknown,
   overrides?: { onAgentEvent?: (event: unknown) => void },
 ): EmbeddedPiSubscribeContext {
+  const onBlockReply = vi.fn();
   return {
     params: {
       runId: "run-1",
       config: {},
       sessionKey: "agent:main:main",
       onAgentEvent: overrides?.onAgentEvent,
+      onBlockReply,
     },
     state: {
       lastAssistant: lastAssistant as EmbeddedPiSubscribeContext["state"]["lastAssistant"],
       pendingCompactionRetry: 0,
+      pendingToolMediaUrls: [],
+      pendingToolAudioAsVoice: false,
       blockState: {
         thinking: true,
         final: true,
@@ -32,6 +36,7 @@ function createContext(
       warn: vi.fn(),
     },
     flushBlockReplyBuffer: vi.fn(),
+    emitBlockReply: onBlockReply,
     resolveCompactionRetry: vi.fn(),
     maybeResolveCompactionWait: vi.fn(),
   } as unknown as EmbeddedPiSubscribeContext;
@@ -158,5 +163,20 @@ describe("handleAgentEnd", () => {
 
     expect(ctx.log.warn).not.toHaveBeenCalled();
     expect(ctx.log.debug).toHaveBeenCalledWith("embedded run agent end: runId=run-1 isError=false");
+  });
+
+  it("flushes orphaned tool media as a media-only block reply", () => {
+    const ctx = createContext(undefined);
+    ctx.state.pendingToolMediaUrls = ["/tmp/reply.opus"];
+    ctx.state.pendingToolAudioAsVoice = true;
+
+    handleAgentEnd(ctx);
+
+    expect(ctx.emitBlockReply).toHaveBeenCalledWith({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
   });
 });

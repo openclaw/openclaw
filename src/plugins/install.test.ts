@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -69,7 +68,9 @@ function ensureSuiteTempRoot() {
   if (suiteTempRoot) {
     return suiteTempRoot;
   }
-  suiteTempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-install-"));
+  const bundleTempRoot = path.join(process.cwd(), ".tmp");
+  fs.mkdirSync(bundleTempRoot, { recursive: true });
+  suiteTempRoot = fs.mkdtempSync(path.join(bundleTempRoot, "openclaw-plugin-install-"));
   return suiteTempRoot;
 }
 
@@ -839,25 +840,13 @@ describe("installPluginFromDir", () => {
     expectInstalledWithPluginId(res, extensionsDir, "@openclaw/test-plugin");
   });
 
-  it("rejects bare @ as an invalid scoped id", () => {
-    expect(() => resolvePluginInstallDir("@")).toThrow(
-      "invalid plugin name: scoped ids must use @scope/name format",
-    );
-  });
+  it("keeps scoped install-dir validation aligned", () => {
+    for (const invalidId of ["@", "@/name", "team/name"]) {
+      expect(() => resolvePluginInstallDir(invalidId)).toThrow(
+        "invalid plugin name: scoped ids must use @scope/name format",
+      );
+    }
 
-  it("rejects empty scoped segments like @/name", () => {
-    expect(() => resolvePluginInstallDir("@/name")).toThrow(
-      "invalid plugin name: scoped ids must use @scope/name format",
-    );
-  });
-
-  it("rejects two-segment ids without a scope prefix", () => {
-    expect(() => resolvePluginInstallDir("team/name")).toThrow(
-      "invalid plugin name: scoped ids must use @scope/name format",
-    );
-  });
-
-  it("uses a unique hashed install dir for scoped ids", () => {
     const extensionsDir = path.join(makeTempDir(), "extensions");
     const scopedTarget = resolvePluginInstallDir("@scope/name", extensionsDir);
     const hashedFlatId = safePathSegmentHashed("@scope/name");
