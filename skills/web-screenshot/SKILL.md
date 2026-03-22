@@ -53,6 +53,7 @@ Inject JavaScript to force all hidden elements visible, trigger lazy-loaded imag
 ### Compact One-Liner (Copy-Paste Ready)
 
 For the reveal injection (step 2):
+
 ```
 (() => { document.querySelectorAll('[class*=reveal],[class*=fade],[class*=animate],[class*=scroll]').forEach(el => { el.style.opacity = '1'; el.style.transform = 'none'; el.style.visibility = 'visible'; el.style.transition = 'none' }); document.querySelectorAll('[style*="opacity: 0"],[style*="opacity:0"]').forEach(el => { el.style.opacity = '1'; el.style.transform = 'none' }); document.querySelectorAll('img[loading=lazy]').forEach(img => { img.loading = 'eager' }); window.scrollTo(0, document.body.scrollHeight); return 'done' })()
 ```
