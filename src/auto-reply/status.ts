@@ -631,6 +631,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const totalCostLabel = (() => {
     if (!showCost || !hasUsage) return undefined;
     if (hasCache) {
+      if (tokenOnlyCost === undefined && cacheOnlyCost === undefined) return undefined;
       const sum = (tokenOnlyCost ?? 0) + (cacheOnlyCost ?? 0);
       return formatComponentUsd(sum);
     }
