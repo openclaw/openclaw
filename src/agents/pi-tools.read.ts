@@ -9,6 +9,7 @@ import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
+import { resolveUserPath } from "../utils.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
 import { wrapEditToolWithRecovery } from "./pi-tools.host-edit.js";
@@ -649,7 +650,8 @@ export function createHostWorkspaceWriteTool(root: string, options?: { workspace
   const base = createWriteTool(root, {
     operations: createHostWriteOperations(root, options),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+  const validated = wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+  return wrapHostToolHomeRelativePathResolution(validated);
 }
 
 export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
@@ -660,7 +662,8 @@ export function createHostWorkspaceEditTool(root: string, options?: { workspaceO
     root,
     readFile: (absolutePath: string) => fs.readFile(absolutePath, "utf-8"),
   });
-  return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit);
+  const validated = wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit);
+  return wrapHostToolHomeRelativePathResolution(validated);
 }
 
 export function createOpenClawReadTool(
@@ -840,4 +843,36 @@ function createFsAccessError(code: string, filePath: string): NodeJS.ErrnoExcept
   const error = new Error(`Sandbox FS error (${code}): ${filePath}`) as NodeJS.ErrnoException;
   error.code = code;
   return error;
+}
+
+function normalizeHostHomeRelativeToolParams(
+  params: unknown,
+): Record<string, unknown> | undefined {
+  const record = getToolParamsRecord(params);
+  if (!record) {
+    return undefined;
+  }
+  const normalized = { ...record };
+
+  const filePath = normalized.path;
+  if (typeof filePath !== "string") {
+    return normalized;
+  }
+
+  const trimmed = filePath.trim();
+  if (trimmed === "~" || trimmed.startsWith("~/") || trimmed.startsWith("~\\")) {
+    normalized.path = resolveUserPath(trimmed);
+  }
+
+  return normalized;
+}
+
+function wrapHostToolHomeRelativePathResolution(tool: AnyAgentTool): AnyAgentTool {
+  return {
+    ...tool,
+    execute: async (toolCallId, params, signal, onUpdate) => {
+      const normalized = normalizeHostHomeRelativeToolParams(params);
+      return tool.execute(toolCallId, normalized ?? params, signal, onUpdate);
+    },
+  };
 }
