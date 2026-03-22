@@ -201,7 +201,7 @@ export async function downloadImageFeishu(params: {
   const { cfg, imageKey, accountId } = params;
   const normalizedImageKey = normalizeFeishuExternalKey(imageKey);
   if (!normalizedImageKey) {
-    throw new Error("Feishu image download failed: invalid image_key");
+    throw new Error(`[Media] 飞书图片下载失败：无效的 image_key (${imageKey})`);
   }
   const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
 
@@ -232,7 +232,9 @@ export async function downloadMessageResourceFeishu(params: {
   const { cfg, messageId, fileKey, type, accountId } = params;
   const normalizedFileKey = normalizeFeishuExternalKey(fileKey);
   if (!normalizedFileKey) {
-    throw new Error("Feishu message resource download failed: invalid file_key");
+    throw new Error(
+      `[Media] 飞书消息资源下载失败：无效的 file_key (${fileKey}, message: ${messageId})`,
+    );
   }
   const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
 
@@ -291,7 +293,7 @@ export async function uploadImageFeishu(params: {
   return {
     imageKey: extractFeishuUploadKey(response, {
       key: "image_key",
-      errorPrefix: "Feishu image upload failed",
+      errorPrefix: "[Media] 飞书图片上传失败",
     }),
   };
 }
@@ -345,7 +347,7 @@ export async function uploadFileFeishu(params: {
   return {
     fileKey: extractFeishuUploadKey(response, {
       key: "file_key",
-      errorPrefix: "Feishu file upload failed",
+      errorPrefix: "[Media] 飞书文件上传失败",
     }),
   };
 }
@@ -378,7 +380,7 @@ export async function sendImageFeishu(params: {
         ...(replyInThread ? { reply_in_thread: true } : {}),
       },
     });
-    assertFeishuMessageApiSuccess(response, "Feishu image reply failed");
+    assertFeishuMessageApiSuccess(response, "[Media] 飞书图片回复失败");
     return toFeishuSendResult(response, receiveId);
   }
 
@@ -390,7 +392,7 @@ export async function sendImageFeishu(params: {
       msg_type: "image",
     },
   });
-  assertFeishuMessageApiSuccess(response, "Feishu image send failed");
+  assertFeishuMessageApiSuccess(response, "[Media] 飞书图片发送失败");
   return toFeishuSendResult(response, receiveId);
 }
 
@@ -425,7 +427,7 @@ export async function sendFileFeishu(params: {
         ...(replyInThread ? { reply_in_thread: true } : {}),
       },
     });
-    assertFeishuMessageApiSuccess(response, "Feishu file reply failed");
+    assertFeishuMessageApiSuccess(response, "[Media] 飞书文件回复失败");
     return toFeishuSendResult(response, receiveId);
   }
 
@@ -437,7 +439,7 @@ export async function sendFileFeishu(params: {
       msg_type: msgType,
     },
   });
-  assertFeishuMessageApiSuccess(response, "Feishu file send failed");
+  assertFeishuMessageApiSuccess(response, "[Media] 飞书文件发送失败");
   return toFeishuSendResult(response, receiveId);
 }
 

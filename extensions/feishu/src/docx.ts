@@ -105,7 +105,7 @@ async function convertMarkdown(client: Lark.Client, markdown: string) {
     data: { content_type: "markdown", content: markdown },
   });
   if (res.code !== 0) {
-    throw new Error(res.msg);
+    throw new Error(`[Docx] Markdown 转换失败：${res.msg} (code: ${res.code})`);
   }
   return {
     blocks: res.data?.blocks ?? [],
@@ -151,7 +151,7 @@ async function insertBlocks(
       },
     });
     if (res.code !== 0) {
-      throw new Error(res.msg);
+      throw new Error(`[Docx] 插入文档块失败：${res.msg} (doc: ${docToken}, parent: ${blockId})`);
     }
     allInserted.push(...(res.data?.children ?? []));
   }
@@ -321,7 +321,9 @@ async function insertBlocksWithDescendant(
   });
 
   if (res.code !== 0) {
-    throw new Error(`${res.msg} (code: ${res.code})`);
+    throw new Error(
+      `[Docx] 插入文档后代失败：${res.msg} (doc: ${docToken}, parent: ${parentBlockId})`,
+    );
   }
 
   return { children: res.data?.children ?? [] };
@@ -332,7 +334,7 @@ async function clearDocumentContent(client: Lark.Client, docToken: string) {
     path: { document_id: docToken },
   });
   if (existing.code !== 0) {
-    throw new Error(existing.msg);
+    throw new Error(`[Docx] 获取文档块列表失败：${existing.msg} (doc: ${docToken})`);
   }
 
   const childIds =
@@ -346,7 +348,9 @@ async function clearDocumentContent(client: Lark.Client, docToken: string) {
       data: { start_index: 0, end_index: childIds.length },
     });
     if (res.code !== 0) {
-      throw new Error(res.msg);
+      throw new Error(
+        `[Docx] 批量删除文档块失败：${res.msg} (doc: ${docToken}, count: ${childIds.length})`,
+      );
     }
   }
 
@@ -380,7 +384,7 @@ async function uploadImageToDocx(
 
   const fileToken = res?.file_token;
   if (!fileToken) {
-    throw new Error("Image upload failed: no file_token returned");
+    throw new Error(`[Docx] 图片上传失败：未返回 file_token`);
   }
   return fileToken;
 }
@@ -405,31 +409,29 @@ async function resolveUploadInput(
     )[]
   ).filter(Boolean);
   if (inputSources.length > 1) {
-    throw new Error(`Provide only one image source; got: ${inputSources.join(", ")}`);
+    throw new Error(`[Docx] 只能提供一个图片源，但收到了：${inputSources.join(", ")}`);
   }
 
   // data URI: data:image/png;base64,xxxx
   if (imageInput?.startsWith("data:")) {
     const commaIdx = imageInput.indexOf(",");
     if (commaIdx === -1) {
-      throw new Error("Invalid data URI: missing comma separator.");
+      throw new Error(`[Docx] 无效的数据 URI：缺少逗号分隔符`);
     }
     const header = imageInput.slice(0, commaIdx);
     const data = imageInput.slice(commaIdx + 1);
     // Only base64-encoded data URIs are supported; reject plain/URL-encoded ones.
     if (!header.includes(";base64")) {
       throw new Error(
-        `Invalid data URI: missing ';base64' marker. ` +
-          `Expected format: data:image/png;base64,<base64data>`,
+        `[Docx] 无效的数据 URI：缺少 ';base64' 标记。` +
+          `期望格式：data:image/png;base64,<base64 数据>`,
       );
     }
     // Validate the payload is actually base64 before decoding; Node's decoder
     // is permissive and would silently accept garbage bytes otherwise.
     const trimmedData = data.trim();
     if (trimmedData.length === 0 || !/^[A-Za-z0-9+/]+=*$/.test(trimmedData)) {
-      throw new Error(
-        `Invalid data URI: base64 payload contains characters outside the standard alphabet.`,
-      );
+      throw new Error(`[Docx] 无效的数据 URI：base64 内容包含非法字符`);
     }
     const mimeMatch = header.match(/data:([^;]+)/);
     const ext = mimeMatch?.[1]?.split("/")[1] ?? "png";
@@ -438,7 +440,7 @@ async function resolveUploadInput(
     const estimatedBytes = Math.ceil((trimmedData.length * 3) / 4);
     if (estimatedBytes > maxBytes) {
       throw new Error(
-        `Image data URI exceeds limit: estimated ${estimatedBytes} bytes > ${maxBytes} bytes`,
+        `[Docx] 图片数据 URI 超出限制：预估 ${estimatedBytes} 字节 > ${maxBytes} 字节`,
       );
     }
     const buffer = Buffer.from(trimmedData, "base64");
@@ -460,15 +462,15 @@ async function resolveUploadInput(
     if (unambiguousPath || (absolutePath && existsSync(candidate))) {
       const buffer = await fs.readFile(candidate);
       if (buffer.length > maxBytes) {
-        throw new Error(`Local file exceeds limit: ${buffer.length} bytes > ${maxBytes} bytes`);
+        throw new Error(`[Docx] 本地文件超出限制：${buffer.length} 字节 > ${maxBytes} 字节`);
       }
       return { buffer, fileName: explicitFileName ?? basename(candidate) };
     }
 
     if (absolutePath && !existsSync(candidate)) {
       throw new Error(
-        `File not found: "${candidate}". ` +
-          `If you intended to pass image binary data, use a data URI instead: data:image/jpeg;base64,...`,
+        `[Docx] 文件不存在："${candidate}"。` +
+          `如需传递图片二进制数据，请使用数据 URI 格式：data:image/jpeg;base64,...`,
       );
     }
   }
@@ -480,30 +482,28 @@ async function resolveUploadInput(
     // which would decode malformed strings into arbitrary bytes. Reject early.
     if (trimmed.length === 0 || !/^[A-Za-z0-9+/]+=*$/.test(trimmed)) {
       throw new Error(
-        `Invalid base64: image input contains characters outside the standard base64 alphabet. ` +
-          `Use a data URI (data:image/png;base64,...) or a local file path instead.`,
+        `[Docx] 无效的 base64：图片输入包含非法字符。` +
+          `请使用数据 URI (data:image/png;base64,...) 或本地文件路径。`,
       );
     }
     // Estimate decoded byte count from base64 length BEFORE allocating the
     // full buffer to avoid spiking memory on oversized payloads.
     const estimatedBytes = Math.ceil((trimmed.length * 3) / 4);
     if (estimatedBytes > maxBytes) {
-      throw new Error(
-        `Base64 image exceeds limit: estimated ${estimatedBytes} bytes > ${maxBytes} bytes`,
-      );
+      throw new Error(`[Docx] Base64 图片超出限制：预估 ${estimatedBytes} 字节 > ${maxBytes} 字节`);
     }
     const buffer = Buffer.from(trimmed, "base64");
     if (buffer.length === 0) {
-      throw new Error("Base64 image decoded to empty buffer; check the input.");
+      throw new Error(`[Docx] Base64 图片解码后为空，请检查输入`);
     }
     return { buffer, fileName: explicitFileName ?? "image.png" };
   }
 
   if (!url && !filePath) {
-    throw new Error("Either url, file_path, or image (base64/data URI) must be provided");
+    throw new Error(`[Docx] 必须提供 url、file_path 或 image (base64/数据 URI) 其中之一`);
   }
   if (url && filePath) {
-    throw new Error("Provide only one of url or file_path");
+    throw new Error(`[Docx] 只能提供 url 或 file_path 其中之一`);
   }
 
   if (url) {
@@ -518,7 +518,7 @@ async function resolveUploadInput(
 
   const buffer = await fs.readFile(filePath!);
   if (buffer.length > maxBytes) {
-    throw new Error(`Local file exceeds limit: ${buffer.length} bytes > ${maxBytes} bytes`);
+    throw new Error(`[Docx] 本地文件超出限制：${buffer.length} 字节 > ${maxBytes} 字节`);
   }
   return {
     buffer,

@@ -212,7 +212,10 @@ export function buildFeishuAgentBody(params: {
 
   if (permissionErrorForAgent) {
     const grantUrl = permissionErrorForAgent.grantUrl ?? "";
-    messageBody += `\n\n[System: The bot encountered a Feishu API permission error. Please inform the user about this issue and provide the permission grant URL for the admin to authorize. Permission grant URL: ${grantUrl}]`;
+    const errorMsg = grantUrl
+      ? `【⚠️ 飞书权限提示】机器人缺少必要的 API 权限，部分功能可能无法使用。请管理员点击以下链接授权：${grantUrl}（如链接无法点击，请完整复制到浏览器打开。授权后重试即可。）`
+      : `【⚠️ 飞书权限提示】机器人缺少必要的 API 权限，部分功能可能无法使用。请联系管理员在飞书开放平台为机器人应用添加相应权限。`;
+    messageBody += `\n\n[System: ${errorMsg}]`;
   }
 
   return messageBody;

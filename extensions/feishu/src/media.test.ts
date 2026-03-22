@@ -418,7 +418,7 @@ describe("sendMediaFeishu msg_type routing", () => {
         cfg: {} as any,
         imageKey: "a/../../bad",
       }),
-    ).rejects.toThrow("invalid image_key");
+    ).rejects.toThrow("[Media] 飞书图片下载失败");
 
     expect(imageGetMock).not.toHaveBeenCalled();
   });
@@ -431,7 +431,7 @@ describe("sendMediaFeishu msg_type routing", () => {
         fileKey: "x/../../bad",
         type: "file",
       }),
-    ).rejects.toThrow("invalid file_key");
+    ).rejects.toThrow("[Media] 飞书消息资源下载失败");
 
     expect(messageResourceGetMock).not.toHaveBeenCalled();
   });

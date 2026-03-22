@@ -129,7 +129,29 @@ describe("buildFeishuAgentBody", () => {
     });
 
     expect(body).toBe(
-      '[message_id: msg-42]\nSender Name: [Replying to: "previous message"]\n\nhello world\n\n[System: Your reply will automatically @mention: Target User. Do not write @xxx yourself.]\n\n[System: The bot encountered a Feishu API permission error. Please inform the user about this issue and provide the permission grant URL for the admin to authorize. Permission grant URL: https://open.feishu.cn/app/cli_test]',
+      '[message_id: msg-42]\nSender Name: [Replying to: "previous message"]\n\nhello world\n\n[System: Your reply will automatically @mention: Target User. Do not write @xxx yourself.]\n\n[System: 【⚠️ 飞书权限提示】机器人缺少必要的 API 权限，部分功能可能无法使用。请管理员点击以下链接授权：https://open.feishu.cn/app/cli_test（如链接无法点击，请完整复制到浏览器打开。授权后重试即可。）]',
+    );
+  });
+
+  it("shows fallback message when grant URL is not available", () => {
+    const body = buildFeishuAgentBody({
+      ctx: {
+        content: "hello world",
+        senderName: "Sender Name",
+        senderOpenId: "ou-sender",
+        messageId: "msg-42",
+        mentionTargets: [],
+      },
+      quotedContent: undefined,
+      permissionErrorForAgent: {
+        code: 99991672,
+        message: "permission denied",
+        grantUrl: "",
+      },
+    });
+
+    expect(body).toBe(
+      "[message_id: msg-42]\nSender Name: hello world\n\n[System: 【⚠️ 飞书权限提示】机器人缺少必要的 API 权限，部分功能可能无法使用。请联系管理员在飞书开放平台为机器人应用添加相应权限。]",
     );
   });
 });
@@ -1536,9 +1558,7 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
     expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
       expect.objectContaining({
-        BodyForAgent: expect.stringContaining(
-          "Permission grant URL: https://open.feishu.cn/app/cli_test",
-        ),
+        BodyForAgent: expect.stringContaining("飞书权限提示"),
       }),
     );
     expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
@@ -1599,7 +1619,7 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
     expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
       expect.objectContaining({
-        BodyForAgent: expect.not.stringContaining("Permission grant URL"),
+        BodyForAgent: expect.not.stringContaining("飞书权限提示"),
       }),
     );
     expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
