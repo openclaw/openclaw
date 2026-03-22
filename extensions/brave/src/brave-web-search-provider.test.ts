@@ -1,0 +1,52 @@
+import { describe, expect, it } from "vitest";
+import { __testing } from "./brave-web-search-provider.js";
+
+describe("brave web search provider", () => {
+  it("normalizes brave language parameters and swaps reversed ui/search inputs", () => {
+    expect(
+      __testing.normalizeBraveLanguageParams({
+        search_lang: "en-US",
+        ui_lang: "ja",
+      }),
+    ).toEqual({
+      search_lang: "jp",
+      ui_lang: "en-US",
+    });
+  });
+
+  it("flags invalid brave language fields", () => {
+    expect(
+      __testing.normalizeBraveLanguageParams({
+        search_lang: "xx",
+      }),
+    ).toEqual({ invalidField: "search_lang" });
+  });
+
+  it("defaults brave mode to web unless llm-context is explicitly selected", () => {
+    expect(__testing.resolveBraveMode()).toBe("web");
+    expect(__testing.resolveBraveMode({ mode: "llm-context" })).toBe("llm-context");
+  });
+
+  it("maps llm-context results into wrapped source entries", () => {
+    expect(
+      __testing.mapBraveLlmContextResults({
+        grounding: {
+          generic: [
+            {
+              url: "https://example.com/post",
+              title: "Example",
+              snippets: ["a", "", "b"],
+            },
+          ],
+        },
+      }),
+    ).toEqual([
+      {
+        url: "https://example.com/post",
+        title: "Example",
+        snippets: ["a", "b"],
+        siteName: "example.com",
+      },
+    ]);
+  });
+});
