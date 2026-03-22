@@ -218,6 +218,7 @@ Docs: https://docs.openclaw.ai
 - Tools/image generation: add bundled fal image generation support so `image_generate` can target `fal/*` models with `FAL_KEY`, including single-image edit flows via FLUX image-to-image. Thanks @vincentkoc.
 - Messages/polls: treat zero-valued poll params on `message.send` as unset defaults while keeping non-zero poll params on the poll validation path. (#52150) Fixes #52118. Thanks @Bartok9.
 - xAI/web search: add missing Grok credential metadata so the bundled provider registration type-checks again. (#49472) thanks @scoootscooob.
+- Agents/session cache: opportunistically sweep expired embedded-runner session cache entries during later cache activity, so one-shot session files do not accumulate forever. (#52427) Thanks @karanuppal.
 - Signal/runtime API: re-export `SignalAccountConfig` so Signal account resolution type-checks again. (#49470) Thanks @scoootscooob.
 - Google Chat/runtime API: thin the private runtime barrel onto the curated public SDK surface while keeping public Google Chat exports intact. (#49504) Thanks @scoootscooob.
 - WhatsApp: stabilize inbound monitor and setup tests (#50007) Thanks @joshavant.
