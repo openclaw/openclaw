@@ -1,7 +1,7 @@
 {
-  "replies_today": 6,
-  "replies_this_hour": 40,
-  "last_reply_time": 1774201571.6251378,
+  "replies_today": 15,
+  "replies_this_hour": 49,
+  "last_reply_time": 1774213272.850976,
   "last_observe_time": 0,
   "replied_tweets": [
     "https://x.com/rocklambros/status/2035733282240045128",
@@ -10,7 +10,20 @@
     "https://x.com/fidasp__/status/2035677003874189596",
     "https://x.com/goblintaskforce/status/2035767772601278796",
     "https://x.com/bluecactusai/status/2035762309675589978",
-    "https://x.com/Julien38415292/status/2035771111854793174"
+    "https://x.com/Julien38415292/status/2035771111854793174",
+    "https://x.com/RunByDaVinci/status/2035775234754969651",
+    "https://x.com/rahuldotsol/status/2035756891863990455",
+    "https://x.com/thoughtproof_ai/status/2035764776010125549",
+    "https://x.com/Cryptinflux/status/2035600544824516745",
+    "https://x.com/TechJobsDailyIN/status/2035793982995984450",
+    "https://x.com/neeeel/status/2035795715876966420",
+    "https://x.com/YouTuberMayur/status/2035797318382035169",
+    "https://x.com/KindledFlameDev/status/2035805787499446310",
+    "https://x.com/Cr8DigitalAsset/status/2035798131665756285",
+    "https://x.com/grok/status/2035812927568040283",
+    "https://x.com/alex_lavaee/status/2035816395104219136",
+    "https://x.com/ninja_prompt/status/2035817647607087533",
+    "https://x.com/fahdmirza/status/2035816596871303420"
   ],
   "quality_scores": [
     6.24,
@@ -18,7 +31,16 @@
     7.24,
     8.42,
     7.24,
-    7.42
+    7.42,
+    6.42,
+    7.24,
+    5.24,
+    7.24,
+    5.42,
+    7.0,
+    5.5,
+    7.24,
+    6.42
   ],
   "date": "2026-03-23"
 }
