@@ -507,6 +507,44 @@ export function buildAllowedModelSet(params: {
   return { allowAny: false, allowedCatalog, allowedKeys };
 }
 
+export function buildConfiguredModelCatalog(params: { cfg: OpenClawConfig }): ModelCatalogEntry[] {
+  const providers = params.cfg.models?.providers;
+  if (!providers || typeof providers !== "object") {
+    return [];
+  }
+
+  const catalog: ModelCatalogEntry[] = [];
+  for (const [providerRaw, provider] of Object.entries(providers)) {
+    const providerId = normalizeProviderId(providerRaw);
+    if (!providerId || !Array.isArray(provider?.models)) {
+      continue;
+    }
+    for (const model of provider.models) {
+      const id = typeof model?.id === "string" ? model.id.trim() : "";
+      if (!id) {
+        continue;
+      }
+      const name = typeof model?.name === "string" && model.name.trim() ? model.name.trim() : id;
+      const contextWindow =
+        typeof model?.contextWindow === "number" && model.contextWindow > 0
+          ? model.contextWindow
+          : undefined;
+      const reasoning = typeof model?.reasoning === "boolean" ? model.reasoning : undefined;
+      const input = Array.isArray(model?.input) ? model.input : undefined;
+      catalog.push({
+        provider: providerId,
+        id,
+        name,
+        contextWindow,
+        reasoning,
+        input,
+      });
+    }
+  }
+
+  return catalog;
+}
+
 export type ModelRefStatus = {
   key: string;
   inCatalog: boolean;

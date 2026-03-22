@@ -78,6 +78,18 @@ function shouldSkipMissingConfigFastPath(): boolean {
   );
 }
 
+function isMissingConfigColdStart(): boolean {
+  return !shouldSkipMissingConfigFastPath() && !existsSync(resolveConfigPath(process.env));
+}
+
+function buildColdStartUpdateResult(): Awaited<ReturnType<typeof getUpdateCheckResult>> {
+  return {
+    root: null,
+    installKind: "unknown",
+    packageManager: "unknown",
+  };
+}
+
 function shouldCollectPluginCompatibility(cfg: OpenClawConfig): boolean {
   if (hasPotentialConfiguredChannels(cfg)) {
     return true;
@@ -138,23 +150,28 @@ export async function scanStatusJsonFast(
   },
   _runtime: RuntimeEnv,
 ): Promise<StatusScanResult> {
+  const coldStart = isMissingConfigColdStart();
   const loadedRaw = await readStatusSourceConfig();
   const { resolvedConfig: cfg, diagnostics: secretDiagnostics } = await resolveStatusConfig({
     sourceConfig: loadedRaw,
     commandName: "status --json",
   });
-  if (hasPotentialConfiguredChannels(cfg)) {
+  const hasConfiguredChannels = hasPotentialConfiguredChannels(cfg);
+  if (hasConfiguredChannels) {
     const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
     ensurePluginRegistryLoaded({ scope: "configured-channels" });
   }
   const osSummary = resolveOsSummary();
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   const updateTimeoutMs = opts.all ? 6500 : 2500;
-  const updatePromise = getUpdateCheckResult({
-    timeoutMs: updateTimeoutMs,
-    fetchGit: true,
-    includeRegistry: true,
-  });
+  const skipColdStartNetworkChecks = coldStart && !hasConfiguredChannels && opts.all !== true;
+  const updatePromise = skipColdStartNetworkChecks
+    ? Promise.resolve(buildColdStartUpdateResult())
+    : getUpdateCheckResult({
+        timeoutMs: updateTimeoutMs,
+        fetchGit: true,
+        includeRegistry: true,
+      });
   const agentStatusPromise = getAgentLocalStatuses(cfg);
   const summaryPromise = getStatusSummary({ config: cfg, sourceConfig: loadedRaw });
 
@@ -169,7 +186,13 @@ export async function scanStatusJsonFast(
           )
           .catch(() => null);
 
-  const gatewayProbePromise = resolveGatewayProbeSnapshot({ cfg, opts });
+  const gatewayProbePromise = resolveGatewayProbeSnapshot({
+    cfg,
+    opts: {
+      ...opts,
+      ...(skipColdStartNetworkChecks ? { skipProbe: true } : {}),
+    },
+  });
 
   const [tailscaleDns, update, agentStatus, gatewaySnapshot, summary] = await Promise.all([
     tailscaleDnsPromise,

@@ -251,6 +251,125 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
 }
 
 describe("chat view", () => {
+  it("hides the context notice when only cumulative inputTokens exceed the limit", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          sessions: {
+            ts: 0,
+            path: "",
+            count: 1,
+            defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: 200_000 },
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                updatedAt: null,
+                inputTokens: 757_300,
+                totalTokens: 46_000,
+                contextTokens: 200_000,
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).not.toContain("context used");
+    expect(container.textContent).not.toContain("757.3k / 200k");
+  });
+
+  it("uses totalTokens for the context notice detail when current usage is high", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          sessions: {
+            ts: 0,
+            path: "",
+            count: 1,
+            defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: 200_000 },
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                updatedAt: null,
+                inputTokens: 757_300,
+                totalTokens: 190_000,
+                contextTokens: 200_000,
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("95% context used");
+    expect(container.textContent).toContain("190k / 200k");
+    expect(container.textContent).not.toContain("757.3k / 200k");
+  });
+
+  it("hides the context notice when totalTokens is missing even if inputTokens is high", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          sessions: {
+            ts: 0,
+            path: "",
+            count: 1,
+            defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: 200_000 },
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                updatedAt: null,
+                inputTokens: 500_000,
+                contextTokens: 200_000,
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).not.toContain("context used");
+  });
+
+  it("hides the context notice when totalTokens is marked stale", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          sessions: {
+            ts: 0,
+            path: "",
+            count: 1,
+            defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: 200_000 },
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                updatedAt: null,
+                totalTokens: 190_000,
+                totalTokensFresh: false,
+                contextTokens: 200_000,
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).not.toContain("context used");
+    expect(container.textContent).not.toContain("190k / 200k");
+  });
+
   it("uses the assistant avatar URL for the welcome state when the identity avatar is only initials", () => {
     const container = document.createElement("div");
     render(

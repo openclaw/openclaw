@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginRuntime, RuntimeEnv } from "../runtime-api.js";
+import type { RuntimeEnv } from "../runtime-api.js";
 
 const verificationMocks = vi.hoisted(() => ({
   bootstrapMatrixVerification: vi.fn(),
@@ -10,7 +10,7 @@ vi.mock("./matrix/actions/verification.js", () => ({
 }));
 
 import { matrixPlugin } from "./channel.js";
-import { setMatrixRuntime } from "./runtime.js";
+import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
 describe("matrix setup post-write bootstrap", () => {
@@ -30,11 +30,7 @@ describe("matrix setup post-write bootstrap", () => {
     log.mockClear();
     error.mockClear();
     exit.mockClear();
-    setMatrixRuntime({
-      state: {
-        resolveStateDir: (_env, homeDir) => (homeDir ?? (() => "/tmp"))(),
-      },
-    } as PluginRuntime);
+    installMatrixTestRuntime();
   });
 
   it("bootstraps verification for newly added encrypted accounts", async () => {
