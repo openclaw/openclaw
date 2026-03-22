@@ -346,19 +346,17 @@ describe("sendMessageMatrix threads", () => {
       threadId: "$thread",
     });
 
-    const content = sendMessage.mock.calls[0]?.[1] as {
-      "m.relates_to"?: {
-        rel_type?: string;
-        event_id?: string;
-        "m.in_reply_to"?: { event_id?: string };
-      };
-    };
-
-    expect(content["m.relates_to"]).toMatchObject({
-      rel_type: "m.thread",
-      event_id: "$thread",
-      "m.in_reply_to": { event_id: "$thread" },
-    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      "!room:example",
+      expect.objectContaining({
+        "m.relates_to": expect.objectContaining({
+          rel_type: "m.thread",
+          event_id: "$thread",
+          is_falling_back: true,
+          "m.in_reply_to": { event_id: "$thread" },
+        }),
+      }),
+    );
   });
 
   it("resolves text chunk limit using the active Matrix account", async () => {
@@ -369,7 +367,11 @@ describe("sendMessageMatrix threads", () => {
       accountId: "ops",
     });
 
-    expect(resolveTextChunkLimitMock).toHaveBeenCalledWith(expect.anything(), "matrix", "ops");
+    expect(
+      resolveTextChunkLimitMock.mock.calls.some(
+        ([, channel, accountId]) => channel === "matrix" && accountId === "ops",
+      ),
+    ).toBe(true);
   });
 });
 

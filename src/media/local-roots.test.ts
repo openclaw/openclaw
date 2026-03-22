@@ -1,9 +1,17 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getAgentScopedMediaLocalRoots, getDefaultMediaLocalRoots } from "./local-roots.js";
 
 function normalizeHostPath(value: string): string {
-  return path.normalize(path.resolve(value));
+  const resolved = path.normalize(path.resolve(value));
+  let normalized = resolved;
+  try {
+    normalized = fs.realpathSync.native(resolved);
+  } catch {
+    // Keep lexical normalization for paths the test does not create on disk.
+  }
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
 describe("local media roots", () => {

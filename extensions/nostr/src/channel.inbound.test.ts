@@ -34,8 +34,13 @@ function createRuntimeHarness() {
         convertMarkdownTables: vi.fn((text: string) => `converted:${text}`),
       },
       commands: {
+        isControlCommandMessage: vi.fn(() => false),
+        resolveCommandArg: vi.fn(() => undefined),
+        resolveCommandArgChoices: vi.fn(() => []),
+        resolveCommandArgMenu: vi.fn(() => null),
         shouldComputeCommandAuthorized: vi.fn(() => true),
         resolveCommandAuthorizedFromAuthorizers: vi.fn(() => true),
+        shouldHandleTextCommands: vi.fn(() => false),
       },
       routing: {
         resolveAgentRoute: vi.fn(({ accountId, peer }) => ({
@@ -73,6 +78,7 @@ describe("nostr inbound gateway path", () => {
   afterEach(() => {
     mocks.normalizePubkey.mockClear();
     mocks.startNostrBus.mockReset();
+    vi.resetAllMocks();
   });
 
   it("issues a pairing reply before decrypt for unknown senders", async () => {
