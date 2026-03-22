@@ -104,6 +104,24 @@ const ttsMocks = vi.hoisted(() => {
   };
 });
 
+vi.mock("./route-reply.runtime.js", () => ({
+  isRoutableChannel: (channel: string | undefined) =>
+    Boolean(
+      channel &&
+      [
+        "telegram",
+        "slack",
+        "discord",
+        "signal",
+        "imessage",
+        "whatsapp",
+        "feishu",
+        "mattermost",
+      ].includes(channel),
+    ),
+  routeReply: mocks.routeReply,
+}));
+
 vi.mock("./route-reply.js", () => ({
   isRoutableChannel: (channel: string | undefined) =>
     Boolean(
@@ -122,7 +140,7 @@ vi.mock("./route-reply.js", () => ({
   routeReply: mocks.routeReply,
 }));
 
-vi.mock("./abort.js", () => ({
+vi.mock("./abort.runtime.js", () => ({
   tryFastAbortFromMessage: mocks.tryFastAbortFromMessage,
   formatAbortReplyText: (stoppedSubagents?: number) => {
     if (typeof stoppedSubagents !== "number" || stoppedSubagents <= 0) {
@@ -138,13 +156,19 @@ vi.mock("../../logging/diagnostic.js", () => ({
   logMessageProcessed: diagnosticMocks.logMessageProcessed,
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
 }));
-vi.mock("../../config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/sessions.js")>();
+vi.mock("../../config/sessions/store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions/store.js")>();
   return {
     ...actual,
     loadSessionStore: sessionStoreMocks.loadSessionStore,
-    resolveStorePath: sessionStoreMocks.resolveStorePath,
     resolveSessionStoreEntry: sessionStoreMocks.resolveSessionStoreEntry,
+  };
+});
+vi.mock("../../config/sessions/paths.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions/paths.js")>();
+  return {
+    ...actual,
+    resolveStorePath: sessionStoreMocks.resolveStorePath,
   };
 });
 
@@ -191,6 +215,13 @@ vi.mock("../../tts/tts.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
   resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
+}));
+vi.mock("../../tts/tts.runtime.js", () => ({
+  maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
+}));
+vi.mock("../../tts/tts-config.js", () => ({
+  normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
+  resolveConfiguredTtsMode: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg).mode,
 }));
 
 const noAbortResult = { handled: false, aborted: false } as const;

@@ -1,1 +1,1 @@
-export { routeReply } from "./route-reply.js";
+export { isRoutableChannel, routeReply } from "./route-reply.js";
