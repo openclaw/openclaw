@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -37,6 +37,7 @@ import type {
   ChannelThreadingToolContext,
 } from "../channels/plugins/types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { resolvePluginSdkAliasFile } from "../plugins/sdk-alias.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
 import type {
   ChannelMessageActionContext as SharedChannelMessageActionContext,
@@ -58,8 +59,30 @@ const representativeRuntimeSmokeSubpaths = [
   "webhook-ingress",
 ] as const;
 
+function resolveImportablePluginSdkSubpath(specifier: string): string {
+  let resolved: string | null = null;
+  try {
+    resolved = requireFromHere.resolve(specifier);
+  } catch {
+    resolved = null;
+  }
+  if (resolved && existsSync(resolved)) {
+    return resolved;
+  }
+  const subpath = specifier.replace(/^openclaw\/plugin-sdk\//, "");
+  return (
+    resolvePluginSdkAliasFile({
+      srcFile: `${subpath}.ts`,
+      distFile: `${subpath}.js`,
+      modulePath: fileURLToPath(import.meta.url),
+    }) ??
+    resolved ??
+    specifier
+  );
+}
+
 const importResolvedPluginSdkSubpath = async (specifier: string) =>
-  import(pathToFileURL(requireFromHere.resolve(specifier)).href);
+  import(pathToFileURL(resolveImportablePluginSdkSubpath(specifier)).href);
 
 function readPluginSdkSource(subpath: string): string {
   const file = resolve(PLUGIN_SDK_DIR, `${subpath}.ts`);
