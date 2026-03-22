@@ -1,3 +1,4 @@
+// Shared feedback helpers for typing indicators, ack reactions, and status reactions.
 export {
   removeAckReactionAfterReply,
   shouldAckReaction,
