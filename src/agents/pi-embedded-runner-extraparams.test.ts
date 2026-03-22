@@ -313,7 +313,7 @@ describe("applyExtraParamsToAgent", () => {
   function runResolvedModelIdCase(params: {
     applyProvider: string;
     applyModelId: string;
-    model: Model<"anthropic-messages">;
+    model: Model<"anthropic-messages"> | Model<"openai-completions">;
     cfg?: Record<string, unknown>;
     extraParamsOverride?: Record<string, unknown>;
   }): string {
@@ -1147,7 +1147,7 @@ describe("applyExtraParamsToAgent", () => {
     );
   });
 
-  it("removes invalid negative Google thinkingBudget and maps Gemini 3.1 to thinkingLevel", () => {
+  it("leaves Atproxy Gemini thinking payload unchanged", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -1194,7 +1194,7 @@ describe("applyExtraParamsToAgent", () => {
     )?.thinkingConfig;
     expect(thinkingConfig).toEqual({
       includeThoughts: true,
-      thinkingLevel: "HIGH",
+      thinkingBudget: -1,
     });
     expect(
       (
@@ -1343,7 +1343,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.transport).toBe("auto");
   });
 
-  it("defaults OpenAI transport to auto (WebSocket-first)", () => {
+  it("leaves OpenAI transport unset by default", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
     applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5");
@@ -1357,8 +1357,8 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.transport).toBe("auto");
-    expect(calls[0]?.openaiWsWarmup).toBe(false);
+    expect(calls[0]?.transport).toBeUndefined();
+    expect(calls[0]?.openaiWsWarmup).toBeUndefined();
   });
 
   it("lets runtime options override OpenAI default transport", () => {
@@ -1530,7 +1530,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.transport).toBe("auto");
   });
 
-  it("disables prompt caching for non-Anthropic Bedrock models", () => {
+  it("leaves prompt caching unset for non-Anthropic Bedrock models", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
     applyExtraParamsToAgent(agent, undefined, "amazon-bedrock", "amazon.nova-micro-v1");
@@ -1545,7 +1545,7 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.cacheRetention).toBe("none");
+    expect(calls[0]?.cacheRetention).toBeUndefined();
   });
 
   it("keeps Anthropic Bedrock models eligible for provider-side caching", () => {
