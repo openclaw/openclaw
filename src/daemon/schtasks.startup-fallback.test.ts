@@ -10,6 +10,7 @@ import {
   resetSchtasksBaseMocks,
   schtasksResponses,
   withWindowsEnv,
+  writeGatewayConfig,
   writeGatewayScript,
 } from "./test-helpers/schtasks-fixtures.js";
 const childUnref = vi.hoisted(() => vi.fn());
@@ -48,6 +49,17 @@ async function writeStartupFallbackEntry(env: Record<string, string>) {
   const startupEntryPath = resolveStartupEntryPath(env);
   await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
   await fs.writeFile(startupEntryPath, "@echo off\r\n", "utf8");
+  return startupEntryPath;
+}
+
+async function writeStartupFallbackLauncher(env: Record<string, string>, scriptPath: string) {
+  const startupEntryPath = resolveStartupEntryPath(env);
+  await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
+  await fs.writeFile(
+    startupEntryPath,
+    `@echo off\r\nstart "" /min cmd.exe /d /c ${quoteCmdScriptArg(scriptPath)}\r\n`,
+    "utf8",
+  );
   return startupEntryPath;
 }
 
@@ -218,6 +230,47 @@ describe("Windows startup fallback", () => {
       expect(spawn).toHaveBeenCalledWith(
         "cmd.exe",
         ["/d", "/s", "/c", quoteCmdScriptArg(resolveTaskScriptPath(legacyEnv))],
+        expect.objectContaining({ detached: true, stdio: "ignore", windowsHide: true }),
+      );
+    });
+  });
+
+  it("restarts the Startup fallback with the installed custom-home script when the caller OPENCLAW_HOME changes", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env, tmpDir }) => {
+      addStartupFallbackMissingResponses([
+        { code: 0, stdout: "", stderr: "" },
+        { code: 1, stdout: "", stderr: "not found" },
+      ]);
+      const taskHome = path.join(tmpDir, "task-home");
+      const shellHome = path.join(tmpDir, "shell-home");
+      const taskEnv = { ...env, OPENCLAW_HOME: taskHome };
+      const shellEnv = { ...env, OPENCLAW_HOME: shellHome };
+      await writeGatewayScript(taskEnv, 18789, {
+        includePortEnv: false,
+        includePortFlag: false,
+        extraEnv: { OPENCLAW_HOME: taskHome },
+      });
+      await writeGatewayConfig(taskEnv, 18789);
+      await writeGatewayConfig(shellEnv, 29999);
+      await writeStartupFallbackLauncher(shellEnv, resolveTaskScriptPath(taskEnv));
+      inspectPortUsage.mockResolvedValue({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 5454, command: "node.exe" }],
+        hints: [],
+      });
+
+      const stdout = new PassThrough();
+      const envWithoutPort: Record<string, string> = { ...shellEnv };
+      delete envWithoutPort.OPENCLAW_GATEWAY_PORT;
+      await expect(restartScheduledTask({ env: envWithoutPort, stdout })).resolves.toEqual({
+        outcome: "completed",
+      });
+
+      expectGatewayTermination(5454);
+      expect(spawn).toHaveBeenCalledWith(
+        "cmd.exe",
+        ["/d", "/s", "/c", quoteCmdScriptArg(resolveTaskScriptPath(taskEnv))],
         expect.objectContaining({ detached: true, stdio: "ignore", windowsHide: true }),
       );
     });

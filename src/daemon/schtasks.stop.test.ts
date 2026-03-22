@@ -700,4 +700,56 @@ describe("Scheduled Task stop/restart cleanup", () => {
       expectGatewayTermination(9898);
     });
   });
+
+  it("queries the installed task script before caller OPENCLAW_HOME guesses when resolving the stop port", async () => {
+    await withWindowsEnv("openclaw-win-stop-", async ({ env, tmpDir }) => {
+      const taskHome = path.join(tmpDir, "task-home");
+      const shellHome = path.join(tmpDir, "shell-home");
+      const taskEnv = { ...env, OPENCLAW_HOME: taskHome };
+      const shellEnv = { ...env, OPENCLAW_HOME: shellHome };
+      const installedScriptPath = resolveTaskScriptPath(taskEnv);
+
+      await writeGatewayScript(taskEnv, GATEWAY_PORT, {
+        includePortEnv: false,
+        includePortFlag: false,
+        extraEnv: { OPENCLAW_HOME: taskHome },
+      });
+      await writeGatewayConfig(taskEnv, GATEWAY_PORT);
+      await writeGatewayScript(shellEnv, 29999, {
+        includePortEnv: false,
+        includePortFlag: false,
+        extraEnv: { OPENCLAW_HOME: shellHome },
+      });
+      await writeGatewayConfig(shellEnv, 29999);
+
+      const stdout = new PassThrough();
+      const envWithoutPort: Record<string, string> = { ...shellEnv };
+      delete envWithoutPort.OPENCLAW_GATEWAY_PORT;
+      schtasksResponses.push(
+        { ...SUCCESS_RESPONSE },
+        { ...SUCCESS_RESPONSE },
+        { ...SUCCESS_RESPONSE },
+        {
+          code: 0,
+          stdout: `TaskName: OpenClaw Gateway\r\nTask To Run: "${installedScriptPath}"\r\n`,
+          stderr: "",
+        },
+        {
+          code: 0,
+          stdout: `TaskName: OpenClaw Gateway\r\nTask To Run: "${installedScriptPath}"\r\n`,
+          stderr: "",
+        },
+      );
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([9999]);
+      inspectPortUsage
+        .mockResolvedValueOnce(busyPortUsage(9999))
+        .mockResolvedValueOnce(freePortUsage());
+
+      await stopScheduledTask({ env: envWithoutPort, stdout });
+
+      expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
+      expect(inspectPortUsage).not.toHaveBeenCalledWith(29999);
+      expectGatewayTermination(9999);
+    });
+  });
 });
