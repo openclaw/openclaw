@@ -346,6 +346,46 @@ describe("Scheduled Task stop/restart cleanup", () => {
     });
   });
 
+  it("keeps shell config roots when the task only overrides OPENCLAW_PROFILE", async () => {
+    await withWindowsEnv("openclaw-win-stop-", async ({ env, tmpDir }) => {
+      const taskHome = path.join(tmpDir, "task-home");
+      const shellConfigEnv = { ...env, OPENCLAW_HOME: taskHome, OPENCLAW_PROFILE: "rescue" };
+      const shellConfigPath = await writeGatewayConfig(shellConfigEnv, GATEWAY_PORT);
+      const taskEnv = {
+        ...env,
+        OPENCLAW_HOME: taskHome,
+        OPENCLAW_PROFILE: "rescue",
+      };
+      const shellEnv = {
+        ...env,
+        OPENCLAW_HOME: taskHome,
+        OPENCLAW_PROFILE: "rescue",
+        OPENCLAW_CONFIG_PATH: shellConfigPath,
+        OPENCLAW_TASK_SCRIPT: resolveTaskScriptPath(taskEnv),
+      };
+      await writeGatewayScript(taskEnv, GATEWAY_PORT, {
+        includePortEnv: false,
+        includePortFlag: false,
+        extraEnv: { OPENCLAW_PROFILE: taskEnv.OPENCLAW_PROFILE },
+      });
+      await writeGatewayConfig({ ...env, OPENCLAW_PROFILE: "rescue" }, 29999);
+      const stdout = new PassThrough();
+      const envWithoutPort: Record<string, string> = { ...shellEnv };
+      delete envWithoutPort.OPENCLAW_GATEWAY_PORT;
+      pushSuccessfulSchtasksResponses(3);
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([8585]);
+      inspectPortUsage
+        .mockResolvedValueOnce(busyPortUsage(8585))
+        .mockResolvedValueOnce(freePortUsage());
+
+      await stopScheduledTask({ env: envWithoutPort, stdout });
+
+      expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
+      expect(inspectPortUsage).not.toHaveBeenCalledWith(29999);
+      expectGatewayTermination(8585);
+    });
+  });
+
   it("ignores shell OPENCLAW_CONFIG_PATH once the task env provides its own config root", async () => {
     await withWindowsEnv("openclaw-win-stop-", async ({ env, tmpDir }) => {
       const taskEnv = { ...env, OPENCLAW_STATE_DIR: path.join(tmpDir, "task-state") };
