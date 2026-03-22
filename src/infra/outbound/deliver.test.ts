@@ -501,6 +501,49 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("forwards audioAsVoice through generic plugin media delivery", async () => {
+    const sendMedia = vi.fn(async () => ({
+      channel: "matrix" as const,
+      messageId: "mx-1",
+      roomId: "!room:example",
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: async ({ to, text }) => ({
+                channel: "matrix",
+                messageId: `${to}:${text}`,
+              }),
+              sendMedia,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: { channels: { matrix: {} } } as OpenClawConfig,
+      channel: "matrix",
+      to: "room:!room:example",
+      payloads: [{ text: "voice caption", mediaUrl: "file:///tmp/clip.mp3", audioAsVoice: true }],
+    });
+
+    expect(sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "room:!room:example",
+        text: "voice caption",
+        mediaUrl: "file:///tmp/clip.mp3",
+        audioAsVoice: true,
+      }),
+    );
+  });
+
   it("includes OpenClaw tmp root in whatsapp mediaLocalRoots", async () => {
     const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
 

@@ -1,10 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { isChannelConfigured } from "../config/plugin-auto-enable.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
@@ -36,15 +35,16 @@ import type { CreatePluginRuntimeOptions } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 import {
+  buildPluginLoaderAliasMap,
   buildPluginLoaderJitiOptions,
   listPluginSdkAliasCandidates,
   listPluginSdkExportedSubpaths,
-  resolveLoaderPackageRoot,
+  resolveExtensionApiAlias,
   resolvePluginSdkAliasCandidateOrder,
   resolvePluginSdkAliasFile,
+  resolvePluginRuntimeModulePath,
   resolvePluginSdkScopedAliasMap,
   shouldPreferNativeJiti,
-  type LoaderModuleResolveParams,
 } from "./sdk-alias.js";
 import type {
   OpenClawPluginDefinition,
@@ -101,6 +101,7 @@ type CachedPluginState = {
 };
 
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
+let pluginRegistryCacheEntryCap = MAX_PLUGIN_REGISTRY_CACHE_ENTRIES;
 const registryCache = new Map<string, CachedPluginState>();
 const openAllowlistWarningCache = new Set<string>();
 const LAZY_RUNTIME_REFLECTION_KEYS = [
@@ -128,84 +129,6 @@ export function clearPluginLoaderCache(): void {
 
 const defaultLogger = () => createSubsystemLogger("plugins");
 
-function resolveLoaderModulePath(params: LoaderModuleResolveParams = {}): string {
-  return params.modulePath ?? fileURLToPath(params.moduleUrl ?? import.meta.url);
-}
-
-const resolvePluginSdkAlias = (params: LoaderModuleResolveParams = {}): string | null =>
-  resolvePluginSdkAliasFile({
-    srcFile: "root-alias.cjs",
-    distFile: "root-alias.cjs",
-    ...params,
-  });
-
-function buildPluginLoaderAliasMap(modulePath: string): Record<string, string> {
-  const pluginSdkAlias = resolvePluginSdkAlias({ modulePath });
-  const extensionApiAlias = resolveExtensionApiAlias({ modulePath });
-  return {
-    ...(extensionApiAlias ? { "openclaw/extension-api": extensionApiAlias } : {}),
-    ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
-    ...resolvePluginSdkScopedAliasMap({ modulePath }),
-  };
-}
-
-const resolveExtensionApiAlias = (params: LoaderModuleResolveParams = {}): string | null => {
-  try {
-    const modulePath = resolveLoaderModulePath(params);
-    const packageRoot = resolveLoaderPackageRoot({ ...params, modulePath });
-    if (!packageRoot) {
-      return null;
-    }
-
-    const orderedKinds = resolvePluginSdkAliasCandidateOrder({
-      modulePath,
-      isProduction: process.env.NODE_ENV === "production",
-    });
-    const candidateMap = {
-      src: path.join(packageRoot, "src", "extensionAPI.ts"),
-      dist: path.join(packageRoot, "dist", "extensionAPI.js"),
-    } as const;
-    for (const kind of orderedKinds) {
-      const candidate = candidateMap[kind];
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    }
-  } catch {
-    // ignore
-  }
-  return null;
-};
-
-function resolvePluginRuntimeModulePath(params: LoaderModuleResolveParams = {}): string | null {
-  try {
-    const modulePath = resolveLoaderModulePath(params);
-    const orderedKinds = resolvePluginSdkAliasCandidateOrder({
-      modulePath,
-      isProduction: process.env.NODE_ENV === "production",
-    });
-    const packageRoot = resolveLoaderPackageRoot({ ...params, modulePath });
-    const candidates = packageRoot
-      ? orderedKinds.map((kind) =>
-          kind === "src"
-            ? path.join(packageRoot, "src", "plugins", "runtime", "index.ts")
-            : path.join(packageRoot, "dist", "plugins", "runtime", "index.js"),
-        )
-      : [
-          path.join(path.dirname(modulePath), "runtime", "index.ts"),
-          path.join(path.dirname(modulePath), "runtime", "index.js"),
-        ];
-    for (const candidate of candidates) {
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    }
-  } catch {
-    // ignore
-  }
-  return null;
-}
-
 export const __testing = {
   buildPluginLoaderJitiOptions,
   buildPluginLoaderAliasMap,
@@ -217,7 +140,15 @@ export const __testing = {
   resolvePluginSdkAliasFile,
   resolvePluginRuntimeModulePath,
   shouldPreferNativeJiti,
-  maxPluginRegistryCacheEntries: MAX_PLUGIN_REGISTRY_CACHE_ENTRIES,
+  get maxPluginRegistryCacheEntries() {
+    return pluginRegistryCacheEntryCap;
+  },
+  setMaxPluginRegistryCacheEntriesForTest(value?: number) {
+    pluginRegistryCacheEntryCap =
+      typeof value === "number" && Number.isFinite(value) && value > 0
+        ? Math.max(1, Math.floor(value))
+        : MAX_PLUGIN_REGISTRY_CACHE_ENTRIES;
+  },
 };
 
 function getCachedPluginRegistry(cacheKey: string): CachedPluginState | undefined {
@@ -236,7 +167,7 @@ function setCachedPluginRegistry(cacheKey: string, state: CachedPluginState): vo
     registryCache.delete(cacheKey);
   }
   registryCache.set(cacheKey, state);
-  while (registryCache.size > MAX_PLUGIN_REGISTRY_CACHE_ENTRIES) {
+  while (registryCache.size > pluginRegistryCacheEntryCap) {
     const oldestKey = registryCache.keys().next().value;
     if (!oldestKey) {
       break;
