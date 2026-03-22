@@ -80,6 +80,7 @@ const mocks = vi.hoisted(() => {
       env: { shellEnv: { enabled: true } },
     }),
     loadProviderUsageSummary: vi.fn().mockResolvedValue(undefined),
+    loadOpenRouterMeteredUsage: vi.fn().mockResolvedValue(null),
   };
 });
 
@@ -134,6 +135,10 @@ vi.mock("../../infra/provider-usage.js", async (importOriginal) => {
     loadProviderUsageSummary: mocks.loadProviderUsageSummary,
   };
 });
+
+vi.mock("../../infra/provider-usage.openrouter.js", () => ({
+  loadOpenRouterMeteredUsage: mocks.loadOpenRouterMeteredUsage,
+}));
 
 import { modelsStatusCommand } from "./list.status-command.js";
 
@@ -215,6 +220,8 @@ describe("modelsStatusCommand auth overview", () => {
     expect(payload.auth.missingProvidersInUse).toEqual([]);
     expect(payload.auth.oauth.warnAfterMs).toBeGreaterThan(0);
     expect(payload.auth.oauth.profiles.length).toBeGreaterThan(0);
+    expect(payload.auth.providerUsage.schemaVersion).toBe("1.0");
+    expect(payload.auth.providerUsage.providers).toBeTruthy();
 
     const providers = payload.auth.providers as Array<{
       provider: string;
