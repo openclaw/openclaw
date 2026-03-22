@@ -53,8 +53,8 @@ OpenClaw supports [Perplexity AI](https://www.perplexity.ai/) for web search. It
 
 [xAI Grok](https://x.ai/) provides a web search tool via the Responses API.
 
-1.  **Environment Variable:** Set `XAI_API_KEY` in your environment.
-2.  **Configuration:** Update `~/.openclaw/openclaw.json`:
+1. **Environment Variable:** Set `XAI_API_KEY` in your environment.
+2. **Configuration:** Update `~/.openclaw/openclaw.json`:
 
 ```json
 {
@@ -104,9 +104,9 @@ OpenClaw uses device identity to secure the connection between your browser and 
 
 **Resolution:**
 
-1.  **Use Localhost:** Access the UI via `http://localhost:18789` if the gateway is running on the same machine.
-2.  **Use HTTPS:** Set up a reverse proxy with TLS (e.g., Nginx, Caddy) to serve the gateway over HTTPS.
-3.  **Insecure Auth (Advanced):** If you must use HTTP on a private network, you can enable insecure auth (not recommended):
+1. **Use Localhost:** Access the UI via `http://localhost:18789` if the gateway is running on the same machine.
+2. **Use HTTPS:** Set up a reverse proxy with TLS (e.g., Nginx, Caddy) to serve the gateway over HTTPS.
+3. **Insecure Auth (Advanced):** If you must use HTTP on a private network, you can enable insecure auth (not recommended):
 
 ```json
 {
@@ -148,11 +148,14 @@ OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 pnpm openclaw onboard --install-daemon
 
 - Verify `~/.openclaw/openclaw.json` contains the correct `allowPrivateNetwork` settings.
 - Restart the OpenClaw daemon to apply configuration changes:
+
   ```bash
   pkill -f openclaw
   pnpm openclaw onboard --install-daemon
   ```
+
 - Test a simple search in Mattermost:
+
   ```
   /ask search "weather tomorrow" freshness=pd
   ```

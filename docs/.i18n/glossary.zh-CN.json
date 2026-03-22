@@ -298,5 +298,13 @@
   {
     "source": "Testing",
     "target": "测试"
+  },
+  {
+    "source": "SearXNG (Self-hosted)",
+    "target": "SearXNG（自托管）"
+  },
+  {
+    "source": "Web Search Overview",
+    "target": "Web 搜索概览"
   }
 ]

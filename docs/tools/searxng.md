@@ -88,64 +88,72 @@ If you receive a 403 Forbidden error (e.g., when asking for weather in Mattermos
 
 #### Resolution Method 1: Modify inside the running container
 
-1.  **Identify the container:**
-    ```bash
-    docker ps | grep searxng
-    ```
-2.  **Enter the container:**
-    ```bash
-    docker exec -it {container_name} sh
-    ```
-3.  **Locate and edit `settings.yml`:**
+1. **Identify the container:**
 
-    ```bash
-    find / -name "settings.yml" 2>/dev/null
-    vi /etc/searxng/settings.yml
-    ```
+   ```bash
+   docker ps | grep searxng
+   ```
 
-    Add `json` to `formats` and comment out the `Limiter` if you are on a private network:
+2. **Enter the container:**
 
-    ```yaml
-    search:
-      formats:
-        - html
-        - json # ← Add this
+   ```bash
+   docker exec -it {container_name} sh
+   ```
 
-    enabled_plugins:
-      # - 'Limiter' # ← Comment out for personal/private instances
-      - "Basic Calculator"
-      - "Hash plugin"
-    ```
+3. **Locate and edit `settings.yml`:**
 
-    > [!WARNING]
-    > For public instances, keep the `Limiter` enabled. Only disable it for internal or private network use.
+   ```bash
+   find / -name "settings.yml" 2>/dev/null
+   vi /etc/searxng/settings.yml
+   ```
 
-4.  **Restart the container:**
-    ```bash
-    exit
-    docker restart {container_name}
-    ```
+   Add `json` to `formats` and comment out the `Limiter` if you are on a private network:
+
+   ```yaml
+   search:
+     formats:
+       - html
+       - json # ← Add this
+
+   enabled_plugins:
+     # - 'Limiter' # ← Comment out for personal/private instances
+     - "Basic Calculator"
+     - "Hash plugin"
+   ```
+
+   > [!WARNING]
+   > For public instances, keep the `Limiter` enabled. Only disable it for internal or private network use.
+
+4. **Restart the container:**
+
+   ```bash
+   exit
+   docker restart {container_name}
+   ```
 
 #### Resolution Method 2: Volume Mounting (Recommended)
 
 Mount a host-side `settings.yml` to ensure settings persist after container updates or removals.
 
-1.  **Copy the config from the container:**
-    ```bash
-    docker cp {container_id}:/etc/searxng/settings.yml ~/searxng-settings.yml
-    ```
-2.  **Edit the file on your host:**
-    Add `json` to `formats` and disable `Limiter` as described in Method 1.
-3.  **Restart with the volume mount:**
-    ```bash
-    docker stop searxng
-    docker rm searxng
-    docker run -d \
-      --name searxng \
-      -p 8080:8080 \
-      -v ~/searxng-settings.yml:/etc/searxng/settings.yml \
-      searxng/searxng
-    ```
+1. **Copy the config from the container:**
+
+   ```bash
+   docker cp {container_id}:/etc/searxng/settings.yml ~/searxng-settings.yml
+   ```
+
+2. **Edit the file on your host:**
+   Add `json` to `formats` and disable `Limiter` as described in Method 1.
+3. **Restart with the volume mount:**
+
+   ```bash
+   docker stop searxng
+   docker rm searxng
+   docker run -d \
+     --name searxng \
+     -p 8080:8080 \
+     -v ~/searxng-settings.yml:/etc/searxng/settings.yml \
+     searxng/searxng
+   ```
 
 #### Verify the fix (curl)
 
@@ -171,9 +179,9 @@ Self-hosted SearXNG instances often face blocking from major search engines (Goo
 
 **Resolution:**
 
-1.  **Increase Timeouts:** Some engines are slow or throttled. Increase the global and engine-specific timeouts in `settings.yml`.
-2.  **Disable Blocked Engines:** If an engine (like Google or Brave) consistently blocks your IP, it is better to disable it to avoid delays.
-3.  **Tune Engines:** Configure problematic engines explicitly.
+1. **Increase Timeouts:** Some engines are slow or throttled. Increase the global and engine-specific timeouts in `settings.yml`.
+2. **Disable Blocked Engines:** If an engine (like Google or Brave) consistently blocks your IP, it is better to disable it to avoid delays.
+3. **Tune Engines:** Configure problematic engines explicitly.
 
 **Example enhanced `settings.yml`:**
 
@@ -250,35 +258,38 @@ To ensure SearXNG starts automatically when your system boots, you can create a 
 
 **Example: `searxng.service` (Docker-based)**
 
-1.  **Create the service file:**
-    ```bash
-    sudo vi /etc/systemd/system/searxng.service
-    ```
-2.  **Add the following content:**
+1. **Create the service file:**
 
-    ```ini
-    [Unit]
-    Description=SearXNG Docker Container
-    After=docker.service
-    Requires=docker.service
+   ```bash
+   sudo vi /etc/systemd/system/searxng.service
+   ```
 
-    [Service]
-    TimeoutStartSec=0
-    Restart=always
-    ExecStartPre=-/usr/bin/docker stop searxng
-    ExecStartPre=-/usr/bin/docker rm searxng
-    ExecStart=/usr/bin/docker run --name searxng -p 8080:8080 -v /etc/searxng/settings.yml:/etc/searxng/settings.yml searxng/searxng
-    ExecStop=/usr/bin/docker stop searxng
+2. **Add the following content:**
 
-    [Install]
-    WantedBy=multi-user.target
-    ```
+   ```ini
+   [Unit]
+   Description=SearXNG Docker Container
+   After=docker.service
+   Requires=docker.service
 
-    _(Ensure the volume path `-v` matches your actual `settings.yml` location on the host.)_
+   [Service]
+   TimeoutStartSec=0
+   Restart=always
+   ExecStartPre=-/usr/bin/docker stop searxng
+   ExecStartPre=-/usr/bin/docker rm searxng
+   ExecStart=/usr/bin/docker run --name searxng -p 8080:8080 -v /etc/searxng/settings.yml:/etc/searxng/settings.yml searxng/searxng
+   ExecStop=/usr/bin/docker stop searxng
 
-3.  **Enable and start the service:**
-    ```bash
-    sudo systemctl daemon-reload
-    sudo systemctl enable searxng
-    sudo systemctl start searxng
-    ```
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+   _(Ensure the volume path `-v` matches your actual `settings.yml` location on the host.)_
+
+3. **Enable and start the service:**
+
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable searxng
+   sudo systemctl start searxng
+   ```

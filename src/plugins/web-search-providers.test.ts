@@ -13,6 +13,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       "perplexity:perplexity",
       "firecrawl:firecrawl",
       "tavily:tavily",
+      "searxng:searxng",
     ]);
     expect(providers.map((provider) => provider.credentialPath)).toEqual([
       "plugins.entries.brave.config.webSearch.apiKey",
@@ -22,6 +23,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       "plugins.entries.perplexity.config.webSearch.apiKey",
       "plugins.entries.firecrawl.config.webSearch.apiKey",
       "plugins.entries.tavily.config.webSearch.apiKey",
+      "plugins.entries.searxng.config.webSearch.apiKey",
     ]);
     expect(providers.find((provider) => provider.id === "firecrawl")?.applySelectionConfig).toEqual(
       expect.any(Function),
@@ -49,6 +51,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       "perplexity",
       "firecrawl",
       "tavily",
+      "searxng",
     ]);
   });
 
@@ -103,6 +106,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       "perplexity:perplexity",
       "firecrawl:firecrawl",
       "tavily:tavily",
+      "searxng:searxng",
     ]);
   });
 
