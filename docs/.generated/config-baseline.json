@@ -6870,6 +6870,16 @@
       "hasChildren": false
     },
     {
+      "path": "agents.list.*.tools.exec.strictInlineEval",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.list.*.tools.exec.timeoutSec",
       "kind": "core",
       "type": "integer",
@@ -60428,6 +60438,20 @@
       ],
       "label": "Exec Security",
       "help": "Execution security posture selector controlling sandbox/approval expectations for command execution. Keep strict security mode for untrusted prompts and relax only for trusted operator workflows.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.exec.strictInlineEval",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools"
+      ],
+      "label": "Require Inline-Eval Approval",
+      "help": "Require explicit approval for interpreter inline-eval forms such as `python -c`, `node -e`, `ruby -e`, or `osascript -e`. Prevents silent allowlist reuse and downgrades allow-always to ask-each-time for those forms.",
       "hasChildren": false
     },
     {
