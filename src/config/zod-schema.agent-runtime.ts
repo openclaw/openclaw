@@ -329,6 +329,7 @@ export const ToolsWebSearchSchema = z
       .object({
         baseUrl: z.string().optional(),
         apiKey: SecretInputSchema.optional().register(sensitive),
+        allowPrivateNetwork: z.boolean().optional(),
       })
       .strict()
       .optional(),
