@@ -33,6 +33,30 @@ function extractToolResultId(msg: Extract<AgentMessage, { role: "toolResult" }>)
   return null;
 }
 
+/**
+ * Creates a simple serializing async mutex.
+ * Each call to `run` queues `fn` behind all previously-queued work so that
+ * concurrent callers execute sequentially in arrival order.
+ *
+ * This is intentionally minimal — no timeout, no fairness guarantees beyond
+ * FIFO promise resolution. Sufficient for low-throughput session appends.
+ */
+function createMutex() {
+  let queue: Promise<void> = Promise.resolve();
+  return {
+    run<T>(fn: () => T | Promise<T>): Promise<T> {
+      const result = queue.then(() => fn());
+      // Advance the queue regardless of whether fn() throws, so a failed
+      // append does not permanently block subsequent calls.
+      queue = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      return result;
+    },
+  };
+}
+
 export function installSessionToolResultGuard(
   sessionManager: SessionManager,
   opts?: {
@@ -56,6 +80,7 @@ export function installSessionToolResultGuard(
 } {
   const originalAppend = sessionManager.appendMessage.bind(sessionManager);
   const pending = new Map<string, string | undefined>();
+  const appendMutex = createMutex();
 
   const persistToolResult = (
     message: AgentMessage,
@@ -84,7 +109,7 @@ export function installSessionToolResultGuard(
     pending.clear();
   };
 
-  const guardedAppend = (message: AgentMessage) => {
+  const guardedAppendInner = (message: AgentMessage) => {
     const role = (message as { role?: unknown }).role;
 
     if (role === "toolResult") {
@@ -116,6 +141,14 @@ export function installSessionToolResultGuard(
       }
     }
 
+    // Register tool calls BEFORE appending so that a racing toolResult handler
+    // (which may arrive during an awaited originalAppend) finds the IDs in pending.
+    if (toolCalls.length > 0) {
+      for (const call of toolCalls) {
+        pending.set(call.id, call.name);
+      }
+    }
+
     const result = originalAppend(message as never);
 
     const sessionFile = (
@@ -125,13 +158,13 @@ export function installSessionToolResultGuard(
       emitSessionTranscriptUpdate(sessionFile);
     }
 
-    if (toolCalls.length > 0) {
-      for (const call of toolCalls) {
-        pending.set(call.id, call.name);
-      }
-    }
-
     return result;
+  };
+
+  const guardedAppend = (message: AgentMessage): ReturnType<typeof originalAppend> => {
+    return appendMutex.run(() => guardedAppendInner(message)) as unknown as ReturnType<
+      typeof originalAppend
+    >;
   };
 
   // Monkey-patch appendMessage with our guarded version.
