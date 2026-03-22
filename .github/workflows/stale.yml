@@ -42,7 +42,7 @@ jobs:
           stale-issue-label: stale
           stale-pr-label: stale
           exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale
-          exempt-pr-labels: maintainer,no-stale
+          exempt-pr-labels: maintainer,no-stale,bad-barnacle
           operations-per-run: 2000
           ascending: true
           exempt-all-assignees: true
@@ -98,7 +98,7 @@ jobs:
           stale-issue-label: stale
           stale-pr-label: stale
           exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale
-          exempt-pr-labels: maintainer,no-stale
+          exempt-pr-labels: maintainer,no-stale,bad-barnacle
           operations-per-run: 2000
           ascending: true
           exempt-all-assignees: true
