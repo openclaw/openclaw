@@ -37,14 +37,28 @@ function buildAccount(): ResolvedNextcloudTalkAccount {
   };
 }
 
+function mockStartedMonitor() {
+  const stop = vi.fn();
+  hoisted.monitorNextcloudTalkProvider.mockResolvedValue({ stop });
+  return stop;
+}
+
+function startNextcloudAccount(abortSignal?: AbortSignal) {
+  return nextcloudTalkPlugin.gateway!.startAccount!(
+    createStartAccountContext({
+      account: buildAccount(),
+      abortSignal,
+    }),
+  );
+}
+
 describe("nextcloudTalkPlugin gateway.startAccount", () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
 
   it("keeps startAccount pending until abort, then stops the monitor", async () => {
-    const stop = vi.fn();
-    hoisted.monitorNextcloudTalkProvider.mockResolvedValue({ stop });
+    const stop = mockStartedMonitor();
     const { abort, task, isSettled } = startAccountAndTrackLifecycle({
       startAccount: nextcloudTalkPlugin.gateway!.startAccount!,
       account: buildAccount(),
@@ -59,17 +73,11 @@ describe("nextcloudTalkPlugin gateway.startAccount", () => {
   });
 
   it("stops immediately when startAccount receives an already-aborted signal", async () => {
-    const stop = vi.fn();
-    hoisted.monitorNextcloudTalkProvider.mockResolvedValue({ stop });
+    const stop = mockStartedMonitor();
     const abort = new AbortController();
     abort.abort();
 
-    await nextcloudTalkPlugin.gateway!.startAccount!(
-      createStartAccountContext({
-        account: buildAccount(),
-        abortSignal: abort.signal,
-      }),
-    );
+    await startNextcloudAccount(abort.signal);
 
     expect(hoisted.monitorNextcloudTalkProvider).toHaveBeenCalledOnce();
     expect(stop).toHaveBeenCalledOnce();
