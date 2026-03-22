@@ -381,8 +381,10 @@ describe("monitorDiscordProvider", () => {
       | [ReconcileStartupParams]
       | undefined;
     const reconcileParams = firstCall?.[0];
-    expect(typeof reconcileParams?.healthProbe).toBe("function");
-    return reconcileParams?.healthProbe as NonNullable<ReconcileStartupParams["healthProbe"]>;
+    if (!reconcileParams?.healthProbe) {
+      throw new Error("healthProbe was not wired into ACP startup reconciliation");
+    }
+    return reconcileParams.healthProbe as NonNullable<ReconcileStartupParams["healthProbe"]>;
   };
 
   beforeEach(() => {
@@ -590,8 +592,10 @@ describe("monitorDiscordProvider", () => {
       const firstCall = getAcpSessionStatusMock.mock.calls[0]?.[0] as
         | { signal?: AbortSignal }
         | undefined;
-      expect(firstCall?.signal).toBeDefined();
-      expect(firstCall?.signal?.aborted).toBe(true);
+      if (!firstCall?.signal) {
+        throw new Error("ACP status check did not receive an abort signal");
+      }
+      expect(firstCall.signal.aborted).toBe(true);
     } finally {
       vi.useRealTimers();
     }
@@ -658,8 +662,7 @@ describe("monitorDiscordProvider", () => {
     });
 
     const eventQueue = getConstructedEventQueue();
-    expect(eventQueue).toBeDefined();
-    expect(eventQueue?.listenerTimeout).toBe(120_000);
+    expect(eventQueue).toEqual({ listenerTimeout: 120_000 });
   });
 
   it("forwards custom eventQueue config from discord config to Carbon Client", async () => {
@@ -785,10 +788,7 @@ describe("monitorDiscordProvider", () => {
       setStatus,
     });
 
-    const connectedTrue = setStatus.mock.calls.find((call) => call[0]?.connected === true);
-    const connectedFalse = setStatus.mock.calls.find((call) => call[0]?.connected === false);
-
-    expect(connectedTrue).toBeDefined();
-    expect(connectedFalse).toBeDefined();
+    expect(setStatus.mock.calls).toContainEqual([expect.objectContaining({ connected: true })]);
+    expect(setStatus.mock.calls).toContainEqual([expect.objectContaining({ connected: false })]);
   });
 });
