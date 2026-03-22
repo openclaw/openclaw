@@ -932,17 +932,18 @@ export async function updateLastRoute(params: {
         })
       : null;
     const basePatch: Partial<SessionEntry> = {
-      updatedAt: Math.max(existing?.updatedAt ?? 0, now),
+      // Preserve existing updatedAt so route updates don't reset the idle timer.
+      // Only new sessions (no existing entry) get the current timestamp.
+      updatedAt: existing?.updatedAt ?? now,
       deliveryContext: normalized.deliveryContext,
       lastChannel: normalized.lastChannel,
       lastTo: normalized.lastTo,
       lastAccountId: normalized.lastAccountId,
       lastThreadId: normalized.lastThreadId,
     };
-    const next = mergeSessionEntry(
-      existing,
-      metaPatch ? { ...basePatch, ...metaPatch } : basePatch,
-    );
+    const next = existing
+      ? mergeSessionEntryPreserveActivity(existing, metaPatch ? { ...basePatch, ...metaPatch } : basePatch)
+      : mergeSessionEntry(existing, metaPatch ? { ...basePatch, ...metaPatch } : basePatch);
     return await persistResolvedSessionEntry({
       storePath,
       store,
