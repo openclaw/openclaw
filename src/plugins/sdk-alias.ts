@@ -17,6 +17,16 @@ type PluginSdkPackageJson = {
   bin?: string | Record<string, unknown>;
 };
 
+function isImplicitOpenClawEntrypointHint(argv1?: string): boolean {
+  const normalized = String(argv1 ?? "").replace(/\\/g, "/");
+  return (
+    normalized.endsWith("/openclaw") ||
+    normalized.endsWith("/openclaw.mjs") ||
+    normalized.endsWith("/dist/index.js") ||
+    normalized.endsWith("/dist/index.mjs")
+  );
+}
+
 function resolveLoaderModulePath(params: LoaderModuleResolveParams = {}): string {
   return params.modulePath ?? fileURLToPath(params.moduleUrl ?? import.meta.url);
 }
@@ -111,14 +121,14 @@ function resolveLoaderPluginSdkPackageRoot(
 ): string | null {
   const cwd = params.cwd ?? path.dirname(params.modulePath);
   const fromCwd = resolveOpenClawPackageRootSync({ cwd });
-  const fromExplicitHints =
-    params.argv1 || params.moduleUrl
-      ? resolveOpenClawPackageRootSync({
-          cwd,
-          ...(params.argv1 ? { argv1: params.argv1 } : {}),
-          ...(params.moduleUrl ? { moduleUrl: params.moduleUrl } : {}),
-        })
-      : null;
+  const argv1 =
+    params.argv1 ?? (isImplicitOpenClawEntrypointHint(process.argv[1]) ? process.argv[1] : null);
+  const moduleUrl = params.moduleUrl;
+  const fromExplicitHints = resolveOpenClawPackageRootSync({
+    cwd,
+    ...(argv1 ? { argv1 } : {}),
+    ...(moduleUrl ? { moduleUrl } : {}),
+  });
   return (
     fromCwd ??
     fromExplicitHints ??

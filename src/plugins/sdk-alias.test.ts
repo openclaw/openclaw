@@ -61,6 +61,20 @@ function withCwd<T>(cwd: string, run: () => T): T {
   }
 }
 
+function withArgv1<T>(argv1: string | undefined, run: () => T): T {
+  const previousArgv = [...process.argv];
+  if (argv1 === undefined) {
+    process.argv.splice(1, 1);
+  } else {
+    process.argv[1] = argv1;
+  }
+  try {
+    return run();
+  } finally {
+    process.argv.splice(0, process.argv.length, ...previousArgv);
+  }
+}
+
 function createPluginSdkAliasFixture(params?: {
   srcFile?: string;
   distFile?: string;
@@ -458,6 +472,30 @@ describe("plugin sdk alias helpers", () => {
       fs.realpathSync(distRootAlias),
     );
     expect(fs.realpathSync(distAliases["openclaw/plugin-sdk/channel-runtime"] ?? "")).toBe(
+      fs.realpathSync(path.join(fixture.root, "dist", "plugin-sdk", "channel-runtime.js")),
+    );
+  });
+
+  it("builds plugin-sdk aliases via argv1 fallback when cwd is outside the package root", () => {
+    const fixture = createPluginSdkAliasFixture({
+      srcFile: "channel-runtime.ts",
+      distFile: "channel-runtime.js",
+      packageExports: {
+        "./plugin-sdk/channel-runtime": { default: "./dist/plugin-sdk/channel-runtime.js" },
+      },
+    });
+    const unrelatedCwd = makeTempDir();
+    const distPluginEntry = path.join(fixture.root, "dist", "extensions", "demo", "index.js");
+    fs.mkdirSync(path.dirname(distPluginEntry), { recursive: true });
+    fs.writeFileSync(distPluginEntry, 'export const plugin = "demo";\n', "utf-8");
+
+    const aliases = withCwd(unrelatedCwd, () =>
+      withArgv1(path.join(fixture.root, "openclaw.mjs"), () =>
+        withEnv({ NODE_ENV: undefined }, () => buildPluginLoaderAliasMap(distPluginEntry)),
+      ),
+    );
+
+    expect(fs.realpathSync(aliases["openclaw/plugin-sdk/channel-runtime"] ?? "")).toBe(
       fs.realpathSync(path.join(fixture.root, "dist", "plugin-sdk", "channel-runtime.js")),
     );
   });
