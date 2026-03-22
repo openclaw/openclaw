@@ -781,16 +781,8 @@ packages:
   '@aws-crypto/util@5.2.0':
     resolution: {integrity: sha512-4RkU9EsI6ZpBve5fseQlGNUWKMa1RLPQ1dnjnQoe07ldfIzcsGb5hC5W0Dm7u423KWzawlrpbjXBrXCEv9zazQ==}
 
-  '@aws-sdk/client-bedrock-runtime@3.1011.0':
-    resolution: {integrity: sha512-yn5oRLLP1TsGLZqlnyqBjAVmiexYR8/rPG8D+rI5f5+UIvb3zHOmHLXA1m41H/sKXI4embmXfUjvArmjTmfsIw==}
-    engines: {node: '>=20.0.0'}
-
   '@aws-sdk/client-bedrock-runtime@3.1014.0':
     resolution: {integrity: sha512-K0TmX1D6dIh4J2QtqUuEXxbyMmtHD+kwHvUg1JwDXaLXC7zJJlR0p1692YBh/eze9tHbuKqP/VWzUy6XX9IPGw==}
-    engines: {node: '>=20.0.0'}
-
-  '@aws-sdk/client-bedrock@3.1011.0':
-    resolution: {integrity: sha512-p9OM3otePseffnPMz6adeLzI82D+LNtH15uzGD4KTJWVo4ZD7V9nRcx7lWb166WIBGWS2UnH4TCxZ5J/qDpXcA==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/client-bedrock@3.1014.0':
@@ -801,10 +793,6 @@ packages:
     resolution: {integrity: sha512-0XLrOT4Cm3NEhhiME7l/8LbTXS4KdsbR4dSrY207KNKTcHLLTZ9EXt4ZpgnTfLvWQF3pGP2us4Zi1fYLo0N+Ow==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/core@3.973.20':
-    resolution: {integrity: sha512-i3GuX+lowD892F3IuJf8o6AbyDupMTdyTxQrCJGcn71ni5hTZ82L4nQhcdumxZ7XPJRJJVHS/CR3uYOIIs0PVA==}
-    engines: {node: '>=20.0.0'}
-
   '@aws-sdk/core@3.973.23':
     resolution: {integrity: sha512-aoJncvD1XvloZ9JLnKqTRL9dBy+Szkryoag9VT+V1TqsuUgIxV9cnBVM/hrDi2vE8bDqLiDR8nirdRcCdtJu0w==}
     engines: {node: '>=20.0.0'}
@@ -813,64 +801,32 @@ packages:
     resolution: {integrity: sha512-2VbTstbjKdT+yKi8m7b3a9CiVac+pL/IY2PHJwsaGkkHmuuqkJZIErPck1h6P3T9ghQMLSdMPyW6Qp7Di5swFg==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/credential-provider-env@3.972.18':
-    resolution: {integrity: sha512-X0B8AlQY507i5DwjLByeU2Af4ARsl9Vr84koDcXCbAkplmU+1xBFWxEPrWRAoh56waBne/yJqEloSwvRf4x6XA==}
-    engines: {node: '>=20.0.0'}
-
   '@aws-sdk/credential-provider-env@3.972.21':
     resolution: {integrity: sha512-BkAfKq8Bd4shCtec1usNz//urPJF/SZy14qJyxkSaRJQ/Vv1gVh0VZSTmS7aE6aLMELkFV5wHHrS9ZcdG8Kxsg==}
-    engines: {node: '>=20.0.0'}
-
-  '@aws-sdk/credential-provider-http@3.972.20':
-    resolution: {integrity: sha512-ey9Lelj001+oOfrbKmS6R2CJAiXX7QKY4Vj9VJv6L2eE6/VjD8DocHIoYqztTm70xDLR4E1jYPTKfIui+eRNDA==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/credential-provider-http@3.972.23':
     resolution: {integrity: sha512-4XZ3+Gu5DY8/n8zQFHBgcKTF7hWQl42G6CY9xfXVo2d25FM/lYkpmuzhYopYoPL1ITWkJ2OSBQfYEu5JRfHOhA==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/credential-provider-ini@3.972.20':
-    resolution: {integrity: sha512-5flXSnKHMloObNF+9N0cupKegnH1Z37cdVlpETVgx8/rAhCe+VNlkcZH3HDg2SDn9bI765S+rhNPXGDJJPfbtA==}
-    engines: {node: '>=20.0.0'}
-
   '@aws-sdk/credential-provider-ini@3.972.23':
     resolution: {integrity: sha512-PZLSmU0JFpNCDFReidBezsgL5ji9jOBry8CnZdw4Jj6d0K2z3Ftnp44NXgADqYx5BLMu/ZHujfeJReaDoV+IwQ==}
-    engines: {node: '>=20.0.0'}
-
-  '@aws-sdk/credential-provider-login@3.972.20':
-    resolution: {integrity: sha512-gEWo54nfqp2jABMu6HNsjVC4hDLpg9HC8IKSJnp0kqWtxIJYHTmiLSsIfI4ScQjxEwpB+jOOH8dOLax1+hy/Hw==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/credential-provider-login@3.972.23':
     resolution: {integrity: sha512-OmE/pSkbMM3dCj1HdOnZ5kXnKK+R/Yz+kbBugraBecp0pGAs21eEURfQRz+1N2gzIHLVyGIP1MEjk/uSrFsngg==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/credential-provider-node@3.972.21':
-    resolution: {integrity: sha512-hah8if3/B/Q+LBYN5FukyQ1Mym6PLPDsBOBsIgNEYD6wLyZg0UmUF/OKIVC3nX9XH8TfTPuITK+7N/jenVACWA==}
-    engines: {node: '>=20.0.0'}
-
   '@aws-sdk/credential-provider-node@3.972.24':
     resolution: {integrity: sha512-9Jwi7aps3AfUicJyF5udYadPypPpCwUZ6BSKr/QjRbVCpRVS1wc+1Q6AEZ/qz8J4JraeRd247pSzyMQSIHVebw==}
-    engines: {node: '>=20.0.0'}
-
-  '@aws-sdk/credential-provider-process@3.972.18':
-    resolution: {integrity: sha512-Tpl7SRaPoOLT32jbTWchPsn52hYYgJ0kpiFgnwk8pxTANQdUymVSZkzFvv1+oOgZm1CrbQUP9MBeoMZ9IzLZjA==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/credential-provider-process@3.972.21':
     resolution: {integrity: sha512-nRxbeOJ1E1gVA0lNQezuMVndx+ZcuyaW/RB05pUsznN5BxykSlH6KkZ/7Ca/ubJf3i5N3p0gwNO5zgPSCzj+ww==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/credential-provider-sso@3.972.20':
-    resolution: {integrity: sha512-p+R+PYR5Z7Gjqf/6pvbCnzEHcqPCpLzR7Yf127HjJ6EAb4hUcD+qsNRnuww1sB/RmSeCLxyay8FMyqREw4p1RA==}
-    engines: {node: '>=20.0.0'}
-
   '@aws-sdk/credential-provider-sso@3.972.23':
     resolution: {integrity: sha512-APUccADuYPLL0f2htpM8Z4czabSmHOdo4r41W6lKEZdy++cNJ42Radqy6x4TopENzr3hR6WYMyhiuiqtbf/nAA==}
-    engines: {node: '>=20.0.0'}
-
-  '@aws-sdk/credential-provider-web-identity@3.972.20':
-    resolution: {integrity: sha512-rWCmh8o7QY4CsUj63qopzMzkDq/yPpkrpb+CnjBEFSOg/02T/we7sSTVg4QsDiVS9uwZ8VyONhq98qt+pIh3KA==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/credential-provider-web-identity@3.972.23':
@@ -921,10 +877,6 @@ packages:
     resolution: {integrity: sha512-wqlK0yO/TxEC2UsY9wIlqeeutF6jjLe0f96Pbm40XscTo57nImUk9lBcw0dPgsm0sppFtAkSlDrfpK+pC30Wqw==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/middleware-user-agent@3.972.21':
-    resolution: {integrity: sha512-62XRl1GDYPpkt7cx1AX1SPy9wgNE9Iw/NPuurJu4lmhCWS7sGKO+kS53TQ8eRmIxy3skmvNInnk0ZbWrU5Dpyg==}
-    engines: {node: '>=20.0.0'}
-
   '@aws-sdk/middleware-user-agent@3.972.24':
     resolution: {integrity: sha512-dLTWy6IfAMhNiSEvMr07g/qZ54be6pLqlxVblbF6AzafmmGAzMMj8qMoY9B4+YgT+gY9IcuxZslNh03L6PyMCQ==}
     engines: {node: '>=20.0.0'}
@@ -933,16 +885,8 @@ packages:
     resolution: {integrity: sha512-Gp6EWIqHX5wmsOR5ZxWyyzEU8P0xBdSxkm6VHEwXwBqScKZ7QWRoj6ZmHpr+S44EYb5tuzGya4ottsogSu2W3A==}
     engines: {node: '>= 14.0.0'}
 
-  '@aws-sdk/nested-clients@3.996.10':
-    resolution: {integrity: sha512-SlDol5Z+C7Ivnc2rKGqiqfSUmUZzY1qHfVs9myt/nxVwswgfpjdKahyTzLTx802Zfq0NFRs7AejwKzzzl5Co2w==}
-    engines: {node: '>=20.0.0'}
-
   '@aws-sdk/nested-clients@3.996.13':
     resolution: {integrity: sha512-ptZ1HF4yYHNJX8cgFF+8NdYO69XJKZn7ft0/ynV3c0hCbN+89fAbrLS+fqniU2tW8o9Kfqhj8FUh+IPXb2Qsuw==}
-    engines: {node: '>=20.0.0'}
-
-  '@aws-sdk/region-config-resolver@3.972.8':
-    resolution: {integrity: sha512-1eD4uhTDeambO/PNIDVG19A6+v4NdD7xzwLHDutHsUqz0B+i661MwQB2eYO4/crcCvCiQG4SRm1k81k54FEIvw==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/region-config-resolver@3.972.9':
@@ -955,14 +899,6 @@ packages:
 
   '@aws-sdk/signature-v4-multi-region@3.996.11':
     resolution: {integrity: sha512-SKgZY7x6AloLUXO20FJGnkKJ3a6CXzNDt6PYs2yqoPzgU0xKWcUoGGJGEBTsfM5eihKW42lbwp+sXzACLbSsaA==}
-    engines: {node: '>=20.0.0'}
-
-  '@aws-sdk/token-providers@3.1009.0':
-    resolution: {integrity: sha512-KCPLuTqN9u0Rr38Arln78fRG9KXpzsPWmof+PZzfAHMMQq2QED6YjQrkrfiH7PDefLWEposY1o4/eGwrmKA4JA==}
-    engines: {node: '>=20.0.0'}
-
-  '@aws-sdk/token-providers@3.1011.0':
-    resolution: {integrity: sha512-WSfBVDQ9uyh1GCR+DxxgHEvAKv+beMIlSeJ2pMAG1HTci340+xbtz1VFwnTJ5qCxrMi+E4dyDMiSAhDvHnq73A==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/token-providers@3.1014.0':
@@ -1000,19 +936,6 @@ packages:
     peerDependenciesMeta:
       aws-crt:
         optional: true
-
-  '@aws-sdk/util-user-agent-node@3.973.7':
-    resolution: {integrity: sha512-Hz6EZMUAEzqUd7e+vZ9LE7mn+5gMbxltXy18v+YSFY+9LBJz15wkNZvw5JqfX3z0FS9n3bgUtz3L5rAsfh4YlA==}
-    engines: {node: '>=20.0.0'}
-    peerDependencies:
-      aws-crt: '>=1.0.0'
-    peerDependenciesMeta:
-      aws-crt:
-        optional: true
-
-  '@aws-sdk/xml-builder@3.972.11':
-    resolution: {integrity: sha512-iitV/gZKQMvY9d7ovmyFnFuTHbBAtrmLnvaSb/3X8vOKyevwtpmEtyc8AdhVWZe0pI/1GsHxlEvQeOePFzy7KQ==}
-    engines: {node: '>=20.0.0'}
 
   '@aws-sdk/xml-builder@3.972.15':
     resolution: {integrity: sha512-PxMRlCFNiQnke9YR29vjFQwz4jq+6Q04rOVFeTDR2K7Qpv9h9FOWOxG+zJjageimYbWqE3bTuLjmryWHAWbvaA==}
@@ -1097,9 +1020,6 @@ packages:
   '@bramus/specificity@2.4.2':
     resolution: {integrity: sha512-ctxtJ/eA+t+6q2++vj5j7FYX3nRu311q1wfYH3xjlLOsczhlhxAg2FWNUXhpGvAw3BWo1xBcvOV6/YLc2r5FJw==}
     hasBin: true
-
-  '@buape/carbon@0.0.0-beta-20260216184201':
-    resolution: {integrity: sha512-u5mgYcigfPVqT7D9gVTGd+3YSflTreQmrWog7ORbb0z5w9eT8ft4rJOdw9fGwr75zMu9kXpSBaAcY2eZoJFSdA==}
 
   '@buape/carbon@0.0.0-beta-20260317045421':
     resolution: {integrity: sha512-yM+r5iSxA/iG8CZ2VhK+EkcBQV+y45WLgF7kuczt2Ul1yixjXSCCcM80GppsklfUv7pqM4Dui+7w1WB3f5p7Kg==}
@@ -1390,15 +1310,6 @@ packages:
       '@noble/hashes': ^1.8.0 || ^2.0.0
     peerDependenciesMeta:
       '@noble/hashes':
-        optional: true
-
-  '@google/genai@1.45.0':
-    resolution: {integrity: sha512-+sNRWhKiRibVgc4OKi7aBJJ0A7RcoVD8tGG+eFkqxAWRjASDW+ktS9lLwTDnAxZICzCVoeAdu8dYLJVTX60N9w==}
-    engines: {node: '>=20.0.0'}
-    peerDependencies:
-      '@modelcontextprotocol/sdk': ^1.25.2
-    peerDependenciesMeta:
-      '@modelcontextprotocol/sdk':
         optional: true
 
   '@google/genai@1.46.0':
@@ -1922,37 +1833,19 @@ packages:
     resolution: {integrity: sha512-faGUlTcXka5l7rv0lP3K3vGW/ejRuOS24RR2aSFWREUQqzjgdsuWNo/IiPqL3kWRGt6Ahl2+qcDAwtdeWeuGUw==}
     hasBin: true
 
-  '@mariozechner/pi-agent-core@0.58.0':
-    resolution: {integrity: sha512-zhkwx3Wdo27snVfnJWi7l+wyU4XlazkeunTtz4e500GC+ufGOp4C3aIf0XiO5ZOtTE/0lvUiG2bWULR/i4lgUQ==}
-    engines: {node: '>=20.0.0'}
-
   '@mariozechner/pi-agent-core@0.61.1':
     resolution: {integrity: sha512-ELZsyx6INGBYXPAbYTAiRWtkmnwAlcXOOVPY434BE605TBdpzMrXF5gNckKdEyCCWYJiLzSKpHaAzWwB7Vx2nA==}
     engines: {node: '>=20.0.0'}
-
-  '@mariozechner/pi-ai@0.58.0':
-    resolution: {integrity: sha512-3TrkJ9QcBYFPo4NxYluhd+JQ4M+98RaEkNPMrLFU4wK4GMFVtsL3kp1YJ/oj7X0eqKuuDKbHj6MdoMZeT2TCvA==}
-    engines: {node: '>=20.0.0'}
-    hasBin: true
 
   '@mariozechner/pi-ai@0.61.1':
     resolution: {integrity: sha512-BOk8xwluIgauX93qgC9qyrWteKKnk6pNDM8szE1m/EJKMhcJ/jIJpgAUQgj4yXiwSMtcZm30h2Po97gqqXTIIg==}
     engines: {node: '>=20.0.0'}
     hasBin: true
 
-  '@mariozechner/pi-coding-agent@0.58.0':
-    resolution: {integrity: sha512-aCoqIMfcFWwuZrLC4MC1EnHwUrqo+ppamXlNYk5+nANH8U+51AP8OUqOUqT9NSHO9ZdItheU9wCqt7wPf5Ah8A==}
-    engines: {node: '>=20.6.0'}
-    hasBin: true
-
   '@mariozechner/pi-coding-agent@0.61.1':
     resolution: {integrity: sha512-w0QTn+LFFdyFhpaaYDOacGwBjW4MKYrl40b6LPfKDuVJ+9fDfHl3kWkbx6xJb9brk6M5lEFMheC82UIQdkeK3Q==}
     engines: {node: '>=20.6.0'}
     hasBin: true
-
-  '@mariozechner/pi-tui@0.58.0':
-    resolution: {integrity: sha512-luRbQlk0ZCbYGCtCrKTqQX0ECKNYPj7OSlxKMXEY0B3bA6s4f/Xj0aLPiKlhsIynC2dPQmijA44ZDfrWFniWwA==}
-    engines: {node: '>=20.0.0'}
 
   '@mariozechner/pi-tui@0.61.1':
     resolution: {integrity: sha512-J3EI1gU5knUf1dXiHJsimDP4IRXLG7QJ1NVykU/yWOJoBPAgG6/qjjPPRcaUA7MYMUfKi+Z/zzGOyQSCVAajPA==}
@@ -3074,10 +2967,6 @@ packages:
     resolution: {integrity: sha512-St+kVicSyayWQca+I1rGitaOEH6uKgE8IUWoYnnEX26SWdWQcL6LvMSD19Lg+vYHKdT9B2Zuu7rd3i6Wnyb/iw==}
     engines: {node: '>=18.0.0'}
 
-  '@smithy/config-resolver@4.4.11':
-    resolution: {integrity: sha512-YxFiiG4YDAtX7WMN7RuhHZLeTmRRAOyCbr+zB8e3AQzHPnUhS8zXjB1+cniPVQI3xbWsQPM0X2aaIkO/ME0ymw==}
-    engines: {node: '>=18.0.0'}
-
   '@smithy/config-resolver@4.4.13':
     resolution: {integrity: sha512-iIzMC5NmOUP6WL6o8iPBjFhUhBZ9pPjpUpQYWMUFQqKyXXzOftbfK8zcQCz/jFV1Psmf05BK5ypx4K2r4Tnwdg==}
     engines: {node: '>=18.0.0'}
@@ -3146,16 +3035,8 @@ packages:
     resolution: {integrity: sha512-YE58Yz+cvFInWI/wOTrB+DbvUVz/pLn5mC5MvOV4fdRUc6qGwygyngcucRQjAhiCEbmfLOXX0gntSIcgMvAjmA==}
     engines: {node: '>=18.0.0'}
 
-  '@smithy/middleware-endpoint@4.4.26':
-    resolution: {integrity: sha512-8Qfikvd2GVKSm8S6IbjfwFlRY9VlMrj0Dp4vTwAuhqbX7NhJKE5DQc2bnfJIcY0B+2YKMDBWfvexbSZeejDgeg==}
-    engines: {node: '>=18.0.0'}
-
   '@smithy/middleware-endpoint@4.4.27':
     resolution: {integrity: sha512-T3TFfUgXQlpcg+UdzcAISdZpj4Z+XECZ/cefgA6wLBd6V4lRi0svN2hBouN/be9dXQ31X4sLWz3fAQDf+nt6BA==}
-    engines: {node: '>=18.0.0'}
-
-  '@smithy/middleware-retry@4.4.43':
-    resolution: {integrity: sha512-ZwsifBdyuNHrFGmbc7bAfP2b54+kt9J2rhFd18ilQGAB+GDiP4SrawqyExbB7v455QVR7Psyhb2kjULvBPIhvA==}
     engines: {node: '>=18.0.0'}
 
   '@smithy/middleware-retry@4.4.44':
@@ -3206,10 +3087,6 @@ packages:
     resolution: {integrity: sha512-B/FBwO3MVOL00DaRSXfXfa/TRXRheagt/q5A2NM13u7q+sHS59EOVGQNfG7DkmVtdQm5m3vOosoKAXSqn/OEgw==}
     engines: {node: '>=18.0.0'}
 
-  '@smithy/smithy-client@4.12.6':
-    resolution: {integrity: sha512-aib3f0jiMsJ6+cvDnXipBsGDL7ztknYSVqJs1FdN9P+u9tr/VzOR7iygSh6EUOdaBeMCMSh3N0VdyYsG4o91DQ==}
-    engines: {node: '>=18.0.0'}
-
   '@smithy/smithy-client@4.12.7':
     resolution: {integrity: sha512-q3gqnwml60G44FECaEEsdQMplYhDMZYCtYhMCzadCnRnnHIobZJjegmdoUo6ieLQlPUzvrMdIJUpx6DoPmzANQ==}
     engines: {node: '>=18.0.0'}
@@ -3246,16 +3123,8 @@ packages:
     resolution: {integrity: sha512-dWU03V3XUprJwaUIFVv4iOnS1FC9HnMHDfUrlNDSh4315v0cWyaIErP8KiqGVbf5z+JupoVpNM7ZB3jFiTejvQ==}
     engines: {node: '>=18.0.0'}
 
-  '@smithy/util-defaults-mode-browser@4.3.42':
-    resolution: {integrity: sha512-0vjwmcvkWAUtikXnWIUOyV6IFHTEeQUYh3JUZcDgcszF+hD/StAsQ3rCZNZEPHgI9kVNcbnyc8P2CBHnwgmcwg==}
-    engines: {node: '>=18.0.0'}
-
   '@smithy/util-defaults-mode-browser@4.3.43':
     resolution: {integrity: sha512-Qd/0wCKMaXxev/z00TvNzGCH2jlKKKxXP1aDxB6oKwSQthe3Og2dMhSayGCnsma1bK/kQX1+X7SMP99t6FgiiQ==}
-    engines: {node: '>=18.0.0'}
-
-  '@smithy/util-defaults-mode-node@4.2.45':
-    resolution: {integrity: sha512-q5dOqqfTgUcLe38TAGiFn9srToKj2YCHJ34QGOLzM+xYLLA+qRZv7N+33kl1MERVusue36ZHnlNaNEvY/PzSrw==}
     engines: {node: '>=18.0.0'}
 
   '@smithy/util-defaults-mode-node@4.2.47':
@@ -5501,17 +5370,6 @@ packages:
       zod:
         optional: true
 
-  openclaw@2026.3.13:
-    resolution: {integrity: sha512-/juSUb070Xz8K8CnShjaZQr7CVtRaW4FbR93lgr1hLepcRSbyz2PQR+V4w5giVWkea61opXWPA6Vb8dybaztFg==}
-    engines: {node: '>=22.16.0'}
-    hasBin: true
-    peerDependencies:
-      '@napi-rs/canvas': ^0.1.89
-      node-llama-cpp: 3.16.2
-    peerDependenciesMeta:
-      node-llama-cpp:
-        optional: true
-
   opus-decoder@0.7.11:
     resolution: {integrity: sha512-+e+Jz3vGQLxRTBHs8YJQPRPc1Tr+/aC6coV/DlZylriA29BdHQAYXhvNRKtjftof17OFng0+P4wsFIqQu3a48A==}
 
@@ -6158,18 +6016,8 @@ packages:
     cpu: [arm64]
     os: [darwin]
 
-  sqlite-vec-darwin-arm64@0.1.7-alpha.2:
-    resolution: {integrity: sha512-raIATOqFYkeCHhb/t3r7W7Cf2lVYdf4J3ogJ6GFc8PQEgHCPEsi+bYnm2JT84MzLfTlSTIdxr4/NKv+zF7oLPw==}
-    cpu: [arm64]
-    os: [darwin]
-
   sqlite-vec-darwin-x64@0.1.7:
     resolution: {integrity: sha512-MDoczft1BriQcGMEz+CqeSCkB0OsAf12ytZOapS6MaB7zgNzLLSLH6Sxe3yzcPWUyDuCWgK7WzyRIo8u1vAIVA==}
-    cpu: [x64]
-    os: [darwin]
-
-  sqlite-vec-darwin-x64@0.1.7-alpha.2:
-    resolution: {integrity: sha512-jeZEELsQjjRsVojsvU5iKxOvkaVuE+JYC8Y4Ma8U45aAERrDYmqZoHvgSG7cg1PXL3bMlumFTAmHynf1y4pOzA==}
     cpu: [x64]
     os: [darwin]
 
@@ -6178,18 +6026,8 @@ packages:
     cpu: [arm64]
     os: [linux]
 
-  sqlite-vec-linux-arm64@0.1.7-alpha.2:
-    resolution: {integrity: sha512-6Spj4Nfi7tG13jsUG+W7jnT0bCTWbyPImu2M8nWp20fNrd1SZ4g3CSlDAK8GBdavX7wRlbBHCZ+BDa++rbDewA==}
-    cpu: [arm64]
-    os: [linux]
-
   sqlite-vec-linux-x64@0.1.7:
     resolution: {integrity: sha512-wZL+lXeW7y63DLv6FYU6Q4nv2lP5F94cWt7bJCWNiHmZ6NdKIgz/p0QlyuJA/51b8TyoDvsTdusLVlZz9cIh5A==}
-    cpu: [x64]
-    os: [linux]
-
-  sqlite-vec-linux-x64@0.1.7-alpha.2:
-    resolution: {integrity: sha512-IcgrbHaDccTVhXDf8Orwdc2+hgDLAFORl6OBUhcvlmwswwBP1hqBTSEhovClG4NItwTOBNgpwOoQ7Qp3VDPWLg==}
     cpu: [x64]
     os: [linux]
 
@@ -6198,16 +6036,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  sqlite-vec-windows-x64@0.1.7-alpha.2:
-    resolution: {integrity: sha512-TRP6hTjAcwvQ6xpCZvjP00pdlda8J38ArFy1lMYhtQWXiIBmWnhMaMbq4kaeCYwvTTddfidatRS+TJrwIKB/oQ==}
-    cpu: [x64]
-    os: [win32]
-
   sqlite-vec@0.1.7:
     resolution: {integrity: sha512-1Sge9uRc3B6wDKR4J6sGFi/E2ai9SAU5FenDki3OmhdP/a49PO2Juy1U5yQnx2bZP5t+C3BYJTkG+KkDi3q9Xg==}
-
-  sqlite-vec@0.1.7-alpha.2:
-    resolution: {integrity: sha512-rNgRCv+4V4Ed3yc33Qr+nNmjhtrMnnHzXfLVPeGb28Dx5mmDL3Ngw/Wk8vhCGjj76+oC6gnkmMG8y73BZWGBwQ==}
 
   stackback@0.0.2:
     resolution: {integrity: sha512-1XMJE5fQo1jGH6Y/7ebnwPOBEkIEnT4QF32d5R1+VXdXveM0IBMJt8zfaxX1P3QhVwrYe+576+jkANtSS2mBbw==}
@@ -6471,10 +6301,6 @@ packages:
 
   undici-types@7.18.2:
     resolution: {integrity: sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w==}
-
-  undici@7.24.4:
-    resolution: {integrity: sha512-BM/JzwwaRXxrLdElV2Uo6cTLEjhSb3WXboncJamZ15NgUURmvlXvxa6xkwIOILIjPNo9i8ku136ZvWV0Uly8+w==}
-    engines: {node: '>=20.18.1'}
 
   undici@7.24.5:
     resolution: {integrity: sha512-3IWdCpjgxp15CbJnsi/Y9TCDE7HWVN19j1hmzVhoAkY/+CJx449tVxT5wZc1Gwg8J+P0LWvzlBzxYRnHJ+1i7Q==}
@@ -6762,11 +6588,6 @@ packages:
     resolution: {integrity: sha512-YgvUTfwqyc7UXVMrB+SImsVYSmTS8X/tSrtdNZMImM+n7+QTriRXyXim0mBrTXNeqzVF0KWGgHPeiyViFFrNDw==}
     engines: {node: '>=18'}
 
-  yaml@2.8.2:
-    resolution: {integrity: sha512-mplynKqc1C2hTVYxd0PU2xQAc22TI1vShAYGksCCfxbn/dFwnHTNi1bvYsBTkhdUNtGIf5xNOg938rrSSYvS9A==}
-    engines: {node: '>= 14.6'}
-    hasBin: true
-
   yaml@2.8.3:
     resolution: {integrity: sha512-AvbaCLOO2Otw/lW5bmh9d/WEdcDFdQp2Z2ZUH3pX9U2ihyUY0nvLv7J6TrWowklRGPYbB/IuIMfYgxaCPg5Bpg==}
     engines: {node: '>= 14.6'}
@@ -6907,58 +6728,6 @@ snapshots:
       '@smithy/util-utf8': 2.3.0
       tslib: 2.8.1
 
-  '@aws-sdk/client-bedrock-runtime@3.1011.0':
-    dependencies:
-      '@aws-crypto/sha256-browser': 5.2.0
-      '@aws-crypto/sha256-js': 5.2.0
-      '@aws-sdk/core': 3.973.20
-      '@aws-sdk/credential-provider-node': 3.972.21
-      '@aws-sdk/eventstream-handler-node': 3.972.11
-      '@aws-sdk/middleware-eventstream': 3.972.8
-      '@aws-sdk/middleware-host-header': 3.972.8
-      '@aws-sdk/middleware-logger': 3.972.8
-      '@aws-sdk/middleware-recursion-detection': 3.972.8
-      '@aws-sdk/middleware-user-agent': 3.972.21
-      '@aws-sdk/middleware-websocket': 3.972.13
-      '@aws-sdk/region-config-resolver': 3.972.8
-      '@aws-sdk/token-providers': 3.1011.0
-      '@aws-sdk/types': 3.973.6
-      '@aws-sdk/util-endpoints': 3.996.5
-      '@aws-sdk/util-user-agent-browser': 3.972.8
-      '@aws-sdk/util-user-agent-node': 3.973.7
-      '@smithy/config-resolver': 4.4.11
-      '@smithy/core': 3.23.12
-      '@smithy/eventstream-serde-browser': 4.2.12
-      '@smithy/eventstream-serde-config-resolver': 4.3.12
-      '@smithy/eventstream-serde-node': 4.2.12
-      '@smithy/fetch-http-handler': 5.3.15
-      '@smithy/hash-node': 4.2.12
-      '@smithy/invalid-dependency': 4.2.12
-      '@smithy/middleware-content-length': 4.2.12
-      '@smithy/middleware-endpoint': 4.4.26
-      '@smithy/middleware-retry': 4.4.43
-      '@smithy/middleware-serde': 4.2.15
-      '@smithy/middleware-stack': 4.2.12
-      '@smithy/node-config-provider': 4.3.12
-      '@smithy/node-http-handler': 4.5.0
-      '@smithy/protocol-http': 5.3.12
-      '@smithy/smithy-client': 4.12.6
-      '@smithy/types': 4.13.1
-      '@smithy/url-parser': 4.2.12
-      '@smithy/util-base64': 4.3.2
-      '@smithy/util-body-length-browser': 4.2.2
-      '@smithy/util-body-length-node': 4.2.3
-      '@smithy/util-defaults-mode-browser': 4.3.42
-      '@smithy/util-defaults-mode-node': 4.2.45
-      '@smithy/util-endpoints': 3.3.3
-      '@smithy/util-middleware': 4.2.12
-      '@smithy/util-retry': 4.2.12
-      '@smithy/util-stream': 4.5.20
-      '@smithy/util-utf8': 4.2.2
-      tslib: 2.8.1
-    transitivePeerDependencies:
-      - aws-crt
-
   '@aws-sdk/client-bedrock-runtime@3.1014.0':
     dependencies:
       '@aws-crypto/sha256-browser': 5.2.0
@@ -7006,51 +6775,6 @@ snapshots:
       '@smithy/util-middleware': 4.2.12
       '@smithy/util-retry': 4.2.12
       '@smithy/util-stream': 4.5.20
-      '@smithy/util-utf8': 4.2.2
-      tslib: 2.8.1
-    transitivePeerDependencies:
-      - aws-crt
-
-  '@aws-sdk/client-bedrock@3.1011.0':
-    dependencies:
-      '@aws-crypto/sha256-browser': 5.2.0
-      '@aws-crypto/sha256-js': 5.2.0
-      '@aws-sdk/core': 3.973.20
-      '@aws-sdk/credential-provider-node': 3.972.21
-      '@aws-sdk/middleware-host-header': 3.972.8
-      '@aws-sdk/middleware-logger': 3.972.8
-      '@aws-sdk/middleware-recursion-detection': 3.972.8
-      '@aws-sdk/middleware-user-agent': 3.972.21
-      '@aws-sdk/region-config-resolver': 3.972.8
-      '@aws-sdk/token-providers': 3.1011.0
-      '@aws-sdk/types': 3.973.6
-      '@aws-sdk/util-endpoints': 3.996.5
-      '@aws-sdk/util-user-agent-browser': 3.972.8
-      '@aws-sdk/util-user-agent-node': 3.973.7
-      '@smithy/config-resolver': 4.4.11
-      '@smithy/core': 3.23.12
-      '@smithy/fetch-http-handler': 5.3.15
-      '@smithy/hash-node': 4.2.12
-      '@smithy/invalid-dependency': 4.2.12
-      '@smithy/middleware-content-length': 4.2.12
-      '@smithy/middleware-endpoint': 4.4.26
-      '@smithy/middleware-retry': 4.4.43
-      '@smithy/middleware-serde': 4.2.15
-      '@smithy/middleware-stack': 4.2.12
-      '@smithy/node-config-provider': 4.3.12
-      '@smithy/node-http-handler': 4.5.0
-      '@smithy/protocol-http': 5.3.12
-      '@smithy/smithy-client': 4.12.6
-      '@smithy/types': 4.13.1
-      '@smithy/url-parser': 4.2.12
-      '@smithy/util-base64': 4.3.2
-      '@smithy/util-body-length-browser': 4.2.2
-      '@smithy/util-body-length-node': 4.2.3
-      '@smithy/util-defaults-mode-browser': 4.3.42
-      '@smithy/util-defaults-mode-node': 4.2.45
-      '@smithy/util-endpoints': 3.3.3
-      '@smithy/util-middleware': 4.2.12
-      '@smithy/util-retry': 4.2.12
       '@smithy/util-utf8': 4.2.2
       tslib: 2.8.1
     transitivePeerDependencies:
@@ -7161,22 +6885,6 @@ snapshots:
     transitivePeerDependencies:
       - aws-crt
 
-  '@aws-sdk/core@3.973.20':
-    dependencies:
-      '@aws-sdk/types': 3.973.6
-      '@aws-sdk/xml-builder': 3.972.11
-      '@smithy/core': 3.23.12
-      '@smithy/node-config-provider': 4.3.12
-      '@smithy/property-provider': 4.2.12
-      '@smithy/protocol-http': 5.3.12
-      '@smithy/signature-v4': 5.3.12
-      '@smithy/smithy-client': 4.12.6
-      '@smithy/types': 4.13.1
-      '@smithy/util-base64': 4.3.2
-      '@smithy/util-middleware': 4.2.12
-      '@smithy/util-utf8': 4.2.2
-      tslib: 2.8.1
-
   '@aws-sdk/core@3.973.23':
     dependencies:
       '@aws-sdk/types': 3.973.6
@@ -7198,33 +6906,12 @@ snapshots:
       '@smithy/types': 4.13.1
       tslib: 2.8.1
 
-  '@aws-sdk/credential-provider-env@3.972.18':
-    dependencies:
-      '@aws-sdk/core': 3.973.20
-      '@aws-sdk/types': 3.973.6
-      '@smithy/property-provider': 4.2.12
-      '@smithy/types': 4.13.1
-      tslib: 2.8.1
-
   '@aws-sdk/credential-provider-env@3.972.21':
     dependencies:
       '@aws-sdk/core': 3.973.23
       '@aws-sdk/types': 3.973.6
       '@smithy/property-provider': 4.2.12
       '@smithy/types': 4.13.1
-      tslib: 2.8.1
-
-  '@aws-sdk/credential-provider-http@3.972.20':
-    dependencies:
-      '@aws-sdk/core': 3.973.20
-      '@aws-sdk/types': 3.973.6
-      '@smithy/fetch-http-handler': 5.3.15
-      '@smithy/node-http-handler': 4.5.0
-      '@smithy/property-provider': 4.2.12
-      '@smithy/protocol-http': 5.3.12
-      '@smithy/smithy-client': 4.12.6
-      '@smithy/types': 4.13.1
-      '@smithy/util-stream': 4.5.20
       tslib: 2.8.1
 
   '@aws-sdk/credential-provider-http@3.972.23':
@@ -7239,25 +6926,6 @@ snapshots:
       '@smithy/types': 4.13.1
       '@smithy/util-stream': 4.5.20
       tslib: 2.8.1
-
-  '@aws-sdk/credential-provider-ini@3.972.20':
-    dependencies:
-      '@aws-sdk/core': 3.973.20
-      '@aws-sdk/credential-provider-env': 3.972.18
-      '@aws-sdk/credential-provider-http': 3.972.20
-      '@aws-sdk/credential-provider-login': 3.972.20
-      '@aws-sdk/credential-provider-process': 3.972.18
-      '@aws-sdk/credential-provider-sso': 3.972.20
-      '@aws-sdk/credential-provider-web-identity': 3.972.20
-      '@aws-sdk/nested-clients': 3.996.10
-      '@aws-sdk/types': 3.973.6
-      '@smithy/credential-provider-imds': 4.2.12
-      '@smithy/property-provider': 4.2.12
-      '@smithy/shared-ini-file-loader': 4.4.7
-      '@smithy/types': 4.13.1
-      tslib: 2.8.1
-    transitivePeerDependencies:
-      - aws-crt
 
   '@aws-sdk/credential-provider-ini@3.972.23':
     dependencies:
@@ -7278,19 +6946,6 @@ snapshots:
     transitivePeerDependencies:
       - aws-crt
 
-  '@aws-sdk/credential-provider-login@3.972.20':
-    dependencies:
-      '@aws-sdk/core': 3.973.20
-      '@aws-sdk/nested-clients': 3.996.10
-      '@aws-sdk/types': 3.973.6
-      '@smithy/property-provider': 4.2.12
-      '@smithy/protocol-http': 5.3.12
-      '@smithy/shared-ini-file-loader': 4.4.7
-      '@smithy/types': 4.13.1
-      tslib: 2.8.1
-    transitivePeerDependencies:
-      - aws-crt
-
   '@aws-sdk/credential-provider-login@3.972.23':
     dependencies:
       '@aws-sdk/core': 3.973.23
@@ -7298,23 +6953,6 @@ snapshots:
       '@aws-sdk/types': 3.973.6
       '@smithy/property-provider': 4.2.12
       '@smithy/protocol-http': 5.3.12
-      '@smithy/shared-ini-file-loader': 4.4.7
-      '@smithy/types': 4.13.1
-      tslib: 2.8.1
-    transitivePeerDependencies:
-      - aws-crt
-
-  '@aws-sdk/credential-provider-node@3.972.21':
-    dependencies:
-      '@aws-sdk/credential-provider-env': 3.972.18
-      '@aws-sdk/credential-provider-http': 3.972.20
-      '@aws-sdk/credential-provider-ini': 3.972.20
-      '@aws-sdk/credential-provider-process': 3.972.18
-      '@aws-sdk/credential-provider-sso': 3.972.20
-      '@aws-sdk/credential-provider-web-identity': 3.972.20
-      '@aws-sdk/types': 3.973.6
-      '@smithy/credential-provider-imds': 4.2.12
-      '@smithy/property-provider': 4.2.12
       '@smithy/shared-ini-file-loader': 4.4.7
       '@smithy/types': 4.13.1
       tslib: 2.8.1
@@ -7338,15 +6976,6 @@ snapshots:
     transitivePeerDependencies:
       - aws-crt
 
-  '@aws-sdk/credential-provider-process@3.972.18':
-    dependencies:
-      '@aws-sdk/core': 3.973.20
-      '@aws-sdk/types': 3.973.6
-      '@smithy/property-provider': 4.2.12
-      '@smithy/shared-ini-file-loader': 4.4.7
-      '@smithy/types': 4.13.1
-      tslib: 2.8.1
-
   '@aws-sdk/credential-provider-process@3.972.21':
     dependencies:
       '@aws-sdk/core': 3.973.23
@@ -7356,36 +6985,11 @@ snapshots:
       '@smithy/types': 4.13.1
       tslib: 2.8.1
 
-  '@aws-sdk/credential-provider-sso@3.972.20':
-    dependencies:
-      '@aws-sdk/core': 3.973.20
-      '@aws-sdk/nested-clients': 3.996.10
-      '@aws-sdk/token-providers': 3.1009.0
-      '@aws-sdk/types': 3.973.6
-      '@smithy/property-provider': 4.2.12
-      '@smithy/shared-ini-file-loader': 4.4.7
-      '@smithy/types': 4.13.1
-      tslib: 2.8.1
-    transitivePeerDependencies:
-      - aws-crt
-
   '@aws-sdk/credential-provider-sso@3.972.23':
     dependencies:
       '@aws-sdk/core': 3.973.23
       '@aws-sdk/nested-clients': 3.996.13
       '@aws-sdk/token-providers': 3.1014.0
-      '@aws-sdk/types': 3.973.6
-      '@smithy/property-provider': 4.2.12
-      '@smithy/shared-ini-file-loader': 4.4.7
-      '@smithy/types': 4.13.1
-      tslib: 2.8.1
-    transitivePeerDependencies:
-      - aws-crt
-
-  '@aws-sdk/credential-provider-web-identity@3.972.20':
-    dependencies:
-      '@aws-sdk/core': 3.973.20
-      '@aws-sdk/nested-clients': 3.996.10
       '@aws-sdk/types': 3.973.6
       '@smithy/property-provider': 4.2.12
       '@smithy/shared-ini-file-loader': 4.4.7
@@ -7504,17 +7108,6 @@ snapshots:
       '@smithy/types': 4.13.1
       tslib: 2.8.1
 
-  '@aws-sdk/middleware-user-agent@3.972.21':
-    dependencies:
-      '@aws-sdk/core': 3.973.20
-      '@aws-sdk/types': 3.973.6
-      '@aws-sdk/util-endpoints': 3.996.5
-      '@smithy/core': 3.23.12
-      '@smithy/protocol-http': 5.3.12
-      '@smithy/types': 4.13.1
-      '@smithy/util-retry': 4.2.12
-      tslib: 2.8.1
-
   '@aws-sdk/middleware-user-agent@3.972.24':
     dependencies:
       '@aws-sdk/core': 3.973.23
@@ -7540,49 +7133,6 @@ snapshots:
       '@smithy/util-hex-encoding': 4.2.2
       '@smithy/util-utf8': 4.2.2
       tslib: 2.8.1
-
-  '@aws-sdk/nested-clients@3.996.10':
-    dependencies:
-      '@aws-crypto/sha256-browser': 5.2.0
-      '@aws-crypto/sha256-js': 5.2.0
-      '@aws-sdk/core': 3.973.20
-      '@aws-sdk/middleware-host-header': 3.972.8
-      '@aws-sdk/middleware-logger': 3.972.8
-      '@aws-sdk/middleware-recursion-detection': 3.972.8
-      '@aws-sdk/middleware-user-agent': 3.972.21
-      '@aws-sdk/region-config-resolver': 3.972.8
-      '@aws-sdk/types': 3.973.6
-      '@aws-sdk/util-endpoints': 3.996.5
-      '@aws-sdk/util-user-agent-browser': 3.972.8
-      '@aws-sdk/util-user-agent-node': 3.973.7
-      '@smithy/config-resolver': 4.4.11
-      '@smithy/core': 3.23.12
-      '@smithy/fetch-http-handler': 5.3.15
-      '@smithy/hash-node': 4.2.12
-      '@smithy/invalid-dependency': 4.2.12
-      '@smithy/middleware-content-length': 4.2.12
-      '@smithy/middleware-endpoint': 4.4.26
-      '@smithy/middleware-retry': 4.4.43
-      '@smithy/middleware-serde': 4.2.15
-      '@smithy/middleware-stack': 4.2.12
-      '@smithy/node-config-provider': 4.3.12
-      '@smithy/node-http-handler': 4.5.0
-      '@smithy/protocol-http': 5.3.12
-      '@smithy/smithy-client': 4.12.6
-      '@smithy/types': 4.13.1
-      '@smithy/url-parser': 4.2.12
-      '@smithy/util-base64': 4.3.2
-      '@smithy/util-body-length-browser': 4.2.2
-      '@smithy/util-body-length-node': 4.2.3
-      '@smithy/util-defaults-mode-browser': 4.3.42
-      '@smithy/util-defaults-mode-node': 4.2.45
-      '@smithy/util-endpoints': 3.3.3
-      '@smithy/util-middleware': 4.2.12
-      '@smithy/util-retry': 4.2.12
-      '@smithy/util-utf8': 4.2.2
-      tslib: 2.8.1
-    transitivePeerDependencies:
-      - aws-crt
 
   '@aws-sdk/nested-clients@3.996.13':
     dependencies:
@@ -7627,14 +7177,6 @@ snapshots:
     transitivePeerDependencies:
       - aws-crt
 
-  '@aws-sdk/region-config-resolver@3.972.8':
-    dependencies:
-      '@aws-sdk/types': 3.973.6
-      '@smithy/config-resolver': 4.4.11
-      '@smithy/node-config-provider': 4.3.12
-      '@smithy/types': 4.13.1
-      tslib: 2.8.1
-
   '@aws-sdk/region-config-resolver@3.972.9':
     dependencies:
       '@aws-sdk/types': 3.973.6
@@ -7662,30 +7204,6 @@ snapshots:
       '@smithy/signature-v4': 5.3.12
       '@smithy/types': 4.13.1
       tslib: 2.8.1
-
-  '@aws-sdk/token-providers@3.1009.0':
-    dependencies:
-      '@aws-sdk/core': 3.973.20
-      '@aws-sdk/nested-clients': 3.996.10
-      '@aws-sdk/types': 3.973.6
-      '@smithy/property-provider': 4.2.12
-      '@smithy/shared-ini-file-loader': 4.4.7
-      '@smithy/types': 4.13.1
-      tslib: 2.8.1
-    transitivePeerDependencies:
-      - aws-crt
-
-  '@aws-sdk/token-providers@3.1011.0':
-    dependencies:
-      '@aws-sdk/core': 3.973.20
-      '@aws-sdk/nested-clients': 3.996.10
-      '@aws-sdk/types': 3.973.6
-      '@smithy/property-provider': 4.2.12
-      '@smithy/shared-ini-file-loader': 4.4.7
-      '@smithy/types': 4.13.1
-      tslib: 2.8.1
-    transitivePeerDependencies:
-      - aws-crt
 
   '@aws-sdk/token-providers@3.1014.0':
     dependencies:
@@ -7741,21 +7259,6 @@ snapshots:
       '@smithy/node-config-provider': 4.3.12
       '@smithy/types': 4.13.1
       '@smithy/util-config-provider': 4.2.2
-      tslib: 2.8.1
-
-  '@aws-sdk/util-user-agent-node@3.973.7':
-    dependencies:
-      '@aws-sdk/middleware-user-agent': 3.972.21
-      '@aws-sdk/types': 3.973.6
-      '@smithy/node-config-provider': 4.3.12
-      '@smithy/types': 4.13.1
-      '@smithy/util-config-provider': 4.2.2
-      tslib: 2.8.1
-
-  '@aws-sdk/xml-builder@3.972.11':
-    dependencies:
-      '@smithy/types': 4.13.1
-      fast-xml-parser: 5.5.6
       tslib: 2.8.1
 
   '@aws-sdk/xml-builder@3.972.15':
@@ -7840,26 +7343,6 @@ snapshots:
   '@bramus/specificity@2.4.2':
     dependencies:
       css-tree: 3.2.1
-
-  '@buape/carbon@0.0.0-beta-20260216184201(@discordjs/opus@0.10.0)(hono@4.12.8)(opusscript@0.1.1)':
-    dependencies:
-      '@types/node': 25.5.0
-      discord-api-types: 0.38.37
-    optionalDependencies:
-      '@cloudflare/workers-types': 4.20260120.0
-      '@discordjs/voice': 0.19.0(@discordjs/opus@0.10.0)(opusscript@0.1.1)
-      '@hono/node-server': 1.19.10(hono@4.12.8)
-      '@types/bun': 1.3.9
-      '@types/ws': 8.18.1
-      ws: 8.19.0
-    transitivePeerDependencies:
-      - '@discordjs/opus'
-      - bufferutil
-      - ffmpeg-static
-      - hono
-      - node-opus
-      - opusscript
-      - utf-8-validate
 
   '@buape/carbon@0.0.0-beta-20260317045421(@discordjs/opus@0.10.0)(hono@4.12.8)(opusscript@0.1.1)':
     dependencies:
@@ -8148,19 +7631,6 @@ snapshots:
   '@exodus/bytes@1.15.0(@noble/hashes@2.0.1)':
     optionalDependencies:
       '@noble/hashes': 2.0.1
-
-  '@google/genai@1.45.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))':
-    dependencies:
-      google-auth-library: 10.6.2
-      p-retry: 4.6.2
-      protobufjs: 7.5.4
-      ws: 8.19.0
-    optionalDependencies:
-      '@modelcontextprotocol/sdk': 1.27.1(zod@4.3.6)
-    transitivePeerDependencies:
-      - bufferutil
-      - supports-color
-      - utf-8-validate
 
   '@google/genai@1.46.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))':
     dependencies:
@@ -8785,45 +8255,9 @@ snapshots:
       std-env: 3.10.0
       yoctocolors: 2.1.2
 
-  '@mariozechner/pi-agent-core@0.58.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)':
-    dependencies:
-      '@mariozechner/pi-ai': 0.58.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
-    transitivePeerDependencies:
-      - '@modelcontextprotocol/sdk'
-      - aws-crt
-      - bufferutil
-      - supports-color
-      - utf-8-validate
-      - ws
-      - zod
-
   '@mariozechner/pi-agent-core@0.61.1(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)':
     dependencies:
       '@mariozechner/pi-ai': 0.61.1(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
-    transitivePeerDependencies:
-      - '@modelcontextprotocol/sdk'
-      - aws-crt
-      - bufferutil
-      - supports-color
-      - utf-8-validate
-      - ws
-      - zod
-
-  '@mariozechner/pi-ai@0.58.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)':
-    dependencies:
-      '@anthropic-ai/sdk': 0.73.0(zod@4.3.6)
-      '@aws-sdk/client-bedrock-runtime': 3.1011.0
-      '@google/genai': 1.45.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))
-      '@mistralai/mistralai': 1.14.1
-      '@sinclair/typebox': 0.34.48
-      ajv: 8.18.0
-      ajv-formats: 3.0.1(ajv@8.18.0)
-      chalk: 5.6.2
-      openai: 6.26.0(ws@8.19.0)(zod@4.3.6)
-      partial-json: 0.1.7
-      proxy-agent: 6.5.0
-      undici: 7.24.4
-      zod-to-json-schema: 3.25.1(zod@4.3.6)
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - aws-crt
@@ -8848,38 +8282,6 @@ snapshots:
       proxy-agent: 6.5.0
       undici: 7.24.5
       zod-to-json-schema: 3.25.1(zod@4.3.6)
-    transitivePeerDependencies:
-      - '@modelcontextprotocol/sdk'
-      - aws-crt
-      - bufferutil
-      - supports-color
-      - utf-8-validate
-      - ws
-      - zod
-
-  '@mariozechner/pi-coding-agent@0.58.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)':
-    dependencies:
-      '@mariozechner/jiti': 2.6.5
-      '@mariozechner/pi-agent-core': 0.58.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
-      '@mariozechner/pi-ai': 0.58.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
-      '@mariozechner/pi-tui': 0.58.0
-      '@silvia-odwyer/photon-node': 0.3.4
-      chalk: 5.6.2
-      cli-highlight: 2.1.11
-      diff: 8.0.3
-      extract-zip: 2.0.1
-      file-type: 21.3.4
-      glob: 13.0.6
-      hosted-git-info: 9.0.2
-      ignore: 7.0.5
-      marked: 15.0.12
-      minimatch: 10.2.4
-      proper-lockfile: 4.1.2
-      strip-ansi: 7.2.0
-      undici: 7.24.4
-      yaml: 2.8.2
-    optionalDependencies:
-      '@mariozechner/clipboard': 0.3.2
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - aws-crt
@@ -8920,16 +8322,6 @@ snapshots:
       - utf-8-validate
       - ws
       - zod
-
-  '@mariozechner/pi-tui@0.58.0':
-    dependencies:
-      '@types/mime-types': 2.1.4
-      chalk: 5.6.2
-      get-east-asian-width: 1.5.0
-      marked: 15.0.12
-      mime-types: 3.0.2
-    optionalDependencies:
-      koffi: 2.15.2
 
   '@mariozechner/pi-tui@0.61.1':
     dependencies:
@@ -9955,15 +9347,6 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@smithy/config-resolver@4.4.11':
-    dependencies:
-      '@smithy/node-config-provider': 4.3.12
-      '@smithy/types': 4.13.1
-      '@smithy/util-config-provider': 4.2.2
-      '@smithy/util-endpoints': 3.3.3
-      '@smithy/util-middleware': 4.2.12
-      tslib: 2.8.1
-
   '@smithy/config-resolver@4.4.13':
     dependencies:
       '@smithy/node-config-provider': 4.3.12
@@ -10077,17 +9460,6 @@ snapshots:
       '@smithy/types': 4.13.1
       tslib: 2.8.1
 
-  '@smithy/middleware-endpoint@4.4.26':
-    dependencies:
-      '@smithy/core': 3.23.12
-      '@smithy/middleware-serde': 4.2.15
-      '@smithy/node-config-provider': 4.3.12
-      '@smithy/shared-ini-file-loader': 4.4.7
-      '@smithy/types': 4.13.1
-      '@smithy/url-parser': 4.2.12
-      '@smithy/util-middleware': 4.2.12
-      tslib: 2.8.1
-
   '@smithy/middleware-endpoint@4.4.27':
     dependencies:
       '@smithy/core': 3.23.12
@@ -10097,18 +9469,6 @@ snapshots:
       '@smithy/types': 4.13.1
       '@smithy/url-parser': 4.2.12
       '@smithy/util-middleware': 4.2.12
-      tslib: 2.8.1
-
-  '@smithy/middleware-retry@4.4.43':
-    dependencies:
-      '@smithy/node-config-provider': 4.3.12
-      '@smithy/protocol-http': 5.3.12
-      '@smithy/service-error-classification': 4.2.12
-      '@smithy/smithy-client': 4.12.6
-      '@smithy/types': 4.13.1
-      '@smithy/util-middleware': 4.2.12
-      '@smithy/util-retry': 4.2.12
-      '@smithy/uuid': 1.1.2
       tslib: 2.8.1
 
   '@smithy/middleware-retry@4.4.44':
@@ -10191,16 +9551,6 @@ snapshots:
       '@smithy/util-utf8': 4.2.2
       tslib: 2.8.1
 
-  '@smithy/smithy-client@4.12.6':
-    dependencies:
-      '@smithy/core': 3.23.12
-      '@smithy/middleware-endpoint': 4.4.26
-      '@smithy/middleware-stack': 4.2.12
-      '@smithy/protocol-http': 5.3.12
-      '@smithy/types': 4.13.1
-      '@smithy/util-stream': 4.5.20
-      tslib: 2.8.1
-
   '@smithy/smithy-client@4.12.7':
     dependencies:
       '@smithy/core': 3.23.12
@@ -10249,27 +9599,10 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@smithy/util-defaults-mode-browser@4.3.42':
-    dependencies:
-      '@smithy/property-provider': 4.2.12
-      '@smithy/smithy-client': 4.12.6
-      '@smithy/types': 4.13.1
-      tslib: 2.8.1
-
   '@smithy/util-defaults-mode-browser@4.3.43':
     dependencies:
       '@smithy/property-provider': 4.2.12
       '@smithy/smithy-client': 4.12.7
-      '@smithy/types': 4.13.1
-      tslib: 2.8.1
-
-  '@smithy/util-defaults-mode-node@4.2.45':
-    dependencies:
-      '@smithy/config-resolver': 4.4.11
-      '@smithy/credential-provider-imds': 4.2.12
-      '@smithy/node-config-provider': 4.3.12
-      '@smithy/property-provider': 4.2.12
-      '@smithy/smithy-client': 4.12.6
       '@smithy/types': 4.13.1
       tslib: 2.8.1
 
@@ -12752,11 +12085,6 @@ snapshots:
       regex: 6.1.0
       regex-recursion: 6.0.2
 
-  openai@6.26.0(ws@8.19.0)(zod@4.3.6):
-    optionalDependencies:
-      ws: 8.19.0
-      zod: 4.3.6
-
   openai@6.26.0(ws@8.20.0)(zod@4.3.6):
     optionalDependencies:
       ws: 8.20.0
@@ -12766,83 +12094,6 @@ snapshots:
     optionalDependencies:
       ws: 8.20.0
       zod: 4.3.6
-
-  openclaw@2026.3.13(@discordjs/opus@0.10.0)(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(jimp@1.6.0)(node-llama-cpp@3.16.2(typescript@5.9.3)):
-    dependencies:
-      '@agentclientprotocol/sdk': 0.16.1(zod@4.3.6)
-      '@aws-sdk/client-bedrock': 3.1011.0
-      '@buape/carbon': 0.0.0-beta-20260216184201(@discordjs/opus@0.10.0)(hono@4.12.8)(opusscript@0.1.1)
-      '@clack/prompts': 1.1.0
-      '@discordjs/voice': 0.19.2(@discordjs/opus@0.10.0)(opusscript@0.1.1)
-      '@grammyjs/runner': 2.0.3(grammy@1.41.1)
-      '@grammyjs/transformer-throttler': 1.2.1(grammy@1.41.1)
-      '@homebridge/ciao': 1.3.5
-      '@larksuiteoapi/node-sdk': 1.59.0
-      '@line/bot-sdk': 10.6.0
-      '@lydell/node-pty': 1.2.0-beta.3
-      '@mariozechner/pi-agent-core': 0.58.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
-      '@mariozechner/pi-ai': 0.58.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
-      '@mariozechner/pi-coding-agent': 0.58.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
-      '@mariozechner/pi-tui': 0.58.0
-      '@modelcontextprotocol/sdk': 1.27.1(zod@4.3.6)
-      '@mozilla/readability': 0.6.0
-      '@napi-rs/canvas': 0.1.95
-      '@sinclair/typebox': 0.34.48
-      '@slack/bolt': 4.6.0(@types/express@5.0.6)
-      '@slack/web-api': 7.15.0
-      '@whiskeysockets/baileys': 7.0.0-rc.9(audio-decode@2.2.3)(jimp@1.6.0)(sharp@0.34.5)
-      ajv: 8.18.0
-      chalk: 5.6.2
-      chokidar: 5.0.0
-      cli-highlight: 2.1.11
-      commander: 14.0.3
-      croner: 10.0.1
-      discord-api-types: 0.38.42
-      dotenv: 17.3.1
-      express: 5.2.1
-      file-type: 21.3.4
-      grammy: 1.41.1
-      hono: 4.12.8
-      https-proxy-agent: 8.0.0
-      ipaddr.js: 2.3.0
-      jiti: 2.6.1
-      json5: 2.2.3
-      jszip: 3.10.1
-      linkedom: 0.18.12
-      long: 5.3.2
-      markdown-it: 14.1.1
-      node-edge-tts: 1.2.10
-      opusscript: 0.1.1
-      osc-progress: 0.3.0
-      pdfjs-dist: 5.5.207
-      playwright-core: 1.58.2
-      qrcode-terminal: 0.12.0
-      sharp: 0.34.5
-      sqlite-vec: 0.1.7-alpha.2
-      tar: 7.5.12
-      tslog: 4.10.2
-      undici: 7.24.4
-      ws: 8.19.0
-      yaml: 2.8.2
-      zod: 4.3.6
-    optionalDependencies:
-      node-llama-cpp: 3.16.2(typescript@5.9.3)
-    transitivePeerDependencies:
-      - '@cfworker/json-schema'
-      - '@discordjs/opus'
-      - '@types/express'
-      - audio-decode
-      - aws-crt
-      - bufferutil
-      - canvas
-      - debug
-      - encoding
-      - ffmpeg-static
-      - jimp
-      - link-preview-js
-      - node-opus
-      - supports-color
-      - utf-8-validate
 
   opus-decoder@0.7.11:
     dependencies:
@@ -13658,31 +12909,16 @@ snapshots:
   sqlite-vec-darwin-arm64@0.1.7:
     optional: true
 
-  sqlite-vec-darwin-arm64@0.1.7-alpha.2:
-    optional: true
-
   sqlite-vec-darwin-x64@0.1.7:
-    optional: true
-
-  sqlite-vec-darwin-x64@0.1.7-alpha.2:
     optional: true
 
   sqlite-vec-linux-arm64@0.1.7:
     optional: true
 
-  sqlite-vec-linux-arm64@0.1.7-alpha.2:
-    optional: true
-
   sqlite-vec-linux-x64@0.1.7:
     optional: true
 
-  sqlite-vec-linux-x64@0.1.7-alpha.2:
-    optional: true
-
   sqlite-vec-windows-x64@0.1.7:
-    optional: true
-
-  sqlite-vec-windows-x64@0.1.7-alpha.2:
     optional: true
 
   sqlite-vec@0.1.7:
@@ -13692,14 +12928,6 @@ snapshots:
       sqlite-vec-linux-arm64: 0.1.7
       sqlite-vec-linux-x64: 0.1.7
       sqlite-vec-windows-x64: 0.1.7
-
-  sqlite-vec@0.1.7-alpha.2:
-    optionalDependencies:
-      sqlite-vec-darwin-arm64: 0.1.7-alpha.2
-      sqlite-vec-darwin-x64: 0.1.7-alpha.2
-      sqlite-vec-linux-arm64: 0.1.7-alpha.2
-      sqlite-vec-linux-x64: 0.1.7-alpha.2
-      sqlite-vec-windows-x64: 0.1.7-alpha.2
 
   stackback@0.0.2: {}
 
@@ -13961,8 +13189,6 @@ snapshots:
 
   undici-types@7.18.2: {}
 
-  undici@7.24.4: {}
-
   undici@7.24.5: {}
 
   unhomoglyph@1.0.6: {}
@@ -14172,8 +13398,6 @@ snapshots:
   y18n@5.0.8: {}
 
   yallist@5.0.0: {}
-
-  yaml@2.8.2: {}
 
   yaml@2.8.3: {}
 
