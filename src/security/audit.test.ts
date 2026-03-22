@@ -1303,6 +1303,20 @@ description: test skill
       },
     ] as const;
 
+    // Dangerous commands in denyCommands should NOT be flagged as unknown.
+    const dangerousCfg: OpenClawConfig = {
+      gateway: {
+        nodes: {
+          denyCommands: ["camera.snap", "camera.clip", "screen.record", "contacts.add", "calendar.add", "sms.send"],
+        },
+      },
+    };
+    const dangerousRes = await audit(dangerousCfg);
+    const dangerousFinding = dangerousRes.findings.find(
+      (f) => f.checkId === "gateway.nodes.deny_commands_ineffective",
+    );
+    expect(dangerousFinding, "dangerous commands in denyCommands should not trigger warning").toBeUndefined();
+
     await Promise.all(
       cases.map(async (testCase) => {
         const res = await audit(testCase.cfg);
