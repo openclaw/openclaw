@@ -5,8 +5,8 @@ import {
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
 import {
+  buildAllowedModelSet,
   modelKey,
-  parseModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
@@ -161,16 +161,15 @@ export async function getReplyFromConfig(
     });
     if (modelRef) {
       // Check if the model is allowed by the agent's allowlist
-      const rawAllowlist = Object.keys(cfg.agents?.defaults?.models ?? {});
-      if (rawAllowlist.length > 0) {
-        // Build allowed keys from allowlist
-        const allowedKeys = new Set<string>();
-        for (const raw of rawAllowlist) {
-          const parsed = parseModelRef(String(raw), defaultProvider);
-          if (parsed) {
-            allowedKeys.add(modelKey(parsed.provider, parsed.model));
-          }
-        }
+      // Use buildAllowedModelSet to include models + fallbacks + default model
+      const { allowAny, allowedKeys } = buildAllowedModelSet({
+        cfg,
+        catalog: [], // Empty catalog; we only need allowedKeys
+        defaultProvider,
+        defaultModel,
+        agentId,
+      });
+      if (!allowAny) {
         const modelKeyStr = modelKey(modelRef.ref.provider, modelRef.ref.model);
         if (!allowedKeys.has(modelKeyStr)) {
           // Model not in allowlist, skip the override and let default model be used
