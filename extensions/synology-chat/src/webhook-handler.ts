@@ -10,7 +10,7 @@ import {
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
-import { sendMessage, resolveChatUserId } from "./client.js";
+import { sendMessage, resolveLegacyWebhookNameToChatUserId } from "./client.js";
 import { validateToken, authorizeUserForDm, sanitizeInput, RateLimiter } from "./security.js";
 import type { SynologyWebhookPayload, ResolvedSynologyChatAccount } from "./types.js";
 
@@ -369,7 +369,7 @@ async function parseAndAuthorizeSynologyWebhook(params: {
   };
 }
 
-async function resolveSynologyReplyUserId(params: {
+async function resolveSynologyDeliveryUserId(params: {
   account: ResolvedSynologyChatAccount;
   payload: SynologyWebhookPayload;
   log?: WebhookHandlerDeps["log"];
@@ -378,14 +378,14 @@ async function resolveSynologyReplyUserId(params: {
     return params.payload.user_id;
   }
 
-  const chatUserId = await resolveChatUserId(
+  const resolvedChatApiUserId = await resolveLegacyWebhookNameToChatUserId(
     params.account.incomingUrl,
     params.payload.username,
     params.account.allowInsecureSsl,
     params.log,
   );
-  if (chatUserId !== undefined) {
-    return String(chatUserId);
+  if (resolvedChatApiUserId !== undefined) {
+    return String(resolvedChatApiUserId);
   }
   params.log?.warn(
     `Could not resolve Chat API user_id for "${params.payload.username}" — falling back to webhook user_id ${params.payload.user_id}. Reply delivery may fail.`,
@@ -399,9 +399,10 @@ async function processAuthorizedSynologyWebhook(params: {
   log?: WebhookHandlerDeps["log"];
   message: AuthorizedSynologyWebhook;
 }): Promise<void> {
-  let replyUserId = params.message.payload.user_id;
+  const authorizedWebhookUserId = params.message.payload.user_id;
+  let deliveryUserId = authorizedWebhookUserId;
   try {
-    replyUserId = await resolveSynologyReplyUserId({
+    deliveryUserId = await resolveSynologyDeliveryUserId({
       account: params.account,
       payload: params.message.payload,
       log: params.log,
@@ -409,13 +410,13 @@ async function processAuthorizedSynologyWebhook(params: {
 
     const deliverPromise = params.deliver({
       body: params.message.body,
-      from: params.message.payload.user_id,
+      from: authorizedWebhookUserId,
       senderName: params.message.payload.username,
       provider: "synology-chat",
       chatType: "direct",
       accountId: params.account.accountId,
       commandAuthorized: params.message.commandAuthorized,
-      chatUserId: replyUserId,
+      chatUserId: deliveryUserId,
     });
     const timeoutPromise = new Promise<null>((_, reject) =>
       setTimeout(() => reject(new Error("Agent response timeout (120s)")), 120_000),
@@ -428,12 +429,12 @@ async function processAuthorizedSynologyWebhook(params: {
     await sendMessage(
       params.account.incomingUrl,
       reply,
-      replyUserId,
+      deliveryUserId,
       params.account.allowInsecureSsl,
     );
     const replyPreview = reply.length > 100 ? `${reply.slice(0, 100)}...` : reply;
     params.log?.info?.(
-      `Reply sent to ${params.message.payload.username} (${replyUserId}): ${replyPreview}`,
+      `Reply sent to ${params.message.payload.username} (${deliveryUserId}): ${replyPreview}`,
     );
   } catch (err) {
     const errMsg = err instanceof Error ? `${err.message}\n${err.stack}` : String(err);
@@ -443,7 +444,7 @@ async function processAuthorizedSynologyWebhook(params: {
     await sendMessage(
       params.account.incomingUrl,
       "Sorry, an error occurred while processing your message.",
-      replyUserId,
+      deliveryUserId,
       params.account.allowInsecureSsl,
     );
   }
