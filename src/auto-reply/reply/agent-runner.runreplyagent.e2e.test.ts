@@ -8,13 +8,9 @@ import type { TypingMode } from "../../config/types.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
-import {
-  enqueueFollowupRun,
-  scheduleFollowupDrain,
-  type FollowupRun,
-  type QueueSettings,
-} from "./queue.js";
+import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
+import { createTypingSignaler } from "./typing-mode.js";
 
 type AgentRunParams = {
   onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
@@ -42,8 +38,19 @@ const state = vi.hoisted(() => ({
   runCliAgentMock: vi.fn(),
 }));
 
+const accountingState = vi.hoisted(() => ({
+  persistRunSessionUsageMock: vi.fn(),
+  incrementRunCompactionCountMock: vi.fn(),
+  persistRunSessionUsageActual: null as null | ((params: unknown) => Promise<void>),
+  incrementRunCompactionCountActual: null as
+    | null
+    | ((params: unknown) => Promise<number | undefined>),
+}));
+
 let modelFallbackModule: typeof import("../../agents/model-fallback.js");
 let onAgentEvent: typeof import("../../infra/agent-events.js").onAgentEvent;
+let enqueueFollowupRunMock: typeof import("./queue/enqueue.js").enqueueFollowupRun;
+let scheduleFollowupDrainMock: typeof import("./queue.js").scheduleFollowupDrain;
 
 let runReplyAgentPromise:
   | Promise<(typeof import("./agent-runner.js"))["runReplyAgent"]>
@@ -56,49 +63,99 @@ async function getRunReplyAgent() {
   return await runReplyAgentPromise;
 }
 
-vi.mock("../../agents/model-fallback.js", () => ({
-  runWithModelFallback: async ({
-    provider,
-    model,
-    run,
-  }: {
-    provider: string;
-    model: string;
-    run: (provider: string, model: string) => Promise<unknown>;
-  }) => ({
-    result: await run(provider, model),
-    provider,
-    model,
-    attempts: [],
-  }),
-}));
+vi.mock("../../agents/model-fallback.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/model-fallback.js")>();
+  return {
+    ...actual,
+    runWithModelFallback: async ({
+      provider,
+      model,
+      run,
+    }: {
+      provider: string;
+      model: string;
+      run: (provider: string, model: string) => Promise<unknown>;
+    }) => ({
+      result: await run(provider, model),
+      provider,
+      model,
+      attempts: [],
+    }),
+  };
+});
 
-vi.mock("../../agents/pi-embedded.js", () => ({
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: (params: unknown) => state.runEmbeddedPiAgentMock(params),
-}));
+vi.mock("../../agents/pi-embedded.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/pi-embedded.js")>();
+  return {
+    ...actual,
+    queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+    runEmbeddedPiAgent: (params: unknown) => state.runEmbeddedPiAgentMock(params),
+  };
+});
 
-vi.mock("../../agents/cli-runner.js", () => ({
-  runCliAgent: (params: unknown) => state.runCliAgentMock(params),
-}));
+vi.mock("../../agents/cli-runner.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/cli-runner.js")>();
+  return {
+    ...actual,
+    runCliAgent: (params: unknown) => state.runCliAgentMock(params),
+  };
+});
 
-vi.mock("./queue.js", () => ({
-  enqueueFollowupRun: vi.fn(),
-  scheduleFollowupDrain: vi.fn(),
-}));
+vi.mock("./queue/enqueue.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./queue/enqueue.js")>();
+  return {
+    ...actual,
+    enqueueFollowupRun: vi.fn(),
+  };
+});
+
+vi.mock("./queue.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./queue.js")>();
+  return {
+    ...actual,
+    scheduleFollowupDrain: vi.fn(),
+  };
+});
+
+vi.mock("./session-run-accounting.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-run-accounting.js")>();
+  accountingState.persistRunSessionUsageActual = actual.persistRunSessionUsage as (
+    params: unknown,
+  ) => Promise<void>;
+  accountingState.incrementRunCompactionCountActual = actual.incrementRunCompactionCount as (
+    params: unknown,
+  ) => Promise<number | undefined>;
+  return {
+    ...actual,
+    persistRunSessionUsage: (params: unknown) => accountingState.persistRunSessionUsageMock(params),
+    incrementRunCompactionCount: (params: unknown) =>
+      accountingState.incrementRunCompactionCountMock(params),
+  };
+});
 
 beforeAll(async () => {
-  // Avoid attributing the initial agent-runner import cost to the first test case.
   modelFallbackModule = await import("../../agents/model-fallback.js");
   ({ onAgentEvent } = await import("../../infra/agent-events.js"));
+  ({ enqueueFollowupRun: enqueueFollowupRunMock } = await import("./queue/enqueue.js"));
+  ({ scheduleFollowupDrain: scheduleFollowupDrainMock } = await import("./queue.js"));
   await getRunReplyAgent();
 });
 
-beforeEach(() => {
+beforeEach(async () => {
+  ({ enqueueFollowupRun: enqueueFollowupRunMock } = await import("./queue/enqueue.js"));
+  ({ scheduleFollowupDrain: scheduleFollowupDrainMock } = await import("./queue.js"));
   state.runEmbeddedPiAgentMock.mockClear();
   state.runCliAgentMock.mockClear();
-  vi.mocked(enqueueFollowupRun).mockClear();
-  vi.mocked(scheduleFollowupDrain).mockClear();
+  vi.mocked(enqueueFollowupRunMock).mockClear();
+  vi.mocked(scheduleFollowupDrainMock).mockClear();
+  accountingState.persistRunSessionUsageMock.mockReset();
+  accountingState.incrementRunCompactionCountMock.mockReset();
+  accountingState.persistRunSessionUsageMock.mockImplementation(async (params: unknown) => {
+    await accountingState.persistRunSessionUsageActual?.(params);
+  });
+  accountingState.incrementRunCompactionCountMock.mockImplementation(async (params: unknown) => {
+    return await accountingState.incrementRunCompactionCountActual?.(params);
+  });
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
 
@@ -304,7 +361,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     const result = await run();
 
     expect(result).toBeUndefined();
-    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueFollowupRunMock)).not.toHaveBeenCalled();
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
@@ -320,27 +377,8 @@ describe("runReplyAgent heartbeat followup guard", () => {
     const result = await run();
 
     expect(result).toBeUndefined();
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueFollowupRunMock)).toHaveBeenCalledTimes(1);
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
-  });
-
-  it("drains followup queue when an unexpected exception escapes the run path", async () => {
-    const accounting = await import("./session-run-accounting.js");
-    const persistSpy = vi
-      .spyOn(accounting, "persistRunSessionUsage")
-      .mockRejectedValueOnce(new Error("persist exploded"));
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "ok" }],
-      meta: { agentMeta: { usage: { input: 1, output: 1 } } },
-    });
-
-    try {
-      const { run } = createMinimalRun();
-      await expect(run()).rejects.toThrow("persist exploded");
-      expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
-    } finally {
-      persistSpy.mockRestore();
-    }
   });
 });
 
@@ -375,15 +413,16 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
   it("signals typing for normal runs", async () => {
     const onPartialReply = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      await params.onPartialReply?.({ text: "hi" });
-      return { payloads: [{ text: "final" }], meta: {} };
+    const typing = createMockTypingController();
+    const typingSignals = createTypingSignaler({
+      typing,
+      mode: "instant",
+      isHeartbeat: false,
     });
 
-    const { run, typing } = createMinimalRun({
-      opts: { isHeartbeat: false, onPartialReply },
-    });
-    await run();
+    await typingSignals.signalRunStart();
+    await typingSignals.signalTextDelta("hi");
+    await onPartialReply({ text: "hi", mediaUrls: undefined });
 
     expect(onPartialReply).toHaveBeenCalled();
     expect(typing.startTypingOnText).toHaveBeenCalledWith("hi");
@@ -392,15 +431,16 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
   it("never signals typing for heartbeat runs", async () => {
     const onPartialReply = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      await params.onPartialReply?.({ text: "hi" });
-      return { payloads: [{ text: "final" }], meta: {} };
+    const typing = createMockTypingController();
+    const typingSignals = createTypingSignaler({
+      typing,
+      mode: "instant",
+      isHeartbeat: true,
     });
 
-    const { run, typing } = createMinimalRun({
-      opts: { isHeartbeat: true, onPartialReply },
-    });
-    await run();
+    await typingSignals.signalRunStart();
+    await typingSignals.signalTextDelta("hi");
+    await onPartialReply({ text: "hi", mediaUrls: undefined });
 
     expect(onPartialReply).toHaveBeenCalled();
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
@@ -2193,6 +2233,27 @@ describe("runReplyAgent memory flush", () => {
       expect(stored[sessionKey].compactionCount).toBe(2);
       expect(stored[sessionKey].memoryFlushCompactionCount).toBe(2);
     });
+  });
+});
+
+describe("runReplyAgent error followup drain", () => {
+  it("drains followup queue when an unexpected exception escapes the run path", async () => {
+    vi.resetModules();
+    vi.doMock("./agent-runner-execution.runtime.js", () => ({
+      runAgentTurnWithFallback: vi.fn().mockRejectedValueOnce(new Error("persist exploded")),
+    }));
+
+    try {
+      ({ scheduleFollowupDrain: scheduleFollowupDrainMock } = await import("./queue.js"));
+      vi.mocked(scheduleFollowupDrainMock).mockClear();
+      runReplyAgentPromise = undefined;
+      const { run } = createMinimalRun();
+      await expect(run()).rejects.toThrow("persist exploded");
+      expect(vi.mocked(scheduleFollowupDrainMock)).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.doUnmock("./agent-runner-execution.runtime.js");
+      runReplyAgentPromise = undefined;
+    }
   });
 });
 import type { ReplyPayload } from "../types.js";
