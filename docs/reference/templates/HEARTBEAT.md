@@ -5,10 +5,10 @@ read_when:
   - Bootstrapping a workspace manually
 ---
 
-# HEARTBEAT.md Template
+# HEARTBEAT.md
 
-```markdown
-# Keep this file empty (or with only comments) to skip heartbeat API calls.
-
-# Add tasks below when you want the agent to check something periodically.
-```
+# No heartbeat tasks configured. Reply HEARTBEAT_OK.
+#
+# To add periodic tasks, replace this with a checklist of things to check.
+# Only message your human when something genuinely needs their attention.
+# Never fabricate activity, fake syncs, or "completed successfully" messages.
