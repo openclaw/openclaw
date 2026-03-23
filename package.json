@@ -28,7 +28,7 @@
     "README.md",
     "assets/",
     "dist/",
-    "scripts/",
+    "scripts/ui.js",
     "docs/",
     "!docs/.generated/**",
     "!docs/.i18n/zh-CN.tm.jsonl",
