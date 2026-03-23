@@ -197,6 +197,17 @@ export function createProfileAvailability({
           return;
         }
       }
+      // Browser control service can restart while a loopback OpenClaw browser is still
+      // alive. Give that pre-existing browser one longer probe window before falling
+      // back to local executable resolution.
+      if (!attachOnly && !remoteCdp && profile.cdpIsLoopback && !profileState.running) {
+        if (
+          (await isHttpReachable(PROFILE_ATTACH_RETRY_TIMEOUT_MS)) &&
+          (await isReachable(PROFILE_ATTACH_RETRY_TIMEOUT_MS))
+        ) {
+          return;
+        }
+      }
       if (attachOnly || remoteCdp) {
         throw new BrowserProfileUnavailableError(
           remoteCdp
