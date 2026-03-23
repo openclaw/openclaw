@@ -97,6 +97,22 @@ async function emitUntrustedToolMediaResult(
   });
 }
 
+async function emitMcpMediaToolResult(ctx: EmbeddedPiSubscribeContext, mediaPathOrUrl: string) {
+  await handleToolExecutionEnd(ctx, {
+    type: "tool_execution_end",
+    toolName: "browser",
+    toolCallId: "tc-1",
+    isError: false,
+    result: {
+      content: [{ type: "text", text: `MEDIA:${mediaPathOrUrl}` }],
+      details: {
+        mcpServer: "probe",
+        mcpTool: "browser",
+      },
+    },
+  });
+}
+
 describe("handleToolExecutionEnd media emission", () => {
   it("does not warn for read tool when path is provided via file_path alias", async () => {
     const ctx = createMockContext();
@@ -136,6 +152,26 @@ describe("handleToolExecutionEnd media emission", () => {
     const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
 
     await emitUntrustedToolMediaResult(ctx, "https://example.com/file.png");
+
+    expect(onToolResult).not.toHaveBeenCalled();
+    expect(ctx.state.pendingToolMediaUrls).toEqual(["https://example.com/file.png"]);
+  });
+
+  it("does NOT emit local media for MCP-provenance results", async () => {
+    const onToolResult = vi.fn();
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+
+    await emitMcpMediaToolResult(ctx, "/tmp/secret.png");
+
+    expect(onToolResult).not.toHaveBeenCalled();
+    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+  });
+
+  it("emits remote media for MCP-provenance results", async () => {
+    const onToolResult = vi.fn();
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+
+    await emitMcpMediaToolResult(ctx, "https://example.com/file.png");
 
     expect(onToolResult).not.toHaveBeenCalled();
     expect(ctx.state.pendingToolMediaUrls).toEqual(["https://example.com/file.png"]);

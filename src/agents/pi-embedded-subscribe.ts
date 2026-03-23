@@ -337,12 +337,16 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     }
     return `\`\`\`txt\n${trimmed}\n\`\`\``;
   };
-  const emitToolResultMessage = (toolName: string | undefined, message: string) => {
+  const emitToolResultMessage = (
+    toolName: string | undefined,
+    message: string,
+    result?: unknown,
+  ) => {
     if (!params.onToolResult) {
       return;
     }
     const { text: cleanedText, mediaUrls } = parseReplyDirectives(message);
-    const filteredMediaUrls = filterToolResultMediaUrls(toolName, mediaUrls ?? []);
+    const filteredMediaUrls = filterToolResultMediaUrls(toolName, mediaUrls ?? [], result);
     if (!cleanedText && filteredMediaUrls.length === 0) {
       return;
     }
@@ -361,7 +365,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     });
     emitToolResultMessage(toolName, agg);
   };
-  const emitToolOutput = (toolName?: string, meta?: string, output?: string) => {
+  const emitToolOutput = (toolName?: string, meta?: string, output?: string, result?: unknown) => {
     if (!output) {
       return;
     }
@@ -369,7 +373,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       markdown: useMarkdown,
     });
     const message = `${agg}\n${formatToolOutputBlock(output)}`;
-    emitToolResultMessage(toolName, message);
+    emitToolResultMessage(toolName, message, result);
   };
 
   const stripBlockTags = (
