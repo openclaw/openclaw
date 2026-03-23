@@ -1,8 +1,8 @@
 #!/usr/bin/env -S node --import tsx
 
 import { execSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join, posix, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   collectBundledExtensionManifestErrors,
@@ -16,8 +16,9 @@ export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-m
 
 type PackFile = { path: string };
 type PackResult = { files?: PackFile[]; filename?: string; unpackedSize?: number };
+type RequiredPackPathGroup = string | string[];
 
-const requiredPathGroups = [
+const requiredPathGroups: RequiredPackPathGroup[] = [
   ["dist/index.js", "dist/index.mjs"],
   ["dist/entry.js", "dist/entry.mjs"],
   ...listPluginSdkDistArtifacts(),
@@ -85,6 +86,49 @@ export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
         forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) ||
         (/node_modules\//.test(path) && !isAllowedBundledPluginNodeModulesPath(path)),
     )
+    .toSorted();
+}
+
+export function collectBuiltArtifactPackRequirements(rootDir = process.cwd()): string[] {
+  const requirements = new Set<string>();
+
+  const controlUiIndexPath = resolve(rootDir, "dist", "control-ui", "index.html");
+  if (existsSync(controlUiIndexPath)) {
+    requirements.add(posix.join("dist", "control-ui", "index.html"));
+  }
+
+  const extensionsRoot = resolve(rootDir, "dist", "extensions");
+  if (!existsSync(extensionsRoot)) {
+    return [...requirements].toSorted();
+  }
+
+  for (const entry of readdirSync(extensionsRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    for (const canaryFile of ["index.js", "package.json"]) {
+      const absolutePath = resolve(extensionsRoot, entry.name, canaryFile);
+      if (existsSync(absolutePath)) {
+        requirements.add(posix.join("dist", "extensions", entry.name, canaryFile));
+      }
+    }
+  }
+
+  return [...requirements].toSorted();
+}
+
+export function collectMissingPackPaths(
+  paths: Iterable<string>,
+  requiredGroups: Iterable<RequiredPackPathGroup>,
+): string[] {
+  const availablePaths = paths instanceof Set ? paths : new Set(paths);
+  return [...requiredGroups]
+    .flatMap((group) => {
+      if (Array.isArray(group)) {
+        return group.some((path) => availablePaths.has(path)) ? [] : [group.join(" or ")];
+      }
+      return availablePaths.has(group) ? [] : [group];
+    })
     .toSorted();
 }
 
@@ -295,15 +339,10 @@ async function main() {
   const results = runPackDry();
   const files = results.flatMap((entry) => entry.files ?? []);
   const paths = new Set(files.map((file) => file.path));
-
-  const missing = requiredPathGroups
-    .flatMap((group) => {
-      if (Array.isArray(group)) {
-        return group.some((path) => paths.has(path)) ? [] : [group.join(" or ")];
-      }
-      return paths.has(group) ? [] : [group];
-    })
-    .toSorted();
+  const missing = collectMissingPackPaths(paths, [
+    ...requiredPathGroups,
+    ...collectBuiltArtifactPackRequirements(),
+  ]);
   const forbidden = collectForbiddenPackPaths(paths);
   const sizeErrors = collectPackUnpackedSizeErrors(results);
 

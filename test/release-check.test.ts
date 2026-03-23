@@ -1,8 +1,13 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   collectAppcastSparkleVersionErrors,
+  collectBuiltArtifactPackRequirements,
   collectBundledExtensionManifestErrors,
   collectForbiddenPackPaths,
+  collectMissingPackPaths,
   collectPackUnpackedSizeErrors,
 } from "../scripts/release-check.ts";
 
@@ -112,6 +117,43 @@ describe("collectForbiddenPackPaths", () => {
         "node_modules/.bin/openclaw",
       ]),
     ).toEqual(["extensions/tlon/node_modules/.bin/tlon", "node_modules/.bin/openclaw"]);
+  });
+});
+
+describe("collectBuiltArtifactPackRequirements", () => {
+  it("requires built control UI and bundled extension canaries when present", () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-release-check-"));
+    try {
+      fs.mkdirSync(path.join(repoRoot, "dist", "control-ui"), { recursive: true });
+      fs.writeFileSync(path.join(repoRoot, "dist", "control-ui", "index.html"), "<!doctype html>");
+
+      fs.mkdirSync(path.join(repoRoot, "dist", "extensions", "discord"), { recursive: true });
+      fs.writeFileSync(path.join(repoRoot, "dist", "extensions", "discord", "index.js"), "");
+      fs.writeFileSync(path.join(repoRoot, "dist", "extensions", "discord", "package.json"), "{}");
+
+      expect(collectBuiltArtifactPackRequirements(repoRoot)).toEqual([
+        "dist/control-ui/index.html",
+        "dist/extensions/discord/index.js",
+        "dist/extensions/discord/package.json",
+      ]);
+    } finally {
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("collectMissingPackPaths", () => {
+  it("flags missing exact and alternative required pack paths", () => {
+    expect(
+      collectMissingPackPaths(
+        ["dist/index.js", "dist/control-ui/index.html"],
+        [
+          ["dist/index.js", "dist/index.mjs"],
+          "dist/control-ui/index.html",
+          "dist/extensions/whatsapp/index.js",
+        ],
+      ),
+    ).toEqual(["dist/extensions/whatsapp/index.js"]);
   });
 });
 
