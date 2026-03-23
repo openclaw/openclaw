@@ -196,6 +196,13 @@ export class TelegramPollingSession {
     const runner = run(bot, this.opts.runnerOptions);
     this.#activeRunner = runner;
     const fetchAbortController = this.#activeFetchAbort;
+    const abortFetch = () => {
+      fetchAbortController?.abort();
+    };
+
+    if (this.opts.abortSignal && fetchAbortController) {
+      this.opts.abortSignal.addEventListener("abort", abortFetch, { once: true });
+    }
     let stopPromise: Promise<void> | undefined;
     let stalledRestart = false;
     let forceCycleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -291,6 +298,7 @@ export class TelegramPollingSession {
       if (forceCycleTimer) {
         clearTimeout(forceCycleTimer);
       }
+      this.opts.abortSignal?.removeEventListener("abort", abortFetch);
       this.opts.abortSignal?.removeEventListener("abort", stopOnAbort);
       await waitForGracefulStop(stopRunner);
       await waitForGracefulStop(stopBot);
