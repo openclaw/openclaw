@@ -292,9 +292,9 @@ describe("provider auth-choice contract", () => {
     });
 
     for (const dir of [mainAgentDir, kidAgentDir, workerAgentDir]) {
-      const stored = await readAuthProfilesForAgent<{ profiles?: Record<string, StoredAuthProfile> }>(
-        dir,
-      );
+      const stored = await readAuthProfilesForAgent<{
+        profiles?: Record<string, StoredAuthProfile>;
+      }>(dir);
       expect(stored.profiles?.["anthropic:default"]).toMatchObject({
         type: "token",
         provider: "anthropic",

@@ -222,8 +222,7 @@ function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
 export function shouldSyncSiblingAgentsForCredential(credential: AuthProfileCredential): boolean {
   return (
     credential.type === "oauth" ||
-    (credential.type === "token" &&
-      normalizeProviderIdForAuth(credential.provider) === "anthropic")
+    (credential.type === "token" && normalizeProviderIdForAuth(credential.provider) === "anthropic")
   );
 }
 
@@ -281,11 +280,6 @@ export async function writeOAuthCredentials(
     ...creds,
   };
 
-  writeAuthProfile(
-    profileId,
-    credential,
-    agentDir,
-    options,
-  );
+  writeAuthProfile(profileId, credential, agentDir, options);
   return profileId;
 }
