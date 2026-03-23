@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
@@ -19,6 +19,10 @@ describe("msteams directory", () => {
   const runtimeEnv = createDirectoryTestRuntime() as RuntimeEnv;
   const directorySelf = requireDirectorySelf(msteamsPlugin.directory);
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   describe("self()", () => {
     it("returns bot identity when credentials are configured", async () => {
       const cfg = {
@@ -36,6 +40,9 @@ describe("msteams directory", () => {
     });
 
     it("returns null when credentials are not configured", async () => {
+      vi.stubEnv("MSTEAMS_APP_ID", "");
+      vi.stubEnv("MSTEAMS_APP_PASSWORD", "");
+      vi.stubEnv("MSTEAMS_TENANT_ID", "");
       const cfg = { channels: {} } as unknown as OpenClawConfig;
       const result = await directorySelf({ cfg, runtime: runtimeEnv });
       expect(result).toBeNull();
