@@ -503,6 +503,70 @@ gateway_log="/tmp/openclaw-plugin-command-e2e.log"
 start_gateway "$gateway_log"
 wait_for_gateway_health
 
+echo "Testing /plugin install with auto-restart..."
+slash_install_dir="$(mktemp -d "/tmp/openclaw-plugin-slash-install.XXXXXX")"
+cat > "$slash_install_dir/package.json" <<'JSON'
+{
+  "name": "@openclaw/slash-install-plugin",
+  "version": "0.0.1",
+  "openclaw": { "extensions": ["./index.js"] }
+}
+JSON
+cat > "$slash_install_dir/index.js" <<'JS'
+module.exports = {
+  id: "slash-install-plugin",
+  name: "Slash Install Plugin",
+  register(api) {
+    api.registerGatewayMethod("demo.slash.install", async () => ({ ok: true }));
+  },
+};
+JS
+cat > "$slash_install_dir/openclaw.plugin.json" <<'JSON'
+{
+  "id": "slash-install-plugin",
+  "configSchema": {
+    "type": "object",
+    "properties": {}
+  }
+}
+JSON
+
+run_gateway_chat_json \
+  "plugin-e2e-install" \
+  "/plugin install $slash_install_dir" \
+  /tmp/plugin-command-install.json \
+  30000
+node - <<'NODE'
+const fs = require("node:fs");
+const payload = JSON.parse(fs.readFileSync("/tmp/plugin-command-install.json", "utf8"));
+const text = payload.text || "";
+if (!text.includes('Installed plugin "slash-install-plugin"')) {
+  throw new Error(`expected install confirmation, got:\n${text}`);
+}
+if (!text.includes("Restart the gateway to load plugins.")) {
+  throw new Error(`expected restart hint, got:\n${text}`);
+}
+console.log("ok");
+NODE
+
+wait_for_gateway_health
+run_gateway_chat_json "plugin-e2e-install-show" "/plugin show slash-install-plugin" /tmp/plugin-command-install-show.json
+node - <<'NODE'
+const fs = require("node:fs");
+const payload = JSON.parse(fs.readFileSync("/tmp/plugin-command-install-show.json", "utf8"));
+const text = payload.text || "";
+if (!text.includes('"status": "loaded"')) {
+  throw new Error(`expected loaded status after slash install, got:\n${text}`);
+}
+if (!text.includes('"enabled": true')) {
+  throw new Error(`expected enabled status after slash install, got:\n${text}`);
+}
+if (!text.includes('"demo.slash.install"')) {
+  throw new Error(`expected installed gateway method, got:\n${text}`);
+}
+console.log("ok");
+NODE
+
 run_gateway_chat_json "plugin-e2e-list" "/plugin list" /tmp/plugin-command-list.json
 node - <<'NODE'
 const fs = require("node:fs");
