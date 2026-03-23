@@ -147,7 +147,7 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     await buildGatewayInstallPlan({
-      env: {},
+      env: { HOME: isolatedHome },
       port: 3000,
       runtime: "node",
       warn,
@@ -166,7 +166,7 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: { HOME: isolatedHome },
       port: 3000,
       runtime: "node",
       config: {
@@ -195,7 +195,7 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: { HOME: isolatedHome },
       port: 3000,
       runtime: "node",
       config: {
@@ -216,7 +216,7 @@ describe("buildGatewayInstallPlan", () => {
     mockNodeGatewayPlanFixture();
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: { HOME: isolatedHome },
       port: 3000,
       runtime: "node",
       config: {
@@ -237,7 +237,7 @@ describe("buildGatewayInstallPlan", () => {
     mockNodeGatewayPlanFixture({ serviceEnvironment: {} });
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: { HOME: isolatedHome },
       port: 3000,
       runtime: "node",
       config: {
@@ -263,7 +263,7 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: { HOME: isolatedHome },
       port: 3000,
       runtime: "node",
       config: {
@@ -304,6 +304,7 @@ describe("buildGatewayInstallPlan", () => {
 
     const plan = await buildGatewayInstallPlan({
       env: {
+        HOME: isolatedHome,
         OPENAI_API_KEY: "sk-openai-test", // pragma: allowlist secret
         ANTHROPIC_TOKEN: "ant-test-token",
       },
@@ -333,7 +334,7 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: { HOME: isolatedHome },
       port: 3000,
       runtime: "node",
     });
