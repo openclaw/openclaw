@@ -185,7 +185,7 @@ function loadDiagnosticEventsModule() {
       findDistChunkByPrefix("diagnostic-events");
     if (distCandidate) {
       try {
-        diagnosticEventsModule = getJiti(true)(distCandidate);
+        diagnosticEventsModule = normalizeDiagnosticEventsModule(getJiti(true)(distCandidate));
         return diagnosticEventsModule;
       } catch {
         // Fall through to source path if dist is unavailable or stale.
@@ -193,10 +193,26 @@ function loadDiagnosticEventsModule() {
     }
   }
 
-  diagnosticEventsModule = getJiti(false)(
-    path.join(getPackageRoot(), "src", "infra", "diagnostic-events.ts"),
+  diagnosticEventsModule = normalizeDiagnosticEventsModule(
+    getJiti(false)(path.join(getPackageRoot(), "src", "infra", "diagnostic-events.ts")),
   );
   return diagnosticEventsModule;
+}
+
+function normalizeDiagnosticEventsModule(mod) {
+  if (!mod || typeof mod !== "object") {
+    return mod;
+  }
+  if (typeof mod.onDiagnosticEvent === "function") {
+    return mod;
+  }
+  if (typeof mod.r === "function") {
+    return {
+      ...mod,
+      onDiagnosticEvent: mod.r,
+    };
+  }
+  return mod;
 }
 
 function tryLoadMonolithicSdk() {
