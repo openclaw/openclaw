@@ -378,6 +378,14 @@ export function normalizeCronJobInput(
     }
   }
 
+  if ("beforeRun" in base) {
+    if (typeof base.beforeRun === "string" && base.beforeRun.trim()) {
+      next.beforeRun = base.beforeRun.trim();
+    } else {
+      delete next.beforeRun;
+    }
+  }
+
   if (isRecord(base.schedule)) {
     next.schedule = coerceSchedule(base.schedule);
   }
