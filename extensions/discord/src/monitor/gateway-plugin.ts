@@ -237,6 +237,15 @@ function createGatewayPlugin(params: {
     }
 
     override async registerClient(client: Parameters<GatewayPlugin["registerClient"]>[0]) {
+      // Set client reference immediately so that identify() works even if
+      // the lifecycle timeout handler calls connect() before this async
+      // method finishes.  Carbon's Client constructor does not await
+      // registerClient(), so there is a window where an external connect()
+      // call reaches identify() while this.client is still undefined —
+      // causing the Identify payload to be silently dropped and the
+      // gateway to never reach READY.
+      this.client = client;
+
       if (!this.gatewayInfo || this.gatewayInfoUsedFallback) {
         const resolved = await fetchDiscordGatewayInfoWithTimeout({
           token: client.options.token,
@@ -251,6 +260,15 @@ function createGatewayPlugin(params: {
         this.gatewayInfo = resolved.info;
         this.gatewayInfoUsedFallback = resolved.usedFallback;
       }
+
+      // If an external caller (e.g. the lifecycle readiness-timeout handler)
+      // already triggered connect() while we were fetching gateway metadata,
+      // skip super.registerClient to avoid tearing down the live WebSocket.
+      const gatewayState = this as unknown as { ws?: unknown; isConnecting?: boolean };
+      if (gatewayState.ws || gatewayState.isConnecting) {
+        return;
+      }
+
       return super.registerClient(client);
     }
 
