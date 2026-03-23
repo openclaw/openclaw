@@ -32,7 +32,12 @@
     ]
   },
   "unit": {
-    "isolated": [],
+    "isolated": [
+      {
+        "file": "src/cli/qr-dashboard.integration.test.ts",
+        "reason": "This CLI integration suite hoists runtime/config mocks and resets module state between qr and dashboard command imports; keep it in its own forked lane so shared unit-fast workers stay deterministic."
+      }
+    ],
     "threadPinned": []
   }
 }
