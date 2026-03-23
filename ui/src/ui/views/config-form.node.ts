@@ -14,6 +14,17 @@ import {
 
 const META_KEYS = new Set(["title", "description", "default", "nullable", "tags", "x-tags"]);
 
+function isDiscordAllowFromPath(path: Array<string | number>): boolean {
+  // 路径格式: ["channels", "discord", "allowFrom", index]
+  // 或: ["discord", "allowFrom", index]
+  if (path.length < 2) return false;
+  const lastIdx = path.length - 1;
+  if (typeof path[lastIdx] !== "number") return false; // 数组索引
+  return path[lastIdx - 1] === "allowFrom" &&
+         (path[lastIdx - 2] === "discord" ||
+          (path[lastIdx - 3] === "channels" && path[lastIdx - 2] === "discord"));
+}
+
 function isAnySchema(schema: JsonSchema): boolean {
   const keys = Object.keys(schema ?? {}).filter((key) => !META_KEYS.has(key));
   return keys.length === 0;
@@ -687,8 +698,22 @@ function renderTextInput(params: {
             if (inputType === "number" || sensitiveState.isRedacted) {
               return;
             }
-            const raw = (e.target as HTMLInputElement).value;
-            onPatch(path, raw.trim());
+            let raw = (e.target as HTMLInputElement).value;
+
+            // 修复 Discord allowFrom 双转义问题
+            // Issue: #52615
+            if (isDiscordAllowFromPath(path)) {
+              // 去除用户可能添加的外层引号
+              const trimmed = raw.trim();
+              if ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+                  (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+                raw = trimmed.slice(1, -1);
+              } else {
+                raw = trimmed;
+              }
+            }
+
+            onPatch(path, raw);
           }}
         />
         ${renderSensitiveToggleButton({
