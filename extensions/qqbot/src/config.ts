@@ -81,7 +81,6 @@ export function resolveQQBotAccount(
       dmPolicy: qqbot?.dmPolicy,
       allowFrom: qqbot?.allowFrom,
       systemPrompt: qqbot?.systemPrompt,
-      imageServerBaseUrl: qqbot?.imageServerBaseUrl,
       markdownSupport: qqbot?.markdownSupport ?? true,
     };
     appId = normalizeAppId(qqbot?.appId);
@@ -121,7 +120,6 @@ export function resolveQQBotAccount(
     clientSecret,
     secretSource,
     systemPrompt: accountConfig.systemPrompt,
-    imageServerBaseUrl: accountConfig.imageServerBaseUrl || process.env.QQBOT_IMAGE_SERVER_BASE_URL,
     markdownSupport: accountConfig.markdownSupport !== false,
     config: accountConfig,
   };
@@ -138,7 +136,6 @@ export function applyQQBotAccountConfig(
     clientSecret?: string;
     clientSecretFile?: string;
     name?: string;
-    imageServerBaseUrl?: string;
   },
 ): OpenClawConfig {
   const next = { ...cfg };
@@ -161,7 +158,6 @@ export function applyQQBotAccountConfig(
             ? { clientSecretFile: input.clientSecretFile }
             : {}),
         ...(input.name ? { name: input.name } : {}),
-        ...(input.imageServerBaseUrl ? { imageServerBaseUrl: input.imageServerBaseUrl } : {}),
       },
     };
   } else {
@@ -188,7 +184,6 @@ export function applyQQBotAccountConfig(
                 ? { clientSecretFile: input.clientSecretFile }
                 : {}),
             ...(input.name ? { name: input.name } : {}),
-            ...(input.imageServerBaseUrl ? { imageServerBaseUrl: input.imageServerBaseUrl } : {}),
           },
         },
       },

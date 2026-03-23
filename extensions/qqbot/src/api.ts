@@ -308,7 +308,8 @@ export async function apiRequest<T = unknown>(
   let rawBody: string;
   try {
     rawBody = await res.text();
-    console.log(`[qqbot-api] <<< Body:`, rawBody);
+    const logBody = rawBody.length > 200 ? rawBody.slice(0, 200) + "…" : rawBody;
+    console.log(`[qqbot-api] <<< Body (truncated):`, logBody);
     data = JSON.parse(rawBody) as T;
   } catch (err) {
     throw new Error(

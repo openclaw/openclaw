@@ -19,8 +19,6 @@ export interface ResolvedQQBotAccount {
   secretSource: "config" | "file" | "env" | "none";
   /** 系统提示词 */
   systemPrompt?: string;
-  /** 图床服务器公网地址 */
-  imageServerBaseUrl?: string;
   /** 是否支持 markdown 消息（默认 true） */
   markdownSupport: boolean;
   config: QQBotAccountConfig;
@@ -39,8 +37,6 @@ export interface QQBotAccountConfig {
   allowFrom?: string[];
   /** 系统提示词，会添加在用户消息前面 */
   systemPrompt?: string;
-  /** 图床服务器公网地址，用于发送图片，例如 http://your-ip:18765 */
-  imageServerBaseUrl?: string;
   /** 是否支持 markdown 消息（默认 true，设为 false 可禁用） */
   markdownSupport?: boolean;
   /**

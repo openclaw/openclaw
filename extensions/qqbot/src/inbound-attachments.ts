@@ -5,9 +5,9 @@
  * 并归类为统一的 ProcessedAttachments 结构供 gateway 消费。
  */
 
-import { downloadFile } from "./image-server.js";
 import { transcribeAudio, resolveSTTConfig } from "./stt.js";
 import { convertSilkToWav, isVoiceAttachment, formatDuration } from "./utils/audio-convert.js";
+import { downloadFile } from "./utils/file-utils.js";
 import { getQQBotMediaDir } from "./utils/platform.js";
 
 // ============ 类型定义 ============
