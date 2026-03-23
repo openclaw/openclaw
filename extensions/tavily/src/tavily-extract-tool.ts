@@ -1,8 +1,18 @@
 import { Type } from "@sinclair/typebox";
 import { jsonResult, readNumberParam, readStringParam } from "openclaw/plugin-sdk/agent-runtime";
-import { optionalStringEnum } from "openclaw/plugin-sdk/core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import { runTavilyExtract } from "./tavily-client.js";
+
+function optionalStringEnum<const T extends readonly string[]>(
+  values: T,
+  options?: { description?: string },
+) {
+  return Type.Optional(
+    Type.Union(values.map((value) => Type.Literal(value)) as never, {
+      description: options?.description,
+    }),
+  );
+}
 
 const TavilyExtractToolSchema = Type.Object(
   {
