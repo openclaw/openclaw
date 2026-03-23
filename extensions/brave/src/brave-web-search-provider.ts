@@ -592,6 +592,7 @@ export function createBraveWebSearchProvider(): WebSearchProviderPlugin {
     id: "brave",
     label: "Brave Search",
     hint: "Structured results · country/language/time filters",
+    credentialLabel: "Brave Search API key",
     envVars: ["BRAVE_API_KEY"],
     placeholder: "BSA...",
     signupUrl: "https://brave.com/search/api/",

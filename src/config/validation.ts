@@ -1,6 +1,8 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/registry.js";
+import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
+import { listBundledWebSearchPluginIds } from "../plugins/bundled-web-search-ids.js";
 import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
@@ -351,15 +353,56 @@ function validateConfigObjectWithPluginsBase(
   };
 
   let registryInfo: RegistryInfo | null = null;
+  let compatConfig: OpenClawConfig | null | undefined;
+
+  const ensureCompatConfig = (): OpenClawConfig => {
+    if (compatConfig !== undefined) {
+      return compatConfig ?? config;
+    }
+
+    const allow = config.plugins?.allow;
+    if (!Array.isArray(allow) || allow.length === 0) {
+      compatConfig = config;
+      return config;
+    }
+
+    const bundledWebSearchPluginIds = new Set(listBundledWebSearchPluginIds());
+    const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+    const seenCompatPluginIds = new Set<string>();
+    const compatPluginIds = loadPluginManifestRegistry({
+      config,
+      workspaceDir: workspaceDir ?? undefined,
+      env: opts.env,
+    })
+      .plugins.filter((plugin) => {
+        if (seenCompatPluginIds.has(plugin.id)) {
+          return false;
+        }
+        seenCompatPluginIds.add(plugin.id);
+        return plugin.origin === "bundled" && bundledWebSearchPluginIds.has(plugin.id);
+      })
+      .map((plugin) => plugin.id)
+      .toSorted((left, right) => left.localeCompare(right));
+
+    compatConfig = withBundledPluginAllowlistCompat({
+      config,
+      pluginIds: compatPluginIds,
+    });
+    return compatConfig ?? config;
+  };
 
   const ensureRegistry = (): RegistryInfo => {
     if (registryInfo) {
       return registryInfo;
     }
 
-    const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+    const effectiveConfig = ensureCompatConfig();
+    const workspaceDir = resolveAgentWorkspaceDir(
+      effectiveConfig,
+      resolveDefaultAgentId(effectiveConfig),
+    );
     const registry = loadPluginManifestRegistry({
-      config,
+      config: effectiveConfig,
       workspaceDir: workspaceDir ?? undefined,
       env: opts.env,
     });
@@ -393,7 +436,7 @@ function validateConfigObjectWithPluginsBase(
   const ensureNormalizedPlugins = (): ReturnType<typeof normalizePluginsConfig> => {
     const info = ensureRegistry();
     if (!info.normalizedPlugins) {
-      info.normalizedPlugins = normalizePluginsConfig(config.plugins);
+      info.normalizedPlugins = normalizePluginsConfig(ensureCompatConfig().plugins);
     }
     return info.normalizedPlugins;
   };

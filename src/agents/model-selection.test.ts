@@ -195,6 +195,15 @@ describe("model-selection", () => {
         expected: { provider: "google", model: "gemini-3.1-flash-lite-preview" },
       },
       {
+        name: "normalizes deprecated xai grok 4.20 beta ids",
+        variants: [
+          "xai/grok-4.20-experimental-beta-0304-reasoning",
+          "grok-4.20-experimental-beta-0304-reasoning",
+        ],
+        defaultProvider: "xai",
+        expected: { provider: "xai", model: "grok-4.20-beta-latest-reasoning" },
+      },
+      {
         name: "keeps OpenAI codex refs on the openai provider",
         variants: ["openai/gpt-5.3-codex", "gpt-5.3-codex"],
         defaultProvider: "openai",

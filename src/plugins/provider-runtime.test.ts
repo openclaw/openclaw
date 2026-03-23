@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectAugmentedCodexCatalog,
   expectCodexBuiltInSuppression,
@@ -6,7 +6,7 @@ import {
 } from "./provider-runtime.test-support.js";
 import type { ProviderPlugin, ProviderRuntimeModel } from "./types.js";
 
-type ResolvePluginProviders = typeof import("./providers.js").resolvePluginProviders;
+type ResolvePluginProviders = typeof import("./providers.runtime.js").resolvePluginProviders;
 type ResolveNonBundledProviderPluginIds =
   typeof import("./providers.js").resolveNonBundledProviderPluginIds;
 type ResolveOwningPluginIdsForProvider =
@@ -21,11 +21,14 @@ const resolveOwningPluginIdsForProviderMock = vi.fn<ResolveOwningPluginIdsForPro
 );
 
 vi.mock("./providers.js", () => ({
-  resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
   resolveNonBundledProviderPluginIds: (params: unknown) =>
     resolveNonBundledProviderPluginIdsMock(params as never),
   resolveOwningPluginIdsForProvider: (params: unknown) =>
     resolveOwningPluginIdsForProviderMock(params as never),
+}));
+
+vi.mock("./providers.runtime.js", () => ({
+  resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
 }));
 
 let augmentModelCatalogWithProviderPlugins: typeof import("./provider-runtime.js").augmentModelCatalogWithProviderPlugins;
@@ -65,7 +68,8 @@ const MODEL: ProviderRuntimeModel = {
 };
 
 describe("provider-runtime", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({
       augmentModelCatalogWithProviderPlugins,
       buildProviderAuthDoctorHintWithPlugin,
@@ -90,9 +94,6 @@ describe("provider-runtime", () => {
       runProviderDynamicModel,
       wrapProviderStreamFn,
     } = await import("./provider-runtime.js"));
-  });
-
-  beforeEach(() => {
     resetProviderRuntimeHookCacheForTest();
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue([]);

@@ -162,13 +162,20 @@ Enforcement points:
 
 ## sessions_spawn
 
-Spawn a sub-agent run in an isolated session and announce the result back to the requester chat channel.
+Spawn an isolated delegated session.
+
+- Default runtime: OpenClaw sub-agent (`runtime: "subagent"`).
+- ACP harness sessions use `runtime: "acp"` and follow ACP-specific targeting/policy rules.
+- This section focuses on sub-agent behavior unless noted otherwise. For ACP-specific behavior, see [ACP Agents](/tools/acp-agents).
 
 Parameters:
 
 - `task` (required)
+- `runtime?` (`subagent|acp`; defaults to `subagent`)
 - `label?` (optional; used for logs/UI)
-- `agentId?` (optional; spawn under another agent id if allowed)
+- `agentId?` (optional)
+  - `runtime: "subagent"`: target another OpenClaw agent id if allowed by `subagents.allowAgents`
+  - `runtime: "acp"`: target an ACP harness id if allowed by `acp.allowedAgents`
 - `model?` (optional; overrides the sub-agent model; invalid values error)
 - `thinking?` (optional; overrides thinking level for the sub-agent run)
 - `runTimeoutSeconds?` (defaults to `agents.defaults.subagents.runTimeoutSeconds` when set, otherwise `0`; when set, aborts the sub-agent run after N seconds)
@@ -181,12 +188,14 @@ Parameters:
 
 Allowlist:
 
-- `agents.list[].subagents.allowAgents`: list of agent ids allowed via `agentId` (`["*"]` to allow any). Default: only the requester agent.
+- `runtime: "subagent"`: `agents.list[].subagents.allowAgents` controls which OpenClaw agent ids are allowed via `agentId` (`["*"]` to allow any). Default: only the requester agent.
+- `runtime: "acp"`: `acp.allowedAgents` controls which ACP harness ids are allowed. This is a separate policy from `subagents.allowAgents`.
 - Sandbox inheritance guard: if the requester session is sandboxed, `sessions_spawn` rejects targets that would run unsandboxed.
 
 Discovery:
 
-- Use `agents_list` to discover which agent ids are allowed for `sessions_spawn`.
+- Use `agents_list` to discover allowed targets for `runtime: "subagent"`.
+- For `runtime: "acp"`, use configured ACP harness ids and `acp.allowedAgents`; `agents_list` does not list ACP harness targets.
 
 Behavior:
 

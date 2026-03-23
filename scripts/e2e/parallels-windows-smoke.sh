@@ -363,6 +363,31 @@ EOF
 )"
 }
 
+run_windows_retry() {
+  local label="$1"
+  local max_attempts="$2"
+  shift 2
+
+  local attempt rc
+  rc=0
+  for (( attempt = 1; attempt <= max_attempts; attempt++ )); do
+    printf '%s attempt %d/%d\n' "$label" "$attempt" "$max_attempts"
+    set +e
+    "$@"
+    rc=$?
+    set -e
+    if [[ $rc -eq 0 ]]; then
+      return 0
+    fi
+    warn "$label attempt $attempt failed (rc=$rc)"
+    if (( attempt < max_attempts )); then
+      wait_for_guest_ready >/dev/null 2>&1 || true
+      sleep 5
+    fi
+  done
+  return "$rc"
+}
+
 restore_snapshot() {
   local snapshot_id="$1"
   say "Restore snapshot $SNAPSHOT_HINT ($snapshot_id)"
@@ -721,13 +746,15 @@ install_latest_release() {
   if [[ -n "$INSTALL_VERSION" ]]; then
     version_flag_q="-Tag '$(ps_single_quote "$INSTALL_VERSION")' "
   fi
-  guest_powershell "$(cat <<EOF
+  local install_script
+  install_script="$(cat <<EOF
 \$ProgressPreference = 'SilentlyContinue'
 \$script = Invoke-RestMethod -Uri '$install_url_q'
 & ([scriptblock]::Create(\$script)) ${version_flag_q}-NoOnboard
 & (Join-Path \$env:APPDATA 'npm\openclaw.cmd') --version
 EOF
 )"
+  run_windows_retry "latest release installer" 2 guest_powershell "$install_script"
 }
 
 install_main_tgz() {
@@ -735,7 +762,8 @@ install_main_tgz() {
   local temp_name="$2"
   local tgz_url
   tgz_url="http://$host_ip:$HOST_PORT/$(basename "$MAIN_TGZ_PATH")"
-  guest_exec cmd.exe /d /s /c "set \"PATH=%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\cmd;%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\mingw64\\bin;%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\usr\\bin;%PATH%\" && curl.exe -fsSL \"$tgz_url\" -o \"%TEMP%\\$temp_name\" && npm.cmd install -g \"%TEMP%\\$temp_name\" --no-fund --no-audit && \"%APPDATA%\\npm\\openclaw.cmd\" --version"
+  run_windows_retry "main tgz install" 2 \
+    guest_exec cmd.exe /d /s /c "set \"PATH=%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\cmd;%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\mingw64\\bin;%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\usr\\bin;%PATH%\" && curl.exe -fsSL \"$tgz_url\" -o \"%TEMP%\\$temp_name\" && npm.cmd install -g \"%TEMP%\\$temp_name\" --no-fund --no-audit && \"%APPDATA%\\npm\\openclaw.cmd\" --version"
 }
 
 verify_version_contains() {
