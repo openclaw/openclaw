@@ -110,13 +110,42 @@ function isInspectorExecArgv(value: string): boolean {
   return (
     value === "--inspect" ||
     value.startsWith("--inspect=") ||
-    value === "--inspect-brk" ||
-    value.startsWith("--inspect-brk=") ||
-    value === "--inspect-port" ||
-    value.startsWith("--inspect-port=") ||
+    value.startsWith("--inspect-") ||
     value === "--debug-port" ||
     value.startsWith("--debug-port=")
   );
+}
+
+function isPreloadExecArgv(value: string): boolean {
+  return (
+    value === "--import" ||
+    value.startsWith("--import=") ||
+    value === "--require" ||
+    value.startsWith("--require=") ||
+    value === "-r" ||
+    value === "--loader" ||
+    value.startsWith("--loader=") ||
+    value === "--experimental-loader" ||
+    value.startsWith("--experimental-loader=")
+  );
+}
+
+function stripIntermediateExecArgv(execArgv: string[]): string[] {
+  const stripped: string[] = [];
+  for (let index = 0; index < execArgv.length; index += 1) {
+    const value = execArgv[index];
+    if (isInspectorExecArgv(value)) {
+      continue;
+    }
+    if (isPreloadExecArgv(value)) {
+      if (!value.includes("=")) {
+        index += 1;
+      }
+      continue;
+    }
+    stripped.push(value);
+  }
+  return stripped;
 }
 
 function buildSourceTreeRespawnPlan(packageRoot: string): {
@@ -124,10 +153,8 @@ function buildSourceTreeRespawnPlan(packageRoot: string): {
   cwd: string;
   env: NodeJS.ProcessEnv;
 } {
-  const wrapperExecArgv = process.execArgv.filter((value) => !isInspectorExecArgv(value));
+  const wrapperExecArgv = stripIntermediateExecArgv(process.execArgv);
   const runtimeCwd = process.cwd();
-  // Keep the original runtime cwd so relative preload/import flags in execArgv
-  // keep resolving exactly as they did for the current process.
   return {
     args: [
       ...wrapperExecArgv,

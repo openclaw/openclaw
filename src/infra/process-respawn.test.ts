@@ -267,7 +267,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
     const runNodePath = path.join(rootPath, "scripts", "run-node.mjs");
     const sourceEntryPath = path.join(rootPath, "src", "entry.ts");
     const tsconfigPath = path.join(rootPath, "tsconfig.json");
-    process.execArgv = ["--inspect=9229", "--trace-warnings", "--inspect-brk"];
+    process.execArgv = ["--inspect=9229", "--trace-warnings", "--inspect-wait", "--inspect-brk"];
     process.argv = ["/usr/local/bin/node", path.join(rootPath, "openclaw.mjs"), "gateway"];
     resolveOpenClawPackageRootSyncMock.mockReturnValue(rootPath);
     existsSyncMock.mockImplementation(
@@ -292,6 +292,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
           OPENCLAW_RUNNER_FORWARDED_EXEC_ARGV: JSON.stringify([
             "--inspect=9229",
             "--trace-warnings",
+            "--inspect-wait",
             "--inspect-brk",
           ]),
         }),
@@ -300,7 +301,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
     );
   });
 
-  it("keeps relative preload flags anchored to the original cwd", () => {
+  it("forwards preload flags only to the final hop while keeping the original cwd", () => {
     delete process.env.OPENCLAW_NO_RESPAWN;
     clearSupervisorHints();
     setPlatform("linux");
@@ -324,10 +325,14 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(result).toEqual({ mode: "spawned", pid: 6161 });
     expect(spawnMock).toHaveBeenCalledWith(
       process.execPath,
-      ["--import", "./loader.mjs", runNodePath, "gateway"],
+      [runNodePath, "gateway"],
       expect.objectContaining({
         cwd: "/tmp/openclaw-runtime",
         detached: true,
+        env: expect.objectContaining({
+          OPENCLAW_RUNNER_FORWARDED_EXEC_ARGV: JSON.stringify(["--import", "./loader.mjs"]),
+          OPENCLAW_RUNNER_RUNTIME_CWD: "/tmp/openclaw-runtime",
+        }),
         stdio: "inherit",
       }),
     );
