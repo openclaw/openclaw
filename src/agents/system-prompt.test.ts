@@ -147,6 +147,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "When a skill drives external API writes, assume rate limits: prefer fewer larger writes, avoid tight one-item loops, serialize bursts when possible, and respect 429/Retry-After.",
     );
+    expect(prompt).toContain(
+      "Instruction precedence (highest → lowest): SKILL.md (active skill) > AGENTS.md > TOOLS.md > SOUL.md.",
+    );
   });
 
   it("omits skills in minimal prompt mode when skillsPrompt is absent", () => {
