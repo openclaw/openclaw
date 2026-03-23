@@ -375,14 +375,16 @@ export function ChatPage() {
       if (!msgText.trim()) {
         return;
       }
-      const msgIndex = messages.indexOf(msg);
-      if (msgIndex === -1) {
-        return;
-      }
-      useChatStore.getState().truncateMessagesFrom(msgIndex);
-      void sendMessage(msgText);
+      // Nudge: re-send the same message to the gateway without duplicating in UI.
+      // The gateway adds it to the transcript and triggers a new agent turn.
+      // The WS chat event will update the UI with the response.
+      void sendRpc("chat.send", {
+        sessionKey: activeSessionKey,
+        message: `[Retry] ${msgText}`,
+        idempotencyKey: crypto.randomUUID(),
+      }).catch(() => {});
     },
-    [messages, isStreaming, sendMessage],
+    [isStreaming, activeSessionKey, sendRpc],
   );
 
   // Session actions
