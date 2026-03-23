@@ -169,40 +169,26 @@ Compared to the [Azure VM guide](/install/azure) (~\$195/month with Bastion), th
 
   </Step>
 
-  <Step title="Deploy the container app with managed identity">
-    Deploy the container app and enable system-assigned managed identity in one step:
+  <Step title="Create the container app with a placeholder image">
+    Create the container app using a public placeholder image to establish the system-assigned managed identity. The ACR image will be set in a later step after the identity is granted pull access.
 
     ```bash
     az containerapp create \
       -g "${RG}" -n "${ACA_APP}" \
       --environment "${ACA_ENV}" \
-      --image "${ACR_NAME}.azurecr.io/openclaw:latest" \
-      --registry-server "${ACR_NAME}.azurecr.io" \
-      --registry-identity system \
+      --image mcr.microsoft.com/k8se/quickstart:latest \
       --system-assigned \
       --target-port 18789 \
       --ingress external \
       --min-replicas 1 --max-replicas 1 \
-      --cpu 0.5 --memory 1Gi \
-      --env-vars \
-        "OPENCLAW_GATEWAY_PORT=18789" \
-        "OPENCLAW_HOME=/data/.openclaw" \
-      --args "gateway" "run" "--bind" "all" "--port" "18789"
+      --cpu 0.5 --memory 1Gi
     ```
 
-    `--registry-identity system` tells Container Apps to pull images using the app's managed identity instead of ACR admin credentials. No passwords to manage or rotate.
-
-    <Note>
-    Set `--min-replicas 1` to keep the Gateway always running. Scaling to 0 stops the Gateway.
-    OpenClaw is a single-instance gateway — do not scale above 1 replica.
-    Using 0.5 vCPU / 1 GiB keeps costs low. Scale up to `--cpu 1.0 --memory 2Gi` if you hit OOMs or need more concurrency.
-    </Note>
+    This creates the app and its system-assigned managed identity. The placeholder image starts successfully while we configure ACR access in the next steps.
 
   </Step>
 
-  <Step title="Grant ACR pull permission and restart the container">
-    The initial container start will fail because the managed identity does not have ACR pull permission yet. Grant the role, then trigger a new revision to retry the image pull:
-
+  <Step title="Grant ACR pull permission to the managed identity">
     ```bash
     IDENTITY_PRINCIPAL="$(az containerapp show -g "${RG}" -n "${ACA_APP}" \
       --query identity.principalId -o tsv)"
@@ -213,12 +199,30 @@ Compared to the [Azure VM guide](/install/azure) (~\$195/month with Bastion), th
       --assignee "${IDENTITY_PRINCIPAL}" \
       --role AcrPull \
       --scope "${ACR_ID}"
+    ```
 
-    # Force a new revision so the now-authorized identity retries the image pull
+  </Step>
+
+  <Step title="Switch to the ACR image">
+    Now that the identity has `AcrPull`, update the app to pull from your private registry and configure the OpenClaw Gateway:
+
+    ```bash
     az containerapp update \
       -g "${RG}" -n "${ACA_APP}" \
-      --image "${ACR_NAME}.azurecr.io/openclaw:latest"
+      --image "${ACR_NAME}.azurecr.io/openclaw:latest" \
+      --registry-server "${ACR_NAME}.azurecr.io" \
+      --registry-identity system \
+      --set-env-vars \
+        "OPENCLAW_GATEWAY_PORT=18789" \
+        "OPENCLAW_HOME=/data/.openclaw" \
+      --args "gateway" "run" "--bind" "all" "--port" "18789"
     ```
+
+    <Note>
+    Set `--min-replicas 1` to keep the Gateway always running. Scaling to 0 stops the Gateway.
+    OpenClaw is a single-instance gateway — do not scale above 1 replica.
+    Using 0.5 vCPU / 1 GiB keeps costs low. Scale up to `--cpu 1.0 --memory 2Gi` if you hit OOMs or need more concurrency.
+    </Note>
 
   </Step>
 
