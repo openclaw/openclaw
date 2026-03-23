@@ -2225,7 +2225,7 @@ export const registerTelegramHandlers = ({
             const sent = await bot.api.sendPhoto(
               Number(senderId),
               new InputFile(detectedImagePath),
-              { caption: streamText.trim() || queryText, disable_notification: true },
+              { caption: queryText, disable_notification: true },
             );
             const fileId = sent.photo.at(-1)!.file_id;
             await bot.api.deleteMessage(Number(senderId), sent.message_id).catch(() => {});
@@ -2233,7 +2233,7 @@ export const registerTelegramHandlers = ({
               .editMessageMediaInline(inlineMessageId, {
                 type: "photo",
                 media: fileId,
-                caption: streamText.trim() || queryText,
+                caption: queryText,
               })
               .then(() => runtime.log?.(`[telegram] inline image: edit ok query_id=${query.id}`))
               .catch((err) =>
