@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
+import type { OpenClawConfig } from "../config/config.js";
 import { openBoundaryFile, type BoundaryFileOpenResult } from "../infra/boundary-file-read.js";
 import { writeFileWithinRoot } from "../infra/fs-safe.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
@@ -71,6 +72,7 @@ type SandboxApplyPatchConfig = {
 type ApplyPatchOptions = {
   cwd: string;
   sandbox?: SandboxApplyPatchConfig;
+  config?: OpenClawConfig;
   /** Restrict patch paths to the workspace root (cwd). Default: true. Set false to opt out. */
   workspaceOnly?: boolean;
   signal?: AbortSignal;
@@ -83,7 +85,12 @@ const applyPatchSchema = Type.Object({
 });
 
 export function createApplyPatchTool(
-  options: { cwd?: string; sandbox?: SandboxApplyPatchConfig; workspaceOnly?: boolean } = {},
+  options: {
+    cwd?: string;
+    sandbox?: SandboxApplyPatchConfig;
+    config?: OpenClawConfig;
+    workspaceOnly?: boolean;
+  } = {},
 ): AgentTool<typeof applyPatchSchema, ApplyPatchToolDetails> {
   const cwd = options.cwd ?? process.cwd();
   const sandbox = options.sandbox;
@@ -110,6 +117,7 @@ export function createApplyPatchTool(
       const result = await applyPatch(input, {
         cwd,
         sandbox,
+        config: options.config,
         workspaceOnly,
         signal,
       });
@@ -266,6 +274,7 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
       await writeFileWithinRoot({
         rootDir: options.cwd,
         relativePath: relative,
+        config: options.config,
         data: content,
         encoding: "utf8",
       });
@@ -276,6 +285,7 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
           filePath,
           cwd: options.cwd,
           root: options.cwd,
+          config: options.config,
           allowFinalSymlinkForUnlink: true,
           allowFinalHardlinkForUnlink: true,
         });
@@ -288,6 +298,7 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
           filePath: dir,
           cwd: options.cwd,
           root: options.cwd,
+          config: options.config,
         });
       }
       await fs.mkdir(dir, { recursive: true });
@@ -318,6 +329,7 @@ async function resolvePatchPath(
         filePath: resolved.hostPath,
         cwd: options.cwd,
         root: options.cwd,
+        config: options.config,
         allowFinalSymlinkForUnlink: aliasPolicy.allowFinalSymlinkForUnlink,
         allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
       });
@@ -335,6 +347,7 @@ async function resolvePatchPath(
           filePath,
           cwd: options.cwd,
           root: options.cwd,
+          config: options.config,
           allowFinalSymlinkForUnlink: aliasPolicy.allowFinalSymlinkForUnlink,
           allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
         })

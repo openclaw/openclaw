@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   createRebindableDirectoryAlias,
   withRealpathSymlinkRebindRace,
@@ -200,6 +201,50 @@ describe("fs-safe", () => {
     await fs.writeFile(scopedPath, "scoped");
     const readScoped = createRootScopedReadFile({ rootDir: root });
     await expect(readScoped(scopedPath)).resolves.toEqual(Buffer.from("scoped"));
+  });
+
+  it("rejects reads outside privateMode allowedRoots", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-private-root-");
+    const cfg = {
+      privateMode: {
+        enabled: true,
+        filesystem: {
+          allowedRoots: [path.join(root, "allowed")],
+        },
+      },
+    } as OpenClawConfig;
+    await fs.mkdir(path.join(root, "blocked"), { recursive: true });
+    await fs.writeFile(path.join(root, "blocked", "secret.txt"), "secret");
+
+    await expect(
+      readFileWithinRoot({
+        rootDir: root,
+        relativePath: path.join("blocked", "secret.txt"),
+        config: cfg,
+      }),
+    ).rejects.toMatchObject({ code: "outside-workspace" });
+  });
+
+  it("rejects writes outside privateMode allowedRoots", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-private-write-root-");
+    const cfg = {
+      privateMode: {
+        enabled: true,
+        filesystem: {
+          allowedRoots: [path.join(root, "allowed")],
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      writeFileWithinRoot({
+        rootDir: root,
+        relativePath: path.join("blocked", "secret.txt"),
+        config: cfg,
+        data: "secret",
+        mkdir: true,
+      }),
+    ).rejects.toMatchObject({ code: "outside-workspace" });
   });
 
   it.runIf(process.platform !== "win32")("blocks symlink escapes under root", async () => {

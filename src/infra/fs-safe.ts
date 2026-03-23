@@ -5,7 +5,9 @@ import type { FileHandle } from "node:fs/promises";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "../config/config.js";
 import { logWarn } from "../logger.js";
+import { assertPrivateModeAllowedPath } from "../private-mode/filesystem.js";
 import { sameFileIdentity } from "./file-identity.js";
 import { runPinnedWriteHelper } from "./fs-pinned-write-helper.js";
 import { expandHomePrefix } from "./home-dir.js";
@@ -155,6 +157,7 @@ async function openVerifiedLocalFile(
 async function resolvePathWithinRoot(params: {
   rootDir: string;
   relativePath: string;
+  config?: OpenClawConfig;
 }): Promise<{ rootReal: string; rootWithSep: string; resolved: string }> {
   let rootReal: string;
   try {
@@ -171,12 +174,24 @@ async function resolvePathWithinRoot(params: {
   if (!isPathInside(rootWithSep, resolved)) {
     throw new SafeOpenError("outside-workspace", "file is outside workspace root");
   }
+  try {
+    assertPrivateModeAllowedPath({
+      config: params.config,
+      absolutePath: resolved,
+      requestedPath: params.relativePath,
+    });
+  } catch (err) {
+    throw new SafeOpenError("outside-workspace", err instanceof Error ? err.message : String(err), {
+      cause: err instanceof Error ? err : undefined,
+    });
+  }
   return { rootReal, rootWithSep, resolved };
 }
 
 export async function openFileWithinRoot(params: {
   rootDir: string;
   relativePath: string;
+  config?: OpenClawConfig;
   rejectHardlinks?: boolean;
 }): Promise<SafeOpenResult> {
   const { rootWithSep, resolved } = await resolvePathWithinRoot(params);
@@ -212,12 +227,14 @@ export async function openFileWithinRoot(params: {
 export async function readFileWithinRoot(params: {
   rootDir: string;
   relativePath: string;
+  config?: OpenClawConfig;
   rejectHardlinks?: boolean;
   maxBytes?: number;
 }): Promise<SafeLocalReadResult> {
   const opened = await openFileWithinRoot({
     rootDir: params.rootDir,
     relativePath: params.relativePath,
+    config: params.config,
     rejectHardlinks: params.rejectHardlinks,
   });
   try {
@@ -230,6 +247,7 @@ export async function readFileWithinRoot(params: {
 export async function readPathWithinRoot(params: {
   rootDir: string;
   filePath: string;
+  config?: OpenClawConfig;
   rejectHardlinks?: boolean;
   maxBytes?: number;
 }): Promise<SafeLocalReadResult> {
@@ -241,6 +259,7 @@ export async function readPathWithinRoot(params: {
   return await readFileWithinRoot({
     rootDir,
     relativePath,
+    config: params.config,
     rejectHardlinks: params.rejectHardlinks,
     maxBytes: params.maxBytes,
   });
@@ -248,6 +267,7 @@ export async function readPathWithinRoot(params: {
 
 export function createRootScopedReadFile(params: {
   rootDir: string;
+  config?: OpenClawConfig;
   rejectHardlinks?: boolean;
   maxBytes?: number;
 }): (filePath: string) => Promise<Buffer> {
@@ -256,6 +276,7 @@ export function createRootScopedReadFile(params: {
     const safeRead = await readPathWithinRoot({
       rootDir,
       filePath,
+      config: params.config,
       rejectHardlinks: params.rejectHardlinks,
       maxBytes: params.maxBytes,
     });
@@ -380,6 +401,7 @@ export async function resolveOpenedFileRealPathForHandle(
 export async function openWritableFileWithinRoot(params: {
   rootDir: string;
   relativePath: string;
+  config?: OpenClawConfig;
   mkdir?: boolean;
   mode?: number;
   truncateExisting?: boolean;
@@ -503,6 +525,7 @@ export async function openWritableFileWithinRoot(params: {
 export async function appendFileWithinRoot(params: {
   rootDir: string;
   relativePath: string;
+  config?: OpenClawConfig;
   data: string | Buffer;
   encoding?: BufferEncoding;
   mkdir?: boolean;
@@ -511,6 +534,7 @@ export async function appendFileWithinRoot(params: {
   const target = await openWritableFileWithinRoot({
     rootDir: params.rootDir,
     relativePath: params.relativePath,
+    config: params.config,
     mkdir: params.mkdir,
     truncateExisting: false,
     append: true,
@@ -547,6 +571,7 @@ export async function appendFileWithinRoot(params: {
 export async function writeFileWithinRoot(params: {
   rootDir: string;
   relativePath: string;
+  config?: OpenClawConfig;
   data: string | Buffer;
   encoding?: BufferEncoding;
   mkdir?: boolean;
@@ -559,6 +584,7 @@ export async function writeFileWithinRoot(params: {
   const pinned = await resolvePinnedWriteTargetWithinRoot({
     rootDir: params.rootDir,
     relativePath: params.relativePath,
+    config: params.config,
   });
 
   const identity = await runPinnedWriteHelper({
@@ -592,6 +618,7 @@ export async function copyFileWithinRoot(params: {
   sourcePath: string;
   rootDir: string;
   relativePath: string;
+  config?: OpenClawConfig;
   maxBytes?: number;
   mkdir?: boolean;
   rejectSourceHardlinks?: boolean;
@@ -616,6 +643,7 @@ export async function copyFileWithinRoot(params: {
     const pinned = await resolvePinnedWriteTargetWithinRoot({
       rootDir: params.rootDir,
       relativePath: params.relativePath,
+      config: params.config,
     });
     const sourceStream = source.handle.createReadStream();
     const identity = await runPinnedWriteHelper({
@@ -649,6 +677,7 @@ export async function copyFileWithinRoot(params: {
 export async function writeFileFromPathWithinRoot(params: {
   rootDir: string;
   relativePath: string;
+  config?: OpenClawConfig;
   sourcePath: string;
   mkdir?: boolean;
 }): Promise<void> {
@@ -656,6 +685,7 @@ export async function writeFileFromPathWithinRoot(params: {
     sourcePath: params.sourcePath,
     rootDir: params.rootDir,
     relativePath: params.relativePath,
+    config: params.config,
     mkdir: params.mkdir,
     rejectSourceHardlinks: true,
   });
@@ -664,6 +694,7 @@ export async function writeFileFromPathWithinRoot(params: {
 async function resolvePinnedWriteTargetWithinRoot(params: {
   rootDir: string;
   relativePath: string;
+  config?: OpenClawConfig;
 }): Promise<{
   rootReal: string;
   targetPath: string;
@@ -698,6 +729,7 @@ async function resolvePinnedWriteTargetWithinRoot(params: {
     const opened = await openFileWithinRoot({
       rootDir: params.rootDir,
       relativePath: params.relativePath,
+      config: params.config,
       rejectHardlinks: true,
     });
     try {
@@ -736,6 +768,7 @@ function normalizePinnedWriteError(error: unknown): Error {
 async function writeFileWithinRootLegacy(params: {
   rootDir: string;
   relativePath: string;
+  config?: OpenClawConfig;
   data: string | Buffer;
   encoding?: BufferEncoding;
   mkdir?: boolean;
@@ -743,6 +776,7 @@ async function writeFileWithinRootLegacy(params: {
   const target = await openWritableFileWithinRoot({
     rootDir: params.rootDir,
     relativePath: params.relativePath,
+    config: params.config,
     mkdir: params.mkdir,
     truncateExisting: false,
   });

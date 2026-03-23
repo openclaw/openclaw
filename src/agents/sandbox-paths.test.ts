@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { resolveSandboxedMediaSource } from "./sandbox-paths.js";
+import { assertSandboxPath, resolveSandboxedMediaSource } from "./sandbox-paths.js";
 
 async function withSandboxRoot<T>(run: (sandboxDir: string) => Promise<T>) {
   const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-media-"));
@@ -276,5 +277,47 @@ describe("resolveSandboxedMediaSource", () => {
       sandboxRoot: "/any/path",
     });
     expect(result).toBe("");
+  });
+});
+
+describe("assertSandboxPath privateMode", () => {
+  it("allows sandbox paths inside configured allowedRoots", async () => {
+    const cfg = {
+      privateMode: {
+        enabled: true,
+        filesystem: {
+          allowedRoots: ["/workspace/private"],
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await assertSandboxPath({
+      filePath: "/workspace/private/docs/a.txt",
+      cwd: "/workspace/private",
+      root: "/workspace/private",
+      config: cfg,
+    });
+
+    expect(result.resolved).toBe("/workspace/private/docs/a.txt");
+  });
+
+  it("rejects sandbox paths outside configured allowedRoots", async () => {
+    const cfg = {
+      privateMode: {
+        enabled: true,
+        filesystem: {
+          allowedRoots: ["/workspace/private/allowed"],
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      assertSandboxPath({
+        filePath: "/workspace/private/blocked/secret.txt",
+        cwd: "/workspace/private",
+        root: "/workspace/private",
+        config: cfg,
+      }),
+    ).rejects.toThrow(/allowedRoots/i);
   });
 });

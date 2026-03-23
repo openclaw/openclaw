@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   appendFileWithinRoot,
   SafeOpenError,
@@ -567,6 +568,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
   root: string,
   options?: {
     containerWorkdir?: string;
+    config?: OpenClawConfig;
   },
 ): AnyAgentTool {
   return {
@@ -583,7 +585,12 @@ export function wrapToolWorkspaceRootGuardWithOptions(
           root,
           containerWorkdir: options?.containerWorkdir,
         });
-        await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
+        await assertSandboxPath({
+          filePath: sandboxPath,
+          cwd: root,
+          root,
+          config: options?.config,
+        });
       }
       return tool.execute(toolCallId, normalized ?? args, signal, onUpdate);
     },
@@ -621,14 +628,20 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
 }
 
-export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
+export function createHostWorkspaceWriteTool(
+  root: string,
+  options?: { workspaceOnly?: boolean; config?: OpenClawConfig },
+) {
   const base = createWriteTool(root, {
     operations: createHostWriteOperations(root, options),
   }) as unknown as AnyAgentTool;
   return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
 }
 
-export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
+export function createHostWorkspaceEditTool(
+  root: string,
+  options?: { workspaceOnly?: boolean; config?: OpenClawConfig },
+) {
   const base = createEditTool(root, {
     operations: createHostEditOperations(root, options),
   }) as unknown as AnyAgentTool;
@@ -718,7 +731,10 @@ async function writeHostFile(absolutePath: string, content: string) {
   await fs.writeFile(resolved, content, "utf-8");
 }
 
-function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
+function createHostWriteOperations(
+  root: string,
+  options?: { workspaceOnly?: boolean; config?: OpenClawConfig },
+) {
   const workspaceOnly = options?.workspaceOnly ?? false;
 
   if (!workspaceOnly) {
@@ -737,7 +753,7 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
     mkdir: async (dir: string) => {
       const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
       const resolved = relative ? path.resolve(root, relative) : path.resolve(root);
-      await assertSandboxPath({ filePath: resolved, cwd: root, root });
+      await assertSandboxPath({ filePath: resolved, cwd: root, root, config: options?.config });
       await fs.mkdir(resolved, { recursive: true });
     },
     writeFile: async (absolutePath: string, content: string) => {
@@ -745,6 +761,7 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
       await writeFileWithinRoot({
         rootDir: root,
         relativePath: relative,
+        config: options?.config,
         data: content,
         mkdir: true,
       });
@@ -752,7 +769,10 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
   } as const;
 }
 
-function createHostEditOperations(root: string, options?: { workspaceOnly?: boolean }) {
+function createHostEditOperations(
+  root: string,
+  options?: { workspaceOnly?: boolean; config?: OpenClawConfig },
+) {
   const workspaceOnly = options?.workspaceOnly ?? false;
 
   if (!workspaceOnly) {
@@ -777,6 +797,7 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
       const safeRead = await readFileWithinRoot({
         rootDir: root,
         relativePath: relative,
+        config: options?.config,
       });
       return safeRead.buffer;
     },
@@ -785,6 +806,7 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
       await writeFileWithinRoot({
         rootDir: root,
         relativePath: relative,
+        config: options?.config,
         data: content,
         mkdir: true,
       });
@@ -805,6 +827,7 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
         const opened = await openFileWithinRoot({
           rootDir: root,
           relativePath: relative,
+          config: options?.config,
         });
         await opened.handle.close().catch(() => {});
       } catch (error) {

@@ -39,7 +39,6 @@ import {
   normalizeToolParams,
   patchToolSchemaForClaudeCompatibility,
   wrapToolMemoryFlushAppendOnlyWrite,
-  wrapToolWorkspaceRootGuard,
   wrapToolWorkspaceRootGuardWithOptions,
   wrapToolParamNormalization,
 } from "./pi-tools.read.js";
@@ -382,6 +381,7 @@ export function createOpenClawCodingTools(options?: {
           workspaceOnly
             ? wrapToolWorkspaceRootGuardWithOptions(sandboxed, sandboxRoot, {
                 containerWorkdir: sandbox.containerWorkdir,
+                config: options?.config,
               })
             : sandboxed,
         ];
@@ -391,7 +391,13 @@ export function createOpenClawCodingTools(options?: {
         modelContextWindowTokens: options?.modelContextWindowTokens,
         imageSanitization,
       });
-      return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
+      return [
+        workspaceOnly
+          ? wrapToolWorkspaceRootGuardWithOptions(wrapped, workspaceRoot, {
+              config: options?.config,
+            })
+          : wrapped,
+      ];
     }
     if (tool.name === "bash" || tool.name === execToolName) {
       return [];
@@ -400,15 +406,33 @@ export function createOpenClawCodingTools(options?: {
       if (sandboxRoot) {
         return [];
       }
-      const wrapped = createHostWorkspaceWriteTool(workspaceRoot, { workspaceOnly });
-      return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
+      const wrapped = createHostWorkspaceWriteTool(workspaceRoot, {
+        workspaceOnly,
+        config: options?.config,
+      });
+      return [
+        workspaceOnly
+          ? wrapToolWorkspaceRootGuardWithOptions(wrapped, workspaceRoot, {
+              config: options?.config,
+            })
+          : wrapped,
+      ];
     }
     if (tool.name === "edit") {
       if (sandboxRoot) {
         return [];
       }
-      const wrapped = createHostWorkspaceEditTool(workspaceRoot, { workspaceOnly });
-      return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
+      const wrapped = createHostWorkspaceEditTool(workspaceRoot, {
+        workspaceOnly,
+        config: options?.config,
+      });
+      return [
+        workspaceOnly
+          ? wrapToolWorkspaceRootGuardWithOptions(wrapped, workspaceRoot, {
+              config: options?.config,
+            })
+          : wrapped,
+      ];
     }
     return [tool];
   });
@@ -464,6 +488,7 @@ export function createOpenClawCodingTools(options?: {
             sandboxRoot && allowWorkspaceWrites
               ? { root: sandboxRoot, bridge: sandboxFsBridge! }
               : undefined,
+          config: options?.config,
           workspaceOnly: applyPatchWorkspaceOnly,
         });
   const tools: AnyAgentTool[] = [
@@ -477,6 +502,7 @@ export function createOpenClawCodingTools(options?: {
                   sandboxRoot,
                   {
                     containerWorkdir: sandbox.containerWorkdir,
+                    config: options?.config,
                   },
                 )
               : createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
@@ -486,6 +512,7 @@ export function createOpenClawCodingTools(options?: {
                   sandboxRoot,
                   {
                     containerWorkdir: sandbox.containerWorkdir,
+                    config: options?.config,
                   },
                 )
               : createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),

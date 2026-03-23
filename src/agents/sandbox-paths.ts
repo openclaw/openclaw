@@ -1,9 +1,11 @@
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, URL } from "node:url";
+import type { OpenClawConfig } from "../config/config.js";
 import { assertNoPathAliasEscape, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { assertPrivateModeAllowedPath } from "../private-mode/filesystem.js";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const HTTP_URL_RE = /^https?:\/\//i;
@@ -61,10 +63,16 @@ export async function assertSandboxPath(params: {
   filePath: string;
   cwd: string;
   root: string;
+  config?: OpenClawConfig;
   allowFinalSymlinkForUnlink?: boolean;
   allowFinalHardlinkForUnlink?: boolean;
 }) {
   const resolved = resolveSandboxPath(params);
+  assertPrivateModeAllowedPath({
+    config: params.config,
+    absolutePath: resolved.resolved,
+    requestedPath: params.filePath,
+  });
   const policy: PathAliasPolicy = {
     allowFinalSymlinkForUnlink: params.allowFinalSymlinkForUnlink,
     allowFinalHardlinkForUnlink: params.allowFinalHardlinkForUnlink,
