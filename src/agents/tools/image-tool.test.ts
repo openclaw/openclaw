@@ -4,12 +4,64 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import type {
+  ImageDescriptionRequest,
+  ImagesDescriptionRequest,
+  MediaUnderstandingProvider,
+} from "../../plugin-sdk/media-understanding.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import { minimaxUnderstandImage } from "../minimax-vlm.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
 import { makeZeroUsageSnapshot } from "../usage.js";
 import { __testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
+
+const imageProviderHarness = vi.hoisted(() => {
+  let providers = new Map<string, MediaUnderstandingProvider>();
+  return {
+    setProviders(next: MediaUnderstandingProvider[]) {
+      providers = new Map(next.map((provider) => [provider.id.toLowerCase(), provider]));
+    },
+    reset() {
+      providers = new Map();
+    },
+    buildProviderRegistry(overrides?: Record<string, MediaUnderstandingProvider>) {
+      const registry = new Map(providers);
+      for (const [id, provider] of Object.entries(overrides ?? {})) {
+        registry.set(id.toLowerCase(), provider);
+      }
+      return registry;
+    },
+    getMediaUnderstandingProvider(
+      id: string,
+      registry: Map<string, MediaUnderstandingProvider>,
+    ): MediaUnderstandingProvider | undefined {
+      return registry.get(id.toLowerCase()) ?? providers.get(id.toLowerCase());
+    },
+  };
+});
+
+vi.mock("../../media-understanding/runner.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../media-understanding/runner.js")>();
+  return {
+    ...actual,
+    buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+      imageProviderHarness.buildProviderRegistry(overrides),
+  };
+});
+
+vi.mock("../../media-understanding/provider-registry.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../media-understanding/provider-registry.js")>();
+  return {
+    ...actual,
+    getMediaUnderstandingProvider: (
+      id: string,
+      registry: Map<string, MediaUnderstandingProvider>,
+    ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+  };
+});
 
 async function writeAuthProfiles(agentDir: string, profiles: unknown) {
   await fs.mkdir(agentDir, { recursive: true });
@@ -146,6 +198,11 @@ function createMinimaxImageConfig(): OpenClawConfig {
         imageModel: { primary: "minimax/MiniMax-VL-01" },
       },
     },
+    plugins: {
+      entries: {
+        minimax: { enabled: true },
+      },
+    },
   };
 }
 
@@ -154,6 +211,95 @@ function createDefaultImageFallbackExpectation(primary: string) {
     primary,
     fallbacks: ["openai/gpt-5-mini", "anthropic/claude-opus-4-5"],
   };
+}
+
+const minimaxProvider = {
+  id: "minimax",
+  capabilities: ["image"],
+  describeImage: async (params: ImageDescriptionRequest) => ({
+    text: await minimaxUnderstandImage({
+      apiKey: process.env.MINIMAX_API_KEY ?? "",
+      prompt: params.prompt ?? "Describe the image.",
+      imageDataUrl: `data:${params.mime ?? "image/jpeg"};base64,${params.buffer.toString("base64")}`,
+    }),
+    model: "MiniMax-VL-01",
+  }),
+  describeImages: async (params: ImagesDescriptionRequest) => {
+    const parts: string[] = [];
+    for (const [index, image] of params.images.entries()) {
+      const text = await minimaxUnderstandImage({
+        apiKey: process.env.MINIMAX_API_KEY ?? "",
+        prompt:
+          params.images.length > 1
+            ? `${params.prompt ?? "Describe the image."}\n\nDescribe image ${index + 1} of ${params.images.length} independently.`
+            : (params.prompt ?? "Describe the image."),
+        imageDataUrl: `data:${image.mime ?? "image/jpeg"};base64,${image.buffer.toString("base64")}`,
+      });
+      parts.push(params.images.length > 1 ? `Image ${index + 1}:\n${text.trim()}` : text.trim());
+    }
+    return {
+      text: parts.join("\n\n").trim(),
+      model: "MiniMax-VL-01",
+    };
+  },
+} satisfies MediaUnderstandingProvider;
+
+async function describeMoonshotImage(
+  params: ImageDescriptionRequest,
+): Promise<{ text: string; model: string }> {
+  const baseUrl =
+    params.cfg.models?.providers?.moonshot?.baseUrl?.trim() ?? "https://api.moonshot.ai/v1";
+  await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${process.env.MOONSHOT_API_KEY ?? ""}`,
+    },
+    body: JSON.stringify({
+      model: params.model,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: params.prompt ?? "Describe the image." },
+            {
+              type: "image_url",
+              image_url: {
+                url: `data:${params.mime ?? "image/jpeg"};base64,${params.buffer.toString("base64")}`,
+              },
+            },
+          ],
+        },
+      ],
+    }),
+  });
+  return { text: "ok moonshot", model: params.model };
+}
+
+async function describeMoonshotImages(
+  params: ImagesDescriptionRequest,
+): Promise<{ text: string; model: string }> {
+  const [first] = params.images;
+  if (!first) {
+    return { text: "", model: params.model };
+  }
+  return await describeMoonshotImage({
+    ...params,
+    buffer: first.buffer,
+    fileName: first.fileName,
+    mime: first.mime,
+  });
+}
+
+const moonshotProvider = {
+  id: "moonshot",
+  capabilities: ["image"],
+  describeImage: describeMoonshotImage,
+  describeImages: describeMoonshotImages,
+} satisfies MediaUnderstandingProvider;
+
+function installImageUnderstandingProviderStubs(...providers: MediaUnderstandingProvider[]) {
+  imageProviderHarness.setProviders(providers);
 }
 
 function makeModelDefinition(id: string, input: Array<"text" | "image">): ModelDefinitionConfig {
@@ -255,6 +401,14 @@ describe("image tool implicit imageModel config", () => {
     "GH_TOKEN",
     "GITHUB_TOKEN",
   ]);
+
+  beforeEach(() => {
+    installImageUnderstandingProviderStubs(minimaxProvider, moonshotProvider);
+  });
+
+  afterEach(() => {
+    imageProviderHarness.reset();
+  });
 
   it("stays disabled without auth when no pairing is possible", async () => {
     await withTempAgentDir(async (agentDir) => {
@@ -698,14 +852,20 @@ describe("image tool MiniMax VLM routing", () => {
     "GITHUB_TOKEN",
   ]);
 
+  beforeEach(() => {
+    installImageUnderstandingProviderStubs(minimaxProvider);
+  });
+
+  afterEach(() => {
+    imageProviderHarness.reset();
+  });
+
   async function createMinimaxVlmFixture(baseResp: { status_code: number; status_msg: string }) {
     const fetch = stubMinimaxFetch(baseResp, baseResp.status_code === 0 ? "ok" : "");
 
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-minimax-vlm-"));
     vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { model: { primary: "minimax/MiniMax-M2.7" } } },
-    };
+    const cfg = createMinimaxImageConfig();
     const tool = createRequiredImageTool({ config: cfg, agentDir });
     return { fetch, tool };
   }
