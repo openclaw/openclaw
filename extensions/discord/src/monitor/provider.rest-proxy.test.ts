@@ -9,7 +9,8 @@ const { undiciFetchMock, proxyAgentSpy } = vi.hoisted(() => ({
 vi.mock("undici", () => {
   class ProxyAgent {
     proxyUrl: string;
-    constructor(proxyUrl: string) {
+    constructor(opts: string | { uri: string }) {
+      const proxyUrl = typeof opts === "string" ? opts : opts.uri;
       if (proxyUrl === "bad-proxy") {
         throw new Error("bad proxy");
       }

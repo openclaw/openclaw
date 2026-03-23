@@ -12,7 +12,7 @@ export function resolveDiscordRestFetch(
     return fetch;
   }
   try {
-    const agent = new ProxyAgent(proxy);
+    const agent = new ProxyAgent({ uri: proxy, connect: { keepAlive: false } });
     const fetcher = ((input: RequestInfo | URL, init?: RequestInit) =>
       undiciFetch(input as string | URL, {
         ...(init as Record<string, unknown>),
