@@ -116,25 +116,17 @@ describe("browser server-context ensureBrowserAvailable", () => {
       setupEnsureBrowserAvailableHarness();
     const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
 
-    isChromeReachable
-      .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(true);
+    isChromeReachable.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     isChromeCdpReady.mockResolvedValueOnce(true);
 
     await expect(profile.ensureBrowserAvailable()).resolves.toBeUndefined();
 
-    expect(isChromeReachable).toHaveBeenNthCalledWith(
-      1,
-      "http://127.0.0.1:18800",
-      undefined,
-      { allowPrivateNetwork: true },
-    );
-    expect(isChromeReachable).toHaveBeenNthCalledWith(
-      2,
-      "http://127.0.0.1:18800",
-      1000,
-      { allowPrivateNetwork: true },
-    );
+    expect(isChromeReachable).toHaveBeenNthCalledWith(1, "http://127.0.0.1:18800", undefined, {
+      allowPrivateNetwork: true,
+    });
+    expect(isChromeReachable).toHaveBeenNthCalledWith(2, "http://127.0.0.1:18800", 1000, {
+      allowPrivateNetwork: true,
+    });
     expect(launchOpenClawChrome).not.toHaveBeenCalled();
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
   });
