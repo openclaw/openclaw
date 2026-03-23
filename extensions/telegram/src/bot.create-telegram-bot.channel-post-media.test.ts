@@ -11,18 +11,9 @@ const {
   telegramBotRuntimeForTest,
 } = harness;
 
-const { createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest } =
-  await import("./bot.js");
-
-setTelegramBotRuntimeForTest(
-  telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
-);
-
-const createTelegramBot = (opts: Parameters<typeof createTelegramBotBase>[0]) =>
-  createTelegramBotBase({
-    ...opts,
-    telegramDeps: telegramBotDepsForTest,
-  });
+let createTelegramBot: (
+  opts: Parameters<typeof import("./bot.js").createTelegramBot>[0],
+) => ReturnType<typeof import("./bot.js").createTelegramBot>;
 
 const loadConfig = getLoadConfigMock();
 
@@ -69,6 +60,20 @@ function resolveFlushTimer(setTimeoutSpy: ReturnType<typeof vi.spyOn>) {
 }
 
 describe("createTelegramBot channel_post media", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    const { createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest } =
+      await import("./bot.js");
+    setTelegramBotRuntimeForTest(
+      telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
+    );
+    createTelegramBot = (opts) =>
+      createTelegramBotBase({
+        ...opts,
+        telegramDeps: telegramBotDepsForTest,
+      });
+  });
+
   it("buffers channel_post media groups and processes them together", async () => {
     setOpenChannelPostConfig();
 
