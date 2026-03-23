@@ -25,7 +25,9 @@ env:
 
 jobs:
   preflight_macos_release:
-    runs-on: macos-latest
+    # Use GitHub's xlarge macOS runner because release packaging is
+    # Swift-heavy and benefits from the faster hosted hardware tier.
+    runs-on: macos-latest-xlarge
     permissions:
       contents: read
     steps:
@@ -58,6 +60,14 @@ jobs:
           sudo xcode-select -s /Applications/Xcode_26.1.app
           xcodebuild -version
           swift --version
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v5
+        with:
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-swiftpm-release-${{ hashFiles('apps/macos/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-swiftpm-release-
 
       - name: Ensure matching GitHub release exists
         env:
@@ -94,18 +104,6 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=4096
         run: pnpm release:check
 
-      - name: Swift build
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3; do
-            if swift build --package-path apps/macos --configuration release; then
-              exit 0
-            fi
-            echo "swift build failed (attempt $attempt/3). Retrying…"
-            sleep $((attempt * 20))
-          done
-          exit 1
-
       - name: Swift test
         run: |
           set -euo pipefail
@@ -119,18 +117,31 @@ jobs:
           exit 1
 
       - name: Package macOS release with ad-hoc signing
+        id: package_preflight
         env:
-          APP_VERSION: ${{ steps.package_version.outputs.value }}
           BUNDLE_ID: ai.openclaw.mac
           BUILD_CONFIG: release
           CODESIGN_TIMESTAMP: "off"
           SIGN_IDENTITY: "-"
-          SKIP_NOTARIZE: "1"
           SKIP_PNPM_INSTALL: "1"
           SKIP_TSC: "1"
           SKIP_UI_BUILD: "1"
           SPARKLE_FEED_URL: ${{ env.SPARKLE_FEED_URL }}
-        run: scripts/package-mac-dist.sh
+        run: |
+          set -euo pipefail
+          scripts/package-mac-app.sh
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" dist/OpenClaw.app/Contents/Info.plist)
+          ZIP_PATH="dist/OpenClaw-${VERSION}.zip"
+          rm -f "$ZIP_PATH"
+          ditto -c -k --sequesterRsrc --keepParent dist/OpenClaw.app "$ZIP_PATH"
+          echo "zip_path=$ZIP_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Upload preflight macOS artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-preflight-${{ inputs.tag }}
+          path: ${{ steps.package_preflight.outputs.zip_path }}
+          if-no-files-found: error
 
   validate_publish_dispatch_ref:
     if: ${{ !inputs.preflight_only }}
@@ -151,7 +162,7 @@ jobs:
   publish_macos_release:
     needs: [preflight_macos_release, validate_publish_dispatch_ref]
     if: ${{ !inputs.preflight_only }}
-    runs-on: macos-latest
+    runs-on: macos-latest-xlarge
     environment: mac-release
     concurrency:
       # Stable releases all derive the same shared appcast.xml; serialize those
@@ -190,6 +201,14 @@ jobs:
           sudo xcode-select -s /Applications/Xcode_26.1.app
           xcodebuild -version
           swift --version
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v5
+        with:
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-swiftpm-release-${{ hashFiles('apps/macos/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-swiftpm-release-
 
       - name: Ensure matching GitHub release exists
         env:
