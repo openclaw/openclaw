@@ -1,9 +1,27 @@
 import { describe, expect, it } from "vitest";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import {
   createDefaultModelPresetAppliers,
   createDefaultModelsPresetAppliers,
   createModelCatalogPresetAppliers,
 } from "./provider-onboarding-config.js";
+
+function createModel(id: string, name: string): ModelDefinitionConfig {
+  return {
+    id,
+    name,
+    reasoning: false,
+    input: ["text"],
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow: 128_000,
+    maxTokens: 8_192,
+  };
+}
 
 describe("provider onboarding preset appliers", () => {
   it("creates provider and primary-model appliers for a default model preset", () => {
@@ -13,10 +31,7 @@ describe("provider onboarding preset appliers", () => {
         providerId: "demo",
         api: "openai-completions" as const,
         baseUrl: "https://demo.test/v1",
-        defaultModel: {
-          id: "demo-default",
-          name: "Demo Default",
-        },
+        defaultModel: createModel("demo-default", "Demo Default"),
         defaultModelId: "demo-default",
         aliases: [{ modelRef: "demo/demo-default", alias: "Demo" }],
       }),
@@ -43,10 +58,7 @@ describe("provider onboarding preset appliers", () => {
         providerId: "demo",
         api: "openai-completions" as const,
         baseUrl,
-        defaultModels: [
-          { id: "a", name: "Model A" },
-          { id: "b", name: "Model B" },
-        ],
+        defaultModels: [createModel("a", "Model A"), createModel("b", "Model B")],
         aliases: [{ modelRef: "demo/a", alias: "Demo A" }],
       }),
     });
@@ -72,8 +84,8 @@ describe("provider onboarding preset appliers", () => {
         api: "openai-completions" as const,
         baseUrl: "https://catalog.test/v1",
         catalogModels: [
-          { id: "default", name: "Catalog Default" },
-          { id: "backup", name: "Catalog Backup" },
+          createModel("default", "Catalog Default"),
+          createModel("backup", "Catalog Backup"),
         ],
         aliases: ["catalog/default", { modelRef: "catalog/default", alias: "Catalog Default" }],
       }),
