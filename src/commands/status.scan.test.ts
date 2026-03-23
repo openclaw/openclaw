@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loggingState } from "../logging/state.js";
 
 const mocks = vi.hoisted(() => ({
   resolveConfigPath: vi.fn(() => `/tmp/openclaw-status-scan-missing-${process.pid}.json`),
@@ -18,9 +19,17 @@ const mocks = vi.hoisted(() => ({
   buildPluginCompatibilityNotices: vi.fn(() => []),
 }));
 
+let originalForceStderr: boolean;
+
 beforeEach(() => {
   vi.clearAllMocks();
+  originalForceStderr = loggingState.forceConsoleToStderr;
+  loggingState.forceConsoleToStderr = false;
   mocks.hasPotentialConfiguredChannels.mockReturnValue(false);
+});
+
+afterEach(() => {
+  loggingState.forceConsoleToStderr = originalForceStderr;
 });
 
 vi.mock("../channels/config-presence.js", () => ({
@@ -141,7 +150,7 @@ describe("scanStatus", () => {
       url: "ws://127.0.0.1:18789",
       urlSource: "default",
     });
-    mocks.resolveGatewayProbeAuthResolution.mockReturnValue({
+    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
       auth: {},
       warning: undefined,
     });
@@ -202,7 +211,7 @@ describe("scanStatus", () => {
       url: "ws://127.0.0.1:18789",
       urlSource: "default",
     });
-    mocks.resolveGatewayProbeAuthResolution.mockReturnValue({
+    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
       auth: {},
       warning: undefined,
     });
@@ -254,7 +263,7 @@ describe("scanStatus", () => {
       url: "ws://127.0.0.1:18789",
       urlSource: "default",
     });
-    mocks.resolveGatewayProbeAuthResolution.mockReturnValue({
+    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
       auth: {},
       warning: undefined,
     });
@@ -273,6 +282,97 @@ describe("scanStatus", () => {
     await scanStatus({ json: true }, {} as never);
 
     expect(mocks.buildPluginCompatibilityNotices).not.toHaveBeenCalled();
+  });
+
+  it("skips plugin compatibility loading for status --json even with configured channels", async () => {
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+    mocks.readBestEffortConfig.mockResolvedValue({
+      session: {},
+      gateway: {},
+      channels: { discord: {} },
+    });
+    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
+      resolvedConfig: {
+        session: {},
+        gateway: {},
+        channels: { discord: {} },
+      },
+      diagnostics: [],
+    });
+    mocks.getUpdateCheckResult.mockResolvedValue({
+      installKind: "git",
+      git: null,
+      registry: null,
+    });
+    mocks.getAgentLocalStatuses.mockResolvedValue({
+      defaultId: "main",
+      agents: [],
+    });
+    mocks.getStatusSummary.mockResolvedValue({
+      linkChannel: undefined,
+      sessions: { count: 0, paths: [], defaults: {}, recent: [] },
+    });
+    mocks.buildGatewayConnectionDetails.mockReturnValue({
+      url: "ws://127.0.0.1:18789",
+      urlSource: "default",
+    });
+    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
+      auth: {},
+      warning: undefined,
+    });
+    mocks.probeGateway.mockResolvedValue({
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: null,
+      error: "timeout",
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    await scanStatus({ json: true }, {} as never);
+
+    expect(mocks.buildPluginCompatibilityNotices).not.toHaveBeenCalled();
+  });
+
+  it("skips gateway and update probes on cold-start status paths", async () => {
+    mocks.readBestEffortConfig.mockResolvedValue({
+      session: {},
+      plugins: { enabled: false },
+      gateway: {},
+    });
+    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
+      resolvedConfig: {
+        session: {},
+        plugins: { enabled: false },
+        gateway: {},
+      },
+      diagnostics: [],
+    });
+    mocks.getAgentLocalStatuses.mockResolvedValue({
+      defaultId: "main",
+      agents: [],
+    });
+    mocks.getStatusSummary.mockResolvedValue({
+      linkChannel: undefined,
+      sessions: { count: 0, paths: [], defaults: {}, recent: [] },
+    });
+    mocks.buildGatewayConnectionDetails.mockReturnValue({
+      url: "ws://127.0.0.1:18789",
+      urlSource: "default",
+    });
+    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
+      auth: {},
+      warning: undefined,
+    });
+
+    await scanStatus({ json: true }, {} as never);
+    await scanStatus({ json: false }, {} as never);
+
+    expect(mocks.getUpdateCheckResult).not.toHaveBeenCalled();
+    expect(mocks.probeGateway).not.toHaveBeenCalled();
   });
 
   it("skips memory backend inspection for default memory-core with no existing store", async () => {
@@ -304,7 +404,7 @@ describe("scanStatus", () => {
       url: "ws://127.0.0.1:18789",
       urlSource: "default",
     });
-    mocks.resolveGatewayProbeAuthResolution.mockReturnValue({
+    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
       auth: {},
       warning: undefined,
     });
@@ -372,7 +472,7 @@ describe("scanStatus", () => {
       url: "ws://127.0.0.1:18789",
       urlSource: "default",
     });
-    mocks.resolveGatewayProbeAuthResolution.mockReturnValue({
+    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
       auth: {},
       warning: undefined,
     });
@@ -444,7 +544,7 @@ describe("scanStatus", () => {
       url: "ws://127.0.0.1:18789",
       urlSource: "default",
     });
-    mocks.resolveGatewayProbeAuthResolution.mockReturnValue({
+    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
       auth: {},
       warning: undefined,
     });
@@ -465,6 +565,8 @@ describe("scanStatus", () => {
     expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith({
       scope: "configured-channels",
     });
+    // Verify plugin logs were routed to stderr during loading and restored after
+    expect(loggingState.forceConsoleToStderr).toBe(false);
     expect(mocks.probeGateway).toHaveBeenCalledWith(
       expect.objectContaining({ detailLevel: "presence" }),
     );
@@ -507,7 +609,7 @@ describe("scanStatus", () => {
       url: "ws://127.0.0.1:18789",
       urlSource: "default",
     });
-    mocks.resolveGatewayProbeAuthResolution.mockReturnValue({
+    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
       auth: {},
       warning: undefined,
     });

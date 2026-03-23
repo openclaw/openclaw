@@ -22,6 +22,7 @@ if (process.getMaxListeners() > 0 && process.getMaxListeners() < TEST_PROCESS_MA
   process.setMaxListeners(TEST_PROCESS_MAX_LISTENERS);
 }
 
+import { createTopLevelChannelReplyToModeResolver } from "../src/channels/plugins/threading-helpers.js";
 import type {
   ChannelId,
   ChannelOutboundAdapter,
@@ -75,6 +76,95 @@ const pickSendFn = (id: ChannelId, deps?: OutboundSendDeps) => {
   return deps?.[id] as ((...args: unknown[]) => Promise<unknown>) | undefined;
 };
 
+function resolveSlackStubReplyToMode(params: {
+  cfg: OpenClawConfig;
+  chatType?: string | null;
+}): "off" | "first" | "all" {
+  const entry = (
+    params.cfg.channels as
+      | Record<
+          string,
+          {
+            replyToMode?: "off" | "first" | "all";
+            replyToModeByChatType?: Partial<
+              Record<"direct" | "group" | "channel", "off" | "first" | "all">
+            >;
+            dm?: { replyToMode?: "off" | "first" | "all" };
+          }
+        >
+      | undefined
+  )?.slack;
+  const normalizedChatType = params.chatType?.trim().toLowerCase();
+  if (
+    normalizedChatType === "direct" ||
+    normalizedChatType === "group" ||
+    normalizedChatType === "channel"
+  ) {
+    const byChatType = entry?.replyToModeByChatType?.[normalizedChatType];
+    if (byChatType) {
+      return byChatType;
+    }
+    if (normalizedChatType === "direct" && entry?.dm?.replyToMode) {
+      return entry.dm.replyToMode;
+    }
+  }
+  return entry?.replyToMode ?? "off";
+}
+
+type VitestEvaluatedModuleNode = {
+  promise?: unknown;
+  exports?: unknown;
+  evaluated?: boolean;
+  importers: Set<string>;
+};
+
+type VitestEvaluatedModules = {
+  idToModuleMap: Map<string, VitestEvaluatedModuleNode>;
+};
+
+const resetVitestWorkerModules = (resetMocks: boolean) => {
+  const workerState = (
+    globalThis as typeof globalThis & {
+      __vitest_worker__?: {
+        evaluatedModules?: VitestEvaluatedModules;
+      };
+    }
+  ).__vitest_worker__;
+  const modules = workerState?.evaluatedModules;
+  if (!modules) {
+    return;
+  }
+
+  const skipPaths = [
+    /\/vitest\/dist\//,
+    /vitest-virtual-\w+\/dist/u,
+    /@vitest\/dist/u,
+    ...(resetMocks ? [] : [/^mock:/u]),
+  ];
+
+  modules.idToModuleMap.forEach((node, modulePath) => {
+    if (skipPaths.some((pattern) => pattern.test(modulePath))) {
+      return;
+    }
+    node.promise = undefined;
+    node.exports = undefined;
+    node.evaluated = false;
+    node.importers.clear();
+  });
+};
+
+const resetVitestWorkerFileState = () => {
+  const mocker = (
+    globalThis as typeof globalThis & {
+      __vitest_mocker__?: {
+        reset?: () => void;
+      };
+    }
+  ).__vitest_mocker__;
+  mocker?.reset?.();
+  resetVitestWorkerModules(true);
+};
+
 const createStubOutbound = (
   id: ChannelId,
   deliveryMode: ChannelOutboundAdapter["deliveryMode"] = "direct",
@@ -110,6 +200,11 @@ const createStubPlugin = (params: {
   aliases?: string[];
   deliveryMode?: ChannelOutboundAdapter["deliveryMode"];
   preferSessionLookupForAnnounceTarget?: boolean;
+  resolveReplyToMode?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    chatType?: string | null;
+  }) => "off" | "first" | "all";
 }): ChannelPlugin => ({
   id: params.id,
   meta: {
@@ -122,6 +217,11 @@ const createStubPlugin = (params: {
     preferSessionLookupForAnnounceTarget: params.preferSessionLookupForAnnounceTarget,
   },
   capabilities: { chatTypes: ["direct", "group"] },
+  threading: params.resolveReplyToMode
+    ? {
+        resolveReplyToMode: params.resolveReplyToMode,
+      }
+    : undefined,
   config: {
     listAccountIds: (cfg: OpenClawConfig) => {
       const channels = cfg.channels as Record<string, unknown> | undefined;
@@ -181,18 +281,30 @@ const createDefaultRegistry = () =>
   createTestRegistry([
     {
       pluginId: "discord",
-      plugin: createStubPlugin({ id: "discord", label: "Discord" }),
+      plugin: createStubPlugin({
+        id: "discord",
+        label: "Discord",
+        resolveReplyToMode: createTopLevelChannelReplyToModeResolver("discord"),
+      }),
       source: "test",
     },
     {
       pluginId: "slack",
-      plugin: createStubPlugin({ id: "slack", label: "Slack" }),
+      plugin: createStubPlugin({
+        id: "slack",
+        label: "Slack",
+        resolveReplyToMode: ({ cfg, chatType }) => resolveSlackStubReplyToMode({ cfg, chatType }),
+      }),
       source: "test",
     },
     {
       pluginId: "telegram",
       plugin: {
-        ...createStubPlugin({ id: "telegram", label: "Telegram" }),
+        ...createStubPlugin({
+          id: "telegram",
+          label: "Telegram",
+          resolveReplyToMode: createTopLevelChannelReplyToModeResolver("telegram"),
+        }),
         status: {
           buildChannelSummary: async () => ({
             configured: false,
@@ -274,8 +386,17 @@ afterEach(() => {
     globalRegistryState.key = null;
     globalRegistryState.version += 1;
   }
-  // Guard against leaked fake timers across test files/workers.
-  if (vi.isFakeTimers()) {
-    vi.useRealTimers();
-  }
+  // Always normalize timer/date state. Some suites call `vi.setSystemTime()`
+  // without leaving fake timers enabled, which still leaks mocked time into
+  // later files under `--isolate=false`.
+  vi.useRealTimers();
+  // Non-isolated runs reuse the same module graph across files. Clear it so
+  // hoisted per-file mocks still apply when later files import the same modules.
+  vi.resetModules();
+});
+
+afterAll(() => {
+  // Mirror Vitest's isolate-mode file cleanup so `--isolate=false` does not
+  // carry hoisted mocks or stale module graphs into the next test file.
+  resetVitestWorkerFileState();
 });

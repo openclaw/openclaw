@@ -10,7 +10,6 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
   type AuthProfileStore,
   ensureAuthProfileStore,
-  resolveAuthProfileOrder,
   saveAuthProfileStore,
 } from "../agents/auth-profiles.js";
 import {
@@ -19,6 +18,7 @@ import {
   isAnthropicRateLimitError,
 } from "../agents/live-auth-keys.js";
 import { isModernModelRef } from "../agents/live-model-filter.js";
+import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
@@ -40,9 +40,8 @@ import {
 import { startGatewayServer } from "./server.js";
 import { loadSessionEntry, readSessionMessages } from "./session-utils.js";
 
-const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
-const GATEWAY_LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY);
 const ZAI_FALLBACK = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_ZAI_FALLBACK);
+const REQUIRE_PROFILE_KEYS = isTruthyEnvValue(process.env.OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS);
 const PROVIDERS = parseFilter(process.env.OPENCLAW_LIVE_GATEWAY_PROVIDERS);
 const THINKING_LEVEL = "high";
 const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
@@ -55,10 +54,14 @@ const GATEWAY_LIVE_PROBE_TIMEOUT_MS = Math.max(
   30_000,
   toInt(process.env.OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS, 90_000),
 );
+const GATEWAY_LIVE_HEARTBEAT_MS = Math.max(
+  1_000,
+  toInt(process.env.OPENCLAW_LIVE_GATEWAY_HEARTBEAT_MS, 30_000),
+);
 const GATEWAY_LIVE_MAX_MODELS = resolveGatewayLiveMaxModels();
 const GATEWAY_LIVE_SUITE_TIMEOUT_MS = resolveGatewayLiveSuiteTimeoutMs(GATEWAY_LIVE_MAX_MODELS);
 
-const describeLive = LIVE || GATEWAY_LIVE ? describe : describe.skip;
+const describeLive = isLiveTestEnabled(["OPENCLAW_LIVE_GATEWAY"]) ? describe : describe.skip;
 
 function parseFilter(raw?: string): Set<string> | null {
   const trimmed = raw?.trim();
@@ -108,6 +111,15 @@ function isGatewayLiveProbeTimeout(error: string): boolean {
 
 async function withGatewayLiveProbeTimeout<T>(operation: Promise<T>, context: string): Promise<T> {
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const startedAt = Date.now();
+  let heartbeatCount = 0;
+  const heartbeat = setInterval(() => {
+    heartbeatCount += 1;
+    logProgress(
+      `${context}: still running (${Math.max(1, Math.round((Date.now() - startedAt) / 1_000))}s)`,
+    );
+  }, GATEWAY_LIVE_HEARTBEAT_MS);
+  heartbeat.unref?.();
   try {
     return await Promise.race([
       operation,
@@ -118,8 +130,14 @@ async function withGatewayLiveProbeTimeout<T>(operation: Promise<T>, context: st
       }),
     ]);
   } finally {
+    clearInterval(heartbeat);
     if (timeoutHandle) {
       clearTimeout(timeoutHandle);
+    }
+    if (heartbeatCount > 0) {
+      logProgress(
+        `${context}: completed after ${Math.max(1, Math.round((Date.now() - startedAt) / 1_000))}s`,
+      );
     }
   }
 }
@@ -168,7 +186,7 @@ function capByProviderSpread<T>(
 }
 
 function logProgress(message: string): void {
-  console.log(`[live] ${message}`);
+  process.stderr.write(`[live] ${message}\n`);
 }
 
 function enterProductionEnvForLiveRun() {
@@ -568,6 +586,7 @@ async function waitForSessionAssistantText(params: {
   context: string;
 }) {
   const startedAt = Date.now();
+  let lastHeartbeatAt = startedAt;
   let delayMs = 50;
   while (Date.now() - startedAt < GATEWAY_LIVE_PROBE_TIMEOUT_MS) {
     const assistantTexts = readSessionAssistantTexts(params.sessionKey);
@@ -579,6 +598,12 @@ async function waitForSessionAssistantText(params: {
       if (freshText) {
         return freshText;
       }
+    }
+    if (Date.now() - lastHeartbeatAt >= GATEWAY_LIVE_HEARTBEAT_MS) {
+      lastHeartbeatAt = Date.now();
+      logProgress(
+        `${params.context}: waiting for transcript (${Math.max(1, Math.round((Date.now() - startedAt) / 1_000))}s)`,
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, delayMs));
     delayMs = Math.min(delayMs * 2, 250);
@@ -862,6 +887,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   try {
     logProgress(
       `[${params.label}] running ${params.candidates.length} models (thinking=${params.thinkingLevel})`,
+    );
+    logProgress(
+      `[${params.label}] heartbeat=${Math.max(1, Math.round(GATEWAY_LIVE_HEARTBEAT_MS / 1_000))}s probe-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_PROBE_TIMEOUT_MS / 1_000))}s`,
     );
     const anthropicKeys = collectAnthropicApiKeys();
     if (anthropicKeys.length > 0) {
@@ -1209,6 +1237,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: rate limit, retrying with next key`);
             continue;
           }
+          if (model.provider === "anthropic" && isAnthropicRateLimitError(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (anthropic rate limit)`);
+            break;
+          }
           if (model.provider === "anthropic" && isAnthropicBillingError(message)) {
             if (attempt + 1 < attemptMax) {
               logProgress(`${progressLabel}: billing issue, retrying with next key`);
@@ -1349,9 +1382,6 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       await ensureOpenClawModelsJson(cfg);
 
       const agentDir = resolveOpenClawAgentDir();
-      const authStore = ensureAuthProfileStore(agentDir, {
-        allowKeychainPrompt: false,
-      });
       const authStorage = discoverAuthStorage(agentDir);
       const modelRegistry = discoverModels(authStorage, agentDir);
       const all = modelRegistry.getAll();
@@ -1365,8 +1395,8 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         ? all.filter((m) => filter.has(`${m.provider}/${m.id}`))
         : all.filter((m) => isModernModelRef({ provider: m.provider, id: m.id }));
 
-      const providerProfileCache = new Map<string, boolean>();
       const candidates: Array<Model<Api>> = [];
+      const skipped: Array<{ model: string; error: string }> = [];
       for (const model of wanted) {
         if (shouldSuppressBuiltInModel({ provider: model.provider, id: model.id })) {
           continue;
@@ -1374,23 +1404,28 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         if (PROVIDERS && !PROVIDERS.has(model.provider)) {
           continue;
         }
-        let hasProfile = providerProfileCache.get(model.provider);
-        if (hasProfile === undefined) {
-          const order = resolveAuthProfileOrder({
-            cfg,
-            store: authStore,
-            provider: model.provider,
-          });
-          hasProfile = order.some((profileId) => Boolean(authStore.profiles[profileId]));
-          providerProfileCache.set(model.provider, hasProfile);
+        const modelRef = `${model.provider}/${model.id}`;
+        try {
+          const apiKeyInfo = await getApiKeyForModel({ model, cfg });
+          if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
+            skipped.push({
+              model: modelRef,
+              error: `non-profile credential source: ${apiKeyInfo.source}`,
+            });
+            continue;
+          }
+          candidates.push(model);
+        } catch (error) {
+          skipped.push({ model: modelRef, error: String(error) });
         }
-        if (!hasProfile) {
-          continue;
-        }
-        candidates.push(model);
       }
 
       if (candidates.length === 0) {
+        if (skipped.length > 0) {
+          logProgress(
+            `[all-models] auth lookup skipped candidates:\n${formatFailurePreview(skipped, 8)}`,
+          );
+        }
         logProgress("[all-models] no API keys found; skipping");
         return;
       }

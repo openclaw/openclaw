@@ -251,11 +251,46 @@ function renderFallbackIndicator(status: FallbackIndicatorStatus | null | undefi
  * Compact notice when context usage reaches 85%+.
  * Progressively shifts from amber (85%) to red (90%+).
  */
+/** Parse a 6-digit CSS hex color string to [r, g, b] integer components. */
+function parseHexRgb(hex: string): [number, number, number] | null {
+  const h = hex.trim().replace(/^#/, "");
+  if (!/^[0-9a-fA-F]{6}$/.test(h)) {
+    return null;
+  }
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+}
+
+let cachedThemeNoticeColors: {
+  warnHex: string;
+  dangerHex: string;
+  warnRgb: [number, number, number];
+  dangerRgb: [number, number, number];
+} | null = null;
+
+function getThemeNoticeColors() {
+  if (cachedThemeNoticeColors) {
+    return cachedThemeNoticeColors;
+  }
+  const rootStyle = getComputedStyle(document.documentElement);
+  const warnHex = rootStyle.getPropertyValue("--warn").trim() || "#f59e0b";
+  const dangerHex = rootStyle.getPropertyValue("--danger").trim() || "#ef4444";
+  cachedThemeNoticeColors = {
+    warnHex,
+    dangerHex,
+    warnRgb: parseHexRgb(warnHex) ?? [245, 158, 11],
+    dangerRgb: parseHexRgb(dangerHex) ?? [239, 68, 68],
+  };
+  return cachedThemeNoticeColors;
+}
+
 function renderContextNotice(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
 ) {
-  const used = session?.inputTokens ?? 0;
+  if (session?.totalTokensFresh === false) {
+    return nothing;
+  }
+  const used = session?.totalTokens ?? 0;
   const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
   if (!used || !limit) {
     return nothing;
@@ -265,12 +300,15 @@ function renderContextNotice(
     return nothing;
   }
   const pct = Math.min(Math.round(ratio * 100), 100);
-  // Lerp from amber (#d97706) at 85% to red (#dc2626) at 95%+
+  // Read theme semantic tokens so color tracks the active theme (Dash, dark, light …)
+  const { warnRgb, dangerRgb } = getThemeNoticeColors();
+  const [wr, wg, wb] = warnRgb;
+  const [dr, dg, db] = dangerRgb;
+  // Blend from --warn at 85% usage to --danger at 95%+ usage
   const t = Math.min(Math.max((ratio - 0.85) / 0.1, 0), 1);
-  // RGB: amber(217,119,6) → red(220,38,38)
-  const r = Math.round(217 + (220 - 217) * t);
-  const g = Math.round(119 + (38 - 119) * t);
-  const b = Math.round(6 + (38 - 6) * t);
+  const r = Math.round(wr + (dr - wr) * t);
+  const g = Math.round(wg + (dg - wg) * t);
+  const b = Math.round(wb + (db - wb) * t);
   const color = `rgb(${r}, ${g}, ${b})`;
   const bgOpacity = 0.08 + 0.08 * t;
   const bg = `rgba(${r}, ${g}, ${b}, ${bgOpacity})`;
@@ -662,7 +700,7 @@ function renderPinnedSection(
       }}>
         ${icons.bookmark}
         ${entries.length} pinned
-        ${vs.pinnedExpanded ? icons.chevronDown : icons.chevronRight}
+        <span class="collapse-chevron ${vs.pinnedExpanded ? "" : "collapse-chevron--collapsed"}">${icons.chevronDown}</span>
       </button>
       ${
         vs.pinnedExpanded

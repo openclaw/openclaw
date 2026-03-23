@@ -422,10 +422,20 @@ describe("resolveModel", () => {
       },
     } as OpenClawConfig;
 
-    const result = resolveModel("openrouter", "openrouter/healer-alpha", "/tmp/agent", cfg);
-
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
+    const models = buildInlineProviderModels(cfg.models?.providers ?? {});
+    expect(models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          provider: "openrouter",
+          id: "openrouter/healer-alpha",
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 262144,
+          maxTokens: 65536,
+        }),
+      ]),
+    );
+    expect(models.find((model) => model.id === "openrouter/healer-alpha")).toMatchObject({
       provider: "openrouter",
       id: "openrouter/healer-alpha",
       reasoning: true,
@@ -753,9 +763,53 @@ describe("resolveModel", () => {
       api: "openai-responses",
       baseUrl: "https://proxy.example.com/v1",
     });
-    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
-      "X-Proxy-Auth": "token-123",
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toMatchObject(
+      {
+        "X-Proxy-Auth": "token-123",
+      },
+    );
+  });
+
+  it("applies configured overrides to github-copilot dynamic models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "github-copilot": {
+            baseUrl: "https://proxy.example.com/v1",
+            api: "openai-completions",
+            headers: { "X-Proxy-Auth": "token-123" },
+            models: [
+              {
+                ...makeModel("gpt-5.4-mini"),
+                reasoning: true,
+                input: ["text"],
+                contextWindow: 256000,
+                maxTokens: 32000,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("github-copilot", "gpt-5.4-mini", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "github-copilot",
+      id: "gpt-5.4-mini",
+      api: "openai-completions",
+      baseUrl: "https://proxy.example.com/v1",
+      reasoning: true,
+      input: ["text"],
+      contextWindow: 256000,
+      maxTokens: 32000,
     });
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toMatchObject(
+      {
+        "X-Proxy-Auth": "token-123",
+      },
+    );
   });
 
   it("builds an openai fallback for gpt-5.4 mini from the gpt-5-mini template", () => {
