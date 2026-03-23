@@ -3,7 +3,7 @@ name: coding-agent
 description: 'Delegate coding tasks to Codex, Claude Code, Kimi CLI, or Pi agents via background process. Use when: (1) building/creating new features or apps, (2) reviewing PRs (spawn in temp dir), (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-liner fixes (just edit), reading code (use read tool), thread-bound ACP harness requests in chat (for example spawn/run Codex or Claude Code in a Discord thread; use sessions_spawn with runtime:"acp"), or any work in ~/clawd workspace (never spawn agents here). Claude Code: use --print --permission-mode bypassPermissions (no PTY). Codex/Kimi/Pi/OpenCode: pty:true required.'
 metadata:
   {
-    "openclaw": { "emoji": "🧩", "requires": { "anyBins": ["claude", "codex", "kimi", "kimi-coding", "opencode", "pi"] } },
+    "openclaw": { "emoji": "🧩", "requires": { "anyBins": ["claude", "codex", "kimi", "opencode", "pi"] } },
   }
 ---
 
@@ -20,7 +20,7 @@ For **Codex, Pi, and OpenCode**, PTY is still required (interactive terminal app
 bash pty:true command:"codex exec 'Your prompt'"
 ```
 
-For **Claude Code** (`claude` CLI) and **Kimi CLI** (`kimi-coding`), use `--print` mode instead.
+For **Claude Code** (`claude` CLI) and **Kimi CLI** (`kimi`), use `--print` mode instead.
 This avoids interactive confirmation and eliminates the need for PTY:
 
 ```bash
@@ -28,7 +28,7 @@ This avoids interactive confirmation and eliminates the need for PTY:
 cd /path/to/project && claude --permission-mode bypassPermissions --print 'Your task'
 
 # ✅ Correct for Kimi CLI (no PTY needed)
-bash workdir:~/project command:"kimi-coding --print 'Your task'"
+bash workdir:~/project command:"kimi -p 'Your task' --print"
 
 # For background execution: use background:true on the exec tool
 
@@ -178,6 +178,49 @@ bash workdir:~/project background:true command:"claude --permission-mode bypassP
 
 ---
 
+## Kimi CLI (Moonshot AI)
+
+```bash
+# Install: npm install -g @moonshotai/kimi-cli
+# Or: curl -fsSL https://kimi.moonshot.cn/install.sh | sh
+
+# Non-interactive mode (recommended, no PTY needed)
+bash workdir:~/project command:"kimi -p 'Your task' --print"
+
+# Background execution (no PTY needed)
+bash workdir:~/project background:true command:"kimi -p 'Refactor the auth module' --print"
+
+# Interactive mode (PTY required)
+bash pty:true workdir:~/project command:"kimi 'Your task'"
+
+# Quick one-liner
+bash command:"kimi -p 'Summarize the main files'"
+
+# With specific model
+bash command:"kimi -p 'Your task' --print --model kimi-k2.5"
+```
+
+**Installation:**
+```bash
+# Official install script (installs uv + kimi-cli)
+curl -LsSf https://code.kimi.com/install.sh | bash
+
+# Or if you already have uv installed
+uv tool install --python 3.13 kimi-cli
+```
+
+**Authentication:**
+```bash
+# Login via OAuth (opens browser)
+kimi login
+
+# Or configure in ~/.kimi/config.toml (see Kimi CLI docs for details)
+```
+
+**Note:** Kimi CLI supports `--print` mode for non-interactive execution (similar to Claude Code), eliminating the need for PTY in most cases.
+
+---
+
 ## OpenCode
 
 ```bash
@@ -200,48 +243,6 @@ bash pty:true command:"pi --provider openai --model gpt-4o-mini -p 'Your task'"
 ```
 
 **Note:** Pi now has Anthropic prompt caching enabled (PR #584, merged Jan 2026)!
-
----
-
-## Kimi CLI (Moonshot AI)
-
-```bash
-# Install: npm install -g @moonshotai/kimi-coding
-# Or: curl -fsSL https://kimi.moonshot.cn/install.sh | sh
-
-# Non-interactive mode (recommended, no PTY needed)
-bash workdir:~/project command:"kimi-coding --print 'Your task'"
-
-# Background execution (no PTY needed)
-bash workdir:~/project background:true command:"kimi-coding --print 'Refactor the auth module'"
-
-# Interactive mode (PTY required)
-bash pty:true workdir:~/project command:"kimi-coding 'Your task'"
-
-# Quick one-liner
-bash command:"kimi-coding -p 'Summarize the main files'"
-
-# With specific model
-bash command:"kimi-coding --print --model kimi-k2.5 'Your task'"
-```
-
-**Installation:**
-```bash
-# Via npm
-npm install -g @moonshotai/kimi-coding
-
-# Or official install script
-curl -fsSL https://kimi.moonshot.cn/install.sh | sh
-```
-
-**Configuration:**
-```bash
-# Set API key
-export MOONSHOT_API_KEY="your-api-key"
-# Or configure in ~/.kimi/config.toml
-```
-
-**Note:** Kimi CLI supports `--print` mode for non-interactive execution (similar to Claude Code), eliminating the need for PTY in most cases.
 
 ---
 
