@@ -357,6 +357,10 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createSiliconFlowThinkingWrapper(agent.streamFn);
   }
 
+  if (thinkingLevel === "off") {
+    agent.streamFn = createOllamaThinkingOffWrapper(agent.streamFn);
+  }
+
   agent.streamFn = createAnthropicToolPayloadCompatibilityWrapper(agent.streamFn, {
     config: cfg,
     workspaceDir,
@@ -454,4 +458,23 @@ export function applyExtraParamsToAgent(
   }
 
   return { effectiveExtraParams };
+}
+
+function createOllamaThinkingOffWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (model.api !== "ollama") {
+      return underlying(model, context, options);
+    }
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload, payloadModel) => {
+        if (payload && typeof payload === "object") {
+          (payload as Record<string, unknown>).think = false;
+        }
+        return originalOnPayload?.(payload, payloadModel);
+      },
+    });
+  };
 }
