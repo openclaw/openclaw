@@ -447,6 +447,11 @@ export function buildStatusMessage(args: StatusArgs): string {
     selectedModel,
     sessionEntry: entry,
   });
+  const initialFallbackState = resolveActiveFallbackState({
+    selectedModelRef: modelRefs.selected.label || "unknown",
+    activeModelRef: modelRefs.active.label || "unknown",
+    state: entry,
+  });
   let activeProvider = modelRefs.active.provider;
   let activeModel = modelRefs.active.model;
   let contextLookupProvider: string | undefined = activeProvider;
@@ -456,11 +461,25 @@ export function buildStatusMessage(args: StatusArgs): string {
     typeof entry?.modelProvider === "string" ? entry.modelProvider.trim() : "";
 
   if (runtimeModelRaw && !runtimeProviderRaw && runtimeModelRaw.includes("/")) {
-    // Legacy sessions can persist raw runtime ids like "google/gemini-2.5-pro"
-    // without a separate provider field. Keep the raw id for context lookup so
-    // provider-qualified resolution does not jump to a different upstream window.
-    contextLookupProvider = undefined;
-    contextLookupModel = runtimeModelRaw;
+    const slashIndex = runtimeModelRaw.indexOf("/");
+    const embeddedProvider = runtimeModelRaw.slice(0, slashIndex).trim().toLowerCase();
+    const fallbackMatchesRuntimeModel =
+      initialFallbackState.active &&
+      runtimeModelRaw.toLowerCase() ===
+        String(entry?.fallbackNoticeActiveModel ?? "")
+          .trim()
+          .toLowerCase();
+    // Legacy fallback sessions can persist provider-qualified runtime ids
+    // without a separate modelProvider field. Preserve provider-aware lookup
+    // when the stored slash id is also the active fallback target; otherwise
+    // keep the raw model-only lookup for OpenRouter-style slash ids.
+    if (fallbackMatchesRuntimeModel && embeddedProvider === activeProvider.toLowerCase()) {
+      contextLookupProvider = activeProvider;
+      contextLookupModel = activeModel;
+    } else {
+      contextLookupProvider = undefined;
+      contextLookupModel = runtimeModelRaw;
+    }
   }
 
   let inputTokens = entry?.inputTokens;
@@ -551,27 +570,43 @@ export function buildStatusMessage(args: StatusArgs): string {
   // callers keep on the agent config is often stale. Prefer an explicit runtime
   // snapshot when available. Separately, callers can pass an explicit configured
   // cap that should still apply on fallback paths, but it cannot exceed the
-  // active runtime window when that window is known. Otherwise preserve a
-  // persisted runtime snapshot unless it still matches the selected-model
-  // window and the active runtime window differs.
+  // active runtime window when that window is known. Persisted runtime snapshots
+  // still take precedence over configured caps so historical fallback sessions
+  // keep their last known live limit even if the active model later becomes
+  // unresolvable.
   const contextTokens = runtimeDiffersFromSelected
     ? (explicitRuntimeContextTokens ??
-      cappedConfiguredContextTokens ??
       (() => {
-        if (persistedContextTokens === undefined) {
-          return activeContextTokens ?? DEFAULT_CONTEXT_TOKENS;
+        if (persistedContextTokens !== undefined) {
+          const persistedLooksSelectedWindow =
+            typeof selectedContextTokens === "number" &&
+            persistedContextTokens === selectedContextTokens;
+          const activeWindowDiffersFromSelected =
+            typeof selectedContextTokens === "number" &&
+            typeof activeContextTokens === "number" &&
+            activeContextTokens !== selectedContextTokens;
+          const explicitConfiguredMatchesPersisted =
+            typeof explicitConfiguredContextTokens === "number" &&
+            explicitConfiguredContextTokens === persistedContextTokens;
+          if (
+            persistedLooksSelectedWindow &&
+            activeWindowDiffersFromSelected &&
+            !explicitConfiguredMatchesPersisted
+          ) {
+            return activeContextTokens;
+          }
+          if (typeof activeContextTokens === "number") {
+            return Math.min(persistedContextTokens, activeContextTokens);
+          }
+          return persistedContextTokens;
         }
-        const persistedLooksSelectedWindow =
-          typeof selectedContextTokens === "number" &&
-          persistedContextTokens === selectedContextTokens;
-        const activeWindowDiffersFromSelected =
-          typeof selectedContextTokens === "number" &&
-          typeof activeContextTokens === "number" &&
-          activeContextTokens !== selectedContextTokens;
-        if (persistedLooksSelectedWindow && activeWindowDiffersFromSelected) {
+        if (cappedConfiguredContextTokens !== undefined) {
+          return cappedConfiguredContextTokens;
+        }
+        if (typeof activeContextTokens === "number") {
           return activeContextTokens;
         }
-        return persistedContextTokens;
+        return DEFAULT_CONTEXT_TOKENS;
       })())
     : (resolveContextTokensForModel({
         cfg: contextConfig,

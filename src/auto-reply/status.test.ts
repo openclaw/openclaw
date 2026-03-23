@@ -490,6 +490,48 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("Context: 49k/1.0m");
   });
 
+  it("keeps a persisted fallback limit when the active runtime model lookup is unavailable", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            xiaomi: {
+              models: [{ id: "mimo-v2-flash", contextWindow: 1_048_576 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "xiaomi/mimo-v2-flash",
+        contextTokens: 1_048_576,
+      },
+      explicitConfiguredContextTokens: 1_048_576,
+      sessionEntry: {
+        sessionId: "fallback-context-window-persisted-unknown-active",
+        updatedAt: 0,
+        providerOverride: "xiaomi",
+        modelOverride: "mimo-v2-flash",
+        modelProvider: "custom-runtime",
+        model: "unknown-fallback-model",
+        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
+        fallbackNoticeActiveModel: "custom-runtime/unknown-fallback-model",
+        fallbackNoticeReason: "model not allowed",
+        totalTokens: 49_000,
+        contextTokens: 128_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      activeModelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fallback: custom-runtime/unknown-fallback-model");
+    expect(normalized).toContain("Context: 49k/128k");
+    expect(normalized).not.toContain("Context: 49k/1.0m");
+  });
+
   it("uses per-agent sandbox config when config and session key are provided", () => {
     const text = buildStatusMessage({
       config: {
@@ -1034,6 +1076,49 @@ describe("buildStatusMessage", () => {
     const normalized = normalizeTestText(text);
     expect(normalized).toContain("Context: 1.2k/999k");
     expect(normalized).not.toContain("Context: 1.2k/2.0m");
+  });
+
+  it("keeps provider-aware lookup for legacy fallback runtime slash ids", () => {
+    MODEL_CONTEXT_TOKEN_CACHE.clear();
+
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            "fake-minimax": {
+              models: [{ id: "FakeMiniMax-M2.5", contextWindow: 777_000 }],
+            },
+            xiaomi: {
+              models: [{ id: "mimo-v2-flash", contextWindow: 1_048_576 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "xiaomi/mimo-v2-flash",
+      },
+      sessionEntry: {
+        sessionId: "sess-runtime-slash-id-fallback",
+        updatedAt: 0,
+        providerOverride: "xiaomi",
+        modelOverride: "mimo-v2-flash",
+        model: "fake-minimax/FakeMiniMax-M2.5",
+        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
+        fallbackNoticeActiveModel: "fake-minimax/FakeMiniMax-M2.5",
+        fallbackNoticeReason: "model not allowed",
+        totalTokens: 49_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      activeModelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fallback: fake-minimax/FakeMiniMax-M2.5");
+    expect(normalized).toContain("Context: 49k/777k");
+    expect(normalized).not.toContain("Context: 49k/200k");
   });
 
   it("keeps provider-aware lookup for bare transcript model ids", async () => {
