@@ -5,6 +5,9 @@ vi.mock("../pi-model-discovery.js", () => ({
   discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
 }));
 
+const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+const OPENROUTER_FALLBACK_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+
 import type { OpenRouterModelCapabilities } from "./openrouter-model-capabilities.js";
 
 const mockGetOpenRouterModelCapabilities = vi.fn<
@@ -19,7 +22,348 @@ vi.mock("./openrouter-model-capabilities.js", () => ({
     mockLoadOpenRouterModelCapabilities(modelId),
 }));
 
+vi.mock("../../plugins/provider-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../plugins/provider-runtime.js")>();
+  const HANDLED_DYNAMIC_PROVIDERS = new Set([
+    "openrouter",
+    "github-copilot",
+    "openai-codex",
+    "openai",
+    "anthropic",
+    "zai",
+  ]);
+  const OPENAI_BASE_URL = "https://api.openai.com/v1";
+  const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
+  const ANTHROPIC_BASE_URL = "https://api.anthropic.com";
+  const ZAI_BASE_URL = "https://api.z.ai/api/paas/v4";
+  const DEFAULT_CONTEXT_WINDOW = 200_000;
+  const DEFAULT_MAX_TOKENS = 8192;
+  const findTemplate = (
+    ctx: { modelRegistry: { find: (provider: string, modelId: string) => unknown } },
+    provider: string,
+    templateIds: readonly string[],
+  ) => {
+    for (const templateId of templateIds) {
+      const template = ctx.modelRegistry.find(provider, templateId) as Record<
+        string,
+        unknown
+      > | null;
+      if (template) {
+        return template;
+      }
+    }
+    return undefined;
+  };
+  const cloneTemplate = (
+    template: Record<string, unknown> | undefined,
+    modelId: string,
+    patch: Record<string, unknown>,
+    fallback: Record<string, unknown>,
+  ) =>
+    ({
+      ...(template ?? fallback),
+      id: modelId,
+      name: modelId,
+      ...patch,
+    }) as Record<string, unknown>;
+  const buildOpenRouterModel = (modelId: string) => {
+    const capabilities = mockGetOpenRouterModelCapabilities(modelId);
+    return {
+      id: modelId,
+      name: capabilities?.name ?? modelId,
+      api: "openai-completions" as const,
+      provider: "openrouter",
+      baseUrl: OPENROUTER_BASE_URL,
+      reasoning: capabilities?.reasoning ?? false,
+      input: capabilities?.input ?? (["text"] as const),
+      cost: capabilities?.cost ?? OPENROUTER_FALLBACK_COST,
+      contextWindow: capabilities?.contextWindow ?? 200_000,
+      maxTokens: capabilities?.maxTokens ?? 8192,
+    };
+  };
+  const buildDynamicModel = (params: {
+    provider: string;
+    modelId: string;
+    modelRegistry: { find: (provider: string, modelId: string) => unknown };
+  }) => {
+    const modelId = params.modelId.trim();
+    const lower = modelId.toLowerCase();
+    switch (params.provider) {
+      case "openrouter":
+        return buildOpenRouterModel(modelId);
+      case "github-copilot": {
+        const existing = params.modelRegistry.find("github-copilot", lower);
+        if (existing) {
+          return undefined;
+        }
+        const template = findTemplate(params, "github-copilot", ["gpt-5.2-codex"]);
+        if (lower === "gpt-5.3-codex" && template) {
+          return cloneTemplate(
+            template,
+            modelId,
+            {},
+            {
+              provider: "github-copilot",
+              api: "openai-responses",
+              reasoning: false,
+              input: ["text", "image"],
+              cost: OPENROUTER_FALLBACK_COST,
+              contextWindow: 128_000,
+              maxTokens: DEFAULT_MAX_TOKENS,
+            },
+          );
+        }
+        return {
+          id: modelId,
+          name: modelId,
+          provider: "github-copilot",
+          api: "openai-responses",
+          reasoning: /^o[13](\\b|$)/.test(lower),
+          input: ["text", "image"],
+          cost: OPENROUTER_FALLBACK_COST,
+          contextWindow: 128_000,
+          maxTokens: DEFAULT_MAX_TOKENS,
+        };
+      }
+      case "openai-codex": {
+        const template =
+          lower === "gpt-5.4"
+            ? findTemplate(params, "openai-codex", ["gpt-5.3-codex", "gpt-5.2-codex"])
+            : lower === "gpt-5.3-codex-spark"
+              ? findTemplate(params, "openai-codex", ["gpt-5.3-codex", "gpt-5.2-codex"])
+              : findTemplate(params, "openai-codex", ["gpt-5.2-codex"]);
+        const fallback = {
+          provider: "openai-codex",
+          api: "openai-codex-responses",
+          baseUrl: OPENAI_CODEX_BASE_URL,
+          reasoning: true,
+          input: ["text", "image"],
+          cost: OPENROUTER_FALLBACK_COST,
+          contextWindow: DEFAULT_CONTEXT_WINDOW,
+          maxTokens: DEFAULT_CONTEXT_WINDOW,
+        };
+        if (lower === "gpt-5.4") {
+          return cloneTemplate(
+            template,
+            modelId,
+            {
+              contextWindow: 1_050_000,
+              maxTokens: 128_000,
+              provider: "openai-codex",
+              api: "openai-codex-responses",
+              baseUrl: OPENAI_CODEX_BASE_URL,
+            },
+            fallback,
+          );
+        }
+        if (lower === "gpt-5.3-codex-spark") {
+          return cloneTemplate(
+            template,
+            modelId,
+            {
+              provider: "openai-codex",
+              api: "openai-codex-responses",
+              baseUrl: OPENAI_CODEX_BASE_URL,
+              reasoning: true,
+              input: ["text"],
+              cost: OPENROUTER_FALLBACK_COST,
+              contextWindow: 128_000,
+              maxTokens: 128_000,
+            },
+            fallback,
+          );
+        }
+        if (lower === "gpt-5.3-codex") {
+          return cloneTemplate(
+            template,
+            modelId,
+            {
+              provider: "openai-codex",
+              api: "openai-codex-responses",
+              baseUrl: OPENAI_CODEX_BASE_URL,
+            },
+            fallback,
+          );
+        }
+        return undefined;
+      }
+      case "openai": {
+        const templateIds =
+          lower === "gpt-5.4"
+            ? ["gpt-5.2"]
+            : lower === "gpt-5.4-pro"
+              ? ["gpt-5.2-pro", "gpt-5.2"]
+              : lower === "gpt-5.4-mini"
+                ? ["gpt-5-mini"]
+                : lower === "gpt-5.4-nano"
+                  ? ["gpt-5-nano", "gpt-5-mini"]
+                  : undefined;
+        if (!templateIds) {
+          return undefined;
+        }
+        const template = findTemplate(params, "openai", templateIds);
+        const patch =
+          lower === "gpt-5.4" || lower === "gpt-5.4-pro"
+            ? {
+                provider: "openai",
+                api: "openai-responses",
+                baseUrl: OPENAI_BASE_URL,
+                reasoning: true,
+                input: ["text", "image"],
+                contextWindow: 1_050_000,
+                maxTokens: 128_000,
+              }
+            : {
+                provider: "openai",
+                api: "openai-responses",
+                baseUrl: OPENAI_BASE_URL,
+                reasoning: true,
+                input: ["text", "image"],
+              };
+        return cloneTemplate(template, modelId, patch, {
+          provider: "openai",
+          api: "openai-responses",
+          baseUrl: OPENAI_BASE_URL,
+          reasoning: true,
+          input: ["text", "image"],
+          cost: OPENROUTER_FALLBACK_COST,
+          contextWindow: patch.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+          maxTokens: patch.maxTokens ?? DEFAULT_CONTEXT_WINDOW,
+        });
+      }
+      case "anthropic": {
+        if (lower !== "claude-opus-4-6" && lower !== "claude-sonnet-4-6") {
+          return undefined;
+        }
+        const template = findTemplate(
+          params,
+          "anthropic",
+          lower === "claude-opus-4-6" ? ["claude-opus-4-5"] : ["claude-sonnet-4-5"],
+        );
+        return cloneTemplate(
+          template,
+          modelId,
+          {
+            provider: "anthropic",
+            api: "anthropic-messages",
+            baseUrl: ANTHROPIC_BASE_URL,
+            reasoning: true,
+          },
+          {
+            provider: "anthropic",
+            api: "anthropic-messages",
+            baseUrl: ANTHROPIC_BASE_URL,
+            reasoning: true,
+            input: ["text", "image"],
+            cost: OPENROUTER_FALLBACK_COST,
+            contextWindow: DEFAULT_CONTEXT_WINDOW,
+            maxTokens: DEFAULT_CONTEXT_WINDOW,
+          },
+        );
+      }
+      case "zai": {
+        if (lower !== "glm-5") {
+          return undefined;
+        }
+        const template = findTemplate(params, "zai", ["glm-4.7"]);
+        return cloneTemplate(
+          template,
+          modelId,
+          {
+            provider: "zai",
+            api: "openai-completions",
+            baseUrl: ZAI_BASE_URL,
+            reasoning: true,
+          },
+          {
+            provider: "zai",
+            api: "openai-completions",
+            baseUrl: ZAI_BASE_URL,
+            reasoning: true,
+            input: ["text"],
+            cost: OPENROUTER_FALLBACK_COST,
+            contextWindow: DEFAULT_CONTEXT_WINDOW,
+            maxTokens: DEFAULT_CONTEXT_WINDOW,
+          },
+        );
+      }
+      default:
+        return undefined;
+    }
+  };
+  const normalizeDynamicModel = (params: { provider: string; model: Record<string, unknown> }) => {
+    if (params.provider === "openai") {
+      const baseUrl = typeof params.model.baseUrl === "string" ? params.model.baseUrl : undefined;
+      if (params.model.api === "openai-completions" && (!baseUrl || baseUrl === OPENAI_BASE_URL)) {
+        return { ...params.model, api: "openai-responses" };
+      }
+    }
+    if (params.provider === "openai-codex") {
+      const baseUrl = typeof params.model.baseUrl === "string" ? params.model.baseUrl : undefined;
+      const nextApi =
+        params.model.api === "openai-responses" &&
+        (!baseUrl || baseUrl === OPENAI_BASE_URL || baseUrl === OPENAI_CODEX_BASE_URL)
+          ? "openai-codex-responses"
+          : params.model.api;
+      const nextBaseUrl =
+        nextApi === "openai-codex-responses" && (!baseUrl || baseUrl === OPENAI_BASE_URL)
+          ? OPENAI_CODEX_BASE_URL
+          : baseUrl;
+      if (nextApi !== params.model.api || nextBaseUrl !== baseUrl) {
+        return { ...params.model, api: nextApi, baseUrl: nextBaseUrl };
+      }
+    }
+    return undefined;
+  };
+  return {
+    ...actual,
+    resolveProviderRuntimePlugin: (
+      params: Parameters<typeof actual.resolveProviderRuntimePlugin>[0],
+    ) =>
+      HANDLED_DYNAMIC_PROVIDERS.has(params.provider)
+        ? {
+            id: params.provider,
+            prepareDynamicModel:
+              params.provider === "openrouter"
+                ? async (ctx: { modelId: string }) => {
+                    await mockLoadOpenRouterModelCapabilities(ctx.modelId);
+                  }
+                : undefined,
+            resolveDynamicModel: (ctx: {
+              provider: string;
+              modelId: string;
+              modelRegistry: { find: (provider: string, modelId: string) => unknown };
+            }) => buildDynamicModel(ctx),
+            normalizeResolvedModel: (ctx: { provider: string; model: Record<string, unknown> }) =>
+              normalizeDynamicModel(ctx),
+          }
+        : actual.resolveProviderRuntimePlugin(params),
+    runProviderDynamicModel: (params: Parameters<typeof actual.runProviderDynamicModel>[0]) =>
+      buildDynamicModel({
+        provider: params.provider,
+        modelId: params.context.modelId,
+        modelRegistry: params.context.modelRegistry,
+      }) ?? actual.runProviderDynamicModel(params),
+    prepareProviderDynamicModel: async (
+      params: Parameters<typeof actual.prepareProviderDynamicModel>[0],
+    ) =>
+      params.provider === "openrouter"
+        ? await mockLoadOpenRouterModelCapabilities(params.context.modelId)
+        : await actual.prepareProviderDynamicModel(params),
+    normalizeProviderResolvedModelWithPlugin: (
+      params: Parameters<typeof actual.normalizeProviderResolvedModelWithPlugin>[0],
+    ) =>
+      HANDLED_DYNAMIC_PROVIDERS.has(params.provider)
+        ? normalizeDynamicModel({
+            provider: params.provider,
+            model: params.context.model as unknown as Record<string, unknown>,
+          })
+        : actual.normalizeProviderResolvedModelWithPlugin(params),
+  };
+});
+
 import type { OpenClawConfig } from "../../config/config.js";
+import { clearProviderRuntimeHookCache } from "../../plugins/provider-runtime.js";
 import { buildInlineProviderModels, resolveModel, resolveModelAsync } from "./model.js";
 import {
   buildOpenAICodexForwardCompatExpectation,
@@ -30,6 +374,7 @@ import {
 } from "./model.test-harness.js";
 
 beforeEach(() => {
+  clearProviderRuntimeHookCache();
   resetMockDiscoverModels();
   mockGetOpenRouterModelCapabilities.mockReset();
   mockGetOpenRouterModelCapabilities.mockReturnValue(undefined);
