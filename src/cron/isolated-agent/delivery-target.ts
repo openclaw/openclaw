@@ -50,6 +50,12 @@ export async function resolveDeliveryTarget(
 ): Promise<DeliveryTargetResolution> {
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
   const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
+  const explicitAccountId =
+    typeof jobPayload.accountId === "string" && jobPayload.accountId.trim()
+      ? jobPayload.accountId.trim()
+      : undefined;
+  const hasExplicitDeliveryTarget =
+    requestedChannel !== "last" || explicitTo !== undefined || explicitAccountId !== undefined;
   const allowMismatchedLastTo = requestedChannel === "last";
 
   const sessionCfg = cfg.session;
@@ -72,7 +78,7 @@ export async function resolveDeliveryTarget(
 
   let fallbackChannel: Exclude<OutboundChannel, "none"> | undefined;
   let channelResolutionError: Error | undefined;
-  if (!preliminary.channel) {
+  if (!hasExplicitDeliveryTarget && !preliminary.channel) {
     if (preliminary.lastChannel) {
       fallbackChannel = preliminary.lastChannel;
     } else {
@@ -99,17 +105,17 @@ export async function resolveDeliveryTarget(
       })
     : preliminary;
 
-  const channel = resolved.channel ?? fallbackChannel;
+  const channel = hasExplicitDeliveryTarget
+    ? requestedChannel !== "last"
+      ? requestedChannel
+      : resolved.channel
+    : resolved.channel ?? fallbackChannel;
   const mode = resolved.mode as "explicit" | "implicit";
-  let toCandidate = resolved.to;
+  let toCandidate = hasExplicitDeliveryTarget ? explicitTo ?? resolved.to : resolved.to;
 
   // Prefer an explicit accountId from the job's delivery config (set via
   // --account on cron add/edit). Fall back to the session's lastAccountId,
   // then to the agent's bound account from bindings config.
-  const explicitAccountId =
-    typeof jobPayload.accountId === "string" && jobPayload.accountId.trim()
-      ? jobPayload.accountId.trim()
-      : undefined;
   let accountId = explicitAccountId ?? resolved.accountId;
   if (!accountId && channel) {
     const bindings = buildChannelAccountBindings(cfg);
