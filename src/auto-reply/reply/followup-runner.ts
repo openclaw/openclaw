@@ -19,7 +19,7 @@ import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { resolveRunAuthProfile } from "./agent-runner-utils.js";
+import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
   resolveOriginAccountId,
   resolveOriginMessageProvider,
