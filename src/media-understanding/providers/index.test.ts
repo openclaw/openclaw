@@ -19,17 +19,6 @@ describe("media-understanding provider registry", () => {
     resetPluginRuntimeStateForTest();
   });
 
-  it("keeps core-owned fallback providers registered by default", () => {
-    const registry = buildMediaUnderstandingRegistry();
-    const groqProvider = getMediaUnderstandingProvider("groq", registry);
-    const deepgramProvider = getMediaUnderstandingProvider("deepgram", registry);
-
-    expect(groqProvider?.id).toBe("groq");
-    expect(groqProvider?.capabilities).toEqual(["audio"]);
-    expect(deepgramProvider?.id).toBe("deepgram");
-    expect(deepgramProvider?.capabilities).toEqual(["audio"]);
-  });
-
   it("merges plugin-registered media providers into the active registry", async () => {
     const pluginRegistry = createEmptyPluginRegistry();
     pluginRegistry.mediaUnderstandingProviders.push({
@@ -75,7 +64,7 @@ describe("media-understanding provider registry", () => {
   it("does not load plugins when config is absent and no runtime registry is active", () => {
     const registry = buildMediaUnderstandingRegistry();
 
-    expect([...registry.keys()]).toEqual(["groq", "deepgram"]);
+    expect([...registry.keys()]).toEqual([]);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 });
