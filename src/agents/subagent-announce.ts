@@ -1398,11 +1398,12 @@ export async function runSubagentAnnounceFlow(params: {
     });
 
     // Apply maxAnnounceChars truncation if specified
+    const TRUNCATION_MARKER = "\n\n[truncated — full output in transcript]";
     const truncatedFindings =
       typeof params.maxAnnounceChars === "number" &&
       params.maxAnnounceChars >= 1 &&
       findings.length > params.maxAnnounceChars
-        ? findings.slice(0, params.maxAnnounceChars) + "\n\n[truncated — full output in transcript]"
+        ? findings.slice(0, params.maxAnnounceChars - TRUNCATION_MARKER.length) + TRUNCATION_MARKER
         : findings;
 
     const internalEvents: AgentInternalEvent[] = [
