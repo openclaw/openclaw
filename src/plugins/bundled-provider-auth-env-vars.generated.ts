@@ -21,6 +21,7 @@ export const BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   modelstudio: ["MODELSTUDIO_API_KEY"],
   moonshot: ["MOONSHOT_API_KEY"],
   nvidia: ["NVIDIA_API_KEY"],
+  ofoxai: ["OFOXAI_API_KEY"],
   ollama: ["OLLAMA_API_KEY"],
   openai: ["OPENAI_API_KEY"],
   opencode: ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"],

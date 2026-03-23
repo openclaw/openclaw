@@ -1,0 +1,27 @@
+{
+  "id": "ofoxai",
+  "providers": ["ofoxai"],
+  "providerAuthEnvVars": {
+    "ofoxai": ["OFOXAI_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "ofoxai",
+      "method": "api-key",
+      "choiceId": "ofoxai-api-key",
+      "choiceLabel": "OfoxAI API key",
+      "groupId": "ofoxai",
+      "groupLabel": "OfoxAI",
+      "groupHint": "API key",
+      "optionKey": "ofoxaiApiKey",
+      "cliFlag": "--ofoxai-api-key",
+      "cliOption": "--ofoxai-api-key <key>",
+      "cliDescription": "OfoxAI API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
