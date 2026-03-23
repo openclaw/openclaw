@@ -87,17 +87,18 @@ export function scheduleFollowupDrain(
   runFollowup: (run: FollowupRun) => Promise<void>,
 ): void {
   const existing = FOLLOWUP_QUEUES.get(key);
-  if (!existing || existing.paused) {
+  if (!existing) {
+    return;
+  }
+  const effectiveRunFollowup = FOLLOWUP_RUN_CALLBACKS.get(key) ?? runFollowup;
+  rememberFollowupDrainCallback(key, effectiveRunFollowup);
+  if (existing.paused) {
     return;
   }
   const queue = beginQueueDrain(FOLLOWUP_QUEUES, key);
   if (!queue) {
     return;
   }
-  const effectiveRunFollowup = FOLLOWUP_RUN_CALLBACKS.get(key) ?? runFollowup;
-  // Cache callback only when a drain actually starts. Avoid keeping stale
-  // callbacks around from finalize calls where no queue work is pending.
-  rememberFollowupDrainCallback(key, effectiveRunFollowup);
   void (async () => {
     try {
       const collectState = { forceIndividualCollect: false };
