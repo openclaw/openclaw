@@ -834,14 +834,34 @@ export async function runCronIsolatedAgentTurn(params: {
   summary = deliveryResult.summary;
   outputText = deliveryResult.outputText;
 
-  // When the run was aborted/timed-out but dispatchCronDelivery() swallowed
-  // the error (e.g. best-effort delivery catch block returns null), the run
-  // must still surface the abort — otherwise one-shot jobs are deleted and
-  // recurring jobs skip back-off.  Fixes P1 review on #49880.
-  if (isAborted() && !hasFatalErrorPayload) {
+  // dispatchCronDelivery() returned no enriched result — this is the common
+  // path when best-effort delivery is swallowed (deliverOutboundPayloads threw
+  // and the catch block returned null).  The guards below mirror the ones in
+  // the `if (deliveryResult.result)` block above.  Fixes P2 review on #49880.
+
+  // Abort/timeout must always surface — even when best-effort delivery
+  // swallowed the error — so one-shot jobs are not deleted and recurring
+  // jobs trigger back-off.
+  if (isAborted()) {
     return withRunSession({
       status: "error",
       error: abortReason() ?? "cron run aborted",
+      summary,
+      outputText,
+      delivered,
+      deliveryAttempted,
+      ...telemetry,
+    });
+  }
+
+  // Non-best-effort delivery that returned no result is an unexpected state
+  // (strict delivery failures normally return an enriched result), but guard
+  // it defensively: if delivery was attempted and not best-effort, surface
+  // the failure.
+  if (deliveryAttempted && !deliveryBestEffort && !delivered) {
+    return withRunSession({
+      status: "error",
+      error: "delivery failed without enriched result",
       summary,
       outputText,
       delivered,
