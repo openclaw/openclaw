@@ -1,9 +1,7 @@
+import { buildElevenLabsSpeechProvider } from "../../extensions/elevenlabs/speech-provider.js";
+import { buildMicrosoftSpeechProvider } from "../../extensions/microsoft/speech-provider.js";
+import { buildOpenAISpeechProvider } from "../../extensions/openai/speech-provider.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  buildElevenLabsSpeechProvider,
-  buildMicrosoftSpeechProvider,
-  buildOpenAISpeechProvider,
-} from "../plugin-sdk/speech.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";

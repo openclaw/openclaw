@@ -69,14 +69,19 @@ describe("voice-call outbound helpers", () => {
       webhookUrl: "https://example.com/webhook",
     };
 
-    await expect(initiateCall({ ...(base as never), provider: undefined }, "+14155550123")).resolves.toEqual({
+    await expect(
+      initiateCall({ ...(base as never), provider: undefined }, "+14155550123"),
+    ).resolves.toEqual({
       callId: "",
       success: false,
       error: "Provider not initialized",
     });
 
     await expect(
-      initiateCall({ ...(base as never), provider: { name: "twilio" }, webhookUrl: undefined }, "+14155550123"),
+      initiateCall(
+        { ...(base as never), provider: { name: "twilio" }, webhookUrl: undefined },
+        "+14155550123",
+      ),
     ).resolves.toEqual({
       callId: "",
       success: false,
@@ -95,7 +100,14 @@ describe("voice-call outbound helpers", () => {
     });
 
     await expect(
-      initiateCall({ ...(base as never), provider: { name: "twilio" }, config: { ...base.config, fromNumber: "" } }, "+14155550123"),
+      initiateCall(
+        {
+          ...(base as never),
+          provider: { name: "twilio" },
+          config: { ...base.config, fromNumber: "" },
+        },
+        "+14155550123",
+      ),
     ).resolves.toEqual({
       callId: "",
       success: false,
@@ -224,7 +236,11 @@ describe("voice-call outbound helpers", () => {
       }),
     );
     expect(clearMaxDurationTimerMock).toHaveBeenCalledWith(ctx, "call-1");
-    expect(rejectTranscriptWaiterMock).toHaveBeenCalledWith(ctx, "call-1", "Call ended: hangup-bot");
+    expect(rejectTranscriptWaiterMock).toHaveBeenCalledWith(
+      ctx,
+      "call-1",
+      "Call ended: hangup-bot",
+    );
     expect(ctx.activeCalls.size).toBe(0);
     expect(ctx.providerCallIdMap.size).toBe(0);
   });
@@ -247,7 +263,9 @@ describe("voice-call outbound helpers", () => {
     await expect(
       endCall(
         {
-          activeCalls: new Map([["call-1", { callId: "call-1", state: "completed", providerCallId: "provider-1" }]]),
+          activeCalls: new Map([
+            ["call-1", { callId: "call-1", state: "completed", providerCallId: "provider-1" }],
+          ]),
           providerCallIdMap: new Map(),
           provider: { hangupCall: vi.fn() },
           storePath: "/tmp/voice-call.json",
