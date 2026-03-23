@@ -165,7 +165,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         cfg: {
           agents: {
             defaults: {
-              model: { primary: "openai-codex/gpt-5.3-codex", fallbacks: defaultFallbacks },
+              model: { primary: "openai-codex/gpt-5.4", fallbacks: defaultFallbacks },
             },
           },
         },
@@ -216,7 +216,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         cfg: {
           agents: {
             defaults: {
-              model: { primary: "openai-codex/gpt-5.3-codex", fallbacks: defaultFallbacks },
+              model: { primary: "openai-codex/gpt-5.4", fallbacks: defaultFallbacks },
             },
           },
         },
@@ -228,7 +228,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         "cron: payload.model 'anthropic/claude-sonnet-4-6' not allowed, falling back to agent defaults",
       );
       expectDefaultModelCall({
-        primary: "openai-codex/gpt-5.3-codex",
+        primary: "openai-codex/gpt-5.4",
         fallbacks: defaultFallbacks,
       });
     });

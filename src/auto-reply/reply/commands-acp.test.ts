@@ -1018,11 +1018,11 @@ describe("/acp command", () => {
   it("updates ACP config options and keeps cwd local when using /acp set", async () => {
     mockBoundThreadSession();
 
-    const setModel = await runThreadAcpCommand("/acp set model gpt-5.3-codex", baseCfg);
+    const setModel = await runThreadAcpCommand("/acp set model gpt-5.4", baseCfg);
     expect(hoisted.setConfigOptionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         key: "model",
-        value: "gpt-5.3-codex",
+        value: "gpt-5.4",
       }),
     );
     expect(setModel?.reply?.text).toContain("Updated ACP config option");

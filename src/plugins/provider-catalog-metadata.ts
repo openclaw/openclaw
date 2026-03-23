@@ -51,12 +51,12 @@ export function augmentBundledProviderCatalog(
   const openAiCodexGpt54Template = findCatalogTemplate({
     entries: context.entries,
     providerId: OPENAI_CODEX_PROVIDER_ID,
-    templateIds: ["gpt-5.3-codex", "gpt-5.2-codex"],
+    templateIds: ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"],
   });
   const openAiCodexSparkTemplate = findCatalogTemplate({
     entries: context.entries,
     providerId: OPENAI_CODEX_PROVIDER_ID,
-    templateIds: ["gpt-5.3-codex", "gpt-5.2-codex"],
+    templateIds: ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"],
   });
 
   return [

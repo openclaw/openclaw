@@ -697,7 +697,7 @@ describe("Cron issue regressions", () => {
       id: "oneshot-overloaded-retry",
       deleteAfterRun: false,
       firstError:
-        "All models failed (2): anthropic/claude-3-5-sonnet: LLM error overloaded_error: overloaded (overloaded); openai/gpt-5.3-codex: LLM error overloaded_error: overloaded (overloaded)",
+        "All models failed (2): anthropic/claude-3-5-sonnet: LLM error overloaded_error: overloaded (overloaded); openai/gpt-5.4: LLM error overloaded_error: overloaded (overloaded)",
     });
     const overloadedJob = overloadedResult.state.store?.jobs.find(
       (j) => j.id === "oneshot-overloaded-retry",
