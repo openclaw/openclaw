@@ -204,7 +204,8 @@ function extractTerms(file, text) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
-  const langs = args.langs.length > 0 ? args.langs : detectLangs();
+  const explicitLangs = args.langs.length > 0;
+  const langs = explicitLangs ? args.langs : detectLangs();
   const allLangs = detectLangs(); // always all langs for path exclusion
 
   if (langs.length === 0) {
@@ -255,9 +256,15 @@ function main() {
     let glossary;
     try {
       glossary = loadGlossarySources(lang);
-    } catch {
-      console.warn(`docs:check-i18n-glossary: glossary.${lang}.json not found; skipping ${lang}.`);
-      continue;
+    } catch (err) {
+      if (err.code === "ENOENT" && !explicitLangs) {
+        // Auto-detected lang whose file disappeared between detect and load — skip.
+        console.warn(`docs:check-i18n-glossary: glossary.${lang}.json not found; skipping ${lang}.`);
+        continue;
+      }
+      // Explicit --lang typo, missing file, or JSON parse error — fail fast.
+      console.error(`docs:check-i18n-glossary: failed to load glossary.${lang}.json: ${err.message}`);
+      process.exit(1);
     }
 
     const missing = [];
