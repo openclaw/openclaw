@@ -488,3 +488,106 @@ describe("stripToolResultDetails", () => {
     expect(out).toBe(input);
   });
 });
+
+// Regression tests for issue #35347 — local LLMs (llama.cpp, Qwen, LM Studio) use the
+// functionCall block type but often omit the id field. The repair should synthesize a
+// stable id rather than silently dropping valid tool calls.
+describe("repairToolCallInputs — local LLM functionCall without id (issue #35347)", () => {
+  it("keeps a functionCall block that has no id and synthesizes one", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          // Local LLM-style functionCall: valid name and arguments, but no id.
+          { type: "functionCall", name: "read", arguments: { path: "src/index.ts" } },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input);
+    expect(out).toHaveLength(1);
+    const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(Array.isArray(assistant.content)).toBe(true);
+    const toolCalls = getAssistantToolCallBlocks(out);
+    expect(toolCalls).toHaveLength(1);
+    // A synthetic id must have been assigned.
+    const id = (toolCalls[0] as { id?: unknown }).id;
+    expect(typeof id).toBe("string");
+    expect((id as string).length).toBeGreaterThan(0);
+  });
+
+  it("synthesizes distinct ids for multiple functionCall blocks in the same message", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "functionCall", name: "read", arguments: { path: "a.ts" } },
+          { type: "functionCall", name: "read", arguments: { path: "b.ts" } },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input);
+    const toolCalls = getAssistantToolCallBlocks(out);
+    expect(toolCalls).toHaveLength(2);
+    const id0 = (toolCalls[0] as { id?: unknown }).id as string;
+    const id1 = (toolCalls[1] as { id?: unknown }).id as string;
+    expect(id0).toBeTruthy();
+    expect(id1).toBeTruthy();
+    // Each call must get a unique id so downstream tool-result pairing works.
+    expect(id0).not.toBe(id1);
+  });
+
+  it("still drops a functionCall block with no id when the name is not in the allowlist", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          // Valid name+args but name not in allowlist — should still be dropped.
+          { type: "functionCall", name: "write", arguments: { path: "a.ts", content: "x" } },
+          // In allowlist — should be kept with synthetic id.
+          { type: "functionCall", name: "read", arguments: { path: "a.ts" } },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, { allowedToolNames: ["read"] });
+    const toolCalls = getAssistantToolCallBlocks(out);
+    expect(toolCalls).toHaveLength(1);
+    const name = (toolCalls[0] as { name?: unknown }).name;
+    expect(name).toBe("read");
+  });
+
+  it("still drops a functionCall block with no id and no arguments", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          // No input AND no id — should be dropped.
+          { type: "functionCall", name: "read" },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input);
+    expect(out).toHaveLength(0);
+  });
+
+  it("does not alter toolCall or toolUse blocks that already have an id", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+          { type: "toolUse", id: "call_2", name: "exec", input: { command: "ls" } },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input);
+    const toolCalls = getAssistantToolCallBlocks(out);
+    expect(toolCalls).toHaveLength(2);
+    expect((toolCalls[0] as { id?: unknown }).id).toBe("call_1");
+    expect((toolCalls[1] as { id?: unknown }).id).toBe("call_2");
+  });
+});

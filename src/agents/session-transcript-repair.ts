@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
@@ -36,6 +37,33 @@ function hasNonEmptyStringField(value: unknown): boolean {
 
 function hasToolCallId(block: RawToolCallBlock): boolean {
   return hasNonEmptyStringField(block.id);
+}
+
+/**
+ * Returns true if this block is a local-LLM-style functionCall block that is
+ * missing an id. Local LLMs (llama.cpp, Qwen, LM Studio) use the functionCall
+ * type but often omit the id field entirely — unlike OpenAI/Anthropic which
+ * always generate a unique call id. See issue #35347.
+ *
+ * Note: only matches when `id` is absent (undefined/null), not when it is
+ * explicitly set to an empty string. An empty-string id indicates a malformed
+ * block from a provider that tried (and failed) to set one, so it is still
+ * dropped by the normal validation path.
+ */
+function isFunctionCallMissingId(block: RawToolCallBlock): boolean {
+  return (
+    (block as { type?: unknown }).type === "functionCall" &&
+    (block.id === undefined || block.id === null)
+  );
+}
+
+/**
+ * Synthesize a stable-ish id for a functionCall block that lacks one.
+ * Uses a UUID so distinct calls with the same name get distinct ids.
+ */
+function synthesizeFunctionCallId(block: RawToolCallBlock): string {
+  const name = typeof block.name === "string" ? block.name.trim() : "unknown";
+  return `local_${name}_${randomUUID()}`;
 }
 
 function normalizeAllowedToolNames(allowedToolNames?: Iterable<string>): Set<string> | null {
@@ -245,6 +273,23 @@ export function repairToolCallInputs(
     let messageChanged = false;
 
     for (const block of msg.content) {
+      if (isRawToolCallBlock(block)) {
+        // Local LLMs (llama.cpp, Qwen, LM Studio) use the functionCall type but
+        // often omit the id field. Synthesize a unique id so the block is kept
+        // rather than silently dropped. See issue #35347.
+        if (
+          isFunctionCallMissingId(block) &&
+          hasToolCallInput(block) &&
+          hasToolCallName(block, allowedToolNames)
+        ) {
+          const syntheticId = synthesizeFunctionCallId(block);
+          const patched = { ...(block as object), id: syntheticId } as typeof block;
+          nextContent.push(patched);
+          changed = true;
+          messageChanged = true;
+          continue;
+        }
+      }
       if (
         isRawToolCallBlock(block) &&
         (!hasToolCallInput(block) ||
@@ -470,6 +515,12 @@ export function repairToolUseResultPairing(
             continue;
           }
           pushToolResult(result);
+        }
+      } else {
+        // Count matched tool results as dropped orphans since we are not preserving them.
+        droppedOrphanCount += spanResultsById.size;
+        if (spanResultsById.size > 0) {
+          changed = true;
         }
       }
       for (const rem of remainder) {
