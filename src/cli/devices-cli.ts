@@ -120,11 +120,7 @@ function isExplicitPairingFallbackError(message: string): boolean {
 }
 
 function isNormalClosurePairingFallbackError(message: string): boolean {
-  return (
-    message.includes("gateway closed") &&
-    message.includes("normal closure") &&
-    message.includes("no close reason")
-  );
+  return message.includes("gateway closed (1000") && message.includes("no close reason");
 }
 
 async function resolveMutatingPairingFallbackAuth(
