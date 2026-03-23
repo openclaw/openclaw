@@ -105,10 +105,10 @@ try {
   process.exit(1);
 }
 
-// 4. 复制文件并压缩
-async function copyAndCompress() {
+// 4. 复制文件
+function copyFiles() {
   try {
-    console.log("\n[5/4] 正在复制文件并压缩...");
+    console.log("\n[5/4] 正在复制文件...");
 
     // 清理旧的品牌目录
     try {
@@ -128,91 +128,16 @@ async function copyAndCompress() {
     copyFileSync(resolve(WORK_DIR, "auto-deploy.mjs"), resolve(BRAND_DIR, "auto-deploy.mjs"));
 
     console.log("文件复制成功");
-
-    // 压缩文件夹
-    const zipPath = resolve(OUTPUT_DIR, `${BRAND_NAME}.zip`);
-    let compressionSuccess = false;
-
-    try {
-      rmSync(zipPath, { force: true });
-    } catch (error) {
-      // 忽略错误
-    }
-
-    // 使用Node.js的archiver包进行压缩
-    try {
-      console.log("正在压缩文件...");
-
-      // 尝试使用archiver包
-      let archiver;
-      try {
-        // 尝试 require 本地安装的 archiver
-        archiver = require("archiver");
-      } catch (requireError) {
-        // 如果没有安装，尝试安装
-        console.log("archiver包未安装，正在安装...");
-        execSync("npm install archiver", { cwd: WORK_DIR, stdio: "inherit" });
-        archiver = require("archiver");
-      }
-
-      const fs = require("fs");
-      const path = require("path");
-
-      // 创建输出流
-      const output = fs.createWriteStream(zipPath);
-      const archive = archiver("zip", {
-        zlib: { level: 9 }, // 最高压缩级别
-      });
-
-      // 监听完成事件
-      output.on("close", function () {
-        console.log(`压缩成功，总大小: ${archive.pointer()} 字节`);
-        compressionSuccess = true;
-      });
-
-      // 监听错误事件
-      archive.on("error", function (err) {
-        throw err;
-      });
-
-      // 管道连接
-      archive.pipe(output);
-
-      // 添加目录
-      archive.directory(path.join(OUTPUT_DIR, BRAND_NAME), BRAND_NAME);
-
-      // 完成压缩
-      archive.finalize();
-
-      // 等待压缩完成
-      await new Promise((resolve, reject) => {
-        output.on("close", resolve);
-        archive.on("error", reject);
-      });
-    } catch (error) {
-      console.error("压缩失败:", error.message);
-      compressionSuccess = false;
-    }
-
-    // 清理临时文件
-    rmSync(BRAND_DIR, { recursive: true, force: true });
-
-    if (compressionSuccess) {
-      console.log("\n打包完成！");
-      console.log(`输出文件: ${zipPath}`);
-      console.log("\n下一步操作:");
-      console.log("1. 解压生成的zip文件到目标服务器");
-      console.log("2. 在目标服务器上执行: node auto-deploy.mjs");
-    } else {
-      console.error("\n打包完成，但压缩失败！");
-      console.error("请手动压缩deploy目录中的文件");
-      process.exit(1);
-    }
+    console.log("\n打包完成！");
+    console.log(`输出目录: ${BRAND_DIR}`);
+    console.log("\n下一步操作:");
+    console.log("1. 将生成的目录复制到目标服务器");
+    console.log("2. 在目标服务器上执行: node auto-deploy.mjs");
   } catch (error) {
-    console.error("复制文件或压缩失败:", error.message);
+    console.error("复制文件失败:", error.message);
     process.exit(1);
   }
 }
 
-// 执行复制和压缩
-copyAndCompress();
+// 执行复制文件
+copyFiles();
