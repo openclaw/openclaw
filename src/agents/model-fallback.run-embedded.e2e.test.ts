@@ -81,9 +81,14 @@ const installRunEmbeddedMocks = () => {
       modelRegistry: {},
     }),
   }));
-  vi.doMock("../plugins/provider-runtime.js", () => ({
-    prepareProviderRuntimeAuth: vi.fn(async () => undefined),
-  }));
+  vi.doMock("../plugins/provider-runtime.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
+    return {
+      ...actual,
+      prepareProviderRuntimeAuth: vi.fn(async () => undefined),
+      resolveProviderCapabilitiesWithPlugin: vi.fn(() => undefined),
+    };
+  });
 };
 
 let runEmbeddedPiAgent: typeof import("./pi-embedded-runner/run.js").runEmbeddedPiAgent;
