@@ -1457,17 +1457,23 @@ export async function runSubagentAnnounceFlow(params: {
       // A worker can finish just after the first wait request timed out.
       // If we already have real completion content, do one cached recheck so
       // the final completion event prefers the authoritative terminal state.
+      // This is best-effort; if the recheck fails, keep the known timeout
+      // outcome instead of dropping the announcement entirely.
       if (outcome?.status === "timeout" && reply?.trim() && params.waitForCompletion !== false) {
-        const rechecked = await waitForSubagentRunOutcome(params.childRunId, 0);
-        const applied = applySubagentWaitOutcome({
-          wait: rechecked,
-          outcome,
-          startedAt: params.startedAt,
-          endedAt: params.endedAt,
-        });
-        outcome = applied.outcome;
-        params.startedAt = applied.startedAt;
-        params.endedAt = applied.endedAt;
+        try {
+          const rechecked = await waitForSubagentRunOutcome(params.childRunId, 0);
+          const applied = applySubagentWaitOutcome({
+            wait: rechecked,
+            outcome,
+            startedAt: params.startedAt,
+            endedAt: params.endedAt,
+          });
+          outcome = applied.outcome;
+          params.startedAt = applied.startedAt;
+          params.endedAt = applied.endedAt;
+        } catch {
+          // Best-effort recheck; keep the existing timeout outcome on failure.
+        }
       }
 
       if (isAnnounceSkip(reply) || isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {
