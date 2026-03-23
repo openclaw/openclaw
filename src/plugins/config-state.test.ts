@@ -271,6 +271,11 @@ describe("resolveEnableState", () => {
     expect(state).toEqual({ enabled: true });
   });
 
+  it("enables bundled web search providers like brave by default", () => {
+    const state = resolveEnableState("brave", "bundled", normalizePluginsConfig({}));
+    expect(state).toEqual({ enabled: true });
+  });
+
   it("allows bundled plugins to opt into default enablement from manifest metadata", () => {
     const state = resolveEnableState("profile-aware", "bundled", normalizePluginsConfig({}), true);
     expect(state).toEqual({ enabled: true });
