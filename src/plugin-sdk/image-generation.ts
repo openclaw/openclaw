@@ -9,6 +9,6 @@ export type {
   ImageGenerationSourceImage,
 } from "../image-generation/types.js";
 
-export { buildFalImageGenerationProvider } from "../image-generation/providers/fal.js";
-export { buildGoogleImageGenerationProvider } from "../image-generation/providers/google.js";
-export { buildOpenAIImageGenerationProvider } from "../image-generation/providers/openai.js";
+export { buildFalImageGenerationProvider } from "../../extensions/fal/image-generation-provider.js";
+export { buildGoogleImageGenerationProvider } from "../../extensions/google/image-generation-provider.js";
+export { buildOpenAIImageGenerationProvider } from "../../extensions/openai/image-generation-provider.js";

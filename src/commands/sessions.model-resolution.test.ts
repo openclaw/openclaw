@@ -45,19 +45,19 @@ describe("sessionsCommand model resolution", () => {
     const model = await resolveSubagentModel(
       {
         modelProvider: "openai-codex",
-        model: "gpt-5.3-codex",
+        model: "gpt-5.4",
         modelOverride: "pi:opus",
       },
       "subagent-1",
     );
-    expect(model).toBe("gpt-5.3-codex");
+    expect(model).toBe("gpt-5.4");
   });
 
   it("falls back to modelOverride when runtime model is missing", async () => {
     const model = await resolveSubagentModel(
-      { modelOverride: "openai-codex/gpt-5.3-codex" },
+      { modelOverride: "openai-codex/gpt-5.4" },
       "subagent-2",
     );
-    expect(model).toBe("gpt-5.3-codex");
+    expect(model).toBe("gpt-5.4");
   });
 });

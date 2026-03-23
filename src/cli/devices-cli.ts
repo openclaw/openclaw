@@ -246,7 +246,7 @@ export function registerDevicesCli(program: Command) {
       .action(async (opts: DevicesRpcOpts) => {
         const list = await listPairingWithFallback(opts);
         if (opts.json) {
-          defaultRuntime.log(JSON.stringify(list, null, 2));
+          defaultRuntime.writeJson(list);
           return;
         }
         if (list.pending?.length) {
@@ -323,7 +323,7 @@ export function registerDevicesCli(program: Command) {
         }
         const result = await callGatewayCli("device.pair.remove", opts, { deviceId: trimmed });
         if (opts.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
+          defaultRuntime.writeJson(result);
           return;
         }
         defaultRuntime.log(`${theme.warn("Removed")} ${theme.command(trimmed)}`);
@@ -366,16 +366,10 @@ export function registerDevicesCli(program: Command) {
           }
         }
         if (opts.json) {
-          defaultRuntime.log(
-            JSON.stringify(
-              {
-                removedDevices: removedDeviceIds,
-                rejectedPending: rejectedRequestIds,
-              },
-              null,
-              2,
-            ),
-          );
+          defaultRuntime.writeJson({
+            removedDevices: removedDeviceIds,
+            rejectedPending: rejectedRequestIds,
+          });
           return;
         }
         defaultRuntime.log(
@@ -413,7 +407,7 @@ export function registerDevicesCli(program: Command) {
           return;
         }
         if (opts.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
+          defaultRuntime.writeJson(result);
           return;
         }
         const deviceId = (result as { device?: { deviceId?: string } })?.device?.deviceId;
@@ -431,7 +425,7 @@ export function registerDevicesCli(program: Command) {
       .action(async (requestId: string, opts: DevicesRpcOpts) => {
         const result = await callGatewayCli("device.pair.reject", opts, { requestId });
         if (opts.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
+          defaultRuntime.writeJson(result);
           return;
         }
         const deviceId = (result as { deviceId?: string })?.deviceId;
@@ -456,7 +450,7 @@ export function registerDevicesCli(program: Command) {
           role: required.role,
           scopes: Array.isArray(opts.scope) ? opts.scope : undefined,
         });
-        defaultRuntime.log(JSON.stringify(result, null, 2));
+        defaultRuntime.writeJson(result);
       }),
   );
 
@@ -475,7 +469,7 @@ export function registerDevicesCli(program: Command) {
           deviceId: required.deviceId,
           role: required.role,
         });
-        defaultRuntime.log(JSON.stringify(result, null, 2));
+        defaultRuntime.writeJson(result);
       }),
   );
 }

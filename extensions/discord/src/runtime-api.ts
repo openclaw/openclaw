@@ -4,7 +4,7 @@ export {
   PAIRING_APPROVED_MESSAGE,
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
-} from "openclaw/plugin-sdk/discord";
+} from "openclaw/plugin-sdk/channel-status";
 export {
   buildChannelConfigSchema,
   getChatChannelMeta,

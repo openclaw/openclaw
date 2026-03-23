@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { callGateway } from "../gateway/call.js";
 import { readSnakeCaseParamRaw } from "../param-key.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
@@ -83,6 +84,16 @@ function toolParametersSupportsMessageThreadId(tool: AnyAgentTool): boolean {
       : null;
   return Boolean(properties && "messageThreadId" in properties);
 }
+type OpenClawToolsDeps = {
+  callGateway: typeof callGateway;
+  config?: OpenClawConfig;
+};
+
+const defaultOpenClawToolsDeps: OpenClawToolsDeps = {
+  callGateway,
+};
+
+let openClawToolsDeps: OpenClawToolsDeps = defaultOpenClawToolsDeps;
 
 export function createOpenClawTools(
   options?: {
@@ -141,6 +152,7 @@ export function createOpenClawTools(
     allowGatewaySubagentBinding?: boolean;
   } & SpawnedToolContext,
 ): AnyAgentTool[] {
+  const resolvedConfig = options?.config ?? openClawToolsDeps.config;
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
   const spawnWorkspaceDir = resolveWorkspaceRoot(
     options?.spawnWorkspaceDir ?? options?.workspaceDir,
@@ -240,18 +252,21 @@ export function createOpenClawTools(
     createSessionsListTool({
       agentSessionKey: options?.agentSessionKey,
       sandboxed: options?.sandboxed,
-      config: options?.config,
+      config: resolvedConfig,
+      callGateway: openClawToolsDeps.callGateway,
     }),
     createSessionsHistoryTool({
       agentSessionKey: options?.agentSessionKey,
       sandboxed: options?.sandboxed,
-      config: options?.config,
+      config: resolvedConfig,
+      callGateway: openClawToolsDeps.callGateway,
     }),
     createSessionsSendTool({
       agentSessionKey: options?.agentSessionKey,
       agentChannel: options?.agentChannel,
       sandboxed: options?.sandboxed,
-      config: options?.config,
+      config: resolvedConfig,
+      callGateway: openClawToolsDeps.callGateway,
     }),
     createSessionsYieldTool({
       sessionId: options?.sessionId,
@@ -275,7 +290,7 @@ export function createOpenClawTools(
     }),
     createSessionStatusTool({
       agentSessionKey: options?.agentSessionKey,
-      config: options?.config,
+      config: resolvedConfig,
       sandboxed: options?.sandboxed,
     }),
     ...(webSearchTool ? [webSearchTool] : []),
@@ -338,3 +353,14 @@ export function createOpenClawTools(
 
   return [...tools, ...wrappedPluginTools];
 }
+
+export const __testing = {
+  setDepsForTest(overrides?: Partial<OpenClawToolsDeps>) {
+    openClawToolsDeps = overrides
+      ? {
+          ...defaultOpenClawToolsDeps,
+          ...overrides,
+        }
+      : defaultOpenClawToolsDeps;
+  },
+};
