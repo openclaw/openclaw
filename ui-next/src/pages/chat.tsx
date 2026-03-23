@@ -135,8 +135,7 @@ export function ChatPage() {
     }
     sendRpc<{ delegations?: DelegationEntry[] }>("sessions.delegations", {
       sessionKey: activeSessionKey,
-      includeCompleted: true,
-      limit: 10,
+      limit: 20,
     })
       .then((result) => setDelegations(result?.delegations ?? []))
       .catch(() => {
