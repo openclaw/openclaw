@@ -16117,6 +16117,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Plugin entry name inside the source marketplace, used for later updates.",
       tags: ["advanced"],
     },
+    "agents.defaults.embeddedPi.overloadBackoffMaxMs": {
+      help: "Maximum backoff delay in milliseconds before retrying after an API overloaded_error during auth profile failover (default: 30000). Lower values retry faster but risk exhausting the retry budget under sustained load.",
+      tags: ["reliability", "performance", "storage"],
+    },
     "models.providers.*.headers.*": {
       sensitive: true,
       tags: ["security", "models"],
