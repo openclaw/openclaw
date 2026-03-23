@@ -1,11 +1,11 @@
 import path from "node:path";
-import type { AudioTranscriptionRequest, AudioTranscriptionResult } from "./types.js";
 import {
   assertOkOrThrowHttpError,
   normalizeBaseUrl,
   postTranscriptionRequest,
   requireTranscriptionText,
 } from "./shared.js";
+import type { AudioTranscriptionRequest, AudioTranscriptionResult } from "./types.js";
 
 type OpenAiCompatibleAudioParams = AudioTranscriptionRequest & {
   defaultBaseUrl: string;

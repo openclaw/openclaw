@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "../config/config.js";
+import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import {
   buildAnthropicVertexProvider,
   buildKimiCodingProvider,
@@ -12,8 +14,6 @@ import {
   XIAOMI_DEFAULT_MODEL_ID,
   buildXiaomiProvider,
 } from "../plugin-sdk/provider-catalog.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { hasAnthropicVertexAvailableAuth } from "./anthropic-vertex-provider.js";
