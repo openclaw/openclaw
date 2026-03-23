@@ -98,7 +98,7 @@ export function createSessionsSpawnTool(
       const task = readStringParam(params, "task", { required: true });
       const label = typeof params.label === "string" ? params.label.trim() : "";
       const runtime = params.runtime === "acp" ? "acp" : "subagent";
-      const requestedAgentId = readStringParam(params, "agentId");
+      const requestedAgentId = readStringParam(params, "agentId", { required: true });
       const resumeSessionId = readStringParam(params, "resumeSessionId");
       const modelOverride = readStringParam(params, "model");
       const thinkingOverrideRaw = readStringParam(params, "thinking");

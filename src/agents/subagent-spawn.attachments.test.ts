@@ -45,6 +45,16 @@ vi.mock("../config/io.js", async (importOriginal) => {
   };
 });
 
+// config.ts re-exports loadConfig from io.js. Vitest ESM module resolution may
+// bind subagent-spawn.ts's loadConfig directly from io.js, bypassing the barrel mock.
+vi.mock("../config/io.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/io.js")>();
+  return {
+    ...actual,
+    loadConfig: () => configOverride,
+  };
+});
+
 vi.mock("./subagent-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./subagent-registry.js")>();
   return {
