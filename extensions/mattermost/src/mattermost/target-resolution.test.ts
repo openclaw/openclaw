@@ -29,11 +29,8 @@ describe("mattermost target resolution", () => {
   });
 
   it("recognizes explicit targets and ID-shaped values", async () => {
-    const {
-      isExplicitMattermostTarget,
-      isMattermostId,
-      parseMattermostApiStatus,
-    } = await import("./target-resolution.js");
+    const { isExplicitMattermostTarget, isMattermostId, parseMattermostApiStatus } =
+      await import("./target-resolution.js");
 
     expect(isExplicitMattermostTarget("@alice")).toBe(true);
     expect(isExplicitMattermostTarget("#town-square")).toBe(true);

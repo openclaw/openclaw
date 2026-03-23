@@ -27,9 +27,9 @@ describe("nextcloud talk format helpers", () => {
   });
 
   it("strips markdown formatting and truncates on word boundaries", () => {
-    expect(
-      stripNextcloudTalkFormatting("**bold** [link](https://example.com) `code`"),
-    ).toBe("bold link");
+    expect(stripNextcloudTalkFormatting("**bold** [link](https://example.com) `code`")).toBe(
+      "bold link",
+    );
     expect(truncateNextcloudTalkText("alpha beta gamma delta", 14)).toBe("alpha beta...");
     expect(truncateNextcloudTalkText("short", 14)).toBe("short");
   });
