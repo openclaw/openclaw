@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.js";
 import { isValidEnvSecretRefId, type SecretRef } from "../config/types.secrets.js";
 import { encodeJsonPointerToken } from "../secrets/json-pointer.js";
-import { PROVIDER_ENV_VARS } from "../secrets/provider-env-vars.js";
+import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidExecSecretRefId,
@@ -45,7 +45,7 @@ export function extractEnvVarFromSourceLabel(source: string): string | undefined
 }
 
 function resolveDefaultProviderEnvVar(provider: string): string | undefined {
-  const envVars = PROVIDER_ENV_VARS[provider];
+  const envVars = getProviderEnvVars(provider);
   return envVars?.find((candidate) => candidate.trim().length > 0);
 }
 

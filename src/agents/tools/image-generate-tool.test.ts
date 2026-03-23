@@ -460,6 +460,56 @@ describe("createImageGenerateTool", () => {
     });
   });
 
+  it("skips auth hints for prototype-like provider ids", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      {
+        id: "__proto__",
+        defaultModel: "proto-v1",
+        models: ["proto-v1"],
+        capabilities: {
+          generate: {
+            maxCount: 1,
+          },
+          edit: {
+            enabled: false,
+            maxInputImages: 0,
+          },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+
+    const tool = createImageGenerateTool({
+      config: {
+        agents: {
+          defaults: {
+            imageGenerationModel: {
+              primary: "__proto__/proto-v1",
+            },
+          },
+        },
+      },
+    });
+
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("expected image_generate tool");
+    }
+
+    const result = await tool.execute("call-list-proto", { action: "list" });
+    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain("__proto__ (default proto-v1)");
+    expect(text).not.toContain("auth: set");
+    expect(result).toMatchObject({
+      details: {
+        providers: [expect.objectContaining({ id: "__proto__", authEnvVars: [] })],
+      },
+    });
+  });
+
   it("rejects provider-specific edit limits before runtime", async () => {
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
       {
