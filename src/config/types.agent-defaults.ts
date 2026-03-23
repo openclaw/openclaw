@@ -322,6 +322,13 @@ export type AgentDefaultsConfig = {
      * Default: false (only the final heartbeat payload is delivered).
      */
     includeReasoning?: boolean;
+    /**
+     * Path to a gate script executed before each heartbeat LLM call.
+     * Exit 0 = proceed with heartbeat; non-zero = skip (no LLM invocation, zero token cost).
+     * The agent workspace directory is passed as the first argument.
+     * Bypassed for cron, exec-event, and wake-triggered heartbeats.
+     */
+    beforeRun?: string;
   };
   /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
   maxConcurrent?: number;

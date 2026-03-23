@@ -1,4 +1,8 @@
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -738,6 +742,43 @@ export async function runHeartbeatOnce(opts: {
       durationMs: Date.now() - startedAt,
     });
     return { status: "skipped", reason: "requests-in-flight" };
+  }
+
+  // beforeRun gate: execute a user-supplied script before the LLM call.
+  // Exit 0 = proceed; non-zero = skip (zero token cost).
+  // Bypassed for cron, exec-event, and wake-triggered heartbeats.
+  const beforeRunScript = heartbeat?.beforeRun?.trim();
+  if (
+    beforeRunScript &&
+    !preflight.isExecEventReason &&
+    !preflight.isCronEventReason &&
+    !preflight.isWakeReason &&
+    !preflight.hasTaggedCronEvents
+  ) {
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    try {
+      await execFileAsync("bash", [beforeRunScript, workspaceDir], {
+        timeout: 30_000,
+      });
+      log.info("heartbeat: beforeRun gate passed", { script: beforeRunScript });
+    } catch (err) {
+      const killed = (err as { killed?: boolean }).killed;
+      const code = (err as { status?: number }).status;
+      const errCode = (err as { code?: string }).code;
+      if (killed) {
+        log.warn("heartbeat: beforeRun gate timed out", { script: beforeRunScript });
+      } else if (errCode === "ENOENT") {
+        log.warn("heartbeat: beforeRun script not found", { script: beforeRunScript });
+      } else {
+        log.info("heartbeat: beforeRun gate rejected", { script: beforeRunScript, exitCode: code });
+      }
+      emitHeartbeatEvent({
+        status: "skipped",
+        reason: "before-run-gate",
+        durationMs: Date.now() - startedAt,
+      });
+      return { status: "skipped", reason: "before-run-gate" };
+    }
   }
 
   const previousUpdatedAt = entry?.updatedAt;
