@@ -152,7 +152,9 @@ describe("mattermost monitor slash", () => {
     });
 
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("slash commands callbackUrl resolved to http://127.0.0.1:18789/slash"),
+      expect.stringContaining(
+        "slash commands callbackUrl resolved to http://127.0.0.1:18789/slash",
+      ),
     );
     expect(runtime.error).toHaveBeenCalledWith(
       "mattermost: failed to register slash commands for team team-2: Error: boom",
