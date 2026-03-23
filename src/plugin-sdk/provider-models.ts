@@ -7,11 +7,12 @@ import {
   KILOCODE_DEFAULT_MAX_TOKENS,
   KILOCODE_DEFAULT_MODEL_ID,
   KILOCODE_DEFAULT_MODEL_NAME,
-} from "../../extensions/kilocode/shared.js";
+} from "../plugins/provider-model-kilocode.js";
 
 export type { ModelApi, ModelProviderConfig } from "../config/types.models.js";
 export type { ModelDefinitionConfig } from "../config/types.models.js";
 export type { ProviderPlugin } from "../plugins/types.js";
+export type { KilocodeModelCatalogEntry } from "../plugins/provider-model-kilocode.js";
 
 export { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 export {
@@ -111,7 +112,7 @@ export {
   KILOCODE_DEFAULT_MODEL_ID,
   KILOCODE_DEFAULT_MODEL_NAME,
   KILOCODE_MODEL_CATALOG,
-} from "../../extensions/kilocode/shared.js";
+} from "../plugins/provider-model-kilocode.js";
 export {
   discoverVercelAiGatewayModels,
   VERCEL_AI_GATEWAY_BASE_URL,

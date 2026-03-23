@@ -5,7 +5,7 @@ import {
   KILOCODE_DEFAULT_MAX_TOKENS,
   KILOCODE_DEFAULT_MODEL_ID,
   KILOCODE_DEFAULT_MODEL_NAME,
-} from "../../extensions/kilocode/shared.js";
+} from "./provider-model-kilocode.js";
 
 const KIMI_CODING_BASE_URL = "https://api.kimi.com/coding/";
 const KIMI_CODING_MODEL_ID = "kimi-code";
