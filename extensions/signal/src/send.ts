@@ -174,13 +174,13 @@ export async function sendMessageSignal(
   }
   if (opts.viewOnce) {
     if (!attachments || attachments.length === 0) {
-      throw new Error("Signal view-once requires an image attachment");
+      throw new Error("Signal view-once requires an image or video attachment");
     }
-    if (attachmentKind === "image") {
+    if (attachmentKind === "image" || attachmentKind === "video") {
       params["view-once"] = true;
     } else {
       throw new Error(
-        `Signal view-once is only supported for image attachments (got ${attachmentKind})`,
+        `Signal view-once is only supported for image and video attachments (got ${attachmentKind})`,
       );
     }
   }

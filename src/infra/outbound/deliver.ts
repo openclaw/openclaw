@@ -702,9 +702,9 @@ async function deliverOutboundPayloadsCore(
               `WhatsApp view-once is only supported for image and video attachments (got ${media.kind})`,
             );
           }
-          if (channel === "signal" && media.kind !== "image") {
+          if (channel === "signal" && media.kind !== "image" && media.kind !== "video") {
             throw new Error(
-              `Signal view-once is only supported for image attachments (got ${media.kind})`,
+              `Signal view-once is only supported for image and video attachments (got ${media.kind})`,
             );
           }
         }
