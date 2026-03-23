@@ -1,7 +1,7 @@
 # ROBUST_SOUL_README: Security & Identity Architecture for OpenClaw
 
 ## The Context
-With the rapid scaling of the OpenClaw and Moltbook ecosystems, the platform has encountered critical vulnerability vectors: prompt injection via sub-agents, runaway recursive loops, and severe privilege escalation. 
+With the rapid scaling of the OpenClaw ecosystem, the platform has encountered critical vulnerability vectors: prompt injection via sub-agents, runaway recursive loops, and severe privilege escalation. 
 
 The root cause of these vulnerabilities is weak identity architecture. When an agent's core instruction is "never break character" or "you ARE the user," it lacks the structural boundary required to evaluate a malicious command. It prioritizes mimicry over security.
 
