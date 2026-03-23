@@ -42,7 +42,7 @@ You wake up fresh each session. These files are your continuity:
 
 ### 📝 Write It Down
 
-**MANDATORY at end of every substantive session (>5 messages):** Write a daily note to `memory/YYYY-MM-DD.md` summarizing what happened, what was decided, and what is pending.
+**MANDATORY at end of every session with more than 5 messages:** Write a daily note to `memory/YYYY-MM-DD.md`. Include: what task you were given, what you created or decided, and any pending items. In subagent mode: write memory FIRST, then return your final answer.
 
 Memory is limited. If you want to remember something, write it to a file.
 
