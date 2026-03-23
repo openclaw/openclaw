@@ -61,6 +61,19 @@ function verifyUiBuild() {
     }
   }
 
+  // Check required scripts (needed for manual UI build workaround)
+  const REQUIRED_SCRIPTS = ["scripts/ui.js"];
+  for (const script of REQUIRED_SCRIPTS) {
+    const scriptPath = path.join(repoRoot, script);
+    if (!fs.existsSync(scriptPath)) {
+      console.error(`❌ Required script missing: ${script}`);
+      console.error("   This script is needed for 'pnpm ui:build' workaround.");
+      hasErrors = true;
+    } else {
+      console.log(`✅ Required script present: ${script}`);
+    }
+  }
+
   if (hasErrors) {
     console.error("");
     console.error("❌ Control UI verification FAILED");
