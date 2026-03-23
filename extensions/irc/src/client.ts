@@ -166,6 +166,9 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
     if (!cleaned) {
       throw new Error("IRC command cannot be empty");
     }
+    if (closed || socket.destroyed) {
+      throw new Error("IRC socket is closed; cannot send");
+    }
     socket.write(`${cleaned}\r\n`);
   };
 
@@ -212,7 +215,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
     const normalizedTarget = sanitizeIrcTarget(target);
     const cleaned = sanitizeIrcOutboundText(text);
     if (!cleaned) {
-      return;
+      throw new Error("IRC message is empty after sanitization");
     }
     let remaining = cleaned;
     while (remaining.length > 0) {
