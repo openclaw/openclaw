@@ -33,6 +33,8 @@ export {
   webAuthExists,
 } from "./auth-store.js";
 
+const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
+
 // Per-authDir queues so multi-account creds saves don't block each other.
 const credsSaveQueues = new Map<string, Promise<void>>();
 const CREDS_SAVE_FLUSH_TIMEOUT_MS = 15_000;
@@ -142,7 +144,7 @@ export async function createWaSocket(
         }
         if (connection === "close") {
           const status = getStatusCode(lastDisconnect?.error);
-          if (status === DisconnectReason.loggedOut) {
+          if (status === LOGGED_OUT_STATUS) {
             console.error(
               danger(
                 `WhatsApp session logged out. Run: ${formatCliCommand("openclaw channels login")}`,

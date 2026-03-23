@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../../../src/logging.js";
 import { renderQrPngBase64 } from "./qr-image.js";
 
-vi.mock("./session.js", () => {
+vi.mock("./session.js", async () => {
+  const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
   const ev = new EventEmitter();
   const sock = {
     ev,
@@ -14,6 +15,7 @@ vi.mock("./session.js", () => {
     sendMessage: vi.fn(),
   };
   return {
+    ...actual,
     createWaSocket: vi.fn().mockResolvedValue(sock),
     waitForWaConnection: vi.fn().mockResolvedValue(undefined),
   };
