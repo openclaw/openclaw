@@ -23,7 +23,7 @@ object CanvasActionTrust {
   private fun isTrustedA2uiPage(candidateUri: URI, trustedUrl: String): Boolean {
     val trustedUri = parseUri(trustedUrl) ?: return false
     if (!candidateUri.scheme.equals(trustedUri.scheme, ignoreCase = true)) return false
-    if (!candidateUri.host.equals(trustedUri.host, ignoreCase = true)) return false
+    if (candidateUri.host?.equals(trustedUri.host, ignoreCase = true) != true) return false
     if (effectivePort(candidateUri) != effectivePort(trustedUri)) return false
 
     val trustedPath = trustedUri.rawPath?.takeIf { it.isNotBlank() } ?: return false
