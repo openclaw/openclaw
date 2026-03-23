@@ -98,7 +98,8 @@ export function resolveCommandResolutionFromArgv(
 ): CommandResolution | null {
   const plan = resolveExecWrapperTrustPlan(argv);
   const effectiveArgv = plan.argv;
-  const rawExecutable = effectiveArgv[0]?.trim();
+  const policyArgv = plan.policyArgv;
+  const rawExecutable = policyArgv[0]?.trim();
   if (!rawExecutable) {
     return null;
   }
