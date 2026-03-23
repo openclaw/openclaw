@@ -15,7 +15,9 @@ import type {
 import {
   computeJobPreviousRunAtMs,
   computeJobNextRunAtMs,
+  hasSkipNextReloadRepairRecompute,
   nextWakeAtMs,
+  removeJobById,
   recomputeNextRunsForMaintenance,
   recordScheduleComputeError,
   resolveJobPayloadTextForMain,
@@ -368,6 +370,7 @@ export function applyJobResult(
 
   const shouldDelete =
     job.schedule.kind === "at" && job.deleteAfterRun === true && result.status === "ok";
+  const skipImmediateScheduleRecompute = hasSkipNextReloadRepairRecompute(state, job.id);
 
   if (!shouldDelete) {
     if (job.schedule.kind === "at") {
@@ -380,7 +383,15 @@ export function applyJobResult(
         const transient = isTransientCronError(result.error, retryConfig.retryOn);
         // consecutiveErrors is always set to ≥1 by the increment block above.
         const consecutive = job.state.consecutiveErrors;
-        if (transient && consecutive <= retryConfig.maxAttempts) {
+        if (skipImmediateScheduleRecompute) {
+          state.deps.log.info(
+            {
+              jobId: job.id,
+              jobName: job.name,
+            },
+            "cron: preserving external reload repair for one-shot job",
+          );
+        } else if (transient && consecutive <= retryConfig.maxAttempts) {
           // Schedule retry with backoff (#24355).
           const backoff = errorBackoffMs(consecutive, retryConfig.backoffMs);
           job.state.nextRunAtMs = result.endedAt + backoff;
@@ -416,54 +427,58 @@ export function applyJobResult(
     } else if (result.status === "error" && job.enabled) {
       // Apply exponential backoff for errored jobs to prevent retry storms.
       const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1);
-      let normalNext: number | undefined;
-      try {
-        normalNext =
-          opts?.preserveSchedule && job.schedule.kind === "every"
-            ? computeNextWithPreservedLastRun(result.endedAt)
-            : computeJobNextRunAtMs(job, result.endedAt);
-      } catch (err) {
-        // If the schedule expression/timezone throws (croner edge cases),
-        // record the schedule error (auto-disables after repeated failures)
-        // and fall back to backoff-only schedule so the state update is not lost.
-        recordScheduleComputeError({ state, job, err });
-      }
-      const backoffNext = result.endedAt + backoff;
-      // Use whichever is later: the natural next run or the backoff delay.
-      job.state.nextRunAtMs =
-        normalNext !== undefined ? Math.max(normalNext, backoffNext) : backoffNext;
-      state.deps.log.info(
-        {
-          jobId: job.id,
-          consecutiveErrors: job.state.consecutiveErrors,
-          backoffMs: backoff,
-          nextRunAtMs: job.state.nextRunAtMs,
-        },
-        "cron: applying error backoff",
-      );
-    } else if (job.enabled) {
-      let naturalNext: number | undefined;
-      try {
-        naturalNext =
-          opts?.preserveSchedule && job.schedule.kind === "every"
-            ? computeNextWithPreservedLastRun(result.endedAt)
-            : computeJobNextRunAtMs(job, result.endedAt);
-      } catch (err) {
-        // If the schedule expression/timezone throws (croner edge cases),
-        // record the schedule error (auto-disables after repeated failures)
-        // so a persistent throw doesn't cause a MIN_REFIRE_GAP_MS hot loop.
-        recordScheduleComputeError({ state, job, err });
-      }
-      if (job.schedule.kind === "cron") {
-        // Safety net: ensure the next fire is at least MIN_REFIRE_GAP_MS
-        // after the current run ended.  Prevents spin-loops when the
-        // schedule computation lands in the same second due to
-        // timezone/croner edge cases (see #17821).
-        const minNext = result.endedAt + MIN_REFIRE_GAP_MS;
+      if (!skipImmediateScheduleRecompute) {
+        let normalNext: number | undefined;
+        try {
+          normalNext =
+            opts?.preserveSchedule && job.schedule.kind === "every"
+              ? computeNextWithPreservedLastRun(result.endedAt)
+              : computeJobNextRunAtMs(job, result.endedAt);
+        } catch (err) {
+          // If the schedule expression/timezone throws (croner edge cases),
+          // record the schedule error (auto-disables after repeated failures)
+          // and fall back to backoff-only schedule so the state update is not lost.
+          recordScheduleComputeError({ state, job, err });
+        }
+        const backoffNext = result.endedAt + backoff;
+        // Use whichever is later: the natural next run or the backoff delay.
         job.state.nextRunAtMs =
-          naturalNext !== undefined ? Math.max(naturalNext, minNext) : minNext;
-      } else {
-        job.state.nextRunAtMs = naturalNext;
+          normalNext !== undefined ? Math.max(normalNext, backoffNext) : backoffNext;
+        state.deps.log.info(
+          {
+            jobId: job.id,
+            consecutiveErrors: job.state.consecutiveErrors,
+            backoffMs: backoff,
+            nextRunAtMs: job.state.nextRunAtMs,
+          },
+          "cron: applying error backoff",
+        );
+      }
+    } else if (job.enabled) {
+      if (!skipImmediateScheduleRecompute) {
+        let naturalNext: number | undefined;
+        try {
+          naturalNext =
+            opts?.preserveSchedule && job.schedule.kind === "every"
+              ? computeNextWithPreservedLastRun(result.endedAt)
+              : computeJobNextRunAtMs(job, result.endedAt);
+        } catch (err) {
+          // If the schedule expression/timezone throws (croner edge cases),
+          // record the schedule error (auto-disables after repeated failures)
+          // so a persistent throw doesn't cause a MIN_REFIRE_GAP_MS hot loop.
+          recordScheduleComputeError({ state, job, err });
+        }
+        if (job.schedule.kind === "cron") {
+          // Safety net: ensure the next fire is at least MIN_REFIRE_GAP_MS
+          // after the current run ended.  Prevents spin-loops when the
+          // schedule computation lands in the same second due to
+          // timezone/croner edge cases (see #17821).
+          const minNext = result.endedAt + MIN_REFIRE_GAP_MS;
+          job.state.nextRunAtMs =
+            naturalNext !== undefined ? Math.max(naturalNext, minNext) : minNext;
+        } else {
+          job.state.nextRunAtMs = naturalNext;
+        }
       }
     } else {
       job.state.nextRunAtMs = undefined;
@@ -498,8 +513,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
 
   emitJobFinished(state, job, result, result.startedAt);
 
-  if (shouldDelete) {
-    store.jobs = jobs.filter((entry) => entry.id !== job.id);
+  if (shouldDelete && removeJobById(state, job.id)) {
     emit(state, { jobId: job.id, action: "removed" });
   }
 }
@@ -684,7 +698,9 @@ export async function onTimer(state: CronServiceState) {
         // locked block.  The full recomputeNextRuns would silently skip
         // those jobs (advancing nextRunAtMs without execution), causing
         // daily cron schedules to jump 48 h instead of 24 h (#17852).
-        recomputeNextRunsForMaintenance(state);
+        recomputeNextRunsForMaintenance(state, {
+          consumeReloadRepairSkip: false,
+        });
         await persist(state);
       });
     }
@@ -1196,8 +1212,7 @@ export async function executeJob(
 
   emitJobFinished(state, job, coreResult, startedAt);
 
-  if (shouldDelete && state.store) {
-    state.store.jobs = state.store.jobs.filter((j) => j.id !== job.id);
+  if (shouldDelete && removeJobById(state, job.id)) {
     emit(state, { jobId: job.id, action: "removed" });
   }
 }

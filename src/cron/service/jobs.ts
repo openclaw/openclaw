@@ -33,6 +33,7 @@ import {
 import type { CronServiceState } from "./state.js";
 
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
+const MISSING_NEXT_RUN_WAKE_MS = 2_000;
 const STAGGER_OFFSET_CACHE_MAX = 4096;
 const staggerOffsetCache = new Map<string, number>();
 
@@ -238,6 +239,19 @@ export function findJobOrThrow(state: CronServiceState, id: string) {
   return job;
 }
 
+export function removeJobById(state: CronServiceState, jobId: string): boolean {
+  if (!state.store) {
+    return false;
+  }
+  const before = state.store.jobs.length;
+  state.store.jobs = state.store.jobs.filter((job) => job.id !== jobId);
+  const removed = state.store.jobs.length !== before;
+  if (removed) {
+    state.skipNextReloadRepairRecomputeJobIds.delete(jobId);
+  }
+  return removed;
+}
+
 export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | undefined {
   if (!job.enabled) {
     return undefined;
@@ -292,6 +306,22 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
     return computeStaggeredCronNextRunAtMs(job, nextSecondMs);
   }
   return isFiniteTimestamp(next) ? next : undefined;
+}
+
+export function shouldTreatUndefinedNextRunAsScheduleError(job: CronJob): boolean {
+  if (!job.enabled) {
+    return false;
+  }
+  if (job.schedule.kind === "every") {
+    return coerceFiniteScheduleNumber(job.schedule.everyMs) === undefined;
+  }
+  if (job.schedule.kind === "at") {
+    return parseAbsoluteTimeMs(job.schedule.at) === null;
+  }
+  if (job.schedule.kind === "cron") {
+    return job.schedule.expr.trim().length === 0;
+  }
+  return false;
 }
 
 export function computeJobPreviousRunAtMs(job: CronJob, nowMs: number): number | undefined {
@@ -413,16 +443,64 @@ function walkSchedulableJobs(
   return changed;
 }
 
-function recomputeJobNextRunAtMs(params: { state: CronServiceState; job: CronJob; nowMs: number }) {
+export function hasSkipNextReloadRepairRecompute(state: CronServiceState, jobId: string): boolean {
+  return state.skipNextReloadRepairRecomputeJobIds.has(jobId);
+}
+
+export function consumeSkipNextReloadRepairRecompute(
+  state: CronServiceState,
+  jobId: string,
+): boolean {
+  if (!hasSkipNextReloadRepairRecompute(state, jobId)) {
+    return false;
+  }
+  state.skipNextReloadRepairRecomputeJobIds.delete(jobId);
+  return true;
+}
+
+function recomputeJobNextRunAtMs(params: {
+  state: CronServiceState;
+  job: CronJob;
+  nowMs: number;
+  consumeReloadRepairSkip?: boolean;
+  treatUndefinedAsScheduleError?: boolean;
+}) {
+  const consumeReloadRepairSkip = params.consumeReloadRepairSkip ?? true;
+  const treatUndefinedAsScheduleError = params.treatUndefinedAsScheduleError ?? true;
+  if (
+    consumeReloadRepairSkip
+      ? consumeSkipNextReloadRepairRecompute(params.state, params.job.id)
+      : hasSkipNextReloadRepairRecompute(params.state, params.job.id)
+  ) {
+    return false;
+  }
   let changed = false;
   try {
     const newNext = computeJobNextRunAtMs(params.job, params.nowMs);
+    const treatUndefinedAsSuccess =
+      newNext !== undefined || !shouldTreatUndefinedNextRunAsScheduleError(params.job);
+    if (
+      treatUndefinedAsScheduleError &&
+      newNext === undefined &&
+      shouldTreatUndefinedNextRunAsScheduleError(params.job)
+    ) {
+      const err =
+        params.job.schedule.kind === "every"
+          ? new Error("invalid every schedule: everyMs must be a finite number")
+          : params.job.schedule.kind === "at"
+            ? new Error("invalid at schedule: at must be a valid absolute timestamp")
+            : new Error("invalid cron schedule: expr is required");
+      if (recordScheduleComputeError({ state: params.state, job: params.job, err })) {
+        changed = true;
+      }
+      return changed;
+    }
     if (params.job.state.nextRunAtMs !== newNext) {
       params.job.state.nextRunAtMs = newNext;
       changed = true;
     }
     // Clear schedule error count on successful computation.
-    if (params.job.state.scheduleErrorCount) {
+    if (treatUndefinedAsSuccess && params.job.state.scheduleErrorCount) {
       params.job.state.scheduleErrorCount = undefined;
       changed = true;
     }
@@ -460,16 +538,31 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
  */
 export function recomputeNextRunsForMaintenance(
   state: CronServiceState,
-  opts?: { recomputeExpired?: boolean; nowMs?: number },
+  opts?: {
+    recomputeExpired?: boolean;
+    nowMs?: number;
+    consumeReloadRepairSkip?: boolean;
+    treatUndefinedAsScheduleError?: boolean;
+  },
 ): boolean {
   const recomputeExpired = opts?.recomputeExpired ?? false;
+  const consumeReloadRepairSkip = opts?.consumeReloadRepairSkip ?? true;
+  const treatUndefinedAsScheduleError = opts?.treatUndefinedAsScheduleError ?? true;
   return walkSchedulableJobs(
     state,
     ({ job, nowMs: now }) => {
       let changed = false;
       if (!isFiniteTimestamp(job.state.nextRunAtMs)) {
         // Missing or invalid nextRunAtMs is always repaired.
-        if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
+        if (
+          recomputeJobNextRunAtMs({
+            state,
+            job,
+            nowMs: now,
+            consumeReloadRepairSkip,
+            treatUndefinedAsScheduleError,
+          })
+        ) {
           changed = true;
         }
       } else if (
@@ -482,7 +575,15 @@ export function recomputeNextRunsForMaintenance(
         const lastRun = job.state.lastRunAtMs;
         const alreadyExecutedSlot = isFiniteTimestamp(lastRun) && lastRun >= job.state.nextRunAtMs;
         if (alreadyExecutedSlot) {
-          if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
+          if (
+            recomputeJobNextRunAtMs({
+              state,
+              job,
+              nowMs: now,
+              consumeReloadRepairSkip,
+              treatUndefinedAsScheduleError,
+            })
+          ) {
             changed = true;
           }
         }
@@ -495,18 +596,46 @@ export function recomputeNextRunsForMaintenance(
 
 export function nextWakeAtMs(state: CronServiceState) {
   const jobs = state.store?.jobs ?? [];
-  const enabled = jobs.filter((j) => j.enabled && isFiniteTimestamp(j.state.nextRunAtMs));
-  if (enabled.length === 0) {
-    return undefined;
+  let minEnabledNextRunAtMs: number | undefined;
+  let hasEnabledRepairableMissingNextRun = false;
+  const nowMs = state.deps.nowMs();
+
+  for (const job of jobs) {
+    if (!job.enabled) {
+      continue;
+    }
+    const nextRunAtMs = job.state.nextRunAtMs;
+    if (isFiniteTimestamp(nextRunAtMs)) {
+      minEnabledNextRunAtMs =
+        minEnabledNextRunAtMs === undefined
+          ? nextRunAtMs
+          : Math.min(minEnabledNextRunAtMs, nextRunAtMs);
+      continue;
+    }
+    // Only wake for missing nextRun values that can be repaired by recompute.
+    // Non-repairable malformed schedules (e.g. invalid every/at payloads)
+    // should not keep the scheduler in a perpetual 2s poll loop.
+    if ((job.state.scheduleErrorCount ?? 0) > 0) {
+      hasEnabledRepairableMissingNextRun = true;
+      continue;
+    }
+    try {
+      if (computeJobNextRunAtMs(job, nowMs) !== undefined) {
+        hasEnabledRepairableMissingNextRun = true;
+      }
+    } catch {
+      hasEnabledRepairableMissingNextRun = true;
+    }
   }
-  const first = enabled[0]?.state.nextRunAtMs;
-  if (!isFiniteTimestamp(first)) {
-    return undefined;
+
+  if (!hasEnabledRepairableMissingNextRun) {
+    return minEnabledNextRunAtMs;
   }
-  return enabled.reduce((min, j) => {
-    const next = j.state.nextRunAtMs;
-    return isFiniteTimestamp(next) ? Math.min(min, next) : min;
-  }, first);
+
+  const wakeForMissingNextRunAtMs = nowMs + MISSING_NEXT_RUN_WAKE_MS;
+  return minEnabledNextRunAtMs === undefined
+    ? wakeForMissingNextRunAtMs
+    : Math.min(minEnabledNextRunAtMs, wakeForMissingNextRunAtMs);
 }
 
 export function createJob(state: CronServiceState, input: CronJobCreate): CronJob {

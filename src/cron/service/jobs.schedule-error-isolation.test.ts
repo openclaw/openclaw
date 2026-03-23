@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob, CronStoreFile } from "../types.js";
-import { recomputeNextRuns } from "./jobs.js";
+import { recomputeNextRuns, recomputeNextRunsForMaintenance } from "./jobs.js";
 import type { CronServiceState } from "./state.js";
 
 function createMockState(jobs: CronJob[]): CronServiceState {
@@ -28,6 +28,11 @@ function createMockState(jobs: CronJob[]): CronServiceState {
     store,
     timer: null,
     running: false,
+    op: Promise.resolve(),
+    warnedDisabled: false,
+    storeLoadedAtMs: null,
+    storeFileMtimeMs: null,
+    skipNextReloadRepairRecomputeJobIds: new Set<string>(),
   } as unknown as CronServiceState;
 }
 
@@ -200,5 +205,69 @@ describe("cron schedule error isolation", () => {
     expect(badJob.state.lastError).toContain("invalid cron schedule: expr is required");
     expect(badJob.state.lastError).not.toContain("Cannot read properties of undefined");
     expect(badJob.state.scheduleErrorCount).toBe(1);
+  });
+
+  it("keeps malformed every schedules on the schedule-error path", () => {
+    const badJob = createJob({
+      id: "bad-every",
+      name: "Bad Every",
+      schedule: { kind: "every", everyMs: Number.NaN },
+      state: {
+        nextRunAtMs: undefined,
+        scheduleErrorCount: 1,
+        lastError: "schedule error: previous",
+      },
+    });
+    const state = createMockState([badJob]);
+
+    recomputeNextRuns(state);
+
+    expect(badJob.state.nextRunAtMs).toBeUndefined();
+    expect(badJob.state.scheduleErrorCount).toBe(2);
+    expect(badJob.state.lastError).toContain("invalid every schedule");
+  });
+
+  it("keeps malformed at schedules on the schedule-error path", () => {
+    const badJob = createJob({
+      id: "bad-at",
+      name: "Bad At",
+      schedule: { kind: "at", at: "not-a-timestamp" },
+      state: {
+        nextRunAtMs: undefined,
+        scheduleErrorCount: 1,
+        lastError: "schedule error: previous",
+      },
+    });
+    const state = createMockState([badJob]);
+
+    recomputeNextRuns(state);
+
+    expect(badJob.state.nextRunAtMs).toBeUndefined();
+    expect(badJob.state.scheduleErrorCount).toBe(2);
+    expect(badJob.state.lastError).toContain("invalid at schedule");
+  });
+
+  it("does not increment schedule errors during read-only maintenance repair", () => {
+    const badJob = createJob({
+      id: "bad-every-read",
+      name: "Bad Every Read",
+      schedule: { kind: "every", everyMs: Number.NaN },
+      state: {
+        nextRunAtMs: undefined,
+        scheduleErrorCount: 2,
+        lastError: "schedule error: previous",
+      },
+    });
+    const state = createMockState([badJob]);
+
+    const changed = recomputeNextRunsForMaintenance(state, {
+      treatUndefinedAsScheduleError: false,
+    });
+
+    expect(changed).toBe(false);
+    expect(badJob.enabled).toBe(true);
+    expect(badJob.state.nextRunAtMs).toBeUndefined();
+    expect(badJob.state.scheduleErrorCount).toBe(2);
+    expect(badJob.state.lastError).toBe("schedule error: previous");
   });
 });

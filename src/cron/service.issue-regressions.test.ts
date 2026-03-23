@@ -22,8 +22,12 @@ import {
   createNoopLogger,
   createRunningCronServiceState,
 } from "./service.test-harness.js";
-import { computeJobNextRunAtMs } from "./service/jobs.js";
-import { enqueueRun, run } from "./service/ops.js";
+import {
+  computeJobNextRunAtMs,
+  nextWakeAtMs,
+  recomputeNextRunsForMaintenance,
+} from "./service/jobs.js";
+import { enqueueRun, list, run, status } from "./service/ops.js";
 import { createCronServiceState, type CronEvent } from "./service/state.js";
 import {
   DEFAULT_JOB_TIMEOUT_MS,
@@ -842,6 +846,61 @@ describe("Cron issue regressions", () => {
     expect(finishedJob).toBeDefined();
     expect(finishedJob!.state.lastStatus).toBe("ok");
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not schedule one-shot retry when external reload breaks the at schedule mid-run", async () => {
+    const store = makeStorePath();
+    const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
+    const jobId = "oneshot-external-invalid-at-no-retry";
+
+    const cronJob = createIsolatedRegressionJob({
+      id: jobId,
+      name: "reminder",
+      scheduledAt,
+      schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+      payload: { kind: "agentTurn", message: "remind me" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    const runIsolatedAgentJob = vi.fn(async () => {
+      await writeCronJobs(store.storePath, [
+        {
+          ...cronJob,
+          updatedAtMs: scheduledAt + 1,
+          schedule: { kind: "at", at: "not-a-valid-timestamp" },
+          state: { ...cronJob.state, nextRunAtMs: scheduledAt },
+        },
+      ]);
+      return {
+        status: "error" as const,
+        error: "429 rate limit exceeded",
+      };
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+      cronConfig: {
+        retry: { maxAttempts: 1, backoffMs: [1000], retryOn: ["rate_limit"] },
+      },
+    });
+
+    await onTimer(state);
+
+    const job = state.store?.jobs.find((entry) => entry.id === jobId);
+    expect(job).toBeDefined();
+    expect(job!.enabled).toBe(true);
+    expect(job!.state.lastStatus).toBe("error");
+    expect(job!.state.scheduleErrorCount).toBe(1);
+    expect(job!.state.nextRunAtMs).toBeUndefined();
+    expect(nextWakeAtMs(state)).toBe(now + 2000);
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
   });
 
   it("#38822: one-shot job retries Bedrock too-many-tokens-per-day errors", async () => {
@@ -1788,6 +1847,170 @@ describe("Cron issue regressions", () => {
     expect(job.state.lastError).toMatch(/^schedule error:/);
     expect(job.state.nextRunAtMs).toBe(endedAt + 30_000);
     expect(job.enabled).toBe(true);
+  });
+
+  it("does not double-count reload schedule errors in apply path before maintenance recompute", () => {
+    const startedAt = Date.parse("2026-03-02T12:10:00.000Z");
+    const endedAt = startedAt + 25;
+    const job = createIsolatedRegressionJob({
+      id: "apply-result-reload-dedupe-30905",
+      name: "apply-result-reload-dedupe-30905",
+      scheduledAt: startedAt,
+      schedule: { kind: "cron", expr: "0 7 * * *", tz: "Invalid/Timezone" },
+      payload: { kind: "agentTurn", message: "ping" },
+      state: {
+        nextRunAtMs: undefined,
+        runningAtMs: startedAt - 500,
+        scheduleErrorCount: 1,
+        lastError: "schedule error: previous",
+      },
+    });
+    const state = createRunningCronServiceState({
+      storePath: "/tmp/cron-30905-reload-dedupe.json",
+      log: noopLogger as never,
+      nowMs: () => endedAt,
+      jobs: [job],
+    });
+    state.skipNextReloadRepairRecomputeJobIds = new Set([job.id]);
+
+    applyJobResult(state, job, {
+      status: "ok",
+      delivered: true,
+      startedAt,
+      endedAt,
+    });
+
+    expect(job.state.scheduleErrorCount).toBe(1);
+    expect(state.skipNextReloadRepairRecomputeJobIds?.has(job.id)).toBe(true);
+    expect(nextWakeAtMs(state)).toBe(endedAt + 2_000);
+
+    recomputeNextRunsForMaintenance(state);
+    expect(job.state.scheduleErrorCount).toBe(1);
+    expect(state.skipNextReloadRepairRecomputeJobIds?.has(job.id)).toBe(false);
+    expect(nextWakeAtMs(state)).toBe(endedAt + 2_000);
+  });
+
+  it("keeps a future wake when apply skips immediate recompute after reload schedule error", () => {
+    const startedAt = Date.parse("2026-03-02T12:12:00.000Z");
+    const endedAt = startedAt + 25;
+    const job = createIsolatedRegressionJob({
+      id: "apply-result-reload-wake-30905",
+      name: "apply-result-reload-wake-30905",
+      scheduledAt: startedAt,
+      schedule: { kind: "cron", expr: "0 7 * * *", tz: "Invalid/Timezone" },
+      payload: { kind: "agentTurn", message: "ping" },
+      state: {
+        nextRunAtMs: undefined,
+        runningAtMs: startedAt - 500,
+        scheduleErrorCount: 1,
+        lastError: "schedule error: previous",
+      },
+    });
+    const state = createRunningCronServiceState({
+      storePath: "/tmp/cron-30905-reload-wake.json",
+      log: noopLogger as never,
+      nowMs: () => endedAt,
+      jobs: [job],
+    });
+    state.skipNextReloadRepairRecomputeJobIds = new Set([job.id]);
+
+    applyJobResult(state, job, {
+      status: "error",
+      error: "synthetic failure",
+      startedAt,
+      endedAt,
+    });
+
+    expect(job.state.scheduleErrorCount).toBe(1);
+    expect(job.state.nextRunAtMs).toBeUndefined();
+    expect(state.skipNextReloadRepairRecomputeJobIds?.has(job.id)).toBe(true);
+    expect(nextWakeAtMs(state)).toBe(endedAt + 2_000);
+
+    recomputeNextRunsForMaintenance(state);
+    expect(job.state.scheduleErrorCount).toBe(1);
+    expect(state.skipNextReloadRepairRecomputeJobIds?.has(job.id)).toBe(false);
+    expect(nextWakeAtMs(state)).toBe(endedAt + 2_000);
+  });
+
+  it("does not arm 2s wake for malformed every schedules with non-repairable missing nextRun", () => {
+    const nowMs = Date.parse("2026-03-02T12:20:00.000Z");
+    const job = createIsolatedRegressionJob({
+      id: "missing-nextrun-malformed-every",
+      name: "missing-nextrun-malformed-every",
+      scheduledAt: nowMs,
+      schedule: { kind: "every", everyMs: Number.NaN, anchorMs: nowMs - 60_000 },
+      payload: { kind: "agentTurn", message: "ping" },
+      state: {
+        nextRunAtMs: undefined,
+      },
+    });
+    const state = createRunningCronServiceState({
+      storePath: "/tmp/cron-missing-nextrun-malformed-every.json",
+      log: noopLogger as never,
+      nowMs: () => nowMs,
+      jobs: [job],
+    });
+
+    expect(nextWakeAtMs(state)).toBeUndefined();
+  });
+
+  it("does not consume reload skip markers during read-only status/list maintenance", async () => {
+    const nowMs = Date.parse("2026-03-02T12:25:00.000Z");
+    const job = createIsolatedRegressionJob({
+      id: "read-only-skip-marker",
+      name: "read-only-skip-marker",
+      scheduledAt: nowMs,
+      schedule: { kind: "cron", expr: "0 7 * * *", tz: "Invalid/Timezone" },
+      payload: { kind: "agentTurn", message: "ping" },
+      state: {
+        nextRunAtMs: undefined,
+        scheduleErrorCount: 1,
+        lastError: "schedule error: previous",
+      },
+    });
+    const state = createRunningCronServiceState({
+      storePath: "/tmp/cron-read-only-skip-marker.json",
+      log: noopLogger as never,
+      nowMs: () => nowMs,
+      jobs: [job],
+    });
+    state.skipNextReloadRepairRecomputeJobIds = new Set([job.id]);
+
+    const currentStatus = await status(state);
+    expect(currentStatus.nextWakeAtMs).toBe(nowMs + 2_000);
+    expect(state.skipNextReloadRepairRecomputeJobIds.has(job.id)).toBe(true);
+
+    const jobs = await list(state, { includeDisabled: true });
+    expect(jobs).toHaveLength(1);
+    expect(state.skipNextReloadRepairRecomputeJobIds.has(job.id)).toBe(true);
+
+    recomputeNextRunsForMaintenance(state);
+    expect(state.skipNextReloadRepairRecomputeJobIds.has(job.id)).toBe(false);
+  });
+
+  it("does not arm 2s wake for exhausted one-shot jobs with missing nextRun", () => {
+    const nowMs = Date.parse("2026-03-02T12:22:00.000Z");
+    const atMs = nowMs - 60_000;
+    const job = createIsolatedRegressionJob({
+      id: "missing-nextrun-exhausted-at",
+      name: "missing-nextrun-exhausted-at",
+      scheduledAt: nowMs,
+      schedule: { kind: "at", at: new Date(atMs).toISOString() },
+      payload: { kind: "agentTurn", message: "ping" },
+      state: {
+        nextRunAtMs: undefined,
+        lastStatus: "ok",
+        lastRunAtMs: nowMs - 30_000,
+      },
+    });
+    const state = createRunningCronServiceState({
+      storePath: "/tmp/cron-missing-nextrun-exhausted-at.json",
+      log: noopLogger as never,
+      nowMs: () => nowMs,
+      jobs: [job],
+    });
+
+    expect(nextWakeAtMs(state)).toBeUndefined();
   });
 
   it("force run preserves 'every' anchor while recording manual lastRunAtMs", () => {

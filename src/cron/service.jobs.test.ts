@@ -385,6 +385,7 @@ function createMockState(now: number, opts?: { defaultAgentId?: string }): CronS
       nowMs: () => now,
       defaultAgentId: opts?.defaultAgentId,
     },
+    skipNextReloadRepairRecomputeJobIds: new Set<string>(),
   } as unknown as CronServiceState;
 }
 

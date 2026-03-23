@@ -9,10 +9,12 @@ import {
   findJobOrThrow,
   isJobDue,
   nextWakeAtMs,
+  removeJobById,
   recomputeNextRuns,
   recomputeNextRunsForMaintenance,
 } from "./jobs.js";
 import { locked } from "./locked.js";
+import { schedulesEqual } from "./schedule-equality.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 import {
@@ -47,6 +49,7 @@ export type CronListPageResult = {
   hasMore: boolean;
   nextOffset: number | null;
 };
+
 function mergeManualRunSnapshotAfterReload(params: {
   state: CronServiceState;
   jobId: string;
@@ -55,13 +58,17 @@ function mergeManualRunSnapshotAfterReload(params: {
     updatedAtMs: number;
     state: CronJob["state"];
   } | null;
+  baseline: {
+    enabled: boolean;
+    schedule: CronJob["schedule"];
+  } | null;
   removed: boolean;
 }) {
   if (!params.state.store) {
     return;
   }
   if (params.removed) {
-    params.state.store.jobs = params.state.store.jobs.filter((job) => job.id !== params.jobId);
+    removeJobById(params.state, params.jobId);
     return;
   }
   if (!params.snapshot) {
@@ -71,9 +78,39 @@ function mergeManualRunSnapshotAfterReload(params: {
   if (!reloaded) {
     return;
   }
-  reloaded.enabled = params.snapshot.enabled;
-  reloaded.updatedAtMs = params.snapshot.updatedAtMs;
-  reloaded.state = params.snapshot.state;
+  const preservedEnabled = reloaded.enabled;
+  const preservedNextRunAtMs = reloaded.state.nextRunAtMs;
+  const preservedScheduleErrorCount = reloaded.state.scheduleErrorCount;
+  const preservedScheduleErrorText = reloaded.state.lastError;
+  const externalScheduleOrEnabledChanged =
+    params.baseline !== null &&
+    (preservedEnabled !== params.baseline.enabled ||
+      !schedulesEqual(reloaded.schedule, params.baseline.schedule));
+
+  const mergedUpdatedAtMs = [reloaded.updatedAtMs, params.snapshot.updatedAtMs]
+    .filter((value) => Number.isFinite(value))
+    .map((value) => Math.max(0, Math.floor(value)));
+  if (mergedUpdatedAtMs.length > 0) {
+    reloaded.updatedAtMs = Math.max(...mergedUpdatedAtMs);
+  }
+  reloaded.state = {
+    ...reloaded.state,
+    ...params.snapshot.state,
+  };
+
+  // Only preserve reload-derived schedule/enable repairs when the underlying
+  // schedule or enabled flag was externally changed while the manual run was executing.
+  // Otherwise, keep the manual-run terminal state (e.g. one-shot disable on success).
+  if (externalScheduleOrEnabledChanged) {
+    reloaded.enabled = preservedEnabled;
+    reloaded.state.nextRunAtMs = preservedNextRunAtMs;
+    reloaded.state.scheduleErrorCount = preservedScheduleErrorCount;
+    if (preservedScheduleErrorCount !== undefined) {
+      reloaded.state.lastError = preservedScheduleErrorText;
+    }
+  } else {
+    reloaded.enabled = params.snapshot.enabled;
+  }
 }
 
 async function ensureLoadedForRead(state: CronServiceState) {
@@ -83,7 +120,10 @@ async function ensureLoadedForRead(state: CronServiceState) {
   }
   // Use the maintenance-only version so that read-only operations never
   // advance a past-due nextRunAtMs without executing the job (#16156).
-  const changed = recomputeNextRunsForMaintenance(state);
+  const changed = recomputeNextRunsForMaintenance(state, {
+    consumeReloadRepairSkip: false,
+    treatUndefinedAsScheduleError: false,
+  });
   if (changed) {
     await persist(state);
   }
@@ -309,6 +349,7 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
         job.state.nextRunAtMs = undefined;
         job.state.runningAtMs = undefined;
       }
+      state.skipNextReloadRepairRecomputeJobIds.delete(id);
     } else if (job.enabled) {
       // Non-schedule edits should not mutate other jobs, but still repair a
       // missing/corrupt nextRunAtMs for the updated job.
@@ -333,12 +374,10 @@ export async function remove(state: CronServiceState, id: string) {
   return await locked(state, async () => {
     warnIfDisabled(state, "remove");
     await ensureLoaded(state);
-    const before = state.store?.jobs.length ?? 0;
     if (!state.store) {
       return { ok: false, removed: false } as const;
     }
-    state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
-    const removed = (state.store.jobs.length ?? 0) !== before;
+    const removed = removeJobById(state, id);
     await persist(state);
     armTimer(state);
     if (removed) {
@@ -390,7 +429,7 @@ async function inspectManualRunPreflight(
     // Normalize job tick state (clears stale runningAtMs markers) before
     // checking if already running, so a stale marker from a crashed Phase-1
     // persist does not block manual triggers for up to STUCK_RUN_MS (#17554).
-    recomputeNextRunsForMaintenance(state);
+    recomputeNextRunsForMaintenance(state, { consumeReloadRepairSkip: false });
     const job = findJobOrThrow(state, id);
     if (typeof job.state.runningAtMs === "number") {
       return { ok: true, ran: false, reason: "already-running" as const };
@@ -515,8 +554,7 @@ async function finishPreparedManualRun(
       usage: coreResult.usage,
     });
 
-    if (shouldDelete && state.store) {
-      state.store.jobs = state.store.jobs.filter((entry) => entry.id !== job.id);
+    if (shouldDelete && removeJobById(state, job.id)) {
       emit(state, { jobId: job.id, action: "removed" });
     }
 
@@ -530,6 +568,12 @@ async function finishPreparedManualRun(
           updatedAtMs: job.updatedAtMs,
           state: structuredClone(job.state),
         };
+    const postRunBaseline = shouldDelete
+      ? null
+      : {
+          enabled: executionJob.enabled,
+          schedule: structuredClone(executionJob.schedule),
+        };
     const postRunRemoved = shouldDelete;
     // Isolated Telegram send can persist target writeback directly to disk.
     // Reload before final persist so manual `cron run` keeps those changes.
@@ -538,9 +582,13 @@ async function finishPreparedManualRun(
       state,
       jobId,
       snapshot: postRunSnapshot,
+      baseline: postRunBaseline,
       removed: postRunRemoved,
     });
-    recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
+    recomputeNextRunsForMaintenance(state, {
+      recomputeExpired: true,
+      consumeReloadRepairSkip: false,
+    });
     await persist(state);
     armTimer(state);
   });
