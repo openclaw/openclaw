@@ -111,12 +111,9 @@ function DelegationDetailModal({
   const agentName = entry.agentId ?? agentFromKey ?? "sub-agent";
 
   return (
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60"
-      onClick={onClose}
-    >
+    <div className="fixed inset-0 z-[100] bg-black/60" onClick={onClose}>
       <div
-        className="w-full max-w-lg rounded-lg border bg-card p-5 shadow-xl flex flex-col gap-3 max-h-[80vh] overflow-y-auto"
+        className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-lg rounded-lg border bg-card p-5 shadow-xl flex flex-col gap-3 max-h-[80vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">
@@ -265,22 +262,14 @@ function DelegationCard({ entry }: { entry: DelegationEntry }) {
 
 function DelegationActions({ runId }: { runId: string }) {
   const { sendRpc } = useGateway();
-  const [acting, setActing] = useState(false);
+  const [acting, setActing] = useState<string | null>(null);
 
-  const handleRetry = (e: React.MouseEvent) => {
+  const act = (e: React.MouseEvent, action: string, method: string) => {
     e.stopPropagation();
-    setActing(true);
-    sendRpc("sessions.delegations.retry", { runId })
+    setActing(action);
+    sendRpc(method, { runId })
       .catch(() => {})
-      .finally(() => setActing(false));
-  };
-
-  const handleCancel = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setActing(true);
-    sendRpc("sessions.delegations.cancel", { runId })
-      .catch(() => {})
-      .finally(() => setActing(false));
+      .finally(() => setActing(null));
   };
 
   return (
@@ -288,22 +277,40 @@ function DelegationActions({ runId }: { runId: string }) {
       <Button
         size="sm"
         variant="ghost"
-        className="h-5 px-1.5 text-[10px] text-amber-400 hover:bg-amber-500/10"
-        onClick={handleRetry}
-        disabled={acting}
-        title="Retry this delegation"
+        className="h-5 px-1.5 text-[10px] text-blue-400 hover:bg-blue-500/10"
+        onClick={(e) => act(e, "resume", "sessions.delegations.resume")}
+        disabled={acting !== null}
+        title="Resume — nudge the sub-agent to continue"
       >
-        {acting ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+        {acting === "resume" ? <Loader2 className="h-3 w-3 animate-spin" /> : <>&#9654;</>}
+      </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        className="h-5 px-1.5 text-[10px] text-amber-400 hover:bg-amber-500/10"
+        onClick={(e) => act(e, "retry", "sessions.delegations.retry")}
+        disabled={acting !== null}
+        title="Retry — start fresh with the same task"
+      >
+        {acting === "retry" ? (
+          <Loader2 className="h-3 w-3 animate-spin" />
+        ) : (
+          <RefreshCw className="h-3 w-3" />
+        )}
       </Button>
       <Button
         size="sm"
         variant="ghost"
         className="h-5 px-1.5 text-[10px] text-red-400 hover:bg-red-500/10"
-        onClick={handleCancel}
-        disabled={acting}
-        title="Cancel this delegation"
+        onClick={(e) => act(e, "cancel", "sessions.delegations.cancel")}
+        disabled={acting !== null}
+        title="Cancel — stop and dismiss"
       >
-        <X className="h-3 w-3" />
+        {acting === "cancel" ? (
+          <Loader2 className="h-3 w-3 animate-spin" />
+        ) : (
+          <X className="h-3 w-3" />
+        )}
       </Button>
     </div>
   );
