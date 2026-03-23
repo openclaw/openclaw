@@ -8,8 +8,10 @@ import { ensureAuthProfileStore } from "./auth-profiles.js";
 import {
   getApiKeyForModel,
   hasAvailableAuthForProvider,
+  GOOGLE_VERTEX_ADC_PLACEHOLDER_API_KEY,
   resolveApiKeyForProvider,
   resolveEnvApiKey,
+  shouldSetRuntimeApiKey,
 } from "./model-auth.js";
 
 const envVar = (...parts: string[]) => parts.join("_");
@@ -451,7 +453,6 @@ describe("getApiKeyForModel", () => {
       },
     );
   });
-
   it("resolveEnvApiKey('opencode-go') falls back to OPENCODE_ZEN_API_KEY", async () => {
     await withEnvAsync(
       {

@@ -52,6 +52,7 @@ import {
   applyLocalNoAuthHeaderOverride,
   getApiKeyForModel,
   resolveModelAuthMode,
+  shouldSetRuntimeApiKey,
 } from "../model-auth.js";
 import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
@@ -689,6 +690,7 @@ export async function compactEmbeddedPiSessionDirect(
         );
       }
     } else {
+      let runtimeAuthHandled = false;
       const preparedAuth = await prepareProviderRuntimeAuth({
         provider: runtimeModel.provider,
         config: params.config,
@@ -714,7 +716,22 @@ export async function compactEmbeddedPiSessionDirect(
       if (!runtimeApiKey) {
         throw new Error(`Provider "${runtimeModel.provider}" runtime auth returned no apiKey.`);
       }
-      authStorage.setRuntimeApiKey(runtimeModel.provider, runtimeApiKey);
+      if (preparedAuth?.apiKey) {
+        authStorage.setRuntimeApiKey(runtimeModel.provider, runtimeApiKey);
+        runtimeAuthHandled = true;
+      }
+      if (!runtimeAuthHandled && model.provider === "github-copilot") {
+        const { resolveCopilotApiToken } =
+          await import("../../../extensions/github-copilot/token.js");
+        const copilotToken = await resolveCopilotApiToken({
+          githubToken: apiKeyInfo.apiKey,
+        });
+        authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+        runtimeAuthHandled = true;
+      }
+      if (!runtimeAuthHandled && shouldSetRuntimeApiKey(runtimeModel.provider, apiKeyInfo.apiKey)) {
+        authStorage.setRuntimeApiKey(runtimeModel.provider, apiKeyInfo.apiKey);
+      }
     }
   } catch (err) {
     const reason = describeUnknownError(err);

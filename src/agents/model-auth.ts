@@ -43,6 +43,7 @@ function loadProviderRuntime() {
   providerRuntimePromise ??= import("../plugins/provider-runtime.runtime.js");
   return providerRuntimePromise;
 }
+export const GOOGLE_VERTEX_ADC_PLACEHOLDER_API_KEY = "<authenticated>";
 
 function resolveProviderConfig(
   cfg: OpenClawConfig | undefined,
