@@ -73,7 +73,8 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Base Vitest config still defaults to `forks`.
   - Unit wrapper lanes default to `threads`, with explicit manifest fork-only exceptions.
   - Extension scoped config defaults to `threads`.
-  - `pnpm test` also defaults to `--isolate=false` at the wrapper level for faster file startup.
+  - Unit, channel, and extension configs default to `isolate: false` for faster file startup.
+  - `pnpm test` also passes `--isolate=false` at the wrapper level.
   - Opt back into Vitest file isolation with `OPENCLAW_TEST_ISOLATE=1 pnpm test`.
   - `OPENCLAW_TEST_NO_ISOLATE=0` or `OPENCLAW_TEST_NO_ISOLATE=false` also force isolated runs.
 

@@ -1,6 +1,16 @@
 import { defineConfig } from "vitest/config";
 import baseConfig from "./vitest.config.ts";
 
+export function resolveVitestIsolation(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  const forceIsolation = env.OPENCLAW_TEST_ISOLATE === "1" || env.OPENCLAW_TEST_ISOLATE === "true";
+  if (forceIsolation) {
+    return true;
+  }
+  return env.OPENCLAW_TEST_NO_ISOLATE === "0" || env.OPENCLAW_TEST_NO_ISOLATE === "false";
+}
+
 export function createScopedVitestConfig(
   include: string[],
   options?: { exclude?: string[]; pool?: "threads" | "forks" },
@@ -14,6 +24,7 @@ export function createScopedVitestConfig(
     ...base,
     test: {
       ...baseTest,
+      isolate: resolveVitestIsolation(),
       include,
       exclude,
       ...(options?.pool ? { pool: options.pool } : {}),
