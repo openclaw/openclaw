@@ -242,8 +242,8 @@ export function createOpenClawTools(
     const readBase = createReadTool(workspaceDir) as unknown as AnyAgentTool;
     tools.push(
       createOpenClawReadTool(readBase),
-      createHostWorkspaceWriteTool(workspaceDir),
-      createHostWorkspaceEditTool(workspaceDir),
+      createHostWorkspaceWriteTool(workspaceDir, { workspaceOnly: true }),
+      createHostWorkspaceEditTool(workspaceDir, { workspaceOnly: true }),
     );
   }
 
