@@ -35,6 +35,7 @@ import {
   FailoverError,
   resolveFailoverStatus,
 } from "../failover-error.js";
+import { shouldAllowCooldownProbeForReason } from "../failover-policy.js";
 import {
   applyLocalNoAuthHeaderOverride,
   ensureAuthProfileStore,
@@ -754,10 +755,7 @@ export async function runEmbeddedPiAgent(
         const allowTransientCooldownProbe =
           params.allowTransientCooldownProbe === true &&
           allAutoProfilesInCooldown &&
-          (unavailableReason === "rate_limit" ||
-            unavailableReason === "overloaded" ||
-            unavailableReason === "billing" ||
-            unavailableReason === "unknown");
+          shouldAllowCooldownProbeForReason(unavailableReason);
         let didTransientCooldownProbe = false;
 
         while (profileIndex < profileCandidates.length) {
