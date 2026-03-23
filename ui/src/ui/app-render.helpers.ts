@@ -396,8 +396,8 @@ export function renderChatMobileToggle(state: AppViewState) {
             }
           }
         }}
-        title="Chat settings"
-        aria-label="Chat settings"
+        title=${t("chat.chatSettings")}
+        aria-label=${t("chat.chatSettings")}
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="3"></circle>
@@ -1081,11 +1081,11 @@ export function renderThemeToggle(state: AppViewState) {
   };
 
   return html`
-    <div class="theme-orb" aria-label="Theme">
+    <div class="theme-orb" aria-label=${t("common.theme")}>
       <button
         type="button"
         class="theme-orb__trigger"
-        title="Theme"
+        title=${t("common.theme")}
         aria-haspopup="menu"
         aria-expanded="false"
         @click=${toggleOpen}
