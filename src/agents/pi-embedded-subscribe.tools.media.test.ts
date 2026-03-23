@@ -97,6 +97,15 @@ describe("extractToolResultMediaPaths", () => {
     ).toEqual(["/tmp/from-file-path.png"]);
   });
 
+  it("falls back to startArgs.filePath when image content exists and details.path is missing", () => {
+    const result = {
+      content: [{ type: "image", data: "base64data", mimeType: "image/png" }],
+    };
+    expect(
+      extractToolResultMediaPathsWithStartArgs(result, { filePath: "/tmp/from-filePath.png" }),
+    ).toEqual(["/tmp/from-filePath.png"]);
+  });
+
   it("does not fall back to details.path when MEDIA: paths are found", () => {
     const result = {
       content: [
