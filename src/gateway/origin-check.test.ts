@@ -48,6 +48,15 @@ describe("checkBrowserOrigin", () => {
       expected: { ok: true as const, matchedBy: "allowlist" as const },
     },
     {
+      name: "accepts extension origins when explicitly allowlisted",
+      input: {
+        requestHost: "gateway.example.com:18789",
+        origin: "chrome-extension://BfpnAggikhabdgbnhnngdfldkbinncdf",
+        allowedOrigins: [" chrome-extension://bfpnaggikhabdgbnhnngdfldkbinncdf "],
+      },
+      expected: { ok: true as const, matchedBy: "allowlist" as const },
+    },
+    {
       name: "accepts wildcard allowlists even alongside specific entries",
       input: {
         requestHost: "gateway.tailnet.ts.net:18789",
@@ -79,6 +88,15 @@ describe("checkBrowserOrigin", () => {
         origin: "not a url",
       },
       expected: { ok: false as const, reason: "origin missing or invalid" },
+    },
+    {
+      name: "rejects extension origins that are not allowlisted",
+      input: {
+        requestHost: "gateway.example.com:18789",
+        origin: "chrome-extension://bfpnaggikhabdgbnhnngdfldkbinncdf",
+        allowedOrigins: ["chrome-extension://other-extension-id"],
+      },
+      expected: { ok: false as const, reason: "origin not allowed" },
     },
     {
       name: "rejects mismatched origins",
