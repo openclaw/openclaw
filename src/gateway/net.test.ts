@@ -257,6 +257,20 @@ describe("resolveClientIp", () => {
       expected: "127.0.0.1",
     },
     {
+      name: "fails closed when trusted proxy sends empty X-Forwarded-For",
+      remoteAddr: "127.0.0.1",
+      forwardedFor: "",
+      trustedProxies: ["127.0.0.1"],
+      expected: undefined,
+    },
+    {
+      name: "fails closed when trusted proxy sends empty X-Real-IP",
+      remoteAddr: "127.0.0.1",
+      realIp: "",
+      trustedProxies: ["127.0.0.1"],
+      expected: undefined,
+    },
+    {
       name: "ignores invalid X-Forwarded-For entries",
       remoteAddr: "127.0.0.1",
       forwardedFor: "garbage, 10.0.0.999",

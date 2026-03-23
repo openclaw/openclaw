@@ -192,7 +192,9 @@ export function resolveClientIp(params: {
   // When no forwarding headers are present at all, the request is directly
   // from the trusted-proxy host itself (not a proxied client request).
   // Return the socket address so callers can identify it as local.
-  if (!params.forwardedFor && !params.realIp) {
+  // Use strict undefined checks so that blank headers (empty strings sent by
+  // a misconfigured proxy) still fail closed.
+  if (params.forwardedFor === undefined && params.realIp === undefined) {
     return remote;
   }
 
