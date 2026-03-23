@@ -24,6 +24,11 @@ import {
   collectOpenPolicyAllowFromWarnings,
   maybeRepairOpenPolicyAllowFrom,
 } from "./open-policy-allowfrom.js";
+import {
+  collectStalePluginConfigWarnings,
+  isStalePluginAutoRepairBlocked,
+  scanStalePluginConfig,
+} from "./stale-plugin-config.js";
 
 export function collectDoctorPreviewWarnings(params: {
   cfg: OpenClawConfig;
@@ -57,6 +62,17 @@ export function collectDoctorPreviewWarnings(params: {
       collectOpenPolicyAllowFromWarnings({
         changes: allowFromScan.changes,
         doctorFixCommand: params.doctorFixCommand,
+      }).join("\n"),
+    );
+  }
+
+  const stalePluginHits = scanStalePluginConfig(params.cfg, process.env);
+  if (stalePluginHits.length > 0) {
+    warnings.push(
+      collectStalePluginConfigWarnings({
+        hits: stalePluginHits,
+        doctorFixCommand: params.doctorFixCommand,
+        autoRepairBlocked: isStalePluginAutoRepairBlocked(params.cfg, process.env),
       }).join("\n"),
     );
   }
