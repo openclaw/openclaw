@@ -38,13 +38,11 @@ describe("mattermost directory", () => {
   it("deduplicates channels across enabled accounts and skips failing accounts", async () => {
     const clientA = {
       token: "token-a",
-      request: vi
-        .fn()
-        .mockResolvedValueOnce([
-          { id: "chan-1", type: "O", name: "alerts", display_name: "Alerts" },
-          { id: "chan-2", type: "P", name: "ops", display_name: "Ops" },
-          { id: "chan-3", type: "D", name: "dm", display_name: "Direct" },
-        ]),
+      request: vi.fn().mockResolvedValueOnce([
+        { id: "chan-1", type: "O", name: "alerts", display_name: "Alerts" },
+        { id: "chan-2", type: "P", name: "ops", display_name: "Ops" },
+        { id: "chan-3", type: "D", name: "dm", display_name: "Direct" },
+      ]),
     };
     const clientB = {
       token: "token-b",
@@ -86,11 +84,7 @@ describe("mattermost directory", () => {
       request: vi
         .fn()
         .mockResolvedValueOnce([{ id: "team-1" }])
-        .mockResolvedValueOnce([
-          { user_id: "me-1" },
-          { user_id: "user-1" },
-          { user_id: "user-2" },
-        ])
+        .mockResolvedValueOnce([{ user_id: "me-1" }, { user_id: "user-1" }, { user_id: "user-2" }])
         .mockResolvedValueOnce([
           {
             id: "user-1",
