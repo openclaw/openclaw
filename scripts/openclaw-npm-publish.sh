@@ -4,8 +4,8 @@ set -euo pipefail
 
 mode="${1:-}"
 
-if [[ "${mode}" != "--dry-run" && "${mode}" != "--publish" ]]; then
-  echo "usage: bash scripts/openclaw-npm-publish.sh [--dry-run|--publish]" >&2
+if [[ "${mode}" != "--publish" ]]; then
+  echo "usage: bash scripts/openclaw-npm-publish.sh --publish" >&2
   exit 2
 fi
 
@@ -25,9 +25,5 @@ echo "Publish auth: GitHub OIDC trusted publishing"
 printf 'Publish command:'
 printf ' %q' "${publish_cmd[@]}"
 printf '\n'
-
-if [[ "${mode}" == "--dry-run" ]]; then
-  exit 0
-fi
 
 "${publish_cmd[@]}"

@@ -79,6 +79,7 @@ Config values override env vars.
 - In `allowlist` mode, an empty `allowedUserIds` list is treated as misconfiguration and the webhook route will not start (use `dmPolicy: "open"` for allow-all).
 - `dmPolicy: "open"` allows any sender.
 - `dmPolicy: "disabled"` blocks DMs.
+- Reply recipient binding stays on stable numeric `user_id` by default. `channels.synology-chat.dangerouslyAllowNameMatching: true` is break-glass compatibility mode that re-enables mutable username/nickname lookup for reply delivery.
 - Pairing approvals work with:
   - `openclaw pairing list synology-chat`
   - `openclaw pairing approve synology-chat <CODE>`
@@ -102,6 +103,11 @@ Multiple Synology Chat accounts are supported under `channels.synology-chat.acco
 Each account can override token, incoming URL, webhook path, DM policy, and limits.
 Direct-message sessions are isolated per account and user, so the same numeric `user_id`
 on two different Synology accounts does not share transcript state.
+Give each enabled account a distinct `webhookPath`. OpenClaw now rejects duplicate exact paths
+and refuses to start named accounts that only inherit a shared webhook path in multi-account setups.
+If you intentionally need legacy inheritance for a named account, set
+`dangerouslyAllowInheritedWebhookPath: true` on that account or at `channels.synology-chat`,
+but duplicate exact paths are still rejected fail-closed. Prefer explicit per-account paths.
 
 ```json5
 {
@@ -132,3 +138,5 @@ on two different Synology accounts does not share transcript state.
 - Keep `allowInsecureSsl: false` unless you explicitly trust a self-signed local NAS cert.
 - Inbound webhook requests are token-verified and rate-limited per sender.
 - Prefer `dmPolicy: "allowlist"` for production.
+- Keep `dangerouslyAllowNameMatching` off unless you explicitly need legacy username-based reply delivery.
+- Keep `dangerouslyAllowInheritedWebhookPath` off unless you explicitly accept shared-path routing risk in a multi-account setup.

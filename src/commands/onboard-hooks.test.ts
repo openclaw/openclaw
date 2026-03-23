@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { HookStatusReport } from "../hooks/hooks-status.js";
+import type { HookStatusEntry, HookStatusReport } from "../hooks/hooks-status.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { setupInternalHooks } from "./onboard-hooks.js";
@@ -53,14 +53,17 @@ describe("onboard-hooks", () => {
     },
     eligible: boolean,
   ) => ({
+    blockedReason: (eligible
+      ? undefined
+      : "missing requirements") as HookStatusEntry["blockedReason"],
     ...params,
     source: "openclaw-bundled" as const,
     pluginId: undefined,
     homepage: undefined,
     always: false,
-    disabled: false,
-    eligible,
+    enabledByConfig: eligible,
     requirementsSatisfied: eligible,
+    loadable: eligible,
     managedByPlugin: false,
     requirements: {
       bins: [],

@@ -20,7 +20,7 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
@@ -263,7 +263,7 @@ export async function sandboxExplainCommand(
   } as const;
 
   if (opts.json) {
-    runtime.log(`${JSON.stringify(payload, null, 2)}\n`);
+    writeRuntimeJson(runtime, payload);
     return;
   }
 

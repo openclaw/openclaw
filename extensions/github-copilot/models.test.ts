@@ -1,9 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@mariozechner/pi-ai/oauth", () => ({
-  getOAuthApiKey: vi.fn(),
-  getOAuthProviders: vi.fn(() => []),
-}));
+vi.mock("@mariozechner/pi-ai/oauth", async () => {
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
+    "@mariozechner/pi-ai/oauth",
+  );
+  return {
+    ...actual,
+    getOAuthApiKey: vi.fn(),
+    getOAuthProviders: vi.fn(() => []),
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/provider-models", () => ({
   normalizeModelCompat: (model: Record<string, unknown>) => model,
@@ -47,7 +53,7 @@ describe("resolveCopilotForwardCompatModel", () => {
     expect(resolveCopilotForwardCompatModel(ctx)).toBeUndefined();
   });
 
-  it("clones gpt-5.2-codex template for gpt-5.3-codex", () => {
+  it("clones gpt-5.2-codex template for gpt-5.4", () => {
     const template = {
       id: "gpt-5.2-codex",
       name: "gpt-5.2-codex",
@@ -56,19 +62,19 @@ describe("resolveCopilotForwardCompatModel", () => {
       reasoning: true,
       contextWindow: 200_000,
     };
-    const ctx = createMockCtx("gpt-5.3-codex", {
+    const ctx = createMockCtx("gpt-5.4", {
       "github-copilot/gpt-5.2-codex": template,
     });
     const result = requireResolvedModel(ctx);
-    expect(result.id).toBe("gpt-5.3-codex");
-    expect(result.name).toBe("gpt-5.3-codex");
+    expect(result.id).toBe("gpt-5.4");
+    expect(result.name).toBe("gpt-5.4");
     expect((result as unknown as Record<string, unknown>).reasoning).toBe(true);
   });
 
   it("falls through to synthetic catch-all when codex template is missing", () => {
-    const ctx = createMockCtx("gpt-5.3-codex");
+    const ctx = createMockCtx("gpt-5.4");
     const result = requireResolvedModel(ctx);
-    expect(result.id).toBe("gpt-5.3-codex");
+    expect(result.id).toBe("gpt-5.4");
   });
 
   it("creates synthetic model for arbitrary unknown model ID", () => {

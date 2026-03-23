@@ -259,6 +259,7 @@ High-signal `checkId` values you will most likely see in real deployments (not e
 | `tools.exec.auto_allow_skills_enabled`                        | warn          | Exec approvals trust skill bins implicitly                                           | `~/.openclaw/exec-approvals.json`                                                                    | no       |
 | `tools.exec.allowlist_interpreter_without_strict_inline_eval` | warn          | Interpreter allowlists permit inline eval without forced reapproval                  | `tools.exec.strictInlineEval`, `agents.list[].tools.exec.strictInlineEval`, exec approvals allowlist | no       |
 | `tools.exec.safe_bins_interpreter_unprofiled`                 | warn          | Interpreter/runtime bins in `safeBins` without explicit profiles broaden exec risk   | `tools.exec.safeBins`, `tools.exec.safeBinProfiles`, `agents.list[].tools.exec.*`                    | no       |
+| `tools.exec.safe_bins_broad_behavior`                         | warn          | Broad-behavior tools in `safeBins` weaken the low-risk stdin-filter trust model      | `tools.exec.safeBins`, `agents.list[].tools.exec.safeBins`                                           | no       |
 | `skills.workspace.symlink_escape`                             | warn          | Workspace `skills/**/SKILL.md` resolves outside workspace root (symlink-chain drift) | workspace `skills/**` filesystem state                                                               | no       |
 | `security.exposure.open_channels_with_exec`                   | warn/critical | Shared/public rooms can reach exec-enabled agents                                    | `channels.*.dmPolicy`, `channels.*.groupPolicy`, `tools.exec.*`, `agents.list[].tools.exec.*`        | no       |
 | `security.exposure.open_groups_with_elevated`                 | critical      | Open groups + elevated tools create high-impact prompt-injection paths               | `channels.*.groupPolicy`, `tools.elevated.*`                                                         | no       |
@@ -312,6 +313,8 @@ schema:
 - `channels.googlechat.dangerouslyAllowNameMatching`
 - `channels.googlechat.accounts.<accountId>.dangerouslyAllowNameMatching`
 - `channels.msteams.dangerouslyAllowNameMatching`
+- `channels.synology-chat.dangerouslyAllowNameMatching` (extension channel)
+- `channels.synology-chat.accounts.<accountId>.dangerouslyAllowNameMatching` (extension channel)
 - `channels.zalouser.dangerouslyAllowNameMatching` (extension channel)
 - `channels.irc.dangerouslyAllowNameMatching` (extension channel)
 - `channels.irc.accounts.<accountId>.dangerouslyAllowNameMatching` (extension channel)
@@ -455,7 +458,7 @@ Plugins run **in-process** with the Gateway. Treat them as trusted code:
 - Prefer explicit `plugins.allow` allowlists.
 - Review plugin config before enabling.
 - Restart the Gateway after plugin changes.
-- If you install plugins from npm (`openclaw plugins install <npm-spec>`), treat it like running untrusted code:
+- If you install plugins (`openclaw plugins install <package>`), treat it like running untrusted code:
   - The install path is `~/.openclaw/extensions/<pluginId>/` (or `$OPENCLAW_STATE_DIR/extensions/<pluginId>/`).
   - OpenClaw uses `npm pack` and then runs `npm install --omit=dev` in that directory (npm lifecycle scripts can execute code during install).
   - Prefer pinned, exact versions (`@scope/pkg@1.2.3`), and inspect the unpacked code on disk before enabling.

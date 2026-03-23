@@ -23,6 +23,11 @@ import {
   isFailoverError,
   isTimeoutError,
 } from "./failover-error.js";
+import {
+  shouldAllowCooldownProbeForReason,
+  shouldPreserveTransientCooldownProbeSlot,
+  shouldUseTransientCooldownProbeSlot,
+} from "./failover-policy.js";
 import { logModelFallbackDecision } from "./model-fallback-observation.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
 import {
@@ -610,19 +615,11 @@ export async function runWithModelFallback<T>(params: {
         if (decision.markProbe) {
           markProbeAttempt(now, probeThrottleKey);
         }
-        if (
-          decision.reason === "rate_limit" ||
-          decision.reason === "overloaded" ||
-          decision.reason === "billing" ||
-          decision.reason === "unknown"
-        ) {
+        if (shouldAllowCooldownProbeForReason(decision.reason)) {
           // Probe at most once per provider per fallback run when all profiles
           // are cooldowned. Re-probing every same-provider candidate can stall
           // cross-provider fallback on providers with long internal retries.
-          const isTransientCooldownReason =
-            decision.reason === "rate_limit" ||
-            decision.reason === "overloaded" ||
-            decision.reason === "unknown";
+          const isTransientCooldownReason = shouldUseTransientCooldownProbeSlot(decision.reason);
           if (isTransientCooldownReason && cooldownProbeUsedProviders.has(candidate.provider)) {
             const error = `Provider ${candidate.provider} is in cooldown (probe already attempted this run)`;
             attempts.push({
@@ -709,13 +706,7 @@ export async function runWithModelFallback<T>(params: {
     {
       if (transientProbeProviderForAttempt) {
         const probeFailureReason = describeFailoverError(err).reason;
-        const shouldPreserveTransientProbeSlot =
-          probeFailureReason === "model_not_found" ||
-          probeFailureReason === "format" ||
-          probeFailureReason === "auth" ||
-          probeFailureReason === "auth_permanent" ||
-          probeFailureReason === "session_expired";
-        if (!shouldPreserveTransientProbeSlot) {
+        if (!shouldPreserveTransientCooldownProbeSlot(probeFailureReason)) {
           cooldownProbeUsedProviders.add(transientProbeProviderForAttempt);
         }
       }

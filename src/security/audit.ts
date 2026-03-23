@@ -17,6 +17,7 @@ import {
   listInterpreterLikeSafeBins,
   resolveMergedSafeBinProfileFixtures,
 } from "../infra/exec-safe-bin-runtime-policy.js";
+import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
 import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
 import { isBlockedHostnameOrIp, isPrivateNetworkAllowedByPolicy } from "../infra/net/ssrf.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
@@ -386,11 +387,8 @@ function collectGatewayConfigFindings(
     : [];
   const hasToken = typeof auth.token === "string" && auth.token.trim().length > 0;
   const hasPassword = typeof auth.password === "string" && auth.password.trim().length > 0;
-  const envTokenConfigured =
-    hasNonEmptyString(env.OPENCLAW_GATEWAY_TOKEN) || hasNonEmptyString(env.CLAWDBOT_GATEWAY_TOKEN);
-  const envPasswordConfigured =
-    hasNonEmptyString(env.OPENCLAW_GATEWAY_PASSWORD) ||
-    hasNonEmptyString(env.CLAWDBOT_GATEWAY_PASSWORD);
+  const envTokenConfigured = hasNonEmptyString(env.OPENCLAW_GATEWAY_TOKEN);
+  const envPasswordConfigured = hasNonEmptyString(env.OPENCLAW_GATEWAY_PASSWORD);
   const tokenConfiguredFromConfig = hasConfiguredSecretInput(
     sourceConfig.gateway?.auth?.token,
     sourceConfig.secrets?.defaults,
@@ -774,7 +772,6 @@ function collectBrowserControlFindings(
   const tokenConfigured =
     Boolean(browserAuth.token) ||
     hasNonEmptyString(env.OPENCLAW_GATEWAY_TOKEN) ||
-    hasNonEmptyString(env.CLAWDBOT_GATEWAY_TOKEN) ||
     hasConfiguredSecretInput(cfg.gateway?.auth?.token, cfg.secrets?.defaults);
   const passwordCanWin =
     explicitAuthMode === "password" ||
@@ -786,7 +783,6 @@ function collectBrowserControlFindings(
     Boolean(browserAuth.password) ||
     (passwordCanWin &&
       (hasNonEmptyString(env.OPENCLAW_GATEWAY_PASSWORD) ||
-        hasNonEmptyString(env.CLAWDBOT_GATEWAY_PASSWORD) ||
         hasConfiguredSecretInput(cfg.gateway?.auth?.password, cfg.secrets?.defaults)));
   if (!tokenConfigured && !passwordConfigured) {
     findings.push({
@@ -1111,12 +1107,16 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
   }
 
   const interpreterHits: string[] = [];
+  const riskySemanticSafeBinHits: string[] = [];
   const globalSafeBins = normalizeConfiguredSafeBins(globalExec?.safeBins);
   if (globalSafeBins.length > 0) {
     const merged = resolveMergedSafeBinProfileFixtures({ global: globalExec }) ?? {};
     const interpreters = listInterpreterLikeSafeBins(globalSafeBins).filter((bin) => !merged[bin]);
     if (interpreters.length > 0) {
       interpreterHits.push(`- tools.exec.safeBins: ${interpreters.join(", ")}`);
+    }
+    for (const hit of listRiskyConfiguredSafeBins(globalSafeBins)) {
+      riskySemanticSafeBinHits.push(`- tools.exec.safeBins: ${hit.bin} (${hit.warning})`);
     }
   }
 
@@ -1136,11 +1136,21 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
       }) ?? {};
     const interpreters = listInterpreterLikeSafeBins(agentSafeBins).filter((bin) => !merged[bin]);
     if (interpreters.length === 0) {
+      for (const hit of listRiskyConfiguredSafeBins(agentSafeBins)) {
+        riskySemanticSafeBinHits.push(
+          `- agents.list.${entry.id}.tools.exec.safeBins: ${hit.bin} (${hit.warning})`,
+        );
+      }
       continue;
     }
     interpreterHits.push(
       `- agents.list.${entry.id}.tools.exec.safeBins: ${interpreters.join(", ")}`,
     );
+    for (const hit of listRiskyConfiguredSafeBins(agentSafeBins)) {
+      riskySemanticSafeBinHits.push(
+        `- agents.list.${entry.id}.tools.exec.safeBins: ${hit.bin} (${hit.warning})`,
+      );
+    }
   }
 
   if (interpreterHits.length > 0) {
@@ -1153,6 +1163,19 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
         "These entries can turn safeBins into a broad execution surface when used with permissive argv profiles.",
       remediation:
         "Remove interpreter/runtime bins from safeBins (prefer allowlist entries) or define hardened tools.exec.safeBinProfiles.<bin> rules.",
+    });
+  }
+
+  if (riskySemanticSafeBinHits.length > 0) {
+    findings.push({
+      checkId: "tools.exec.safe_bins_broad_behavior",
+      severity: "warn",
+      title: "safeBins includes binaries with broader semantics than low-risk stream filters",
+      detail:
+        `Detected risky safeBins entries:\n${riskySemanticSafeBinHits.join("\n")}\n` +
+        "These tools expose semantics that do not fit the low-risk stdin-filter fast path.",
+      remediation:
+        "Remove these binaries from safeBins and prefer explicit allowlist entries or approval-gated execution.",
     });
   }
 

@@ -52,16 +52,15 @@ type FeishuThreadBindingsState = {
 };
 
 const FEISHU_THREAD_BINDINGS_STATE_KEY = Symbol.for("openclaw.feishuThreadBindingsState");
-let state: FeishuThreadBindingsState | undefined;
+const state = resolveGlobalSingleton<FeishuThreadBindingsState>(
+  FEISHU_THREAD_BINDINGS_STATE_KEY,
+  () => ({
+    managersByAccountId: new Map(),
+    bindingsByAccountConversation: new Map(),
+  }),
+);
 
 function getState(): FeishuThreadBindingsState {
-  state ??= resolveGlobalSingleton<FeishuThreadBindingsState>(
-    FEISHU_THREAD_BINDINGS_STATE_KEY,
-    () => ({
-      managersByAccountId: new Map(),
-      bindingsByAccountConversation: new Map(),
-    }),
-  );
   return state;
 }
 
