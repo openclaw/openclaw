@@ -1005,11 +1005,14 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
       async result() {
         return params.resultMessage;
       },
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
+      async *[Symbol.asyncIterator]() {
+        yield { role: "user", content: [{ type: "text", text: "retry" }] };
       },
-    ];
+    };
+  }
+
+  it("sanitizes malformed tool calls in streamed responses", async () => {
+    const messages = [{ role: "user", content: [{ type: "text", text: "retry" }] }];
     const baseFn = vi.fn((_model, _context) =>
       createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
     );

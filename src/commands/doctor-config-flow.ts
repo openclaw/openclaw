@@ -4,9 +4,8 @@ import { collectSubagentAllowlistAudit } from "../agents/subagent-target-readine
 import { normalizeChatChannelId } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { CONFIG_PATH, migrateLegacyConfig, readConfigFileSnapshot } from "../config/config.js";
+import { CONFIG_PATH } from "../config/config.js";
 import { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
-import { formatConfigIssueLines } from "../config/issue-format.js";
 import { resolveStateDir } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { parseToolsBySenderTypedKey } from "../config/types.tools.js";
@@ -54,7 +53,6 @@ import { noteOpencodeProviderOverrides } from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
-import { autoMigrateLegacyStateDir } from "./doctor-state-migrations.js";
 
 type TelegramAllowFromUsernameHit = { path: string; entry: string };
 
@@ -467,7 +465,7 @@ function scanTelegramAllowFromUsernameEntries(cfg: OpenClawConfig): TelegramAllo
   return hits;
 }
 
-async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promise<{
+async function _maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promise<{
   config: OpenClawConfig;
   changes: string[];
 }> {
@@ -724,7 +722,7 @@ function scanDiscordNumericIdEntries(cfg: OpenClawConfig): DiscordNumericIdHit[]
   return hits;
 }
 
-function maybeRepairDiscordNumericIds(cfg: OpenClawConfig): {
+function _maybeRepairDiscordNumericIds(cfg: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];
 } {
@@ -1198,7 +1196,7 @@ function hasAllowFromEntries(list?: Array<string | number>) {
   return Array.isArray(list) && list.map((v) => String(v).trim()).filter(Boolean).length > 0;
 }
 
-async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): Promise<{
+async function _maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): Promise<{
   config: OpenClawConfig;
   changes: string[];
 }> {
@@ -1623,7 +1621,7 @@ function scanExecSafeBinTrustedDirHints(cfg: OpenClawConfig): ExecSafeBinTrusted
   return hits;
 }
 
-function maybeRepairExecSafeBinProfiles(cfg: OpenClawConfig): {
+function _maybeRepairExecSafeBinProfiles(cfg: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];
   warnings: string[];
@@ -1718,7 +1716,7 @@ function scanLegacyToolsBySenderKeys(cfg: OpenClawConfig): LegacyToolsBySenderKe
   return hits;
 }
 
-function maybeRepairLegacyToolsBySenderKeys(cfg: OpenClawConfig): {
+function _maybeRepairLegacyToolsBySenderKeys(cfg: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];
 } {
@@ -1777,7 +1775,7 @@ function maybeRepairLegacyToolsBySenderKeys(cfg: OpenClawConfig): {
   return { config: next, changes };
 }
 
-async function maybeMigrateLegacyConfig(): Promise<string[]> {
+async function _maybeMigrateLegacyConfig(): Promise<string[]> {
   const changes: string[] = [];
   const home = resolveHomeDir();
   if (!home) {

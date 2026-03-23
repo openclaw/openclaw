@@ -25,7 +25,7 @@ vi.mock("../operator-control/task-store.js", () => ({
 const MEDIA_CLEANUP_TTL_MS = 24 * 60 * 60_000;
 const ABORTED_RUN_TTL_MS = 60 * 60_000;
 
-function createActiveRun(sessionKey: string): ChatAbortControllerEntry {
+function _createActiveRun(sessionKey: string): ChatAbortControllerEntry {
   const now = Date.now();
   return {
     controller: new AbortController(),

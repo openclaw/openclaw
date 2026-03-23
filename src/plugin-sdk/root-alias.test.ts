@@ -30,7 +30,6 @@ function loadRootAliasWithStubs(options?: {
   let createJitiCalls = 0;
   let createJitiOptions: Record<string, unknown> | undefined;
   let jitiLoadCalls = 0;
-  const createJitiOptions: Record<string, unknown>[] = [];
   const loadedSpecifiers: string[] = [];
   const monolithicExports = options?.monolithicExports ?? {
     slowHelper: () => "loaded",
@@ -105,9 +104,6 @@ function loadRootAliasWithStubs(options?: {
     },
     get jitiLoadCalls() {
       return jitiLoadCalls;
-    },
-    get createJitiOptions() {
-      return createJitiOptions;
     },
     loadedSpecifiers,
   };

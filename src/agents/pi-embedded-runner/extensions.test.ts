@@ -24,7 +24,7 @@ function buildSafeguardFactories(cfg: OpenClawConfig) {
   return { factories, sessionManager };
 }
 
-function expectSafeguardRuntime(
+function _expectSafeguardRuntime(
   cfg: OpenClawConfig,
   expectedRuntime: { qualityGuardEnabled: boolean; qualityGuardMaxRetries?: number },
 ) {

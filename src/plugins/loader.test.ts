@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
+import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { buildMemoryPromptSection, registerMemoryPromptSection } from "../memory/prompt-section.js";
 import { withEnv } from "../test-utils/env.js";
 import { clearPluginCommands, getPluginCommandSpecs } from "./command-registry-state.js";
@@ -3273,7 +3273,7 @@ module.exports = {
   });
 
   it("prefers dist root-alias shim when loader runs from dist", () => {
-    const { root, distFile } = createPluginSdkAliasFixture({
+    const { _root, _distFile } = createPluginSdkAliasFixture({
       srcFile: "root-alias.cjs",
       distFile: "root-alias.cjs",
       srcBody: "module.exports = {};\n",

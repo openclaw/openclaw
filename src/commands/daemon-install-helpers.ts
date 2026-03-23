@@ -71,7 +71,7 @@ function collectReferencedServiceEnvVars(params: {
   return entries;
 }
 
-function buildGatewayInstallEnvironment(params: {
+function _buildGatewayInstallEnvironment(params: {
   env: Record<string, string | undefined>;
   config?: OpenClawConfig;
   authStore?: AuthProfileStore;
@@ -108,7 +108,7 @@ export async function buildGatewayInstallPlan(params: {
     devMode: params.devMode,
     nodePath: params.nodePath,
   });
-  const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
+  const { programArguments, _workingDirectory } = await resolveGatewayProgramArguments({
     port: params.port,
     dev: devMode,
     runtime: params.runtime,
@@ -121,7 +121,7 @@ export async function buildGatewayInstallPlan(params: {
     warn: params.warn,
     title: "Gateway runtime",
   });
-  const serviceEnvironment = buildServiceEnvironment({
+  const _serviceEnvironment = buildServiceEnvironment({
     env: params.env,
     port: params.port,
     launchdLabel:
@@ -136,7 +136,7 @@ export async function buildGatewayInstallPlan(params: {
 
   // Merge config env vars into the service environment (vars + inline env keys).
   // Config env vars are added first so service-specific vars take precedence.
-  const environment: Record<string, string | undefined> = {
+  const _environment: Record<string, string | undefined> = {
     ...collectConfigServiceEnvVars(params.config),
     ...collectReferencedServiceEnvVars({
       env: params.env,

@@ -5,14 +5,13 @@
  * - Or single fork: pnpm test -- src/agents/pi-embedded-runner/compact.hooks.test.ts --pool forks --poolOptions.forks.singleFork
  */
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+let onSessionTranscriptUpdate!: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 
 const {
   hookRunner,
   ensureRuntimePluginsLoaded,
   estimateTokensMock,
   getMemorySearchManagerMock,
-  hookRunner,
   loadCompactHooksHarness,
   resolveContextEngineMock,
   resolveMemorySearchConfigMock,
@@ -24,15 +23,9 @@ const {
   sessionMessages,
   sessionCompactImpl,
   triggerInternalHook,
-  sanitizeSessionHistoryMock,
   contextEngineCompactMock,
   validateAnthropicTurnsMock,
   resolveTranscriptPolicyMock,
-  getMemorySearchManagerMock,
-  resolveMemorySearchConfigMock,
-  resolveSessionAgentIdMock,
-  estimateTokensMock,
-  sessionAbortCompactionMock,
   createOpenClawCodingToolsMock,
 } = vi.hoisted(() => {
   const contextEngineCompactMock = vi.fn(async () => ({
@@ -356,7 +349,8 @@ vi.mock("./utils.js", () => ({
 
 import { getApiProvider, unregisterApiProviders } from "@mariozechner/pi-ai";
 import { getCustomApiRegistrySourceId } from "../custom-api-registry.js";
-import { compactEmbeddedPiSessionDirect, compactEmbeddedPiSession } from "./compact.js";
+let compactEmbeddedPiSessionDirect!: typeof import("./compact.js").compactEmbeddedPiSessionDirect;
+let compactEmbeddedPiSession!: typeof import("./compact.js").compactEmbeddedPiSession;
 import { log } from "./logger.js";
 
 const TEST_SESSION_ID = "session-1";
@@ -513,7 +507,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     vi.clearAllMocks();
   });
 
-  async function runDirectCompaction(customInstructions = TEST_CUSTOM_INSTRUCTIONS) {
+  async function _runDirectCompaction(customInstructions = TEST_CUSTOM_INSTRUCTIONS) {
     return await compactEmbeddedPiSessionDirect(
       directCompactionArgs({
         customInstructions,

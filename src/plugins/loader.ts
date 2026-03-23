@@ -235,7 +235,7 @@ const resolvePluginSdkAliasFile = (params: {
   return null;
 };
 
-const resolvePluginSdkAlias = (): string | null =>
+const _resolvePluginSdkAlias = (): string | null =>
   resolvePluginSdkAliasFile({ srcFile: "root-alias.cjs", distFile: "root-alias.cjs" });
 
 function buildPluginLoaderJitiOptions(aliasMap: Record<string, string>) {

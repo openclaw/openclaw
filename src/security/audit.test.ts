@@ -3303,14 +3303,27 @@ description: test skill
   });
 
   it("warns on unpinned npm install specs and missing integrity metadata", async () => {
-    const cfg: OpenClawConfig = {
-      plugins: {
-        installs: {
-          "voice-call": {
-            source: "npm",
-            spec: "@openclaw/voice-call",
-          },
-        },
+    const cases = [
+      {
+        name: "warns on unpinned npm install specs and missing integrity metadata",
+        run: async () =>
+          runInstallMetadataAudit(
+            {
+              plugins: {
+                installs: {
+                  "voice-call": {
+                    source: "npm",
+                    spec: "@openclaw/voice-call",
+                  },
+                },
+              },
+            } satisfies OpenClawConfig,
+            sharedInstallMetadataStateDir,
+          ),
+        expectedPresent: [
+          "plugins.installs_unpinned_npm_specs",
+          "plugins.installs_missing_integrity",
+        ],
       },
       {
         name: "does not warn on pinned npm install specs with integrity metadata",

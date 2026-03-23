@@ -514,7 +514,6 @@ export function repairToolUseResultPairing(
     // Aborted/errored assistant turns should never synthesize missing tool results, but
     // the replay sanitizer can still legitimately retain real tool results for surviving
     // tool calls in the same turn after malformed siblings are dropped.
-    const stopReason = (assistant as { stopReason?: string }).stopReason;
     if (stopReason === "error" || stopReason === "aborted") {
       out.push(msg);
       if (options?.preserveErroredAssistantResults) {

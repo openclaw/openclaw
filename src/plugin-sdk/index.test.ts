@@ -55,7 +55,7 @@ describe("plugin-sdk exports", () => {
 
   it("keeps the root runtime surface intentionally small", async () => {
     const runtimeExports = await collectRuntimeExports(path.join(import.meta.dirname, "index.ts"));
-    expect([...runtimeExports].toSorted()).toEqual([
+    expect([...runtimeExports].toSorted((a, b) => a.localeCompare(b))).toEqual([
       "buildFalImageGenerationProvider",
       "buildGoogleImageGenerationProvider",
       "buildOpenAIImageGenerationProvider",
@@ -72,7 +72,7 @@ describe("plugin-sdk exports", () => {
       "resolveChannelEntryMatchWithFallback",
       "normalizeChannelSlug",
       "buildChannelKeyCandidates",
-    ];
+    ]);
 
     for (const key of requiredFunctions) {
       expect(sdk).toHaveProperty(key);

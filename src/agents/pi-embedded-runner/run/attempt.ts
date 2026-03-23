@@ -102,7 +102,6 @@ import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { sanitizeToolCallIdsForCloudCodeAssist, type ToolCallIdMode } from "../../tool-call-id.js";
 import { resolveEffectiveToolFsReadWorkspaceOnly } from "../../tool-fs-policy.js";
 import { normalizeToolName } from "../../tool-policy.js";
-import type { TranscriptPolicy } from "../../transcript-policy.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -757,7 +756,7 @@ function resolveReplayToolCallName(
   return resolveExactAllowedToolName(trimmed, allowedToolNames);
 }
 
-function sanitizeReplayToolCallInputs(
+function _sanitizeReplayToolCallInputs(
   messages: AgentMessage[],
   allowedToolNames?: Set<string>,
 ): ReplayToolCallSanitizeReport {
@@ -827,7 +826,7 @@ function sanitizeReplayToolCallInputs(
   };
 }
 
-function sanitizeAnthropicReplayToolResults(messages: AgentMessage[]): AgentMessage[] {
+function _sanitizeAnthropicReplayToolResults(messages: AgentMessage[]): AgentMessage[] {
   let changed = false;
   const out: AgentMessage[] = [];
 
