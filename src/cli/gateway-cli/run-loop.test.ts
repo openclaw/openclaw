@@ -403,8 +403,11 @@ describe("runGatewayLoop", () => {
       expect(flushAllInboundDebouncers.mock.invocationCallOrder[0]).toBeLessThan(
         markGatewayDraining.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
       );
-      expect(markGatewayDraining.mock.invocationCallOrder[0]).toBeLessThan(
-        waitForFollowupQueueDrain.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      // markGatewayDraining must come AFTER followup queue drain — the drain
+      // callbacks flow through enqueueCommandInLane() which rejects once
+      // draining=true, so draining before drain drops queued followups.
+      expect(waitForFollowupQueueDrain.mock.invocationCallOrder[0]).toBeLessThan(
+        markGatewayDraining.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
       );
       expect(flushAllInboundDebouncers.mock.invocationCallOrder[0]).toBeLessThan(
         waitForFollowupQueueDrain.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
@@ -443,9 +446,9 @@ describe("runGatewayLoop", () => {
 
         const forceExitCalls = setTimeoutSpy.mock.calls
           .map((call) => call[1])
-          .filter((delay): delay is number => typeof delay === "number" && delay >= 95_000);
-        expect(forceExitCalls).toContain(95_000);
-        expect(forceExitCalls).toContain(100_000);
+          .filter((delay): delay is number => typeof delay === "number" && delay >= 115_000);
+        expect(forceExitCalls).toContain(115_000);
+        expect(forceExitCalls).toContain(120_000);
 
         sigterm();
         await expect(exited).resolves.toBe(0);
@@ -483,8 +486,8 @@ describe("runGatewayLoop", () => {
         expect(markGatewayDraining).toHaveBeenCalledTimes(1);
         const forceExitCalls = setTimeoutSpy.mock.calls
           .map((call) => call[1])
-          .filter((delay): delay is number => typeof delay === "number" && delay >= 95_000);
-        expect(forceExitCalls).toEqual([95_000, 100_000]);
+          .filter((delay): delay is number => typeof delay === "number" && delay >= 115_000);
+        expect(forceExitCalls).toEqual([115_000, 120_000]);
 
         sigterm();
         await expect(exited).resolves.toBe(0);
@@ -546,11 +549,11 @@ describe("runGatewayLoop", () => {
 
         const forceExitCalls = setTimeoutSpy.mock.calls
           .map((call) => call[1])
-          .filter((delay): delay is number => typeof delay === "number" && delay >= 95_000);
-        // First arm: 1000 + 5000 + 90000 = 96000, delay = 96000 - 1000 = 95000
-        // Second arm (after 20s flush): 21000 + 5000 + 90000 + 5000 = 121000,
-        // delay = 121000 - 21000 = 100000
-        expect(forceExitCalls).toEqual([95_000, 100_000]);
+          .filter((delay): delay is number => typeof delay === "number" && delay >= 115_000);
+        // First arm: 1000 + 25000 + 90000 = 116000, delay = 116000 - 1000 = 115000
+        // Second arm (after 20s flush): 21000 + 25000 + 90000 + 5000 = 141000,
+        // delay = 141000 - 21000 = 120000
+        expect(forceExitCalls).toEqual([115_000, 120_000]);
 
         sigterm();
         await expect(exited).resolves.toBe(0);

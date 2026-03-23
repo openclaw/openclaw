@@ -195,11 +195,6 @@ export async function runGatewayLoop(params: {
             );
           }
 
-          // Now reject new command-queue work so late arrivals fail explicitly
-          // instead of being stranded. This does not block followup queue
-          // enqueues, so already-flushed inbound work can still drain normally.
-          markGatewayDraining();
-
           // Start the restart watchdog budget after the pre-shutdown debounce
           // flush so slow flush handlers do not steal time from active drain.
           armForceExitTimer(
@@ -249,6 +244,12 @@ export async function runGatewayLoop(params: {
               `followup queue drain timeout; ${followupResult.remaining} item(s) still pending`,
             );
           }
+
+          // Reject new command-queue work AFTER followup queues have drained.
+          // The drain callbacks flow through enqueueCommandInLane() which
+          // throws GatewayDrainingError once draining=true; marking before
+          // drain would silently drop queued followups.
+          markGatewayDraining();
         }
 
         await server?.close({

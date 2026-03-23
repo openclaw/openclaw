@@ -5,8 +5,9 @@ import { resolveGlobalMap } from "../shared/global-singleton.js";
 /**
  * Global registry of all active inbound debouncers so they can be flushed
  * collectively during gateway restart (SIGUSR1). Each debouncer registers
- * itself on creation and stays registered until a complete global flush
- * drains it or the owner explicitly unregisters it during teardown.
+ * itself on creation and stays registered until the owning channel explicitly
+ * unregisters it during teardown (server.close()). Flushing alone does not
+ * unregister — the server may still be accepting connections.
  */
 type DebouncerFlushResult = {
   flushedCount: number;
@@ -73,12 +74,13 @@ export async function flushAllInboundDebouncers(options?: { timeoutMs?: number }
         // from being swept. Keep the handle registered for a future sweep.
         return 0;
       }
-      // Only deregister AFTER the handle confirms all its buffers are
-      // drained. If the deadline hit mid-sweep, keep partially-flushed
-      // handles registered so subsequent sweeps can finish the job.
-      // Also auto-evict stale entries whose owning channel never called
-      // unregister() (e.g. after reconnect).
-      if (result.drained || now - handle.lastActivityMs >= STALE_DEBOUNCER_MS) {
+      // Do NOT unregister drained debouncers here — the server is still
+      // accepting connections and channel monitors still hold the debouncer
+      // object. If a message arrives between flush and server.close(), it
+      // would be buffered on an unregistered handle with no future global
+      // flush to rescue it. Only auto-evict genuinely stale entries whose
+      // owning channel never called unregister() (e.g. after reconnect).
+      if (now - handle.lastActivityMs >= STALE_DEBOUNCER_MS) {
         handle.unregister();
       }
       return result.flushedCount;
