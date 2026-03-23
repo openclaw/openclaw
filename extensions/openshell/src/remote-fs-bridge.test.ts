@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +8,15 @@ import type { OpenShellSandboxBackend } from "./backend.js";
 import { createOpenShellRemoteFsBridge } from "./remote-fs-bridge.js";
 
 const tempDirs: string[] = [];
+const localPythonBin = (() => {
+  try {
+    return execFileSync("python3", ["-c", "import sys; print(sys.executable)"], {
+      encoding: "utf8",
+    }).trim();
+  } catch {
+    return "python3";
+  }
+})();
 
 async function makeTempDir(prefix: string) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -108,7 +117,7 @@ function normalizeScriptForLocalShell(script: string) {
   return script
     .replace(
       'stats=$(stat -c "%F|%h" -- "$1")',
-      `stats=$(python3 - "$1" <<'PY'
+      `stats=$(${localPythonBin} - "$1" <<'PY'
 import os, stat, sys
 st = os.stat(sys.argv[1])
 kind = 'directory' if stat.S_ISDIR(st.st_mode) else 'regular file' if stat.S_ISREG(st.st_mode) else 'other'
@@ -118,13 +127,14 @@ PY
     )
     .replace(
       'stat -c "%F|%s|%Y" -- "$1"',
-      `python3 - "$1" <<'PY'
+      `${localPythonBin} - "$1" <<'PY'
 import os, stat, sys
 st = os.stat(sys.argv[1])
 kind = 'directory' if stat.S_ISDIR(st.st_mode) else 'regular file' if stat.S_ISREG(st.st_mode) else 'other'
 print(f"{kind}|{st.st_size}|{int(st.st_mtime)}")
 PY`,
-    );
+    )
+    .replace("python3 /dev/fd/3", `${localPythonBin} /dev/fd/3`);
 }
 
 describe("openshell remote fs bridge", () => {
