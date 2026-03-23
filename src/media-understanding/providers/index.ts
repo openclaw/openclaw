@@ -3,10 +3,6 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import type { MediaUnderstandingProvider } from "../types.js";
-import { deepgramProvider } from "./deepgram/index.js";
-import { groqProvider } from "./groq/index.js";
-
-const PROVIDERS: MediaUnderstandingProvider[] = [groqProvider, deepgramProvider];
 
 function mergeProviderIntoRegistry(
   registry: Map<string, MediaUnderstandingProvider>,
@@ -37,9 +33,6 @@ export function buildMediaUnderstandingRegistry(
   cfg?: OpenClawConfig,
 ): Map<string, MediaUnderstandingProvider> {
   const registry = new Map<string, MediaUnderstandingProvider>();
-  for (const provider of PROVIDERS) {
-    mergeProviderIntoRegistry(registry, provider);
-  }
   const active = getActivePluginRegistry();
   const activeEntries = active?.mediaUnderstandingProviders ?? [];
   for (const entry of activeEntries) {
