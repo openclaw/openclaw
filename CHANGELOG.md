@@ -105,6 +105,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Models/OpenAI Codex OAuth and Plugins/MiniMax OAuth: ensure env-configured HTTP/HTTPS proxy dispatchers are initialized before OAuth preflight and token exchange requests so proxy-required environments can complete MiniMax and OpenAI Codex sign-in flows again. (#52228; fixes #51619, #51569) Thanks @openperf.
 - Plugins/DeepSeek: refactor the bundled DeepSeek provider onto the shared single-provider plugin entry, move its coverage into the extension test lane, and keep bundled auth env-var metadata on the generated manifest path. (#48762) Thanks @07akioni.
 - Web tools/search provider lists: keep onboarding, configure, and docs provider lists alphabetical while preserving the separate runtime auto-detect precedence used for credential-based provider selection.
 - Media/Windows security: block remote-host `file://` media URLs and UNC/network paths before local filesystem resolution in core media loading and adjacent prompt/sandbox attachment seams, so the next release no longer allows structured local-media inputs to trigger outbound SMB credential handshakes on Windows. Thanks @RacerZ-fighting for reporting.
