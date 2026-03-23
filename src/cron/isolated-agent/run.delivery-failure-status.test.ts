@@ -14,19 +14,12 @@ import {
   setupRunCronIsolatedAgentTurnSuite,
 } from "./run.suite-helpers.js";
 import {
+  deliverOutboundPayloadsMock,
   loadRunCronIsolatedAgentTurn,
   mockRunCronFallbackPassthrough,
   resolveCronDeliveryPlanMock,
   resolveDeliveryTargetMock,
 } from "./run.test-harness.js";
-
-// Access the mocked deliverOutboundPayloads from the same mock scope as the
-// test harness.  The harness already calls vi.mock() on this module so we can
-// just import and cast.
-const { deliverOutboundPayloads } =
-  (await import("../../infra/outbound/deliver.js")) as unknown as {
-    deliverOutboundPayloads: ReturnType<typeof vi.fn>;
-  };
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
@@ -52,7 +45,7 @@ describe("runCronIsolatedAgentTurn — delivery failure does not mark job as err
   it("returns status ok when agent task succeeded but best-effort delivery threw", async () => {
     mockRunCronFallbackPassthrough();
     setupDeliveryRequested();
-    deliverOutboundPayloads.mockRejectedValue(new Error("network timeout"));
+    deliverOutboundPayloadsMock.mockRejectedValue(new Error("network timeout"));
 
     const result = await runCronIsolatedAgentTurn(
       makeIsolatedAgentTurnParams({
@@ -76,7 +69,7 @@ describe("runCronIsolatedAgentTurn — delivery failure does not mark job as err
   it("returns status error when agent task succeeded but strict delivery threw", async () => {
     mockRunCronFallbackPassthrough();
     setupDeliveryRequested();
-    deliverOutboundPayloads.mockRejectedValue(new Error("network timeout"));
+    deliverOutboundPayloadsMock.mockRejectedValue(new Error("network timeout"));
 
     const result = await runCronIsolatedAgentTurn(
       makeIsolatedAgentTurnParams({
@@ -106,7 +99,7 @@ describe("runCronIsolatedAgentTurn — delivery failure does not mark job as err
       provider: "openai",
       model: "gpt-4",
     });
-    deliverOutboundPayloads.mockRejectedValue(new Error("network timeout"));
+    deliverOutboundPayloadsMock.mockRejectedValue(new Error("network timeout"));
 
     const result = await runCronIsolatedAgentTurn(
       makeIsolatedAgentTurnParams({
@@ -136,7 +129,7 @@ describe("runCronIsolatedAgentTurn — delivery failure does not mark job as err
       provider: "openai",
       model: "gpt-4",
     });
-    deliverOutboundPayloads.mockResolvedValueOnce([{ ok: true }]);
+    deliverOutboundPayloadsMock.mockResolvedValueOnce([{ ok: true }]);
 
     const result = await runCronIsolatedAgentTurn(
       makeIsolatedAgentTurnParams({
@@ -160,7 +153,7 @@ describe("runCronIsolatedAgentTurn — delivery failure does not mark job as err
 
     mockRunCronFallbackPassthrough();
     setupDeliveryRequested();
-    deliverOutboundPayloads.mockImplementationOnce(async () => {
+    deliverOutboundPayloadsMock.mockImplementationOnce(async () => {
       ac.abort("timeout");
       throw new Error("aborted: timeout");
     });
@@ -186,7 +179,7 @@ describe("runCronIsolatedAgentTurn — delivery failure does not mark job as err
     // Simulate what happens when a message_sending hook cancels every payload:
     // deliverOutboundPayloads returns an empty array (no sends) and calls
     // the onHookCancelled callback for each cancelled payload.
-    deliverOutboundPayloads.mockImplementationOnce(
+    deliverOutboundPayloadsMock.mockImplementationOnce(
       async (params: { onHookCancelled?: (p: unknown) => void }) => {
         params.onHookCancelled?.({ text: "cancelled payload" });
         return [];
@@ -210,7 +203,7 @@ describe("runCronIsolatedAgentTurn — delivery failure does not mark job as err
   it("returns status ok and delivered=true when delivery succeeds", async () => {
     mockRunCronFallbackPassthrough();
     setupDeliveryRequested();
-    deliverOutboundPayloads.mockResolvedValueOnce([{ ok: true }]);
+    deliverOutboundPayloadsMock.mockResolvedValueOnce([{ ok: true }]);
 
     const result = await runCronIsolatedAgentTurn(
       makeIsolatedAgentTurnParams({
