@@ -1,5 +1,6 @@
 import baiduPlugin from "../extensions/baidu/index.js";
 import bravePlugin from "../extensions/brave/index.js";
+import duckduckgoPlugin from "../extensions/duckduckgo/index.js";
 import exaPlugin from "../extensions/exa/index.js";
 import firecrawlPlugin from "../extensions/firecrawl/index.js";
 import googlePlugin from "../extensions/google/index.js";
@@ -35,6 +36,12 @@ export const bundledWebSearchPluginRegistrations: ReadonlyArray<{
       return exaPlugin;
     },
     credentialValue: "exa-test",
+  },
+  {
+    get plugin() {
+      return duckduckgoPlugin;
+    },
+    credentialValue: "duckduckgo-no-key-needed",
   },
   {
     get plugin() {

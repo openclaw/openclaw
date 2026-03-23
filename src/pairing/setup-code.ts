@@ -22,6 +22,9 @@ export type PairingSetupPayload = {
   bootstrapToken: string;
 };
 
+const PAIRING_SETUP_BOOTSTRAP_ROLES = ["node"] as const;
+const PAIRING_SETUP_BOOTSTRAP_SCOPES: string[] = [];
+
 export type PairingSetupCommandResult = {
   code: number | null;
   stdout: string;
@@ -143,13 +146,11 @@ function pickTailnetIPv4(
 }
 
 function resolveGatewayTokenFromEnv(env: NodeJS.ProcessEnv): string | undefined {
-  return env.OPENCLAW_GATEWAY_TOKEN?.trim() || env.CLAWDBOT_GATEWAY_TOKEN?.trim() || undefined;
+  return env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined;
 }
 
 function resolveGatewayPasswordFromEnv(env: NodeJS.ProcessEnv): string | undefined {
-  return (
-    env.OPENCLAW_GATEWAY_PASSWORD?.trim() || env.CLAWDBOT_GATEWAY_PASSWORD?.trim() || undefined
-  );
+  return env.OPENCLAW_GATEWAY_PASSWORD?.trim() || undefined;
 }
 
 function resolvePairingSetupAuthLabel(
@@ -208,9 +209,7 @@ async function resolveGatewayTokenSecretRef(
     return cfg;
   }
   if (mode !== "token") {
-    const hasPasswordEnvCandidate = Boolean(
-      env.OPENCLAW_GATEWAY_PASSWORD?.trim() || env.CLAWDBOT_GATEWAY_PASSWORD?.trim(),
-    );
+    const hasPasswordEnvCandidate = Boolean(env.OPENCLAW_GATEWAY_PASSWORD?.trim());
     if (hasPasswordEnvCandidate) {
       return cfg;
     }
@@ -388,6 +387,8 @@ export async function resolvePairingSetupFromConfig(
       bootstrapToken: (
         await issueDeviceBootstrapToken({
           baseDir: options.pairingBaseDir,
+          roles: PAIRING_SETUP_BOOTSTRAP_ROLES,
+          scopes: PAIRING_SETUP_BOOTSTRAP_SCOPES,
         })
       ).token,
     },

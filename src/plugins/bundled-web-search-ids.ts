@@ -1,6 +1,7 @@
 export const BUNDLED_WEB_SEARCH_PLUGIN_IDS = [
   "baidu",
   "brave",
+  "duckduckgo",
   "exa",
   "firecrawl",
   "google",

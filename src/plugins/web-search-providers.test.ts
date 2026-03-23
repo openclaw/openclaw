@@ -15,6 +15,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       "exa:exa",
       "tavily:tavily",
       "baidu:baidu",
+      "duckduckgo:duckduckgo",
     ]);
     expect(providers.map((provider) => provider.credentialPath)).toEqual([
       "plugins.entries.brave.config.webSearch.apiKey",
@@ -55,6 +56,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       "exa",
       "tavily",
       "baidu",
+      "duckduckgo",
     ]);
   });
 
@@ -111,6 +113,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       "exa:exa",
       "tavily:tavily",
       "baidu:baidu",
+      "duckduckgo:duckduckgo",
     ]);
   });
 
