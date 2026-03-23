@@ -8,7 +8,11 @@ vi.mock("../../../api.js", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
-import { guardedJsonApiRequest } from "./guarded-json-api.js";
+async function loadGuardedJsonApiRequest() {
+  vi.resetModules();
+  const module = await import("./guarded-json-api.js");
+  return module.guardedJsonApiRequest;
+}
 
 describe("guardedJsonApiRequest", () => {
   beforeEach(() => {
@@ -16,6 +20,7 @@ describe("guardedJsonApiRequest", () => {
   });
 
   it("uses the SSRF-guarded fetch and parses json responses", async () => {
+    const guardedJsonApiRequest = await loadGuardedJsonApiRequest();
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(JSON.stringify({ ok: true }), { status: 200 }),
@@ -48,6 +53,7 @@ describe("guardedJsonApiRequest", () => {
   });
 
   it("returns undefined for empty bodies and allowed 404s", async () => {
+    const guardedJsonApiRequest = await loadGuardedJsonApiRequest();
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
       response: new Response(null, { status: 204 }),
@@ -84,6 +90,7 @@ describe("guardedJsonApiRequest", () => {
   });
 
   it("throws prefixed errors and still releases the response handle", async () => {
+    const guardedJsonApiRequest = await loadGuardedJsonApiRequest();
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response("boom", { status: 500 }),
