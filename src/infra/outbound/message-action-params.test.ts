@@ -184,6 +184,23 @@ describe("message action media helpers", () => {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
     }
   });
+
+  it("falls back to extension-based attachment names for remote-host file URLs", async () => {
+    const args: Record<string, unknown> = {
+      media: "file://attacker/share/photo.png",
+    };
+
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "slack",
+      args,
+      action: "sendAttachment",
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+    });
+
+    expect(args.filename).toBe("attachment");
+  });
 });
 
 describe("message action sandbox media hydration", () => {

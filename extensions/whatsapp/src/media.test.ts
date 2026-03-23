@@ -28,6 +28,16 @@ vi.mock("../../../src/media/image-ops.js", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
+    "openclaw/plugin-sdk/media-runtime",
+  );
+  return {
+    ...actual,
+    convertHeicToJpeg: (...args: unknown[]) => convertHeicToJpegMock(...args),
+  };
+});
+
 let fixtureRoot = "";
 let fixtureFileCount = 0;
 let largeJpegBuffer: Buffer;

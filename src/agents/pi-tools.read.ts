@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
 import {
@@ -10,6 +9,7 @@ import {
   readFileWithinRoot,
   writeFileWithinRoot,
 } from "../infra/fs-safe.js";
+import { trySafeFileURLToPath } from "../infra/local-file-access.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
@@ -374,22 +374,11 @@ function mapContainerPathToWorkspaceRoot(params: {
 
   let candidate = params.filePath.startsWith("@") ? params.filePath.slice(1) : params.filePath;
   if (/^file:\/\//i.test(candidate)) {
-    try {
-      candidate = fileURLToPath(candidate);
-    } catch {
-      try {
-        const parsed = new URL(candidate);
-        if (parsed.protocol !== "file:") {
-          return params.filePath;
-        }
-        candidate = decodeURIComponent(parsed.pathname || "");
-        if (!candidate.startsWith("/")) {
-          return params.filePath;
-        }
-      } catch {
-        return params.filePath;
-      }
+    const localFilePath = trySafeFileURLToPath(candidate);
+    if (!localFilePath) {
+      return params.filePath;
     }
+    candidate = localFilePath;
   }
 
   const normalizedCandidate = candidate.replace(/\\/g, "/");
