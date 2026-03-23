@@ -69,13 +69,6 @@ function unwrapDeferredResult<T>(result: DeferredResult<T>): T {
   return result.value;
 }
 
-function shouldCollectPluginCompatibility(cfg: OpenClawConfig): boolean {
-  if (hasPotentialConfiguredChannels(cfg)) {
-    return true;
-  }
-  return existsSync(resolveConfigPath(process.env));
-}
-
 function isMissingConfigColdStart(): boolean {
   return !existsSync(resolveConfigPath(process.env));
 }
@@ -237,9 +230,9 @@ async function scanStatusJsonFast(opts: {
   const memoryPlugin = resolveMemoryPluginStatus(cfg);
   const memoryPromise = resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin });
   const memory = await memoryPromise;
-  const pluginCompatibility = shouldCollectPluginCompatibility(cfg)
-    ? buildPluginCompatibilityNotices({ config: cfg })
-    : [];
+  // `status --json` never renders plugin compatibility notices, so skip the
+  // full compatibility scan and avoid a second plugin load on the JSON path.
+  const pluginCompatibility: StatusScanResult["pluginCompatibility"] = [];
 
   return {
     cfg,
