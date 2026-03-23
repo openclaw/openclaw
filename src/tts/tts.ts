@@ -548,8 +548,13 @@ function formatTtsProviderError(provider: TtsProvider, err: unknown): string {
   return `${provider}: ${error.message}`;
 }
 
-/** Shell-escape a value by wrapping in single quotes. */
+/** Shell-escape a value for the platform-appropriate shell. */
 function shellEscape(value: string): string {
+  if (process.platform === "win32") {
+    // cmd.exe: wrap in double quotes, escape embedded double quotes as ""
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  // POSIX sh: wrap in single quotes, escape embedded single quotes
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
@@ -573,7 +578,9 @@ async function maybeForwardTtsAudio(params: {
   }
   const cmd = substituteShellSafe(fwd.command, { file: params.audioPath });
   try {
-    await execFileAsync("sh", ["-c", cmd], { timeout: fwd.timeoutMs });
+    const isWindows = process.platform === "win32";
+    const [shell, shellFlag] = isWindows ? ["cmd.exe", "/c"] : ["sh", "-c"];
+    await execFileAsync(shell, [shellFlag, cmd], { timeout: fwd.timeoutMs });
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
     logVerbose(`TTS: forward command failed: ${error.message}`);
