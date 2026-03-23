@@ -2,10 +2,10 @@ import "./test-helpers.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import * as ssrf from "openclaw/plugin-sdk/infra-runtime";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
+import { mockPinnedHostnameResolution } from "../../../src/test-helpers/ssrf.js";
 import type { WebInboundMessage, WebListenerCloseReason } from "./inbound.js";
 import {
   resetBaileysMocks as _resetBaileysMocks,
@@ -136,18 +136,7 @@ export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
     _resetBaileysMocks();
     _resetLoadConfigMock();
     if (opts?.pinDns) {
-      resolvePinnedHostnameSpy = vi
-        .spyOn(ssrf, "resolvePinnedHostname")
-        .mockImplementation(async (hostname) => {
-          // SSRF guard pins DNS; stub resolution to avoid live lookups in unit tests.
-          const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
-          const addresses = [TEST_NET_IP];
-          return {
-            hostname: normalized,
-            addresses,
-            lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
-          };
-        });
+      resolvePinnedHostnameSpy = mockPinnedHostnameResolution([TEST_NET_IP]);
     }
   });
 
