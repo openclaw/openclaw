@@ -17,6 +17,7 @@ import { saveCredentialBackup, loadCredentialBackup } from "./credential-backup.
 import { startGateway } from "./gateway.js";
 import { sendText, sendMedia } from "./outbound.js";
 import { getQQBotRuntime } from "./runtime.js";
+import { qqbotSetupWizard } from "./setup-surface.js";
 import type { ResolvedQQBotAccount } from "./types.js";
 
 /** QQ Bot 单条消息文本长度上限 */
@@ -34,6 +35,7 @@ export function chunkText(text: string, limit: number): string[] {
 
 export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
   id: "qqbot",
+  setupWizard: qqbotSetupWizard,
   meta: {
     id: "qqbot",
     label: "QQ Bot",
