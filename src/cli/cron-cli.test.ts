@@ -25,17 +25,24 @@ vi.mock("./gateway-rpc.js", async () => {
   };
 });
 
-vi.mock("../runtime.js", () => ({
-  defaultRuntime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    writeStdout: vi.fn(),
-    writeJson: vi.fn(),
-    exit: (code: number) => {
-      throw new Error(`__exit__:${code}`);
+vi.mock("../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime.js")>();
+  const log = vi.fn();
+  return {
+    ...actual,
+    defaultRuntime: {
+      ...actual.defaultRuntime,
+      log,
+      error: vi.fn(),
+      writeStdout: (value: string) => log(value.endsWith("\n") ? value.slice(0, -1) : value),
+      writeJson: (value: unknown, space = 2) =>
+        log(JSON.stringify(value, null, space > 0 ? space : undefined)),
+      exit: (code: number) => {
+        throw new Error(`__exit__:${code}`);
+      },
     },
-  },
-}));
+  };
+});
 
 const { registerCronCli } = await import("./cron-cli.js");
 
