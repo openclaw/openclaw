@@ -76,6 +76,13 @@ function normalizeResolvedModel(params: {
   agentDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model<Api> {
+  const normalizedInputModel =
+    Array.isArray(params.model.input) && params.model.input.length > 0
+      ? params.model
+      : ({
+          ...params.model,
+          input: ["text"],
+        } as Model<Api>);
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const pluginNormalized = runtimeHooks.normalizeProviderResolvedModelWithPlugin({
     provider: params.provider,
@@ -84,14 +91,36 @@ function normalizeResolvedModel(params: {
       config: params.cfg,
       agentDir: params.agentDir,
       provider: params.provider,
-      modelId: params.model.id,
-      model: params.model,
+      modelId: normalizedInputModel.id,
+      model: normalizedInputModel,
     },
   }) as Model<Api> | undefined;
   if (pluginNormalized) {
     return normalizeModelCompat(pluginNormalized);
   }
-  return normalizeResolvedProviderModel(params);
+  return normalizeResolvedProviderModel({
+    provider: params.provider,
+    model: normalizedInputModel,
+  });
+}
+
+function findInlineModelMatch(params: {
+  providers: Record<string, InlineProviderConfig>;
+  provider: string;
+  modelId: string;
+}) {
+  const inlineModels = buildInlineProviderModels(params.providers);
+  const exact = inlineModels.find(
+    (entry) => entry.provider === params.provider && entry.id === params.modelId,
+  );
+  if (exact) {
+    return exact;
+  }
+  const normalizedProvider = normalizeProviderId(params.provider);
+  return inlineModels.find(
+    (entry) =>
+      normalizeProviderId(entry.provider) === normalizedProvider && entry.id === params.modelId,
+  );
 }
 
 export { buildModelAliasLines };
@@ -212,11 +241,11 @@ function resolveExplicitModelWithRegistry(params: {
     return { kind: "suppressed" };
   }
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
-  const inlineModels = buildInlineProviderModels(cfg?.models?.providers ?? {});
-  const normalizedProvider = normalizeProviderId(provider);
-  const inlineMatch = inlineModels.find(
-    (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
-  );
+  const inlineMatch = findInlineModelMatch({
+    providers: cfg?.models?.providers ?? {},
+    provider,
+    modelId,
+  });
   if (inlineMatch?.api) {
     return {
       kind: "resolved",
@@ -249,9 +278,11 @@ function resolveExplicitModelWithRegistry(params: {
   }
 
   const providers = cfg?.models?.providers ?? {};
-  const fallbackInlineMatch = buildInlineProviderModels(providers).find(
-    (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
-  );
+  const fallbackInlineMatch = findInlineModelMatch({
+    providers,
+    provider,
+    modelId,
+  });
   if (fallbackInlineMatch?.api) {
     return {
       kind: "resolved",
@@ -385,6 +416,8 @@ export function resolveModel(
   agentDir?: string,
   cfg?: OpenClawConfig,
   options?: {
+    authStorage?: AuthStorage;
+    modelRegistry?: ModelRegistry;
     runtimeHooks?: ProviderRuntimeHooks;
   },
 ): {
@@ -394,8 +427,8 @@ export function resolveModel(
   modelRegistry: ModelRegistry;
 } {
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
-  const authStorage = discoverAuthStorage(resolvedAgentDir);
-  const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
+  const authStorage = options?.authStorage ?? discoverAuthStorage(resolvedAgentDir);
+  const modelRegistry = options?.modelRegistry ?? discoverModels(authStorage, resolvedAgentDir);
   const model = resolveModelWithRegistry({
     provider,
     modelId,
@@ -421,6 +454,8 @@ export async function resolveModelAsync(
   agentDir?: string,
   cfg?: OpenClawConfig,
   options?: {
+    authStorage?: AuthStorage;
+    modelRegistry?: ModelRegistry;
     retryTransientProviderRuntimeMiss?: boolean;
     runtimeHooks?: ProviderRuntimeHooks;
   },
@@ -431,8 +466,8 @@ export async function resolveModelAsync(
   modelRegistry: ModelRegistry;
 }> {
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
-  const authStorage = discoverAuthStorage(resolvedAgentDir);
-  const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
+  const authStorage = options?.authStorage ?? discoverAuthStorage(resolvedAgentDir);
+  const modelRegistry = options?.modelRegistry ?? discoverModels(authStorage, resolvedAgentDir);
   const explicitModel = resolveExplicitModelWithRegistry({
     provider,
     modelId,
