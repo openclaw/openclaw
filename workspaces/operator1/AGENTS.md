@@ -84,9 +84,7 @@
 
 ## Session Notes
 
-**MANDATORY write-back after completing any task or answering any substantive question:** Write `memory/YYYY-MM-DD.md` immediately after finishing each task. Do NOT wait for end of session — write after each completed item.
-
-- Keep entries short: what happened, what was decided, what is pending.
+- Keep memory entries short: what happened, what was decided, what is pending.
 - Do not write secrets to memory files.
 - Format: `[HH:MM] Task: <what was done>. Result: <outcome>. Pending: <if any>.`
 
