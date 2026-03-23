@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT_DIR/scripts/lib/live-docker-auth.sh"
 IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
 LIVE_IMAGE_NAME="${OPENCLAW_LIVE_IMAGE:-${IMAGE_NAME}-live}"
 CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
@@ -13,8 +14,32 @@ if [[ -f "$PROFILE_FILE" ]]; then
   PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
 fi
 
+AUTH_DIRS=()
+if [[ -n "${OPENCLAW_DOCKER_AUTH_DIRS:-}" ]]; then
+  while IFS= read -r auth_dir; do
+    [[ -n "$auth_dir" ]] || continue
+    AUTH_DIRS+=("$auth_dir")
+  done < <(openclaw_live_collect_auth_dirs)
+elif [[ -n "${OPENCLAW_LIVE_PROVIDERS:-}" && -n "${OPENCLAW_LIVE_GATEWAY_PROVIDERS:-}" ]]; then
+  while IFS= read -r auth_dir; do
+    [[ -n "$auth_dir" ]] || continue
+    AUTH_DIRS+=("$auth_dir")
+  done < <(
+    {
+      openclaw_live_collect_auth_dirs_from_csv "${OPENCLAW_LIVE_PROVIDERS:-}"
+      openclaw_live_collect_auth_dirs_from_csv "${OPENCLAW_LIVE_GATEWAY_PROVIDERS:-}"
+    } | awk '!seen[$0]++'
+  )
+else
+  while IFS= read -r auth_dir; do
+    [[ -n "$auth_dir" ]] || continue
+    AUTH_DIRS+=("$auth_dir")
+  done < <(openclaw_live_collect_auth_dirs)
+fi
+AUTH_DIRS_CSV="$(openclaw_live_join_csv "${AUTH_DIRS[@]}")"
+
 EXTERNAL_AUTH_MOUNTS=()
-for auth_dir in .claude .codex .minimax .qwen; do
+for auth_dir in "${AUTH_DIRS[@]}"; do
   host_path="$HOME/$auth_dir"
   if [[ -d "$host_path" ]]; then
     EXTERNAL_AUTH_MOUNTS+=(-v "$host_path":/host-auth/"$auth_dir":ro)
@@ -24,7 +49,9 @@ done
 read -r -d '' LIVE_TEST_CMD <<'EOF' || true
 set -euo pipefail
 [ -f "$HOME/.profile" ] && source "$HOME/.profile" || true
-for auth_dir in .claude .codex .minimax .qwen; do
+IFS=',' read -r -a auth_dirs <<<"${OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED:-}"
+for auth_dir in "${auth_dirs[@]}"; do
+  [ -n "$auth_dir" ] || continue
   if [ -d "/host-auth/$auth_dir" ]; then
     mkdir -p "$HOME/$auth_dir"
     cp -R "/host-auth/$auth_dir/." "$HOME/$auth_dir"
@@ -58,11 +85,13 @@ echo "==> Build live-test image: $LIVE_IMAGE_NAME (target=build)"
 docker build --target build -t "$LIVE_IMAGE_NAME" -f "$ROOT_DIR/Dockerfile" "$ROOT_DIR"
 
 echo "==> Run live model tests (profile keys)"
+echo "==> External auth dirs: ${AUTH_DIRS_CSV:-none}"
 docker run --rm -t \
   --entrypoint bash \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e HOME=/home/node \
   -e NODE_OPTIONS=--disable-warning=ExperimentalWarning \
+  -e OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED="$AUTH_DIRS_CSV" \
   -e OPENCLAW_LIVE_TEST=1 \
   -e OPENCLAW_LIVE_MODELS="${OPENCLAW_LIVE_MODELS:-modern}" \
   -e OPENCLAW_LIVE_PROVIDERS="${OPENCLAW_LIVE_PROVIDERS:-}" \
