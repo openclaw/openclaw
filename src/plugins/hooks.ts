@@ -674,14 +674,34 @@ export function createHookRunner(
     event: PluginHookAgentErrorEvent,
     ctx: PluginHookAgentContext,
   ): Promise<PluginHookAgentErrorResult | undefined> {
-    return runModifyingHook<"agent_error", PluginHookAgentErrorResult>(
-      "agent_error",
-      event,
-      ctx,
-      (acc, next) => ({
-        message: next.message ?? acc?.message,
-      }),
-    );
+    const hooks = getHooksForName(registry, "agent_error");
+    if (hooks.length === 0) {
+      return undefined;
+    }
+
+    logger?.debug?.(`[hooks] running agent_error (${hooks.length} handlers, sequential)`);
+
+    // Each handler receives the message produced by the previous one so that
+    // later plugins can build on an earlier plugin's replacement rather than
+    // seeing the original raw provider error.
+    let currentError = event.error;
+    for (const hook of hooks) {
+      try {
+        const handlerResult = await (
+          hook.handler as (
+            e: PluginHookAgentErrorEvent,
+            c: PluginHookAgentContext,
+          ) => Promise<PluginHookAgentErrorResult>
+        )({ error: currentError }, ctx);
+        if (typeof handlerResult?.message === "string") {
+          currentError = handlerResult.message;
+        }
+      } catch (err) {
+        handleHookError({ hookName: "agent_error", pluginId: hook.pluginId, error: err });
+      }
+    }
+
+    return currentError !== event.error ? { message: currentError } : undefined;
   }
 
   /**
