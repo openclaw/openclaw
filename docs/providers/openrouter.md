@@ -30,6 +30,61 @@ openclaw onboard --auth-choice apiKey --token-provider openrouter --token "$OPEN
 }
 ```
 
+## Auto-router
+
+OpenRouter's [auto-router](https://openrouter.ai/docs/features/model-routing) selects the best
+model for each prompt automatically. You can constrain it to a specific set of models using the
+`autoRouter.allowedModels` param:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "openrouter/openrouter/auto" },
+      models: {
+        "openrouter/openrouter/auto": {
+          params: {
+            autoRouter: {
+              allowedModels: [
+                "anthropic/claude-haiku-4-5",
+                "google/gemini-2.5-flash",
+                "openai/gpt-5-nano",
+              ],
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+When `allowedModels` is set, the auto-router picks only from that list — giving you intelligent
+task-based routing within a cost-controlled pool. Omitting `allowedModels` lets the auto-router
+choose from all OpenRouter models.
+
+Wildcards are also supported: `"anthropic/*"` matches all Anthropic models.
+
+## Provider routing
+
+You can restrict which inference providers OpenRouter uses via `params.provider`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openrouter/anthropic/claude-haiku-4-5": {
+          params: {
+            provider: { only: ["anthropic"], allow_fallbacks: false },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
 ## Notes
 
 - Model refs are `openrouter/<provider>/<model>`.

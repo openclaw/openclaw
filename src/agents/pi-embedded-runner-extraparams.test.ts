@@ -77,6 +77,31 @@ beforeEach(() => {
           );
       }
 
+      const autoRouterConfig = params.context.extraParams?.autoRouter;
+      if (autoRouterConfig != null && typeof autoRouterConfig === "object") {
+        const allowedModels = (autoRouterConfig as Record<string, unknown>).allowedModels;
+        if (Array.isArray(allowedModels) && allowedModels.length > 0) {
+          const validModels = allowedModels.filter((m): m is string => typeof m === "string");
+          if (validModels.length > 0) {
+            const underlying = streamFn;
+            streamFn = (model, context, options) => {
+              const originalOnPayload = options?.onPayload;
+              return (underlying as StreamFn)(model, context, {
+                ...options,
+                onPayload: (payload) => {
+                  if (payload && typeof payload === "object") {
+                    (payload as Record<string, unknown>).plugins = [
+                      { id: "auto-router", allowed_models: validModels },
+                    ];
+                  }
+                  return originalOnPayload?.(payload, model);
+                },
+              });
+            };
+          }
+        }
+      }
+
       const skipReasoningInjection =
         params.context.modelId === "auto" || isProxyReasoningUnsupported(params.context.modelId);
       const thinkingLevel = skipReasoningInjection ? undefined : params.context.thinkingLevel;
@@ -525,6 +550,117 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads).toHaveLength(1);
     expect(payloads[0]).not.toHaveProperty("reasoning");
     expect(payloads[0]).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("injects auto-router plugins into payload when autoRouter.allowedModels is configured", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(
+      agent,
+      {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/openrouter/auto": {
+                params: {
+                  autoRouter: {
+                    allowedModels: ["anthropic/claude-haiku-4-5", "google/gemini-2.5-flash"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      "openrouter",
+      "openrouter/auto",
+    );
+
+    const model = {
+      api: "openai-completions",
+      provider: "openrouter",
+      id: "openrouter/auto",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.plugins).toEqual([
+      {
+        id: "auto-router",
+        allowed_models: ["anthropic/claude-haiku-4-5", "google/gemini-2.5-flash"],
+      },
+    ]);
+  });
+
+  it("does not inject plugins when autoRouter.allowedModels is absent", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "openrouter", "openrouter/auto");
+
+    const model = {
+      api: "openai-completions",
+      provider: "openrouter",
+      id: "openrouter/auto",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).not.toHaveProperty("plugins");
+  });
+
+  it("does not inject plugins when autoRouter.allowedModels is an empty array", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(
+      agent,
+      {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/openrouter/auto": {
+                params: { autoRouter: { allowedModels: [] } },
+              },
+            },
+          },
+        },
+      },
+      "openrouter",
+      "openrouter/auto",
+    );
+
+    const model = {
+      api: "openai-completions",
+      provider: "openrouter",
+      id: "openrouter/auto",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).not.toHaveProperty("plugins");
   });
 
   it("injects parallel_tool_calls for openai-completions payloads when configured", () => {
