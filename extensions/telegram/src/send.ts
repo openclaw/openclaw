@@ -507,7 +507,7 @@ function createTelegramRequestWithDiag(params: {
 
 function wrapTelegramChatNotFoundError(err: unknown, params: { chatId: string; input: string }) {
   const errorMsg = formatErrorMessage(err);
-  
+
   // Check for 403 "bot is not a member" or "bot was blocked" errors
   if (/403.*(bot.*not.*member|bot.*blocked)/i.test(errorMsg)) {
     return new Error(
@@ -518,7 +518,7 @@ function wrapTelegramChatNotFoundError(err: unknown, params: { chatId: string; i
       ].join(" "),
     );
   }
-  
+
   if (!CHAT_NOT_FOUND_RE.test(errorMsg)) {
     return err;
   }
