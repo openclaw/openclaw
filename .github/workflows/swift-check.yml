@@ -2,7 +2,14 @@ name: Swift Check
 
 on:
   push:
-    branches: [fix/websocket-ping-double-resume]
+    branches: [main]
+    paths:
+      - 'apps/macos/**'
+      - 'apps/shared/**'
+  pull_request:
+    paths:
+      - 'apps/macos/**'
+      - 'apps/shared/**'
 
 jobs:
   swift:
