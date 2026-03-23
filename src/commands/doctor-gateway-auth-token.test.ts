@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { withTempHome, writeStateDirDotEnv } from "../config/test-helpers.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   resolveGatewayAuthTokenForService,
@@ -236,6 +237,24 @@ describe("shouldRequireGatewayTokenForInstall", () => {
       {} as NodeJS.ProcessEnv,
     );
     expect(required).toBe(false);
+  });
+
+  it("does not require token in inferred mode when password env exists in state-dir .env", async () => {
+    await withTempHome(async (_home) => {
+      await writeStateDirDotEnv("OPENCLAW_GATEWAY_PASSWORD=dotenv-password\n", {
+        env: process.env,
+      });
+
+      const required = shouldRequireGatewayTokenForInstall(
+        {
+          gateway: {
+            auth: {},
+          },
+        } as OpenClawConfig,
+        process.env,
+      );
+      expect(required).toBe(false);
+    });
   });
 
   it("requires token in inferred mode when no password candidate exists", () => {
