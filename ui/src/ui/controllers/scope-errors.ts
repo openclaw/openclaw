@@ -9,7 +9,9 @@ export function isMissingOperatorReadScopeError(err: unknown): boolean {
   if (detailCode === ConnectErrorDetailCodes.AUTH_UNAUTHORIZED) {
     return true;
   }
-  return false;
+  // RPC scope failures do not yet expose a dedicated structured detail code.
+  // Fall back to the current gateway message until the protocol surfaces one.
+  return err.message.includes("missing scope: operator.read");
 }
 
 export function formatMissingOperatorReadScopeMessage(feature: string): string {
