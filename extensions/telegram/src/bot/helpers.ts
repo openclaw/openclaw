@@ -403,13 +403,8 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
 
   const replyLike = reply ?? externalReply;
   if (!body && replyLike) {
-    const replyBody = (
-      typeof replyLike.text === "string"
-        ? replyLike.text
-        : typeof replyLike.caption === "string"
-          ? replyLike.caption
-          : ""
-    ).trim();
+    const rawText = replyLike.text ?? replyLike.caption ?? "";
+    const replyBody = (typeof rawText === "string" ? rawText : "").trim();
     body = replyBody;
     if (!body) {
       body = resolveTelegramMediaPlaceholder(replyLike) ?? "";
