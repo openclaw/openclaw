@@ -238,7 +238,20 @@ export function resolveDefaultConfigCandidates(
     candidates.push(...LEGACY_CONFIG_FILENAMES.map((name) => path.join(resolved, name)));
   }
 
-  const defaultDirs = [newStateDir(effectiveHomedir), ...legacyStateDirs(effectiveHomedir)];
+  // When OPENCLAW_HOME basename is a known state dir, reorder to match
+  // resolveStateDir's orderedNames: .openclaw → self-named → rest.
+  // Prevents config/state split when multiple nested dirs coexist.
+  const explicitHome = env.OPENCLAW_HOME?.trim();
+  let defaultDirs = [newStateDir(effectiveHomedir), ...legacyStateDirs(effectiveHomedir)];
+  if (explicitHome && !openclawStateDir) {
+    const home = effectiveHomedir();
+    const selfName = path.basename(home);
+    if (ALL_STATE_DIRNAMES.has(selfName) && selfName !== NEW_STATE_DIRNAME) {
+      const selfDir = path.join(home, selfName);
+      const openclawDir = defaultDirs[0]!;
+      defaultDirs = [openclawDir, selfDir, ...defaultDirs.filter((d) => d !== openclawDir && d !== selfDir)];
+    }
+  }
   for (const dir of defaultDirs) {
     candidates.push(path.join(dir, CONFIG_FILENAME));
     candidates.push(...LEGACY_CONFIG_FILENAMES.map((name) => path.join(dir, name)));
@@ -252,7 +265,6 @@ export function resolveDefaultConfigCandidates(
   // (e.g. ~/.clawdbot/clawdbot.json), matching resolveStateDir()'s preference.
   // Skip when OPENCLAW_STATE_DIR is active — config should follow the
   // overridden state dir, not fall back to a stale OPENCLAW_HOME flat file.
-  const explicitHome = env.OPENCLAW_HOME?.trim();
   if (explicitHome && !openclawStateDir) {
     const home = effectiveHomedir();
     if (ALL_STATE_DIRNAMES.has(path.basename(home))) {

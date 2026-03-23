@@ -253,6 +253,30 @@ describe("resolveDefaultConfigCandidates nesting guard (#45765)", () => {
     });
   });
 
+  it("config candidate order matches resolveStateDir when OPENCLAW_HOME is a legacy state dir", async () => {
+    await withTempDir({ prefix: "openclaw-ordering-" }, async (root) => {
+      const homeDir = path.join(root, ".moldbot");
+      const nestedClawdbot = path.join(homeDir, ".clawdbot");
+      const nestedMoldbot = path.join(homeDir, ".moldbot");
+      await fs.mkdir(nestedClawdbot, { recursive: true });
+      await fs.mkdir(nestedMoldbot, { recursive: true });
+
+      const env = { OPENCLAW_HOME: homeDir } as NodeJS.ProcessEnv;
+      const stateDir = resolveStateDir(env);
+      const candidates = resolveDefaultConfigCandidates(env);
+
+      // resolveStateDir picks self-named (.moldbot) since .openclaw doesn't exist
+      expect(stateDir).toBe(nestedMoldbot);
+
+      // Config candidates must search .moldbot before .clawdbot to match
+      const moldbotIdx = candidates.indexOf(path.join(nestedMoldbot, "openclaw.json"));
+      const clawdbotIdx = candidates.indexOf(path.join(nestedClawdbot, "openclaw.json"));
+      expect(moldbotIdx).toBeGreaterThan(-1);
+      expect(clawdbotIdx).toBeGreaterThan(-1);
+      expect(moldbotIdx).toBeLessThan(clawdbotIdx);
+    });
+  });
+
   it("skips flat candidates when nested state dir exists under OPENCLAW_HOME", async () => {
     await withTempDir({ prefix: "openclaw-nesting-" }, async (root) => {
       const homeDir = path.join(root, ".clawdbot");
