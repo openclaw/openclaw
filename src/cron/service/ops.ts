@@ -396,13 +396,9 @@ async function inspectManualRunPreflight(
     // This fixes jobs stuck with a wrong timestamp from timezone bugs.
     if (mode === "force" && job.enabled) {
       const now = state.deps.nowMs();
-      const isDue = isJobDue(job, now, { forced: true });
-      if (!isDue && job.state.nextRunAtMs !== undefined) {
-        // Job is not due but has nextRunAtMs - recompute to fix stale values
-        const newNext = computeJobNextRunAtMs(job, now);
-        if (job.state.nextRunAtMs !== newNext) {
-          job.state.nextRunAtMs = newNext;
-        }
+      const newNext = computeJobNextRunAtMs(job, now);
+      if (job.state.nextRunAtMs !== newNext) {
+        job.state.nextRunAtMs = newNext;
       }
     }
     if (typeof job.state.runningAtMs === "number") {
