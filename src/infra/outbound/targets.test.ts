@@ -1,8 +1,20 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+
+vi.mock("./channel-resolution.js", async () => {
+  const { getActivePluginRegistry } = await import("../../plugins/runtime.js");
+
+  return {
+    normalizeDeliverableOutboundChannel: (raw?: string | null) =>
+      typeof raw === "string" && raw.trim() ? raw.trim().toLowerCase() : undefined,
+    resolveOutboundChannelPlugin: ({ channel }: { channel: string }) =>
+      getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)?.plugin,
+  };
+});
+
 import {
   resolveHeartbeatDeliveryTarget,
   resolveOutboundTarget,
