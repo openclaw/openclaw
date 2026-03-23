@@ -74,6 +74,7 @@ vi.mock("@whiskeysockets/baileys", async () => {
     ...actual,
     DisconnectReason: actual.DisconnectReason ?? { loggedOut: 401 },
     isJidGroup: actual.isJidGroup ?? ((jid: string) => jid.endsWith("@g.us")),
+    normalizeMessageContent: actual.normalizeMessageContent ?? ((message: unknown) => message),
     downloadMediaMessage: vi.fn().mockResolvedValue(jpegBuffer),
   };
 });

@@ -6,6 +6,8 @@ vi.mock("@whiskeysockets/baileys", async () => {
   return {
     ...actual,
     DisconnectReason: actual.DisconnectReason ?? { loggedOut: 401 },
+    isJidGroup: actual.isJidGroup ?? ((jid: string) => jid.endsWith("@g.us")),
+    normalizeMessageContent: actual.normalizeMessageContent ?? ((message: unknown) => message),
   };
 });
 

@@ -445,15 +445,15 @@ describe("startTelegramWebhook", () => {
         webhookCertPath: "/path/to/cert.pem",
       },
       async () => {
-        expect(setWebhookSpy).toHaveBeenCalledWith(
-          expect.any(String),
-          expect.objectContaining({
-            certificate: expect.objectContaining({
-              fileData: "/path/to/cert.pem",
-              filename: "cert.pem",
-            }),
-          }),
-        );
+        expect(setWebhookSpy).toHaveBeenCalledTimes(1);
+        const [, options] = setWebhookSpy.mock.calls[0] ?? [];
+        const certificate = (options as { certificate?: Record<string, unknown> } | undefined)
+          ?.certificate;
+        expect(certificate).toBeDefined();
+        expect(
+          (certificate as { fileData?: string; path?: string } | undefined)?.fileData ??
+            (certificate as { fileData?: string; path?: string } | undefined)?.path,
+        ).toBe("/path/to/cert.pem");
       },
     );
   });

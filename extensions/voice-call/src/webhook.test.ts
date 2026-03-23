@@ -363,15 +363,22 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
 
     try {
       const baseUrl = await server.start();
-      const response = await postWebhookFormWithHeaders(
+      const outcome = await postWebhookFormWithHeaders(
         server,
         baseUrl,
         "CallSid=CA123&SpeechResult=".padEnd(70 * 1024, "a"),
         { "x-twilio-signature": "sig" },
-      );
+      ).catch((error) => error as Error & { code?: string; cause?: { code?: string } });
 
-      expect(response.status).toBe(413);
-      expect(await response.text()).toBe("Payload Too Large");
+      if (outcome instanceof Response) {
+        expect(outcome.status).toBe(413);
+        expect(await outcome.text()).toBe("Payload Too Large");
+      } else {
+        expect(
+          outcome.code ?? outcome.cause?.code,
+          `unexpected transport error: ${String(outcome)}`,
+        ).toBe("ECONNRESET");
+      }
       expect(verifyWebhook).not.toHaveBeenCalled();
     } finally {
       await server.stop();

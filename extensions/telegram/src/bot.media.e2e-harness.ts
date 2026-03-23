@@ -178,8 +178,17 @@ vi.doMock("./bot.runtime.js", () => ({
 
 vi.mock("undici", async (importOriginal) => {
   const actual = await importOriginal<typeof import("undici")>();
+  class AgentFallback {
+    close() {}
+    destroy() {}
+  }
+  class EnvHttpProxyAgentFallback extends AgentFallback {}
+  class ProxyAgentFallback extends AgentFallback {}
   return {
     ...actual,
+    Agent: actual.Agent ?? AgentFallback,
+    EnvHttpProxyAgent: actual.EnvHttpProxyAgent ?? EnvHttpProxyAgentFallback,
+    ProxyAgent: actual.ProxyAgent ?? ProxyAgentFallback,
     fetch: (...args: Parameters<typeof undiciFetchSpy>) => undiciFetchSpy(...args),
   };
 });
