@@ -25,9 +25,9 @@ env:
 
 jobs:
   preflight_macos_release:
-    # Use GitHub's larger macOS runner because release packaging is
-    # Swift-heavy and benefits more from extra CPU than the default image.
-    runs-on: macos-latest-large
+    # Use GitHub's xlarge macOS runner because release packaging is
+    # Swift-heavy and benefits from the faster hosted hardware tier.
+    runs-on: macos-latest-xlarge
     permissions:
       contents: read
     steps:
@@ -158,7 +158,7 @@ jobs:
   publish_macos_release:
     needs: [preflight_macos_release, validate_publish_dispatch_ref]
     if: ${{ !inputs.preflight_only }}
-    runs-on: macos-latest-large
+    runs-on: macos-latest-xlarge
     environment: mac-release
     concurrency:
       # Stable releases all derive the same shared appcast.xml; serialize those
