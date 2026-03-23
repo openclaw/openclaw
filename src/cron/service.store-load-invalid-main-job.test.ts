@@ -94,7 +94,7 @@ describe("CronService store load", () => {
       payload: { kind: "systemEvent", message: "  legacy tick  " },
       state: {},
       name: "legacy-system-message",
-    } as CronJob;
+    } as unknown as CronJob;
 
     await writeCronStoreSnapshot({ storePath, jobs: [job] });
 
