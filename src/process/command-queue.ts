@@ -228,7 +228,7 @@ export function getTotalQueueSize() {
   return total;
 }
 
-export function clearCommandLane(lane: string = CommandLane.Main) {
+export function clearCommandLane(lane: string = CommandLane.Main, opts?: { force?: boolean }) {
   const cleaned = normalizeLane(lane);
   const state = queueState.lanes.get(cleaned);
   if (!state) {
@@ -238,6 +238,11 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
   const pending = state.queue.splice(0);
   for (const entry of pending) {
     entry.reject(new CommandLaneClearedError(cleaned));
+  }
+  if (opts?.force) {
+    state.generation += 1;
+    state.activeTaskIds.clear();
+    state.draining = false;
   }
   return removed;
 }

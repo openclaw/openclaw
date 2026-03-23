@@ -6,6 +6,15 @@ import { Routes } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions.js";
 import type { DiscordExecApprovalConfig } from "../../../../src/config/types.discord.js";
+import {
+  buildExecApprovalCustomId,
+  extractDiscordChannelId,
+  parseExecApprovalData,
+  type ExecApprovalRequest,
+  DiscordExecApprovalHandler,
+  ExecApprovalButton,
+  type ExecApprovalButtonContext,
+} from "./exec-approvals.js";
 
 const STORE_PATH = path.join(os.tmpdir(), "openclaw-exec-approvals-test.json");
 
@@ -50,7 +59,6 @@ const gatewayClientRequests = vi.hoisted(() => vi.fn(async () => ({ ok: true }))
 const gatewayClientParams = vi.hoisted(() => [] as Array<Record<string, unknown>>);
 const mockGatewayClientCtor = vi.hoisted(() => vi.fn());
 const mockResolveGatewayConnectionAuth = vi.hoisted(() => vi.fn());
-const mockCreateOperatorApprovalsGatewayClient = vi.hoisted(() => vi.fn());
 
 vi.mock("../send.shared.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../send.shared.js")>();
@@ -67,12 +75,8 @@ vi.mock("../send.shared.js", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/gateway-runtime")>();
-  type CreateOperatorApprovalsGatewayClientParams = Parameters<
-    typeof actual.createOperatorApprovalsGatewayClient
-  >[0];
-  class MockGatewayClient {
+vi.mock("../../../../src/gateway/client.js", () => ({
+  GatewayClient: class {
     private params: Record<string, unknown>;
     constructor(params: Record<string, unknown>) {
       this.params = params;
@@ -88,69 +92,17 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => {
     async request() {
       return gatewayClientRequests();
     }
-  }
-  return {
-    ...actual,
-    GatewayClient: MockGatewayClient,
-    createOperatorApprovalsGatewayClient: async (
-      params: CreateOperatorApprovalsGatewayClientParams,
-    ) => {
-      mockCreateOperatorApprovalsGatewayClient(params);
-      const envUrl = process.env.OPENCLAW_GATEWAY_URL?.trim();
-      const gatewayUrl = params.gatewayUrl?.trim() || envUrl || "ws://127.0.0.1:18789";
-      const urlOverrideSource = params.gatewayUrl?.trim() ? "cli" : envUrl ? "env" : undefined;
-      const auth = await mockResolveGatewayConnectionAuth({
-        config: params.config,
-        env: process.env,
-        ...(urlOverrideSource
-          ? {
-              urlOverride: gatewayUrl,
-              urlOverrideSource,
-            }
-          : {}),
-      });
-      return new MockGatewayClient({
-        url: gatewayUrl,
-        token: auth?.token,
-        password: auth?.password,
-        clientName: "gateway-client",
-        clientDisplayName: params.clientDisplayName,
-        mode: "backend",
-        scopes: ["operator.approvals"],
-        onEvent: params.onEvent,
-        onHelloOk: params.onHelloOk,
-        onConnectError: params.onConnectError,
-        onClose: params.onClose,
-      });
-    },
-  };
-});
+  },
+}));
 
-vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-runtime")>();
-  return {
-    ...actual,
-    logDebug: vi.fn(),
-    logError: vi.fn(),
-  };
-});
+vi.mock("../../../../src/gateway/connection-auth.js", () => ({
+  resolveGatewayConnectionAuth: mockResolveGatewayConnectionAuth,
+}));
 
 vi.mock("../../../../src/logger.js", () => ({
   logDebug: vi.fn(),
   logError: vi.fn(),
 }));
-
-let buildExecApprovalCustomId: typeof import("./exec-approvals.js").buildExecApprovalCustomId;
-let extractDiscordChannelId: typeof import("./exec-approvals.js").extractDiscordChannelId;
-let parseExecApprovalData: typeof import("./exec-approvals.js").parseExecApprovalData;
-let DiscordExecApprovalHandler: typeof import("./exec-approvals.js").DiscordExecApprovalHandler;
-let ExecApprovalButton: typeof import("./exec-approvals.js").ExecApprovalButton;
-type DiscordExecApprovalHandlerInstance = InstanceType<
-  typeof import("./exec-approvals.js").DiscordExecApprovalHandler
->;
-
-type ExecApprovalRequest = import("./exec-approvals.js").ExecApprovalRequest;
-type ExecApprovalButtonContext = import("./exec-approvals.js").ExecApprovalButtonContext;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -191,7 +143,7 @@ function mockSuccessfulDmDelivery(params?: {
 }
 
 async function expectGatewayAuthStart(params: {
-  handler: DiscordExecApprovalHandlerInstance;
+  handler: DiscordExecApprovalHandler;
   expectedUrl: string;
   expectedSource: "cli" | "env";
   expectedToken?: string;
@@ -229,13 +181,11 @@ type ExecApprovalHandlerInternals = {
   handleApprovalTimeout: (approvalId: string, source?: "channel" | "dm") => Promise<void>;
 };
 
-function getHandlerInternals(
-  handler: DiscordExecApprovalHandlerInstance,
-): ExecApprovalHandlerInternals {
+function getHandlerInternals(handler: DiscordExecApprovalHandler): ExecApprovalHandlerInternals {
   return handler as unknown as ExecApprovalHandlerInternals;
 }
 
-function clearPendingTimeouts(handler: DiscordExecApprovalHandlerInstance) {
+function clearPendingTimeouts(handler: DiscordExecApprovalHandler) {
   const internals = getHandlerInternals(handler);
   for (const pending of internals.pending.values()) {
     clearTimeout(pending.timeoutId);
@@ -270,18 +220,6 @@ beforeEach(() => {
   gatewayClientRequests.mockReset();
   gatewayClientRequests.mockResolvedValue({ ok: true });
   gatewayClientParams.length = 0;
-  mockCreateOperatorApprovalsGatewayClient.mockReset();
-});
-
-beforeEach(async () => {
-  vi.resetModules();
-  ({
-    buildExecApprovalCustomId,
-    extractDiscordChannelId,
-    parseExecApprovalData,
-    DiscordExecApprovalHandler,
-    ExecApprovalButton,
-  } = await import("./exec-approvals.js"));
 });
 
 // ─── buildExecApprovalCustomId ────────────────────────────────────────────────

@@ -2,9 +2,15 @@ import { randomUUID } from "node:crypto";
 import { listAgentIds } from "../../agents/agent-scope.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import {
+  isClearableLane,
+  resolveGlobalLane,
+  resolveSessionLane,
+} from "../../agents/pi-embedded-runner/lanes.js";
+import {
   normalizeSpawnedRunMetadata,
   resolveIngressWorkspaceOverrideForSpawnedRun,
 } from "../../agents/spawned-context.js";
+import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { buildBareSessionResetPrompt } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
 import { loadConfig } from "../../config/config.js";
@@ -22,10 +28,12 @@ import {
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import { clearCommandLane } from "../../process/command-queue.js";
 import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -33,6 +41,7 @@ import {
   isGatewayMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { abortAgentRunById, resolveAgentRunExpiresAtMs } from "../agent-abort.js";
 import { resolveAssistantIdentity } from "../assistant-identity.js";
 import { parseMessageWithAttachments } from "../chat-attachments.js";
 import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
@@ -42,6 +51,7 @@ import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  validateAgentAbortParams,
   validateAgentIdentityParams,
   validateAgentParams,
   validateAgentWaitParams,
@@ -101,6 +111,50 @@ async function runSessionResetFromAgent(params: {
   };
 }
 
+function canonicalizeAbortSessionKey(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  activeSessionKey?: string;
+  requestedSessionKey?: string;
+}): string | undefined {
+  const raw = params.requestedSessionKey?.trim();
+  if (!raw) {
+    return undefined;
+  }
+  const lowered = raw.toLowerCase();
+  if (lowered === "global" || lowered === "unknown") {
+    return lowered;
+  }
+  if (lowered.startsWith("agent:")) {
+    const parsed = parseAgentSessionKey(lowered);
+    if (parsed) {
+      const canonicalMainKey = resolveAgentMainSessionKey({
+        cfg: params.cfg,
+        agentId: parsed.agentId,
+      }).toLowerCase();
+      const configuredMainAlias = canonicalMainKey.split(":").slice(2).join(":");
+      if (parsed.rest === "main" || parsed.rest === configuredMainAlias) {
+        return canonicalMainKey;
+      }
+    }
+    return lowered;
+  }
+  const activeAgentId =
+    (params.activeSessionKey ? resolveAgentIdFromSessionKey(params.activeSessionKey) : undefined) ??
+    resolveAgentIdFromSessionKey(lowered);
+  if (!activeAgentId) {
+    return lowered;
+  }
+  const canonicalMainKey = resolveAgentMainSessionKey({
+    cfg: params.cfg,
+    agentId: activeAgentId,
+  }).toLowerCase();
+  const configuredMainAlias = canonicalMainKey.split(":").slice(2).join(":");
+  if (lowered === "main" || lowered === configuredMainAlias) {
+    return canonicalMainKey;
+  }
+  return `agent:${normalizeAgentId(activeAgentId)}:${lowered}`;
+}
+
 function emitSessionsChanged(
   context: Pick<
     GatewayRequestHandlerOptions["context"],
@@ -142,6 +196,7 @@ function dispatchAgentRunFromGateway(params: {
   ingressOpts: Parameters<typeof agentCommandFromIngress>[0];
   runId: string;
   idempotencyKey: string;
+  abortController: AbortController;
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
 }) {
@@ -187,6 +242,12 @@ function dispatchAgentRunFromGateway(params: {
         runId: params.runId,
         error: formatForLog(err),
       });
+    })
+    .finally(() => {
+      const active = params.context.agentAbortControllers.get(params.runId);
+      if (active?.controller === params.abortController) {
+        params.context.agentAbortControllers.delete(params.runId);
+      }
     });
 }
 
@@ -625,11 +686,43 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const deliver = request.deliver === true && resolvedChannel !== INTERNAL_MESSAGE_CHANNEL;
 
+    const acceptedAt = Date.now();
     const accepted = {
       runId,
       status: "accepted" as const,
-      acceptedAt: Date.now(),
+      acceptedAt,
     };
+    const agentAbortController = new AbortController();
+    const requestLane = typeof request.lane === "string" ? request.lane.trim() : "";
+    const resolvedLane = requestLane ? resolveGlobalLane(requestLane) : "";
+    // Record the resolved lane for abort cleanup, but only if it's a custom lane.
+    // Built-in lanes (main, subagent, nested, cron) are shared across multiple
+    // runs, so clearing them on abort could cancel unrelated queued work.
+    const laneClearable = isClearableLane(resolvedLane);
+    // Do not overwrite an existing in-flight controller for the same runId.
+    // Dedupe TTL (5 min) can expire before agent timeout (600s), so a retried
+    // request may reuse the same runId while the original run is still active.
+    const existingController = context.agentAbortControllers.get(runId);
+    if (existingController && !existingController.controller.signal.aborted) {
+      respond(true, accepted);
+      return;
+    }
+    context.agentAbortControllers.set(runId, {
+      controller: agentAbortController,
+      sessionKey: resolvedSessionKey || resolvedSessionId,
+      startedAtMs: acceptedAt,
+      expiresAtMs: resolveAgentRunExpiresAtMs({
+        now: acceptedAt,
+        timeoutMs: resolveAgentTimeoutMs({
+          cfg: cfgForAgent ?? cfg,
+          overrideSeconds: request.timeout,
+          // Subagent-lane runs default to no timeout (matching agent-command.ts behavior).
+          // Use the normalized lane so untrimmed values like " subagent " are handled.
+          ...(requestLane === "subagent" && request.timeout == null ? { overrideMs: 0 } : {}),
+        }),
+      }),
+      ...(laneClearable ? { clearableLanes: [resolvedLane] } : {}),
+    });
     // Store an in-flight ack so retries do not spawn a second run.
     setGatewayDedupeEntry({
       dedupe: context.dedupe,
@@ -699,6 +792,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         extraSystemPrompt: request.extraSystemPrompt,
         internalEvents: request.internalEvents,
         inputProvenance,
+        abortSignal: agentAbortController.signal,
         // Internal-only: allow workspace override for spawned subagent runs.
         workspaceDir: resolveIngressWorkspaceOverrideForSpawnedRun({
           spawnedBy: spawnedByValue,
@@ -709,9 +803,50 @@ export const agentHandlers: GatewayRequestHandlers = {
       },
       runId,
       idempotencyKey: idem,
+      abortController: agentAbortController,
       respond,
       context,
     });
+  },
+  "agent.enqueue": async ({ req, params, respond, context, client, isWebchatConnect }) => {
+    await agentHandlers.agent({ req, params, respond, context, client, isWebchatConnect });
+  },
+  "agent.abort": ({ params, respond, context }) => {
+    if (!validateAgentAbortParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid agent.abort params: ${formatValidationErrors(validateAgentAbortParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const request = params as { runId: string; sessionKey?: string };
+    const runId = request.runId;
+    const activeSessionKey = context.agentAbortControllers.get(runId)?.sessionKey;
+    const sessionKey = canonicalizeAbortSessionKey({
+      cfg: loadConfig(),
+      activeSessionKey,
+      requestedSessionKey:
+        typeof request.sessionKey === "string" && request.sessionKey.trim()
+          ? request.sessionKey.trim()
+          : undefined,
+    });
+    const result = abortAgentRunById(
+      {
+        agentAbortControllers: context.agentAbortControllers,
+        runId,
+        sessionKey,
+        reason: "rpc",
+      },
+      {
+        clearSessionLane: (key) => clearCommandLane(resolveSessionLane(key), { force: true }),
+        clearLane: (lane) => clearCommandLane(lane, { force: true }),
+      },
+    );
+    respond(true, { ok: true, aborted: result.aborted, runId });
   },
   "agent.identity.get": ({ params, respond }) => {
     if (!validateAgentIdentityParams(params)) {

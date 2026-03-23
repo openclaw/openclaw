@@ -76,6 +76,17 @@ vi.mock("../session-reset-service.js", () => ({
     (mocks.performGatewaySessionReset as (...args: unknown[]) => unknown)(...args),
 }));
 
+vi.mock("../../process/command-queue.js", () => ({
+  clearCommandLane: vi.fn(),
+  enqueueCommandInLane: vi.fn((_lane: unknown, task: () => unknown) => task()),
+  CommandLaneClearedError: class extends Error {
+    name = "CommandLaneClearedError";
+  },
+  GatewayDrainingError: class extends Error {
+    name = "GatewayDrainingError";
+  },
+}));
+
 vi.mock("../../sessions/send-policy.js", () => ({
   resolveSendPolicy: () => "allow",
 }));
@@ -92,6 +103,8 @@ vi.mock("../../utils/delivery-context.js", async () => {
 
 const makeContext = (): GatewayRequestContext =>
   ({
+    agentAbortControllers: new Map(),
+    chatAbortControllers: new Map(),
     dedupe: new Map(),
     addChatRun: vi.fn(),
     logGateway: { info: vi.fn(), error: vi.fn() },
@@ -508,6 +521,8 @@ describe("gateway agent handler", () => {
       {
         respond,
         context: {
+          agentAbortControllers: new Map(),
+          chatAbortControllers: new Map(),
           dedupe: new Map(),
           addChatRun: vi.fn(),
           logGateway: { info: vi.fn(), error: vi.fn() },
@@ -745,6 +760,178 @@ describe("gateway agent handler", () => {
     // Should be undefined, not cause an error
     expect(capturedEntry?.cliSessionIds).toBeUndefined();
     expect(capturedEntry?.claudeCliSessionId).toBeUndefined();
+  });
+
+  it("aborts active agent runs by run id", () => {
+    const respond = vi.fn();
+    const controller = new AbortController();
+    const context = makeContext();
+    context.agentAbortControllers.set("run-1", {
+      controller,
+      sessionKey: "agent:main:main",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+    });
+
+    void agentHandlers["agent.abort"]({
+      params: { runId: "run-1", sessionKey: "agent:main:main" },
+      respond: respond as never,
+      context,
+      req: { type: "req", id: "agent-abort-1", method: "agent.abort" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(context.agentAbortControllers.has("run-1")).toBe(false);
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, aborted: true, runId: "run-1" });
+    mocks.loadConfigReturn = {};
+  });
+
+  it("does not abort a session-bound run when sessionKey is omitted", async () => {
+    const respond = vi.fn();
+    const controller = new AbortController();
+    const context = makeContext();
+    context.agentAbortControllers.set("run-1", {
+      controller,
+      sessionKey: "agent:main:main",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+    });
+
+    await agentHandlers["agent.abort"]({
+      params: { runId: "run-1" },
+      respond: respond as never,
+      context,
+      req: { type: "req", id: "agent-abort-missing-session", method: "agent.abort" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(controller.signal.aborted).toBe(false);
+    expect(context.agentAbortControllers.has("run-1")).toBe(true);
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, aborted: false, runId: "run-1" });
+  });
+
+  it("canonicalizes alias session keys before aborting agent runs", async () => {
+    mocks.loadConfigReturn = { session: { mainKey: "work" } };
+    const respond = vi.fn();
+    const controller = new AbortController();
+    const context = makeContext();
+    context.agentAbortControllers.set("run-1", {
+      controller,
+      sessionKey: "agent:main:work",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+    });
+
+    await agentHandlers["agent.abort"]({
+      params: { runId: "run-1", sessionKey: "main" },
+      respond: respond as never,
+      context,
+      req: { type: "req", id: "agent-abort-alias-session", method: "agent.abort" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(context.agentAbortControllers.has("run-1")).toBe(false);
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, aborted: true, runId: "run-1" });
+    mocks.loadConfigReturn = {};
+  });
+
+  it("clears session lane and custom clearable lanes on successful abort", async () => {
+    const { clearCommandLane } = await import("../../process/command-queue.js");
+    (clearCommandLane as ReturnType<typeof vi.fn>).mockClear();
+    const respond = vi.fn();
+    const controller = new AbortController();
+    const context = makeContext();
+    context.agentAbortControllers.set("run-lane", {
+      controller,
+      sessionKey: "agent:main:main",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+      clearableLanes: ["custom:test-lane"],
+    });
+
+    await agentHandlers["agent.abort"]({
+      params: { runId: "run-lane", sessionKey: "agent:main:main" },
+      respond: respond as never,
+      context,
+      req: { type: "req", id: "agent-abort-lane", method: "agent.abort" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, aborted: true, runId: "run-lane" });
+    const clearCalls = (clearCommandLane as ReturnType<typeof vi.fn>).mock.calls;
+    expect(clearCalls.some((c: unknown[]) => c[0] === "session:agent:main:main")).toBe(true);
+    expect(clearCalls.some((c: unknown[]) => c[0] === "custom:test-lane")).toBe(true);
+  });
+
+  it("keeps a newer abort controller entry when an older run with the same id finishes", async () => {
+    mockMainSessionEntry({ sessionId: "existing-session-id" });
+    mocks.updateSessionStore.mockResolvedValue(undefined);
+
+    let resolveOlderRun:
+      | ((value: { payloads: Array<{ text: string }>; meta: { durationMs: number } }) => void)
+      | undefined;
+    mocks.agentCommand.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOlderRun = resolve;
+        }),
+    );
+
+    const context = makeContext();
+    const respond = vi.fn();
+    await invokeAgent(
+      {
+        message: "older run",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "shared-run-id",
+      },
+      { respond, reqId: "shared-run-id", context },
+    );
+
+    const olderEntry = context.agentAbortControllers.get("shared-run-id");
+    expect(olderEntry).toBeDefined();
+
+    const newerController = new AbortController();
+    context.agentAbortControllers.set("shared-run-id", {
+      controller: newerController,
+      sessionKey: "agent:main:main",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+    });
+
+    resolveOlderRun?.({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+    await vi.waitFor(() => expect(respond).toHaveBeenCalledTimes(2));
+
+    expect(context.agentAbortControllers.get("shared-run-id")?.controller).toBe(newerController);
+
+    const abortRespond = vi.fn();
+    await agentHandlers["agent.abort"]({
+      params: { runId: "shared-run-id", sessionKey: "agent:main:main" },
+      respond: abortRespond as never,
+      context,
+      req: { type: "req", id: "agent-abort-shared", method: "agent.abort" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(newerController.signal.aborted).toBe(true);
+    expect(context.agentAbortControllers.has("shared-run-id")).toBe(false);
+    expect(abortRespond).toHaveBeenCalledWith(true, {
+      ok: true,
+      aborted: true,
+      runId: "shared-run-id",
+    });
   });
 
   it("prunes legacy main alias keys when writing a canonical session entry", async () => {

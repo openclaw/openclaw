@@ -7,7 +7,7 @@ vi.mock("./monitor/media.js", () => ({
   resolveSlackMedia: (...args: Parameters<typeof resolveSlackMedia>) => resolveSlackMedia(...args),
 }));
 
-let downloadSlackFile: typeof import("./actions.js").downloadSlackFile;
+const { downloadSlackFile } = await import("./actions.js");
 
 function createClient() {
   return {
@@ -68,10 +68,8 @@ function mockSuccessfulMediaDownload(client: ReturnType<typeof createClient>) {
 }
 
 describe("downloadSlackFile", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     resolveSlackMedia.mockReset();
-    ({ downloadSlackFile } = await import("./actions.js"));
   });
 
   it("returns null when files.info has no private download URL", async () => {

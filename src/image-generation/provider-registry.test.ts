@@ -22,8 +22,9 @@ describe("image-generation provider registry", () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    ({ getImageGenerationProvider, listImageGenerationProviders } =
-      await import("./provider-registry.js"));
+    ({ getImageGenerationProvider, listImageGenerationProviders } = await import(
+      "./provider-registry.js"
+    ));
   });
 
   it("does not load plugins when listing without config", () => {

@@ -95,6 +95,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "send",
     "poll",
     "agent",
+    "agent.enqueue",
     "agent.wait",
     "wake",
     "talk.mode",
@@ -116,6 +117,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "node.pending.enqueue",
   ],
   [ADMIN_SCOPE]: [
+    "agent.abort",
     "channels.logout",
     "agents.create",
     "agents.update",

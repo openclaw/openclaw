@@ -21,7 +21,6 @@ import { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
 import { isModernModelRef } from "../agents/live-model-filter.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
-import { normalizeGoogleModelId } from "../agents/model-id-normalization.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { isRateLimitErrorMessage } from "../agents/pi-embedded-helpers/errors.js";
@@ -61,10 +60,7 @@ const GATEWAY_LIVE_HEARTBEAT_MS = Math.max(
   1_000,
   toInt(process.env.OPENCLAW_LIVE_GATEWAY_HEARTBEAT_MS, 30_000),
 );
-const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set([
-  "google/gemini-3-flash-preview",
-  "google/gemini-3-pro-preview",
-]);
+const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set(["google/gemini-3-flash-preview"]);
 const GATEWAY_LIVE_MAX_MODELS = resolveGatewayLiveMaxModels();
 const GATEWAY_LIVE_SUITE_TIMEOUT_MS = resolveGatewayLiveSuiteTimeoutMs(GATEWAY_LIVE_MAX_MODELS);
 
@@ -275,18 +271,7 @@ function isMeaningful(text: string): boolean {
 }
 
 function shouldStripAssistantScaffoldingForLiveModel(modelKey?: string): boolean {
-  if (!modelKey) {
-    return false;
-  }
-  if (GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS.has(modelKey)) {
-    return true;
-  }
-  const [provider, ...rest] = modelKey.split("/");
-  if (provider !== "google" || rest.length === 0) {
-    return false;
-  }
-  const normalizedKey = `${provider}/${normalizeGoogleModelId(rest.join("/"))}`;
-  return GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS.has(normalizedKey);
+  return !!modelKey && GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS.has(modelKey);
 }
 
 function maybeStripAssistantScaffoldingForLiveModel(text: string, modelKey?: string): string {
@@ -297,23 +282,17 @@ function maybeStripAssistantScaffoldingForLiveModel(text: string, modelKey?: str
 }
 
 describe("maybeStripAssistantScaffoldingForLiveModel", () => {
-  it("strips scaffolding for the gemini 3.1 flash alias and targeted live models", () => {
+  it("strips scaffolding only for the targeted live model", () => {
     expect(
       maybeStripAssistantScaffoldingForLiveModel(
         "<think>hidden</think>Visible",
-        "google/gemini-3.1-flash-preview",
+        "google/gemini-3-flash-preview",
       ),
     ).toBe("Visible");
     expect(
       maybeStripAssistantScaffoldingForLiveModel(
         "<think>hidden</think>Visible",
         "google/gemini-3-pro-preview",
-      ),
-    ).toBe("Visible");
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel(
-        "<think>hidden</think>Visible",
-        "google/gemini-2.5-flash",
       ),
     ).toBe("<think>hidden</think>Visible");
   });
@@ -1406,14 +1385,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: skip (tool probe refusal)`);
             break;
           }
-          if (
-            (model.provider === "anthropic" ||
-              model.provider === "minimax" ||
-              model.provider === "opencode-go") &&
-            isToolNonceProbeMiss(message)
-          ) {
+          if (model.provider === "anthropic" && isToolNonceProbeMiss(message)) {
             skippedCount += 1;
-            logProgress(`${progressLabel}: skip (${model.provider} tool probe nonce miss)`);
+            logProgress(`${progressLabel}: skip (anthropic tool probe nonce miss)`);
             break;
           }
           if (isMissingProfileError(message)) {

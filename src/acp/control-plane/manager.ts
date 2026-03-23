@@ -26,7 +26,4 @@ export const __testing = {
   resetAcpSessionManagerForTests() {
     ACP_SESSION_MANAGER_SINGLETON = null;
   },
-  setAcpSessionManagerForTests(manager: unknown) {
-    ACP_SESSION_MANAGER_SINGLETON = manager as AcpSessionManager | null;
-  },
 };

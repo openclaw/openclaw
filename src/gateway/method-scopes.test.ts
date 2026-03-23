@@ -50,6 +50,16 @@ describe("operator scope authorization", () => {
     });
   });
 
+  it("requires admin for agent.abort", () => {
+    expect(authorizeOperatorScopesForMethod("agent.abort", ["operator.write"])).toEqual({
+      allowed: false,
+      missingScope: "operator.admin",
+    });
+    expect(authorizeOperatorScopesForMethod("agent.abort", ["operator.admin"])).toEqual({
+      allowed: true,
+    });
+  });
+
   it("requires approvals scope for approval methods", () => {
     expect(authorizeOperatorScopesForMethod("exec.approval.resolve", ["operator.write"])).toEqual({
       allowed: false,

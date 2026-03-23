@@ -1,5 +1,8 @@
+import { resolveSessionLane } from "../agents/pi-embedded-runner/lanes.js";
 import type { HealthSummary } from "../commands/health.js";
 import { cleanOldMedia } from "../media/store.js";
+import { clearCommandLane } from "../process/command-queue.js";
+import { abortAgentRunById, type AgentAbortControllerEntry } from "./agent-abort.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ChatRunEntry } from "./server-chat.js";
 import {
@@ -27,6 +30,7 @@ export function startGatewayMaintenanceTimers(params: {
   refreshGatewayHealthSnapshot: (opts?: { probe?: boolean }) => Promise<HealthSummary>;
   logHealth: { error: (msg: string) => void };
   dedupe: Map<string, DedupeEntry>;
+  agentAbortControllers: Map<string, AgentAbortControllerEntry>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatRunState: { abortedRuns: Map<string, number> };
   chatRunBuffers: Map<string, string>;
@@ -101,6 +105,24 @@ export function startGatewayMaintenanceTimers(params: {
           break;
         }
       }
+    }
+
+    for (const [runId, entry] of params.agentAbortControllers) {
+      if (now <= entry.expiresAtMs) {
+        continue;
+      }
+      abortAgentRunById(
+        {
+          agentAbortControllers: params.agentAbortControllers,
+          runId,
+          sessionKey: entry.sessionKey,
+          reason: "timeout",
+        },
+        {
+          clearSessionLane: (key) => clearCommandLane(resolveSessionLane(key), { force: true }),
+          clearLane: (lane) => clearCommandLane(lane, { force: true }),
+        },
+      );
     }
 
     for (const [runId, entry] of params.chatAbortControllers) {

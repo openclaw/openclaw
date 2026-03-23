@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import { lookupCachedContextTokens } from "../../agents/context-cache.js";
-import { lookupContextTokens } from "../../agents/context-tokens.runtime.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
@@ -26,7 +25,6 @@ import {
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { runAgentTurnWithFallback } from "./agent-runner-execution.runtime.js";
 import {
   createShouldEmitToolOutput,
   createShouldEmitToolResult,
@@ -34,7 +32,6 @@ import {
   isAudioPayload,
   signalTypingIfNeeded,
 } from "./agent-runner-helpers.js";
-import { runMemoryFlushIfNeeded } from "./agent-runner-memory.runtime.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import {
   appendUnscheduledReminderNote,
@@ -48,9 +45,8 @@ import { createFollowupRunner } from "./followup-runner.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
-import type { FollowupRun, QueueSettings } from "./queue.js";
 import { enqueueFollowupRun } from "./queue/enqueue.js";
-import { createReplyMediaPathNormalizer } from "./reply-media-paths.runtime.js";
+import type { FollowupRun, QueueSettings } from "./queue/types.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -60,7 +56,18 @@ const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 let piEmbeddedQueueRuntimePromise: Promise<
   typeof import("../../agents/pi-embedded-queue.runtime.js")
 > | null = null;
+let agentRunnerExecutionRuntimePromise: Promise<
+  typeof import("./agent-runner-execution.runtime.js")
+> | null = null;
+let agentRunnerMemoryRuntimePromise: Promise<
+  typeof import("./agent-runner-memory.runtime.js")
+> | null = null;
 let usageCostRuntimePromise: Promise<typeof import("./usage-cost.runtime.js")> | null = null;
+let contextTokensRuntimePromise: Promise<
+  typeof import("../../agents/context-tokens.runtime.js")
+> | null = null;
+let replyMediaPathsRuntimePromise: Promise<typeof import("./reply-media-paths.runtime.js")> | null =
+  null;
 let sessionStoreRuntimePromise: Promise<
   typeof import("../../config/sessions/store.runtime.js")
 > | null = null;
@@ -70,9 +77,29 @@ function loadPiEmbeddedQueueRuntime() {
   return piEmbeddedQueueRuntimePromise;
 }
 
+function loadAgentRunnerExecutionRuntime() {
+  agentRunnerExecutionRuntimePromise ??= import("./agent-runner-execution.runtime.js");
+  return agentRunnerExecutionRuntimePromise;
+}
+
+function loadAgentRunnerMemoryRuntime() {
+  agentRunnerMemoryRuntimePromise ??= import("./agent-runner-memory.runtime.js");
+  return agentRunnerMemoryRuntimePromise;
+}
+
 function loadUsageCostRuntime() {
   usageCostRuntimePromise ??= import("./usage-cost.runtime.js");
   return usageCostRuntimePromise;
+}
+
+function loadContextTokensRuntime() {
+  contextTokensRuntimePromise ??= import("../../agents/context-tokens.runtime.js");
+  return contextTokensRuntimePromise;
+}
+
+function loadReplyMediaPathsRuntime() {
+  replyMediaPathsRuntimePromise ??= import("./reply-media-paths.runtime.js");
+  return replyMediaPathsRuntimePromise;
 }
 
 function loadSessionStoreRuntime() {
@@ -175,6 +202,7 @@ export async function runReplyAgent(params: {
   );
   const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
   const cfg = followupRun.run.config;
+  const { createReplyMediaPathNormalizer } = await loadReplyMediaPathsRuntime();
   const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
     cfg,
     sessionKey,
@@ -246,6 +274,7 @@ export async function runReplyAgent(params: {
 
   await typingSignals.signalRunStart();
 
+  const { runMemoryFlushIfNeeded } = await loadAgentRunnerMemoryRuntime();
   activeSessionEntry = await runMemoryFlushIfNeeded({
     cfg,
     followupRun,
@@ -375,6 +404,7 @@ export async function runReplyAgent(params: {
     });
   try {
     const runStartedAt = Date.now();
+    const { runAgentTurnWithFallback } = await loadAgentRunnerExecutionRuntime();
     const runOutcome = await runAgentTurnWithFallback({
       commandBody,
       followupRun,
@@ -501,7 +531,9 @@ export async function runReplyAgent(params: {
     const contextTokensUsed =
       agentCfgContextTokens ??
       cachedContextTokens ??
-      lookupContextTokens(modelUsed, { allowAsyncLoad: false }) ??
+      (await loadContextTokensRuntime()).lookupContextTokens(modelUsed, {
+        allowAsyncLoad: false,
+      }) ??
       activeSessionEntry?.contextTokens ??
       DEFAULT_CONTEXT_TOKENS;
 

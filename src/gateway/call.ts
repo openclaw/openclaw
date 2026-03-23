@@ -17,7 +17,7 @@ import {
   type GatewayClientName,
 } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
-import { GatewayClient, type GatewayClientOptions } from "./client.js";
+import { GatewayClient } from "./client.js";
 import {
   GatewaySecretRefUnavailableError,
   resolveGatewayCredentialsFromConfig,
@@ -79,47 +79,6 @@ export type GatewayConnectionDetails = {
   bindDetail?: string;
   remoteFallbackNote?: string;
   message: string;
-};
-
-const defaultCreateGatewayClient = (opts: GatewayClientOptions) => new GatewayClient(opts);
-const defaultGatewayCallDeps = {
-  createGatewayClient: defaultCreateGatewayClient,
-  loadConfig,
-  resolveGatewayPort,
-  resolveConfigPath,
-  resolveStateDir,
-  loadGatewayTlsRuntime,
-};
-const gatewayCallDeps = {
-  ...defaultGatewayCallDeps,
-};
-
-export const __testing = {
-  setDepsForTests(deps: Partial<typeof defaultGatewayCallDeps> | undefined): void {
-    gatewayCallDeps.createGatewayClient =
-      deps?.createGatewayClient ?? defaultGatewayCallDeps.createGatewayClient;
-    gatewayCallDeps.loadConfig = deps?.loadConfig ?? defaultGatewayCallDeps.loadConfig;
-    gatewayCallDeps.resolveGatewayPort =
-      deps?.resolveGatewayPort ?? defaultGatewayCallDeps.resolveGatewayPort;
-    gatewayCallDeps.resolveConfigPath =
-      deps?.resolveConfigPath ?? defaultGatewayCallDeps.resolveConfigPath;
-    gatewayCallDeps.resolveStateDir =
-      deps?.resolveStateDir ?? defaultGatewayCallDeps.resolveStateDir;
-    gatewayCallDeps.loadGatewayTlsRuntime =
-      deps?.loadGatewayTlsRuntime ?? defaultGatewayCallDeps.loadGatewayTlsRuntime;
-  },
-  setCreateGatewayClientForTests(createGatewayClient?: typeof defaultCreateGatewayClient): void {
-    gatewayCallDeps.createGatewayClient =
-      createGatewayClient ?? defaultGatewayCallDeps.createGatewayClient;
-  },
-  resetDepsForTests(): void {
-    gatewayCallDeps.createGatewayClient = defaultGatewayCallDeps.createGatewayClient;
-    gatewayCallDeps.loadConfig = defaultGatewayCallDeps.loadConfig;
-    gatewayCallDeps.resolveGatewayPort = defaultGatewayCallDeps.resolveGatewayPort;
-    gatewayCallDeps.resolveConfigPath = defaultGatewayCallDeps.resolveConfigPath;
-    gatewayCallDeps.resolveStateDir = defaultGatewayCallDeps.resolveStateDir;
-    gatewayCallDeps.loadGatewayTlsRuntime = defaultGatewayCallDeps.loadGatewayTlsRuntime;
-  },
 };
 
 function shouldAttachDeviceIdentityForGatewayCall(params: {
@@ -196,14 +155,13 @@ export function buildGatewayConnectionDetails(
     urlSource?: "cli" | "env";
   } = {},
 ): GatewayConnectionDetails {
-  const config = options.config ?? gatewayCallDeps.loadConfig();
+  const config = options.config ?? loadConfig();
   const configPath =
-    options.configPath ??
-    gatewayCallDeps.resolveConfigPath(process.env, gatewayCallDeps.resolveStateDir(process.env));
+    options.configPath ?? resolveConfigPath(process.env, resolveStateDir(process.env));
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
   const tlsEnabled = config.gateway?.tls?.enabled === true;
-  const localPort = gatewayCallDeps.resolveGatewayPort(config);
+  const localPort = resolveGatewayPort(config);
   const bindMode = config.gateway?.bind ?? "loopback";
   const scheme = tlsEnabled ? "wss" : "ws";
   // Self-connections should always target loopback; bind mode only controls listener exposure.
@@ -315,10 +273,9 @@ function resolveGatewayCallTimeout(timeoutValue: unknown): {
 }
 
 function resolveGatewayCallContext(opts: CallGatewayBaseOptions): ResolvedGatewayCallContext {
-  const config = opts.config ?? gatewayCallDeps.loadConfig();
+  const config = opts.config ?? loadConfig();
   const configPath =
-    opts.configPath ??
-    gatewayCallDeps.resolveConfigPath(process.env, gatewayCallDeps.resolveStateDir(process.env));
+    opts.configPath ?? resolveConfigPath(process.env, resolveStateDir(process.env));
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode
     ? (config.gateway?.remote as GatewayRemoteSettings | undefined)
@@ -726,10 +683,7 @@ export async function resolveGatewayCredentialsWithSecretInputs(params: {
       : undefined;
   const context: ResolvedGatewayCallContext = {
     config: params.config,
-    configPath: gatewayCallDeps.resolveConfigPath(
-      process.env,
-      gatewayCallDeps.resolveStateDir(process.env),
-    ),
+    configPath: resolveConfigPath(process.env, resolveStateDir(process.env)),
     isRemoteMode,
     remote: remoteFromOverride ?? remoteFromConfig,
     urlOverride: trimToUndefined(params.urlOverride),
@@ -761,7 +715,7 @@ async function resolveGatewayTlsFingerprint(params: {
     !context.remoteUrl &&
     url.startsWith("wss://");
   const tlsRuntime = useLocalTls
-    ? await gatewayCallDeps.loadGatewayTlsRuntime(context.config.gateway?.tls)
+    ? await loadGatewayTlsRuntime(context.config.gateway?.tls)
     : undefined;
   const overrideTlsFingerprint = trimToUndefined(opts.tlsFingerprint);
   const remoteTlsFingerprint =
@@ -855,7 +809,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       }
     };
 
-    const client = gatewayCallDeps.createGatewayClient({
+    const client = new GatewayClient({
       url,
       token,
       password,

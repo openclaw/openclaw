@@ -75,10 +75,7 @@ export function toBrowserErrorResponse(err: unknown): {
   if (err instanceof SsrFBlockedError) {
     return { status: 400, message: err.message };
   }
-  if (
-    err instanceof InvalidBrowserNavigationUrlError ||
-    (err instanceof Error && err.name === "InvalidBrowserNavigationUrlError")
-  ) {
+  if (err instanceof InvalidBrowserNavigationUrlError) {
     return { status: 400, message: err.message };
   }
   return null;

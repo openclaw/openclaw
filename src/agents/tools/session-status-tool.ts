@@ -484,10 +484,6 @@ export function createSessionStatusTool(opts?: {
           model: agentModel,
         },
         agentId,
-        explicitConfiguredContextTokens:
-          typeof agentDefaults.contextTokens === "number" && agentDefaults.contextTokens > 0
-            ? agentDefaults.contextTokens
-            : undefined,
         sessionEntry: resolved.entry,
         sessionKey: resolved.key,
         sessionStorePath: storePath,

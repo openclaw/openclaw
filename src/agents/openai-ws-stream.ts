@@ -23,7 +23,6 @@
 
 import { randomUUID } from "node:crypto";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import * as piAi from "@mariozechner/pi-ai";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -34,6 +33,7 @@ import type {
   TextContent,
   ToolCall,
 } from "@mariozechner/pi-ai";
+import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/pi-ai";
 import {
   OpenAIWebSocketManager,
   type ContentPart,
@@ -69,18 +69,6 @@ interface WsSession {
 
 /** Module-level registry: sessionId → WsSession */
 const wsRegistry = new Map<string, WsSession>();
-
-type OpenAIWsStreamDeps = {
-  createManager: (options?: OpenAIWebSocketManagerOptions) => OpenAIWebSocketManager;
-  streamSimple: typeof piAi.streamSimple;
-};
-
-const defaultOpenAIWsStreamDeps: OpenAIWsStreamDeps = {
-  createManager: (options) => new OpenAIWebSocketManager(options),
-  streamSimple: (...args) => piAi.streamSimple(...args),
-};
-
-let openAIWsStreamDeps: OpenAIWsStreamDeps = defaultOpenAIWsStreamDeps;
 
 type AssistantMessageEventStreamLike = {
   push(event: AssistantMessageEvent): void;
@@ -157,8 +145,8 @@ class LocalAssistantMessageEventStream implements AssistantMessageEventStreamLik
 }
 
 function createEventStream(): AssistantMessageEventStream {
-  return typeof piAi.createAssistantMessageEventStream === "function"
-    ? piAi.createAssistantMessageEventStream()
+  return typeof createAssistantMessageEventStream === "function"
+    ? createAssistantMessageEventStream()
     : (new LocalAssistantMessageEventStream() as unknown as AssistantMessageEventStream);
 }
 
@@ -710,7 +698,7 @@ export function createOpenAIWebSocketStreamFn(
       let session = wsRegistry.get(sessionId);
 
       if (!session) {
-        const manager = openAIWsStreamDeps.createManager(opts.managerOptions);
+        const manager = new OpenAIWebSocketManager(opts.managerOptions);
         session = {
           manager,
           lastContextLength: 0,
@@ -1036,19 +1024,8 @@ async function fallbackToHttp(
   signal?: AbortSignal,
 ): Promise<void> {
   const mergedOptions = signal ? { ...options, signal } : options;
-  const httpStream = openAIWsStreamDeps.streamSimple(model, context, mergedOptions);
+  const httpStream = streamSimple(model, context, mergedOptions);
   for await (const event of httpStream) {
     eventStream.push(event);
   }
 }
-
-export const __testing = {
-  setDepsForTest(overrides?: Partial<OpenAIWsStreamDeps>) {
-    openAIWsStreamDeps = overrides
-      ? {
-          ...defaultOpenAIWsStreamDeps,
-          ...overrides,
-        }
-      : defaultOpenAIWsStreamDeps;
-  },
-};

@@ -205,9 +205,9 @@ describe("model-selection", () => {
       },
       {
         name: "keeps OpenAI codex refs on the openai provider",
-        variants: ["openai/gpt-5.4", "gpt-5.4"],
+        variants: ["openai/gpt-5.3-codex", "gpt-5.3-codex"],
         defaultProvider: "openai",
-        expected: { provider: "openai", model: "gpt-5.4" },
+        expected: { provider: "openai", model: "gpt-5.3-codex" },
       },
       {
         name: "preserves openrouter native model prefixes",
@@ -247,9 +247,9 @@ describe("model-selection", () => {
       },
       {
         name: "keeps already-suffixed codex variants unchanged",
-        variants: ["openai/gpt-5.4-codex-codex"],
+        variants: ["openai/gpt-5.3-codex-codex"],
         defaultProvider: "anthropic",
-        expected: { provider: "openai", model: "gpt-5.4-codex-codex" },
+        expected: { provider: "openai", model: "gpt-5.3-codex-codex" },
       },
       {
         name: "normalizes gemini 3.1 flash-lite ids for google-vertex",

@@ -9,28 +9,6 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { DEFAULT_ACCOUNT_ID, isAcpSessionKey } from "../../routing/session-key.js";
 
-const acpResetTargetDeps = {
-  getSessionBindingService,
-  listAcpBindings,
-  resolveConfiguredBindingRecord,
-};
-
-export const __testing = {
-  setDepsForTest(
-    overrides?: Partial<{
-      getSessionBindingService: typeof getSessionBindingService;
-      listAcpBindings: typeof listAcpBindings;
-      resolveConfiguredBindingRecord: typeof resolveConfiguredBindingRecord;
-    }>,
-  ) {
-    acpResetTargetDeps.getSessionBindingService =
-      overrides?.getSessionBindingService ?? getSessionBindingService;
-    acpResetTargetDeps.listAcpBindings = overrides?.listAcpBindings ?? listAcpBindings;
-    acpResetTargetDeps.resolveConfiguredBindingRecord =
-      overrides?.resolveConfiguredBindingRecord ?? resolveConfiguredBindingRecord;
-  },
-};
-
 function normalizeText(value: string | undefined | null): string {
   return value?.trim() ?? "";
 }
@@ -42,7 +20,7 @@ function resolveRawConfiguredAcpSessionKey(params: {
   conversationId: string;
   parentConversationId?: string;
 }): string | undefined {
-  for (const binding of acpResetTargetDeps.listAcpBindings(params.cfg)) {
+  for (const binding of listAcpBindings(params.cfg)) {
     const bindingChannel = normalizeText(binding.match.channel).toLowerCase();
     if (!bindingChannel || bindingChannel !== params.channel) {
       continue;
@@ -106,7 +84,7 @@ export function resolveEffectiveResetTargetSessionKey(params: {
   const parentConversationId = normalizeText(params.parentConversationId) || undefined;
   const allowNonAcpBindingSessionKey = Boolean(params.allowNonAcpBindingSessionKey);
 
-  const serviceBinding = acpResetTargetDeps.getSessionBindingService().resolveByConversation({
+  const serviceBinding = getSessionBindingService().resolveByConversation({
     channel,
     accountId,
     conversationId,
@@ -125,7 +103,7 @@ export function resolveEffectiveResetTargetSessionKey(params: {
     return undefined;
   }
 
-  const configuredBinding = acpResetTargetDeps.resolveConfiguredBindingRecord({
+  const configuredBinding = resolveConfiguredBindingRecord({
     cfg: params.cfg,
     channel,
     accountId,

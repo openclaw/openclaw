@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CommandLane } from "../../process/lanes.js";
-import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
+import { isClearableLane, resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 
 describe("resolveGlobalLane", () => {
   it("defaults to main lane when no lane is provided", () => {
@@ -51,6 +51,29 @@ describe("resolveSessionLane", () => {
   it("preserves existing session: prefix", () => {
     for (const lane of ["session:abc", "session:main"]) {
       expect(resolveSessionLane(lane)).toBe(lane);
+    }
+  });
+});
+
+describe("isClearableLane", () => {
+  it("rejects built-in lanes", () => {
+    for (const lane of [
+      CommandLane.Main,
+      CommandLane.Cron,
+      CommandLane.Subagent,
+      CommandLane.Nested,
+    ]) {
+      expect(isClearableLane(lane)).toBe(false);
+    }
+  });
+
+  it("rejects empty string", () => {
+    expect(isClearableLane("")).toBe(false);
+  });
+
+  it("accepts custom lanes", () => {
+    for (const lane of ["my-lane", "custom", "deploy-queue", "build"]) {
+      expect(isClearableLane(lane)).toBe(true);
     }
   });
 });

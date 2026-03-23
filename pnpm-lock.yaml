@@ -271,8 +271,6 @@ importers:
 
   extensions/deepgram: {}
 
-  extensions/deepseek: {}
-
   extensions/diagnostics-otel:
     dependencies:
       '@opentelemetry/api':

@@ -28,41 +28,53 @@ let startMode: StartMode = "hello";
 let closeCode = 1006;
 let closeReason = "";
 let helloMethods: string[] | undefined = ["health", "secrets.resolve"];
-const { __testing, buildGatewayConnectionDetails, callGateway, callGatewayCli, callGatewayScoped } =
-  await import("./call.js");
 
-class StubGatewayClient {
-  constructor(opts: {
-    url?: string;
-    token?: string;
-    password?: string;
-    scopes?: string[];
-    onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
-    onClose?: (code: number, reason: string) => void;
-  }) {
-    lastClientOptions = opts;
-  }
-  async request(
-    method: string,
-    params: unknown,
-    opts?: { expectFinal?: boolean; timeoutMs?: number | null },
-  ) {
-    lastRequestOptions = { method, params, opts };
-    return { ok: true };
-  }
-  start() {
-    if (startMode === "hello") {
-      void lastClientOptions?.onHelloOk?.({
-        features: {
-          methods: helloMethods,
-        },
-      });
-    } else if (startMode === "close") {
-      lastClientOptions?.onClose?.(closeCode, closeReason);
+vi.mock("./client.js", () => ({
+  describeGatewayCloseCode: (code: number) => {
+    if (code === 1000) {
+      return "normal closure";
     }
-  }
-  stop() {}
-}
+    if (code === 1006) {
+      return "abnormal closure (no close frame)";
+    }
+    return undefined;
+  },
+  GatewayClient: class {
+    constructor(opts: {
+      url?: string;
+      token?: string;
+      password?: string;
+      scopes?: string[];
+      onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
+      onClose?: (code: number, reason: string) => void;
+    }) {
+      lastClientOptions = opts;
+    }
+    async request(
+      method: string,
+      params: unknown,
+      opts?: { expectFinal?: boolean; timeoutMs?: number | null },
+    ) {
+      lastRequestOptions = { method, params, opts };
+      return { ok: true };
+    }
+    start() {
+      if (startMode === "hello") {
+        void lastClientOptions?.onHelloOk?.({
+          features: {
+            methods: helloMethods,
+          },
+        });
+      } else if (startMode === "close") {
+        lastClientOptions?.onClose?.(closeCode, closeReason);
+      }
+    }
+    stop() {}
+  },
+}));
+
+const { buildGatewayConnectionDetails, callGateway, callGatewayCli, callGatewayScoped } =
+  await import("./call.js");
 
 function resetGatewayCallMocks() {
   loadConfig.mockClear();
@@ -75,17 +87,6 @@ function resetGatewayCallMocks() {
   closeCode = 1006;
   closeReason = "";
   helloMethods = ["health", "secrets.resolve"];
-  const loadConfigForTests = loadConfig as unknown as () => OpenClawConfig;
-  const resolveGatewayPortForTests = resolveGatewayPort as unknown as (
-    cfg?: OpenClawConfig,
-    env?: NodeJS.ProcessEnv,
-  ) => number;
-  __testing.setDepsForTests({
-    createGatewayClient: (opts) =>
-      new StubGatewayClient(opts as ConstructorParameters<typeof StubGatewayClient>[0]) as never,
-    loadConfig: loadConfigForTests,
-    resolveGatewayPort: resolveGatewayPortForTests,
-  });
 }
 
 function setGatewayNetworkDefaults(port = 18789) {
@@ -125,7 +126,6 @@ describe("callGateway url resolution", () => {
 
   afterEach(() => {
     envSnapshot.restore();
-    __testing.resetDepsForTests();
   });
 
   it.each([

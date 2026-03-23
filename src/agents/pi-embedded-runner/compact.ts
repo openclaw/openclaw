@@ -390,7 +390,7 @@ async function runPostCompactionSideEffects(params: {
 type CompactionHookRunner = {
   hasHooks?: (hookName?: string) => boolean;
   runBeforeCompaction?: (
-    metrics: { messageCount: number; tokenCount?: number; sessionFile?: string },
+    metrics: { messageCount: number; tokenCount?: number },
     context: {
       sessionId: string;
       agentId: string;
@@ -1337,7 +1337,6 @@ export async function compactEmbeddedPiSession(
             await hookRunner.runBeforeCompaction(
               {
                 messageCount: -1,
-                sessionFile: params.sessionFile,
               },
               hookCtx,
             );
