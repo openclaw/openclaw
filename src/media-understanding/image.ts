@@ -57,7 +57,7 @@ async function resolveImageRuntime(params: {
   // (e.g. input: ["text", "image"]) are applied even for registry-cached models.
   // This also handles OpenRouter pass-through (with vision heuristics),
   // inline provider models, and plugin-resolved dynamic models.
-  const { resolveModelWithRegistry } = await import("../../agents/pi-embedded-runner/model.js");
+  const { resolveModelWithRegistry } = await import("../agents/pi-embedded-runner/model.js");
   let model =
     resolveModelWithRegistry({
       provider: resolvedRef.provider,
