@@ -20,6 +20,7 @@ import {
 } from "../hooks/internal-hooks.js";
 import { loadInternalHooks } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { initStateDb } from "../infra/state-db/index.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
@@ -489,6 +490,12 @@ export async function startGatewaySidecars(params: {
       void scheduleRestartSentinelWake({ deps: params.deps });
     }, 750);
   }
+
+  // Fire a startup heartbeat so agents can resume pending work immediately
+  // instead of waiting for the next scheduled interval (STARTUP_DELAY_MS = 10s).
+  setTimeout(() => {
+    requestHeartbeatNow({ reason: "startup" });
+  }, 5_000);
 
   return { browserControl, pluginServices };
 }
