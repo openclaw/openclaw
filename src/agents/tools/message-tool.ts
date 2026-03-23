@@ -122,6 +122,12 @@ function buildSendSchema(options: { includeInteractive: boolean }) {
         description: "Send image/GIF as document to avoid Telegram compression (Telegram only).",
       }),
     ),
+    asDocument: Type.Optional(
+      Type.Boolean({
+        description:
+          "Send image/GIF as document to avoid Telegram compression. Alias for forceDocument (Telegram only).",
+      }),
+    ),
     interactive: Type.Optional(interactiveMessageSchema),
   };
   if (!options.includeInteractive) {
