@@ -531,7 +531,9 @@ export async function runReplyAgent(params: {
     const contextTokensUsed =
       agentCfgContextTokens ??
       cachedContextTokens ??
-      (await loadContextTokensRuntime()).lookupContextTokens(modelUsed) ??
+      (await loadContextTokensRuntime()).lookupContextTokens(modelUsed, {
+        allowAsyncLoad: false,
+      }) ??
       activeSessionEntry?.contextTokens ??
       DEFAULT_CONTEXT_TOKENS;
 

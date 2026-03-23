@@ -230,6 +230,15 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
   return loadPromise;
 }
 
+export function resetContextWindowCacheForTest(): void {
+  loadPromise = null;
+  configuredConfig = undefined;
+  configLoadFailures = 0;
+  nextConfigLoadAttemptAtMs = 0;
+  modelsConfigRuntimePromise = undefined;
+  MODEL_CONTEXT_TOKEN_CACHE.clear();
+}
+
 export function lookupContextTokens(
   modelId?: string,
   options?: { allowAsyncLoad?: boolean },
@@ -237,8 +246,12 @@ export function lookupContextTokens(
   if (!modelId) {
     return undefined;
   }
-  // Best-effort: kick off loading on demand, but don't block lookups.
-  if (options?.allowAsyncLoad !== false) {
+  if (options?.allowAsyncLoad === false) {
+    // Read-only callers still need synchronous config-backed overrides, but they
+    // should not start background model discovery or models.json writes.
+    primeConfiguredContextWindows();
+  } else {
+    // Best-effort: kick off loading on demand, but don't block lookups.
     void ensureContextWindowCacheLoaded();
   }
   return lookupCachedContextTokens(modelId);
