@@ -122,7 +122,12 @@ fun CanvasScreen(viewModel: MainViewModel, visible: Boolean, modifier: Modifier 
             }
           }
 
-        val bridge = CanvasA2UIActionBridge { payload -> viewModel.handleCanvasA2UIActionFromWebView(payload) }
+        val bridge =
+          CanvasA2UIActionBridge(
+            isTrustedPage = { viewModel.isTrustedCanvasActionUrl(this.url?.toString()) },
+          ) { payload ->
+            viewModel.handleCanvasA2UIActionFromWebView(payload)
+          }
         addJavascriptInterface(bridge, CanvasA2UIActionBridge.interfaceName)
         viewModel.canvas.attach(this)
         webViewRef.value = this
@@ -147,11 +152,15 @@ private fun disableForceDarkIfSupported(settings: WebSettings) {
   WebSettingsCompat.setForceDark(settings, WebSettingsCompat.FORCE_DARK_OFF)
 }
 
-private class CanvasA2UIActionBridge(private val onMessage: (String) -> Unit) {
+private class CanvasA2UIActionBridge(
+  private val isTrustedPage: () -> Boolean,
+  private val onMessage: (String) -> Unit,
+) {
   @JavascriptInterface
   fun postMessage(payload: String?) {
     val msg = payload?.trim().orEmpty()
     if (msg.isEmpty()) return
+    if (!isTrustedPage()) return
     onMessage(msg)
   }
 
