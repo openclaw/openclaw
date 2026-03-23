@@ -247,7 +247,11 @@ export const soundchainChannelPlugin: ChannelPlugin<ResolvedSoundChainAccount> =
             if (aborted) return;
 
             // Auto-follow all users on startup, then re-check every 5 minutes
+            // Single-flight guard prevents overlapping runs on slow networks
+            let followRunning = false;
             const autoFollowAll = async () => {
+              if (followRunning) return;
+              followRunning = true;
               try {
                 const users = await client.getAllUsers();
                 if (aborted) return;
@@ -270,6 +274,8 @@ export const soundchainChannelPlugin: ChannelPlugin<ResolvedSoundChainAccount> =
                 }
               } catch (err) {
                 ctx.log?.warn?.(`[${account.accountId}] Auto-follow error: ${err}`);
+              } finally {
+                followRunning = false;
               }
             };
 

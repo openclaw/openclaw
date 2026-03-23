@@ -27,7 +27,8 @@ const GIPHY_API_KEY = process.env.GIPHY_API_KEY ?? ""; // Optional — enables G
 const HOME_DIR = process.env.HOME ?? "/Users/soundchain";
 const NODE_DIR = process.env.SC_NODE_DIR ?? `${HOME_DIR}/.local/bin`;
 const CLAUDE_BIN = process.env.SC_CLAUDE_BIN ?? "claude"; // Resolve from PATH by default
-const SYSTEM_PROMPT_FILE = process.env.SC_SYSTEM_PROMPT ?? `${HOME_DIR}/.openclaw/furl-system-prompt.txt`;
+const SYSTEM_PROMPT_FILE =
+  process.env.SC_SYSTEM_PROMPT ?? `${HOME_DIR}/.openclaw/furl-system-prompt.txt`;
 
 // OAuth token — use env var if set, otherwise rely on existing Claude CLI session
 const CLAUDE_OAUTH_TOKEN = process.env.CLAUDE_CODE_OAUTH_TOKEN ?? "";
@@ -74,8 +75,10 @@ export async function generateReply(senderName: string, message: string): Promis
   // Step 4: Spawn Claude CLI with args array — NO shell, NO injection risk
   const args = [
     "--print",
-    "--model", "claude-haiku-4-5-20251001",
-    "--system-prompt", systemPrompt,
+    "--model",
+    "claude-haiku-4-5-20251001",
+    "--system-prompt",
+    systemPrompt,
     userMsg,
   ];
 
@@ -100,14 +103,24 @@ export async function generateReply(senderName: string, message: string): Promis
       stderr += chunk.toString();
     });
 
-    // Timeout guard
+    // Timeout guard — SIGTERM first, SIGKILL after 5s if process hangs
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
     const timer = setTimeout(() => {
-      console.error(`[FURL responder] timeout after ${TIMEOUT_MS}ms`);
+      console.error(`[FURL responder] timeout after ${TIMEOUT_MS}ms — sending SIGTERM`);
       proc.kill("SIGTERM");
+      killTimer = setTimeout(() => {
+        console.error(`[FURL responder] process ignored SIGTERM — sending SIGKILL`);
+        proc.kill("SIGKILL");
+        // Force-resolve if SIGKILL doesn't trigger close event
+        resolve(
+          `hey ${senderName}! FURL here — caught your message but my brain's rebooting. hit me again in a sec`,
+        );
+      }, 5_000);
     }, TIMEOUT_MS);
 
     const cleanup = () => {
       clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
     };
 
     proc.on("close", async (code) => {
