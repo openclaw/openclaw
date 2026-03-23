@@ -579,9 +579,11 @@ export function buildAgentSystemPrompt(params: {
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
   ];
 
-  // --- Cache boundary: everything above is static per-session; everything below
-  // may change per-turn (group context, runtime info). Providers with prefix-based
-  // caching (Anthropic) split here so the static prefix stays cached.
+  // --- Cache boundary: everything above is stable per-session (tools, skills,
+  // memory, safety, project context, heartbeats). Everything below may change
+  // per-turn (group context, runtime info). The delimiter is stripped or used to
+  // split system content blocks at the transport layer — see
+  // createAnthropicSystemPromptCacheSplitWrapper.
   lines.push(SYSTEM_PROMPT_CACHE_BOUNDARY);
 
   if (extraSystemPrompt) {

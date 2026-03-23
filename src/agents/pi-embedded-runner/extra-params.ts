@@ -7,6 +7,7 @@ import {
   prepareProviderExtraParams,
   wrapProviderStreamFn,
 } from "../../plugins/provider-runtime.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../system-prompt.js";
 import {
   createAnthropicBetaHeadersWrapper,
   createAnthropicSystemPromptCacheSplitWrapper,
@@ -18,7 +19,6 @@ import {
   resolveAnthropicBetas,
   resolveCacheRetention,
 } from "./anthropic-stream-wrappers.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../system-prompt.js";
 import { createGoogleThinkingPayloadWrapper } from "./google-stream-wrappers.js";
 import { log } from "./logger.js";
 import { createMinimaxFastModeWrapper } from "./minimax-stream-wrappers.js";
@@ -247,13 +247,20 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
   }
 
-  // Split the system prompt into static (cached) and dynamic (uncached) blocks
-  // for Anthropic providers. This preserves cache hits across turns by keeping
-  // per-turn dynamic content (group context, runtime info) out of the cached prefix.
-  if (provider === "anthropic" || isAnthropicBedrockModel(provider, modelId)) {
+  // Always strip the cache boundary delimiter from the system prompt so it never
+  // leaks to the model. For Anthropic providers with caching enabled, the wrapper
+  // also splits the prompt into static (cached) and dynamic (uncached) blocks.
+  {
+    const cacheRetentionForSplit = resolveCacheRetention(effectiveExtraParams, provider);
+    const shouldSplit =
+      cacheRetentionForSplit != null &&
+      cacheRetentionForSplit !== "none" &&
+      (provider === "anthropic" ||
+        (provider === "amazon-bedrock" && isAnthropicBedrockModel(modelId)));
     agent.streamFn = createAnthropicSystemPromptCacheSplitWrapper(
       agent.streamFn,
       SYSTEM_PROMPT_CACHE_BOUNDARY,
+      shouldSplit,
     );
   }
 

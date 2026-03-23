@@ -315,12 +315,12 @@ export function createAnthropicBetaHeadersWrapper(
 export function createAnthropicSystemPromptCacheSplitWrapper(
   baseStreamFn: StreamFn | undefined,
   delimiter: string,
+  splitAndCache = true,
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (model.api !== "anthropic-messages") {
-      return underlying(model, context, options);
-    }
+    // The wrapper always runs to strip the delimiter. When splitAndCache is
+    // false, it only strips — no content block splitting or cache_control changes.
 
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
@@ -329,10 +329,12 @@ export function createAnthropicSystemPromptCacheSplitWrapper(
         if (payload && typeof payload === "object") {
           const payloadObj = payload as Record<string, unknown>;
 
-          // Anthropic Messages API: `system` can be a string or content block array.
-          // pi-ai with cacheRetention wraps it as a single-block array with cache_control.
+          // Strip or split the delimiter from the system prompt.
+          // When splitAndCache is true (Anthropic with caching enabled), split
+          // into two content blocks so the static prefix stays cached.
+          // When false, just strip the marker so it never reaches the model.
           const system = payloadObj.system;
-          if (Array.isArray(system)) {
+          if (splitAndCache && Array.isArray(system)) {
             const newBlocks: Array<Record<string, unknown>> = [];
             for (const block of system as Array<Record<string, unknown>>) {
               if (typeof block.text !== "string" || !block.text.includes(delimiter)) {
@@ -358,15 +360,14 @@ export function createAnthropicSystemPromptCacheSplitWrapper(
             }
             payloadObj.system = newBlocks;
           } else if (typeof system === "string" && system.includes(delimiter)) {
-            const idx = system.indexOf(delimiter);
-            const staticPart = system.slice(0, idx).trimEnd();
-            const dynamicPart = system.slice(idx + delimiter.length).trimStart();
-            payloadObj.system = [
-              ...(staticPart
-                ? [{ type: "text", text: staticPart, cache_control: { type: "ephemeral" } }]
-                : []),
-              ...(dynamicPart ? [{ type: "text", text: dynamicPart }] : []),
-            ];
+            payloadObj.system = system.replace(delimiter, "\n");
+          } else if (Array.isArray(system)) {
+            // Strip-only mode (no split): remove delimiter from text blocks
+            for (const block of system as Array<Record<string, unknown>>) {
+              if (typeof block.text === "string" && block.text.includes(delimiter)) {
+                block.text = block.text.replace(delimiter, "\n");
+              }
+            }
           }
         }
         return originalOnPayload?.(payload, model);
