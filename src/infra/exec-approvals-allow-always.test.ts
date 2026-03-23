@@ -249,6 +249,35 @@ describe("resolveAllowAlwaysPatterns", () => {
     expect(second.allowlistSatisfied).toBe(true);
   });
 
+  it("rejects positional argv carriers when inline command contains extra shell operations", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const touch = makeExecutable(dir, "touch");
+    const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
+    const safeBins = resolveSafeBins(undefined);
+    const marker = path.join(dir, "marker");
+
+    const { persisted } = resolvePersistedPatterns({
+      command: `sh -lc 'echo blocked; $0 "$1"' touch ${marker}`,
+      dir,
+      env,
+      safeBins,
+    });
+    expect(persisted).not.toContain(touch);
+
+    const second = evaluateShellAllowlist({
+      command: `sh -lc 'echo blocked; $0 "$1"' touch ${marker}`,
+      allowlist: [{ pattern: touch }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(false);
+  });
+
   it("does not treat inline shell commands as persisted script paths", () => {
     if (process.platform === "win32") {
       return;

@@ -449,7 +449,7 @@ function resolveShellWrapperPositionalArgvCandidatePath(params: {
   if (inlineMatch.valueTokenIndex === null || !inlineMatch.command) {
     return undefined;
   }
-  if (!/(?:^|[^\\$])\$(?:0|\{0\})/.test(inlineMatch.command)) {
+  if (!isDirectShellPositionalCarrierInvocation(inlineMatch.command)) {
     return undefined;
   }
 
@@ -463,6 +463,19 @@ function resolveShellWrapperPositionalArgvCandidatePath(params: {
 
   const resolution = resolveCommandResolutionFromArgv([carriedExecutable], params.cwd, params.env);
   return resolveAllowlistCandidatePath(resolution, params.cwd);
+}
+
+function isDirectShellPositionalCarrierInvocation(command: string): boolean {
+  const trimmed = command.trim();
+  if (trimmed.length === 0) {
+    return false;
+  }
+
+  // Keep carrier matching strict: only allow direct `$0` execution with positional arguments.
+  // This prevents payloads like `echo pwned; echo $0` from satisfying allowlist checks.
+  return /^(?:exec\s+)?["']?\$(?:0|\{0\})["']?(?:\s+["']?\$(?:[@*]|[1-9]|\{[@*1-9]\})["']?)*$/u.test(
+    trimmed,
+  );
 }
 
 function collectAllowAlwaysPatterns(params: {
