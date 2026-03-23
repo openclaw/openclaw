@@ -19,7 +19,7 @@
           "exportName": "buildGoogleImageGenerationProvider",
           "kind": "function",
           "source": {
-            "line": 98,
+            "line": 95,
             "path": "extensions/google/image-generation-provider.ts"
           }
         },
@@ -28,7 +28,7 @@
           "exportName": "buildOpenAIImageGenerationProvider",
           "kind": "function",
           "source": {
-            "line": 43,
+            "line": 22,
             "path": "extensions/openai/image-generation-provider.ts"
           }
         },
@@ -1357,7 +1357,7 @@
           "kind": "function",
           "source": {
             "line": 17,
-            "path": "src/whatsapp/normalize.ts"
+            "path": "extensions/whatsapp/src/normalize-target.ts"
           }
         },
         {
@@ -1365,8 +1365,8 @@
           "exportName": "isWhatsAppUserTarget",
           "kind": "function",
           "source": {
-            "line": 33,
-            "path": "src/whatsapp/normalize.ts"
+            "line": 30,
+            "path": "extensions/whatsapp/src/normalize-target.ts"
           }
         },
         {
@@ -1455,8 +1455,8 @@
           "exportName": "normalizeWhatsAppTarget",
           "kind": "function",
           "source": {
-            "line": 55,
-            "path": "src/whatsapp/normalize.ts"
+            "line": 47,
+            "path": "extensions/whatsapp/src/normalize-target.ts"
           }
         },
         {
@@ -2258,7 +2258,7 @@
           "exportName": "createTopLevelChannelDmPolicy",
           "kind": "function",
           "source": {
-            "line": 363,
+            "line": 411,
             "path": "src/channels/plugins/setup-wizard-helpers.ts"
           }
         },
@@ -2276,7 +2276,7 @@
           "exportName": "setSetupChannelEnabled",
           "kind": "function",
           "source": {
-            "line": 765,
+            "line": 813,
             "path": "src/channels/plugins/setup-wizard-helpers.ts"
           }
         },
@@ -2285,7 +2285,7 @@
           "exportName": "splitSetupEntries",
           "kind": "function",
           "source": {
-            "line": 76,
+            "line": 80,
             "path": "src/channels/plugins/setup-wizard-helpers.ts"
           }
         },
@@ -4242,6 +4242,24 @@
           }
         },
         {
+          "declaration": "export function applyCloudflareAiGatewayConfig(cfg: OpenClawConfig, params?: { accountId?: string | undefined; gatewayId?: string | undefined; } | undefined): OpenClawConfig;",
+          "exportName": "applyCloudflareAiGatewayConfig",
+          "kind": "function",
+          "source": {
+            "line": 85,
+            "path": "extensions/cloudflare-ai-gateway/onboard.ts"
+          }
+        },
+        {
+          "declaration": "export function applyCloudflareAiGatewayProviderConfig(cfg: OpenClawConfig, params?: { accountId?: string | undefined; gatewayId?: string | undefined; } | undefined): OpenClawConfig;",
+          "exportName": "applyCloudflareAiGatewayProviderConfig",
+          "kind": "function",
+          "source": {
+            "line": 41,
+            "path": "extensions/cloudflare-ai-gateway/onboard.ts"
+          }
+        },
+        {
           "declaration": "export function applyOnboardAuthAgentModelsAndProviders(cfg: OpenClawConfig, params: { agentModels: Record<string, AgentModelEntryConfig>; providers: Record<string, ModelProviderConfig>; }): OpenClawConfig;",
           "exportName": "applyOnboardAuthAgentModelsAndProviders",
           "kind": "function",
@@ -4282,7 +4300,7 @@
           "exportName": "applyProviderConfigWithDefaultModelsPreset",
           "kind": "function",
           "source": {
-            "line": 177,
+            "line": 230,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4291,7 +4309,7 @@
           "exportName": "applyProviderConfigWithModelCatalog",
           "kind": "function",
           "source": {
-            "line": 202,
+            "line": 272,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4300,7 +4318,52 @@
           "exportName": "applyProviderConfigWithModelCatalogPreset",
           "kind": "function",
           "source": {
-            "line": 234,
+            "line": 304,
+            "path": "src/plugins/provider-onboarding-config.ts"
+          }
+        },
+        {
+          "declaration": "export function applyVercelAiGatewayConfig(cfg: OpenClawConfig): OpenClawConfig;",
+          "exportName": "applyVercelAiGatewayConfig",
+          "kind": "function",
+          "source": {
+            "line": 27,
+            "path": "extensions/vercel-ai-gateway/onboard.ts"
+          }
+        },
+        {
+          "declaration": "export function applyVercelAiGatewayProviderConfig(cfg: OpenClawConfig): OpenClawConfig;",
+          "exportName": "applyVercelAiGatewayProviderConfig",
+          "kind": "function",
+          "source": {
+            "line": 8,
+            "path": "extensions/vercel-ai-gateway/onboard.ts"
+          }
+        },
+        {
+          "declaration": "export function createDefaultModelPresetAppliers<TArgs extends unknown[]>(params: { resolveParams: (cfg: OpenClawConfig, ...args: TArgs) => Omit<{ providerId: string; api: \"github-copilot\" | \"openai-completions\" | \"openai-responses\" | ... 4 more ... | \"ollama\"; ... 4 more ...; primaryModelRef?: string | undefined; }, \"primaryModelRef\"> | null | undefined; primaryModelRef: string; }): ProviderOnboardPresetAppliers<...>;",
+          "exportName": "createDefaultModelPresetAppliers",
+          "kind": "function",
+          "source": {
+            "line": 213,
+            "path": "src/plugins/provider-onboarding-config.ts"
+          }
+        },
+        {
+          "declaration": "export function createDefaultModelsPresetAppliers<TArgs extends unknown[]>(params: { resolveParams: (cfg: OpenClawConfig, ...args: TArgs) => Omit<{ providerId: string; api: \"github-copilot\" | \"openai-completions\" | \"openai-responses\" | ... 4 more ... | \"ollama\"; ... 4 more ...; primaryModelRef?: string | undefined; }, \"primaryModelRef\"> | null | undefined; primaryModelRef: string; }): ProviderOnboardPresetAppliers<...>;",
+          "exportName": "createDefaultModelsPresetAppliers",
+          "kind": "function",
+          "source": {
+            "line": 255,
+            "path": "src/plugins/provider-onboarding-config.ts"
+          }
+        },
+        {
+          "declaration": "export function createModelCatalogPresetAppliers<TArgs extends unknown[]>(params: { resolveParams: (cfg: OpenClawConfig, ...args: TArgs) => Omit<{ providerId: string; api: \"github-copilot\" | \"openai-completions\" | \"openai-responses\" | ... 4 more ... | \"ollama\"; baseUrl: string; catalogModels: ModelDefinitionConfig[]; aliases?: readonly AgentModelAliasEntry[] | undefined; primaryModelRef?: string | undefined; }, \"primaryModelRef\"> | null | undefined; primaryModelRef: string; }): ProviderOnboardPresetAppliers<...>;",
+          "exportName": "createModelCatalogPresetAppliers",
+          "kind": "function",
+          "source": {
+            "line": 327,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4320,6 +4383,24 @@
           "source": {
             "line": 38,
             "path": "src/plugins/provider-onboarding-config.ts"
+          }
+        },
+        {
+          "declaration": "export const CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF: \"cloudflare-ai-gateway/claude-sonnet-4-5\";",
+          "exportName": "CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF",
+          "kind": "const",
+          "source": {
+            "line": 5,
+            "path": "src/agents/cloudflare-ai-gateway.ts"
+          }
+        },
+        {
+          "declaration": "export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF: \"vercel-ai-gateway/anthropic/claude-opus-4.6\";",
+          "exportName": "VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF",
+          "kind": "const",
+          "source": {
+            "line": 6,
+            "path": "extensions/vercel-ai-gateway/onboard.ts"
           }
         },
         {
@@ -4365,6 +4446,15 @@
           "source": {
             "line": 32,
             "path": "src/config/types.openclaw.ts"
+          }
+        },
+        {
+          "declaration": "export type ProviderOnboardPresetAppliers = ProviderOnboardPresetAppliers<TArgs>;",
+          "exportName": "ProviderOnboardPresetAppliers",
+          "kind": "type",
+          "source": {
+            "line": 177,
+            "path": "src/plugins/provider-onboarding-config.ts"
           }
         }
       ],
@@ -4888,6 +4978,15 @@
           "source": {
             "line": 47,
             "path": "src/infra/http-body.ts"
+          }
+        },
+        {
+          "declaration": "export function normalizePluginHttpPath(path?: string | null | undefined, fallback?: string | null | undefined): string | null;",
+          "exportName": "normalizePluginHttpPath",
+          "kind": "function",
+          "source": {
+            "line": 1,
+            "path": "src/plugins/http-path.ts"
           }
         },
         {

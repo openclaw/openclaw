@@ -1,3 +1,8 @@
+import { resolveCommandSecretRefsViaGateway } from "../../../cli/command-secret-gateway.js";
+import { getChannelsCommandSecretTargetIds } from "../../../cli/command-secret-targets.js";
+import type { OpenClawConfig } from "../../../config/config.js";
+import type { TelegramNetworkConfig } from "../../../config/types.telegram.js";
+import { resolveTelegramAccount } from "../../../plugin-sdk/account-resolution.js";
 import {
   isNumericTelegramUserId,
   normalizeTelegramAllowFromEntry,
@@ -5,11 +10,6 @@ import {
   listTelegramAccountIds,
   lookupTelegramChatId,
 } from "../../../plugin-sdk/telegram.js";
-import { resolveCommandSecretRefsViaGateway } from "../../../cli/command-secret-gateway.js";
-import { getChannelsCommandSecretTargetIds } from "../../../cli/command-secret-targets.js";
-import type { OpenClawConfig } from "../../../config/config.js";
-import type { TelegramNetworkConfig } from "../../../config/types.telegram.js";
-import { resolveTelegramAccount } from "../../../plugin-sdk/account-resolution.js";
 import { describeUnknownError } from "../../../secrets/shared.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { hasAllowFromEntries } from "../shared/allowlist.js";
