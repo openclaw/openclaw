@@ -10,6 +10,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/subagents: recheck timed-out worker waits against the latest runtime snapshot before sending completion events, so fast-finishing workers stop being reported as timed out when they actually succeeded. Fixes #53106. Thanks @vincentkoc.
+
 ## 2026.3.23
 
 ### Breaking
