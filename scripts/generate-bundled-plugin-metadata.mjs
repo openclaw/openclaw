@@ -135,6 +135,12 @@ function formatTypeScriptModule(source, { outputPath }) {
   });
 }
 
+/**
+ * @param {{
+ *   repoRoot?: string;
+ *   env?: NodeJS.ProcessEnv;
+ * }} [params]
+ */
 export function collectBundledPluginMetadata(params = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const env = params.env ?? process.env;
@@ -223,6 +229,14 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = ${JSON.stringify(entries, null,
 `;
 }
 
+/**
+ * @param {{
+ *   repoRoot?: string;
+ *   outputPath?: string;
+ *   check?: boolean;
+ *   env?: NodeJS.ProcessEnv;
+ * }} [params]
+ */
 export function writeBundledPluginMetadataModule(params = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const env = params.env ?? process.env;
