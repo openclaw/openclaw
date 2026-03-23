@@ -49,7 +49,7 @@ To allow a temporary overwrite of the guardrails you can specify OVERRIDE_TOKEN:
 The agent will:
 - Read `ROBUST_SOUL_OVERRIDE_TOKENS.md` using available read tools
 - Check if any non-comment line exactly matches the provided token
-- If match found and date not expired → allow exemption
+- If match found and date not expired → allow exception
 
 **Security note:** The token file must remain read-only for the agent process (OS-level protection). Prompt injection cannot create or modify it. 
 **Limitations:** Override tokens do never allow write access to files which are read-only or immutable for the agent - this needs filesystem operation (chmod / chattr).
