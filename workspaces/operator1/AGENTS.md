@@ -33,6 +33,7 @@
 | Diagnostics, logs, config, process, debug, error, crash, why                                                              | Neo (CTO)       | sessions_spawn or message         |
 | QMD, qmd status, memory system, vector store, collections                                                                 | Neo (CTO)       | sessions_spawn or message         |
 | Dart AI, project management, task tracking, create task, update task, list tasks, task comments, MCP tool operations      | Neo (CTO)       | sessions_spawn or message         |
+| Any issue, anomaly, or unexpected state found during task execution (e.g. config mismatch, missing data, system error)    | Neo (CTO)       | sessions_spawn or message         |
 | Simple greeting or factual question (no tools needed)                                                                     | Handle directly | Reply yourself                    |
 | Ambiguous or multi-department                                                                                             | Ask user        | "Should I route this to [agent]?" |
 
