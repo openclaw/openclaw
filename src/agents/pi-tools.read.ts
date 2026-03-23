@@ -42,6 +42,9 @@ type ImageContentBlock = Extract<ToolContentBlock, { type: "image" }>;
 type TextContentBlock = Extract<ToolContentBlock, { type: "text" }>;
 
 const DEFAULT_READ_PAGE_MAX_BYTES = 50 * 1024;
+// Align recovery paging with pi-coding-agent's default line window so out-of-range
+// reads still return a useful tail chunk instead of aborting the run.
+const DEFAULT_READ_RECOVERY_WINDOW_LINES = 2_000;
 const MAX_ADAPTIVE_READ_MAX_BYTES = 512 * 1024;
 const ADAPTIVE_READ_CONTEXT_SHARE = 0.2;
 const CHARS_PER_TOKEN_ESTIMATE = 4;
@@ -60,6 +63,16 @@ type ReadTruncationDetails = {
 
 const READ_CONTINUATION_NOTICE_RE =
   /\n\n\[(?:Showing lines [^\]]*?Use offset=\d+ to continue\.|\d+ more lines in file\. Use offset=\d+ to continue\.)\]\s*$/;
+const READ_OFFSET_OUT_OF_RANGE_RE = /^Offset (\d+) is beyond end of file \((\d+) lines total\)$/;
+
+type ReadOffsetOutOfRangeDiagnostic = {
+  requestedOffset: number;
+  totalLines: number;
+};
+
+type ReadOffsetRecoveryDetails = ReadOffsetOutOfRangeDiagnostic & {
+  recoveredOffset: number;
+};
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -205,6 +218,115 @@ function stripReadTruncationContentDetails(
   };
 }
 
+function parseReadOffsetOutOfRangeError(error: unknown): ReadOffsetOutOfRangeDiagnostic | null {
+  const message =
+    error instanceof Error ? error.message : typeof error === "string" ? error.trim() : "";
+  if (!message) {
+    return null;
+  }
+  const match = READ_OFFSET_OUT_OF_RANGE_RE.exec(message);
+  if (!match) {
+    return null;
+  }
+  const requestedOffset = Number.parseInt(match[1] ?? "", 10);
+  const totalLines = Number.parseInt(match[2] ?? "", 10);
+  if (!Number.isFinite(requestedOffset) || !Number.isFinite(totalLines)) {
+    return null;
+  }
+  return {
+    requestedOffset,
+    totalLines: Math.max(0, totalLines),
+  };
+}
+
+function resolveReadRecoveryOffset(args: Record<string, unknown>, totalLines: number): number {
+  const limitRaw = args.limit;
+  const recoveryWindow =
+    typeof limitRaw === "number" && Number.isFinite(limitRaw) && limitRaw > 0
+      ? Math.floor(limitRaw)
+      : DEFAULT_READ_RECOVERY_WINDOW_LINES;
+  return Math.max(1, totalLines - recoveryWindow + 1);
+}
+
+function prependReadRecoveryNotice(
+  result: AgentToolResult<unknown>,
+  details: ReadOffsetRecoveryDetails,
+): AgentToolResult<unknown> {
+  const returnedLines = Math.max(1, details.totalLines - details.recoveredOffset + 1);
+  const lineLabel = returnedLines === 1 ? "line" : "lines";
+  const notice = `[Requested offset ${details.requestedOffset} is beyond end of file (${details.totalLines} lines total). Returning the last ${returnedLines} ${lineLabel} from offset=${details.recoveredOffset} instead.]`;
+  const existingText = getToolResultText(result);
+  const withNotice = withToolResultText(
+    result,
+    existingText && existingText.trim().length > 0 ? `${notice}\n\n${existingText}` : notice,
+  );
+  const existingDetails = (withNotice as { details?: unknown }).details;
+  const detailsRecord =
+    existingDetails && typeof existingDetails === "object"
+      ? (existingDetails as Record<string, unknown>)
+      : {};
+  return {
+    ...withNotice,
+    details: {
+      ...detailsRecord,
+      offsetRecovery: {
+        code: "offset_out_of_range",
+        requestedOffset: details.requestedOffset,
+        totalLines: details.totalLines,
+        recoveredOffset: details.recoveredOffset,
+      },
+    },
+  };
+}
+
+function createReadOffsetDiagnosticResult(
+  details: ReadOffsetOutOfRangeDiagnostic,
+): AgentToolResult<unknown> {
+  const notice = `[Requested offset ${details.requestedOffset} is beyond end of file (${details.totalLines} lines total). Use offset=1 to read from the beginning.]`;
+  return {
+    content: [{ type: "text", text: notice }],
+    details: {
+      offsetRecovery: {
+        code: "offset_out_of_range",
+        requestedOffset: details.requestedOffset,
+        totalLines: details.totalLines,
+        recoveredOffset: 1,
+      },
+    },
+  };
+}
+
+async function executeReadPageWithRecovery(params: {
+  base: AnyAgentTool;
+  toolCallId: string;
+  args: Record<string, unknown>;
+  signal?: AbortSignal;
+}): Promise<AgentToolResult<unknown>> {
+  try {
+    return await params.base.execute(params.toolCallId, params.args, params.signal);
+  } catch (error) {
+    const diagnostic = parseReadOffsetOutOfRangeError(error);
+    if (!diagnostic) {
+      throw error;
+    }
+
+    const recoveredOffset = resolveReadRecoveryOffset(params.args, diagnostic.totalLines);
+    try {
+      const recovered = await params.base.execute(
+        params.toolCallId,
+        { ...params.args, offset: recoveredOffset },
+        params.signal,
+      );
+      return prependReadRecoveryNotice(recovered, {
+        ...diagnostic,
+        recoveredOffset,
+      });
+    } catch {
+      return createReadOffsetDiagnosticResult(diagnostic);
+    }
+  }
+}
+
 async function executeReadWithAdaptivePaging(params: {
   base: AnyAgentTool;
   toolCallId: string;
@@ -216,7 +338,12 @@ async function executeReadWithAdaptivePaging(params: {
   const hasExplicitLimit =
     typeof userLimit === "number" && Number.isFinite(userLimit) && userLimit > 0;
   if (hasExplicitLimit) {
-    return await params.base.execute(params.toolCallId, params.args, params.signal);
+    return await executeReadPageWithRecovery({
+      base: params.base,
+      toolCallId: params.toolCallId,
+      args: params.args,
+      signal: params.signal,
+    });
   }
 
   const offsetRaw = params.args.offset;
@@ -232,7 +359,12 @@ async function executeReadWithAdaptivePaging(params: {
 
   for (let page = 0; page < MAX_ADAPTIVE_READ_PAGES; page += 1) {
     const pageArgs = { ...params.args, offset: nextOffset };
-    const pageResult = await params.base.execute(params.toolCallId, pageArgs, params.signal);
+    const pageResult = await executeReadPageWithRecovery({
+      base: params.base,
+      toolCallId: params.toolCallId,
+      args: pageArgs,
+      signal: params.signal,
+    });
     firstResult ??= pageResult;
 
     const rawText = getToolResultText(pageResult);
@@ -273,7 +405,12 @@ async function executeReadWithAdaptivePaging(params: {
   }
 
   if (!firstResult) {
-    return await params.base.execute(params.toolCallId, params.args, params.signal);
+    return await executeReadPageWithRecovery({
+      base: params.base,
+      toolCallId: params.toolCallId,
+      args: params.args,
+      signal: params.signal,
+    });
   }
 
   let finalText = aggregatedText;
