@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { createLineBotMock, registerPluginHttpRouteMock, unregisterHttpMock } = vi.hoisted(() => ({
   createLineBotMock: vi.fn(() => ({
@@ -20,11 +20,15 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
   dispatchReplyWithBufferedBlockDispatcher: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
-  danger: (value: unknown) => String(value),
-  logVerbose: vi.fn(),
-  waitForAbortSignal: vi.fn(),
-}));
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    danger: (value: unknown) => String(value),
+    logVerbose: vi.fn(),
+    waitForAbortSignal: vi.fn(),
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/channel-reply-pipeline", () => ({
   createChannelReplyPipeline: vi.fn(() => ({})),
