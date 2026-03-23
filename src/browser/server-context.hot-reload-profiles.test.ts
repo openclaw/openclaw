@@ -8,6 +8,7 @@ let cfgNoSandbox = false;
 let cfgDefaultProfile = "openclaw";
 let cfgGatewayPort: number | undefined;
 let runtimeConfigSnapshot: ReturnType<typeof buildConfig> | null = null;
+let runtimeRefreshState: "idle" | "pending" | "failed" = "idle";
 
 // Simulate module-level cache behavior
 let cachedConfig: ReturnType<typeof buildConfig> | null = null;
@@ -35,6 +36,7 @@ vi.mock("../config/config.js", () => ({
     },
   }),
   getRuntimeConfigSnapshot: () => runtimeConfigSnapshot,
+  getRuntimeConfigSnapshotRefreshState: () => runtimeRefreshState,
   loadConfig: () => {
     // simulate stale loadConfig that doesn't see updates unless cache cleared
     if (!cachedConfig) {
@@ -68,6 +70,7 @@ describe("server-context hot-reload profiles", () => {
     cfgDefaultProfile = "openclaw";
     cfgGatewayPort = undefined;
     runtimeConfigSnapshot = null;
+    runtimeRefreshState = "idle";
     cachedConfig = null; // Clear simulated cache
   });
 
@@ -285,4 +288,35 @@ describe("server-context hot-reload profiles", () => {
     expect(state.resolved.headless).toBe(false);
     expect(state.resolved.noSandbox).toBe(true);
   });
+
+  it.each(["pending", "failed"] as const)(
+    "preserves the last-known-good runtime browser config while refresh is %s",
+    async (refreshState) => {
+      const cfg = loadConfig();
+      const resolved = resolveBrowserConfig(cfg.browser, cfg);
+      const state = {
+        server: null,
+        port: 18791,
+        resolved,
+        profiles: new Map(),
+      };
+
+      runtimeConfigSnapshot = buildConfig();
+      runtimeRefreshState = refreshState;
+
+      cfgExecutablePath = "/opt/google/chrome/google-chrome";
+      cfgHeadless = false;
+      cfgNoSandbox = true;
+
+      refreshResolvedBrowserConfigFromDisk({
+        current: state,
+        refreshConfigFromDisk: true,
+        mode: "cached",
+      });
+
+      expect(state.resolved.executablePath).toBeUndefined();
+      expect(state.resolved.headless).toBe(true);
+      expect(state.resolved.noSandbox).toBe(false);
+    },
+  );
 });

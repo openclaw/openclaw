@@ -4,6 +4,7 @@ export {
   clearRuntimeConfigSnapshot,
   createConfigIO,
   getRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshotRefreshState,
   getRuntimeConfigSourceSnapshot,
   projectConfigOntoRuntimeSourceSnapshot,
   loadConfig,

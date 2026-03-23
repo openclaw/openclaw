@@ -1,4 +1,8 @@
-import { createConfigIO, getRuntimeConfigSnapshot } from "../config/config.js";
+import {
+  createConfigIO,
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshotRefreshState,
+} from "../config/config.js";
 import { resolveBrowserConfig, resolveProfile, type ResolvedBrowserProfile } from "./config.js";
 import type { BrowserServerState } from "./server-context.types.js";
 
@@ -79,7 +83,11 @@ export function refreshResolvedBrowserConfigFromDisk(params: {
   // derived defaults that depend on non-browser config like gateway.port.
   const diskCfg = createConfigIO().loadConfig();
   const runtimeCfg = getRuntimeConfigSnapshot();
-  const cfg = runtimeCfg ? { ...runtimeCfg, browser: diskCfg.browser } : diskCfg;
+  const refreshState = getRuntimeConfigSnapshotRefreshState();
+  const cfg =
+    runtimeCfg && refreshState === "idle"
+      ? { ...runtimeCfg, browser: diskCfg.browser }
+      : (runtimeCfg ?? diskCfg);
   const freshResolved = resolveBrowserConfig(cfg.browser, cfg);
   applyResolvedConfig(params.current, freshResolved);
 }

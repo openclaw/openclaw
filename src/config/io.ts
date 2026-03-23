@@ -1353,6 +1353,7 @@ let configCache: {
 let runtimeConfigSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSourceSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSnapshotRefreshHandler: RuntimeConfigSnapshotRefreshHandler | null = null;
+let runtimeConfigSnapshotRefreshState: "idle" | "pending" | "failed" = "idle";
 
 function resolveConfigCacheMs(env: NodeJS.ProcessEnv): number {
   const raw = env.OPENCLAW_CONFIG_CACHE_MS?.trim();
@@ -1386,17 +1387,23 @@ export function setRuntimeConfigSnapshot(
 ): void {
   runtimeConfigSnapshot = config;
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
+  runtimeConfigSnapshotRefreshState = "idle";
   clearConfigCache();
 }
 
 export function clearRuntimeConfigSnapshot(): void {
   runtimeConfigSnapshot = null;
   runtimeConfigSourceSnapshot = null;
+  runtimeConfigSnapshotRefreshState = "idle";
   clearConfigCache();
 }
 
 export function getRuntimeConfigSnapshot(): OpenClawConfig | null {
   return runtimeConfigSnapshot;
+}
+
+export function getRuntimeConfigSnapshotRefreshState(): "idle" | "pending" | "failed" {
+  return runtimeConfigSnapshotRefreshState;
 }
 
 export function getRuntimeConfigSourceSnapshot(): OpenClawConfig | null {
@@ -1459,6 +1466,9 @@ export function setRuntimeConfigSnapshotRefreshHandler(
   refreshHandler: RuntimeConfigSnapshotRefreshHandler | null,
 ): void {
   runtimeConfigSnapshotRefreshHandler = refreshHandler;
+  if (!refreshHandler) {
+    runtimeConfigSnapshotRefreshState = "idle";
+  }
 }
 
 export function loadConfig(): OpenClawConfig {
@@ -1523,12 +1533,15 @@ export async function writeConfigFile(
   // succeeds, so concurrent readers do not observe unresolved SecretRefs mid-refresh.
   const refreshHandler = runtimeConfigSnapshotRefreshHandler;
   if (refreshHandler) {
+    runtimeConfigSnapshotRefreshState = "pending";
     try {
       const refreshed = await refreshHandler.refresh({ sourceConfig: nextCfg });
       if (refreshed) {
         return;
       }
+      runtimeConfigSnapshotRefreshState = "idle";
     } catch (error) {
+      runtimeConfigSnapshotRefreshState = "failed";
       try {
         refreshHandler.clearOnRefreshFailure?.();
       } catch {
@@ -1550,6 +1563,7 @@ export async function writeConfigFile(
   }
   if (hadRuntimeSnapshot) {
     clearRuntimeConfigSnapshot();
+    runtimeConfigSnapshotRefreshState = "idle";
   }
   // When we had no runtime snapshot, keep callers reading from disk/cache so external/manual
   // edits to openclaw.json remain visible (no stale snapshot).
