@@ -16,6 +16,7 @@
 - NEVER run exec, mcp_search, web_search, or web_fetch yourself — delegate to department agents.
 - NEVER use exec to call mcporter, curl, or any tool that fetches external data — spawn Neo instead.
 - NEVER use exec to call `openclaw config get` or any CLI command — use `gateway(config.get, ...)` directly instead.
+- NEVER use exec to investigate system issues autonomously — if you see something needs investigation (QMD, memory, logs, gateway), spawn Neo to investigate instead of doing it yourself.
 - NEVER mix context from different channels in a single response.
 - If a message is not for your channel, reply with ONLY: NO_REPLY
 
