@@ -290,15 +290,6 @@ const entries: SubCliEntry[] = [
     },
   },
   {
-    name: "update",
-    description: "Update OpenClaw and inspect update channel status",
-    hasSubcommands: true,
-    register: async (program) => {
-      const mod = await import("../update-cli.js");
-      mod.registerUpdateCli(program);
-    },
-  },
-  {
     name: "completion",
     description: "Generate shell completion script",
     hasSubcommands: false,

@@ -21,39 +21,26 @@ without changing the version number — dist-tags are the source of truth for np
 
 ## Switching channels
 
-Git checkout:
+Set the channel in your config:
 
 ```bash
-openclaw update --channel stable
-openclaw update --channel beta
-openclaw update --channel dev
+openclaw config set update.channel stable
+openclaw config set update.channel beta
+openclaw config set update.channel dev
 ```
 
-- `stable`/`beta` check out the latest matching tag (often the same tag).
-- `dev` switches to `main` and rebases on the upstream.
+Then update:
 
-npm/pnpm global install:
-
-```bash
-openclaw update --channel stable
-openclaw update --channel beta
-openclaw update --channel dev
-```
-
-This updates via the corresponding npm dist-tag (`latest`, `beta`, `dev`).
-
-When you **explicitly** switch channels with `--channel`, OpenClaw also aligns
-the install method:
-
-- `dev` ensures a git checkout (default `~/openclaw`, override with `OPENCLAW_GIT_DIR`),
-  updates it, and installs the global CLI from that checkout.
-- `stable`/`beta` installs from npm using the matching dist-tag.
+- For **global installs** (npm/pnpm): `stable` uses dist-tag `latest`, `beta` uses `beta`, `dev` uses `dev`. Update with your package manager (e.g. `npm i -g openclaw@latest`).
+- For **source installs** (git):
+  - `dev` tracks `main`: `git pull --rebase && pnpm install && pnpm build && pnpm ui:build && openclaw doctor`.
+  - `stable`/`beta` use tagged releases. Update via the Control UI, or re-run the installer, which handles tag checkout automatically.
 
 Tip: if you want stable + dev in parallel, keep two clones and point your gateway at the stable one.
 
 ## Plugins and channels
 
-When you switch channels with `openclaw update`, OpenClaw also syncs plugin sources:
+When you switch channels, OpenClaw also syncs plugin sources:
 
 - `dev` prefers bundled plugins from the git checkout.
 - `stable` and `beta` restore npm-installed plugin packages.

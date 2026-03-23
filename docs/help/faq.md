@@ -506,10 +506,11 @@ Two options:
 1. **Dev channel (git checkout):**
 
 ```bash
-openclaw update --channel dev
+openclaw config set update.channel dev
+git pull --rebase && pnpm install && pnpm build && pnpm ui:build && openclaw doctor
 ```
 
-This switches to the `main` branch and updates from source.
+This sets the dev channel and updates from source. If you're not already on `main`, run `git checkout main` first.
 
 2. **Hackable install (from the installer site):**
 
@@ -662,28 +663,26 @@ Nodes: [Nodes](/nodes), [Nodes CLI](/cli/nodes).
 
 ### Can I ask OpenClaw to update itself
 
-Short answer: **possible, not recommended**. The update flow can restart the
+Short answer: **not recommended**. The update flow can restart the
 Gateway (which drops the active session), may need a clean git checkout, and
 can prompt for confirmation. Safer: run updates from a shell as the operator.
 
-Use the CLI:
+For global installs, use your package manager:
 
 ```bash
-openclaw update
-openclaw update status
-openclaw update --channel stable|beta|dev
-openclaw update --tag <dist-tag|version>
-openclaw update --no-restart
+npm i -g openclaw@latest
+# or
+pnpm add -g openclaw@latest
 ```
 
-If you must automate from an agent:
+For source installs:
 
 ```bash
-openclaw update --yes --no-restart
+git pull --rebase && pnpm install && pnpm build && pnpm ui:build && openclaw doctor
 openclaw gateway restart
 ```
 
-Docs: [Update](/cli/update), [Updating](/install/updating).
+Docs: [Updating](/install/updating).
 
 ### What does the onboarding wizard actually do
 

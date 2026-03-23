@@ -1174,7 +1174,7 @@ openclaw logs --follow
 
   <Accordion title="Voice STT drops with DecryptionFailed(...)">
 
-    - keep OpenClaw current (`openclaw update`) so the Discord voice receive recovery logic is present
+    - keep OpenClaw current (re-run the installer or update via your package manager) so the Discord voice receive recovery logic is present
     - confirm `channels.discord.voice.daveEncryption=true` (default)
     - start from `channels.discord.voice.decryptionFailureTolerance=24` (upstream default) and tune only if needed
     - watch logs for:

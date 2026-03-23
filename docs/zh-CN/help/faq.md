@@ -481,10 +481,11 @@ https://openclaw.ai/install.ps1
 1. **Dev 渠道（git checkout）：**
 
 ```bash
-openclaw update --channel dev
+openclaw config set update.channel dev
+git pull --rebase && pnpm install && pnpm build && pnpm ui:build && openclaw doctor
 ```
 
-这会切换到 `main` 分支并从源码更新。
+这会设置 dev 渠道并从源码更新。如果尚未在 `main` 分支，请先运行 `git checkout main`。
 
 2. **可编辑安装（从安装程序网站）：**
 
@@ -593,26 +594,24 @@ curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method git
 
 ### 可以让 OpenClaw 自行更新吗
 
-简短回答：**可以，但不推荐**。更新流程可能重启 Gateway 网关（这会中断活跃会话），可能需要干净的 git checkout，并且可能提示确认。更安全的做法：作为运维人员从 shell 运行更新。
+简短回答：**不推荐**。更新流程可能重启 Gateway 网关（这会中断活跃会话），可能需要干净的 git checkout，并且可能提示确认。更安全的做法：作为运维人员从 shell 运行更新。
 
-使用 CLI：
+全局安装请使用包管理器：
 
 ```bash
-openclaw update
-openclaw update status
-openclaw update --channel stable|beta|dev
-openclaw update --tag <dist-tag|version>
-openclaw update --no-restart
+npm i -g openclaw@latest
+# 或
+pnpm add -g openclaw@latest
 ```
 
-如果必须从智能体自动化：
+源码安装：
 
 ```bash
-openclaw update --yes --no-restart
+git pull --rebase && pnpm install && pnpm build && pnpm ui:build && openclaw doctor
 openclaw gateway restart
 ```
 
-文档：[更新](/cli/update)、[更新指南](/install/updating)。
+文档：[更新指南](/install/updating)。
 
 ### 新手引导向导具体做了什么
 

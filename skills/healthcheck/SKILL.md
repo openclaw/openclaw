@@ -91,9 +91,9 @@ If browser control is enabled, recommend that 2FA be enabled on all important ac
 
 ### 3) Check OpenClaw version/update status (read-only)
 
-As part of the default read-only checks, run `openclaw update status`.
+As part of the default read-only checks, run `openclaw status` and `openclaw health --json`.
 
-Report the current channel and whether an update is available.
+Report the current version and whether the gateway is healthy.
 
 ### 4) Determine risk tolerance (after system context)
 
@@ -172,7 +172,7 @@ After OpenClaw install or first hardening pass, run at least one baseline audit 
 
 - `openclaw security audit`
 - `openclaw security audit --deep`
-- `openclaw update status`
+- `openclaw status`
 
 Ongoing monitoring is recommended. Use the OpenClaw cron tool/CLI to schedule periodic audits (Gateway scheduler). Do not create scheduled tasks without explicit approval. Store outputs in a user-approved location and avoid secrets in logs.
 When scheduling headless cron runs, include a note in the output that instructs the user to call `healthcheck` so issues can be fixed.
@@ -186,7 +186,7 @@ After any audit or hardening pass, explicitly offer scheduling and require a dir
 If the user says yes, ask for:
 
 - cadence (daily/weekly), preferred time window, and output location
-- whether to also schedule `openclaw update status`
+- whether to also schedule `openclaw status`
 
 Use a stable cron job name so updates are deterministic. Prefer exact names:
 
@@ -198,7 +198,7 @@ If not found, `openclaw cron add --name <name> ...`.
 
 Also offer a periodic version check so the user can decide when to update (numbered):
 
-1. `openclaw update status` (preferred for source checkouts and channels)
+1. `openclaw status` (shows current version and gateway health)
 2. `npm view openclaw version` (published npm version)
 
 ## OpenClaw command accuracy
@@ -208,7 +208,6 @@ Use only supported commands and flags:
 - `openclaw security audit [--deep] [--fix] [--json]`
 - `openclaw status` / `openclaw status --deep`
 - `openclaw health --json`
-- `openclaw update status`
 - `openclaw cron add|list|runs|run`
 
 Do not invent CLI flags or imply OpenClaw enforces host firewall/SSH policies.

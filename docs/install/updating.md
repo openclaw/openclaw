@@ -8,7 +8,7 @@ title: "Updating"
 
 # Updating
 
-OpenClaw is moving fast (pre “1.0”). Treat updates like shipping infra: update → run checks → restart (or use `openclaw update`, which restarts) → verify.
+OpenClaw is moving fast (pre “1.0”). Treat updates like shipping infra: update → run checks → restart → verify.
 
 ## Recommended: re-run the website installer (upgrade in place)
 
@@ -57,15 +57,13 @@ pnpm add -g openclaw@latest
 
 We do **not** recommend Bun for the Gateway runtime (WhatsApp/Telegram bugs).
 
-To switch update channels (git + npm installs):
+To switch update channels, set the channel in your config:
 
 ```bash
-openclaw update --channel beta
-openclaw update --channel dev
-openclaw update --channel stable
+openclaw config set update.channel beta
+openclaw config set update.channel dev
+openclaw config set update.channel stable
 ```
-
-Use `--tag <dist-tag|version>` for a one-off install tag/version.
 
 See [Development channels](/install/development-channels) for channel semantics and release notes.
 
@@ -93,9 +91,7 @@ Behavior:
 
 - `stable`: when a new version is seen, OpenClaw waits `stableDelayHours` and then applies a deterministic per-install jitter in `stableJitterHours` (spread rollout).
 - `beta`: checks on `betaCheckIntervalHours` cadence (default: hourly) and applies when an update is available.
-- `dev`: no automatic apply; use manual `openclaw update`.
-
-Use `openclaw update --dry-run` to preview update actions before enabling automation.
+- `dev`: no automatic apply; update manually via your package manager or `git pull`.
 
 Then:
 
@@ -110,29 +106,11 @@ Notes:
 - If your Gateway runs as a service, `openclaw gateway restart` is preferred over killing PIDs.
 - If you’re pinned to a specific version, see “Rollback / pinning” below.
 
-## Update (`openclaw update`)
-
-For **source installs** (git checkout), prefer:
-
-```bash
-openclaw update
-```
-
-It runs a safe-ish update flow:
-
-- Requires a clean worktree.
-- Switches to the selected channel (tag or branch).
-- Fetches + rebases against the configured upstream (dev channel).
-- Installs deps, builds, builds the Control UI, and runs `openclaw doctor`.
-- Restarts the gateway by default (use `--no-restart` to skip).
-
-If you installed via **npm/pnpm** (no git metadata), `openclaw update` will try to update via your package manager. If it can’t detect the install, use “Update (global install)” instead.
-
 ## Update (Control UI / RPC)
 
 The Control UI has **Update & Restart** (RPC: `update.run`). It:
 
-1. Runs the same source-update flow as `openclaw update` (git checkout only).
+1. Runs the source-update flow (git checkout only): fetch, rebase, install, build, doctor.
 2. Writes a restart sentinel with a structured report (stdout/stderr tail).
 3. Restarts the gateway and pings the last active session with the report.
 
@@ -140,24 +118,18 @@ If the rebase fails, the gateway aborts and restarts without applying the update
 
 ## Update (from source)
 
-From the repo checkout:
-
-Preferred:
+For **dev channel** source installs (tracking `main`):
 
 ```bash
-openclaw update
-```
-
-Manual (equivalent-ish):
-
-```bash
-git pull
+git pull --rebase
 pnpm install
 pnpm build
 pnpm ui:build # auto-installs UI deps on first run
 openclaw doctor
 openclaw health
 ```
+
+For **stable/beta** source installs (on a tagged release), prefer the Control UI's **Update & Restart** or re-run the installer — both handle tag checkout automatically.
 
 Notes:
 
@@ -170,7 +142,7 @@ Notes:
 
 Doctor is the “safe update” command. It’s intentionally boring: repair + migrate + warn.
 
-Note: if you’re on a **source install** (git checkout), `openclaw doctor` will offer to run `openclaw update` first.
+Note: if you’re on a **source install** (git checkout), `openclaw doctor` will offer to update from git before running.
 
 Typical things it does:
 

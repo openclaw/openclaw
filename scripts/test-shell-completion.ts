@@ -2,8 +2,8 @@
  * Test script for shell completion installation feature.
  *
  * This script simulates the shell completion prompt that appears during
- * `openclaw update`. Use it to verify the completion installation flow
- * without running a full update.
+ * `openclaw doctor` and `openclaw onboard`. Use it to verify the completion
+ * installation flow without running a full doctor or onboard pass.
  *
  * Run from repo root:
  *   node --import tsx scripts/test-shell-completion.ts [options]
@@ -67,7 +67,7 @@ function printHelp(): void {
 ${theme.heading("Shell Completion Test Script")}
 
 This script simulates the shell completion checks that run during
-\`openclaw update\`, \`openclaw doctor\`, and \`openclaw onboard\`.
+\`openclaw doctor\` and \`openclaw onboard\`.
 
 ${theme.heading("Usage (run from repo root):")}
   node --import tsx scripts/test-shell-completion.ts [options]

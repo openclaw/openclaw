@@ -23,14 +23,7 @@ async function closeCliMemoryManagers(): Promise<void> {
 }
 
 export function rewriteUpdateFlagArgv(argv: string[]): string[] {
-  const index = argv.indexOf("--update");
-  if (index === -1) {
-    return argv;
-  }
-
-  const next = [...argv];
-  next.splice(index, 1, "update");
-  return next;
+  return argv;
 }
 
 export function shouldRegisterPrimarySubcommand(argv: string[]): boolean {
