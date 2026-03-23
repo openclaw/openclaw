@@ -168,11 +168,15 @@ vi.mock("openclaw/plugin-sdk/state-paths", async (importOriginal) => {
   };
 });
 
-vi.mock("@whiskeysockets/baileys", () => {
+vi.mock("@whiskeysockets/baileys", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@whiskeysockets/baileys")>();
   const created = createMockBaileys();
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw:lastSocket")] =
     created.lastSocket;
-  return created.mod;
+  return {
+    ...actual,
+    ...created.mod,
+  };
 });
 
 vi.mock("qrcode-terminal", () => ({

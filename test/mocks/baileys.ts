@@ -7,6 +7,13 @@ type MakeCacheableSignalKeyStoreFn = BaileysExports["makeCacheableSignalKeyStore
 type MakeWASocketFn = BaileysExports["makeWASocket"];
 type UseMultiFileAuthStateFn = BaileysExports["useMultiFileAuthState"];
 type DownloadMediaMessageFn = BaileysExports["downloadMediaMessage"];
+type ExtractMessageContentFn = BaileysExports["extractMessageContent"];
+type GetContentTypeFn = BaileysExports["getContentType"];
+type NormalizeMessageContentFn = BaileysExports["normalizeMessageContent"];
+type IsJidGroupFn = BaileysExports["isJidGroup"];
+type MessageContentInput = Parameters<NormalizeMessageContentFn>[0];
+type MessageContentOutput = ReturnType<NormalizeMessageContentFn>;
+type MessageContentType = ReturnType<GetContentTypeFn>;
 
 export type MockBaileysSocket = {
   ev: EventEmitter;
@@ -19,14 +26,104 @@ export type MockBaileysSocket = {
 
 export type MockBaileysModule = {
   DisconnectReason: { loggedOut: number };
+  extractMessageContent: ReturnType<typeof vi.fn<ExtractMessageContentFn>>;
   fetchLatestBaileysVersion: ReturnType<typeof vi.fn<FetchLatestBaileysVersionFn>>;
+  getContentType: ReturnType<typeof vi.fn<GetContentTypeFn>>;
+  isJidGroup: ReturnType<typeof vi.fn<IsJidGroupFn>>;
   makeCacheableSignalKeyStore: ReturnType<typeof vi.fn<MakeCacheableSignalKeyStoreFn>>;
   makeWASocket: ReturnType<typeof vi.fn<MakeWASocketFn>>;
+  normalizeMessageContent: ReturnType<typeof vi.fn<NormalizeMessageContentFn>>;
   useMultiFileAuthState: ReturnType<typeof vi.fn<UseMultiFileAuthStateFn>>;
   jidToE164?: (jid: string) => string | null;
   proto?: unknown;
   downloadMediaMessage?: ReturnType<typeof vi.fn<DownloadMediaMessageFn>>;
 };
+
+const MESSAGE_WRAPPER_KEYS = [
+  "ephemeralMessage",
+  "viewOnceMessage",
+  "viewOnceMessageV2",
+  "viewOnceMessageV2Extension",
+  "documentWithCaptionMessage",
+] as const;
+
+const MESSAGE_CONTENT_KEYS = [
+  "conversation",
+  "extendedTextMessage",
+  "imageMessage",
+  "videoMessage",
+  "audioMessage",
+  "documentMessage",
+  "stickerMessage",
+  "locationMessage",
+  "liveLocationMessage",
+  "contactMessage",
+  "contactsArrayMessage",
+  "buttonsResponseMessage",
+  "listResponseMessage",
+  "templateButtonReplyMessage",
+  "interactiveResponseMessage",
+  "buttonsMessage",
+  "listMessage",
+] as const;
+
+type MessageLike = Record<string, unknown>;
+
+export function mockNormalizeMessageContent(message: MessageContentInput): MessageContentOutput {
+  let current = message as unknown;
+  while (current && typeof current === "object") {
+    let unwrapped = false;
+    for (const key of MESSAGE_WRAPPER_KEYS) {
+      const candidate = (current as MessageLike)[key];
+      if (
+        candidate &&
+        typeof candidate === "object" &&
+        "message" in (candidate as MessageLike) &&
+        (candidate as { message?: unknown }).message
+      ) {
+        current = (candidate as { message: unknown }).message;
+        unwrapped = true;
+        break;
+      }
+    }
+    if (!unwrapped) {
+      break;
+    }
+  }
+  return current as MessageContentOutput;
+}
+
+export function mockGetContentType(message: MessageContentInput): MessageContentType {
+  const normalized = mockNormalizeMessageContent(message);
+  if (!normalized || typeof normalized !== "object") {
+    return undefined;
+  }
+  for (const key of MESSAGE_CONTENT_KEYS) {
+    if ((normalized as MessageLike)[key] != null) {
+      return key as MessageContentType;
+    }
+  }
+  return undefined;
+}
+
+export function mockExtractMessageContent(message: MessageContentInput): MessageContentOutput {
+  const normalized = mockNormalizeMessageContent(message);
+  if (!normalized || typeof normalized !== "object") {
+    return normalized;
+  }
+  const contentType = mockGetContentType(normalized);
+  if (!contentType || contentType === "conversation") {
+    return normalized;
+  }
+  const candidate = (normalized as MessageLike)[contentType];
+  return (
+    candidate && typeof candidate === "object" ? candidate : normalized
+  ) as MessageContentOutput;
+}
+
+export function mockIsJidGroup(jid: string | undefined | null): boolean {
+  return typeof jid === "string" && jid.endsWith("@g.us");
+}
 
 export function createMockBaileys(): {
   mod: MockBaileysModule;
@@ -50,11 +147,19 @@ export function createMockBaileys(): {
 
   const mod: MockBaileysModule = {
     DisconnectReason: { loggedOut: 401 },
+    extractMessageContent: vi.fn<ExtractMessageContentFn>((message) =>
+      mockExtractMessageContent(message),
+    ),
     fetchLatestBaileysVersion: vi
       .fn<FetchLatestBaileysVersionFn>()
       .mockResolvedValue({ version: [1, 2, 3], isLatest: true }),
+    getContentType: vi.fn<GetContentTypeFn>((message) => mockGetContentType(message)),
+    isJidGroup: vi.fn<IsJidGroupFn>((jid) => mockIsJidGroup(jid)),
     makeCacheableSignalKeyStore: vi.fn<MakeCacheableSignalKeyStoreFn>((keys) => keys),
     makeWASocket,
+    normalizeMessageContent: vi.fn<NormalizeMessageContentFn>((message) =>
+      mockNormalizeMessageContent(message),
+    ),
     useMultiFileAuthState: vi.fn<UseMultiFileAuthStateFn>(async () => ({
       state: { creds: {}, keys: {} } as Awaited<ReturnType<UseMultiFileAuthStateFn>>["state"],
       saveCreds: vi.fn(),
