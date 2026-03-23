@@ -187,159 +187,171 @@ export const soundchainChannelPlugin: ChannelPlugin<ResolvedSoundChainAccount> =
       // startAccount Promise resolves — so we must block until aborted.
       return new Promise<void>((resolve, reject) => {
         void (async () => {
-          // Handle already-aborted signal before starting any work
-          if (ctx.abortSignal.aborted) { resolve(); return; }
-
-          ctx.log?.info(`[${account.accountId}] Starting SoundChain channel (${account.name})`);
-
-          // Create and store the messaging client
-          const client = createMessagingClient(account.apiUrl, account.apiToken);
-          activeClients.set(account.accountId, client);
-
-          // Track last seen message timestamp per conversation.
-          // The chats query returns one entry per conversation (id = conversation ID),
-          // so we compare createdAt to detect new messages in existing conversations.
-          const lastSeen = new Map<string, string>();
-          let interval: ReturnType<typeof setInterval> | undefined;
-          let followInterval: ReturnType<typeof setInterval> | undefined;
-          let aborted = false;
-
-          // Cleanup helper
-          const cleanup = () => {
-            aborted = true;
-            if (interval) clearInterval(interval);
-            if (followInterval) clearInterval(followInterval);
-            activeClients.delete(account.accountId);
-            ctx.log?.info(`[${account.accountId}] SoundChain channel stopped`);
-          };
-
-          // Listen for gateway abort signal (manual stop or shutdown)
-          ctx.abortSignal.addEventListener(
-            "abort",
-            () => {
-              cleanup();
-              resolve();
-            },
-            { once: true },
-          );
-
-          // Seed with current chat timestamps so we don't replay history
-          // MUST complete before polling starts to avoid duplicate replies on cold start
           try {
-            const seedChats = await client.getChats();
-            for (const chat of seedChats) {
-              if (chat.id) {
-                lastSeen.set(chat.id, chat.createdAt ?? "");
-              }
+            // Handle already-aborted signal before starting any work
+            if (ctx.abortSignal.aborted) {
+              resolve();
+              return;
             }
-            ctx.log?.debug?.(
-              `[${account.accountId}] Seeded ${lastSeen.size} existing conversations`,
+
+            ctx.log?.info(`[${account.accountId}] Starting SoundChain channel (${account.name})`);
+
+            // Create and store the messaging client
+            const client = createMessagingClient(account.apiUrl, account.apiToken);
+            activeClients.set(account.accountId, client);
+
+            // Track last seen message timestamp per conversation.
+            // The chats query returns one entry per conversation (id = conversation ID),
+            // so we compare createdAt to detect new messages in existing conversations.
+            const lastSeen = new Map<string, string>();
+            let interval: ReturnType<typeof setInterval> | undefined;
+            let followInterval: ReturnType<typeof setInterval> | undefined;
+            let aborted = false;
+
+            // Cleanup helper
+            const cleanup = () => {
+              aborted = true;
+              if (interval) clearInterval(interval);
+              if (followInterval) clearInterval(followInterval);
+              activeClients.delete(account.accountId);
+              ctx.log?.info(`[${account.accountId}] SoundChain channel stopped`);
+            };
+
+            // Listen for gateway abort signal (manual stop or shutdown)
+            ctx.abortSignal.addEventListener(
+              "abort",
+              () => {
+                cleanup();
+                resolve();
+              },
+              { once: true },
+            );
+
+            // Seed with current chat timestamps so we don't replay history
+            // MUST complete before polling starts to avoid duplicate replies on cold start
+            try {
+              const seedChats = await client.getChats();
+              for (const chat of seedChats) {
+                if (chat.id) {
+                  lastSeen.set(chat.id, chat.createdAt ?? "");
+                }
+              }
+              ctx.log?.debug?.(
+                `[${account.accountId}] Seeded ${lastSeen.size} existing conversations`,
+              );
+            } catch (err) {
+              ctx.log?.warn?.(`[${account.accountId}] Initial chat seed failed: ${err}`);
+            }
+
+            // If aborted during seed, stop here — don't register timers
+            if (aborted) return;
+
+            // Auto-follow all users on startup, then re-check every 5 minutes
+            const autoFollowAll = async () => {
+              try {
+                const users = await client.getAllUsers();
+                if (aborted) return;
+                let followed = 0;
+                for (const user of users) {
+                  if (aborted) break;
+                  if (!user.isFollowed) {
+                    try {
+                      await client.followUser(user.id);
+                      followed++;
+                    } catch {
+                      // skip individual follow errors (already following, etc)
+                    }
+                  }
+                }
+                if (followed > 0) {
+                  ctx.log?.info(
+                    `[${account.accountId}] Auto-followed ${followed} new users (${users.length} total)`,
+                  );
+                }
+              } catch (err) {
+                ctx.log?.warn?.(`[${account.accountId}] Auto-follow error: ${err}`);
+              }
+            };
+
+            // Auto-follow is opt-in (channels.soundchain.autoFollow: true)
+            if (account.autoFollow) {
+              autoFollowAll();
+              followInterval = setInterval(autoFollowAll, 5 * 60 * 1000);
+            }
+
+            // Poll for new inbound messages (starts AFTER seed completes)
+            // Single-flight guard prevents overlapping iterations
+            let polling = false;
+            interval = setInterval(async () => {
+              if (polling || aborted) return;
+              polling = true;
+              try {
+                const chats = await client.getChats();
+                if (aborted) {
+                  polling = false;
+                  return;
+                }
+
+                for (const chat of chats) {
+                  if (!chat.id || aborted) continue;
+
+                  const prevTimestamp = lastSeen.get(chat.id);
+                  const currentTimestamp = chat.createdAt ?? "";
+
+                  // Skip if we've already seen this exact message
+                  if (prevTimestamp === currentTimestamp) continue;
+
+                  // Skip read messages (only process unread)
+                  if (!chat.unread) continue;
+
+                  // Cap tracked conversations to prevent unbounded growth
+                  if (lastSeen.size > MAX_SEEN_IDS) {
+                    const entries = Array.from(lastSeen.keys());
+                    for (let i = 0; i < entries.length - MAX_SEEN_IDS; i++) {
+                      lastSeen.delete(entries[i]);
+                    }
+                  }
+
+                  const sender = chat.profile?.displayName ?? "unknown";
+                  const preview = chat.message?.slice(0, 80) ?? "";
+
+                  ctx.log?.info(
+                    `[${account.accountId}] New DM from ${sender}: ${preview}${(chat.message?.length ?? 0) > 80 ? "..." : ""}`,
+                  );
+
+                  // Generate AI reply via SMITH gateway and send back
+                  const profileId = chat.profile?.id;
+                  if (profileId && chat.message) {
+                    try {
+                      ctx.log?.info(`[${account.accountId}] Generating reply for ${sender}...`);
+                      const reply = await generateReply(sender, chat.message);
+                      if (aborted) break;
+                      await client.sendMessage(profileId, reply);
+                      // Only update timestamp AFTER successful reply (retry on failure)
+                      lastSeen.set(chat.id, currentTimestamp);
+                      ctx.log?.info(
+                        `[${account.accountId}] Replied to ${sender}: ${reply.slice(0, 80)}${reply.length > 80 ? "..." : ""}`,
+                      );
+                    } catch (err) {
+                      ctx.log?.warn?.(`[${account.accountId}] Reply failed for ${sender}: ${err}`);
+                    }
+                  }
+                }
+              } catch (err) {
+                ctx.log?.warn?.(`[${account.accountId}] Poll error: ${err}`);
+              } finally {
+                polling = false;
+              }
+            }, POLL_INTERVAL_MS);
+
+            ctx.log?.info(
+              `[${account.accountId}] SoundChain channel started — polling every ${POLL_INTERVAL_MS / 1000}s`,
             );
           } catch (err) {
-            ctx.log?.warn?.(`[${account.accountId}] Initial chat seed failed: ${err}`);
+            // Bootstrap failed — reject the promise so gateway marks channel as errored
+            // instead of leaving it in a broken "started" state
+            reject(err instanceof Error ? err : new Error(String(err)));
           }
-
-          // If aborted during seed, stop here — don't register timers
-          if (aborted) return;
-
-          // Auto-follow all users on startup, then re-check every 5 minutes
-          const autoFollowAll = async () => {
-            try {
-              const users = await client.getAllUsers();
-              if (aborted) return;
-              let followed = 0;
-              for (const user of users) {
-                if (aborted) break;
-                if (!user.isFollowed) {
-                  try {
-                    await client.followUser(user.id);
-                    followed++;
-                  } catch {
-                    // skip individual follow errors (already following, etc)
-                  }
-                }
-              }
-              if (followed > 0) {
-                ctx.log?.info(
-                  `[${account.accountId}] Auto-followed ${followed} new users (${users.length} total)`,
-                );
-              }
-            } catch (err) {
-              ctx.log?.warn?.(`[${account.accountId}] Auto-follow error: ${err}`);
-            }
-          };
-
-          // Auto-follow is opt-in (channels.soundchain.autoFollow: true)
-          if (account.autoFollow) {
-            autoFollowAll();
-            followInterval = setInterval(autoFollowAll, 5 * 60 * 1000);
-          }
-
-          // Poll for new inbound messages (starts AFTER seed completes)
-          // Single-flight guard prevents overlapping iterations
-          let polling = false;
-          interval = setInterval(async () => {
-            if (polling || aborted) return;
-            polling = true;
-            try {
-              const chats = await client.getChats();
-              if (aborted) { polling = false; return; }
-
-              for (const chat of chats) {
-                if (!chat.id || aborted) continue;
-
-                const prevTimestamp = lastSeen.get(chat.id);
-                const currentTimestamp = chat.createdAt ?? "";
-
-                // Skip if we've already seen this exact message
-                if (prevTimestamp === currentTimestamp) continue;
-
-                // Skip read messages (only process unread)
-                if (!chat.unread) continue;
-
-                // Cap tracked conversations to prevent unbounded growth
-                if (lastSeen.size > MAX_SEEN_IDS) {
-                  const entries = Array.from(lastSeen.keys());
-                  for (let i = 0; i < entries.length - MAX_SEEN_IDS; i++) {
-                    lastSeen.delete(entries[i]);
-                  }
-                }
-
-                const sender = chat.profile?.displayName ?? "unknown";
-                const preview = chat.message?.slice(0, 80) ?? "";
-
-                ctx.log?.info(
-                  `[${account.accountId}] New DM from ${sender}: ${preview}${(chat.message?.length ?? 0) > 80 ? "..." : ""}`,
-                );
-
-                // Generate AI reply via SMITH gateway and send back
-                const profileId = chat.profile?.id;
-                if (profileId && chat.message) {
-                  try {
-                    ctx.log?.info(`[${account.accountId}] Generating reply for ${sender}...`);
-                    const reply = await generateReply(sender, chat.message);
-                    if (aborted) break;
-                    await client.sendMessage(profileId, reply);
-                    // Only update timestamp AFTER successful reply (retry on failure)
-                    lastSeen.set(chat.id, currentTimestamp);
-                    ctx.log?.info(
-                      `[${account.accountId}] Replied to ${sender}: ${reply.slice(0, 80)}${reply.length > 80 ? "..." : ""}`,
-                    );
-                  } catch (err) {
-                    ctx.log?.warn?.(`[${account.accountId}] Reply failed for ${sender}: ${err}`);
-                  }
-                }
-              }
-            } catch (err) {
-              ctx.log?.warn?.(`[${account.accountId}] Poll error: ${err}`);
-            } finally {
-              polling = false;
-            }
-          }, POLL_INTERVAL_MS);
-
-          ctx.log?.info(
-            `[${account.accountId}] SoundChain channel started — polling every ${POLL_INTERVAL_MS / 1000}s`,
-          );
         })();
       });
     },

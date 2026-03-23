@@ -235,7 +235,8 @@ export function createMessagingClient(apiUrl: string, token: string): MessagingC
       } catch (err: unknown) {
         const isNetworkError =
           err instanceof TypeError || // fetch network failure
-          (err instanceof DOMException && err.name === "AbortError"); // timeout
+          (err instanceof DOMException &&
+            (err.name === "AbortError" || err.name === "TimeoutError")); // timeout (Node uses TimeoutError)
         if (!isNetworkError) throw err; // Server responded — do NOT retry (avoids duplicate DMs)
 
         // Network failure — safe to retry via GraphQL since REST never reached the server
