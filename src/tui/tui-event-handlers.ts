@@ -116,6 +116,17 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
   };
 
+  /**
+   * When the gateway finalizes a run whose runId no longer matches activeChatRunId, we normally
+   * avoid touching the status line so a concurrent run can keep showing streaming/running.
+   * If activeChatRunId is already null and no other session runs remain in flight, the UI can be
+   * stuck on "streaming" from deltas that targeted a run whose final arrived "inactive" (e.g.
+   * active pointer cleared or reassigned during failover / multi-stage tool flows). Clear in
+   * that orphaned case only.
+   */
+  const shouldClearOrphanedActivityStatus = (): boolean =>
+    !state.activeChatRunId && sessionRuns.size === 0;
+
   const finalizeRun = (params: {
     runId: string;
     wasActiveRun: boolean;
@@ -123,7 +134,7 @@ export function createEventHandlers(context: EventHandlerContext) {
   }) => {
     noteFinalizedRun(params.runId);
     clearActiveRunIfMatch(params.runId);
-    if (params.wasActiveRun) {
+    if (params.wasActiveRun || shouldClearOrphanedActivityStatus()) {
       setActivityStatus(params.status);
     }
     void refreshSessionInfo?.();
@@ -137,7 +148,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     streamAssembler.drop(params.runId);
     sessionRuns.delete(params.runId);
     clearActiveRunIfMatch(params.runId);
-    if (params.wasActiveRun) {
+    if (params.wasActiveRun || shouldClearOrphanedActivityStatus()) {
       setActivityStatus(params.status);
     }
     void refreshSessionInfo?.();
