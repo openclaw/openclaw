@@ -49,6 +49,8 @@ export type PluginRuntimeChannel = {
   routing: {
     buildAgentSessionKey: typeof import("../../routing/resolve-route.js").buildAgentSessionKey;
     resolveAgentRoute: typeof import("../../routing/resolve-route.js").resolveAgentRoute;
+    resolveConfiguredBindingRoute: typeof import("../../channels/plugins/binding-routing.js").resolveConfiguredBindingRoute;
+    ensureConfiguredBindingRouteReady: typeof import("../../channels/plugins/binding-routing.js").ensureConfiguredBindingRouteReady;
   };
   pairing: {
     buildPairingReply: typeof import("../../pairing/pairing-messages.js").buildPairingReply;

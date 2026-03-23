@@ -71,12 +71,11 @@ const AcpBindingSchema = z
       return;
     }
     const channel = value.match.channel.trim().toLowerCase();
-    if (channel !== "discord" && channel !== "telegram" && channel !== "feishu") {
+    if (!channel) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["match", "channel"],
-        message:
-          'ACP bindings currently support only "discord", "telegram", and "feishu" channels.',
+        message: "ACP bindings require a non-empty channel name.",
       });
       return;
     }
