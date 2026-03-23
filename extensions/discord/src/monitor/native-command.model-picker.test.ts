@@ -200,7 +200,9 @@ function expectDispatchedModelSelection(params: {
   expect(dispatchCall.ctx?.CommandBody).toBe(`/model ${params.model}`);
   expect(dispatchCall.ctx?.CommandArgs?.values?.model).toBe(params.model);
   if (params.requireTargetSessionKey) {
-    expect(dispatchCall.ctx?.CommandTargetSessionKey).toBeDefined();
+    if (!dispatchCall.ctx?.CommandTargetSessionKey) {
+      throw new Error("model selection dispatch did not include a target session key");
+    }
   }
 }
 
@@ -372,8 +374,12 @@ describe("Discord model picker interactions", () => {
 
     expect(interaction.update).toHaveBeenCalledTimes(1);
     const updatePayload = interaction.update.mock.calls[0]?.[0];
-    expect(updatePayload).toBeDefined();
-    expect(updatePayload.components).toBeDefined();
+    if (!updatePayload) {
+      throw new Error("recents button did not emit an update payload");
+    }
+    const updateText = JSON.stringify(updatePayload);
+    expect(updateText).toContain("gpt-4o");
+    expect(updateText).toContain("claude-sonnet-4-5");
   });
 
   it("clicking recents model button applies model through /model pipeline", async () => {

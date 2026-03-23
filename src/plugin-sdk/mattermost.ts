@@ -1,4 +1,4 @@
-// Narrow plugin-sdk surface for the bundled mattermost plugin.
+// Private helper surface for the bundled mattermost plugin.
 // Keep this list additive and scoped to symbols used under extensions/mattermost.
 
 export { formatInboundFromLabel } from "../auto-reply/envelope.js";

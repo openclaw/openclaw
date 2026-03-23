@@ -223,7 +223,7 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   };
 
   if (json) {
-    defaultRuntime.log(JSON.stringify(payload, null, 2));
+    defaultRuntime.writeJson(payload);
     return;
   }
 

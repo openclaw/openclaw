@@ -6,7 +6,7 @@ import {
 } from "./provider-runtime.test-support.js";
 import type { ProviderPlugin, ProviderRuntimeModel } from "./types.js";
 
-type ResolvePluginProviders = typeof import("./providers.js").resolvePluginProviders;
+type ResolvePluginProviders = typeof import("./providers.runtime.js").resolvePluginProviders;
 type ResolveNonBundledProviderPluginIds =
   typeof import("./providers.js").resolveNonBundledProviderPluginIds;
 type ResolveOwningPluginIdsForProvider =
@@ -19,14 +19,6 @@ const resolveNonBundledProviderPluginIdsMock = vi.fn<ResolveNonBundledProviderPl
 const resolveOwningPluginIdsForProviderMock = vi.fn<ResolveOwningPluginIdsForProvider>(
   (_) => undefined as string[] | undefined,
 );
-
-vi.mock("./providers.js", () => ({
-  resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
-  resolveNonBundledProviderPluginIds: (params: unknown) =>
-    resolveNonBundledProviderPluginIdsMock(params as never),
-  resolveOwningPluginIdsForProvider: (params: unknown) =>
-    resolveOwningPluginIdsForProviderMock(params as never),
-}));
 
 let augmentModelCatalogWithProviderPlugins: typeof import("./provider-runtime.js").augmentModelCatalogWithProviderPlugins;
 let buildProviderAuthDoctorHintWithPlugin: typeof import("./provider-runtime.js").buildProviderAuthDoctorHintWithPlugin;
@@ -67,6 +59,15 @@ const MODEL: ProviderRuntimeModel = {
 describe("provider-runtime", () => {
   beforeEach(async () => {
     vi.resetModules();
+    vi.doMock("./providers.js", () => ({
+      resolveNonBundledProviderPluginIds: (params: unknown) =>
+        resolveNonBundledProviderPluginIdsMock(params as never),
+      resolveOwningPluginIdsForProvider: (params: unknown) =>
+        resolveOwningPluginIdsForProviderMock(params as never),
+    }));
+    vi.doMock("./providers.runtime.js", () => ({
+      resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
+    }));
     ({
       augmentModelCatalogWithProviderPlugins,
       buildProviderAuthDoctorHintWithPlugin,

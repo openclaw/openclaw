@@ -1,14 +1,24 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
-import { resolveMemoryBackendConfig } from "../../memory/backend-config.js";
-import { getMemorySearchManager } from "../../memory/index.js";
 import type { MemorySearchResult } from "../../memory/types.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
+
+type MemoryToolRuntime = typeof import("./memory-tool.runtime.js");
+type MemorySearchManagerResult = Awaited<
+  ReturnType<(typeof import("../../memory/index.js"))["getMemorySearchManager"]>
+>;
+
+let memoryToolRuntimePromise: Promise<MemoryToolRuntime> | null = null;
+
+async function loadMemoryToolRuntime(): Promise<MemoryToolRuntime> {
+  memoryToolRuntimePromise ??= import("./memory-tool.runtime.js");
+  return await memoryToolRuntimePromise;
+}
 
 const MemorySearchSchema = Type.Object({
   query: Type.String(),
@@ -39,15 +49,32 @@ function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessi
 
 async function getMemoryManagerContext(params: { cfg: OpenClawConfig; agentId: string }): Promise<
   | {
-      manager: NonNullable<Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]>;
+      manager: NonNullable<MemorySearchManagerResult["manager"]>;
     }
   | {
       error: string | undefined;
     }
 > {
+  return await getMemoryManagerContextWithPurpose({ ...params, purpose: undefined });
+}
+
+async function getMemoryManagerContextWithPurpose(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  purpose?: "default" | "status";
+}): Promise<
+  | {
+      manager: NonNullable<MemorySearchManagerResult["manager"]>;
+    }
+  | {
+      error: string | undefined;
+    }
+> {
+  const { getMemorySearchManager } = await loadMemoryToolRuntime();
   const { manager, error } = await getMemorySearchManager({
     cfg: params.cfg,
     agentId: params.agentId,
+    purpose: params.purpose,
   });
   return manager ? { manager } : { error };
 }
@@ -93,6 +120,7 @@ export function createMemorySearchTool(options: {
         const query = readStringParam(params, "query", { required: true });
         const maxResults = readNumberParam(params, "maxResults");
         const minScore = readNumberParam(params, "minScore");
+        const { resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
         const memory = await getMemoryManagerContext({ cfg, agentId });
         if ("error" in memory) {
           return jsonResult(buildMemorySearchUnavailableResult(memory.error));
@@ -149,7 +177,28 @@ export function createMemoryGetTool(options: {
         const relPath = readStringParam(params, "path", { required: true });
         const from = readNumberParam(params, "from", { integer: true });
         const lines = readNumberParam(params, "lines", { integer: true });
-        const memory = await getMemoryManagerContext({ cfg, agentId });
+        const { readAgentMemoryFile, resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
+        const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+        if (resolved.backend === "builtin") {
+          try {
+            const result = await readAgentMemoryFile({
+              cfg,
+              agentId,
+              relPath,
+              from: from ?? undefined,
+              lines: lines ?? undefined,
+            });
+            return jsonResult(result);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            return jsonResult({ path: relPath, text: "", disabled: true, error: message });
+          }
+        }
+        const memory = await getMemoryManagerContextWithPurpose({
+          cfg,
+          agentId,
+          purpose: "status",
+        });
         if ("error" in memory) {
           return jsonResult({ path: relPath, text: "", disabled: true, error: memory.error });
         }
