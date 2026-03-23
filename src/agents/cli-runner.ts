@@ -422,7 +422,7 @@ export async function runCliAgent(params: {
         const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
 
         if (outputMode === "text") {
-          return { text: stdout, sessionId: undefined };
+          return { text: stdout, sessionId: resolvedSessionId };
         }
         if (outputMode === "jsonl") {
           const parsed = parseCliJsonl(stdout, backend);
