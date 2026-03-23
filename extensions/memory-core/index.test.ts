@@ -29,7 +29,9 @@ describe("buildPromptSection", () => {
       "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks.",
     );
   });
+});
 
+describe("plugin registration", () => {
   it("registers memory tools independently so one unavailable tool does not suppress the other", () => {
     const registerTool = vi.fn();
     const registerMemoryPromptSection = vi.fn();

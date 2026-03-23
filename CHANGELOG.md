@@ -80,10 +80,10 @@ Docs: https://docs.openclaw.ai
 - Hooks/workspace: keep repo-local `<workspace>/hooks` disabled until explicitly enabled, block workspace hook name collisions from shadowing bundled/managed/plugin hooks, and treat `hooks.internal.load.extraDirs` as trusted managed hook sources.
 - Web tools/Exa: add Exa as a bundled web-search plugin with Exa-native date filters, search-mode selection, and optional content extraction under `plugins.entries.exa.config.webSearch.*`. Thanks @V-Gutierrez and @vincentkoc.
 - CLI/hooks: route hook-pack install and update through `openclaw plugins`, keep `openclaw hooks` focused on hook visibility and per-hook controls, and show plugin-managed hook details in CLI output.
-- Memory/core tools: register `memory_search` and `memory_get` independently so one unavailable memory tool no longer suppresses the other in new sessions. (#50198) Thanks @artwalker.
 
 ### Fixes
 
+- Memory/core tools: register `memory_search` and `memory_get` independently so one unavailable memory tool no longer suppresses the other in new sessions. (#50198) Thanks @artwalker.
 - Web tools/Exa: align the bundled Exa plugin with the current Exa API by supporting newer search types and richer `contents` options, while fixing the result-count cap to honor Exa's higher limit. Thanks @vincentkoc.
 - Plugins/Matrix: move bundled plugin `KeyedAsyncQueue` imports onto the stable `plugin-sdk/core` surface so Matrix Docker/runtime builds do not depend on the brittle keyed-async-queue subpath. Thanks @ecohash-co and @vincentkoc.
 - Nostr/security: enforce inbound DM policy before decrypt, route Nostr DMs through the standard reply pipeline, and add pre-crypto rate and size guards so unknown senders cannot bypass pairing or force unbounded crypto work. Thanks @kuranikaran.
