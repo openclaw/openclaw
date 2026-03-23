@@ -1,9 +1,22 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
+import {
+  createOpenRouterSystemCacheWrapper,
+  createOpenRouterWrapper,
+  isProxyReasoningUnsupported,
+} from "./pi-embedded-runner/proxy-stream-wrappers.js";
+import type { ProviderCapabilities } from "./provider-capabilities.js";
+import { __testing as providerCapabilitiesTesting } from "./provider-capabilities.js";
 
 const resolveProviderCapabilitiesWithPluginMock = vi.fn(
-  (params: { provider: string; workspaceDir?: string }) => {
+  (params: {
+    provider: string;
+    config?: import("../config/config.js").OpenClawConfig;
+    workspaceDir?: string;
+    env?: NodeJS.ProcessEnv;
+  }): Partial<ProviderCapabilities> | undefined => {
     if (
       params.provider === "workspace-anthropic-proxy" &&
       params.workspaceDir === "/tmp/workspace-capabilities"
@@ -17,20 +30,12 @@ const resolveProviderCapabilitiesWithPluginMock = vi.fn(
   },
 );
 
-vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
-  const {
-    createOpenRouterSystemCacheWrapper,
-    createOpenRouterWrapper,
-    isProxyReasoningUnsupported,
-  } = await import("./pi-embedded-runner/proxy-stream-wrappers.js");
+import { applyExtraParamsToAgent, resolveExtraParams } from "./pi-embedded-runner.js";
+import { log } from "./pi-embedded-runner/logger.js";
 
-  return {
-    ...actual,
-    prepareProviderExtraParams: (params: {
-      provider: string;
-      context: { extraParams?: Record<string, unknown> };
-    }) => {
+beforeEach(() => {
+  extraParamsTesting.setProviderRuntimeDepsForTest({
+    prepareProviderExtraParams: (params) => {
       if (params.provider !== "openai-codex") {
         return undefined;
       }
@@ -43,15 +48,7 @@ vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
         transport: "auto",
       };
     },
-    wrapProviderStreamFn: (params: {
-      provider: string;
-      context: {
-        modelId: string;
-        thinkingLevel?: import("../auto-reply/thinking.js").ThinkLevel;
-        extraParams?: Record<string, unknown>;
-        streamFn?: StreamFn;
-      };
-    }) => {
+    wrapProviderStreamFn: (params) => {
       if (params.provider !== "openrouter") {
         return params.context.streamFn;
       }
@@ -80,13 +77,17 @@ vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
       const thinkingLevel = skipReasoningInjection ? undefined : params.context.thinkingLevel;
       return createOpenRouterSystemCacheWrapper(createOpenRouterWrapper(streamFn, thinkingLevel));
     },
-    resolveProviderCapabilitiesWithPlugin: (params: { provider: string; workspaceDir?: string }) =>
-      resolveProviderCapabilitiesWithPluginMock(params),
-  };
+  });
+  providerCapabilitiesTesting.setResolveProviderCapabilitiesWithPluginForTest(
+    resolveProviderCapabilitiesWithPluginMock,
+  );
+  resolveProviderCapabilitiesWithPluginMock.mockClear();
 });
 
-import { applyExtraParamsToAgent, resolveExtraParams } from "./pi-embedded-runner.js";
-import { log } from "./pi-embedded-runner/logger.js";
+afterEach(() => {
+  extraParamsTesting.resetProviderRuntimeDepsForTest();
+  providerCapabilitiesTesting.resetDepsForTests();
+});
 
 describe("resolveExtraParams", () => {
   it("returns undefined with no model config", () => {
