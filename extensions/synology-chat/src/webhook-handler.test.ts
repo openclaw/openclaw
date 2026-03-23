@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { resolveChatUserId, sendMessage } from "./client.js";
 import { makeFormBody, makeReq, makeRes, makeStalledReq } from "./test-http-utils.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 import type { WebhookHandlerDeps } from "./webhook-handler.js";
@@ -23,6 +24,7 @@ function makeAccount(
     incomingUrl: "https://nas.example.com/incoming",
     nasHost: "nas.example.com",
     webhookPath: "/webhook/synology",
+    dangerouslyAllowNameMatching: false,
     dmPolicy: "open",
     allowedUserIds: [],
     rateLimitPerMinute: 30,
@@ -324,6 +326,111 @@ describe("createWebhookHandler", () => {
         chatType: "direct",
         commandAuthorized: true,
       }),
+    );
+  });
+
+  it("keeps replies bound to payload.user_id by default", async () => {
+    const deliver = vi.fn().mockResolvedValue("Bot reply");
+    const handler = createWebhookHandler({
+      account: makeAccount({ accountId: "stable-id-test-" + Date.now() }),
+      deliver,
+      log,
+    });
+
+    const req = makeReq("POST", validBody);
+    const res = makeRes();
+    await handler(req, res);
+
+    expect(res._status).toBe(204);
+    expect(resolveChatUserId).not.toHaveBeenCalled();
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: "123",
+        chatUserId: "123",
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      "https://nas.example.com/incoming",
+      "Bot reply",
+      "123",
+      true,
+    );
+  });
+
+  it("only resolves reply recipient by username when break-glass mode is enabled", async () => {
+    vi.mocked(resolveChatUserId).mockResolvedValueOnce(456);
+    const deliver = vi.fn().mockResolvedValue("Bot reply");
+    const handler = createWebhookHandler({
+      account: makeAccount({
+        accountId: "dangerous-name-match-test-" + Date.now(),
+        dangerouslyAllowNameMatching: true,
+      }),
+      deliver,
+      log,
+    });
+
+    const req = makeReq("POST", validBody);
+    const res = makeRes();
+    await handler(req, res);
+
+    expect(res._status).toBe(204);
+    expect(resolveChatUserId).toHaveBeenCalledWith(
+      "https://nas.example.com/incoming",
+      "testuser",
+      true,
+      log,
+    );
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: "123",
+        chatUserId: "456",
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      "https://nas.example.com/incoming",
+      "Bot reply",
+      "456",
+      true,
+    );
+  });
+
+  it("falls back to payload.user_id when break-glass resolution does not find a match", async () => {
+    vi.mocked(resolveChatUserId).mockResolvedValueOnce(undefined);
+    const deliver = vi.fn().mockResolvedValue("Bot reply");
+    const handler = createWebhookHandler({
+      account: makeAccount({
+        accountId: "dangerous-name-fallback-test-" + Date.now(),
+        dangerouslyAllowNameMatching: true,
+      }),
+      deliver,
+      log,
+    });
+
+    const req = makeReq("POST", validBody);
+    const res = makeRes();
+    await handler(req, res);
+
+    expect(res._status).toBe(204);
+    expect(resolveChatUserId).toHaveBeenCalledWith(
+      "https://nas.example.com/incoming",
+      "testuser",
+      true,
+      log,
+    );
+    expect(log.warn).toHaveBeenCalledWith(
+      'Could not resolve Chat API user_id for "testuser" — falling back to webhook user_id 123. Reply delivery may fail.',
+    );
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: "123",
+        chatUserId: "123",
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      "https://nas.example.com/incoming",
+      "Bot reply",
+      "123",
+      true,
     );
   });
 
