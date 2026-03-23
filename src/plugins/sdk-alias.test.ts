@@ -547,6 +547,53 @@ export const syntheticRuntimeMarker = {
     });
   }, 240_000);
 
+  it("loads a local TypeScript plugin that imports plugin-sdk/plugin-entry", async () => {
+    const fixture = createPluginSdkAliasFixture({
+      srcFile: "plugin-entry.ts",
+      distFile: "plugin-entry.js",
+      srcBody: "export const definePluginEntry = () => 'source-plugin-entry';\n",
+      distBody: "export const definePluginEntry = () => 'dist-plugin-entry';\n",
+      packageExports: {
+        "./plugin-sdk/plugin-entry": { default: "./dist/plugin-sdk/plugin-entry.js" },
+      },
+    });
+    const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
+    const distRootAlias = path.join(fixture.root, "dist", "plugin-sdk", "root-alias.cjs");
+    fs.writeFileSync(sourceRootAlias, "module.exports = {};\n", "utf-8");
+    fs.writeFileSync(distRootAlias, "module.exports = {};\n", "utf-8");
+
+    const localPluginEntry = path.join(fixture.root, "extensions", "demo-plugin", "index.ts");
+    mkdirSafe(path.dirname(localPluginEntry));
+    fs.writeFileSync(
+      localPluginEntry,
+      `import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+
+export const loadedEntry = definePluginEntry();
+`,
+      "utf-8",
+    );
+
+    const aliasMap = withEnv({ NODE_ENV: undefined }, () =>
+      buildPluginLoaderAliasMap(localPluginEntry),
+    );
+    expect(fs.realpathSync(aliasMap["openclaw/plugin-sdk"] ?? "")).toBe(
+      fs.realpathSync(sourceRootAlias),
+    );
+    expect(fs.realpathSync(aliasMap["openclaw/plugin-sdk/plugin-entry"] ?? "")).toBe(
+      fs.realpathSync(path.join(fixture.root, "src", "plugin-sdk", "plugin-entry.ts")),
+    );
+
+    const createJiti = await getCreateJiti();
+    const jiti = createJiti(import.meta.url, {
+      ...buildPluginLoaderJitiOptions(aliasMap),
+      tryNative: false,
+    });
+
+    expect(jiti(localPluginEntry)).toMatchObject({
+      loadedEntry: "source-plugin-entry",
+    });
+  }, 240_000);
+
   it.each([
     {
       name: "prefers dist plugin runtime module when loader runs from dist",
