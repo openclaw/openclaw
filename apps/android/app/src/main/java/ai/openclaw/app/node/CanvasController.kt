@@ -180,27 +180,41 @@ class CanvasController {
     withContext(Dispatchers.Main) {
       val wv = webView ?: throw IllegalStateException("no webview")
       val bmp = wv.captureBitmap()
-      val scaled = bmp.scaleForMaxWidth(maxWidth)
-
-      val out = ByteArrayOutputStream()
-      scaled.compress(Bitmap.CompressFormat.PNG, 100, out)
-      Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+      try {
+        val scaled = bmp.scaleForMaxWidth(maxWidth)
+        try {
+          val out = ByteArrayOutputStream()
+          scaled.compress(Bitmap.CompressFormat.PNG, 100, out)
+          Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+        } finally {
+          if (scaled !== bmp) scaled.recycle()
+        }
+      } finally {
+        bmp.recycle()
+      }
     }
 
   suspend fun snapshotBase64(format: SnapshotFormat, quality: Double?, maxWidth: Int?): String =
     withContext(Dispatchers.Main) {
       val wv = webView ?: throw IllegalStateException("no webview")
       val bmp = wv.captureBitmap()
-      val scaled = bmp.scaleForMaxWidth(maxWidth)
-
-      val out = ByteArrayOutputStream()
-      val (compressFormat, compressQuality) =
-        when (format) {
-          SnapshotFormat.Png -> Bitmap.CompressFormat.PNG to 100
-          SnapshotFormat.Jpeg -> Bitmap.CompressFormat.JPEG to clampJpegQuality(quality)
+      try {
+        val scaled = bmp.scaleForMaxWidth(maxWidth)
+        try {
+          val out = ByteArrayOutputStream()
+          val (compressFormat, compressQuality) =
+            when (format) {
+              SnapshotFormat.Png -> Bitmap.CompressFormat.PNG to 100
+              SnapshotFormat.Jpeg -> Bitmap.CompressFormat.JPEG to clampJpegQuality(quality)
+            }
+          scaled.compress(compressFormat, compressQuality, out)
+          Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+        } finally {
+          if (scaled !== bmp) scaled.recycle()
         }
-      scaled.compress(compressFormat, compressQuality, out)
-      Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+      } finally {
+        bmp.recycle()
+      }
     }
 
   private suspend fun WebView.captureBitmap(): Bitmap =

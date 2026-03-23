@@ -1,15 +1,15 @@
 import amazonBedrockPlugin from "../../../extensions/amazon-bedrock/index.js";
 import anthropicPlugin from "../../../extensions/anthropic/index.js";
-import bravePlugin from "../../../extensions/brave/index.js";
 import byteplusPlugin from "../../../extensions/byteplus/index.js";
 import chutesPlugin from "../../../extensions/chutes/index.js";
 import cloudflareAiGatewayPlugin from "../../../extensions/cloudflare-ai-gateway/index.js";
 import copilotProxyPlugin from "../../../extensions/copilot-proxy/index.js";
+import deepgramPlugin from "../../../extensions/deepgram/index.js";
 import elevenLabsPlugin from "../../../extensions/elevenlabs/index.js";
 import falPlugin from "../../../extensions/fal/index.js";
-import firecrawlPlugin from "../../../extensions/firecrawl/index.js";
 import githubCopilotPlugin from "../../../extensions/github-copilot/index.js";
 import googlePlugin from "../../../extensions/google/index.js";
+import groqPlugin from "../../../extensions/groq/index.js";
 import huggingFacePlugin from "../../../extensions/huggingface/index.js";
 import kilocodePlugin from "../../../extensions/kilocode/index.js";
 import kimiCodingPlugin from "../../../extensions/kimi-coding/index.js";
@@ -24,7 +24,6 @@ import openAIPlugin from "../../../extensions/openai/index.js";
 import opencodeGoPlugin from "../../../extensions/opencode-go/index.js";
 import opencodePlugin from "../../../extensions/opencode/index.js";
 import openrouterPlugin from "../../../extensions/openrouter/index.js";
-import perplexityPlugin from "../../../extensions/perplexity/index.js";
 import qianfanPlugin from "../../../extensions/qianfan/index.js";
 import qwenPortalAuthPlugin from "../../../extensions/qwen-portal-auth/index.js";
 import sglangPlugin from "../../../extensions/sglang/index.js";
@@ -37,8 +36,9 @@ import volcenginePlugin from "../../../extensions/volcengine/index.js";
 import xaiPlugin from "../../../extensions/xai/index.js";
 import xiaomiPlugin from "../../../extensions/xiaomi/index.js";
 import zaiPlugin from "../../../extensions/zai/index.js";
+import { bundledWebSearchPluginRegistrations } from "../../bundled-web-search-registry.js";
 import { createCapturedPluginRegistration } from "../captured-registration.js";
-import { resolvePluginProviders } from "../providers.js";
+import { resolvePluginProviders } from "../provider-auth-choice.runtime.js";
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
@@ -78,20 +78,18 @@ type PluginRegistrationContractEntry = {
   toolNames: string[];
 };
 
-const bundledWebSearchPlugins: Array<RegistrablePlugin & { credentialValue: unknown }> = [
-  { ...bravePlugin, credentialValue: "BSA-test" },
-  { ...firecrawlPlugin, credentialValue: "fc-test" },
-  { ...googlePlugin, credentialValue: "AIza-test" },
-  { ...moonshotPlugin, credentialValue: "sk-test" },
-  { ...perplexityPlugin, credentialValue: "pplx-test" },
-  { ...xaiPlugin, credentialValue: "xai-test" },
-];
-
+const bundledWebSearchPlugins: Array<RegistrablePlugin & { credentialValue: unknown }> =
+  bundledWebSearchPluginRegistrations.map(({ plugin, credentialValue }) => ({
+    ...plugin,
+    credentialValue,
+  }));
 const bundledSpeechPlugins: RegistrablePlugin[] = [elevenLabsPlugin, microsoftPlugin, openAIPlugin];
 
 const bundledMediaUnderstandingPlugins: RegistrablePlugin[] = [
   anthropicPlugin,
+  deepgramPlugin,
   googlePlugin,
+  groqPlugin,
   minimaxPlugin,
   mistralPlugin,
   moonshotPlugin,
@@ -141,10 +139,10 @@ function loadBundledProviderRegistry(): ProviderContractEntry[] {
       cache: false,
       activate: false,
     })
-      .filter((provider): provider is ProviderPlugin & { pluginId: string } =>
+      .filter((provider: ProviderPlugin): provider is ProviderPlugin & { pluginId: string } =>
         Boolean(provider.pluginId),
       )
-      .map((provider) => ({
+      .map((provider: ProviderPlugin & { pluginId: string }) => ({
         pluginId: provider.pluginId,
         provider,
       }));

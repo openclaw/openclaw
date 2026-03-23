@@ -169,12 +169,14 @@ function buildCoreDistEntries(): Record<string, string> {
     entry: "src/entry.ts",
     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
     "cli/daemon-cli": "src/cli/daemon-cli.ts",
+    // Ensure memory-cli is a stable entry so the runtime tools plugin can import
+    // it by a deterministic path instead of a content-hashed chunk name.
+    // See https://github.com/openclaw/openclaw/issues/51676
+    "cli/memory-cli": "src/cli/memory-cli.ts",
+    extensionAPI: "src/extensionAPI.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",
     "telegram/audit": "extensions/telegram/src/audit.ts",
     "telegram/token": "extensions/telegram/src/token.ts",
-    "line/accounts": "src/line/accounts.ts",
-    "line/send": "src/line/send.ts",
-    "line/template-messages": "src/line/template-messages.ts",
     "plugins/build-smoke-entry": "src/plugins/build-smoke-entry.ts",
     "plugins/runtime/index": "src/plugins/runtime/index.ts",
     "llm-slug-generator": "src/hooks/llm-slug-generator.ts",
@@ -186,6 +188,8 @@ const coreDistEntries = buildCoreDistEntries();
 function buildUnifiedDistEntries(): Record<string, string> {
   return {
     ...coreDistEntries,
+    // Internal compat artifact for the root-alias.cjs lazy loader.
+    "plugin-sdk/compat": "src/plugin-sdk/compat.ts",
     ...Object.fromEntries(
       Object.entries(buildPluginSdkEntrySources()).map(([entry, source]) => [
         `plugin-sdk/${entry}`,

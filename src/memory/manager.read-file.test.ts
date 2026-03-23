@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetEmbeddingMocks } from "./embedding.test-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
@@ -32,16 +32,32 @@ function createMemorySearchCfg(options: {
 describe("MemoryIndexManager.readFile", () => {
   let workspaceDir: string;
   let indexPath: string;
+  let memoryDir: string;
   let manager: MemoryIndexManager | null = null;
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     resetEmbeddingMocks();
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-read-"));
     indexPath = path.join(workspaceDir, "index.sqlite");
-    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    memoryDir = path.join(workspaceDir, "memory");
+    await fs.mkdir(memoryDir, { recursive: true });
+    manager = await getRequiredMemoryIndexManager({
+      cfg: createMemorySearchCfg({ workspaceDir, indexPath }),
+      agentId: "main",
+      purpose: "status",
+    });
   });
 
   afterEach(async () => {
+    const entries = await fs.readdir(memoryDir).catch(() => []);
+    await Promise.all(
+      entries.map(async (entry) => {
+        await fs.rm(path.join(memoryDir, entry), { recursive: true, force: true });
+      }),
+    );
+  });
+
+  afterAll(async () => {
     if (manager) {
       await manager.close();
       manager = null;
@@ -50,13 +66,8 @@ describe("MemoryIndexManager.readFile", () => {
   });
 
   it("returns empty text when the requested file does not exist", async () => {
-    manager = await getRequiredMemoryIndexManager({
-      cfg: createMemorySearchCfg({ workspaceDir, indexPath }),
-      agentId: "main",
-    });
-
     const relPath = "memory/2099-01-01.md";
-    const result = await manager.readFile({ relPath });
+    const result = await manager!.readFile({ relPath });
     expect(result).toEqual({ text: "", path: relPath });
   });
 
@@ -66,12 +77,7 @@ describe("MemoryIndexManager.readFile", () => {
     await fs.mkdir(path.dirname(absPath), { recursive: true });
     await fs.writeFile(absPath, ["line 1", "line 2", "line 3"].join("\n"), "utf-8");
 
-    manager = await getRequiredMemoryIndexManager({
-      cfg: createMemorySearchCfg({ workspaceDir, indexPath }),
-      agentId: "main",
-    });
-
-    const result = await manager.readFile({ relPath, from: 2, lines: 1 });
+    const result = await manager!.readFile({ relPath, from: 2, lines: 1 });
     expect(result).toEqual({ text: "line 2", path: relPath });
   });
 
@@ -81,12 +87,7 @@ describe("MemoryIndexManager.readFile", () => {
     await fs.mkdir(path.dirname(absPath), { recursive: true });
     await fs.writeFile(absPath, ["alpha", "beta"].join("\n"), "utf-8");
 
-    manager = await getRequiredMemoryIndexManager({
-      cfg: createMemorySearchCfg({ workspaceDir, indexPath }),
-      agentId: "main",
-    });
-
-    const result = await manager.readFile({ relPath, from: 10, lines: 5 });
+    const result = await manager!.readFile({ relPath, from: 10, lines: 5 });
     expect(result).toEqual({ text: "", path: relPath });
   });
 
@@ -95,11 +96,6 @@ describe("MemoryIndexManager.readFile", () => {
     const absPath = path.join(workspaceDir, relPath);
     await fs.mkdir(path.dirname(absPath), { recursive: true });
     await fs.writeFile(absPath, "first\nsecond", "utf-8");
-
-    manager = await getRequiredMemoryIndexManager({
-      cfg: createMemorySearchCfg({ workspaceDir, indexPath }),
-      agentId: "main",
-    });
 
     const realReadFile = fs.readFile;
     let injected = false;
@@ -116,9 +112,11 @@ describe("MemoryIndexManager.readFile", () => {
         return realReadFile(target, options);
       });
 
-    const result = await manager.readFile({ relPath });
-    expect(result).toEqual({ text: "", path: relPath });
-
-    readSpy.mockRestore();
+    try {
+      const result = await manager!.readFile({ relPath });
+      expect(result).toEqual({ text: "", path: relPath });
+    } finally {
+      readSpy.mockRestore();
+    }
   });
 });

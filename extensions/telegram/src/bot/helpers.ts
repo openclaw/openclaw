@@ -1,5 +1,5 @@
 import type { Chat, Message, MessageOrigin, User } from "@grammyjs/types";
-import { formatLocationText, type NormalizedLocation } from "openclaw/plugin-sdk/channel-runtime";
+import { formatLocationText, type NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveTelegramPreviewStreamMode } from "openclaw/plugin-sdk/config-runtime";
 import type {
   TelegramDirectConfig,
@@ -406,7 +406,8 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
 
   const replyLike = reply ?? externalReply;
   if (!body && replyLike) {
-    const replyBody = (replyLike.text ?? replyLike.caption ?? "").trim();
+    const rawText = replyLike.text ?? replyLike.caption ?? "";
+    const replyBody = (typeof rawText === "string" ? rawText : "").trim();
     body = replyBody;
     if (!body) {
       body = resolveTelegramMediaPlaceholder(replyLike) ?? "";

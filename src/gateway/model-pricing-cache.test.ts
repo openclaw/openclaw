@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { modelKey } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import {
   __resetGatewayModelPricingCacheForTest,
   collectConfiguredModelPricingRefs,
@@ -101,55 +102,57 @@ describe("model-pricing-cache", () => {
         ],
       },
       hooks: {
-        mappings: [{ model: "xai/grok-4" }],
+        mappings: [{ model: "xai/grok-4.20-experimental-beta-0304-reasoning" }],
       },
       tools: {
         subagents: { model: { primary: "zai/glm-5" } },
       },
     } as unknown as OpenClawConfig;
 
-    const fetchImpl: typeof fetch = async () =>
-      new Response(
-        JSON.stringify({
-          data: [
-            {
-              id: "anthropic/claude-opus-4.6",
-              pricing: {
-                prompt: "0.000005",
-                completion: "0.000025",
-                input_cache_read: "0.0000005",
-                input_cache_write: "0.00000625",
+    const fetchImpl = withFetchPreconnect(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "anthropic/claude-opus-4.6",
+                pricing: {
+                  prompt: "0.000005",
+                  completion: "0.000025",
+                  input_cache_read: "0.0000005",
+                  input_cache_write: "0.00000625",
+                },
               },
-            },
-            {
-              id: "anthropic/claude-sonnet-4.6",
-              pricing: {
-                prompt: "0.000003",
-                completion: "0.000015",
-                input_cache_read: "0.0000003",
+              {
+                id: "anthropic/claude-sonnet-4.6",
+                pricing: {
+                  prompt: "0.000003",
+                  completion: "0.000015",
+                  input_cache_read: "0.0000003",
+                },
               },
-            },
-            {
-              id: "x-ai/grok-4",
-              pricing: {
-                prompt: "0.000002",
-                completion: "0.00001",
+              {
+                id: "x-ai/grok-4.20-experimental-beta-0304-reasoning",
+                pricing: {
+                  prompt: "0.000002",
+                  completion: "0.00001",
+                },
               },
-            },
-            {
-              id: "z-ai/glm-5",
-              pricing: {
-                prompt: "0.000001",
-                completion: "0.000004",
+              {
+                id: "z-ai/glm-5",
+                pricing: {
+                  prompt: "0.000001",
+                  completion: "0.000004",
+                },
               },
-            },
-          ],
-        }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        },
-      );
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
 
     await refreshGatewayModelPricingCache({ config, fetchImpl });
 
@@ -172,12 +175,25 @@ describe("model-pricing-cache", () => {
       cacheRead: 0.3,
       cacheWrite: 0,
     });
-    expect(getCachedGatewayModelPricing({ provider: "xai", model: "grok-4" })).toEqual({
+    expect(
+      getCachedGatewayModelPricing({
+        provider: "xai",
+        model: "grok-4.20-experimental-beta-0304-reasoning",
+      }),
+    ).toEqual({
       input: 2,
       output: 10,
       cacheRead: 0,
       cacheWrite: 0,
     });
+    expect(getCachedGatewayModelPricing({ provider: "xai", model: "grok-4.20-reasoning" })).toEqual(
+      {
+        input: 2,
+        output: 10,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+    );
     expect(getCachedGatewayModelPricing({ provider: "zai", model: "glm-5" })).toEqual({
       input: 1,
       output: 4,

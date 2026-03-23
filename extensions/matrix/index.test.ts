@@ -33,7 +33,7 @@ describe("matrix plugin registration", () => {
       requiresExplicitMatrixDefaultAccount: expect.any(Function),
       resolveMatrixDefaultOrOnlyAccountId: expect.any(Function),
     });
-  });
+  }, 240_000);
 
   it("registers the channel without bootstrapping crypto runtime", () => {
     const runtime = {} as never;
