@@ -587,6 +587,7 @@ export {
   readNumberParam,
   readReactionParams,
   readStringParam,
+  ToolInputError,
 } from "../agents/tools/common.js";
 export { formatDocsLink } from "../terminal/links.js";
 export {

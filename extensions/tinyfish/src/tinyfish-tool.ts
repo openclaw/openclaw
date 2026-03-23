@@ -11,6 +11,7 @@ const DEFAULT_BASE_URL = "https://agent.tinyfish.ai";
 const RUN_STREAM_PATH = "v1/automation/run-sse";
 const API_INTEGRATION = "openclaw";
 const STREAM_TIMEOUT_MS = 15 * 60 * 1000;
+const MAX_ERROR_TEXT_BYTES = 2048;
 
 type TinyFishConfig = {
   apiKey: string;
@@ -115,6 +116,9 @@ function validateTargetUrl(rawUrl: string): string {
   }
   if (!["http:", "https:"].includes(parsed.protocol)) {
     throw new ToolInputError("url must be a valid http or https URL");
+  }
+  if (parsed.username || parsed.password) {
+    throw new ToolInputError("url must not include embedded credentials");
   }
   return parsed.toString();
 }
@@ -311,7 +315,36 @@ async function parseRunStream(
 }
 
 async function readErrorText(response: Response): Promise<string> {
-  const text = await response.text().catch(() => "");
+  const reader = response.body?.getReader();
+  if (!reader) {
+    return "";
+  }
+  const decoder = new TextDecoder();
+  let remainingBytes = MAX_ERROR_TEXT_BYTES;
+  let text = "";
+  try {
+    while (remainingBytes > 0) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (!value || value.byteLength === 0) {
+        continue;
+      }
+      const chunk = value.byteLength > remainingBytes ? value.subarray(0, remainingBytes) : value;
+      text += decoder.decode(chunk, { stream: true });
+      remainingBytes -= chunk.byteLength;
+      if (chunk.byteLength < value.byteLength) {
+        await reader.cancel().catch(() => {});
+        break;
+      }
+    }
+    text += decoder.decode();
+  } catch {
+    return text;
+  } finally {
+    reader.releaseLock();
+  }
   if (!text) {
     return "";
   }

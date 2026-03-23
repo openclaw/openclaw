@@ -136,6 +136,20 @@ describe("tinyfish automation tool", () => {
     ).rejects.toThrow(/plugins\.entries\.tinyfish\.config\.apiKey/);
   });
 
+  it("rejects target URLs with embedded credentials", async () => {
+    const tool = createTinyFishTool(createApi({ apiKey: "config-key" }), {
+      fetchWithGuard: vi.fn(),
+      env: {},
+    });
+
+    await expect(
+      tool.execute("tool-1", {
+        url: "https://user:pass@example.com/private",
+        goal: "Open the page",
+      }),
+    ).rejects.toThrow(/embedded credentials/);
+  });
+
   it("succeeds when TinyFish omits the streaming URL event", async () => {
     const fetchWithGuard = vi.fn(async () => ({
       response: sseResponse([
@@ -220,6 +234,38 @@ describe("tinyfish automation tool", () => {
         goal: "Extract the table",
       }),
     ).rejects.toThrow(/not valid JSON/);
+  });
+
+  it("caps oversized TinyFish error bodies", async () => {
+    const fetchWithGuard = vi.fn(async () => ({
+      response: new Response("x".repeat(5000), {
+        status: 502,
+        headers: {
+          "content-type": "text/plain",
+        },
+      }),
+      finalUrl: "https://agent.tinyfish.ai/v1/automation/run-sse",
+      release: async () => {},
+    }));
+
+    const tool = createTinyFishTool(createApi({ apiKey: "config-key" }), {
+      fetchWithGuard,
+      env: {},
+    });
+
+    await expect(
+      tool.execute("tool-1", {
+        url: "https://example.com",
+        goal: "Extract the table",
+      }),
+    ).rejects.toThrow(new RegExp(`x{${2048}}`));
+
+    await expect(
+      tool.execute("tool-1", {
+        url: "https://example.com",
+        goal: "Extract the table",
+      }),
+    ).rejects.not.toThrow(new RegExp(`x{2500}`));
   });
 
   it("fails cleanly when the stream ends without COMPLETE", async () => {
