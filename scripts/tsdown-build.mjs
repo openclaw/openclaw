@@ -49,7 +49,9 @@ function findFatalUnresolvedImport(lines) {
     }
 
     const normalizedLine = line.replace(ANSI_ESCAPE_RE, "");
-    if (!normalizedLine.includes("extensions/")) {
+    // Ignore unresolved imports inside extensions/ (handled separately) and
+    // inside node_modules/ (optional peer deps of third-party packages).
+    if (!normalizedLine.includes("extensions/") && !normalizedLine.includes("node_modules/")) {
       return normalizedLine;
     }
   }
