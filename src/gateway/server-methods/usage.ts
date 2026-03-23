@@ -638,7 +638,9 @@ export const usageHandlers: GatewayRequestHandlers = {
                 totals: emptyTotals(),
               } as SessionModelUsage);
             modelExisting.count += entry.count;
-            mergeTotals(modelExisting.totals, entry.totals);
+            if (entry.totals) {
+              mergeTotals(modelExisting.totals, entry.totals);
+            }
             byModelMap.set(modelKey, modelExisting);
 
             const providerKey = entry.provider ?? "unknown";
@@ -651,7 +653,9 @@ export const usageHandlers: GatewayRequestHandlers = {
                 totals: emptyTotals(),
               } as SessionModelUsage);
             providerExisting.count += entry.count;
-            mergeTotals(providerExisting.totals, entry.totals);
+            if (entry.totals) {
+              mergeTotals(providerExisting.totals, entry.totals);
+            }
             byProviderMap.set(providerKey, providerExisting);
           }
         }
