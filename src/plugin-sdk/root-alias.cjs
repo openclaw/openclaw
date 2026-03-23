@@ -65,10 +65,6 @@ function resolveControlCommandGate(params) {
 }
 
 function onDiagnosticEvent(listener) {
-  const monolithic = loadMonolithicSdk();
-  if (monolithic && typeof monolithic.onDiagnosticEvent === "function") {
-    return monolithic.onDiagnosticEvent(listener);
-  }
   const diagnosticEvents = loadDiagnosticEventsModule();
   if (!diagnosticEvents || typeof diagnosticEvents.onDiagnosticEvent !== "function") {
     throw new Error("openclaw/plugin-sdk root alias could not resolve onDiagnosticEvent");
