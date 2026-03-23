@@ -274,7 +274,7 @@ API key auth, and dynamic model resolution.
       </Tab>
     </Tabs>
 
-    <Accordion title="All 21 available hooks">
+    <Accordion title="All available provider hooks">
       OpenClaw calls hooks in this order. Most providers only use 2-3:
 
       | # | Hook | When to use |
@@ -283,7 +283,7 @@ API key auth, and dynamic model resolution.
       | 2 | `resolveDynamicModel` | Accept arbitrary upstream model IDs |
       | 3 | `prepareDynamicModel` | Async metadata fetch before resolving |
       | 4 | `normalizeResolvedModel` | Transport rewrites before the runner |
-      | 5 | `capabilities` | Transcript/tooling metadata |
+      | 5 | `capabilities` | Transcript/tooling metadata (data, not callable) |
       | 6 | `prepareExtraParams` | Default request params |
       | 7 | `wrapStreamFn` | Custom headers/body wrappers |
       | 8 | `formatApiKey` | Custom runtime token shape |
@@ -300,6 +300,7 @@ API key auth, and dynamic model resolution.
       | 19 | `prepareRuntimeAuth` | Token exchange before inference |
       | 20 | `resolveUsageAuth` | Custom usage credential parsing |
       | 21 | `fetchUsageSnapshot` | Custom usage endpoint |
+      | 22 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
 
       For detailed descriptions and real-world examples, see
       [Internals: Provider Runtime Hooks](/plugins/architecture#provider-runtime-hooks).
