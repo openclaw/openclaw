@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, readBestEffortConfig } from "../config/config.js";
 import { installHooksFromNpmSpec, installHooksFromPath } from "../hooks/install.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub.js";
@@ -167,6 +167,17 @@ async function tryInstallHookPackFromNpmSpec(params: {
   return { ok: true };
 }
 
+// loadConfig() throws when config is invalid; fall back to best-effort so
+// repair-oriented installs (e.g. reinstalling a broken Matrix plugin) can
+// still proceed from a partially valid config snapshot.
+async function loadConfigForInstall(): Promise<OpenClawConfig> {
+  try {
+    return loadConfig();
+  } catch {
+    return readBestEffortConfig();
+  }
+}
+
 export async function runPluginInstallCommand(params: {
   raw: string;
   opts: { link?: boolean; pin?: boolean; marketplace?: string };
@@ -196,7 +207,7 @@ export async function runPluginInstallCommand(params: {
       return defaultRuntime.exit(1);
     }
 
-    const cfg = loadConfig();
+    const cfg = await loadConfigForInstall();
     const result = await installPluginFromMarketplace({
       marketplace: opts.marketplace,
       plugin: raw,
@@ -230,7 +241,7 @@ export async function runPluginInstallCommand(params: {
   }
   const normalized = fileSpec && fileSpec.ok ? fileSpec.path : raw;
   const resolved = resolveUserPath(normalized);
-  const cfg = loadConfig();
+  const cfg = await loadConfigForInstall();
 
   if (fs.existsSync(resolved)) {
     if (opts.link) {
