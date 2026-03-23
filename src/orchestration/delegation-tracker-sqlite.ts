@@ -30,14 +30,14 @@ interface SubagentRunRow {
   cleanup_completed_at: number | null;
 }
 
-function deriveStatus(row: SubagentRunRow, nowSec: number): DelegationSummary["status"] {
+function deriveStatus(row: SubagentRunRow, nowMs: number): DelegationSummary["status"] {
   if (!row.started_at) {
     return "spawned";
   }
   if (!row.ended_at) {
     // Running for more than 10 minutes counts as stale
-    const elapsedSec = nowSec - row.started_at;
-    return elapsedSec > 600 ? "stale" : "running";
+    const elapsedMs = nowMs - row.started_at;
+    return elapsedMs > 600_000 ? "stale" : "running";
   }
   // Determine success vs failure from outcome_json
   if (row.outcome_json) {
@@ -92,14 +92,14 @@ export function listActiveDelegations(
   `;
   bindings.push(limit);
 
-  const rows = db.prepare(sql).all(...bindings) as SubagentRunRow[];
-  const nowSec = Math.floor(Date.now() / 1000);
+  const rows = db.prepare(sql).all(...bindings) as unknown as SubagentRunRow[];
+  const nowMs = Date.now();
 
   return rows.map((row): DelegationSummary => {
     const createdAt = row.created_at ?? 0;
     const endedAt = row.ended_at ?? null;
-    const refSec = endedAt ?? nowSec;
-    const elapsedMs = (refSec - createdAt) * 1000;
+    const refMs = endedAt ?? nowMs;
+    const elapsedMs = refMs - createdAt;
 
     return {
       runId: row.run_id,
@@ -107,7 +107,7 @@ export function listActiveDelegations(
       agentId: row.agent_id ?? null,
       task: row.task ?? null,
       label: row.label ?? null,
-      status: deriveStatus(row, nowSec),
+      status: deriveStatus(row, nowMs),
       createdAt,
       startedAt: row.started_at ?? null,
       endedAt,

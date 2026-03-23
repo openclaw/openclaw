@@ -36,7 +36,7 @@ function computeDelegationStatus(row: ActiveRunRow): "pending" | "running" | "st
     return "done";
   }
   if (row.started_at != null) {
-    const ageMs = Date.now() - row.started_at * 1000;
+    const ageMs = Date.now() - row.started_at;
     if (ageMs > DELEGATION_STALE_THRESHOLD_MS) {
       return "stale";
     }
@@ -199,13 +199,13 @@ export function startGatewayMaintenanceTimers(params: {
       if (isFirstDelegationRun) {
         isFirstDelegationRun = false;
         // Warn about runs that appear orphaned from before a gateway restart
-        const nowSec = Date.now() / 1000;
+        const nowMs = Date.now();
         for (const row of rows) {
           if (
             row.started_at != null &&
             row.ended_at == null &&
             row.created_at != null &&
-            nowSec - row.created_at > DELEGATION_STALE_THRESHOLD_MS / 1000
+            nowMs - row.created_at > DELEGATION_STALE_THRESHOLD_MS
           ) {
             params.logHealth.error(
               `delegation: orphaned run ${row.run_id} (agent=${row.agent_id ?? "?"}, ` +
@@ -223,7 +223,7 @@ export function startGatewayMaintenanceTimers(params: {
           agentId: r.agent_id,
           task: r.task,
           status: computeDelegationStatus(r),
-          elapsedMs: r.created_at != null ? Date.now() - r.created_at * 1000 : 0,
+          elapsedMs: r.created_at != null ? Date.now() - r.created_at : 0,
         }))
         .filter((d) => d.status !== "done");
 
