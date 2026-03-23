@@ -3018,7 +3018,7 @@
           "exportName": "channelTargetSchema",
           "kind": "function",
           "source": {
-            "line": 33,
+            "line": 38,
             "path": "src/agents/schema/typebox.ts"
           }
         },
@@ -3027,7 +3027,7 @@
           "exportName": "channelTargetsSchema",
           "kind": "function",
           "source": {
-            "line": 39,
+            "line": 44,
             "path": "src/agents/schema/typebox.ts"
           }
         },
@@ -3198,7 +3198,7 @@
           "exportName": "optionalStringEnum",
           "kind": "function",
           "source": {
-            "line": 26,
+            "line": 31,
             "path": "src/agents/schema/typebox.ts"
           }
         },
