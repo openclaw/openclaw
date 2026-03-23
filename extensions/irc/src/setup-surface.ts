@@ -2,7 +2,7 @@ import type { DmPolicy } from "openclaw/plugin-sdk/config-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import {
   createAllowFromSection,
-  promptParsedAllowFromForAccount,
+  createPromptParsedAllowFromForAccount,
   setSetupChannelEnabled,
 } from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
@@ -52,36 +52,27 @@ function normalizeGroupEntry(raw: string): string | null {
   return `#${normalized.replace(/^#+/, "")}`;
 }
 
-async function promptIrcAllowFrom(params: {
-  cfg: CoreConfig;
-  prompter: WizardPrompter;
-  accountId?: string;
-}): Promise<CoreConfig> {
-  return await promptParsedAllowFromForAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    defaultAccountId: resolveDefaultIrcAccountId(params.cfg),
-    prompter: params.prompter,
-    noteTitle: "IRC allowlist",
-    noteLines: [
-      "Allowlist IRC DMs by sender.",
-      "Examples:",
-      "- alice",
-      "- alice!ident@example.org",
-      "Multiple entries: comma-separated.",
-    ],
-    message: "IRC allowFrom (nick or nick!user@host)",
-    placeholder: "alice, bob!ident@example.org",
-    parseEntries: (raw) => ({
-      entries: parseListInput(raw)
-        .map((entry) => normalizeIrcAllowEntry(entry))
-        .map((entry) => entry.trim())
-        .filter(Boolean),
-    }),
-    getExistingAllowFrom: ({ cfg }) => cfg.channels?.irc?.allowFrom ?? [],
-    applyAllowFrom: ({ cfg, allowFrom }) => setIrcAllowFrom(cfg, allowFrom),
-  });
-}
+const promptIrcAllowFrom = createPromptParsedAllowFromForAccount<CoreConfig>({
+  defaultAccountId: (cfg) => resolveDefaultIrcAccountId(cfg),
+  noteTitle: "IRC allowlist",
+  noteLines: [
+    "Allowlist IRC DMs by sender.",
+    "Examples:",
+    "- alice",
+    "- alice!ident@example.org",
+    "Multiple entries: comma-separated.",
+  ],
+  message: "IRC allowFrom (nick or nick!user@host)",
+  placeholder: "alice, bob!ident@example.org",
+  parseEntries: (raw) => ({
+    entries: parseListInput(raw)
+      .map((entry) => normalizeIrcAllowEntry(entry))
+      .map((entry) => entry.trim())
+      .filter(Boolean),
+  }),
+  getExistingAllowFrom: ({ cfg }) => cfg.channels?.irc?.allowFrom ?? [],
+  applyAllowFrom: ({ cfg, allowFrom }) => setIrcAllowFrom(cfg, allowFrom),
+});
 
 async function promptIrcNickServConfig(params: {
   cfg: CoreConfig;

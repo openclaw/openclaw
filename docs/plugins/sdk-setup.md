@@ -277,6 +277,12 @@ The `ChannelSetupWizard` type supports `credentials`, `textInputs`,
 See bundled plugins (e.g. `extensions/discord/src/channel.setup.ts`) for
 full examples.
 
+For DM allowlist prompts that only need the standard
+`note -> prompt -> parse -> merge -> patch` flow, prefer the shared setup
+helpers from `openclaw/plugin-sdk/setup`: `createPromptParsedAllowFromForAccount(...)`,
+`createTopLevelChannelParsedAllowFromPrompt(...)`, and
+`createNestedChannelParsedAllowFromPrompt(...)`.
+
 For optional setup surfaces that should only appear in certain contexts, use
 `createOptionalChannelSetupSurface` from `openclaw/plugin-sdk/channel-setup`:
 
