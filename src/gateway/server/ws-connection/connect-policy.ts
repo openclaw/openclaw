@@ -1,3 +1,4 @@
+import { isLoopbackAddress, resolveHostName } from "../../net.js";
 import type { ConnectParams } from "../../protocol/index.js";
 import type { GatewayRole } from "../../role-policy.js";
 import { roleCanSkipDeviceIdentity } from "../../role-policy.js";
@@ -81,6 +82,43 @@ export type MissingDeviceIdentityDecision =
   | { kind: "reject-unauthorized" }
   | { kind: "reject-device-required" };
 
+export function isContainerForwardedLocalControlUiRequest(params: {
+  isControlUi: boolean;
+  requestHost?: string;
+  requestOrigin?: string;
+  hasUntrustedProxyHeaders: boolean;
+}): boolean {
+  const isStrictLoopbackHost = (hostHeader?: string): boolean => {
+    const hostName = resolveHostName(hostHeader);
+    return hostName === "localhost" || isLoopbackAddress(hostName);
+  };
+
+  if (!params.isControlUi || params.hasUntrustedProxyHeaders) {
+    return false;
+  }
+  if (!isStrictLoopbackHost(params.requestHost)) {
+    return false;
+  }
+  const origin = params.requestOrigin?.trim();
+  if (!origin) {
+    return false;
+  }
+  try {
+    const url = new URL(origin);
+    if (
+      (url.protocol !== "http:" && url.protocol !== "https:") ||
+      !isStrictLoopbackHost(url.host)
+    ) {
+      return false;
+    }
+    const originHostName = resolveHostName(url.host);
+    const requestHostName = resolveHostName(params.requestHost);
+    return Boolean(originHostName && requestHostName && originHostName === requestHostName);
+  } catch {
+    return false;
+  }
+}
+
 export function evaluateMissingDeviceIdentity(params: {
   hasDeviceIdentity: boolean;
   role: GatewayRole;
@@ -91,6 +129,7 @@ export function evaluateMissingDeviceIdentity(params: {
   authOk: boolean;
   hasSharedAuth: boolean;
   isLocalClient: boolean;
+  isContainerForwardedLocalControlUiRequest?: boolean;
 }): MissingDeviceIdentityDecision {
   if (params.hasDeviceIdentity) {
     return { kind: "allow" };
@@ -112,7 +151,10 @@ export function evaluateMissingDeviceIdentity(params: {
     // (needed for device identity) is unavailable in insecure HTTP contexts.
     // Remote connections are still rejected to preserve the MitM protection
     // that the security fix (#20684) intended.
-    if (!params.controlUiAuthPolicy.allowInsecureAuthConfigured || !params.isLocalClient) {
+    if (
+      !params.controlUiAuthPolicy.allowInsecureAuthConfigured ||
+      !(params.isLocalClient || params.isContainerForwardedLocalControlUiRequest)
+    ) {
       return { kind: "reject-control-ui-insecure-auth" };
     }
   }

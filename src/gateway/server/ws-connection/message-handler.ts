@@ -81,6 +81,7 @@ import { resolveConnectAuthDecision, resolveConnectAuthState } from "./auth-cont
 import { formatGatewayAuthFailureMessage } from "./auth-messages.js";
 import {
   evaluateMissingDeviceIdentity,
+  isContainerForwardedLocalControlUiRequest,
   isTrustedProxyControlUiOperatorAuth,
   resolveControlUiAuthPolicy,
   shouldSkipControlUiPairing,
@@ -513,6 +514,13 @@ export function attachGatewayWsMessageHandler(params: {
           }
         };
         const handleMissingDeviceIdentity = (): boolean => {
+          const isContainerForwardedLocalControlUi = isContainerForwardedLocalControlUiRequest({
+            isControlUi,
+            requestHost,
+            requestOrigin,
+            hasUntrustedProxyHeaders,
+          });
+          const isTrustedLocalControlUiClient = isLocalClient || isContainerForwardedLocalControlUi;
           const trustedProxyAuthOk = isTrustedProxyControlUiOperatorAuth({
             isControlUi,
             role,
@@ -523,7 +531,7 @@ export function attachGatewayWsMessageHandler(params: {
           const preserveInsecureLocalControlUiScopes =
             isControlUi &&
             controlUiAuthPolicy.allowInsecureAuthConfigured &&
-            isLocalClient &&
+            isTrustedLocalControlUiClient &&
             (authMethod === "token" || authMethod === "password");
           const decision = evaluateMissingDeviceIdentity({
             hasDeviceIdentity: Boolean(device),
@@ -535,6 +543,7 @@ export function attachGatewayWsMessageHandler(params: {
             authOk,
             hasSharedAuth,
             isLocalClient,
+            isContainerForwardedLocalControlUiRequest: isContainerForwardedLocalControlUi,
           });
           // Shared token/password auth can bypass pairing for trusted operators.
           // Device-less clients only keep self-declared scopes on the explicit

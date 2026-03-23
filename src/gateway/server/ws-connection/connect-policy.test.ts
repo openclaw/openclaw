@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   evaluateMissingDeviceIdentity,
+  isContainerForwardedLocalControlUiRequest,
   isTrustedProxyControlUiOperatorAuth,
   resolveControlUiAuthPolicy,
   shouldSkipControlUiPairing,
@@ -117,13 +118,14 @@ describe("ws connect policy", () => {
       evaluateMissingDeviceIdentity({
         hasDeviceIdentity: false,
         role: "operator",
-        isControlUi: false,
-        controlUiAuthPolicy: policy,
+        isControlUi: true,
+        controlUiAuthPolicy: controlUiStrict,
         trustedProxyAuthOk: false,
         sharedAuthOk: true,
         authOk: true,
         hasSharedAuth: true,
         isLocalClient: false,
+        isContainerForwardedLocalControlUiRequest: true,
       }).kind,
     ).toBe("allow");
 
@@ -207,6 +209,62 @@ describe("ws connect policy", () => {
         isLocalClient: false,
       }).kind,
     ).toBe("reject-device-required");
+  });
+
+  test("recognizes container-forwarded localhost control ui requests", () => {
+    expect(
+      isContainerForwardedLocalControlUiRequest({
+        isControlUi: true,
+        requestHost: "localhost:18789",
+        requestOrigin: "http://localhost:18789",
+        hasUntrustedProxyHeaders: false,
+      }),
+    ).toBe(true);
+
+    expect(
+      isContainerForwardedLocalControlUiRequest({
+        isControlUi: true,
+        requestHost: "127.0.0.1:18789",
+        requestOrigin: "http://127.0.0.1:18789",
+        hasUntrustedProxyHeaders: false,
+      }),
+    ).toBe(true);
+
+    expect(
+      isContainerForwardedLocalControlUiRequest({
+        isControlUi: true,
+        requestHost: "localhost:18789",
+        requestOrigin: "http://gateway.example:18789",
+        hasUntrustedProxyHeaders: false,
+      }),
+    ).toBe(false);
+
+    expect(
+      isContainerForwardedLocalControlUiRequest({
+        isControlUi: true,
+        requestHost: "localhost:18789",
+        requestOrigin: "http://localhost:18789",
+        hasUntrustedProxyHeaders: true,
+      }),
+    ).toBe(false);
+
+    expect(
+      isContainerForwardedLocalControlUiRequest({
+        isControlUi: false,
+        requestHost: "localhost:18789",
+        requestOrigin: "http://localhost:18789",
+        hasUntrustedProxyHeaders: false,
+      }),
+    ).toBe(false);
+
+    expect(
+      isContainerForwardedLocalControlUiRequest({
+        isControlUi: true,
+        requestHost: "my-machine.ts.net:18789",
+        requestOrigin: "http://my-machine.ts.net:18789",
+        hasUntrustedProxyHeaders: false,
+      }),
+    ).toBe(false);
   });
 
   test("dangerouslyDisableDeviceAuth skips pairing for operator control-ui only", () => {
