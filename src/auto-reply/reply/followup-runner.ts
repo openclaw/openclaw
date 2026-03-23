@@ -8,7 +8,6 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
-import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
@@ -26,17 +25,31 @@ import {
   resolveOriginMessageTo,
 } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
-import {
-  applyReplyThreading,
-  filterMessagingToolDuplicates,
-  filterMessagingToolMediaDuplicates,
-  shouldSuppressMessagingToolReplies,
-} from "./reply-payloads.js";
 import { resolveReplyToMode } from "./reply-threading.js";
-import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
+
+let piEmbeddedRuntimePromise: Promise<typeof import("../../agents/pi-embedded.runtime.js")> | null =
+  null;
+let routeReplyRuntimePromise: Promise<typeof import("./route-reply.runtime.js")> | null = null;
+let replyPayloadsRuntimePromise: Promise<typeof import("./reply-payloads.runtime.js")> | null =
+  null;
+
+function loadPiEmbeddedRuntime() {
+  piEmbeddedRuntimePromise ??= import("../../agents/pi-embedded.runtime.js");
+  return piEmbeddedRuntimePromise;
+}
+
+function loadRouteReplyRuntime() {
+  routeReplyRuntimePromise ??= import("./route-reply.runtime.js");
+  return routeReplyRuntimePromise;
+}
+
+function loadReplyPayloadsRuntime() {
+  replyPayloadsRuntimePromise ??= import("./reply-payloads.runtime.js");
+  return replyPayloadsRuntimePromise;
+}
 
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
@@ -77,6 +90,7 @@ export function createFollowupRunner(params: {
   const sendFollowupPayloads = async (payloads: ReplyPayload[], queued: FollowupRun) => {
     // Check if we should route to originating channel.
     const { originatingChannel, originatingTo } = queued;
+    const { isRoutableChannel, routeReply } = await loadRouteReplyRuntime();
     const shouldRouteToOriginating = isRoutableChannel(originatingChannel) && originatingTo;
 
     if (!shouldRouteToOriginating && !opts?.onBlockReply) {
@@ -148,8 +162,47 @@ export function createFollowupRunner(params: {
           isControlUiVisible: shouldSurfaceToControlUi,
         });
       }
+      const replyToChannel = resolveOriginMessageProvider({
+        originatingChannel: queued.originatingChannel,
+        provider: queued.run.messageProvider,
+      }) as OriginatingChannelType | undefined;
+      const replyToMode = resolveReplyToMode(
+        queued.run.config,
+        replyToChannel,
+        queued.originatingAccountId,
+        queued.originatingChatType,
+      );
+      const currentMessageId = queued.messageId?.trim() || undefined;
+      const applyFollowupReplyThreading = async (payloads: ReplyPayload[]) => {
+        const { applyReplyThreading } = await loadReplyPayloadsRuntime();
+        return applyReplyThreading({
+          payloads,
+          replyToMode,
+          replyToChannel,
+          currentMessageId,
+        });
+      };
+      const sendCompactionNotice = async (text: string) => {
+        try {
+          const noticePayloads = await applyFollowupReplyThreading([
+            {
+              text,
+              replyToCurrent: true,
+              isCompactionNotice: true,
+            },
+          ]);
+          if (noticePayloads.length === 0) {
+            return;
+          }
+          await sendFollowupPayloads(noticePayloads, queued);
+        } catch (err) {
+          logVerbose(`followup queue: compaction notice failed (non-fatal): ${String(err)}`);
+        }
+      };
       let autoCompactionCount = 0;
-      let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+      let runResult: Awaited<
+        ReturnType<typeof import("../../agents/pi-embedded.runtime.js").runEmbeddedPiAgent>
+      >;
       let fallbackProvider = queued.run.provider;
       let fallbackModel = queued.run.model;
       const activeSessionEntry =
@@ -173,6 +226,7 @@ export function createFollowupRunner(params: {
             const authProfile = resolveRunAuthProfile(queued.run, provider);
             let attemptCompactionCount = 0;
             try {
+              const { runEmbeddedPiAgent } = await loadPiEmbeddedRuntime();
               const result = await runEmbeddedPiAgent({
                 allowGatewaySubagentBinding: true,
                 sessionId: queued.run.sessionId,
@@ -224,11 +278,14 @@ export function createFollowupRunner(params: {
                   bootstrapPromptWarningSignaturesSeen[
                     bootstrapPromptWarningSignaturesSeen.length - 1
                   ],
-                onAgentEvent: (evt) => {
+                onAgentEvent: (evt: { stream: string; data?: Record<string, unknown> }) => {
                   if (evt.stream !== "compaction") {
                     return;
                   }
-                  const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                  const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
+                  if (phase === "start") {
+                    void sendCompactionNotice("🧹 Compacting context...");
+                  }
                   const completed = evt.data?.completed === true;
                   if (phase === "end" && completed) {
                     attemptCompactionCount += 1;
@@ -284,10 +341,7 @@ export function createFollowupRunner(params: {
       }
 
       const payloadArray = runResult.payloads ?? [];
-      if (payloadArray.length === 0) {
-        return;
-      }
-      const sanitizedPayloads = payloadArray.flatMap((payload) => {
+      const sanitizedPayloads = payloadArray.flatMap((payload: ReplyPayload) => {
         const text = payload.text;
         if (!text || !text.includes("HEARTBEAT_OK")) {
           return [payload];
@@ -299,23 +353,13 @@ export function createFollowupRunner(params: {
         }
         return [{ ...payload, text: stripped.text }];
       });
-      const replyToChannel = resolveOriginMessageProvider({
-        originatingChannel: queued.originatingChannel,
-        provider: queued.run.messageProvider,
-      }) as OriginatingChannelType | undefined;
-      const replyToMode = resolveReplyToMode(
-        queued.run.config,
-        replyToChannel,
-        queued.originatingAccountId,
-        queued.originatingChatType,
-      );
+      const replyTaggedPayloads = await applyFollowupReplyThreading(sanitizedPayloads);
 
-      const replyTaggedPayloads: ReplyPayload[] = applyReplyThreading({
-        payloads: sanitizedPayloads,
-        replyToMode,
-        replyToChannel,
-      });
-
+      const {
+        filterMessagingToolDuplicates,
+        filterMessagingToolMediaDuplicates,
+        shouldSuppressMessagingToolReplies,
+      } = await loadReplyPayloadsRuntime();
       const dedupedPayloads = filterMessagingToolDuplicates({
         payloads: replyTaggedPayloads,
         sentTexts: runResult.messagingToolSentTexts ?? [],
@@ -338,11 +382,7 @@ export function createFollowupRunner(params: {
           accountId: queued.run.agentAccountId,
         }),
       });
-      const finalPayloads = suppressMessagingToolReplies ? [] : mediaFilteredPayloads;
-
-      if (finalPayloads.length === 0) {
-        return;
-      }
+      let finalPayloads = suppressMessagingToolReplies ? [] : mediaFilteredPayloads;
 
       if (autoCompactionCount > 0) {
         const count = await incrementRunCompactionCount({
@@ -354,12 +394,25 @@ export function createFollowupRunner(params: {
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           contextTokensUsed,
         });
-        if (queued.run.verboseLevel && queued.run.verboseLevel !== "off") {
-          const suffix = typeof count === "number" ? ` (count ${count})` : "";
-          finalPayloads.unshift({
-            text: `🧹 Auto-compaction complete${suffix}.`,
-          });
-        }
+        const suffix = typeof count === "number" ? ` (count ${count})` : "";
+        const completionText =
+          queued.run.verboseLevel && queued.run.verboseLevel !== "off"
+            ? `🧹 Auto-compaction complete${suffix}.`
+            : `✅ Context compacted${suffix}.`;
+        finalPayloads = [
+          ...(await applyFollowupReplyThreading([
+            {
+              text: completionText,
+              replyToCurrent: true,
+              isCompactionNotice: true,
+            },
+          ])),
+          ...finalPayloads,
+        ];
+      }
+
+      if (finalPayloads.length === 0) {
+        return;
       }
 
       await sendFollowupPayloads(finalPayloads, queued);

@@ -1,6 +1,5 @@
 import { lookup as dnsLookupCb, type LookupAddress } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
-import * as undici from "undici";
 import type { Dispatcher } from "undici";
 import {
   extractEmbeddedIpv4FromIpv6,
@@ -14,6 +13,7 @@ import {
   parseLooseIpAddress,
 } from "../../shared/net/ip.js";
 import { normalizeHostname } from "./hostname.js";
+import { loadUndiciRuntimeDeps } from "./undici-runtime.js";
 
 type LookupCallback = (
   err: NodeJS.ErrnoException | null,
@@ -401,22 +401,23 @@ export function createPinnedDispatcher(
   policy?: PinnedDispatcherPolicy,
   ssrfPolicy?: SsrFPolicy,
 ): Dispatcher {
+  const { Agent, EnvHttpProxyAgent, ProxyAgent } = loadUndiciRuntimeDeps();
   const lookup = resolvePinnedDispatcherLookup(pinned, policy?.pinnedHostname, ssrfPolicy);
 
   if (!policy || policy.mode === "direct") {
-    if (typeof undici.Agent !== "function") {
+    if (typeof Agent !== "function") {
       return {
         close: async () => undefined,
         destroy: () => undefined,
       } as unknown as Dispatcher;
     }
-    return new undici.Agent({
+    return new Agent({
       connect: withPinnedLookup(lookup, policy?.connect),
     });
   }
 
   if (policy.mode === "env-proxy") {
-    return new undici.EnvHttpProxyAgent({
+    return new EnvHttpProxyAgent({
       connect: withPinnedLookup(lookup, policy.connect),
       ...(policy.proxyTls ? { proxyTls: { ...policy.proxyTls } } : {}),
     });
@@ -424,9 +425,9 @@ export function createPinnedDispatcher(
 
   const proxyUrl = policy.proxyUrl.trim();
   if (!policy.proxyTls) {
-    return new undici.ProxyAgent(proxyUrl);
+    return new ProxyAgent(proxyUrl);
   }
-  return new undici.ProxyAgent({
+  return new ProxyAgent({
     uri: proxyUrl,
     proxyTls: { ...policy.proxyTls },
   });

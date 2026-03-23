@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import {
+  adaptScopedAccountAccessor,
   createScopedAccountConfigAccessors,
   createScopedChannelConfigAdapter,
   createScopedChannelConfigBase,
@@ -11,6 +13,8 @@ import {
   mapAllowFromEntries,
   resolveOptionalConfigString,
 } from "./channel-config-helpers.js";
+
+const resolveDefaultAccountId = () => DEFAULT_ACCOUNT_ID;
 
 describe("mapAllowFromEntries", () => {
   it("coerces allowFrom entries to strings", () => {
@@ -34,6 +38,33 @@ describe("resolveOptionalConfigString", () => {
   it("returns undefined for empty values", () => {
     expect(resolveOptionalConfigString("   ")).toBeUndefined();
     expect(resolveOptionalConfigString(undefined)).toBeUndefined();
+  });
+});
+
+describe("adaptScopedAccountAccessor", () => {
+  it("binds positional callback args into the shared account context object", () => {
+    const accessor = adaptScopedAccountAccessor(({ cfg, accountId }) => ({
+      channel: cfg.channels?.demo,
+      accountId: accountId ?? "default",
+    }));
+
+    expect(
+      accessor(
+        {
+          channels: {
+            demo: {
+              enabled: true,
+            },
+          },
+        },
+        "alt",
+      ),
+    ).toEqual({
+      channel: {
+        enabled: true,
+      },
+      accountId: "alt",
+    });
   });
 });
 
@@ -86,7 +117,7 @@ describe("createScopedChannelConfigBase", () => {
       sectionKey: "demo",
       listAccountIds: () => ["default", "alt"],
       resolveAccount: (_cfg, accountId) => ({ accountId: accountId ?? "default" }),
-      defaultAccountId: () => "default",
+      defaultAccountId: resolveDefaultAccountId,
       clearBaseFields: ["token"],
     });
 
@@ -119,7 +150,7 @@ describe("createScopedChannelConfigBase", () => {
       sectionKey: "demo",
       listAccountIds: () => ["default", "alt"],
       resolveAccount: (_cfg, accountId) => ({ accountId: accountId ?? "default" }),
-      defaultAccountId: () => "default",
+      defaultAccountId: resolveDefaultAccountId,
       clearBaseFields: [],
       allowTopLevel: false,
     });
@@ -173,7 +204,7 @@ describe("createScopedChannelConfigAdapter", () => {
         allowFrom: accountId ? [accountId] : ["fallback"],
         defaultTo: " room:123 ",
       }),
-      defaultAccountId: () => "default",
+      defaultAccountId: resolveDefaultAccountId,
       clearBaseFields: ["token"],
       resolveAllowFrom: (account) => account.allowFrom,
       formatAllowFrom: (allowFrom) => allowFrom.map((entry) => String(entry).toUpperCase()),
@@ -341,7 +372,7 @@ describe("createHybridChannelConfigBase", () => {
       sectionKey: "demo",
       listAccountIds: () => ["default", "alt"],
       resolveAccount: (_cfg, accountId) => ({ accountId: accountId ?? "default" }),
-      defaultAccountId: () => "default",
+      defaultAccountId: resolveDefaultAccountId,
       clearBaseFields: ["token"],
     });
 
@@ -383,7 +414,7 @@ describe("createHybridChannelConfigBase", () => {
       sectionKey: "demo",
       listAccountIds: () => ["default", "alt"],
       resolveAccount: (_cfg, accountId) => ({ accountId: accountId ?? "default" }),
-      defaultAccountId: () => "default",
+      defaultAccountId: resolveDefaultAccountId,
       clearBaseFields: ["token", "name"],
       preserveSectionOnDefaultDelete: true,
     });
@@ -427,7 +458,7 @@ describe("createHybridChannelConfigAdapter", () => {
         allowFrom: [accountId ?? "default"],
         defaultTo: " room:123 ",
       }),
-      defaultAccountId: () => "default",
+      defaultAccountId: resolveDefaultAccountId,
       clearBaseFields: ["token"],
       preserveSectionOnDefaultDelete: true,
       resolveAllowFrom: (account) => account.allowFrom,

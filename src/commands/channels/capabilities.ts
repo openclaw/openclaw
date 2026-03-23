@@ -12,7 +12,7 @@ import type {
 } from "../../channels/plugins/types.js";
 import { writeConfigFile, type OpenClawConfig } from "../../config/config.js";
 import { danger } from "../../globals.js";
-import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
 import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
 import { formatChannelAccountLabel, requireValidConfig } from "./shared.js";
@@ -266,7 +266,7 @@ export async function channelsCapabilitiesCommand(
   }
 
   if (opts.json) {
-    runtime.log(JSON.stringify({ channels: reports }, null, 2));
+    writeRuntimeJson(runtime, { channels: reports });
     return;
   }
 

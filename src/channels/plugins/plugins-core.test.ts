@@ -505,6 +505,12 @@ describe("resolveChannelConfigWrites", () => {
     const cfg = makeSlackConfigWritesCfg("Work");
     expect(resolveChannelConfigWrites({ cfg, channelId: "slack", accountId: "work" })).toBe(false);
   });
+
+  it("ignores account ids when the channel is missing", () => {
+    expect(resolveChannelConfigWrites({ cfg: {}, channelId: "slack", accountId: "work" })).toBe(
+      true,
+    );
+  });
 });
 
 describe("authorizeConfigWrite", () => {

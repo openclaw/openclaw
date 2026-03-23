@@ -4,6 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  resolveConfigPath: vi.fn(() => `/tmp/openclaw-status-fast-json-missing-${process.pid}.json`),
   hasPotentialConfiguredChannels: vi.fn(),
   readBestEffortConfig: vi.fn(),
   resolveCommandSecretRefsViaGateway: vi.fn(),
@@ -105,6 +106,14 @@ vi.mock("../channels/config-presence.js", () => ({
 vi.mock("../config/io.js", () => ({
   readBestEffortConfig: mocks.readBestEffortConfig,
 }));
+
+vi.mock("../config/paths.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/paths.js")>();
+  return {
+    ...actual,
+    resolveConfigPath: mocks.resolveConfigPath,
+  };
+});
 
 vi.mock("../cli/command-secret-gateway.js", () => ({
   resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
@@ -250,5 +259,36 @@ describe("scanStatusJsonFast", () => {
       }
       await fs.rm(tmpStateDir, { recursive: true, force: true });
     }
+  });
+
+  it("skips gateway and update probes on cold-start status --json", async () => {
+    const originalVitest = process.env.VITEST;
+    const originalVitestPoolId = process.env.VITEST_POOL_ID;
+    const originalNodeEnv = process.env.NODE_ENV;
+    delete process.env.VITEST;
+    delete process.env.VITEST_POOL_ID;
+    delete process.env.NODE_ENV;
+    try {
+      await scanStatusJsonFast({}, {} as never);
+    } finally {
+      if (originalVitest === undefined) {
+        delete process.env.VITEST;
+      } else {
+        process.env.VITEST = originalVitest;
+      }
+      if (originalVitestPoolId === undefined) {
+        delete process.env.VITEST_POOL_ID;
+      } else {
+        process.env.VITEST_POOL_ID = originalVitestPoolId;
+      }
+      if (originalNodeEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = originalNodeEnv;
+      }
+    }
+
+    expect(mocks.getUpdateCheckResult).not.toHaveBeenCalled();
+    expect(mocks.probeGateway).not.toHaveBeenCalled();
   });
 });

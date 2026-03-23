@@ -7,8 +7,13 @@ const runAcpClientInteractive = vi.fn(async (_opts: unknown) => {});
 const serveAcpGateway = vi.fn(async (_opts: unknown) => {});
 
 const defaultRuntime = {
+  log: vi.fn(),
   error: vi.fn(),
+  writeStdout: vi.fn(),
+  writeJson: vi.fn(),
   exit: vi.fn(),
+  writeStdout: vi.fn(),
+  writeJson: vi.fn(),
 };
 
 const passwordKey = () => ["pass", "word"].join("");
@@ -52,7 +57,10 @@ describe("acp cli option collisions", () => {
   beforeEach(() => {
     runAcpClientInteractive.mockClear();
     serveAcpGateway.mockClear();
+    defaultRuntime.log.mockClear();
     defaultRuntime.error.mockClear();
+    defaultRuntime.writeStdout.mockClear();
+    defaultRuntime.writeJson.mockClear();
     defaultRuntime.exit.mockClear();
   });
 

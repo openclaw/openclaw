@@ -1,13 +1,15 @@
 import { vi } from "vitest";
 import type { GatewayService } from "../../../daemon/service.js";
-import type { RuntimeEnv } from "../../../runtime.js";
+import type { OutputRuntimeEnv } from "../../../runtime.js";
 import type { MockFn } from "../../../test-utils/vitest-mock-fn.js";
 
 export const runtimeLogs: string[] = [];
 
-type LifecycleRuntimeHarness = RuntimeEnv & {
-  error: MockFn<RuntimeEnv["error"]>;
-  exit: MockFn<RuntimeEnv["exit"]>;
+type LifecycleRuntimeHarness = OutputRuntimeEnv & {
+  error: MockFn<OutputRuntimeEnv["error"]>;
+  exit: MockFn<OutputRuntimeEnv["exit"]>;
+  writeStdout: MockFn<(value: string) => void>;
+  writeJson: MockFn<(value: unknown, space?: number) => void>;
 };
 
 type LifecycleServiceHarness = GatewayService & {
@@ -27,6 +29,12 @@ export const defaultRuntime: LifecycleRuntimeHarness = {
   error: vi.fn(),
   exit: vi.fn((code: number) => {
     throw new Error(`__exit__:${code}`);
+  }),
+  writeStdout: vi.fn((value: string) => {
+    runtimeLogs.push(value.endsWith("\n") ? value.slice(0, -1) : value);
+  }),
+  writeJson: vi.fn((value: unknown, space = 2) => {
+    runtimeLogs.push(JSON.stringify(value, null, space > 0 ? space : undefined));
   }),
 };
 

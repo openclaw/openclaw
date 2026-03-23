@@ -263,6 +263,10 @@ function shouldSkipMissingConfigFastPath(): boolean {
   );
 }
 
+function isMissingConfigColdStart(): boolean {
+  return !shouldSkipMissingConfigFastPath() && !existsSync(resolveConfigPathFast(process.env));
+}
+
 function shouldCollectPluginCompatibility(cfg: OpenClawConfig): boolean {
   if (hasPotentialConfiguredChannelsFast(cfg)) {
     return true;
@@ -407,19 +411,21 @@ export async function scanStatusJsonFast(
   },
   _runtime: RuntimeEnv,
 ): Promise<StatusScanResult> {
+  const coldStart = isMissingConfigColdStart();
   const loadedRaw = await readStatusSourceConfig();
   const { resolvedConfig: cfg, diagnostics: secretDiagnostics } = await resolveStatusConfig({
     sourceConfig: loadedRaw,
     commandName: "status --json",
   });
-  if (hasPotentialConfiguredChannelsFast(cfg)) {
+  const hasConfiguredChannels = hasPotentialConfiguredChannelsFast(cfg);
+  if (hasConfiguredChannels) {
     const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
     ensurePluginRegistryLoaded({ scope: "configured-channels" });
   }
   const osSummary = resolveOsSummary();
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   const updateTimeoutMs = opts.all ? 6500 : 2500;
-  const canUseLeanSummary = hasMissingConfigFastPath() && !hasPotentialConfiguredChannelsFast(cfg);
+  const canUseLeanSummary = coldStart && !hasConfiguredChannels && opts.all !== true;
   const updatePromise = canUseLeanSummary
     ? Promise.resolve(buildLeanUpdateCheckResult())
     : loadStatusUpdateModule().then(({ getUpdateCheckResult }) =>

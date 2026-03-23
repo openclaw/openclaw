@@ -54,7 +54,9 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Should be fast and stable
 - Scheduler note:
   - `pnpm test` now keeps a small checked-in behavioral manifest for true pool/isolation overrides and a separate timing snapshot for the slowest unit files.
-  - Shared unit coverage stays on, but the wrapper peels the heaviest measured files into dedicated lanes instead of relying on a growing hand-maintained exclusion list.
+  - Shared unit coverage now defaults to `threads`, while the manifest keeps the measured fork-only exceptions and heavy singleton lanes explicit.
+  - The extension suite (`vitest.extensions.config.ts`) also now defaults to `threads`; the March 22, 2026 direct full-suite control run passed clean without extension-specific fork exceptions.
+  - The wrapper peels the heaviest measured files into dedicated lanes instead of relying on a growing hand-maintained exclusion list.
   - Refresh the timing snapshot with `pnpm test:perf:update-timings` after major suite shape changes.
 - Embedded runner note:
   - When you change message-tool discovery inputs or compaction runtime context,
@@ -68,9 +70,12 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
     through the real `run.ts` / `compact.ts` paths; helper-only tests are not a
     sufficient substitute for those integration paths.
 - Pool note:
-  - OpenClaw uses Vitest `vmForks` on Node 22, 23, and 24 for faster unit shards.
-  - On Node 25+, OpenClaw automatically falls back to regular `forks` until the repo is re-validated there.
-  - Override manually with `OPENCLAW_TEST_VM_FORKS=0` (force `forks`) or `OPENCLAW_TEST_VM_FORKS=1` (force `vmForks`).
+  - Base Vitest config still defaults to `forks`.
+  - Unit wrapper lanes default to `threads`, with explicit manifest fork-only exceptions.
+  - Extension scoped config defaults to `threads`.
+  - `pnpm test` also defaults to `--isolate=false` at the wrapper level for faster file startup.
+  - Opt back into Vitest file isolation with `OPENCLAW_TEST_ISOLATE=1 pnpm test`.
+  - `OPENCLAW_TEST_NO_ISOLATE=0` or `OPENCLAW_TEST_NO_ISOLATE=false` also force isolated runs.
 
 ### E2E (gateway smoke)
 
@@ -78,8 +83,8 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
 - Config: `vitest.e2e.config.ts`
 - Files: `src/**/*.e2e.test.ts`, `test/**/*.e2e.test.ts`
 - Runtime defaults:
-  - Uses Vitest `vmForks` for faster file startup.
-  - Uses adaptive workers (CI: 2-4, local: 4-8).
+  - Uses Vitest `forks` for deterministic cross-file isolation.
+  - Uses adaptive workers (CI: up to 2, local: 1 by default).
   - Runs in silent mode by default to reduce console I/O overhead.
 - Useful overrides:
   - `OPENCLAW_E2E_WORKERS=<n>` to force worker count (capped at 16).
@@ -124,6 +129,11 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Prefer running narrowed subsets instead of “everything”
   - Live runs will source `~/.profile` to pick up missing API keys
 - API key rotation (provider-specific): set `*_API_KEYS` with comma/semicolon format or `*_API_KEY_1`, `*_API_KEY_2` (for example `OPENAI_API_KEYS`, `ANTHROPIC_API_KEYS`, `GEMINI_API_KEYS`) or per-live override via `OPENCLAW_LIVE_*_KEY`; tests retry on rate limit responses.
+- Progress/heartbeat output:
+  - Live suites now emit progress lines to stderr so long provider calls are visibly active even when Vitest console capture is quiet.
+  - `vitest.live.config.ts` disables Vitest console interception so provider/gateway progress lines stream immediately during live runs.
+  - Tune direct-model heartbeats with `OPENCLAW_LIVE_HEARTBEAT_MS`.
+  - Tune gateway/probe heartbeats with `OPENCLAW_LIVE_GATEWAY_HEARTBEAT_MS`.
 
 ## Which suite should I run?
 

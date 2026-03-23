@@ -6,7 +6,7 @@ import {
 } from "./doctor.e2e-harness.js";
 import "./doctor.fast-path-mocks.js";
 
-vi.mock("../plugins/providers.js", () => ({
+vi.mock("../plugins/providers.runtime.js", () => ({
   resolvePluginProviders: vi.fn(() => []),
 }));
 

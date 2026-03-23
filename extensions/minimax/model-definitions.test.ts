@@ -13,16 +13,27 @@ describe("minimax model definitions", () => {
     expect(MINIMAX_HOSTED_MODEL_ID).toBe("MiniMax-M2.7");
   });
 
+  it("uses the higher upstream MiniMax context and token defaults", () => {
+    expect(DEFAULT_MINIMAX_CONTEXT_WINDOW).toBe(204800);
+    expect(DEFAULT_MINIMAX_MAX_TOKENS).toBe(131072);
+    expect(MINIMAX_API_COST).toEqual({
+      input: 0.3,
+      output: 1.2,
+      cacheRead: 0.06,
+      cacheWrite: 0.375,
+    });
+  });
+
   it("builds catalog model with name and reasoning from catalog", () => {
     const model = buildMinimaxModelDefinition({
-      id: "MiniMax-M2.7",
+      id: "MiniMax-M2.1",
       cost: MINIMAX_API_COST,
       contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
       maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
     });
     expect(model).toMatchObject({
-      id: "MiniMax-M2.7",
-      name: "MiniMax M2.7",
+      id: "MiniMax-M2.1",
+      name: "MiniMax M2.1",
       reasoning: true,
     });
   });

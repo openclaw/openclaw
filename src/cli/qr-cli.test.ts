@@ -6,9 +6,19 @@ const mocks = vi.hoisted(() => ({
   runtime: {
     log: vi.fn(),
     error: vi.fn(),
+    writeStdout: vi.fn((value: string) => {
+      mocks.runtime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
+    }),
+    writeJson: vi.fn((value: unknown, space = 2) => {
+      mocks.runtime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
+    }),
     exit: vi.fn(() => {
       throw new Error("exit");
     }),
+    writeStdout: vi.fn((value: string) => mocks.runtime.log(value)),
+    writeJson: vi.fn((value: unknown, space = 2) =>
+      mocks.runtime.log(JSON.stringify(value, null, space)),
+    ),
   },
   loadConfig: vi.fn(),
   runCommandWithTimeout: vi.fn(),

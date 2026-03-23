@@ -17,6 +17,7 @@ export {
   splitSetupEntries,
 } from "./setup.js";
 
+/** Metadata used to advertise an optional channel plugin during setup flows. */
 type OptionalChannelSetupParams = {
   channel: string;
   label: string;
@@ -24,6 +25,7 @@ type OptionalChannelSetupParams = {
   docsPath?: string;
 };
 
+/** Paired setup adapter + setup wizard for channels that may not be installed yet. */
 export type OptionalChannelSetupSurface = {
   setupAdapter: ChannelSetupAdapter;
   setupWizard: ChannelSetupWizard;
@@ -34,6 +36,7 @@ export {
   createOptionalChannelSetupWizard,
 } from "./optional-channel-setup.js";
 
+/** Build both optional setup surfaces from one metadata object. */
 export function createOptionalChannelSetupSurface(
   params: OptionalChannelSetupParams,
 ): OptionalChannelSetupSurface {

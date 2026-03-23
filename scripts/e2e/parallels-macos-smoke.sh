@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 VM_NAME="macOS Tahoe"
-SNAPSHOT_HINT="macOS 26.3.1 fresh"
+SNAPSHOT_HINT="macOS 26.3.1 latest"
 MODE="both"
 OPENAI_API_KEY_ENV="OPENAI_API_KEY"
 INSTALL_URL="https://openclaw.ai/install.sh"
@@ -102,7 +102,7 @@ Usage: bash scripts/e2e/parallels-macos-smoke.sh [options]
 Options:
   --vm <name>                Parallels VM name. Default: "macOS Tahoe"
   --snapshot-hint <name>     Snapshot name substring/fuzzy match.
-                             Default: "macOS 26.3.1 fresh"
+                             Default: "macOS 26.3.1 latest"
   --mode <fresh|upgrade|both>
                              fresh   = fresh snapshot -> target package/current main tgz -> onboard smoke
                              upgrade = fresh snapshot -> latest release -> target package/current main tgz -> onboard smoke
@@ -903,6 +903,13 @@ show_log_excerpt() {
   tail -n 80 "$log_path" >&2 || true
 }
 
+show_restore_timeout_diagnostics() {
+  warn "restore diagnostics for $VM_NAME"
+  prlctl status "$VM_NAME" >&2 || true
+  warn "snapshot list for $VM_NAME"
+  prlctl snapshot-list "$VM_NAME" >&2 || true
+}
+
 phase_run() {
   local phase_id="$1"
   local timeout_s="$2"
@@ -938,6 +945,9 @@ phase_run() {
   if (( timed_out )); then
     warn "$phase_id timed out after ${timeout_s}s"
     printf 'timeout after %ss\n' "$timeout_s" >>"$log_path"
+    if [[ "$phase_id" == *.restore-snapshot ]]; then
+      show_restore_timeout_diagnostics
+    fi
     show_log_excerpt "$log_path"
     return 124
   fi

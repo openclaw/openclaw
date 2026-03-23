@@ -25,7 +25,7 @@ function printJsonResult(parent: BrowserParentOpts, payload: unknown): boolean {
   if (!parent?.json) {
     return false;
   }
-  defaultRuntime.log(JSON.stringify(payload, null, 2));
+  defaultRuntime.writeJson(payload);
   return true;
 }
 
@@ -89,7 +89,7 @@ function runBrowserCommand(action: () => Promise<void>) {
 
 function logBrowserTabs(tabs: BrowserTab[], json?: boolean) {
   if (json) {
-    defaultRuntime.log(JSON.stringify({ tabs }, null, 2));
+    defaultRuntime.writeJson({ tabs });
     return;
   }
   if (tabs.length === 0) {

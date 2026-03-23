@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureFullEnv } from "../../test-utils/env.js";
 import type { DaemonActionResponse } from "./response.js";
 
+const resolveNodeStartupTlsEnvironmentMock = vi.hoisted(() => vi.fn());
 const loadConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn(() => 18789));
@@ -48,6 +49,10 @@ const service = vi.hoisted(() => ({
   stop: vi.fn(async () => {}),
   readCommand: vi.fn(async () => null),
   readRuntime: vi.fn(async () => ({ status: "stopped" as const })),
+}));
+
+vi.mock("../../bootstrap/node-startup-env.js", () => ({
+  resolveNodeStartupTlsEnvironment: resolveNodeStartupTlsEnvironmentMock,
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -124,6 +129,12 @@ const runtimeLogs: string[] = [];
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: {
     log: (message: string) => runtimeLogs.push(message),
+    writeStdout: (value: string) => {
+      runtimeLogs.push(value.endsWith("\n") ? value.slice(0, -1) : value);
+    },
+    writeJson: (value: unknown, space = 2) => {
+      runtimeLogs.push(JSON.stringify(value, null, space));
+    },
     error: vi.fn(),
     exit: vi.fn(),
   },
@@ -151,6 +162,7 @@ const envSnapshot = captureFullEnv();
 describe("runDaemonInstall", () => {
   beforeEach(() => {
     loadConfigMock.mockReset();
+    resolveNodeStartupTlsEnvironmentMock.mockReset();
     readConfigFileSnapshotMock.mockReset();
     resolveGatewayPortMock.mockClear();
     writeConfigFileMock.mockReset();
@@ -191,6 +203,11 @@ describe("runDaemonInstall", () => {
     isGatewayDaemonRuntimeMock.mockReturnValue(true);
     installDaemonServiceAndEmitMock.mockResolvedValue(undefined);
     service.isLoaded.mockResolvedValue(false);
+    service.readCommand.mockResolvedValue(null);
+    resolveNodeStartupTlsEnvironmentMock.mockReturnValue({
+      NODE_EXTRA_CA_CERTS: undefined,
+      NODE_USE_SYSTEM_CA: undefined,
+    });
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.CLAWDBOT_GATEWAY_TOKEN;
   });
@@ -288,5 +305,64 @@ describe("runDaemonInstall", () => {
     expect(actionState.failed[0]?.message).toContain("Gateway service check failed");
     expect(actionState.failed[0]?.message).toContain("read-only file system");
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+  });
+
+  it("returns already-installed when the service already has the expected TLS env", async () => {
+    service.isLoaded.mockResolvedValue(true);
+    resolveNodeStartupTlsEnvironmentMock.mockReturnValue({
+      NODE_EXTRA_CA_CERTS: "/etc/ssl/certs/ca-certificates.crt",
+      NODE_USE_SYSTEM_CA: undefined,
+    });
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {
+        NODE_EXTRA_CA_CERTS: "/etc/ssl/certs/ca-certificates.crt",
+      },
+    } as never);
+
+    await runDaemonInstall({ json: true });
+
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+    expect(actionState.emitted.at(-1)).toMatchObject({ result: "already-installed" });
+  });
+
+  it("reinstalls when an existing service is missing the nvm TLS CA bundle", async () => {
+    service.isLoaded.mockResolvedValue(true);
+    resolveNodeStartupTlsEnvironmentMock.mockReturnValue({
+      NODE_EXTRA_CA_CERTS: "/etc/ssl/certs/ca-certificates.crt",
+      NODE_USE_SYSTEM_CA: undefined,
+    });
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {},
+    } as never);
+
+    await runDaemonInstall({ json: true });
+
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reinstalls when the installed service still runs from nvm even if the installer runtime does not", async () => {
+    service.isLoaded.mockResolvedValue(true);
+    resolveNodeStartupTlsEnvironmentMock.mockImplementation(({ execPath }) => ({
+      NODE_EXTRA_CA_CERTS:
+        typeof execPath === "string" && execPath.includes("/.nvm/")
+          ? "/etc/ssl/certs/ca-certificates.crt"
+          : undefined,
+      NODE_USE_SYSTEM_CA: undefined,
+    }));
+    service.readCommand.mockResolvedValue({
+      programArguments: ["/home/test/.nvm/versions/node/v22.18.0/bin/node", "dist/entry.js"],
+      environment: {},
+    } as never);
+
+    await runDaemonInstall({ json: true });
+
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+    expect(resolveNodeStartupTlsEnvironmentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        execPath: "/home/test/.nvm/versions/node/v22.18.0/bin/node",
+      }),
+    );
   });
 });

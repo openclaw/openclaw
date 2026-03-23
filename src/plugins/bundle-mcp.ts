@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyMergePatch } from "../config/merge-patch.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
 import {
   CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
@@ -65,10 +65,18 @@ function readPluginJsonObject(params: {
     rejectHardlinks: true,
   });
   if (!opened.ok) {
-    if (opened.reason === "path" && params.allowMissing) {
-      return { ok: true, raw: {} };
-    }
-    return { ok: false, error: `unable to read ${params.relativePath}: ${opened.reason}` };
+    return matchBoundaryFileOpenFailure(opened, {
+      path: () => {
+        if (params.allowMissing) {
+          return { ok: true, raw: {} };
+        }
+        return { ok: false, error: `unable to read ${params.relativePath}: path` };
+      },
+      fallback: (failure) => ({
+        ok: false,
+        error: `unable to read ${params.relativePath}: ${failure.reason}`,
+      }),
+    });
   }
   try {
     const raw = JSON.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;

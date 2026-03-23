@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
@@ -24,6 +25,12 @@ const formatPortDiagnostics = vi.fn();
 const pathExists = vi.fn();
 const syncPluginsForUpdateChannel = vi.fn();
 const updateNpmInstalledPlugins = vi.fn();
+const runtimeLog = vi.fn();
+const runtimeError = vi.fn();
+const runtimeExit = vi.fn();
+const runtimeWriteJson = vi.fn((value: unknown, space = 2) =>
+  runtimeLog(JSON.stringify(value, null, space > 0 ? space : undefined)),
+);
 
 vi.mock("@clack/prompts", () => ({
   confirm,
@@ -130,9 +137,13 @@ vi.mock("./daemon-cli.js", () => ({
 // Mock the runtime
 vi.mock("../runtime.js", () => ({
   defaultRuntime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
+    log: runtimeLog,
+    error: runtimeError,
+    exit: runtimeExit,
+    writeStdout: vi.fn((value: string) =>
+      runtimeLog(value.endsWith("\n") ? value.slice(0, -1) : value),
+    ),
+    writeJson: runtimeWriteJson,
   },
 }));
 
@@ -447,6 +458,24 @@ describe("update-cli", () => {
       await updateStatusCommand(testCase.options);
       testCase.assert();
     }
+  });
+
+  it("parses update status --json as the subcommand option", async () => {
+    const program = new Command();
+    program.name("openclaw");
+    program.enablePositionalOptions();
+    let seenJson = false;
+    const update = program.command("update").option("--json", "", false);
+    update
+      .command("status")
+      .option("--json", "", false)
+      .action((opts) => {
+        seenJson = Boolean(opts.json);
+      });
+
+    await program.parseAsync(["node", "openclaw", "update", "status", "--json"]);
+
+    expect(seenJson).toBe(true);
   });
 
   it.each([

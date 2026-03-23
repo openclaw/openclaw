@@ -27,18 +27,11 @@ type TelegramSendMessageDraft = (
  * lanes do not accidentally reuse draft ids when code-split entries coexist.
  */
 const TELEGRAM_DRAFT_STREAM_STATE_KEY = Symbol.for("openclaw.telegramDraftStreamState");
-
-let draftStreamState: { nextDraftId: number } | undefined;
-
-function getDraftStreamState(): { nextDraftId: number } {
-  draftStreamState ??= resolveGlobalSingleton(TELEGRAM_DRAFT_STREAM_STATE_KEY, () => ({
-    nextDraftId: 0,
-  }));
-  return draftStreamState;
-}
+const draftStreamState = resolveGlobalSingleton(TELEGRAM_DRAFT_STREAM_STATE_KEY, () => ({
+  nextDraftId: 0,
+}));
 
 function allocateTelegramDraftId(): number {
-  const draftStreamState = getDraftStreamState();
   draftStreamState.nextDraftId =
     draftStreamState.nextDraftId >= TELEGRAM_DRAFT_ID_MAX ? 1 : draftStreamState.nextDraftId + 1;
   return draftStreamState.nextDraftId;
@@ -460,6 +453,6 @@ export function createTelegramDraftStream(params: {
 
 export const __testing = {
   resetTelegramDraftStreamForTests() {
-    getDraftStreamState().nextDraftId = 0;
+    draftStreamState.nextDraftId = 0;
   },
 };

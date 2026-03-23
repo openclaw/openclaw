@@ -341,7 +341,7 @@ export function registerCronEditCommand(cron: Command) {
             id,
             patch,
           });
-          defaultRuntime.log(JSON.stringify(res, null, 2));
+          defaultRuntime.writeJson(res);
           await warnIfCronSchedulerDisabled(opts);
         } catch (err) {
           defaultRuntime.error(danger(String(err)));

@@ -85,6 +85,44 @@ function cdpUrlForPort(cdpPort: number) {
   return `http://127.0.0.1:${cdpPort}`;
 }
 
+export function buildOpenClawChromeLaunchArgs(params: {
+  resolved: ResolvedBrowserConfig;
+  profile: ResolvedBrowserProfile;
+  userDataDir: string;
+}): string[] {
+  const { resolved, profile, userDataDir } = params;
+  const args: string[] = [
+    `--remote-debugging-port=${profile.cdpPort}`,
+    `--user-data-dir=${userDataDir}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-sync",
+    "--disable-background-networking",
+    "--disable-component-update",
+    "--disable-features=Translate,MediaRouter",
+    "--disable-session-crashed-bubble",
+    "--hide-crash-restore-bubble",
+    "--password-store=basic",
+  ];
+
+  if (resolved.headless) {
+    args.push("--headless=new");
+    args.push("--disable-gpu");
+  }
+  if (resolved.noSandbox) {
+    args.push("--no-sandbox");
+    args.push("--disable-setuid-sandbox");
+  }
+  if (process.platform === "linux") {
+    args.push("--disable-dev-shm-usage");
+  }
+  if (resolved.extraArgs.length > 0) {
+    args.push(...resolved.extraArgs);
+  }
+
+  return args;
+}
+
 async function canOpenWebSocket(url: string, timeoutMs: number): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     const ws = openCdpWebSocket(url, { handshakeTimeoutMs: timeoutMs });
@@ -280,41 +318,11 @@ export async function launchOpenClawChrome(
 
   // First launch to create preference files if missing, then decorate and relaunch.
   const spawnOnce = () => {
-    const args: string[] = [
-      `--remote-debugging-port=${profile.cdpPort}`,
-      `--user-data-dir=${userDataDir}`,
-      "--no-first-run",
-      "--no-default-browser-check",
-      "--disable-sync",
-      "--disable-background-networking",
-      "--disable-component-update",
-      "--disable-features=Translate,MediaRouter",
-      "--disable-session-crashed-bubble",
-      "--hide-crash-restore-bubble",
-      "--password-store=basic",
-    ];
-
-    if (resolved.headless) {
-      // Best-effort; older Chromes may ignore.
-      args.push("--headless=new");
-      args.push("--disable-gpu");
-    }
-    if (resolved.noSandbox) {
-      args.push("--no-sandbox");
-      args.push("--disable-setuid-sandbox");
-    }
-    if (process.platform === "linux") {
-      args.push("--disable-dev-shm-usage");
-    }
-
-    // Append user-configured extra arguments (e.g., stealth flags, window size)
-    if (resolved.extraArgs.length > 0) {
-      args.push(...resolved.extraArgs);
-    }
-
-    // Always open a blank tab to ensure a target exists.
-    args.push("about:blank");
-
+    const args = buildOpenClawChromeLaunchArgs({
+      resolved,
+      profile,
+      userDataDir,
+    });
     return spawn(exe.path, args, {
       stdio: "pipe",
       env: {

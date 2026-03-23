@@ -148,6 +148,7 @@ export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
 export { runPluginCommandWithTimeout } from "./run-command.js";
 export { createLoggerBackedRuntime, resolveRuntimeEnv } from "./runtime.js";
 export {
+  buildComputedAccountStatusSnapshot,
   buildProbeChannelStatusSummary,
   collectStatusIssuesFromLastError,
 } from "./status-helpers.js";

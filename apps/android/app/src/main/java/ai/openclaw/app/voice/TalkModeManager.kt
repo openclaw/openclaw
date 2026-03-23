@@ -104,6 +104,7 @@ class TalkModeManager(
   private val playbackGeneration = AtomicLong(0L)
 
   private var ttsJob: Job? = null
+  private val playerLock = Any()
   private var player: MediaPlayer? = null
   @Volatile private var finalizeInFlight = false
   private var listenWatchdogJob: Job? = null
@@ -763,7 +764,9 @@ class TalkModeManager(
     try {
       withContext(Dispatchers.IO) { tempFile.writeBytes(audioBytes) }
       val player = MediaPlayer()
-      this.player = player
+      synchronized(playerLock) {
+        this.player = player
+      }
       val finished = CompletableDeferred<Unit>()
       player.setAudioAttributes(
         AudioAttributes.Builder()
@@ -784,7 +787,7 @@ class TalkModeManager(
       ensurePlaybackActive(playbackToken)
     } finally {
       try {
-        cleanupPlayer()
+        cleanupPlayer(player)
       } catch (_: Throwable) {}
       tempFile.delete()
     }
@@ -821,7 +824,11 @@ class TalkModeManager(
       return
     }
     if (resetInterrupt) {
-      val currentMs = player?.currentPosition?.toDouble() ?: 0.0
+      val currentMs = synchronized(playerLock) {
+        try {
+          player?.currentPosition?.toDouble() ?: 0.0
+        } catch (_: IllegalStateException) { 0.0 }
+      }
       lastInterruptedAtSeconds = currentMs / 1000.0
     }
     cleanupPlayer()
@@ -864,10 +871,16 @@ class TalkModeManager(
     audioFocusRequest = null
   }
 
-  private fun cleanupPlayer() {
-    player?.stop()
-    player?.release()
-    player = null
+  private fun cleanupPlayer(expectedPlayer: MediaPlayer? = null) {
+    synchronized(playerLock) {
+      val p = player ?: return
+      if (expectedPlayer != null && p !== expectedPlayer) return
+      player = null
+      try {
+        p.stop()
+      } catch (_: IllegalStateException) {}
+      p.release()
+    }
   }
 
   private fun shouldInterrupt(transcript: String): Boolean {

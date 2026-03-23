@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const agentCliCommandMock = vi.fn();
 const agentsAddCommandMock = vi.fn();
@@ -15,6 +15,12 @@ const createDefaultDepsMock = vi.fn(() => ({ deps: true }));
 const runtime = {
   log: vi.fn(),
   error: vi.fn(),
+  writeStdout: vi.fn((value: string) => {
+    runtime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
+  }),
+  writeJson: vi.fn((value: unknown, space = 2) => {
+    runtime.log(JSON.stringify(value, null, space));
+  }),
   exit: vi.fn(),
 };
 
@@ -44,10 +50,25 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
+const mockedModuleIds = [
+  "../../commands/agent-via-gateway.js",
+  "../../commands/agents.js",
+  "../../globals.js",
+  "../deps.js",
+  "../../runtime.js",
+];
+
 let registerAgentCommands: typeof import("./register.agent.js").registerAgentCommands;
 
 beforeAll(async () => {
   ({ registerAgentCommands } = await import("./register.agent.js"));
+});
+
+afterAll(() => {
+  for (const id of mockedModuleIds) {
+    vi.doUnmock(id);
+  }
+  vi.resetModules();
 });
 
 describe("registerAgentCommands", () => {
