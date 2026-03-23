@@ -59,6 +59,19 @@ while reducing token usage.
 openclaw plugins install @martian-engineering/lossless-claw
 ```
 
+### OpenClaw China Channels
+
+Unified OpenClaw plugin bundle for China messaging platforms. Supports
+DingTalk, Feishu, QQ, WeCom, WeCom App, WeCom KF, and WeChat MP, with a shared
+setup flow for deploying AI assistants across common China messaging channels.
+
+- **npm:** `@openclaw-china/channels`
+- **repo:** [github.com/BytePioneer-AI/openclaw-china](https://github.com/BytePioneer-AI/openclaw-china)
+
+```bash
+openclaw plugins install @openclaw-china/channels
+```
+
 ### Opik
 
 Official plugin that exports agent traces to Opik. Monitor agent behavior,

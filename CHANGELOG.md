@@ -102,6 +102,7 @@ Docs: https://docs.openclaw.ai
 - Docs/plugins: add the community QQbot plugin listing to the docs catalog. (#29898) Thanks @sliverp.
 - Docs/plugins: add the community wecom plugin listing to the docs catalog. (#29905) Thanks @sliverp.
 - Telegram/message tool: add `asDocument` as a user-facing alias for `forceDocument` on image and GIF sends, while preserving explicit `forceDocument` precedence when both flags are present. (#52461) Thanks @bakhtiersizhaev.
+- Docs/plugins: add the community OpenClaw China Channels plugin listing to the docs catalog. Thanks @BytePioneer-AI.
 
 ### Fixes
 
