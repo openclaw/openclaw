@@ -15,6 +15,7 @@ import type {
 import {
   computeJobPreviousRunAtMs,
   computeJobNextRunAtMs,
+  consumeSkipNextReloadRepairRecompute,
   hasSkipNextReloadRepairRecompute,
   nextWakeAtMs,
   removeJobById,
@@ -510,6 +511,13 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
     startedAt: result.startedAt,
     endedAt: result.endedAt,
   });
+  if (
+    !shouldDelete &&
+    typeof job.state.nextRunAtMs === "number" &&
+    Number.isFinite(job.state.nextRunAtMs)
+  ) {
+    consumeSkipNextReloadRepairRecompute(state, job.id);
+  }
 
   emitJobFinished(state, job, result, result.startedAt);
 

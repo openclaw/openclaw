@@ -950,6 +950,62 @@ describe("Cron issue regressions", () => {
     expect(job!.state.nextRunAtMs).toBeLessThan(now);
   });
 
+  it("consumes successful external schedule repair markers after the replayed run", async () => {
+    const store = makeStorePath();
+    const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
+    const jobId = "recurring-external-valid-repair-marker";
+
+    const cronJob = createIsolatedRegressionJob({
+      id: jobId,
+      name: "poll",
+      scheduledAt,
+      schedule: { kind: "every", everyMs: 10_000, anchorMs: scheduledAt },
+      payload: { kind: "agentTurn", message: "poll" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    const runIsolatedAgentJob = vi.fn(async () => {
+      if (runIsolatedAgentJob.mock.calls.length === 1) {
+        await writeCronJobs(store.storePath, [
+          {
+            ...cronJob,
+            updatedAtMs: scheduledAt + 1,
+            schedule: { kind: "every", everyMs: 60_000, anchorMs: scheduledAt },
+            state: { ...cronJob.state, nextRunAtMs: scheduledAt },
+          },
+        ]);
+        now = scheduledAt + 10 * 60_000;
+      } else {
+        now += 500;
+      }
+      return { status: "ok" as const, summary: "ok" };
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    await onTimer(state);
+    expect(state.store?.jobs.find((entry) => entry.id === jobId)?.state.nextRunAtMs).toBe(
+      scheduledAt + 60_000,
+    );
+
+    await onTimer(state);
+
+    const job = state.store?.jobs.find((entry) => entry.id === jobId);
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+    expect(job?.state.lastStatus).toBe("ok");
+    expect(job?.state.nextRunAtMs).toBe(scheduledAt + 11 * 60_000);
+    expect(job?.state.nextRunAtMs).toBeGreaterThan(now);
+  });
+
   it("preserves force-run retry backoff when external schedule edits make the job earlier", async () => {
     const store = makeStorePath();
     const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
