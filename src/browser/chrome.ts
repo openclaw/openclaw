@@ -1,4 +1,4 @@
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { type ChildProcess, type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -70,7 +70,7 @@ export type RunningChrome = {
   userDataDir: string;
   cdpPort: number;
   startedAt: number;
-  proc: ChildProcessWithoutNullStreams;
+  proc: ChildProcess;
 };
 
 function resolveBrowserExecutable(resolved: ResolvedBrowserConfig): BrowserExecutable | null {
@@ -323,14 +323,18 @@ export async function launchOpenClawChrome(
       profile,
       userDataDir,
     });
+    // stdio tuple: discard stdout to prevent buffer saturation in constrained
+    // environments (e.g. Docker), while keeping stderr piped for diagnostics.
+    // Cast to ChildProcessWithoutNullStreams so callers can use .stderr safely;
+    // the tuple overload resolution varies across @types/node versions.
     return spawn(exe.path, args, {
-      stdio: "pipe",
+      stdio: ["ignore", "ignore", "pipe"],
       env: {
         ...process.env,
         // Reduce accidental sharing with the user's env.
         HOME: os.homedir(),
       },
-    });
+    }) as unknown as ChildProcessWithoutNullStreams;
   };
 
   const startedAt = Date.now();

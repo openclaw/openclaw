@@ -707,11 +707,11 @@ export async function loadSessionCostSummary(params: {
 
   const modelUsage = modelUsageMap.size
     ? Array.from(modelUsageMap.values()).toSorted((a, b) => {
-        const costDiff = b.totals.totalCost - a.totals.totalCost;
+        const costDiff = (b.totals?.totalCost ?? 0) - (a.totals?.totalCost ?? 0);
         if (costDiff !== 0) {
           return costDiff;
         }
-        return b.totals.totalTokens - a.totals.totalTokens;
+        return (b.totals?.totalTokens ?? 0) - (a.totals?.totalTokens ?? 0);
       })
     : undefined;
 
