@@ -130,7 +130,11 @@ export async function updateAuthProfileStoreWithLock(params: {
 
   try {
     return await withFileLock(authPath, AUTH_STORE_LOCK_OPTIONS, async () => {
-      const store = ensureAuthProfileStore(params.agentDir);
+      // Under secrets runtime, ensureAuthProfileStore() may return a stale in-memory
+      // snapshot. Locked mutation must start from the on-disk store so partial
+      // updates (for example, writing auth order after persisting a credential)
+      // do not clobber freshly written profiles.
+      const store = loadAuthProfileStoreForAgent(params.agentDir);
       const shouldSave = params.updater(store);
       if (shouldSave) {
         saveAuthProfileStore(store, params.agentDir);

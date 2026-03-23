@@ -35,6 +35,10 @@ import {
 } from "../../extensions/xai/onboard.js";
 import { applyXiaomiConfig, applyXiaomiProviderConfig } from "../../extensions/xiaomi/onboard.js";
 import { applyZaiConfig, applyZaiProviderConfig } from "../../extensions/zai/onboard.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  replaceRuntimeAuthProfileStoreSnapshots,
+} from "../agents/auth-profiles.js";
 import { SYNTHETIC_DEFAULT_MODEL_ID } from "../agents/synthetic-models.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -144,6 +148,7 @@ describe("writeOAuthCredentials", () => {
   const authProfilePathFor = (dir: string) => path.join(dir, "auth-profiles.json");
 
   afterEach(async () => {
+    clearRuntimeAuthProfileStoreSnapshots();
     await lifecycle.cleanup();
   });
 
@@ -240,6 +245,44 @@ describe("writeOAuthCredentials", () => {
     });
 
     await expect(fs.readFile(authProfilePathFor(mainAgentDir), "utf8")).rejects.toThrow();
+  });
+
+  it("preserves written OAuth profiles when runtime snapshots are stale", async () => {
+    const env = await setupAuthTestEnv("openclaw-oauth-stale-runtime-");
+    lifecycle.setStateDir(env.stateDir);
+
+    replaceRuntimeAuthProfileStoreSnapshots([
+      {
+        agentDir: env.agentDir,
+        store: {
+          version: 1,
+          profiles: {},
+          order: {},
+        },
+      },
+    ]);
+
+    const creds = {
+      refresh: "refresh-stale",
+      access: "access-stale",
+      expires: Date.now() + 60_000,
+    } satisfies OAuthCredentials;
+
+    await writeOAuthCredentials("openai-codex", creds);
+
+    const raw = await fs.readFile(authProfilePathFor(env.agentDir), "utf8");
+    const parsed = JSON.parse(raw) as {
+      profiles?: Record<string, OAuthCredentials & { type?: string; provider?: string }>;
+      order?: Record<string, string[]>;
+    };
+
+    expect(parsed.profiles?.["openai-codex:default"]).toMatchObject({
+      refresh: "refresh-stale",
+      access: "access-stale",
+      type: "oauth",
+      provider: "openai-codex",
+    });
+    expect(parsed.order?.["openai-codex"]).toEqual(["openai-codex:default"]);
   });
 
   it("syncs siblings from explicit agentDir outside OPENCLAW_STATE_DIR", async () => {
