@@ -273,14 +273,30 @@ Compared to the [Azure VM guide](/install/azure) (~\$195/month with Bastion), th
 ## Access the Control UI
 
 <Steps>
-  <Step title="Get the application URL">
+  <Step title="Get the application URL and configure Control UI access">
+    The Gateway requires authentication and an explicit origin allowlist when bound to a non-loopback address. Get the FQDN and configure both:
+
     ```bash
     FQDN="$(az containerapp show -g "${RG}" -n "${ACA_APP}" \
       --query properties.configuration.ingress.fqdn -o tsv)"
     echo "https://${FQDN}"
     ```
 
-    Open the URL in your browser. Azure Container Apps provides a valid TLS certificate automatically — no certificate setup required.
+    Set a gateway auth token (required for non-loopback bind) and the Control UI allowed origin:
+
+    ```bash
+    az containerapp exec -g "${RG}" -n "${ACA_APP}" \
+      --command "openclaw config set gateway.auth.token '<YOUR_AUTH_TOKEN>'"
+
+    az containerapp exec -g "${RG}" -n "${ACA_APP}" \
+      --command "openclaw config set gateway.controlUi.allowedOrigins '[\"https://${FQDN}\"]' --strict-json"
+    ```
+
+    <Note>
+    Replace `<YOUR_AUTH_TOKEN>` with a strong random string. You will use this token to authenticate to the Control UI. Without `gateway.auth.token` and `gateway.controlUi.allowedOrigins`, the Gateway refuses to serve the Control UI on non-loopback addresses.
+    </Note>
+
+    Open `https://<FQDN>` in your browser. Azure Container Apps provides a valid TLS certificate automatically — no certificate setup required. You will be prompted for the auth token you set above.
 
   </Step>
 
