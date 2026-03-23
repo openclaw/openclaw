@@ -20,6 +20,7 @@ import {
 import { useRef, useState, useMemo, useCallback, useEffect } from "react";
 import { AutocompleteMenu, useAutocomplete } from "@/components/chat/autocomplete-menu";
 import { AnimatedPlaceholder } from "@/components/chat/chat-messages";
+import { SessionBadges } from "@/components/chat/session-badges";
 import { type ToolDisplayMode } from "@/components/chat/tool-call-card";
 import { Button } from "@/components/ui/button";
 import {
@@ -82,6 +83,12 @@ export type ChatInputProps = {
     mode: ToolDisplayMode | ((prev: ToolDisplayMode) => ToolDisplayMode),
   ) => void;
   models?: Array<{ id: string; contextWindow?: number }>;
+  // Badge props — agent identity, model/project/channel selectors shown above the input
+  badgeModels?: import("@/components/ui/custom/status/model-selector").ModelEntry[];
+  agentEmoji?: string;
+  agentName?: string;
+  agentRole?: string;
+  agentDepartment?: string;
 };
 
 export function ChatInput({
@@ -97,6 +104,11 @@ export function ChatInput({
   toolDisplayMode,
   setToolDisplayMode,
   models,
+  badgeModels,
+  agentEmoji,
+  agentName,
+  agentRole,
+  agentDepartment,
 }: ChatInputProps) {
   const { sendRpc } = useGateway();
   const { toast } = useToast();
@@ -622,40 +634,56 @@ export function ChatInput({
   return (
     <div className="shrink-0 p-4 pt-2 pb-6 z-20 bg-gradient-to-t from-background via-background to-transparent">
       <div className="mx-auto max-w-4xl relative">
-        {/* Session status bar */}
-        <div className="absolute -top-7 left-1/2 -translate-x-1/2 flex items-center gap-3 text-[10px] font-mono text-muted-foreground/60 hover:text-muted-foreground transition-colors duration-300">
-          <span className="flex items-center gap-1.5">
-            <span
-              className={cn(
-                "h-1.5 w-1.5 rounded-full",
-                isConnected ? "bg-primary animate-glow-pulse" : "bg-destructive",
-              )}
+        {/* Badge row + session status bar */}
+        <div className="flex items-center justify-between gap-3 mb-1.5 min-w-0">
+          {/* Left: interactive session badges (model, project, channel, agent) */}
+          {badgeModels && badgeModels.length > 0 ? (
+            <SessionBadges
+              models={badgeModels}
+              agentEmoji={agentEmoji}
+              agentName={agentName}
+              agentRole={agentRole}
+              agentDepartment={agentDepartment}
             />
-            <span>{isConnected ? "Connected" : "Disconnected"}</span>
-          </span>
-          {ctxTokenUsed > 0 && ctxTotal > 0 && (
-            <>
-              <span className="text-muted-foreground/20">·</span>
-              <span className="flex items-center gap-1.5 tabular-nums">
-                <span>
-                  {fmtCtx(ctxTokenUsed)} / {fmtCtx(ctxTotal)}
-                </span>
-                <span className="w-12 h-1 rounded-full bg-secondary/40 overflow-hidden">
-                  <span
-                    className={cn(
-                      "block h-full rounded-full transition-all duration-300",
-                      ctxRatio > 0.95
-                        ? "bg-destructive"
-                        : ctxRatio > 0.8
-                          ? "bg-chart-5"
-                          : "bg-primary/50",
-                    )}
-                    style={{ width: `${Math.round(ctxRatio * 100)}%` }}
-                  />
-                </span>
-              </span>
-            </>
+          ) : (
+            <div />
           )}
+
+          {/* Right: connection + context window */}
+          <div className="flex items-center gap-3 text-[10px] font-mono text-muted-foreground/60 hover:text-muted-foreground transition-colors duration-300 shrink-0">
+            <span className="flex items-center gap-1.5">
+              <span
+                className={cn(
+                  "h-1.5 w-1.5 rounded-full",
+                  isConnected ? "bg-primary animate-glow-pulse" : "bg-destructive",
+                )}
+              />
+              <span>{isConnected ? "Connected" : "Disconnected"}</span>
+            </span>
+            {ctxTokenUsed > 0 && ctxTotal > 0 && (
+              <>
+                <span className="text-muted-foreground/20">·</span>
+                <span className="flex items-center gap-1.5 tabular-nums">
+                  <span>
+                    {fmtCtx(ctxTokenUsed)} / {fmtCtx(ctxTotal)}
+                  </span>
+                  <span className="w-12 h-1 rounded-full bg-secondary/40 overflow-hidden">
+                    <span
+                      className={cn(
+                        "block h-full rounded-full transition-all duration-300",
+                        ctxRatio > 0.95
+                          ? "bg-destructive"
+                          : ctxRatio > 0.8
+                            ? "bg-chart-5"
+                            : "bg-primary/50",
+                      )}
+                      style={{ width: `${Math.round(ctxRatio * 100)}%` }}
+                    />
+                  </span>
+                </span>
+              </>
+            )}
+          </div>
         </div>
 
         {/* Hidden file input for Paperclip button */}

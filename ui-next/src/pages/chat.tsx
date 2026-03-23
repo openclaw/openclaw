@@ -983,6 +983,11 @@ export function ChatPage() {
           toolDisplayMode={toolDisplayMode}
           setToolDisplayMode={setToolDisplayMode}
           models={models}
+          badgeModels={models}
+          agentEmoji={activeAgentEmoji}
+          agentName={activeAgentName}
+          agentRole={activeAgentRole}
+          agentDepartment={activeAgentDepartment}
         />
       </ChatLayout>
     </>
