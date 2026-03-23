@@ -28,11 +28,31 @@ export function buildWorkspaceContextBlock(workspaceId: string): string | undefi
       }
     }
 
-    // Task count summary — in_progress and todo (backlog excluded to keep output concise)
-    const inProgressTasks = listTasks({ workspaceId, status: "in_progress" });
+    // Pending tasks with details — so agents can act on them without needing to call tasks.list
     const todoTasks = listTasks({ workspaceId, status: "todo" });
-    if (inProgressTasks.length > 0 || todoTasks.length > 0) {
-      lines.push(`Tasks: ${inProgressTasks.length} in-progress, ${todoTasks.length} todo`);
+    const inProgressTasks = listTasks({ workspaceId, status: "in_progress" });
+
+    if (todoTasks.length > 0) {
+      lines.push(`Pending Tasks (todo — action required):`);
+      for (const t of todoTasks.slice(0, 5)) {
+        const assignee = t.assigneeAgentId ? ` [assigned: ${t.assigneeAgentId}]` : " [unassigned]";
+        lines.push(`- ${t.identifier}: ${t.title}${assignee}`);
+      }
+      if (todoTasks.length > 5) {
+        lines.push(`  ... and ${todoTasks.length - 5} more`);
+      }
+    }
+
+    if (inProgressTasks.length > 0) {
+      lines.push(`In-Progress Tasks:`);
+      for (const t of inProgressTasks.slice(0, 5)) {
+        const assignee = t.assigneeAgentId ? ` [${t.assigneeAgentId}]` : "";
+        lines.push(`- ${t.identifier}: ${t.title}${assignee}`);
+      }
+    }
+
+    if (todoTasks.length === 0 && inProgressTasks.length === 0) {
+      lines.push(`Tasks: none pending`);
     }
 
     // Budget usage if a monthly budget is configured
@@ -44,8 +64,8 @@ export function buildWorkspaceContextBlock(workspaceId: string): string | undefi
     }
 
     const block = lines.join("\n");
-    // Hard cap to protect token budget
-    return block.length > 800 ? `${block.slice(0, 797)}...` : block;
+    // Hard cap to protect token budget (1500 chars to fit task details)
+    return block.length > 1500 ? `${block.slice(0, 1497)}...` : block;
   } catch {
     // Non-fatal: skip workspace context if lookup fails
     return undefined;
