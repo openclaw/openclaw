@@ -124,7 +124,9 @@ Looking for third-party plugins? See [Community Plugins](/plugins/community).
 | `slots`          | Exclusive slot selectors (e.g. `memory`, `contextEngine`) |
 | `entries.\<id\>` | Per-plugin toggles + config                               |
 
-Config changes **require a gateway restart**.
+Config changes **require a gateway restart**. If the Gateway is running with config
+watch + in-process restart enabled (the default `openclaw gateway` path), that
+restart is usually performed automatically a moment after the config write lands.
 
 <Accordion title="Plugin states: disabled vs missing vs invalid">
   - **Disabled**: plugin exists but enablement rules turned it off. Config is preserved.
