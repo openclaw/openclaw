@@ -22,23 +22,6 @@
         "reason": "Touches process-level unhandledRejection listeners."
       }
     ],
-    "threadPinned": [
-      {
-        "file": "src/infra/outbound/message-action-runner.context.test.ts",
-        "reason": "Terminates cleanly under threads, but not process forks on this host."
-      },
-      {
-        "file": "src/infra/outbound/targets.test.ts",
-        "reason": "Measured ~14% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/infra/outbound/agent-delivery.test.ts",
-        "reason": "Measured ~17% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/media-understanding/runner.video.test.ts",
-        "reason": "Measured ~25% faster under threads than forks on this host while keeping the file green."
-      }
-    ]
+    "threadPinned": []
   }
 }
