@@ -2,8 +2,8 @@ import { Type } from "@sinclair/typebox";
 import {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
+  createScopedPluginWebSearchCredentialAccessors,
   DEFAULT_SEARCH_COUNT,
-  getScopedCredentialValue,
   MAX_SEARCH_COUNT,
   mergeScopedSearchConfig,
   readCachedSearchPayload,
@@ -15,8 +15,6 @@ import {
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
-  setScopedCredentialValue,
-  setProviderWebSearchPluginConfigValue,
   type SearchConfigRecord,
   type WebSearchProviderPlugin,
   type WebSearchProviderToolDefinition,
@@ -324,16 +322,10 @@ export function createKimiWebSearchProvider(): WebSearchProviderPlugin {
     signupUrl: "https://platform.moonshot.cn/",
     docsUrl: "https://docs.openclaw.ai/tools/web",
     autoDetectOrder: 40,
-    credentialPath: "plugins.entries.moonshot.config.webSearch.apiKey",
-    inactiveSecretPaths: ["plugins.entries.moonshot.config.webSearch.apiKey"],
-    getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "kimi"),
-    setCredentialValue: (searchConfigTarget, value) =>
-      setScopedCredentialValue(searchConfigTarget, "kimi", value),
-    getConfiguredCredentialValue: (config) =>
-      resolveProviderWebSearchPluginConfig(config, "moonshot")?.apiKey,
-    setConfiguredCredentialValue: (configTarget, value) => {
-      setProviderWebSearchPluginConfigValue(configTarget, "moonshot", "apiKey", value);
-    },
+    ...createScopedPluginWebSearchCredentialAccessors({
+      pluginId: "moonshot",
+      searchConfigKey: "kimi",
+    }),
     createTool: (ctx) =>
       createKimiToolDefinition(
         mergeScopedSearchConfig(

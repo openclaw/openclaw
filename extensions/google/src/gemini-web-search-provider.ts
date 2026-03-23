@@ -2,8 +2,8 @@ import { Type } from "@sinclair/typebox";
 import {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
+  createScopedPluginWebSearchCredentialAccessors,
   DEFAULT_SEARCH_COUNT,
-  getScopedCredentialValue,
   MAX_SEARCH_COUNT,
   mergeScopedSearchConfig,
   readCachedSearchPayload,
@@ -16,8 +16,6 @@ import {
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
-  setScopedCredentialValue,
-  setProviderWebSearchPluginConfigValue,
   type SearchConfigRecord,
   type WebSearchProviderPlugin,
   type WebSearchProviderToolDefinition,
@@ -252,16 +250,10 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
     signupUrl: "https://aistudio.google.com/apikey",
     docsUrl: "https://docs.openclaw.ai/tools/web",
     autoDetectOrder: 20,
-    credentialPath: "plugins.entries.google.config.webSearch.apiKey",
-    inactiveSecretPaths: ["plugins.entries.google.config.webSearch.apiKey"],
-    getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "gemini"),
-    setCredentialValue: (searchConfigTarget, value) =>
-      setScopedCredentialValue(searchConfigTarget, "gemini", value),
-    getConfiguredCredentialValue: (config) =>
-      resolveProviderWebSearchPluginConfig(config, "google")?.apiKey,
-    setConfiguredCredentialValue: (configTarget, value) => {
-      setProviderWebSearchPluginConfigValue(configTarget, "google", "apiKey", value);
-    },
+    ...createScopedPluginWebSearchCredentialAccessors({
+      pluginId: "google",
+      searchConfigKey: "gemini",
+    }),
     createTool: (ctx) =>
       createGeminiToolDefinition(
         mergeScopedSearchConfig(

@@ -71,6 +71,38 @@ export function setScopedCredentialValue(
   (scoped as Record<string, unknown>).apiKey = value;
 }
 
+function buildPluginWebSearchCredentialPath(pluginId: string): string {
+  return `plugins.entries.${pluginId}.config.webSearch.apiKey`;
+}
+
+export function createScopedPluginWebSearchCredentialAccessors(params: {
+  pluginId: string;
+  searchConfigKey?: string;
+}): {
+  credentialPath: string;
+  inactiveSecretPaths: string[];
+  getCredentialValue: (searchConfig?: Record<string, unknown>) => unknown;
+  setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) => void;
+  getConfiguredCredentialValue: (config?: OpenClawConfig) => unknown;
+  setConfiguredCredentialValue: (configTarget: OpenClawConfig, value: unknown) => void;
+} {
+  const credentialPath = buildPluginWebSearchCredentialPath(params.pluginId);
+  const searchConfigKey = params.searchConfigKey ?? params.pluginId;
+
+  return {
+    credentialPath,
+    inactiveSecretPaths: [credentialPath],
+    getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, searchConfigKey),
+    setCredentialValue: (searchConfigTarget, value) =>
+      setScopedCredentialValue(searchConfigTarget, searchConfigKey, value),
+    getConfiguredCredentialValue: (config) =>
+      resolveProviderWebSearchPluginConfig(config, params.pluginId)?.apiKey,
+    setConfiguredCredentialValue: (configTarget, value) => {
+      setProviderWebSearchPluginConfigValue(configTarget, params.pluginId, "apiKey", value);
+    },
+  };
+}
+
 export function mergeScopedSearchConfig(
   searchConfig: Record<string, unknown> | undefined,
   key: string,

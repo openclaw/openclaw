@@ -2,8 +2,8 @@ import { Type } from "@sinclair/typebox";
 import {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
+  createScopedPluginWebSearchCredentialAccessors,
   DEFAULT_SEARCH_COUNT,
-  getScopedCredentialValue,
   MAX_SEARCH_COUNT,
   readCachedSearchPayload,
   readConfiguredSecretString,
@@ -15,8 +15,6 @@ import {
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
-  setScopedCredentialValue,
-  setProviderWebSearchPluginConfigValue,
   type SearchConfigRecord,
   type WebSearchProviderPlugin,
   type WebSearchProviderToolDefinition,
@@ -134,16 +132,10 @@ export function createGrokWebSearchProvider(): WebSearchProviderPlugin {
     signupUrl: "https://console.x.ai/",
     docsUrl: "https://docs.openclaw.ai/tools/web",
     autoDetectOrder: 30,
-    credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
-    inactiveSecretPaths: ["plugins.entries.xai.config.webSearch.apiKey"],
-    getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "grok"),
-    setCredentialValue: (searchConfigTarget, value) =>
-      setScopedCredentialValue(searchConfigTarget, "grok", value),
-    getConfiguredCredentialValue: (config) =>
-      resolveProviderWebSearchPluginConfig(config, "xai")?.apiKey,
-    setConfiguredCredentialValue: (configTarget, value) => {
-      setProviderWebSearchPluginConfigValue(configTarget, "xai", "apiKey", value);
-    },
+    ...createScopedPluginWebSearchCredentialAccessors({
+      pluginId: "xai",
+      searchConfigKey: "grok",
+    }),
     createTool: (ctx) =>
       createGrokToolDefinition(
         mergeScopedSearchConfig(

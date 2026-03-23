@@ -6,8 +6,8 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import {
   buildSearchCacheKey,
+  createScopedPluginWebSearchCredentialAccessors,
   DEFAULT_SEARCH_COUNT,
-  getScopedCredentialValue,
   MAX_SEARCH_COUNT,
   isoToPerplexityDate,
   mergeScopedSearchConfig,
@@ -21,8 +21,6 @@ import {
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
   resolveSiteName,
-  setScopedCredentialValue,
-  setProviderWebSearchPluginConfigValue,
   throwWebSearchApiError,
   type SearchConfigRecord,
   type WebSearchCredentialResolutionSource,
@@ -660,16 +658,7 @@ export function createPerplexityWebSearchProvider(): WebSearchProviderPlugin {
     signupUrl: "https://www.perplexity.ai/settings/api",
     docsUrl: "https://docs.openclaw.ai/perplexity",
     autoDetectOrder: 50,
-    credentialPath: "plugins.entries.perplexity.config.webSearch.apiKey",
-    inactiveSecretPaths: ["plugins.entries.perplexity.config.webSearch.apiKey"],
-    getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "perplexity"),
-    setCredentialValue: (searchConfigTarget, value) =>
-      setScopedCredentialValue(searchConfigTarget, "perplexity", value),
-    getConfiguredCredentialValue: (config) =>
-      resolveProviderWebSearchPluginConfig(config, "perplexity")?.apiKey,
-    setConfiguredCredentialValue: (configTarget, value) => {
-      setProviderWebSearchPluginConfigValue(configTarget, "perplexity", "apiKey", value);
-    },
+    ...createScopedPluginWebSearchCredentialAccessors({ pluginId: "perplexity" }),
     resolveRuntimeMetadata: (ctx) => ({
       perplexityTransport: resolveRuntimeTransport({
         searchConfig: mergeScopedSearchConfig(

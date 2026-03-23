@@ -29,6 +29,7 @@ export {
   writeCachedSearchPayload,
 } from "../agents/tools/web-search-provider-common.js";
 export {
+  createScopedPluginWebSearchCredentialAccessors,
   getScopedCredentialValue,
   getTopLevelCredentialValue,
   mergeScopedSearchConfig,
