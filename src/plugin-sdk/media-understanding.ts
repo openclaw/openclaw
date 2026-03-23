@@ -25,3 +25,5 @@ export {
   postTranscriptionRequest,
   requireTranscriptionText,
 } from "../media-understanding/shared.js";
+export { deepgramMediaUnderstandingProvider } from "../../extensions/deepgram/media-understanding-provider.js";
+export { groqMediaUnderstandingProvider } from "../../extensions/groq/media-understanding-provider.js";
