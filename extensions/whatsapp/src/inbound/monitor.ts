@@ -148,6 +148,13 @@ export async function monitorWebInbox(options: {
               if (normalized) {
                 participantJidMap.set(normalized, p.id);
               }
+              // Also map the raw JID digits so the agent can mention using
+              // either the resolved phone or the raw LID number it sees in
+              // inbound message bodies (e.g. "@101653353078797").
+              const rawDigits = p.id.replace(/:.*/, "").replace(/@.*/, "");
+              if (rawDigits && rawDigits !== normalized?.replace(/^\+/, "")) {
+                participantJidMap.set(`+${rawDigits}`, p.id);
+              }
               return resolved;
             }) ?? [],
           )
