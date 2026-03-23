@@ -1,27 +1,39 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+   This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 
- 开发环境配置
+   ## 铁律
 
-  ┌────────────┬───────────────────────────────┐
-  │    项目    │            路径/值            │
-  ├────────────┼───────────────────────────────┤
-  │ 配置目录   │ ~/.openclaw-dev/              │
-  ├────────────┼───────────────────────────────┤
-  │ 配置文件   │ ~/.openclaw-dev/openclaw.json │
-  ├────────────┼───────────────────────────────┤
-  │ 工作区     │ ~/.openclaw/workspace-dev     │
-  ├────────────┼───────────────────────────────┤
-  │ 默认 Agent │ dev                           │
-  └────────────┴───────────────────────────────┘
+   - 铁律1: 使用中文
+   - 铁律2: 每次构建成功提交修改
+
+
+   ## 开发环境配置
+
+   ┌────────────┬───────────────────────────────┐
+   │    项目    │            路径/值            │
+   ├────────────┼───────────────────────────────┤
+   │ 配置目录   │ ~/.openclaw-dev/              │
+   ├────────────┼───────────────────────────────┤
+   │ 配置文件   │ ~/.openclaw-dev/openclaw.json │
+   ├────────────┼───────────────────────────────┤
+   │ 工作区     │ ~/.openclaw/workspace-dev     │
+   ├────────────┼───────────────────────────────┤
+   │ 默认 Agent │ dev                           │
+   └────────────┴───────────────────────────────┘
+
+
 
 ❯   pnpm gateway:dev    
 
 llm 集成：
 1 只支持openai和ollama
 2 简单直接主流
+
+  如果你想用 3000 端口运行开发模式，可以：
+  1. 手动指定端口：pnpm openclaw --dev gateway --port 3000
+
 
 
 ## Build, Test, and Run Commands

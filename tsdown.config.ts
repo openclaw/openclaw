@@ -54,6 +54,7 @@ const pluginSdkEntrypoints = [
   "memory-lancedb",
   "thread-ownership",
   "account-id",
+  "device-pair",
   "keyed-async-queue",
 ] as const;
 
