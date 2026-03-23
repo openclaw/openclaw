@@ -724,6 +724,7 @@
     "test:macmini": "OPENCLAW_TEST_PROFILE=macmini node scripts/test-parallel.mjs",
     "test:parallels:linux": "bash scripts/e2e/parallels-linux-smoke.sh",
     "test:parallels:macos": "bash scripts/e2e/parallels-macos-smoke.sh",
+    "test:parallels:npm-update": "bash scripts/e2e/parallels-npm-update-smoke.sh",
     "test:parallels:windows": "bash scripts/e2e/parallels-windows-smoke.sh",
     "test:perf:budget": "node scripts/test-perf-budget.mjs",
     "test:perf:find-thread-candidates": "node scripts/test-find-thread-candidates.mjs",
