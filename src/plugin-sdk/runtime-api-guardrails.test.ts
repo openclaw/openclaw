@@ -57,6 +57,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
   ],
   "extensions/telegram/runtime-api.ts": [
     'export type { ChannelMessageActionAdapter, ChannelPlugin, OpenClawConfig, OpenClawPluginApi, PluginRuntime, TelegramAccountConfig, TelegramActionConfig, TelegramNetworkConfig } from "openclaw/plugin-sdk/telegram";',
+    'export type { TelegramApiOverride } from "./src/send.js";',
     'export type { OpenClawPluginService, OpenClawPluginServiceContext, PluginLogger } from "openclaw/plugin-sdk/core";',
     'export type { AcpRuntime, AcpRuntimeCapabilities, AcpRuntimeDoctorReport, AcpRuntimeEnsureInput, AcpRuntimeEvent, AcpRuntimeHandle, AcpRuntimeStatus, AcpRuntimeTurnInput, AcpRuntimeErrorCode, AcpSessionUpdateTag } from "openclaw/plugin-sdk/acp-runtime";',
     'export { AcpRuntimeError } from "openclaw/plugin-sdk/acp-runtime";',
