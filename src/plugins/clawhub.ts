@@ -13,10 +13,10 @@ import {
   type ClawHubPackageDetail,
   type ClawHubPackageFamily,
 } from "../infra/clawhub.js";
-import { resolveRuntimeServiceVersion } from "../version.js";
+import { VERSION, resolveRuntimeServiceVersion } from "../version.js";
 import { installPluginFromArchive, type InstallPluginResult } from "./install.js";
 
-export const OPENCLAW_PLUGIN_API_VERSION = "1.2.0";
+export const OPENCLAW_PLUGIN_API_VERSION = VERSION ?? resolveRuntimeServiceVersion();
 export const CLAWHUB_INSTALL_ERROR_CODE = {
   INVALID_SPEC: "invalid_spec",
   PACKAGE_NOT_FOUND: "package_not_found",
