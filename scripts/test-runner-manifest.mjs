@@ -47,9 +47,13 @@ export function loadTestRunnerBehavior() {
   const raw = tryReadJsonFile(behaviorManifestPath, {});
   const unit = raw.unit ?? {};
   const base = raw.base ?? {};
+  const extensions = raw.extensions ?? {};
   return {
     base: {
       threadPinned: mergeManifestEntries(base, ["threadPinned", "threadSingleton"]),
+    },
+    extensions: {
+      isolated: mergeManifestEntries(extensions, ["isolated"]),
     },
     unit: {
       isolated: mergeManifestEntries(unit, ["isolated"]),
