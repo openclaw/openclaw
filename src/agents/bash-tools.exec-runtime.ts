@@ -332,11 +332,13 @@ function classifyExecFailureKind(params: {
 }
 
 export function formatExecFailureReason(params: {
-  failureKind: Exclude<ExecProcessFailureKind, "runtime-error">;
+  failureKind: ExecProcessFailureKind;
   exitSignal: NodeJS.Signals | number | null;
   timeoutSec: number | null | undefined;
 }): string {
   switch (params.failureKind) {
+    case "runtime-error":
+      return "Command failed before exit status was captured";
     case "shell-command-not-found":
       return "Command not found";
     case "shell-not-executable":
