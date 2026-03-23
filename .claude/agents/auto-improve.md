@@ -1,6 +1,6 @@
 ---
 name: auto-improve
-description: Analyzes Operator1 gateway session logs and iteratively improves workspace prompt files. Run this to optimize how Operator1 handles routing, memory, delegation, and channel isolation. Inspired by karpathy/autoresearch.
+description: Analyzes Operator1 gateway session logs and iteratively improves workspace prompt files. Runs CONTINUOUSLY in the background — sleeps 10m between iterations, never exits. Optimizes routing, memory, delegation, and channel isolation. Inspired by karpathy/autoresearch.
 tools: Read, Grep, Glob, Bash, Write, Edit
 model: sonnet
 maxTurns: 200
@@ -179,9 +179,21 @@ Append a row to `~/dev/operator1/workspaces/operator1/auto-improve/results.tsv`:
 
 ### 9. Wait and Re-analyze
 
-Wait for new conversations to happen with the updated prompts. The user may specify a wait time, or you can analyze the next batch of sessions.
+**DO NOT EXIT.** Sleep for 10 minutes to allow new session data to accumulate, then loop back to Step 1.
+
+```bash
+echo "[auto-improve] sleeping 10m before next iteration ($(date))"
+sleep 600
+echo "[auto-improve] waking up for next iteration ($(date))"
+```
+
+If no new sessions have appeared since your last analysis (check file mtimes), sleep another 10 minutes. Keep sleeping and checking until new data arrives. The point is to **stay alive and keep iterating** — the user dispatched you to run continuously, not to do one pass and exit.
+
+**Score stabilization:** If the composite score has been within ±0.02 of the same value for 5 consecutive iterations AND all individual metrics are above 0.7, print a summary and sleep for 30 minutes instead of 10 before checking again. Do NOT exit — the score may regress as new conversation patterns emerge.
 
 ### 10. GOTO Step 1
+
+Return to Step 1 (Collect Sessions) and repeat. This loop runs indefinitely until the user stops it or the session is terminated.
 
 ## Constraints
 
@@ -230,7 +242,7 @@ Wait for new conversations to happen with the updated prompts. The user may spec
 - Always measure before and after.
 - If stuck after 3 consecutive discards on the same metric, try a different metric.
 - Simpler is better. If removing text improves or maintains the score, keep the removal.
-- NEVER STOP unless the user tells you to. If you run out of ideas, re-read the session logs for new patterns.
+- NEVER STOP and NEVER EXIT unless the user explicitly tells you to. If you run out of ideas, sleep 10 minutes and re-read session logs for new patterns. If no new sessions exist, sleep and check again. Your job is to stay alive and keep iterating — exiting after one iteration defeats the entire purpose.
 
 ## Reporting
 
