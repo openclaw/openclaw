@@ -111,6 +111,9 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
   the npm version is already published.
 - Validation-only runs may be dispatched from a branch when you are testing a
   workflow change before merge.
+- macOS preflight uploads the ad-hoc `.zip`, `.dmg`, and `.dSYM.zip` outputs as
+  workflow artifacts so maintainers can download and inspect the built package
+  before any real publish run.
 - npm preflight and macOS preflight must both pass before any publish run
   starts.
 - Real publish runs must be dispatched from `main`; branch-dispatched publish

@@ -132,6 +132,16 @@ jobs:
           SPARKLE_FEED_URL: ${{ env.SPARKLE_FEED_URL }}
         run: scripts/package-mac-dist.sh
 
+      - name: Upload preflight macOS artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-preflight-${{ inputs.tag }}
+          path: |
+            dist/OpenClaw-${{ steps.package_version.outputs.value }}.zip
+            dist/OpenClaw-${{ steps.package_version.outputs.value }}.dmg
+            dist/OpenClaw-${{ steps.package_version.outputs.value }}.dSYM.zip
+          if-no-files-found: error
+
   validate_publish_dispatch_ref:
     if: ${{ !inputs.preflight_only }}
     runs-on: ubuntu-latest
