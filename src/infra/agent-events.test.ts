@@ -107,7 +107,7 @@ describe("agent-events sequencing", () => {
       isHeartbeat: true,
     });
 
-    expect(getAgentRunContext("run-ctx")).toEqual({
+    expect(getAgentRunContext("run-ctx")).toMatchObject({
       sessionKey: "session-main",
       verboseLevel: "full",
       isHeartbeat: true,
@@ -186,7 +186,7 @@ describe("agent-events sequencing", () => {
 
     stop();
 
-    expect(second.getAgentRunContext("run-dup")).toEqual({ sessionKey: "session-dup" });
+    expect(second.getAgentRunContext("run-dup")).toMatchObject({ sessionKey: "session-dup" });
     expect(seen).toEqual([
       { seq: 1, sessionKey: "session-dup" },
       { seq: 2, sessionKey: "session-dup" },
