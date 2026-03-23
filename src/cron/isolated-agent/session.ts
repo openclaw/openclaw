@@ -99,6 +99,8 @@ export function resolveCronSession(params: {
         chatType: entry?.chatType,
         groupActivation: entry?.groupActivation,
         groupActivationNeedsSystemIntro: entry?.groupActivationNeedsSystemIntro,
+        // Preserve skills snapshot to avoid re-scanning workspace
+        skillsSnapshot: entry?.skillsSnapshot,
       }
     : isNewSession
       ? {
