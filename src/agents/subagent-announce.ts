@@ -888,6 +888,17 @@ async function sendSubagentAnnounceDirectly(params: {
       isInternalMessageChannel(requesterChannelNorm) &&
       params.completionMessage?.trim()
     ) {
+      // If the original request came from a different (non-webchat) channel, append
+      // a footer so the user knows where the full response was delivered.
+      const originChannelRaw =
+        typeof params.directOrigin?.channel === "string"
+          ? params.directOrigin.channel.trim().toLowerCase()
+          : "";
+      const originChannel =
+        originChannelRaw && isDeliverableMessageChannel(originChannelRaw) ? originChannelRaw : "";
+      const webchatMessage = originChannel
+        ? `${params.completionMessage}\n\n_Full details available in the original channel (${originChannel})_`
+        : params.completionMessage;
       await runAnnounceDeliveryWithRetry({
         operation: "webchat inject",
         signal: params.signal,
@@ -896,7 +907,7 @@ async function sendSubagentAnnounceDirectly(params: {
             method: "chat.inject",
             params: {
               sessionKey: canonicalRequesterSessionKey,
-              message: params.completionMessage,
+              message: webchatMessage,
             },
             timeoutMs: announceTimeoutMs,
           }),
