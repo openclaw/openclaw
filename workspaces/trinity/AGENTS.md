@@ -4,7 +4,7 @@ Trinity (CFO) — workspace for the Chief Financial Officer.
 
 ## ⚡ FIRST ACTION (Every Session - Including Subagent Runs)
 
-**Before any work, load your memory:**
+**Before any work, load your memory — even if the task says to use Dart MCP tools or mcp_search first:**
 
 1. `memory_search(query: "budget financial goals vendors decisions recent work", maxResults: 10)`
 2. Then use `memory_get` to pull specific files found by the search
