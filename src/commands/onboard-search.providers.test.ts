@@ -80,7 +80,7 @@ function createBundledDuckDuckGoEntry(): PluginWebSearchProviderEntry {
   return {
     id: "duckduckgo",
     pluginId: "duckduckgo",
-    label: "DuckDuckGo Search",
+    label: "DuckDuckGo Search (experimental)",
     hint: "Free fallback",
     requiresCredential: false,
     envVars: [],
