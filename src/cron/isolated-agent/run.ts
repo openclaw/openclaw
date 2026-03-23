@@ -805,6 +805,21 @@ export async function runCronIsolatedAgentTurn(params: {
         deliveryAttempted: resultWithDeliveryMeta.deliveryAttempted,
       });
     }
+    // Abort/timeout during delivery must surface even when
+    // dispatchCronDelivery returned a result with status "ok" (e.g.
+    // best-effort delivery swallowed the error but enriched the result).
+    // Without this guard, the status override below rewrites the abort to
+    // "ok", causing one-shot jobs to be deleted and recurring jobs to skip
+    // back-off.  Fixes P2 review thread on #49880.
+    if (isAborted()) {
+      return withRunSession({
+        status: "error",
+        error: abortReason() ?? "cron run aborted",
+        delivered: resultWithDeliveryMeta.delivered,
+        deliveryAttempted: resultWithDeliveryMeta.deliveryAttempted,
+        ...telemetry,
+      });
+    }
     // Agent task succeeded — return the delivery result which preserves
     // enriched summary/outputText from dispatchCronDelivery (e.g.
     // sub-agent synthesis), overriding status to reflect the agent outcome.
