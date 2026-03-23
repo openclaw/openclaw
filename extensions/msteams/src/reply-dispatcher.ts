@@ -92,6 +92,8 @@ export function createMSTeamsReplyDispatcher(params: {
       if (errStr.includes("429") || errStr.includes("quota exceeded")) {
         typingSuppressedUntil = Date.now() + TYPING_BACKOFF_MS;
         params.log.debug?.(`msteams typing suppressed for ${TYPING_BACKOFF_MS}ms after 429`);
+      } else {
+        throw err;
       }
     }
   };
