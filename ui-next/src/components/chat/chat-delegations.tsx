@@ -1,0 +1,202 @@
+import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Loader2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
+import type { DelegationEntry } from "@/store/delegation-store";
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function formatElapsed(ms: number): string {
+  if (ms < 1000) {
+    return `${ms}ms`;
+  }
+  const s = Math.floor(ms / 1000);
+  if (s < 60) {
+    return `${s}s`;
+  }
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return `${m}m ${rem}s`;
+}
+
+function truncate(str: string, max: number): string {
+  if (str.length <= max) {
+    return str;
+  }
+  return str.slice(0, max) + "\u2026";
+}
+
+// ─── Status dot ───────────────────────────────────────────────────────────────
+
+function StatusDot({ status }: { status: DelegationEntry["status"] }) {
+  if (status === "running") {
+    return (
+      <span className="relative flex h-2 w-2 shrink-0">
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75" />
+        <span className="relative inline-flex h-2 w-2 rounded-full bg-blue-500" />
+      </span>
+    );
+  }
+  const colorMap: Record<DelegationEntry["status"], string> = {
+    spawned: "bg-muted-foreground/50",
+    running: "bg-blue-500",
+    completed: "bg-green-500",
+    stale: "bg-amber-500",
+    failed: "bg-red-500",
+  };
+  return <span className={cn("inline-flex h-2 w-2 shrink-0 rounded-full", colorMap[status])} />;
+}
+
+// ─── Status badge ─────────────────────────────────────────────────────────────
+
+const statusBadgeClass: Record<DelegationEntry["status"], string> = {
+  spawned: "bg-muted text-muted-foreground border-border",
+  running: "bg-blue-500/15 text-blue-400 border-blue-500/30",
+  completed: "bg-green-500/15 text-green-400 border-green-500/30",
+  stale: "bg-amber-500/15 text-amber-400 border-amber-500/30",
+  failed: "bg-red-500/15 text-red-400 border-red-500/30",
+};
+
+function StatusBadge({ status }: { status: DelegationEntry["status"] }) {
+  return (
+    <Badge
+      variant="outline"
+      className={cn("text-[10px] px-1.5 py-0 font-mono leading-4 border", statusBadgeClass[status])}
+    >
+      {status}
+    </Badge>
+  );
+}
+
+// ─── Status icon (for completed / stale / failed summary) ────────────────────
+
+function StatusIcon({ status }: { status: DelegationEntry["status"] }) {
+  if (status === "running") {
+    return <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-400 shrink-0" />;
+  }
+  if (status === "completed") {
+    return <CheckCircle2 className="h-3.5 w-3.5 text-green-400 shrink-0" />;
+  }
+  if (status === "failed" || status === "stale") {
+    return <AlertCircle className="h-3.5 w-3.5 text-amber-400 shrink-0" />;
+  }
+  return null;
+}
+
+// ─── Single delegation card ────────────────────────────────────────────────────
+
+function DelegationCard({ entry }: { entry: DelegationEntry }) {
+  // Auto-update elapsed time every second for active delegations
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (entry.status === "running" || entry.status === "spawned") {
+      const id = setInterval(() => setNow(Date.now()), 1000);
+      return () => clearInterval(id);
+    }
+  }, [entry.status]);
+
+  const elapsed =
+    entry.endedAt != null
+      ? entry.elapsedMs
+      : entry.startedAt != null
+        ? now - entry.startedAt
+        : now - entry.createdAt;
+
+  const agentDisplay = entry.label ?? entry.agentId ?? "sub-agent";
+  const task = entry.task ? truncate(entry.task, 80) : null;
+
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-1 rounded-md border px-3 py-2 text-xs transition-colors",
+        entry.status === "running"
+          ? "border-blue-500/20 bg-blue-500/5"
+          : entry.status === "completed"
+            ? "border-green-500/20 bg-green-500/5"
+            : entry.status === "failed"
+              ? "border-red-500/20 bg-red-500/5"
+              : entry.status === "stale"
+                ? "border-amber-500/20 bg-amber-500/5"
+                : "border-border bg-muted/30",
+      )}
+    >
+      {/* Top row: dot + agent name + status badge + elapsed */}
+      <div className="flex items-center gap-2 min-w-0">
+        <StatusDot status={entry.status} />
+        <span className="font-medium text-foreground/90 truncate max-w-[120px]">
+          {agentDisplay}
+        </span>
+        <StatusBadge status={entry.status} />
+        <span className="ml-auto text-muted-foreground font-mono tabular-nums shrink-0">
+          {formatElapsed(elapsed)}
+        </span>
+        <StatusIcon status={entry.status} />
+      </div>
+
+      {/* Task description */}
+      {task && <p className="text-muted-foreground leading-snug pl-4">{task}</p>}
+
+      {/* Result preview (completed only) */}
+      {entry.status === "completed" && entry.resultPreview && (
+        <p className="mt-0.5 pl-4 text-green-400/80 leading-snug line-clamp-3">
+          {truncate(entry.resultPreview, 200)}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ─── Main panel ───────────────────────────────────────────────────────────────
+
+export interface ChatDelegationsProps {
+  delegations: DelegationEntry[];
+}
+
+export function ChatDelegations({ delegations }: ChatDelegationsProps) {
+  const [collapsed, setCollapsed] = useState(false);
+
+  // Only render when there are entries
+  if (delegations.length === 0) {
+    return null;
+  }
+
+  const activeCount = delegations.filter(
+    (d) => d.status === "running" || d.status === "spawned",
+  ).length;
+
+  return (
+    <div className="mx-auto w-full max-w-4xl px-4 pb-2">
+      <div className="rounded-lg border border-border/60 bg-card/60 backdrop-blur-sm shadow-sm">
+        {/* Header row */}
+        <button
+          type="button"
+          onClick={() => setCollapsed((v) => !v)}
+          className="flex w-full items-center gap-2 px-3 py-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        >
+          {collapsed ? (
+            <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+          ) : (
+            <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+          )}
+          <span className="font-medium">Sub-agent delegations</span>
+          {activeCount > 0 && (
+            <span className="ml-1 flex items-center gap-1 text-blue-400">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              {activeCount} active
+            </span>
+          )}
+          <span className="ml-auto text-muted-foreground/60">{delegations.length} total</span>
+        </button>
+
+        {/* Delegation cards */}
+        {!collapsed && (
+          <div className="flex flex-col gap-2 px-3 pb-3">
+            {delegations.map((entry) => (
+              <DelegationCard key={entry.runId} entry={entry} />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

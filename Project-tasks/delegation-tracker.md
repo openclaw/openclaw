@@ -4,7 +4,7 @@ title: "Delegation Tracker: Auto-polling sub-agent status with UI plan cards"
 description: "Track Operator1 sub-agent delegations with auto-polling, stale detection, restart recovery, and UI plan card visualization."
 dartboard: "Operator1/Tasks"
 type: Project
-status: "In Progress"
+status: "Done"
 priority: high
 assignee: "rohit sharma"
 tags: [feature, backend, ui, orchestration, delegation]
@@ -17,7 +17,7 @@ dart_project_id:
 # Delegation Tracker: Auto-polling Sub-agent Status with UI Plan Cards
 
 **Created:** 2026-03-23
-**Status:** In Progress
+**Status:** Done
 **Depends on:** Paperclip orchestration (complete), workspace context injection (complete), startup heartbeat (complete)
 
 ---

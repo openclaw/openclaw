@@ -1,6 +1,7 @@
 import { ArrowDown, ArrowUp, ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import { useRef, useState, useMemo, useCallback, useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { ChatDelegations } from "@/components/chat/chat-delegations";
 import {
   ChatHeader,
   useAgentMap,
@@ -30,9 +31,10 @@ import { type ModelEntry } from "@/components/ui/custom/status/model-selector";
 import { useToast } from "@/components/ui/custom/toast";
 import { useChat } from "@/hooks/use-chat";
 import { useDynamicPlaceholder } from "@/hooks/use-dynamic-placeholder";
-import { useGateway, onAgentPushEvent } from "@/hooks/use-gateway";
+import { useGateway, onAgentPushEvent, onDelegationPushEvent } from "@/hooks/use-gateway";
 import { cn } from "@/lib/utils";
 import { useChatStore, getMessageText, type ChatMessage } from "@/store/chat-store";
+import { useDelegationStore, type DelegationEntry } from "@/store/delegation-store";
 import { useGatewayStore } from "@/store/gateway-store";
 
 export function ChatPage() {
@@ -122,6 +124,38 @@ export function ChatPage() {
       }
     });
   }, [toast]);
+
+  // Delegation store
+  const { delegations, setDelegations, clearDelegations } = useDelegationStore();
+
+  // Load initial delegation state when session changes or connection is established
+  useEffect(() => {
+    if (!isConnected || !activeSessionKey) {
+      return;
+    }
+    sendRpc<{ delegations?: DelegationEntry[] }>("sessions.delegations", {
+      sessionKey: activeSessionKey,
+    })
+      .then((result) => setDelegations(result?.delegations ?? []))
+      .catch(() => {
+        // sessions.delegations may not exist on older gateways; swallow silently
+      });
+  }, [isConnected, activeSessionKey, sendRpc, setDelegations]);
+
+  // Clear delegations when switching sessions
+  useEffect(() => {
+    clearDelegations();
+  }, [activeSessionKey, clearDelegations]);
+
+  // Subscribe to live delegation events pushed via WebSocket
+  useEffect(() => {
+    return onDelegationPushEvent((payload) => {
+      const evt = payload as { delegations?: DelegationEntry[] } | null;
+      if (evt?.delegations) {
+        setDelegations(evt.delegations);
+      }
+    });
+  }, [setDelegations]);
 
   // After a stream finalizes, refresh history from the server to pick up
   // full message data (usage, stopReason, etc.) that the live "final" event
@@ -898,6 +932,9 @@ export function ChatPage() {
             </div>
           )}
         </div>
+
+        {/* Delegation status panel — shown above input when sub-agents are active */}
+        <ChatDelegations delegations={delegations} />
 
         {/* Input Area */}
         <ChatInput

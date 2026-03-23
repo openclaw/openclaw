@@ -190,6 +190,10 @@ function handleEvent(evt: GatewayEventFrame) {
     notifyAgentEventListeners(evt.payload);
   }
 
+  if (evt.event === "delegation") {
+    notifyDelegationEventListeners(evt.payload);
+  }
+
   // Forward events to visualize store when active
   const vizState = useVisualizeStore.getState();
   if (vizState.isActive) {
@@ -273,6 +277,29 @@ function notifyAgentEventListeners(payload: unknown) {
 export function onAgentPushEvent(listener: AgentEventListener): () => void {
   agentEventListeners.add(listener);
   return () => agentEventListeners.delete(listener);
+}
+
+// ─── Delegation event push listener registry ──────────────────────────
+// Allows chat page to subscribe to delegation lifecycle events (spawned,
+// running, completed, failed, stale) pushed from the gateway over WebSocket.
+
+type DelegationEventListener = (payload: unknown) => void;
+const delegationEventListeners = new Set<DelegationEventListener>();
+
+function notifyDelegationEventListeners(payload: unknown) {
+  for (const listener of delegationEventListeners) {
+    try {
+      listener(payload);
+    } catch {
+      /* ignore listener errors */
+    }
+  }
+}
+
+/** Subscribe to delegation events pushed via WebSocket. Returns an unsubscribe function. */
+export function onDelegationPushEvent(listener: DelegationEventListener): () => void {
+  delegationEventListeners.add(listener);
+  return () => delegationEventListeners.delete(listener);
 }
 
 function handleChatEvent(payload: unknown) {
