@@ -59,6 +59,8 @@ describe("nextcloud talk room info", () => {
   it("reads the api password from a file and logs non-ok responses", async () => {
     const release = vi.fn(async () => {});
     const log = vi.fn();
+    const error = vi.fn();
+    const exit = vi.fn();
     readFileSync.mockReturnValue("file-secret\n");
     fetchWithSsrFGuard.mockResolvedValue({
       response: {
@@ -80,14 +82,12 @@ describe("nextcloud talk room info", () => {
         },
       } as never,
       roomToken: "room-group",
-      runtime: { log },
+      runtime: { log, error, exit },
     });
 
     expect(kind).toBeUndefined();
     expect(readFileSync).toHaveBeenCalledWith("/tmp/nextcloud-secret", "utf-8");
-    expect(log).toHaveBeenCalledWith(
-      "nextcloud-talk: room lookup failed (403) token=room-group",
-    );
+    expect(log).toHaveBeenCalledWith("nextcloud-talk: room lookup failed (403) token=room-group");
     expect(release).toHaveBeenCalledTimes(1);
   });
 

@@ -1,19 +1,13 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { formatGeneratedModule } from "./lib/format-generated-module.mjs";
 import { writeTextFileIfChanged } from "./runtime-postbuild-shared.mjs";
 
 const GENERATED_BY = "scripts/generate-bundled-plugin-metadata.mjs";
 const DEFAULT_OUTPUT_PATH = "src/plugins/bundled-plugin-metadata.generated.ts";
 const MANIFEST_KEY = "openclaw";
 const FORMATTER_CWD = path.resolve(import.meta.dirname, "..");
-const OXFMT_BIN = path.join(
-  FORMATTER_CWD,
-  "node_modules",
-  ".bin",
-  process.platform === "win32" ? "oxfmt.cmd" : "oxfmt",
-);
 const CANONICAL_PACKAGE_ID_ALIASES = {
   "elevenlabs-speech": "elevenlabs",
   "microsoft-speech": "microsoft",
@@ -133,29 +127,11 @@ function normalizePluginManifest(raw) {
 }
 
 function formatTypeScriptModule(source, { outputPath }) {
-  const formatterPath = path.relative(FORMATTER_CWD, outputPath) || outputPath;
-  const command = fs.existsSync(OXFMT_BIN)
-    ? OXFMT_BIN
-    : process.platform === "win32"
-      ? "pnpm.cmd"
-      : "pnpm";
-  const args = fs.existsSync(OXFMT_BIN)
-    ? ["--stdin-filepath", formatterPath]
-    : ["exec", "oxfmt", "--stdin-filepath", formatterPath];
-  const formatter = spawnSync(command, args, {
-    cwd: FORMATTER_CWD,
-    input: source,
-    encoding: "utf8",
+  return formatGeneratedModule(source, {
+    repoRoot: FORMATTER_CWD,
+    outputPath,
+    errorLabel: "bundled plugin metadata",
   });
-  if (formatter.status !== 0) {
-    const details =
-      formatter.stderr?.trim() ||
-      formatter.stdout?.trim() ||
-      formatter.error?.message ||
-      "unknown formatter failure";
-    throw new Error(`failed to format generated bundled plugin metadata: ${details}`);
-  }
-  return formatter.stdout;
 }
 
 export function collectBundledPluginMetadata(params = {}) {

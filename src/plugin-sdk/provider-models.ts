@@ -7,11 +7,12 @@ import {
   KILOCODE_DEFAULT_MAX_TOKENS,
   KILOCODE_DEFAULT_MODEL_ID,
   KILOCODE_DEFAULT_MODEL_NAME,
-} from "../providers/kilocode-shared.js";
+} from "../plugins/provider-model-kilocode.js";
 
 export type { ModelApi, ModelProviderConfig } from "../config/types.models.js";
 export type { ModelDefinitionConfig } from "../config/types.models.js";
 export type { ProviderPlugin } from "../plugins/types.js";
+export type { KilocodeModelCatalogEntry } from "../plugins/provider-model-kilocode.js";
 
 export { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 export {
@@ -35,7 +36,11 @@ export {
   applyOpenAIConfig,
   OPENAI_CODEX_DEFAULT_MODEL,
   OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL,
+  OPENAI_DEFAULT_EMBEDDING_MODEL,
+  OPENAI_DEFAULT_IMAGE_MODEL,
   OPENAI_DEFAULT_MODEL,
+  OPENAI_DEFAULT_TTS_MODEL,
+  OPENAI_DEFAULT_TTS_VOICE,
 } from "../plugins/provider-model-defaults.js";
 export { OPENCODE_GO_DEFAULT_MODEL_REF } from "../plugins/provider-model-defaults.js";
 export { OPENCODE_ZEN_DEFAULT_MODEL } from "../plugins/provider-model-defaults.js";
@@ -107,7 +112,7 @@ export {
   KILOCODE_DEFAULT_MODEL_ID,
   KILOCODE_DEFAULT_MODEL_NAME,
   KILOCODE_MODEL_CATALOG,
-} from "../providers/kilocode-shared.js";
+} from "../plugins/provider-model-kilocode.js";
 export {
   discoverVercelAiGatewayModels,
   VERCEL_AI_GATEWAY_BASE_URL,

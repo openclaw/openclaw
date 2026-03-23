@@ -3,9 +3,9 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace } from "../../test-helpers/workspace.js";
 import { captureEnv } from "../../test-utils/env.js";
+import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
-const runtimeLogs: string[] = [];
-const runtimeErrors: string[] = [];
+const { runtimeLogs, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 const serviceMock = vi.hoisted(() => ({
   label: "Gateway",
@@ -25,22 +25,7 @@ vi.mock("../../daemon/service.js", () => ({
 }));
 
 vi.mock("../../runtime.js", () => ({
-  defaultRuntime: {
-    log: (message: string) => runtimeLogs.push(message),
-    error: (message: string) => runtimeErrors.push(message),
-    writeStdout: (value: string) => {
-      runtimeLogs.push(value.endsWith("\n") ? value.slice(0, -1) : value);
-    },
-    writeJson: (value: unknown, space = 2) => {
-      runtimeLogs.push(JSON.stringify(value, null, space > 0 ? space : undefined));
-    },
-    exit: (code: number) => {
-      throw new Error(`__exit__:${code}`);
-    },
-    writeStdout: (value: string) => runtimeLogs.push(value),
-    writeJson: (value: unknown, space = 2) =>
-      runtimeLogs.push(JSON.stringify(value, null, space > 0 ? space : undefined)),
-  },
+  defaultRuntime,
 }));
 
 const { runDaemonInstall } = await import("./install.js");
@@ -78,9 +63,8 @@ describe("runDaemonInstall integration", () => {
   });
 
   beforeEach(async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
     vi.clearAllMocks();
+    resetRuntimeCapture();
     // Keep these defined-but-empty so dotenv won't repopulate from local .env.
     process.env.OPENCLAW_GATEWAY_TOKEN = "";
     process.env.CLAWDBOT_GATEWAY_TOKEN = "";

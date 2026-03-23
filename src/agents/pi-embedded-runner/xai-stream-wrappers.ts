@@ -2,6 +2,8 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 
 const XAI_FAST_MODEL_IDS = new Map<string, string>([
+  ["grok-3", "grok-3-fast"],
+  ["grok-3-mini", "grok-3-mini-fast"],
   ["grok-4", "grok-4-fast"],
   ["grok-4-0709", "grok-4-fast"],
 ]);

@@ -10,6 +10,7 @@ import { resolveConfigPath } from "../config/paths.js";
 import { callGateway } from "../gateway/call.js";
 import type { collectChannelStatusIssues as collectChannelStatusIssuesFn } from "../infra/channels-status-issues.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
+import { loggingState } from "../logging/state.js";
 import {
   buildPluginCompatibilityNotices,
   type PluginCompatibilityNotice,
@@ -66,13 +67,6 @@ function unwrapDeferredResult<T>(result: DeferredResult<T>): T {
     throw result.error;
   }
   return result.value;
-}
-
-function shouldCollectPluginCompatibility(cfg: OpenClawConfig): boolean {
-  if (hasPotentialConfiguredChannels(cfg)) {
-    return true;
-  }
-  return existsSync(resolveConfigPath(process.env));
 }
 
 function isMissingConfigColdStart(): boolean {
@@ -166,7 +160,14 @@ async function scanStatusJsonFast(opts: {
   const hasConfiguredChannels = hasPotentialConfiguredChannels(cfg);
   if (hasConfiguredChannels) {
     const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
-    ensurePluginRegistryLoaded({ scope: "configured-channels" });
+    // Route plugin registration logs to stderr so they don't corrupt JSON on stdout.
+    const prev = loggingState.forceConsoleToStderr;
+    loggingState.forceConsoleToStderr = true;
+    try {
+      ensurePluginRegistryLoaded({ scope: "configured-channels" });
+    } finally {
+      loggingState.forceConsoleToStderr = prev;
+    }
   }
   const osSummary = resolveOsSummary();
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
@@ -229,9 +230,9 @@ async function scanStatusJsonFast(opts: {
   const memoryPlugin = resolveMemoryPluginStatus(cfg);
   const memoryPromise = resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin });
   const memory = await memoryPromise;
-  const pluginCompatibility = shouldCollectPluginCompatibility(cfg)
-    ? buildPluginCompatibilityNotices({ config: cfg })
-    : [];
+  // `status --json` never renders plugin compatibility notices, so skip the
+  // full compatibility scan and avoid a second plugin load on the JSON path.
+  const pluginCompatibility: StatusScanResult["pluginCompatibility"] = [];
 
   return {
     cfg,

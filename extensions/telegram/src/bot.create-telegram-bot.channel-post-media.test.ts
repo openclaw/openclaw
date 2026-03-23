@@ -11,10 +11,8 @@ const {
   telegramBotRuntimeForTest,
 } = harness;
 
-const {
-  createTelegramBot: createTelegramBotBase,
-  setTelegramBotRuntimeForTest,
-} = await import("./bot.js");
+const { createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest } =
+  await import("./bot.js");
 
 setTelegramBotRuntimeForTest(
   telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
@@ -56,7 +54,7 @@ function getChannelPostHandler() {
 
 function resolveFlushTimer(setTimeoutSpy: ReturnType<typeof vi.spyOn>) {
   const flushTimerCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
-    (call) => call[1] === TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs,
+    (call: Parameters<typeof setTimeout>) => call[1] === TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs,
   );
   const flushTimer =
     flushTimerCallIndex >= 0
@@ -233,7 +231,12 @@ describe("createTelegramBot channel_post media", () => {
       expect(sendMessageSpy).toHaveBeenCalledWith(
         1234,
         "⚠️ Failed to download media. Please try again.",
-        { reply_to_message_id: 411 },
+        {
+          reply_parameters: {
+            message_id: 411,
+            allow_sending_without_reply: true,
+          },
+        },
       );
       expect(replySpy).not.toHaveBeenCalled();
     } finally {

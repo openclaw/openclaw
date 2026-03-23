@@ -429,6 +429,8 @@ describe("createImageGenerateTool", () => {
     expect(text).toContain("google (default gemini-3.1-flash-image-preview)");
     expect(text).toContain("gemini-3.1-flash-image-preview");
     expect(text).toContain("gemini-3-pro-image-preview");
+    expect(text).toContain("auth: set GEMINI_API_KEY / GOOGLE_API_KEY to use google/*");
+    expect(text).toContain("auth: set OPENAI_API_KEY to use openai/*");
     expect(text).toContain("editing up to 5 refs");
     expect(text).toContain("aspect ratios 1:1, 16:9");
     expect(result).toMatchObject({
@@ -437,6 +439,7 @@ describe("createImageGenerateTool", () => {
           expect.objectContaining({
             id: "google",
             defaultModel: "gemini-3.1-flash-image-preview",
+            authEnvVars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
             models: expect.arrayContaining([
               "gemini-3.1-flash-image-preview",
               "gemini-3-pro-image-preview",
@@ -448,7 +451,61 @@ describe("createImageGenerateTool", () => {
               }),
             }),
           }),
+          expect.objectContaining({
+            id: "openai",
+            authEnvVars: ["OPENAI_API_KEY"],
+          }),
         ]),
+      },
+    });
+  });
+
+  it("skips auth hints for prototype-like provider ids", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      {
+        id: "__proto__",
+        defaultModel: "proto-v1",
+        models: ["proto-v1"],
+        capabilities: {
+          generate: {
+            maxCount: 1,
+          },
+          edit: {
+            enabled: false,
+            maxInputImages: 0,
+          },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+
+    const tool = createImageGenerateTool({
+      config: {
+        agents: {
+          defaults: {
+            imageGenerationModel: {
+              primary: "__proto__/proto-v1",
+            },
+          },
+        },
+      },
+    });
+
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("expected image_generate tool");
+    }
+
+    const result = await tool.execute("call-list-proto", { action: "list" });
+    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain("__proto__ (default proto-v1)");
+    expect(text).not.toContain("auth: set");
+    expect(result).toMatchObject({
+      details: {
+        providers: [expect.objectContaining({ id: "__proto__", authEnvVars: [] })],
       },
     });
   });
