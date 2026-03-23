@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   detectChangedExtensionIds,
   listAvailableExtensionIds,
+  listChangedExtensionIds,
   resolveExtensionTestPlan,
 } from "../../scripts/test-extension.mjs";
 
@@ -77,6 +78,15 @@ describe("scripts/test-extension.mjs", () => {
     expect(extensionIds).toEqual(
       [...extensionIds].toSorted((left, right) => left.localeCompare(right)),
     );
+  });
+
+  it("can fail safe to all extensions when the base revision is unavailable", () => {
+    const extensionIds = listChangedExtensionIds({
+      base: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      unavailableBaseBehavior: "all",
+    });
+
+    expect(extensionIds).toEqual(listAvailableExtensionIds());
   });
 
   it("dry-run still reports a plan for extensions without tests", () => {
