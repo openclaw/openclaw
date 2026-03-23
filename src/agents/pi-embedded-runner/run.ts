@@ -1634,9 +1634,7 @@ export async function runEmbeddedPiAgent(
               // Mark the failing profile for cooldown so multi-profile setups
               // rotate away from the exhausted credential on the next turn.
               if (lastProfileId) {
-                const failoverReason = classifyFailoverReason(
-                  lastAssistant?.errorMessage ?? "",
-                );
+                const failoverReason = classifyFailoverReason(lastAssistant?.errorMessage ?? "");
                 await maybeMarkAuthProfileFailure({
                   profileId: lastProfileId,
                   reason: resolveAuthProfileFailureReason(failoverReason),

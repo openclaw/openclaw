@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import {
+  hasOutboundReplyContent,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
@@ -710,10 +713,7 @@ export async function runAgentTurnWithFallback(params: {
   // suppression, and usage/model metadata updates.
   if (runResult) {
     const hasNonErrorContent = runResult.payloads?.some(
-      (p) =>
-        !p.isError &&
-        !p.isReasoning &&
-        (p.text?.trim() || (p.mediaUrls?.length ?? 0) > 0),
+      (p) => !p.isError && !p.isReasoning && hasOutboundReplyContent(p, { trimText: true }),
     );
     if (!hasNonErrorContent) {
       const metaErrorMsg = finalEmbeddedError?.message ?? "";
