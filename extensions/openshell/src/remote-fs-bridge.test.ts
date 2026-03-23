@@ -93,7 +93,9 @@ async function emulateRemoteShell(params: {
       return { stdout: await fs.readFile(params.args[0] ?? ""), stderr: Buffer.alloc(0), code: 0 };
     }
 
-    if (params.script === 'if [ -e "$1" ] || [ -L "$1" ]; then printf "1\\n"; else printf "0\\n"; fi') {
+    if (
+      params.script === 'if [ -e "$1" ] || [ -L "$1" ]; then printf "1\\n"; else printf "0\\n"; fi'
+    ) {
       const target = params.args[0] ?? "";
       const exists = await pathExistsOrSymlink(target);
       return { stdout: Buffer.from(exists ? "1\n" : "0\n"), stderr: Buffer.alloc(0), code: 0 };
@@ -129,7 +131,7 @@ async function emulateRemoteShell(params: {
       };
     }
 
-    if (params.script.includes('python3 /dev/fd/3 "$@" 3<<\'PY\'')) {
+    if (params.script.includes("python3 /dev/fd/3 \"$@\" 3<<'PY'")) {
       await applyMutation(params.args, params.stdin);
       return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), code: 0 };
     }
