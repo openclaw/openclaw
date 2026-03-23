@@ -435,6 +435,11 @@ skills.
 Use allowlists and explicit install/load paths for non-bundled plugins. Treat
 workspace plugins as development-time code, not production defaults.
 
+For bundled workspace package names, keep the plugin id anchored in the npm
+name: `@openclaw/<id>` by default, or an approved typed suffix such as
+`-provider`, `-plugin`, `-speech`, `-sandbox`, or `-media-understanding` when
+the package intentionally exposes a narrower plugin role.
+
 Important trust note:
 
 - `plugins.allow` trusts **plugin ids**, not source provenance.
