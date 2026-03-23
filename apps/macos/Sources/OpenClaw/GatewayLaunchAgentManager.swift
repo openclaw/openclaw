@@ -2,11 +2,9 @@ import Foundation
 
 enum GatewayLaunchAgentManager {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "gateway.launchd")
-    private static let disableLaunchAgentMarker = ".openclaw/disable-launchagent"
 
     private static var disableLaunchAgentMarkerURL: URL {
-        FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent(self.disableLaunchAgentMarker)
+        OpenClawPaths.stateDirURL.appendingPathComponent("disable-launchagent")
     }
 
     private static var plistURL: URL {

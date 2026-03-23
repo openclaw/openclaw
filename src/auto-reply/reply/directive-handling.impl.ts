@@ -10,18 +10,12 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import {
-  applyFutureThreadThinkingLevelOverride,
-  applyVerboseOverride,
-} from "../../sessions/level-overrides.js";
+import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import {
   applyFutureThreadModelDefaultToSessionEntry,
   applyModelOverrideToSessionEntry,
 } from "../../sessions/model-overrides.js";
-import {
-  resolveFutureThreadParentSessionKey,
-  resolveTelegramThreadParentSessionKey,
-} from "../../sessions/session-key-utils.js";
+import { resolveFutureThreadParentSessionKey } from "../../sessions/session-key-utils.js";
 import { formatThinkingLevels, formatXHighModelHint, supportsXHighThinking } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -329,25 +323,6 @@ export async function handleDirectiveOnly(
     directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
   if (directives.hasThinkDirective && directives.thinkLevel) {
     sessionEntry.thinkingLevel = directives.thinkLevel;
-    const telegramParentSessionKey = resolveTelegramThreadParentSessionKey({
-      sessionKey,
-      channelHint: telegramChannelHint,
-    });
-    if (telegramParentSessionKey) {
-      const parentEntry =
-        sessionStore[telegramParentSessionKey] ??
-        ({
-          sessionId: crypto.randomUUID(),
-          updatedAt: Date.now(),
-        } satisfies SessionEntry);
-      const { updated: parentUpdated } = applyFutureThreadThinkingLevelOverride(
-        parentEntry,
-        directives.thinkLevel,
-      );
-      if (parentUpdated) {
-        sessionStore[telegramParentSessionKey] = parentEntry;
-      }
-    }
   }
   if (directives.hasFastDirective && directives.fastMode !== undefined) {
     sessionEntry.fastMode = directives.fastMode;
@@ -474,23 +449,12 @@ export async function handleDirectiveOnly(
   });
 
   const parts: string[] = [];
-  const telegramParentSessionKeyForAck = resolveTelegramThreadParentSessionKey({
-    sessionKey,
-    channelHint: telegramChannelHint,
-  });
   if (directives.hasThinkDirective && directives.thinkLevel) {
     parts.push(
       directives.thinkLevel === "off"
         ? "Thinking disabled."
         : `Thinking level set to ${directives.thinkLevel}.`,
     );
-    if (telegramParentSessionKeyForAck) {
-      parts.push(
-        directives.thinkLevel === "off"
-          ? "New Telegram threads in this chat will have thinking disabled by default."
-          : `New Telegram threads in this chat will default to thinking level ${directives.thinkLevel}.`,
-      );
-    }
   }
   if (directives.hasFastDirective && directives.fastMode !== undefined) {
     parts.push(
@@ -560,7 +524,13 @@ export async function handleDirectiveOnly(
         ? `Model reset to default (${labelWithAlias}).`
         : `Model set to ${labelWithAlias}.`,
     );
-    if (telegramParentSessionKeyForAck) {
+    if (
+      resolveFutureThreadParentSessionKey({
+        sessionKey,
+        parentSessionKey: params.parentSessionKey,
+        channelHint: telegramChannelHint,
+      })
+    ) {
       parts.push(
         modelSelection.isDefault
           ? "New threads in this chat now follow the default model."

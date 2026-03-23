@@ -16,7 +16,6 @@ import sys
 from pathlib import Path
 
 from telethon import TelegramClient
-from userbot_guard import acquire_session_guard, sanitize_error_text, SessionGuardError
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -47,26 +46,22 @@ async def run() -> int:
   chat_entity = int(args.chat) if args.chat.lstrip("-").isdigit() else args.chat
 
   client = TelegramClient(str(session_path), args.api_id, args.api_hash)
+  await client.start()
   try:
-    with acquire_session_guard(session_path):
-      await client.start()
-      sent = await client.send_message(
-        entity=chat_entity,
-        message=args.text,
-        reply_to=args.reply_to or None,
-      )
-      chat = await sent.get_chat()
-      payload = {
-        "chat_id": getattr(chat, "id", None),
-        "message_id": sent.id,
-        "reply_to": args.reply_to or None,
-        "text": args.text,
-      }
-      print(json.dumps(payload, ensure_ascii=True))
-      return 0
-  except SessionGuardError as err:
-    print(f"userbot_send failed: {err}", file=sys.stderr)
-    return 1
+    sent = await client.send_message(
+      entity=chat_entity,
+      message=args.text,
+      reply_to=args.reply_to or None,
+    )
+    chat = await sent.get_chat()
+    payload = {
+      "chat_id": getattr(chat, "id", None),
+      "message_id": sent.id,
+      "reply_to": args.reply_to or None,
+      "text": args.text,
+    }
+    print(json.dumps(payload, ensure_ascii=True))
+    return 0
   finally:
     await client.disconnect()
 
@@ -77,7 +72,7 @@ def main() -> None:
   except KeyboardInterrupt:
     raise SystemExit(130) from None
   except Exception as err:  # pragma: no cover - script-level fallback
-    print(f"userbot_send failed: {sanitize_error_text(str(err))}", file=sys.stderr)
+    print(f"userbot_send failed: {err}", file=sys.stderr)
     raise SystemExit(1) from err
 
 

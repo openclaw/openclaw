@@ -32,6 +32,26 @@ type ToolErrorWarningPolicy = {
   showWarning: boolean;
   includeDetails: boolean;
 };
+type ReplyPayload = {
+  text?: string;
+  mediaUrl?: string;
+  mediaUrls?: string[];
+  replyToId?: string;
+  isError?: boolean;
+  isReasoning?: boolean;
+  audioAsVoice?: boolean;
+  replyToTag?: boolean;
+  replyToCurrent?: boolean;
+};
+type ResolvedAssistantErrorState = {
+  errorText?: string;
+  rawErrorMessage?: string;
+  rawErrorFingerprint: string | null;
+  formattedRawErrorMessage: string | null;
+  normalizedFormattedRawErrorMessage: string | null;
+  normalizedRawErrorText: string | null;
+  normalizedErrorText: string | null;
+};
 
 const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
   "required",
@@ -91,6 +111,7 @@ export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
+  lastErroredAssistant?: AssistantMessage;
   lastToolError?: LastToolError;
   config?: OpenClawConfig;
   sessionKey: string;
@@ -103,17 +124,7 @@ export function buildEmbeddedRunPayloads(params: {
   inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
-}): Array<{
-  text?: string;
-  mediaUrl?: string;
-  mediaUrls?: string[];
-  replyToId?: string;
-  isError?: boolean;
-  isReasoning?: boolean;
-  audioAsVoice?: boolean;
-  replyToTag?: boolean;
-  replyToCurrent?: boolean;
-}> {
+}): ReplyPayload[] {
   const replyItems: Array<{
     text: string;
     media?: string[];
@@ -127,38 +138,22 @@ export function buildEmbeddedRunPayloads(params: {
 
   const useMarkdown = params.toolResultFormat === "markdown";
   const suppressAssistantArtifacts = params.didSendDeterministicApprovalPrompt === true;
-  const lastAssistantErrored = params.lastAssistant?.stopReason === "error";
-  const errorText =
-    params.lastAssistant && lastAssistantErrored
-      ? suppressAssistantArtifacts
-        ? undefined
-        : formatAssistantErrorText(params.lastAssistant, {
-            cfg: params.config,
-            sessionKey: params.sessionKey,
-            provider: params.provider,
-            model: params.model,
-          })
-      : undefined;
-  const rawErrorMessage = lastAssistantErrored
-    ? params.lastAssistant?.errorMessage?.trim() || undefined
-    : undefined;
-  const rawErrorFingerprint = rawErrorMessage
-    ? getApiErrorPayloadFingerprint(rawErrorMessage)
-    : null;
-  const formattedRawErrorMessage = rawErrorMessage
-    ? formatRawAssistantErrorForUi(rawErrorMessage)
-    : null;
-  const normalizedFormattedRawErrorMessage = formattedRawErrorMessage
-    ? normalizeTextForComparison(formattedRawErrorMessage)
-    : null;
-  const normalizedRawErrorText = rawErrorMessage
-    ? normalizeTextForComparison(rawErrorMessage)
-    : null;
-  const normalizedErrorText = errorText ? normalizeTextForComparison(errorText) : null;
-  const normalizedGenericBillingErrorText = normalizeTextForComparison(BILLING_ERROR_USER_MESSAGE);
+  const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
+  const rawAnswerTexts = suppressAssistantArtifacts
+    ? []
+    : params.assistantTexts.length
+      ? params.assistantTexts
+      : fallbackAnswerText
+        ? [fallbackAnswerText]
+        : [];
+  const activeErrorAssistant = resolveEmbeddedRunPayloadErrorAssistant(params);
+  const activeErrorState = resolveAssistantErrorState(activeErrorAssistant, params);
+  const shouldSuppressRawErrorText = createRawErrorSuppressor(activeErrorState);
   const genericErrorText = "The AI service returned an error. Please try again.";
-  if (errorText) {
-    replyItems.push({ text: errorText, isError: true });
+  const normalizedGenericBillingErrorText = normalizeTextForComparison(BILLING_ERROR_USER_MESSAGE);
+
+  if (activeErrorState.errorText) {
+    replyItems.push({ text: activeErrorState.errorText, isError: true });
   }
 
   const inlineToolResults =
@@ -198,65 +193,36 @@ export function buildEmbeddedRunPayloads(params: {
     replyItems.push({ text: reasoningText, isReasoning: true });
   }
 
-  const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
-  const shouldSuppressRawErrorText = (text: string) => {
-    if (!lastAssistantErrored) {
-      return false;
-    }
+  const answerTexts = rawAnswerTexts.filter((text) => {
     const trimmed = text.trim();
     if (!trimmed) {
       return false;
     }
-    if (errorText) {
-      const normalized = normalizeTextForComparison(trimmed);
-      if (normalized && normalizedErrorText && normalized === normalizedErrorText) {
-        return true;
-      }
-      if (trimmed === genericErrorText) {
-        return true;
-      }
-      if (
-        normalized &&
-        normalizedGenericBillingErrorText &&
-        normalized === normalizedGenericBillingErrorText
-      ) {
-        return true;
-      }
-    }
-    if (rawErrorMessage && trimmed === rawErrorMessage) {
+    if (!activeErrorAssistant) {
       return true;
     }
-    if (formattedRawErrorMessage && trimmed === formattedRawErrorMessage) {
-      return true;
+    if (shouldSuppressRawErrorText(trimmed)) {
+      return false;
     }
-    if (normalizedRawErrorText) {
-      const normalized = normalizeTextForComparison(trimmed);
-      if (normalized && normalized === normalizedRawErrorText) {
-        return true;
-      }
+    const normalized = normalizeTextForComparison(trimmed);
+    if (
+      activeErrorState.normalizedErrorText &&
+      normalized === activeErrorState.normalizedErrorText
+    ) {
+      return false;
     }
-    if (normalizedFormattedRawErrorMessage) {
-      const normalized = normalizeTextForComparison(trimmed);
-      if (normalized && normalized === normalizedFormattedRawErrorMessage) {
-        return true;
-      }
+    if (trimmed === genericErrorText) {
+      return false;
     }
-    if (rawErrorFingerprint) {
-      const fingerprint = getApiErrorPayloadFingerprint(trimmed);
-      if (fingerprint && fingerprint === rawErrorFingerprint) {
-        return true;
-      }
+    if (
+      normalized &&
+      normalizedGenericBillingErrorText &&
+      normalized === normalizedGenericBillingErrorText
+    ) {
+      return false;
     }
-    return isRawApiErrorPayload(trimmed);
-  };
-  const answerTexts = suppressAssistantArtifacts
-    ? []
-    : (params.assistantTexts.length
-        ? params.assistantTexts
-        : fallbackAnswerText
-          ? [fallbackAnswerText]
-          : []
-      ).filter((text) => !shouldSuppressRawErrorText(text));
+    return true;
+  });
 
   let hasUserFacingAssistantReply = false;
   for (const text of answerTexts) {
@@ -344,4 +310,119 @@ export function buildEmbeddedRunPayloads(params: {
       }
       return true;
     });
+}
+
+export function resolveEmbeddedRunPayloadErrorAssistant(params: {
+  assistantTexts: string[];
+  toolMetas: ToolMetaEntry[];
+  lastAssistant: AssistantMessage | undefined;
+  lastErroredAssistant?: AssistantMessage;
+  lastToolError?: LastToolError;
+  config?: OpenClawConfig;
+  sessionKey: string;
+  provider?: string;
+  model?: string;
+  verboseLevel?: VerboseLevel;
+  reasoningLevel?: ReasoningLevel;
+  toolResultFormat?: ToolResultFormat;
+  suppressToolErrorWarnings?: boolean;
+  inlineToolResultsAllowed: boolean;
+  didSendViaMessagingTool?: boolean;
+  didSendDeterministicApprovalPrompt?: boolean;
+}): AssistantMessage | undefined {
+  const suppressAssistantArtifacts = params.didSendDeterministicApprovalPrompt === true;
+  if (suppressAssistantArtifacts) {
+    return undefined;
+  }
+  if (params.lastAssistant?.stopReason === "error") {
+    return params.lastAssistant;
+  }
+  const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
+  const rawAnswerTexts = params.assistantTexts.length
+    ? params.assistantTexts
+    : fallbackAnswerText
+      ? [fallbackAnswerText]
+      : [];
+  const priorErroredAssistant =
+    params.lastErroredAssistant?.stopReason === "error" ? params.lastErroredAssistant : undefined;
+  if (!priorErroredAssistant) {
+    return undefined;
+  }
+  const priorErrorState = resolveAssistantErrorState(priorErroredAssistant, params);
+  const shouldSuppressRawErrorText = createRawErrorSuppressor(priorErrorState);
+  const survivingAnswerTexts = rawAnswerTexts.filter((text) => !shouldSuppressRawErrorText(text));
+  return survivingAnswerTexts.length === 0 ? priorErroredAssistant : undefined;
+}
+
+function resolveAssistantErrorState(
+  assistant: AssistantMessage | undefined,
+  params: {
+    config?: OpenClawConfig;
+    sessionKey: string;
+    provider?: string;
+    model?: string;
+  },
+): ResolvedAssistantErrorState {
+  const rawErrorMessage =
+    assistant?.stopReason === "error" ? assistant.errorMessage?.trim() || undefined : undefined;
+  const errorText =
+    assistant?.stopReason === "error"
+      ? formatAssistantErrorText(assistant, {
+          cfg: params.config,
+          sessionKey: params.sessionKey,
+          provider: params.provider,
+          model: params.model,
+        })
+      : undefined;
+  const formattedRawErrorMessage = rawErrorMessage
+    ? formatRawAssistantErrorForUi(rawErrorMessage)
+    : null;
+  return {
+    errorText,
+    rawErrorMessage,
+    rawErrorFingerprint: rawErrorMessage ? getApiErrorPayloadFingerprint(rawErrorMessage) : null,
+    formattedRawErrorMessage,
+    normalizedFormattedRawErrorMessage: formattedRawErrorMessage
+      ? normalizeTextForComparison(formattedRawErrorMessage)
+      : null,
+    normalizedRawErrorText: rawErrorMessage ? normalizeTextForComparison(rawErrorMessage) : null,
+    normalizedErrorText: errorText ? normalizeTextForComparison(errorText) : null,
+  };
+}
+
+function createRawErrorSuppressor(errorState: ResolvedAssistantErrorState) {
+  return (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      return false;
+    }
+    if (errorState.rawErrorMessage && trimmed === errorState.rawErrorMessage) {
+      return true;
+    }
+    if (errorState.formattedRawErrorMessage && trimmed === errorState.formattedRawErrorMessage) {
+      return true;
+    }
+    const normalized = normalizeTextForComparison(trimmed);
+    if (
+      normalized &&
+      errorState.normalizedRawErrorText &&
+      normalized === errorState.normalizedRawErrorText
+    ) {
+      return true;
+    }
+    if (
+      normalized &&
+      errorState.normalizedFormattedRawErrorMessage &&
+      normalized === errorState.normalizedFormattedRawErrorMessage
+    ) {
+      return true;
+    }
+    if (errorState.rawErrorFingerprint) {
+      const fingerprint = getApiErrorPayloadFingerprint(trimmed);
+      if (fingerprint && fingerprint === errorState.rawErrorFingerprint) {
+        return true;
+      }
+    }
+    return isRawApiErrorPayload(trimmed);
+  };
 }

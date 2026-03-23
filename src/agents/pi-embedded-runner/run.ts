@@ -72,7 +72,10 @@ import { resolveModelAsync } from "./model.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
-import { buildEmbeddedRunPayloads } from "./run/payloads.js";
+import {
+  buildEmbeddedRunPayloads,
+  resolveEmbeddedRunPayloadErrorAssistant,
+} from "./run/payloads.js";
 import {
   truncateOversizedToolResultsInSession,
   sessionLikelyHasOversizedToolResults,
@@ -1623,6 +1626,7 @@ export async function runEmbeddedPiAgent(
             assistantTexts: attempt.assistantTexts,
             toolMetas: attempt.toolMetas,
             lastAssistant: attempt.lastAssistant,
+            lastErroredAssistant: attempt.lastErroredAssistant,
             lastToolError: attempt.lastToolError,
             config: params.config,
             sessionKey: params.sessionKey ?? params.sessionId,
@@ -1636,6 +1640,33 @@ export async function runEmbeddedPiAgent(
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
           });
+          const surfacedErrorAssistant = resolveEmbeddedRunPayloadErrorAssistant({
+            assistantTexts: attempt.assistantTexts,
+            toolMetas: attempt.toolMetas,
+            lastAssistant: attempt.lastAssistant,
+            lastErroredAssistant: attempt.lastErroredAssistant,
+            lastToolError: attempt.lastToolError,
+            config: params.config,
+            sessionKey: params.sessionKey ?? params.sessionId,
+            provider: activeErrorContext.provider,
+            model: activeErrorContext.model,
+            verboseLevel: params.verboseLevel,
+            reasoningLevel: params.reasoningLevel,
+            toolResultFormat: resolvedToolResultFormat,
+            suppressToolErrorWarnings: params.suppressToolErrorWarnings,
+            inlineToolResultsAllowed: false,
+            didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+            didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+          });
+          const surfacedPriorAssistantError =
+            surfacedErrorAssistant != null &&
+            surfacedErrorAssistant === attempt.lastErroredAssistant &&
+            surfacedErrorAssistant !== attempt.lastAssistant;
+          if (surfacedPriorAssistantError) {
+            log.warn(
+              "[embedded-run-error-recovery] surfaced prior assistant error after trailing tool-use masked the terminal failure",
+            );
+          }
 
           // Timeout aborts can leave the run without any assistant payloads.
           // Emit an explicit timeout error instead of silently completing, so
@@ -1698,7 +1729,9 @@ export async function runEmbeddedPiAgent(
                 ? "tool_calls"
                 : attempt.yieldDetected
                   ? "end_turn"
-                  : (lastAssistant?.stopReason as string | undefined),
+                  : surfacedPriorAssistantError
+                    ? "error"
+                    : (lastAssistant?.stopReason as string | undefined),
               pendingToolCalls: attempt.clientToolCall
                 ? [
                     {

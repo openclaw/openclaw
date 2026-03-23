@@ -507,6 +507,9 @@ async function withTelegramThreadFallback<T>(
   params: Record<string, unknown> | undefined,
   label: string,
   verbose: boolean | undefined,
+  opts: {
+    allowThreadlessRetry: boolean;
+  },
   attempt: (
     effectiveParams: Record<string, unknown> | undefined,
     effectiveLabel: string,
@@ -517,7 +520,11 @@ async function withTelegramThreadFallback<T>(
   } catch (err) {
     // Do not widen this fallback to cover "chat not found".
     // chat-not-found is routing/auth/membership/token; stripping thread IDs hides root cause.
-    if (!hasMessageThreadIdParam(params) || !isTelegramThreadNotFoundError(err)) {
+    if (
+      !opts.allowThreadlessRetry ||
+      !hasMessageThreadIdParam(params) ||
+      !isTelegramThreadNotFoundError(err)
+    ) {
       throw err;
     }
     if (verbose) {
@@ -614,6 +621,9 @@ export async function sendMessageTelegram(
     replyToMessageId: opts.replyToMessageId,
     quoteText: opts.quoteText,
   });
+  // Threadless retry is only safe for DM topics. For forum topics, stripping
+  // the thread id silently posts into the parent chat/root topic.
+  const allowThreadlessRetry = target.chatType === "direct";
   const hasThreadParams = Object.keys(threadParams).length > 0;
   const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
     cfg,
@@ -652,6 +662,7 @@ export async function sendMessageTelegram(
       params,
       "message",
       opts.verbose,
+      { allowThreadlessRetry },
       async (effectiveParams, label) => {
         const baseParams = effectiveParams ? { ...effectiveParams } : {};
         if (linkPreviewOptions) {
@@ -813,6 +824,7 @@ export async function sendMessageTelegram(
         mediaParams,
         label,
         opts.verbose,
+        { allowThreadlessRetry },
         async (effectiveParams, retryLabel) =>
           requestWithChatNotFound(() => sender(effectiveParams), retryLabel),
       );
@@ -1440,6 +1452,7 @@ export async function sendStickerTelegram(
     chatType: target.chatType,
     replyToMessageId: opts.replyToMessageId,
   });
+  const allowThreadlessRetry = target.chatType === "direct";
   const hasThreadParams = Object.keys(threadParams).length > 0;
 
   const requestWithDiag = createTelegramRequestWithDiag({
@@ -1461,6 +1474,7 @@ export async function sendStickerTelegram(
     stickerParams,
     "sticker",
     opts.verbose,
+    { allowThreadlessRetry },
     async (effectiveParams, label) =>
       requestWithChatNotFound(() => api.sendSticker(chatId, fileId.trim(), effectiveParams), label),
   );
@@ -1524,6 +1538,7 @@ export async function sendPollTelegram(
     chatType: target.chatType,
     replyToMessageId: opts.replyToMessageId,
   });
+  const allowThreadlessRetry = target.chatType === "direct";
 
   // Build poll options as simple strings (Grammy accepts string[] or InputPollOption[])
   const pollOptions = normalizedPoll.options;
@@ -1564,6 +1579,7 @@ export async function sendPollTelegram(
     pollParams,
     "poll",
     opts.verbose,
+    { allowThreadlessRetry },
     async (effectiveParams, label) =>
       requestWithChatNotFound(
         () => api.sendPoll(chatId, normalizedPoll.question, pollOptions, effectiveParams),

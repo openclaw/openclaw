@@ -22,6 +22,26 @@ scripts/package-mac-app.sh
 
 Creates `dist/OpenClaw.app` and signs it via `scripts/codesign-mac-app.sh`.
 
+## Consumer build
+
+To package an isolated consumer app that can coexist with the founder app on the same Mac:
+
+```bash
+APP_NAME="OpenClaw Consumer" \
+APP_BUNDLE_NAME="OpenClaw Consumer.app" \
+BUNDLE_ID="ai.openclaw.consumer.mac.debug" \
+APP_VARIANT=consumer \
+URL_SCHEME=openclaw-consumer \
+scripts/package-mac-app.sh
+```
+
+This consumer flavor defaults to its own runtime identity:
+
+- bundle identifier: `ai.openclaw.consumer.mac.*`
+- state dir: `~/.openclaw-consumer`
+- local gateway port: `19001`
+- launch labels: `ai.openclaw.consumer.*`
+
 ## Signing behavior
 
 Auto-selects identity (first match):

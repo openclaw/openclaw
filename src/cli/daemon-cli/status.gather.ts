@@ -63,7 +63,6 @@ type PortStatusSummary = {
 };
 
 type DaemonConfigContext = {
-  cliEnv: Record<string, string | undefined>;
   mergedDaemonEnv: Record<string, string | undefined>;
   cliCfg: OpenClawConfig;
   daemonCfg: OpenClawConfig;
@@ -144,24 +143,18 @@ function parseGatewaySecretRefPathFromError(error: unknown): string | null {
 async function loadDaemonConfigContext(
   serviceEnv?: Record<string, string>,
 ): Promise<DaemonConfigContext> {
-  const cliEnv = {
-    ...(process.env as Record<string, string | undefined>),
-  } satisfies Record<string, string | undefined>;
   const mergedDaemonEnv = {
-    ...cliEnv,
+    ...(process.env as Record<string, string | undefined>),
     ...(serviceEnv ?? undefined),
   } satisfies Record<string, string | undefined>;
 
-  const cliConfigPath = resolveConfigPath(
-    cliEnv as NodeJS.ProcessEnv,
-    resolveStateDir(cliEnv as NodeJS.ProcessEnv),
-  );
+  const cliConfigPath = resolveConfigPath(process.env, resolveStateDir(process.env));
   const daemonConfigPath = resolveConfigPath(
     mergedDaemonEnv as NodeJS.ProcessEnv,
     resolveStateDir(mergedDaemonEnv as NodeJS.ProcessEnv),
   );
 
-  const cliIO = createConfigIO({ env: cliEnv, configPath: cliConfigPath });
+  const cliIO = createConfigIO({ env: process.env, configPath: cliConfigPath });
   const daemonIO = createConfigIO({
     env: mergedDaemonEnv,
     configPath: daemonConfigPath,
@@ -171,8 +164,8 @@ async function loadDaemonConfigContext(
     cliIO.readConfigFileSnapshot().catch(() => null),
     daemonIO.readConfigFileSnapshot().catch(() => null),
   ]);
-  const cliCfg = cliIO.loadConfigReadOnly();
-  const daemonCfg = daemonIO.loadConfigReadOnly();
+  const cliCfg = cliIO.loadConfig();
+  const daemonCfg = daemonIO.loadConfig();
 
   const cliConfigSummary: ConfigSummary = {
     path: cliSnapshot?.path ?? cliConfigPath,
@@ -190,7 +183,6 @@ async function loadDaemonConfigContext(
   };
 
   return {
-    cliEnv,
     mergedDaemonEnv,
     cliCfg,
     daemonCfg,
@@ -203,7 +195,6 @@ async function loadDaemonConfigContext(
 async function resolveGatewayStatusSummary(params: {
   daemonCfg: OpenClawConfig;
   cliCfg: OpenClawConfig;
-  cliEnv: Record<string, string | undefined>;
   mergedDaemonEnv: Record<string, string | undefined>;
   commandProgramArguments?: string[];
   rpcUrlOverride?: string;
@@ -239,7 +230,7 @@ async function resolveGatewayStatusSummary(params: {
       ...(probeNote ? { probeNote } : {}),
     },
     daemonPort,
-    cliPort: resolveGatewayPort(params.cliCfg, params.cliEnv),
+    cliPort: resolveGatewayPort(params.cliCfg, process.env),
     probeUrlOverride,
   };
 }
@@ -298,7 +289,6 @@ export async function gatherDaemonStatus(
     command,
   });
   const {
-    cliEnv,
     mergedDaemonEnv,
     cliCfg,
     daemonCfg,
@@ -309,7 +299,6 @@ export async function gatherDaemonStatus(
   const { gateway, daemonPort, cliPort, probeUrlOverride } = await resolveGatewayStatusSummary({
     cliCfg,
     daemonCfg,
-    cliEnv,
     mergedDaemonEnv,
     commandProgramArguments: command?.programArguments,
     rpcUrlOverride: opts.rpc.url,

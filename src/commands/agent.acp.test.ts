@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
 import { readSessionMessages } from "../gateway/session-utils.fs.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { enqueueSystemEvent, resetSystemEventsForTest } from "../infra/system-events.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { agentCommand } from "./agent.js";
 
@@ -254,6 +255,7 @@ async function runAcpSessionWithPolicyOverrides(params: {
 describe("agentCommand ACP runtime routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetSystemEventsForTest();
     runEmbeddedPiAgentSpy.mockResolvedValue({
       payloads: [{ text: "embedded" }],
       meta: {
@@ -278,6 +280,32 @@ describe("agentCommand ACP runtime routing", () => {
         .mocked(runtime.log)
         .mock.calls.some(([first]) => typeof first === "string" && first.includes("ACP_OK"));
       expect(hasAckLog).toBe(true);
+    });
+  });
+
+  it("prepends queued system events before waking ACP parent turns", async () => {
+    await withAcpSessionEnv(async () => {
+      enqueueSystemEvent("System wake with child result: EXEC_ACP_OK", {
+        sessionKey: "agent:codex:acp:test",
+        contextKey: "acp-spawn:test",
+      });
+      const { runTurn } = await runAcpTurnWithTextDeltas({ message: "continue", chunks: ["ok"] });
+
+      expect(runTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining("System: "),
+        }),
+      );
+      expect(runTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining("System wake with child result: EXEC_ACP_OK"),
+        }),
+      );
+      expect(runTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining("continue"),
+        }),
+      );
     });
   });
 

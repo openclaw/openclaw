@@ -145,33 +145,3 @@ export function resetGlobalUndiciStreamTimeoutsForTests(): void {
   lastAppliedTimeoutKey = null;
   lastAppliedProxyBootstrap = false;
 }
-
-export async function closeGlobalUndiciDispatcher(): Promise<void> {
-  let dispatcher: unknown;
-  try {
-    dispatcher = getGlobalDispatcher();
-  } catch {
-    return;
-  }
-
-  if (!dispatcher || typeof dispatcher !== "object") {
-    return;
-  }
-
-  const close = (dispatcher as { close?: () => Promise<void> | void }).close;
-  if (typeof close !== "function") {
-    return;
-  }
-
-  try {
-    if (process.env.OPENCLAW_DEBUG_ACTIVE_HANDLES === "1") {
-      console.error("[openclaw][net] closeGlobalUndiciDispatcher:before-close");
-    }
-    await close.call(dispatcher);
-    if (process.env.OPENCLAW_DEBUG_ACTIVE_HANDLES === "1") {
-      console.error("[openclaw][net] closeGlobalUndiciDispatcher:after-close");
-    }
-  } catch {
-    // Best-effort teardown for short-lived CLI processes.
-  }
-}

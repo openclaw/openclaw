@@ -16,7 +16,6 @@ import time
 from pathlib import Path
 
 from telethon import TelegramClient
-from userbot_guard import acquire_session_guard, sanitize_error_text, SessionGuardError
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -70,53 +69,49 @@ async def run() -> int:
   deadline = time.time() + max(1, args.timeout)
 
   client = TelegramClient(str(session_path), args.api_id, args.api_hash)
+  await client.start()
   try:
-    with acquire_session_guard(session_path):
-      await client.start()
-      while time.time() < deadline:
-        messages = await client.get_messages(chat_entity, limit=80)
-        for message in messages:
-          if message.id <= args.after_id:
+    while time.time() < deadline:
+      messages = await client.get_messages(chat_entity, limit=80)
+      for message in messages:
+        if message.id <= args.after_id:
+          continue
+        if args.sender_id > 0:
+          sender_id = int(getattr(message, "sender_id", 0) or 0)
+          if sender_id != args.sender_id:
             continue
-          if args.sender_id > 0:
-            sender_id = int(getattr(message, "sender_id", 0) or 0)
-            if sender_id != args.sender_id:
-              continue
-          text = (getattr(message, "message", "") or "").strip()
-          if not text:
+        text = (getattr(message, "message", "") or "").strip()
+        if not text:
+          continue
+        if args.contains not in text:
+          continue
+        if args.thread_anchor > 0:
+          anchor = resolve_thread_anchor(message)
+          if anchor != args.thread_anchor:
             continue
-          if args.contains not in text:
-            continue
-          if args.thread_anchor > 0:
-            anchor = resolve_thread_anchor(message)
-            if anchor != args.thread_anchor:
-              continue
-          payload = {
-            "chat_id": int(getattr(message, "chat_id", 0) or 0),
-            "message_id": message.id,
-            "sender_id": int(getattr(message, "sender_id", 0) or 0),
-            "thread_anchor": resolve_thread_anchor(message),
-            "text": text,
-          }
-          print(json.dumps(payload, ensure_ascii=True))
-          return 0
-        await asyncio.sleep(max(0.1, args.poll_interval))
+        payload = {
+          "chat_id": int(getattr(message, "chat_id", 0) or 0),
+          "message_id": message.id,
+          "sender_id": int(getattr(message, "sender_id", 0) or 0),
+          "thread_anchor": resolve_thread_anchor(message),
+          "text": text,
+        }
+        print(json.dumps(payload, ensure_ascii=True))
+        return 0
+      await asyncio.sleep(max(0.1, args.poll_interval))
 
-      print(
-        json.dumps(
-          {
-            "error": "timeout",
-            "contains": args.contains,
-            "after_id": args.after_id,
-            "thread_anchor": args.thread_anchor or None,
-          },
-          ensure_ascii=True,
-        ),
-        file=sys.stderr,
-      )
-      return 1
-  except SessionGuardError as err:
-    print(json.dumps({"error": "session_busy", "detail": str(err)}, ensure_ascii=True), file=sys.stderr)
+    print(
+      json.dumps(
+        {
+          "error": "timeout",
+          "contains": args.contains,
+          "after_id": args.after_id,
+          "thread_anchor": args.thread_anchor or None,
+        },
+        ensure_ascii=True,
+      ),
+      file=sys.stderr,
+    )
     return 1
   finally:
     await client.disconnect()
@@ -128,7 +123,7 @@ def main() -> None:
   except KeyboardInterrupt:
     raise SystemExit(130) from None
   except Exception as err:  # pragma: no cover - script-level fallback
-    print(f"userbot_wait failed: {sanitize_error_text(str(err))}", file=sys.stderr)
+    print(f"userbot_wait failed: {err}", file=sys.stderr)
     raise SystemExit(1) from err
 
 

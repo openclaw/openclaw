@@ -4,14 +4,16 @@ set -euo pipefail
 # Build the mac app bundle, then create a zip (Sparkle) + styled DMG (humans).
 #
 # Output:
-# - dist/OpenClaw.app
-# - dist/OpenClaw-<version>.zip
-# - dist/OpenClaw-<version>.dmg
+# - dist/<app-bundle-name>
+# - dist/<app-name>-<version>.zip
+# - dist/<app-name>-<version>.dmg
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
 PRODUCT="OpenClaw"
 BUILD_CONFIG="${BUILD_CONFIG:-release}"
+APP_NAME="${APP_NAME:-OpenClaw}"
+APP_BUNDLE_NAME="${APP_BUNDLE_NAME:-${APP_NAME}.app}"
 
 # Default to universal binary for distribution builds (supports both Apple Silicon and Intel Macs)
 export BUILD_ARCHS="${BUILD_ARCHS:-all}"
@@ -22,17 +24,17 @@ export BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.mac}"
 
 "$ROOT_DIR/scripts/package-mac-app.sh"
 
-APP="$ROOT_DIR/dist/OpenClaw.app"
+APP="$ROOT_DIR/dist/${APP_BUNDLE_NAME}"
 if [[ ! -d "$APP" ]]; then
   echo "Error: missing app bundle at $APP" >&2
   exit 1
 fi
 
 VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP/Contents/Info.plist" 2>/dev/null || echo "0.0.0")
-ZIP="$ROOT_DIR/dist/OpenClaw-$VERSION.zip"
-DMG="$ROOT_DIR/dist/OpenClaw-$VERSION.dmg"
-NOTARY_ZIP="$ROOT_DIR/dist/OpenClaw-$VERSION.notary.zip"
-DSYM_ZIP="$ROOT_DIR/dist/OpenClaw-$VERSION.dSYM.zip"
+ZIP="$ROOT_DIR/dist/${APP_NAME}-${VERSION}.zip"
+DMG="$ROOT_DIR/dist/${APP_NAME}-${VERSION}.dmg"
+NOTARY_ZIP="$ROOT_DIR/dist/${APP_NAME}-${VERSION}.notary.zip"
+DSYM_ZIP="$ROOT_DIR/dist/${APP_NAME}-${VERSION}.dSYM.zip"
 SKIP_NOTARIZE="${SKIP_NOTARIZE:-0}"
 NOTARIZE=1
 SKIP_DSYM="${SKIP_DSYM:-0}"

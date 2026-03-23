@@ -147,6 +147,24 @@ struct SettingsViewSmokeTests {
         _ = view.body
     }
 
+    @Test func `consumer settings hide advanced tabs by default`() {
+        let tabs = SettingsRootView.visibleTabs(
+            isConsumer: true,
+            showAdvancedSettings: false,
+            debugPaneEnabled: true)
+        #expect(tabs == [.general, .permissions, .about])
+    }
+
+    @Test func `consumer advanced settings reveal hidden tabs`() {
+        let tabs = SettingsRootView.visibleTabs(
+            isConsumer: true,
+            showAdvancedSettings: true,
+            debugPaneEnabled: true)
+        #expect(tabs.contains(.channels))
+        #expect(tabs.contains(.skills))
+        #expect(tabs.contains(.debug))
+    }
+
     @Test func `about settings builds body`() {
         let view = AboutSettings(updater: nil)
         _ = view.body

@@ -330,6 +330,49 @@ describe("registerTelegramNativeCommands", () => {
     expect(deliveryMocks.deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("keeps plugin command fallback replies in the originating forum topic", async () => {
+    const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+
+    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
+      {
+        name: "plug",
+        description: "Plugin command",
+      },
+    ] as never);
+    pluginCommandMocks.matchPluginCommand.mockReturnValue(null as never);
+
+    registerTelegramNativeCommands({
+      ...buildParams({}),
+      bot: {
+        api: {
+          setMyCommands: vi.fn().mockResolvedValue(undefined),
+          sendMessage,
+        },
+        command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
+          commandHandlers.set(name, cb);
+        }),
+      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+    });
+
+    const handler = commandHandlers.get("plug");
+    expect(handler).toBeTruthy();
+    await handler?.({
+      match: "",
+      message: {
+        message_id: 1,
+        date: Math.floor(Date.now() / 1000),
+        chat: { id: -100123, type: "supergroup", is_forum: true },
+        from: { id: 456, username: "alice" },
+        message_thread_id: 42,
+      },
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(-100123, "Command not found.", {
+      message_thread_id: 42,
+    });
+  });
+
   it("registers /ping --full and replies with branch plus short sha", async () => {
     const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
     const sendMessage = vi.fn().mockResolvedValue(undefined);

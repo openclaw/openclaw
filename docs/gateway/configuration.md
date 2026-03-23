@@ -218,9 +218,7 @@ When validation fails:
           maxAgeHours: 0,
         },
         reset: {
-          mode: "daily",
-          atHour: 4,
-          idleMinutes: 120,
+          mode: "manual",
         },
       },
     }

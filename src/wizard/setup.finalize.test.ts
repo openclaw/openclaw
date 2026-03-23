@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import {
+  createLocalSetupIntent,
+  resolveLocalSetupExecutionPlan,
+} from "../commands/onboard-local-plan.js";
+import { createLocalOnboardingPlan } from "../commands/onboard-plan.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 const runTui = vi.hoisted(() => vi.fn(async () => {}));
@@ -110,6 +115,50 @@ function createRuntime(): RuntimeEnv {
   };
 }
 
+function createFinalizePlan(params?: {
+  flow?: "advanced" | "quickstart";
+  installDaemon?: boolean;
+  skipHealth?: boolean;
+}) {
+  const flow = params?.flow ?? "advanced";
+  const intent = createLocalSetupIntent({
+    workspaceDir: "/tmp",
+    authChoice: "skip",
+    installDaemon: params?.installDaemon,
+    skipHealth: params?.skipHealth,
+  });
+  const settings = {
+    mode: "local" as const,
+    port: 18789,
+    bind: "loopback" as const,
+    authMode: "token" as const,
+    gatewayToken: "session-token",
+    tailscaleMode: "off" as const,
+    tailscaleResetOnExit: false,
+  };
+
+  return {
+    intent,
+    onboardingPlan: createLocalOnboardingPlan({
+      executionMode: "interactive",
+      flow,
+      intent,
+      gatewayState: settings,
+      executionPlan: resolveLocalSetupExecutionPlan({
+        intent,
+        executionMode: "interactive",
+        flow,
+        platform: "darwin",
+      }),
+      opts: {
+        installDaemon: params?.installDaemon,
+        skipHealth: params?.skipHealth,
+      },
+    }),
+    settings,
+  };
+}
+
 function expectFirstOnboardingInstallPlanCallOmitsToken() {
   const [firstArg] =
     (buildGatewayInstallPlan.mock.calls.at(0) as [Record<string, unknown>] | undefined) ?? [];
@@ -148,6 +197,11 @@ describe("finalizeSetupWizard", () => {
       confirm: vi.fn(async () => false),
     });
     const runtime = createRuntime();
+    const plan = createFinalizePlan({
+      flow: "quickstart",
+      installDaemon: false,
+      skipHealth: true,
+    });
 
     try {
       await finalizeSetupWizard({
@@ -180,13 +234,12 @@ describe("finalizeSetupWizard", () => {
           },
         },
         workspaceDir: "/tmp",
+        intent: plan.intent,
+        onboardingPlan: plan.onboardingPlan,
         settings: {
-          port: 18789,
-          bind: "loopback",
+          ...plan.settings,
           authMode: "password",
           gatewayToken: undefined,
-          tailscaleMode: "off",
-          tailscaleResetOnExit: false,
         },
         prompter,
         runtime,
@@ -219,6 +272,11 @@ describe("finalizeSetupWizard", () => {
       confirm: vi.fn(async () => false),
     });
     const runtime = createRuntime();
+    const plan = createFinalizePlan({
+      flow: "advanced",
+      installDaemon: true,
+      skipHealth: true,
+    });
 
     await finalizeSetupWizard({
       flow: "advanced",
@@ -243,14 +301,9 @@ describe("finalizeSetupWizard", () => {
         },
       },
       workspaceDir: "/tmp",
-      settings: {
-        port: 18789,
-        bind: "loopback",
-        authMode: "token",
-        gatewayToken: "session-token",
-        tailscaleMode: "off",
-        tailscaleResetOnExit: false,
-      },
+      intent: plan.intent,
+      onboardingPlan: plan.onboardingPlan,
+      settings: plan.settings,
       prompter,
       runtime,
     });
@@ -276,6 +329,11 @@ describe("finalizeSetupWizard", () => {
       confirm: vi.fn(async () => false),
       progress: vi.fn(() => ({ update: progressUpdate, stop: progressStop })),
     });
+    const plan = createFinalizePlan({
+      flow: "advanced",
+      installDaemon: true,
+      skipHealth: true,
+    });
 
     await finalizeSetupWizard({
       flow: "advanced",
@@ -289,13 +347,11 @@ describe("finalizeSetupWizard", () => {
       baseConfig: {},
       nextConfig: {},
       workspaceDir: "/tmp",
+      intent: plan.intent,
+      onboardingPlan: plan.onboardingPlan,
       settings: {
-        port: 18789,
-        bind: "loopback",
-        authMode: "token",
+        ...plan.settings,
         gatewayToken: undefined,
-        tailscaleMode: "off",
-        tailscaleResetOnExit: false,
       },
       prompter,
       runtime: createRuntime(),
@@ -306,5 +362,47 @@ describe("finalizeSetupWizard", () => {
     expect(gatewayServiceUninstall).not.toHaveBeenCalled();
     expect(progressUpdate).toHaveBeenCalledWith("Restarting Gateway service…");
     expect(progressStop).toHaveBeenCalledWith("Gateway service restart scheduled.");
+  });
+
+  it("prompts before daemon install for advanced local onboarding defaults", async () => {
+    const confirm = vi.fn(async () => false);
+    const prompter = buildWizardPrompter({
+      select: vi.fn(async () => "later") as never,
+      confirm,
+    });
+    const plan = createFinalizePlan({
+      flow: "advanced",
+    });
+
+    await finalizeSetupWizard({
+      flow: "advanced",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        skipUi: true,
+      },
+      baseConfig: {},
+      nextConfig: {},
+      workspaceDir: "/tmp",
+      intent: plan.intent,
+      onboardingPlan: plan.onboardingPlan,
+      settings: plan.settings,
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Install Gateway service (recommended)",
+        initialValue: true,
+      }),
+    );
+    expect(gatewayServiceInstall).not.toHaveBeenCalled();
+    expect(buildGatewayInstallPlan).not.toHaveBeenCalled();
+    expect(probeGatewayReachable).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+      }),
+    );
   });
 });

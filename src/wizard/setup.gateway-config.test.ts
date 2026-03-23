@@ -6,7 +6,7 @@ import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
 
 const mocks = vi.hoisted(() => ({
   randomToken: vi.fn(),
-  getTailnetHostname: vi.fn(async () => "demo.ts.net"),
+  getTailnetHostname: vi.fn(),
 }));
 
 vi.mock("../commands/onboard-helpers.js", async (importActual) => {
@@ -177,78 +177,6 @@ describe("configureGatewayForSetup", () => {
         process.env.OPENCLAW_GATEWAY_PASSWORD = previous;
       }
     }
-  });
-
-  it("forces loopback and clears custom bind host when tailscale serve is enabled", async () => {
-    mocks.randomToken.mockReturnValue("generated-token");
-    const note = vi.fn(async () => {});
-    const selectQueue = ["custom", "token", "serve"];
-    const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
-      const next = selectQueue.shift();
-      if (next !== undefined) {
-        return next;
-      }
-      return params.initialValue ?? params.options[0]?.value;
-    }) as unknown as WizardPrompter["select"];
-    const prompter = buildWizardPrompter({
-      select,
-      note,
-      text: vi.fn(async () => "192.168.1.20"),
-      confirm: vi.fn(async () => false),
-    });
-    const runtime = createRuntime();
-
-    const result = await configureGatewayForSetup({
-      flow: "advanced",
-      baseConfig: {},
-      nextConfig: {},
-      localPort: 18789,
-      quickstartGateway: createQuickstartGateway("token"),
-      prompter,
-      runtime,
-    });
-
-    expect(result.settings.bind).toBe("loopback");
-    expect(result.settings.customBindHost).toBeUndefined();
-    expect(result.nextConfig.gateway?.bind).toBe("loopback");
-    expect(result.nextConfig.gateway?.customBindHost).toBeUndefined();
-    expect(note).toHaveBeenCalledWith(
-      "Tailscale requires bind=loopback. Adjusting bind to loopback.",
-      "Note",
-    );
-  });
-
-  it("forces password auth when tailscale funnel is enabled", async () => {
-    const note = vi.fn(async () => {});
-    const selectQueue = ["loopback", "token", "funnel"];
-    const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
-      const next = selectQueue.shift();
-      if (next !== undefined) {
-        return next;
-      }
-      return params.initialValue ?? params.options[0]?.value;
-    }) as unknown as WizardPrompter["select"];
-    const prompter = buildWizardPrompter({
-      select,
-      note,
-      text: vi.fn(async () => "my-password"),
-      confirm: vi.fn(async () => false),
-    });
-    const runtime = createRuntime();
-
-    const result = await configureGatewayForSetup({
-      flow: "advanced",
-      baseConfig: {},
-      nextConfig: {},
-      localPort: 18789,
-      quickstartGateway: createQuickstartGateway("token"),
-      prompter,
-      runtime,
-    });
-
-    expect(result.settings.authMode).toBe("password");
-    expect(result.nextConfig.gateway?.auth?.mode).toBe("password");
-    expect(note).toHaveBeenCalledWith("Tailscale funnel requires password auth.", "Note");
   });
 
   it("stores gateway token as SecretRef when secretInputMode=ref", async () => {

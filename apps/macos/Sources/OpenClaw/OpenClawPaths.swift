@@ -17,6 +17,17 @@ enum OpenClawPaths {
     private static let configPathEnv = ["OPENCLAW_CONFIG_PATH"]
     private static let stateDirEnv = ["OPENCLAW_STATE_DIR"]
 
+    private static func legacyStateDirURL(home: URL) -> URL {
+        home.appendingPathComponent(AppFlavor.current.defaultStateDirName, isDirectory: true)
+    }
+
+    private static func consumerPreferredStateDirURL(home: URL) -> URL {
+        home
+            .appendingPathComponent("Library/Application Support", isDirectory: true)
+            .appendingPathComponent(AppFlavor.current.appName, isDirectory: true)
+            .appendingPathComponent(".openclaw", isDirectory: true)
+    }
+
     static var stateDirURL: URL {
         for key in self.stateDirEnv {
             if let override = OpenClawEnv.path(key) {
@@ -24,7 +35,20 @@ enum OpenClawPaths {
             }
         }
         let home = FileManager().homeDirectoryForCurrentUser
-        return home.appendingPathComponent(".openclaw", isDirectory: true)
+        let legacy = self.legacyStateDirURL(home: home)
+        guard AppFlavor.current.isConsumer else { return legacy }
+
+        // Consumer launch agents already use Application Support profile paths.
+        // Prefer that canonical location so the app and gateway share one config,
+        // but keep a legacy fallback for older local dot-dir installs.
+        let preferred = self.consumerPreferredStateDirURL(home: home)
+        if FileManager().fileExists(atPath: preferred.path) {
+            return preferred
+        }
+        if FileManager().fileExists(atPath: legacy.path) {
+            return legacy
+        }
+        return preferred
     }
 
     private static func resolveConfigCandidate(in dir: URL) -> URL? {

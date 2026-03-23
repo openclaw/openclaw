@@ -52,11 +52,15 @@ describe("deliverAgentCommandResult", () => {
     sessionEntry?: SessionEntry;
     runtime?: RuntimeEnv;
     resultText?: string;
+    resultPayloads?: Array<{ text?: string; isError?: boolean }>;
   }) {
     const cfg = {} as OpenClawConfig;
     const deps = {} as CliDeps;
     const runtime = params.runtime ?? createRuntime();
-    const result = createResult(params.resultText);
+    const result =
+      params.resultPayloads != null
+        ? { payloads: params.resultPayloads, meta: { durationMs: 1 } }
+        : createResult(params.resultText);
 
     await deliverAgentCommandResult({
       cfg,
@@ -283,5 +287,27 @@ describe("deliverAgentCommandResult", () => {
     expect(line).toContain("run=run-announce");
     expect(line).toContain("channel=webchat");
     expect(line).toContain("ANNOUNCE_SKIP");
+  });
+
+  it("does not degrade a surfaced provider error into 'No reply from agent'", async () => {
+    const runtime = createRuntime();
+    await runDelivery({
+      runtime,
+      opts: {
+        message: "hello",
+        deliver: false,
+      },
+      resultPayloads: [
+        {
+          text: "The AI service is temporarily overloaded. Please try again in a moment.",
+          isError: true,
+        },
+      ],
+    });
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      "The AI service is temporarily overloaded. Please try again in a moment.",
+    );
+    expect(runtime.log).not.toHaveBeenCalledWith("No reply from agent.");
   });
 });

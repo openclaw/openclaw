@@ -97,6 +97,18 @@ struct OpenClawConfigFileTests {
         }
     }
 
+    @Test
+    func `consumer flavor prefers application support state dir`() async {
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": nil,
+            "OPENCLAW_STATE_DIR": nil,
+            "OPENCLAW_APP_VARIANT": "consumer",
+        ]) {
+            let path = OpenClawConfigFile.stateDirURL().path
+            #expect(path.contains("Library/Application Support/OpenClaw Consumer/.openclaw"))
+        }
+    }
+
     @MainActor
     @Test
     func `save dict appends config audit log`() async throws {

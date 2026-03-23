@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
 vi.mock("../../config/sessions.js", () => ({
+  DEFAULT_CRON_RESET_MODE: "daily",
   loadSessionStore: vi.fn(),
   resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
   evaluateSessionFreshness: vi.fn().mockReturnValue({ fresh: true }),
@@ -18,7 +19,11 @@ vi.mock("../../agents/bootstrap-cache.js", () => ({
 }));
 
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
-import { loadSessionStore, evaluateSessionFreshness } from "../../config/sessions.js";
+import {
+  loadSessionStore,
+  evaluateSessionFreshness,
+  resolveSessionResetPolicy,
+} from "../../config/sessions.js";
 import { resolveCronSession } from "./session.js";
 
 const NOW_MS = 1_737_600_000_000;
@@ -101,6 +106,22 @@ describe("resolveCronSession", () => {
 
   // New tests for session reuse behavior (#18027)
   describe("session reuse for webhooks/cron", () => {
+    it("keeps the legacy daily default for isolated cron sessions", () => {
+      resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-123",
+          updatedAt: NOW_MS - 1000,
+        },
+      });
+
+      expect(resolveSessionResetPolicy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          resetType: "direct",
+          defaultMode: "daily",
+        }),
+      );
+    });
+
     it("reuses existing sessionId when session is fresh", () => {
       const result = resolveWithStoredEntry({
         entry: {

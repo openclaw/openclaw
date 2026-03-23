@@ -30,9 +30,8 @@ import {
   text,
 } from "./configure.shared.js";
 import { formatHealthCheckFailure } from "./health-format.js";
+import { healthCommand } from "./health.js";
 import { noteChannelStatus, setupChannels } from "./onboard-channels.js";
-import { applyOnboardingWorkspaceConfig, resolveOnboardingWorkspaceDir } from "./onboard-config.js";
-import { runGatewayReachabilityHealthWorkflow } from "./onboard-gateway-health.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
@@ -40,9 +39,9 @@ import {
   guardCancel,
   printWizardHeader,
   probeGatewayReachable,
-  resolveGatewayModeProbeSummary,
   resolveControlUiLinks,
   summarizeExistingConfig,
+  waitForGatewayReachable,
 } from "./onboard-helpers.js";
 import { promptRemoteGatewayConfig } from "./onboard-remote.js";
 import { setupSkills } from "./onboard-skills.js";
@@ -96,24 +95,26 @@ async function runGatewayHealthCheck(params: {
     process.env.CLAWDBOT_GATEWAY_PASSWORD ??
     configuredPassword;
 
-  await runGatewayReachabilityHealthWorkflow({
-    runtime: params.runtime,
-    wsUrl,
+  await waitForGatewayReachable({
+    url: wsUrl,
     token,
     password,
     deadlineMs: 15_000,
-    onHealthFailure: (err) => {
-      params.runtime.error(formatHealthCheckFailure(err));
-      note(
-        [
-          "Docs:",
-          "https://docs.openclaw.ai/gateway/health",
-          "https://docs.openclaw.ai/gateway/troubleshooting",
-        ].join("\n"),
-        "Health check help",
-      );
-    },
   });
+
+  try {
+    await healthCommand({ json: false, timeoutMs: 10_000 }, params.runtime);
+  } catch (err) {
+    params.runtime.error(formatHealthCheckFailure(err));
+    note(
+      [
+        "Docs:",
+        "https://docs.openclaw.ai/gateway/health",
+        "https://docs.openclaw.ai/gateway/troubleshooting",
+      ].join("\n"),
+      "Health check help",
+    );
+  }
 }
 
 async function promptConfigureSection(
@@ -339,11 +340,40 @@ export async function runConfigureWizard(
       }
     }
 
-    const gatewayModeProbeSummary = await resolveGatewayModeProbeSummary({
+    const localUrl = "ws://127.0.0.1:18789";
+    const baseLocalProbeToken = await resolveGatewaySecretInputForWizard({
       cfg: baseConfig,
-      localPort: resolveGatewayPort(baseConfig),
-      resolveSecretInput: resolveGatewaySecretInputForWizard,
+      value: baseConfig.gateway?.auth?.token,
+      path: "gateway.auth.token",
     });
+    const baseLocalProbePassword = await resolveGatewaySecretInputForWizard({
+      cfg: baseConfig,
+      value: baseConfig.gateway?.auth?.password,
+      path: "gateway.auth.password",
+    });
+    const localProbe = await probeGatewayReachable({
+      url: localUrl,
+      token:
+        process.env.OPENCLAW_GATEWAY_TOKEN ??
+        process.env.CLAWDBOT_GATEWAY_TOKEN ??
+        baseLocalProbeToken,
+      password:
+        process.env.OPENCLAW_GATEWAY_PASSWORD ??
+        process.env.CLAWDBOT_GATEWAY_PASSWORD ??
+        baseLocalProbePassword,
+    });
+    const remoteUrl = baseConfig.gateway?.remote?.url?.trim() ?? "";
+    const baseRemoteProbeToken = await resolveGatewaySecretInputForWizard({
+      cfg: baseConfig,
+      value: baseConfig.gateway?.remote?.token,
+      path: "gateway.remote.token",
+    });
+    const remoteProbe = remoteUrl
+      ? await probeGatewayReachable({
+          url: remoteUrl,
+          token: baseRemoteProbeToken,
+        })
+      : null;
 
     const mode = guardCancel(
       await select({
@@ -352,12 +382,18 @@ export async function runConfigureWizard(
           {
             value: "local",
             label: "Local (this machine)",
-            hint: gatewayModeProbeSummary.hints.local,
+            hint: localProbe.ok
+              ? `Gateway reachable (${localUrl})`
+              : `No gateway detected (${localUrl})`,
           },
           {
             value: "remote",
             label: "Remote (info-only)",
-            hint: gatewayModeProbeSummary.hints.remote,
+            hint: !remoteUrl
+              ? "No remote URL configured yet"
+              : remoteProbe?.ok
+                ? `Gateway reachable (${remoteUrl})`
+                : `Configured but unreachable (${remoteUrl})`,
           },
         ],
       }),
@@ -388,11 +424,10 @@ export async function runConfigureWizard(
       };
       didSetGatewayMode = true;
     }
-    let workspaceDir = resolveOnboardingWorkspaceDir({
-      requestedWorkspace: nextConfig.agents?.defaults?.workspace,
-      configuredWorkspace: baseConfig.agents?.defaults?.workspace,
-      defaultWorkspaceDir: DEFAULT_WORKSPACE,
-    });
+    let workspaceDir =
+      nextConfig.agents?.defaults?.workspace ??
+      baseConfig.agents?.defaults?.workspace ??
+      DEFAULT_WORKSPACE;
     let gatewayPort = resolveGatewayPort(baseConfig);
 
     const persistConfig = async () => {
@@ -412,10 +447,7 @@ export async function runConfigureWizard(
         }),
         runtime,
       );
-      workspaceDir = resolveOnboardingWorkspaceDir({
-        requestedWorkspace: String(workspaceInput ?? "").trim() || undefined,
-        defaultWorkspaceDir: DEFAULT_WORKSPACE,
-      });
+      workspaceDir = resolveUserPath(String(workspaceInput ?? "").trim() || DEFAULT_WORKSPACE);
       if (!snapshot.exists) {
         const indicators = ["MEMORY.md", "memory", ".git"].map((name) =>
           nodePath.join(workspaceDir, name),
@@ -442,7 +474,16 @@ export async function runConfigureWizard(
           );
         }
       }
-      nextConfig = applyOnboardingWorkspaceConfig(nextConfig, workspaceDir);
+      nextConfig = {
+        ...nextConfig,
+        agents: {
+          ...nextConfig.agents,
+          defaults: {
+            ...nextConfig.agents?.defaults,
+            workspace: workspaceDir,
+          },
+        },
+      };
       await ensureWorkspaceAndSessions(workspaceDir, runtime);
     };
 

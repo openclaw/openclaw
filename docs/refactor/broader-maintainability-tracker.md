@@ -16,8 +16,8 @@ Current status:
 - Stage 2A initial deterministic-read seam complete
 - Stage 2B startup-threaded container seam complete
 - Stage 3A complete enough to pause (startup phases extracted, typed context threaded across early phases, startup failure classification unified across major boundaries)
-- Stage 3B initial seam in progress
-- Stages 4 to 5 not started
+- Stage 3B complete for this maintainability pass
+- Stages 4 to 5 deferred into a separate follow-on initiative
 
 ## Protected runtime slice
 
@@ -100,9 +100,13 @@ Do not edit these files under this plan:
 - [x] Extract shared workspace resolution and workspace-config helpers used by wizard and non-interactive local onboarding
 - [x] Extract shared gateway mode probe summary used by configure and setup flows
 - [x] Extract shared gateway exposure safety normalization used by wizard and non-interactive local onboarding
-- [ ] Define shared `OnboardingPlan` decision graph
-- [ ] Keep separate interactive and non-interactive executors
-- [ ] Add parity coverage for equivalent inputs
+- [x] Reuse shared gateway exposure safety normalization in `configure.gateway`
+- [x] Thread a shared `LocalSetupIntent` and execution-plan seam through wizard and non-interactive local setup
+- [x] Extract shared `LocalGatewaySetupState` used by wizard and non-interactive local onboarding
+- [x] Derive shared local gateway reachability inputs from `LocalGatewaySetupState`
+- [x] Define shared `OnboardingPlan` decision graph
+- [x] Keep separate interactive and non-interactive executors
+- [x] Add parity coverage for equivalent inputs
 
 ### Stage 4: routing and plugin boundary cleanup
 
@@ -118,6 +122,8 @@ Do not edit these files under this plan:
 
 ## Notes
 
+- This maintainability pass ends at Stage 3B. Stages 4 and 5 are intentionally deferred into a separate follow-on initiative.
+- `src/wizard/setup.finalize.test.ts` still shows pre-existing sticky runner shutdown behavior in this environment. Track that as a separate follow-up, and fix it before the next substantial change to `src/wizard/setup.finalize.ts`.
 - Keep runtime-worktree isolation strict.
 - If unrelated changes appear, work around them. Do not revert other contributors.
 - Do not touch `docs/zh-CN/**` unless explicitly requested.

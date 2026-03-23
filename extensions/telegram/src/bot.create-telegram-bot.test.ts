@@ -2059,6 +2059,56 @@ describe("createTelegramBot", () => {
       fetchSpy.mockRestore();
     }
   });
+
+  it("keeps media download failure replies in the originating forum topic", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: {
+            "-100777111222": {
+              enabled: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () =>
+        Promise.reject(new Error("MediaFetchError: Failed to fetch media")),
+      );
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: -100777111222, type: "supergroup", is_forum: true, title: "Forum" },
+          message_id: 412,
+          message_thread_id: 42,
+          date: 1736380800,
+          photo: [{ file_id: "p1" }],
+          from: { id: 55, is_bot: false, first_name: "u" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "photos/p1.jpg" }),
+      });
+
+      expect(sendMessageSpy).toHaveBeenCalledWith(
+        -100777111222,
+        "⚠️ Failed to download media. Please try again.",
+        { reply_to_message_id: 412, message_thread_id: 42 },
+      );
+      expect(replySpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
   it("processes remaining media group photos when one photo download fails", async () => {
     onSpy.mockReset();
     replySpy.mockReset();

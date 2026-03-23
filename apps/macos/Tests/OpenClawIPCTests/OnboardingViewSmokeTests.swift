@@ -27,6 +27,27 @@ struct OnboardingViewSmokeTests {
         #expect(!order.contains(8))
     }
 
+    @Test func `consumer local onboarding collapses to welcome and setup`() async {
+        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+            let order = OnboardingView.pageOrder(for: .local, showOnboardingChat: false)
+            #expect(order == [0])
+        }
+    }
+
+    @Test func `consumer first run defaults unconfigured state to same two-screen flow`() async {
+        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+            let order = OnboardingView.pageOrder(for: .unconfigured, showOnboardingChat: false)
+            #expect(order == [0])
+        }
+    }
+
+    @Test func `consumer explicit remote mode still exposes connection page`() async {
+        await TestIsolation.withEnvValues(["OPENCLAW_APP_VARIANT": "consumer"]) {
+            let order = OnboardingView.pageOrder(for: .remote, showOnboardingChat: false)
+            #expect(order == [0, 1, 3])
+        }
+    }
+
     @Test func `select remote gateway clears stale ssh target when endpoint unresolved`() async {
         let override = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-config-\(UUID().uuidString)")

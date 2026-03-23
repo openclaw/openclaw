@@ -116,23 +116,4 @@ describe("loadDotEnv", () => {
       });
     });
   });
-
-  it("hydrates provided env objects without mutating process.env", async () => {
-    await withIsolatedEnvAndCwd(async () => {
-      await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
-        await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\n");
-        await writeEnvFile(path.join(cwdDir, ".env"), "FOO=from-cwd\n");
-        await writeEnvFile(path.join(cwdDir, ".env.local"), "FOO=from-local\n");
-
-        process.chdir(cwdDir);
-        delete process.env.FOO;
-        const isolatedEnv = {} as NodeJS.ProcessEnv;
-
-        loadDotEnv({ quiet: true, env: isolatedEnv });
-
-        expect(isolatedEnv.FOO).toBe("from-local");
-        expect(process.env.FOO).toBeUndefined();
-      });
-    });
-  });
 });

@@ -39,5 +39,7 @@ vi.mock("./server-plugins.js", async () => {
     },
     // server.impl.ts sets a fallback context before dispatch; tests only need the symbol to exist.
     setFallbackGatewayContext: vi.fn(),
+    getFallbackGatewayContext: vi.fn(),
+    clearFallbackGatewayContext: vi.fn(),
   };
 });

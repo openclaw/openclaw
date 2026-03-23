@@ -132,6 +132,9 @@ export function createTelegramDraftStream(params: {
     ? resolveSendMessageDraftApi(params.api)
     : undefined;
   const usesDraftTransport = Boolean(prefersDraftTransport && resolvedDraftApi);
+  // Only DM topics are safe to retry without a thread id. Forum topics must
+  // fail loudly so we do not dump preview/final messages into the chat root.
+  const allowThreadlessRetry = params.thread?.scope === "dm";
   if (prefersDraftTransport && !usesDraftTransport) {
     params.warn?.(
       "telegram stream preview: sendMessageDraft unavailable; falling back to sendMessage/editMessageText",
@@ -174,6 +177,9 @@ export function createTelegramDraftStream(params: {
       };
     } catch (err) {
       if (!usedThreadParams || !THREAD_NOT_FOUND_RE.test(String(err))) {
+        throw err;
+      }
+      if (!allowThreadlessRetry) {
         throw err;
       }
       const threadlessParams = {

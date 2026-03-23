@@ -668,9 +668,12 @@ function normalizeDeps(overrides: ConfigIoDeps = {}): Required<ConfigIoDeps> {
 }
 
 function maybeLoadDotEnvForConfig(env: NodeJS.ProcessEnv): void {
-  // Hydrate dotenv into the provided env object so read-only callers can stay
-  // isolated from global process.env mutations while still resolving .env values.
-  loadDotEnv({ quiet: true, env });
+  // Only hydrate dotenv for the real process env. Callers using injected env
+  // objects (tests/diagnostics) should stay isolated.
+  if (env !== process.env) {
+    return;
+  }
+  loadDotEnv({ quiet: true });
 }
 
 export function parseConfigJson5(
@@ -1533,18 +1536,17 @@ export function loadConfigReadOnly(): OpenClawConfig {
   if (runtimeConfigSnapshot) {
     return runtimeConfigSnapshot;
   }
-  const io = createConfigIO({ env: { ...process.env } });
+  const io = createConfigIO();
   return io.loadConfigReadOnly();
 }
 
 export async function readBestEffortConfig(): Promise<OpenClawConfig> {
-  const io = createConfigIO({ env: { ...process.env } });
-  const snapshot = await io.readConfigFileSnapshot();
-  return snapshot.valid ? io.loadConfigReadOnly() : snapshot.config;
+  const snapshot = await readConfigFileSnapshot();
+  return snapshot.valid ? loadConfigReadOnly() : snapshot.config;
 }
 
 export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
-  return await createConfigIO({ env: { ...process.env } }).readConfigFileSnapshot();
+  return await createConfigIO().readConfigFileSnapshot();
 }
 
 export async function readConfigFileSnapshotForWrite(): Promise<ReadConfigFileSnapshotForWriteResult> {

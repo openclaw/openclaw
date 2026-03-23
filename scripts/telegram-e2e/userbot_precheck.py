@@ -15,22 +15,37 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import re
 import sys
 from pathlib import Path
 
-from userbot_guard import acquire_session_guard, sanitize_error_text, SessionGuardError
+
 EXIT_MISSING_CREDS = 10
 EXIT_MISSING_SESSION = 11
 EXIT_UNAUTHORIZED = 12
 EXIT_CHAT_NOT_RESOLVABLE = 13
 EXIT_TELETHON_MISSING = 14
 EXIT_PRECHECK_FAILED = 15
-EXIT_SESSION_BUSY = 16
 
 
 def fail(code: str, message: str, exit_code: int) -> int:
   print(f"{code}: {message}", file=sys.stderr)
   return exit_code
+
+
+def sanitize_error_text(raw: str) -> str:
+  text = raw.replace("\n", " ").replace("\r", " ").strip()
+  for secret in (
+    os.environ.get("TELEGRAM_API_HASH", ""),
+    os.environ.get("TG_BOT_TOKEN", ""),
+    os.environ.get("TELEGRAM_BOT_TOKEN", ""),
+  ):
+    if secret:
+      text = text.replace(secret, "<redacted>")
+  text = re.sub(r"\s+", " ", text).strip()
+  if not text:
+    return "unexpected error"
+  return text[:240]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -75,32 +90,29 @@ async def run() -> int:
 
   client = TelegramClient(str(session_path), args.api_id, api_hash)
   try:
-    with acquire_session_guard(session_path):
-      await client.connect()
-      if not await client.is_user_authorized():
-        return fail(
-          "E_UNAUTHORIZED_SESSION",
-          "userbot session is not authorized. Re-auth once via interactive userbot_send.py run.",
-          EXIT_UNAUTHORIZED,
-        )
+    await client.connect()
+    if not await client.is_user_authorized():
+      return fail(
+        "E_UNAUTHORIZED_SESSION",
+        "userbot session is not authorized. Re-auth once via interactive userbot_send.py run.",
+        EXIT_UNAUTHORIZED,
+      )
 
-      try:
-        resolved = await client.get_input_entity(chat_entity)
-      except Exception as err:
-        detail = sanitize_error_text(str(err))
-        return fail(
-          "E_CHAT_NOT_RESOLVABLE",
-          f"unable to resolve chat target. {detail}",
-          EXIT_CHAT_NOT_RESOLVABLE,
-        )
+    try:
+      resolved = await client.get_input_entity(chat_entity)
+    except Exception as err:
+      detail = sanitize_error_text(str(err))
+      return fail(
+        "E_CHAT_NOT_RESOLVABLE",
+        f"unable to resolve chat target. {detail}",
+        EXIT_CHAT_NOT_RESOLVABLE,
+      )
 
-      me = await client.get_me()
-      user_id = int(getattr(me, "id", 0) or 0)
-      peer_type = type(resolved).__name__
-      print(f"userbot_precheck: ok session={session_path.name} user_id={user_id} peer={peer_type}")
-      return 0
-  except SessionGuardError as err:
-    return fail("E_SESSION_BUSY", str(err), EXIT_SESSION_BUSY)
+    me = await client.get_me()
+    user_id = int(getattr(me, "id", 0) or 0)
+    peer_type = type(resolved).__name__
+    print(f"userbot_precheck: ok session={session_path.name} user_id={user_id} peer={peer_type}")
+    return 0
   except Exception as err:
     detail = sanitize_error_text(str(err))
     return fail("E_UNAUTHORIZED_SESSION", f"session check failed. {detail}", EXIT_UNAUTHORIZED)

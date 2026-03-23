@@ -24,7 +24,6 @@ import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
 import { extractKeywords } from "./query-expansion.js";
 import type {
-  MemoryCloseOptions,
   MemoryEmbeddingProbeResult,
   MemoryProviderStatus,
   MemorySearchManager,
@@ -43,16 +42,16 @@ const log = createSubsystemLogger("memory");
 const INDEX_CACHE = new Map<string, MemoryIndexManager>();
 const INDEX_CACHE_PENDING = new Map<string, Promise<MemoryIndexManager>>();
 
-export async function closeAllMemoryIndexManagers(opts?: MemoryCloseOptions): Promise<void> {
+export async function closeAllMemoryIndexManagers(): Promise<void> {
   const pending = Array.from(INDEX_CACHE_PENDING.values());
-  if (pending.length > 0 && opts?.fast !== true) {
+  if (pending.length > 0) {
     await Promise.allSettled(pending);
   }
   const managers = Array.from(INDEX_CACHE.values());
   INDEX_CACHE.clear();
   for (const manager of managers) {
     try {
-      await manager.close(opts);
+      await manager.close();
     } catch (err) {
       log.warn(`failed to close memory index manager: ${String(err)}`);
     }
@@ -833,7 +832,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
   }
 
-  async close(opts?: MemoryCloseOptions): Promise<void> {
+  async close(): Promise<void> {
     if (this.closed) {
       return;
     }
@@ -859,7 +858,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       this.sessionUnsubscribe();
       this.sessionUnsubscribe = null;
     }
-    if (pendingSync && opts?.fast !== true) {
+    if (pendingSync) {
       try {
         await pendingSync;
       } catch {}

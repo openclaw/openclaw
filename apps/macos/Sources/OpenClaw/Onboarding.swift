@@ -6,7 +6,7 @@ import OpenClawIPC
 import SwiftUI
 
 enum UIStrings {
-    static let welcomeTitle = "Welcome to OpenClaw"
+    static var welcomeTitle: String { "Welcome to \(AppFlavor.current.appName)" }
 }
 
 enum RemoteOnboardingProbeState: Equatable {
@@ -24,7 +24,7 @@ final class OnboardingController {
     func show() {
         if ProcessInfo.processInfo.isNixMode {
             // Nix mode is fully declarative; onboarding would suggest interactive setup that doesn't apply.
-            UserDefaults.standard.set(true, forKey: "openclaw.onboardingSeen")
+            UserDefaults.standard.set(true, forKey: onboardingSeenKey)
             UserDefaults.standard.set(currentOnboardingVersion, forKey: onboardingVersionKey)
             AppStateStore.shared.onboardingSeen = true
             return
@@ -105,15 +105,27 @@ struct OnboardingView: View {
         for mode: AppState.ConnectionMode,
         showOnboardingChat: Bool) -> [Int]
     {
+        // Consumer onboarding is intentionally opinionated: default to running on
+        // this Mac, skip channel/bootstrap ceremony, and keep first run to at
+        // most two screens. Remote remains reachable for explicit remote setups.
+        if AppFlavor.current.isConsumer {
+            switch mode {
+            case .remote:
+                return [0, 1, 3]
+            case .local, .unconfigured:
+                return [0]
+            }
+        }
+
         switch mode {
         case .remote:
             // Remote setup doesn't need local gateway/CLI/workspace setup pages,
             // and WhatsApp/Telegram setup is optional.
-            showOnboardingChat ? [0, 1, 5, 8, 9] : [0, 1, 5, 9]
+            return showOnboardingChat ? [0, 1, 5, 8, 9] : [0, 1, 5, 9]
         case .unconfigured:
-            showOnboardingChat ? [0, 1, 8, 9] : [0, 1, 9]
+            return showOnboardingChat ? [0, 1, 8, 9] : [0, 1, 9]
         case .local:
-            showOnboardingChat ? [0, 1, 3, 5, 8, 9] : [0, 1, 3, 5, 9]
+            return showOnboardingChat ? [0, 1, 3, 5, 8, 9] : [0, 1, 3, 5, 9]
         }
     }
 
@@ -134,7 +146,15 @@ struct OnboardingView: View {
     }
 
     var buttonTitle: String {
-        self.currentPage == self.pageCount - 1 ? "Finish" : "Next"
+        if AppFlavor.current.isConsumer {
+            if self.pageCount == 1, self.activePageIndex == 0 {
+                return self.onboardingWizard.isComplete ? "Finish" : "Setting Up…"
+            }
+            if self.activePageIndex == self.wizardPageIndex, self.onboardingWizard.isComplete {
+                return "Finish"
+            }
+        }
+        return self.currentPage == self.pageCount - 1 ? "Finish" : "Next"
     }
 
     var wizardPageOrderIndex: Int? {
@@ -145,8 +165,15 @@ struct OnboardingView: View {
         self.activePageIndex == self.wizardPageIndex && !self.onboardingWizard.isComplete
     }
 
+    var isConsumerInlineSetupBlocking: Bool {
+        AppFlavor.current.isConsumer &&
+            self.pageCount == 1 &&
+            self.state.connectionMode != .remote &&
+            !self.onboardingWizard.isComplete
+    }
+
     var canAdvance: Bool {
-        !self.isWizardBlocking
+        !self.isWizardBlocking && !self.isConsumerInlineSetupBlocking
     }
 
     var devLinkCommand: String {

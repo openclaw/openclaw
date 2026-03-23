@@ -3,7 +3,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ResolvedQmdConfig } from "./backend-config.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
 import type {
-  MemoryCloseOptions,
   MemoryEmbeddingProbeResult,
   MemorySearchManager,
   MemorySyncProgressUpdate,
@@ -86,19 +85,19 @@ export async function getMemorySearchManager(params: {
   }
 }
 
-export async function closeAllMemorySearchManagers(opts?: MemoryCloseOptions): Promise<void> {
+export async function closeAllMemorySearchManagers(): Promise<void> {
   const managers = Array.from(QMD_MANAGER_CACHE.values());
   QMD_MANAGER_CACHE.clear();
   for (const manager of managers) {
     try {
-      await manager.close?.(opts);
+      await manager.close?.();
     } catch (err) {
       log.warn(`failed to close qmd memory manager: ${String(err)}`);
     }
   }
   if (managerRuntimePromise !== null) {
     const { closeAllMemoryIndexManagers } = await loadManagerRuntime();
-    await closeAllMemoryIndexManagers(opts);
+    await closeAllMemoryIndexManagers();
   }
 }
 
@@ -212,9 +211,9 @@ class FallbackMemoryManager implements MemorySearchManager {
     return (await fallback?.probeVectorAvailability()) ?? false;
   }
 
-  async close(opts?: MemoryCloseOptions) {
-    await this.deps.primary.close?.(opts);
-    await this.fallback?.close?.(opts);
+  async close() {
+    await this.deps.primary.close?.();
+    await this.fallback?.close?.();
     this.evictCacheEntry();
   }
 

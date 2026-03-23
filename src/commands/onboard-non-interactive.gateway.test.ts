@@ -378,6 +378,32 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
+  it("uses the existing-gateway health deadline when daemon install was not requested", async () => {
+    await withStateDir("state-local-existing-health-", async (stateDir) => {
+      let capturedDeadlineMs: number | undefined;
+      waitForGatewayReachableMock = vi.fn(async (params: { deadlineMs?: number }) => {
+        capturedDeadlineMs = params.deadlineMs;
+        return { ok: true };
+      });
+
+      await runNonInteractiveSetup(
+        {
+          nonInteractive: true,
+          mode: "local",
+          workspace: path.join(stateDir, "openclaw"),
+          authChoice: "skip",
+          skipSkills: true,
+          skipHealth: false,
+          gatewayBind: "loopback",
+        },
+        runtime,
+      );
+
+      expect(installGatewayDaemonNonInteractiveMock).not.toHaveBeenCalled();
+      expect(capturedDeadlineMs).toBe(15_000);
+    });
+  }, 60_000);
+
   it("uses a longer health deadline when daemon install was requested", async () => {
     await withStateDir("state-local-daemon-health-", async (stateDir) => {
       let capturedDeadlineMs: number | undefined;
@@ -553,62 +579,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(parsed.diagnostics?.service?.runtimeStatus).toBe("running");
       expect(parsed.diagnostics?.service?.pid).toBe(4242);
       expect(parsed.diagnostics?.lastGatewayError).toContain("required secrets are unavailable");
-    });
-  }, 60_000);
-
-  it("forces loopback bind when tailscale serve is requested", async () => {
-    await withStateDir("state-local-tailscale-serve-", async (stateDir) => {
-      const workspace = path.join(stateDir, "openclaw");
-
-      await runNonInteractiveSetup(
-        {
-          nonInteractive: true,
-          mode: "local",
-          workspace,
-          authChoice: "skip",
-          skipSkills: true,
-          skipHealth: true,
-          installDaemon: false,
-          gatewayBind: "lan",
-          gatewayAuth: "token",
-          tailscale: "serve",
-        },
-        runtime,
-      );
-
-      const cfg = await readJsonFile<{
-        gateway?: {
-          bind?: string;
-          auth?: { mode?: string };
-          tailscale?: { mode?: string };
-        };
-      }>(resolveStateConfigPath(process.env, stateDir));
-
-      expect(cfg.gateway?.bind).toBe("loopback");
-      expect(cfg.gateway?.auth?.mode).toBe("token");
-      expect(cfg.gateway?.tailscale?.mode).toBe("serve");
-    });
-  }, 60_000);
-
-  it("forces password auth for tailscale funnel and requires a password", async () => {
-    await withStateDir("state-local-tailscale-funnel-", async (stateDir) => {
-      await expect(
-        runNonInteractiveSetup(
-          {
-            nonInteractive: true,
-            mode: "local",
-            workspace: path.join(stateDir, "openclaw"),
-            authChoice: "skip",
-            skipSkills: true,
-            skipHealth: true,
-            installDaemon: false,
-            gatewayBind: "lan",
-            gatewayAuth: "token",
-            tailscale: "funnel",
-          },
-          runtime,
-        ),
-      ).rejects.toThrow("Missing --gateway-password for password auth.");
     });
   }, 60_000);
 

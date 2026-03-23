@@ -2,10 +2,12 @@ import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
+import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
-import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
+import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
+import { AGENT_LANE_NESTED } from "./lanes.js";
 
 const DEFAULT_STREAM_FLUSH_MS = 2_500;
 const DEFAULT_NO_OUTPUT_NOTICE_MS = 60_000;
@@ -45,6 +47,54 @@ function resolveAcpStreamLogPathFromSessionFile(sessionFile: string, sessionId: 
   return path.join(baseDir, `${sessionId}.acp-stream.jsonl`);
 }
 
+function buildAcpParentWakeInternalEvents(params: {
+  childSessionKey: string;
+  agentId: string;
+  result: string;
+  status: "ok" | "error" | "timeout" | "unknown";
+}): AgentInternalEvent[] {
+  const statusLabel =
+    params.status === "ok"
+      ? "completed"
+      : params.status === "timeout"
+        ? "timed out"
+        : params.status === "error"
+          ? "failed"
+          : "finished";
+  return [
+    {
+      type: "task_completion",
+      source: "subagent",
+      childSessionKey: params.childSessionKey,
+      announceType: "acp session",
+      taskLabel: params.agentId,
+      status: params.status,
+      statusLabel,
+      result: params.result || "(no output)",
+      replyInstruction:
+        "Continue the main conversation using the queued ACP result. Keep internal details private and answer the user in your own words.",
+    },
+  ];
+}
+
+function buildAcpParentWakeMessage(params: {
+  childSessionKey: string;
+  agentId: string;
+  status: "ok" | "error" | "timeout" | "unknown";
+  result: string;
+}): string {
+  const internalEvents = buildAcpParentWakeInternalEvents({
+    childSessionKey: params.childSessionKey,
+    agentId: params.agentId,
+    result: params.result,
+    status: params.status,
+  });
+  return (
+    formatAgentInternalEventsForPrompt(internalEvents) ||
+    "An ACP child session has completed. Review the queued internal result and continue the user's conversation."
+  );
+}
+
 export function resolveAcpSpawnStreamLogPath(params: {
   childSessionKey: string;
 }): string | undefined {
@@ -78,6 +128,10 @@ export function startAcpSpawnParentStreamRelay(params: {
   parentSessionKey: string;
   childSessionKey: string;
   agentId: string;
+  replyChannel?: string;
+  replyTo?: string;
+  replyAccountId?: string;
+  threadId?: string | number;
   logPath?: string;
   streamFlushMs?: number;
   noOutputNoticeMs?: number;
@@ -114,6 +168,10 @@ export function startAcpSpawnParentStreamRelay(params: {
   const relayLabel = truncate(compactWhitespace(params.agentId), 40) || "ACP child";
   const contextPrefix = `acp-spawn:${runId}`;
   const logPath = toTrimmedString(params.logPath);
+  const replyChannel = toTrimmedString(params.replyChannel);
+  const replyTo = toTrimmedString(params.replyTo);
+  const replyAccountId = toTrimmedString(params.replyAccountId);
+  const threadId = params.threadId != null ? toTrimmedString(String(params.threadId)) : undefined;
   let logDirReady = false;
   let pendingLogLines = "";
   let logFlushScheduled = false;
@@ -178,12 +236,56 @@ export function startAcpSpawnParentStreamRelay(params: {
       ...fields,
     });
   };
-  const wake = () => {
-    requestHeartbeatNow(
-      scopedHeartbeatWakeOptions(parentSessionKey, {
-        reason: "acp:spawn:stream",
-      }),
-    );
+  const wakeParent = (params: {
+    contextKey: string;
+    agentId: string;
+    status: "ok" | "error" | "timeout" | "unknown";
+    result: string;
+  }) => {
+    const wakeMessage = buildAcpParentWakeMessage({
+      childSessionKey: params.contextKey,
+      agentId: params.agentId,
+      status: params.status,
+      result: params.result,
+    });
+    const internalEvents = buildAcpParentWakeInternalEvents({
+      childSessionKey: params.contextKey,
+      agentId: params.agentId,
+      status: params.status,
+      result: params.result,
+    });
+    const wakeIdempotencyKey = `${runId}:${params.contextKey}:${params.status}`;
+    void callGateway({
+      method: "agent",
+      params: {
+        sessionKey: parentSessionKey,
+        message: wakeMessage,
+        // The wake message is internal, but the resumed parent turn still needs
+        // delivery enabled so its final answer returns to the original thread.
+        deliver: true,
+        channel: INTERNAL_MESSAGE_CHANNEL,
+        replyChannel,
+        replyTo,
+        replyAccountId,
+        threadId,
+        lane: AGENT_LANE_NESTED,
+        internalEvents,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: parentSessionKey,
+          sourceChannel: INTERNAL_MESSAGE_CHANNEL,
+          sourceTool: "acp_spawn",
+        },
+        idempotencyKey: wakeIdempotencyKey,
+      },
+      expectFinal: true,
+      timeoutMs: Math.max(10_000, noOutputNoticeMs),
+    }).catch((error: unknown) => {
+      logEvent("parent_wake_failed", {
+        contextKey: params.contextKey,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   };
   const emit = (text: string, contextKey: string) => {
     const cleaned = text.trim();
@@ -192,7 +294,6 @@ export function startAcpSpawnParentStreamRelay(params: {
     }
     logEvent("system_event", { contextKey, text: cleaned });
     enqueueSystemEvent(cleaned, { sessionKey: parentSessionKey, contextKey });
-    wake();
   };
   const emitStartNotice = () => {
     emit(
@@ -272,6 +373,12 @@ export function startAcpSpawnParentStreamRelay(params: {
       `${relayLabel} stream relay timed out after ${Math.max(1, Math.round(maxRelayLifetimeMs / 1000))}s without completion.`,
       `${contextPrefix}:timeout`,
     );
+    wakeParent({
+      contextKey: params.childSessionKey,
+      agentId: params.agentId,
+      status: "timeout",
+      result: `${relayLabel} stream relay timed out after ${Math.max(1, Math.round(maxRelayLifetimeMs / 1000))}s without completion.`,
+    });
     dispose();
   }, maxRelayLifetimeMs);
   relayLifetimeTimer.unref?.();
@@ -331,12 +438,23 @@ export function startAcpSpawnParentStreamRelay(params: {
           ? endedAt - startedAt
           : undefined;
       if (durationMs != null) {
-        emit(
-          `${relayLabel} run completed in ${Math.max(1, Math.round(durationMs / 1000))}s.`,
-          `${contextPrefix}:done`,
-        );
+        const completionText = `${relayLabel} run completed in ${Math.max(1, Math.round(durationMs / 1000))}s.`;
+        emit(completionText, `${contextPrefix}:done`);
+        wakeParent({
+          contextKey: params.childSessionKey,
+          agentId: params.agentId,
+          status: "ok",
+          result: completionText,
+        });
       } else {
-        emit(`${relayLabel} run completed.`, `${contextPrefix}:done`);
+        const completionText = `${relayLabel} run completed.`;
+        emit(completionText, `${contextPrefix}:done`);
+        wakeParent({
+          contextKey: params.childSessionKey,
+          agentId: params.agentId,
+          status: "ok",
+          result: completionText,
+        });
       }
       dispose();
       return;
@@ -346,9 +464,23 @@ export function startAcpSpawnParentStreamRelay(params: {
       flushPending();
       const errorText = toTrimmedString((event.data as { error?: unknown } | undefined)?.error);
       if (errorText) {
-        emit(`${relayLabel} run failed: ${errorText}`, `${contextPrefix}:error`);
+        const failureText = `${relayLabel} run failed: ${errorText}`;
+        emit(failureText, `${contextPrefix}:error`);
+        wakeParent({
+          contextKey: params.childSessionKey,
+          agentId: params.agentId,
+          status: "error",
+          result: failureText,
+        });
       } else {
-        emit(`${relayLabel} run failed.`, `${contextPrefix}:error`);
+        const failureText = `${relayLabel} run failed.`;
+        emit(failureText, `${contextPrefix}:error`);
+        wakeParent({
+          contextKey: params.childSessionKey,
+          agentId: params.agentId,
+          status: "error",
+          result: failureText,
+        });
       }
       dispose();
     }

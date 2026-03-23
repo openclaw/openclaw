@@ -68,7 +68,7 @@ describe("handshake auth helpers", () => {
     });
   });
 
-  it("allows silent local pairing only for not-paired and scope upgrades", () => {
+  it("allows silent local pairing for safe local repair paths", () => {
     expect(
       shouldAllowSilentLocalPairing({
         isLocalClient: true,
@@ -85,6 +85,15 @@ describe("handshake auth helpers", () => {
         isControlUi: false,
         isWebchat: false,
         reason: "metadata-upgrade",
+      }),
+    ).toBe(true);
+    expect(
+      shouldAllowSilentLocalPairing({
+        isLocalClient: true,
+        hasBrowserOriginHeader: false,
+        isControlUi: false,
+        isWebchat: false,
+        reason: "role-upgrade",
       }),
     ).toBe(false);
   });

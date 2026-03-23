@@ -34,7 +34,10 @@ struct GatewayEnvironmentTests {
     @Test func `gateway port defaults and respects override`() async {
         let configPath = TestIsolation.tempConfigPath()
         await TestIsolation.withIsolatedState(
-            env: ["OPENCLAW_CONFIG_PATH": configPath],
+            env: [
+                "OPENCLAW_CONFIG_PATH": configPath,
+                "OPENCLAW_APP_VARIANT": "standard",
+            ],
             defaults: ["gatewayPort": nil])
         {
             let defaultPort = GatewayEnvironment.gatewayPort()
@@ -43,6 +46,19 @@ struct GatewayEnvironmentTests {
             UserDefaults.standard.set(19999, forKey: "gatewayPort")
             defer { UserDefaults.standard.removeObject(forKey: "gatewayPort") }
             #expect(GatewayEnvironment.gatewayPort() == 19999)
+        }
+    }
+
+    @Test func `consumer flavor defaults to isolated gateway port`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_CONFIG_PATH": configPath,
+                "OPENCLAW_APP_VARIANT": "consumer",
+            ],
+            defaults: ["gatewayPort": nil])
+        {
+            #expect(GatewayEnvironment.gatewayPort() == 19001)
         }
     }
 

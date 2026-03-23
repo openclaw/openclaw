@@ -63,6 +63,7 @@ final class OnboardingWizardModel {
 
     func startIfNeeded(mode: AppState.ConnectionMode, workspace: String? = nil) async {
         guard self.sessionId == nil, !self.isStarting else { return }
+        guard !self.isComplete else { return }
         guard mode == .local else { return }
         if self.shouldSkipWizard() {
             self.sessionId = nil

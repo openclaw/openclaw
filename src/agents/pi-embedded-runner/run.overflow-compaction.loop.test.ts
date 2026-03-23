@@ -1,6 +1,10 @@
 import "./run.overflow-compaction.mocks.shared.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { isCompactionFailureError, isLikelyContextOverflowError } from "../pi-embedded-helpers.js";
+import {
+  mockedBuildEmbeddedRunPayloads,
+  mockedResolveEmbeddedRunPayloadErrorAssistant,
+} from "./run.overflow-compaction.mocks.shared.js";
 
 vi.mock(import("../../utils.js"), async (importOriginal) => {
   const actual = await importOriginal();
@@ -31,6 +35,30 @@ import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 const mockedIsCompactionFailureError = vi.mocked(isCompactionFailureError);
 const mockedIsLikelyContextOverflowError = vi.mocked(isLikelyContextOverflowError);
+const baseUsage = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+function makeAssistant(
+  overrides: Partial<NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>>,
+): NonNullable<EmbeddedRunAttemptResult["lastAssistant"]> {
+  return {
+    role: "assistant",
+    content: [],
+    api: "openai-responses",
+    provider: "openai",
+    model: "mock-1",
+    usage: baseUsage,
+    stopReason: "stop",
+    timestamp: Date.now(),
+    ...overrides,
+  };
+}
 
 describe("overflow compaction in run loop", () => {
   beforeEach(() => {
@@ -39,6 +67,8 @@ describe("overflow compaction in run loop", () => {
     mockedCompactDirect.mockReset();
     mockedSessionLikelyHasOversizedToolResults.mockReset();
     mockedTruncateOversizedToolResultsInSession.mockReset();
+    mockedBuildEmbeddedRunPayloads.mockReset();
+    mockedResolveEmbeddedRunPayloadErrorAssistant.mockReset();
     mockedContextEngine.info.ownsCompaction = false;
     mockedIsCompactionFailureError.mockImplementation((msg?: string) => {
       if (!msg) {
@@ -70,6 +100,8 @@ describe("overflow compaction in run loop", () => {
       truncatedCount: 0,
       reason: "no oversized tool results",
     });
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([]);
+    mockedResolveEmbeddedRunPayloadErrorAssistant.mockReturnValue(undefined);
   });
 
   it("retries after successful compaction on context overflow promptError", async () => {
@@ -138,6 +170,58 @@ describe("overflow compaction in run loop", () => {
     expect(result.meta.error?.kind).toBe("context_overflow");
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("auto-compaction failed"));
+  });
+
+  it("surfaces the prior assistant error when a trailing tool-use masked it", async () => {
+    const maskedError =
+      '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_masked"}';
+
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [maskedError],
+        lastAssistant: makeAssistant({
+          stopReason: "toolUse",
+          content: [
+            {
+              type: "toolCall",
+              id: "toolu_masked",
+              name: "browser",
+              arguments: { action: "search", query: "openclaw" },
+            },
+          ],
+        }),
+        lastErroredAssistant: makeAssistant({
+          stopReason: "error",
+          errorMessage: maskedError,
+          content: [{ type: "text", text: maskedError }],
+        }),
+      }),
+    );
+    mockedBuildEmbeddedRunPayloads.mockReturnValueOnce([
+      {
+        text: "The AI service is temporarily overloaded. Please try again in a moment.",
+        isError: true,
+      },
+    ]);
+    mockedResolveEmbeddedRunPayloadErrorAssistant.mockReturnValueOnce(
+      makeAssistant({
+        stopReason: "error",
+        errorMessage: maskedError,
+        content: [{ type: "text", text: maskedError }],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(result.meta.stopReason).toBe("error");
+    expect(result.payloads).toHaveLength(1);
+    expect(result.payloads?.[0]).toMatchObject({
+      text: "The AI service is temporarily overloaded. Please try again in a moment.",
+      isError: true,
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("[embedded-run-error-recovery] surfaced prior assistant error"),
+    );
   });
 
   it("falls back to tool-result truncation and retries when oversized results are detected", async () => {

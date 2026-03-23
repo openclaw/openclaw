@@ -62,6 +62,11 @@ extension OnboardingView {
             await self.ensureDefaultWorkspace()
             self.refreshBootstrapStatus()
             self.preferredGatewayID = GatewayDiscoveryPreferences.preferredStableID()
+            if AppFlavor.current.isConsumer, self.state.connectionMode == .unconfigured {
+                // Keep the default consumer path local-first even before the
+                // user presses the first button so the reduced page order stays stable.
+                self.selectLocalGateway()
+            }
         }
     }
 

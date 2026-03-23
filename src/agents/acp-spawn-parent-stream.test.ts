@@ -5,18 +5,18 @@ import {
   startAcpSpawnParentStreamRelay,
 } from "./acp-spawn-parent-stream.js";
 
+const callGatewayMock = vi.fn();
 const enqueueSystemEventMock = vi.fn();
-const requestHeartbeatNowMock = vi.fn();
 const readAcpSessionEntryMock = vi.fn();
 const resolveSessionFilePathMock = vi.fn();
 const resolveSessionFilePathOptionsMock = vi.fn();
 
-vi.mock("../infra/system-events.js", () => ({
-  enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+vi.mock("../gateway/call.js", () => ({
+  callGateway: (...args: unknown[]) => callGatewayMock(...args),
 }));
 
-vi.mock("../infra/heartbeat-wake.js", () => ({
-  requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
+vi.mock("../infra/system-events.js", () => ({
+  enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
 }));
 
 vi.mock("../acp/runtime/session-meta.js", () => ({
@@ -34,12 +34,13 @@ function collectedTexts() {
 
 describe("startAcpSpawnParentStreamRelay", () => {
   beforeEach(() => {
+    callGatewayMock.mockReset();
     enqueueSystemEventMock.mockClear();
-    requestHeartbeatNowMock.mockClear();
     readAcpSessionEntryMock.mockReset();
     resolveSessionFilePathMock.mockReset();
     resolveSessionFilePathOptionsMock.mockReset();
     resolveSessionFilePathOptionsMock.mockImplementation((value: unknown) => value);
+    callGatewayMock.mockResolvedValue({ runId: "wake-run" });
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-04T01:00:00.000Z"));
   });
@@ -54,6 +55,10 @@ describe("startAcpSpawnParentStreamRelay", () => {
       parentSessionKey: "agent:main:main",
       childSessionKey: "agent:codex:acp:child-1",
       agentId: "codex",
+      replyChannel: "telegram",
+      replyTo: "telegram:1336356696",
+      replyAccountId: "default",
+      threadId: "39951",
       streamFlushMs: 10,
       noOutputNoticeMs: 120_000,
     });
@@ -81,12 +86,45 @@ describe("startAcpSpawnParentStreamRelay", () => {
     expect(texts.some((text) => text.includes("Started codex session"))).toBe(true);
     expect(texts.some((text) => text.includes("codex: hello from child"))).toBe(true);
     expect(texts.some((text) => text.includes("codex run completed in 2s"))).toBe(true);
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
+    expect(callGatewayMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        reason: "acp:spawn:stream",
-        sessionKey: "agent:main:main",
+        method: "agent",
+        expectFinal: true,
       }),
     );
+    expect(
+      callGatewayMock.mock.calls.some(([call]) => {
+        const typed = call as {
+          method?: string;
+          expectFinal?: boolean;
+          params?: {
+            sessionKey?: string;
+            deliver?: boolean;
+            channel?: string;
+            replyChannel?: string;
+            replyTo?: string;
+            replyAccountId?: string;
+            threadId?: string;
+            lane?: string;
+            inputProvenance?: { kind?: string; sourceTool?: string };
+          };
+        };
+        return (
+          typed.method === "agent" &&
+          typed.expectFinal === true &&
+          typed.params?.sessionKey === "agent:main:main" &&
+          typed.params?.deliver === true &&
+          typed.params?.channel === "webchat" &&
+          typed.params?.replyChannel === "telegram" &&
+          typed.params?.replyTo === "telegram:1336356696" &&
+          typed.params?.replyAccountId === "default" &&
+          typed.params?.threadId === "39951" &&
+          typed.params?.lane === "nested" &&
+          typed.params?.inputProvenance?.kind === "inter_session" &&
+          typed.params?.inputProvenance?.sourceTool === "acp_spawn"
+        );
+      }),
+    ).toBeTruthy();
     relay.dispose();
   });
 
@@ -146,6 +184,19 @@ describe("startAcpSpawnParentStreamRelay", () => {
     expect(collectedTexts().some((text) => text.includes("stream relay timed out after 1s"))).toBe(
       true,
     );
+    expect(
+      callGatewayMock.mock.calls.some(([call]) => {
+        const typed = call as {
+          method?: string;
+          params?: { sessionKey?: string; deliver?: boolean };
+        };
+        return (
+          typed.method === "agent" &&
+          typed.params?.sessionKey === "agent:main:main" &&
+          typed.params?.deliver === true
+        );
+      }),
+    ).toBeTruthy();
 
     const before = enqueueSystemEventMock.mock.calls.length;
     emitAgentEvent({

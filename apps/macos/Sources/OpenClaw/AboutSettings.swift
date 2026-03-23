@@ -5,12 +5,15 @@ struct AboutSettings: View {
     @State private var iconHover = false
     @AppStorage("autoUpdateEnabled") private var autoCheckEnabled = true
     @State private var didLoadUpdaterState = false
+    private var isConsumer: Bool {
+        AppFlavor.current.isConsumer
+    }
 
     var body: some View {
         VStack(spacing: 8) {
             let appIcon = NSApplication.shared.applicationIconImage ?? CritterIconRenderer.makeIcon(blink: 0)
             Button {
-                if let url = URL(string: "https://github.com/openclaw/openclaw") {
+                if let url = URL(string: self.primaryIconURL) {
                     NSWorkspace.shared.open(url)
                 }
             } label: {
@@ -29,7 +32,7 @@ struct AboutSettings: View {
             }
 
             VStack(spacing: 3) {
-                Text("OpenClaw")
+                Text(AppFlavor.current.appName)
                     .font(.title3.bold())
                 Text("Version \(self.versionString)")
                     .foregroundStyle(.secondary)
@@ -38,7 +41,7 @@ struct AboutSettings: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-                Text("Menu bar companion for notifications, screenshots, and privileged agent actions.")
+                Text(self.subtitle)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -46,13 +49,18 @@ struct AboutSettings: View {
             }
 
             VStack(alignment: .center, spacing: 6) {
-                AboutLinkRow(
-                    icon: "chevron.left.slash.chevron.right",
-                    title: "GitHub",
-                    url: "https://github.com/openclaw/openclaw")
-                AboutLinkRow(icon: "globe", title: "Website", url: "https://openclaw.ai")
-                AboutLinkRow(icon: "bird", title: "Twitter", url: "https://twitter.com/steipete")
-                AboutLinkRow(icon: "envelope", title: "Email", url: "mailto:peter@steipete.me")
+                if self.isConsumer {
+                    AboutLinkRow(icon: "globe", title: "Website", url: "https://openclaw.ai")
+                    AboutLinkRow(icon: "book", title: "Documentation", url: "https://docs.openclaw.ai")
+                } else {
+                    AboutLinkRow(
+                        icon: "chevron.left.slash.chevron.right",
+                        title: "GitHub",
+                        url: "https://github.com/openclaw/openclaw")
+                    AboutLinkRow(icon: "globe", title: "Website", url: "https://openclaw.ai")
+                    AboutLinkRow(icon: "bird", title: "Twitter", url: "https://twitter.com/steipete")
+                    AboutLinkRow(icon: "envelope", title: "Email", url: "mailto:peter@steipete.me")
+                }
             }
             .frame(maxWidth: .infinity)
             .multilineTextAlignment(.center)
@@ -64,9 +72,11 @@ struct AboutSettings: View {
 
                 if updater.isAvailable {
                     VStack(spacing: 10) {
-                        Toggle("Check for updates automatically", isOn: self.$autoCheckEnabled)
-                            .toggleStyle(.checkbox)
-                            .frame(maxWidth: .infinity, alignment: .center)
+                        if !self.isConsumer {
+                            Toggle("Check for updates automatically", isOn: self.$autoCheckEnabled)
+                                .toggleStyle(.checkbox)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                        }
 
                         Button("Check for Updates…") { updater.checkForUpdates(nil) }
                     }
@@ -77,7 +87,7 @@ struct AboutSettings: View {
                 }
             }
 
-            Text("© 2025 Peter Steinberger — MIT License.")
+            Text(self.footer)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .padding(.top, 4)
@@ -103,11 +113,17 @@ struct AboutSettings: View {
 
     private var versionString: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+        if self.isConsumer {
+            return version
+        }
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
         return build.map { "\(version) (\($0))" } ?? version
     }
 
     private var buildTimestamp: String? {
+        if self.isConsumer {
+            return nil
+        }
         guard
             let raw =
             (Bundle.main.object(forInfoDictionaryKey: "OpenClawBuildTimestamp") as? String) ??
@@ -144,6 +160,27 @@ struct AboutSettings: View {
         #endif
         suffix += ")"
         return suffix
+    }
+
+    private var subtitle: String {
+        if self.isConsumer {
+            return "Your AI operator for this Mac."
+        }
+        return "Menu bar companion for notifications, screenshots, and privileged agent actions."
+    }
+
+    private var footer: String {
+        if self.isConsumer {
+            return "OpenClaw Consumer for macOS"
+        }
+        return "© 2025 Peter Steinberger — MIT License."
+    }
+
+    private var primaryIconURL: String {
+        if self.isConsumer {
+            return "https://openclaw.ai"
+        }
+        return "https://github.com/openclaw/openclaw"
     }
 }
 

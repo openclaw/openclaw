@@ -35,6 +35,9 @@ ASSIGNED_BOT_TOKEN=""
 ASSIGNED_BOT_ID="unknown"
 ASSIGNED_BOT_USERNAME="unknown"
 ASSIGNED_BOT_NAME="unknown"
+CURRENT_LANE_BOT="unknown"
+RUNTIME_TOKEN_SOURCE="unknown"
+TOKEN_ORIGIN_HINT="unknown"
 TOKEN_CLAIM_COUNT=0
 TOKEN_CLAIM_PATHS=()
 FAIL=0
@@ -406,8 +409,15 @@ ensure_tester_bot_claim() {
   TOKEN_PRESENT="yes"
   ASSIGNED_BOT_TOKEN="$token"
   TOKEN_FINGERPRINT="$(mask_token "$token")"
+  RUNTIME_TOKEN_SOURCE="repo_env_local"
+  TOKEN_ORIGIN_HINT="repo_env_local"
   resolve_token_claims "$token"
   resolve_bot_identity
+  if [[ "${ASSIGNED_BOT_USERNAME}" != "unknown" ]]; then
+    CURRENT_LANE_BOT="@${ASSIGNED_BOT_USERNAME}"
+  elif [[ "${ASSIGNED_BOT_ID}" != "unknown" ]]; then
+    CURRENT_LANE_BOT="id=${ASSIGNED_BOT_ID}"
+  fi
 
   local in_pool="no"
   local line=""
@@ -545,6 +555,29 @@ sync_runtime_auth_profiles() {
     return
   fi
 
+  purge_runtime_auth_profiles() {
+    local auth_path=""
+    while IFS= read -r auth_path || [[ -n "$auth_path" ]]; do
+      [[ -z "$auth_path" ]] && continue
+      rm -f "$auth_path"
+    done < <(
+      find "$RUNTIME_STATE_DIR/agents" \
+        \( -path "*/agent/auth-profiles.json" -o -path "*/agent/auth.json" \) \
+        -type f 2>/dev/null
+    )
+  }
+
+  # Telegram live tester lanes should be able to run with fully isolated auth.
+  # When this flag is set we intentionally do not inherit any auth-profiles
+  # from the shared ~/.openclaw agent state, which avoids OAuth refresh-token
+  # races between the tester runtime and the user's main runtime.
+  if [[ "${OPENCLAW_TELEGRAM_LIVE_SKIP_AUTH_SYNC:-0}" == "1" ]]; then
+    # Scrub any stale inherited auth that might already be sitting in the
+    # runtime state from an earlier non-isolated run.
+    purge_runtime_auth_profiles
+    return
+  fi
+
   # Worktree runtimes keep isolated state, but they still need the operator's
   # existing auth profiles copied in so inbound Telegram messages can actually
   # execute the same agent models as the stable runtime.
@@ -635,6 +668,7 @@ start_isolated_runtime() {
       OPENCLAW_SKIP_CANVAS_HOST=1 \
       OPENCLAW_SKIP_BROWSER_CONTROL_SERVER=1 \
       OPENCLAW_DISABLE_BONJOUR=1 \
+      OPENCLAW_DISABLE_EXTERNAL_CLI_AUTH_SYNC="${OPENCLAW_TELEGRAM_LIVE_SKIP_AUTH_SYNC:-0}" \
       node scripts/run-node.mjs gateway run --bind loopback --port "$RUNTIME_PORT" --force --allow-unconfigured \
       >"$RUNTIME_LOG_PATH" 2>&1 &
   ); then
@@ -660,6 +694,9 @@ emit_ensure_proof_lines() {
   echo "token_present=${TOKEN_PRESENT}"
   echo "token_pool_guard=${TOKEN_POOL_GUARD}"
   echo "token_fingerprint=${TOKEN_FINGERPRINT}"
+  echo "current_lane_bot=${CURRENT_LANE_BOT}"
+  echo "runtime_token_source=${RUNTIME_TOKEN_SOURCE}"
+  echo "token_origin_hint=${TOKEN_ORIGIN_HINT}"
   echo "assigned_bot_id=${ASSIGNED_BOT_ID}"
   echo "assigned_bot_username=${ASSIGNED_BOT_USERNAME}"
   echo "assigned_bot_name=${ASSIGNED_BOT_NAME}"

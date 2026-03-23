@@ -1,4 +1,9 @@
 import { formatCliCommand } from "../cli/command-format.js";
+import {
+  createLocalSetupIntent,
+  resolveLocalSetupExecutionPlan,
+} from "../commands/onboard-local-plan.js";
+import { createLocalOnboardingPlan } from "../commands/onboard-plan.js";
 import type {
   GatewayAuthChoice,
   OnboardMode,
@@ -12,6 +17,7 @@ import {
   resolveGatewayPort,
   writeConfigFile,
 } from "../config/config.js";
+import { normalizeSecretInputString } from "../config/types.secrets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
@@ -279,26 +285,81 @@ export async function runSetupWizard(
   }
 
   const localPort = resolveGatewayPort(baseConfig);
-  const gatewayModeProbeSummary = await onboardHelpers.resolveGatewayModeProbeSummary({
-    cfg: baseConfig,
-    localPort,
-    resolveSecretInput: async (params) =>
-      resolveSetupSecretInputString({
-        config: params.cfg,
-        value: params.value,
-        path: params.path,
-        env: process.env,
-      }),
-    onSecretResolveError: async (params) => {
-      await prompter.note(
-        [
-          `Could not resolve ${params.path} SecretRef for setup probe.`,
-          params.error instanceof Error ? params.error.message : String(params.error),
-        ].join("\n"),
-        "Gateway auth",
-      );
-    },
+  const localUrl = `ws://127.0.0.1:${localPort}`;
+  let localGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN ?? process.env.CLAWDBOT_GATEWAY_TOKEN;
+  try {
+    const resolvedGatewayToken = await resolveSetupSecretInputString({
+      config: baseConfig,
+      value: baseConfig.gateway?.auth?.token,
+      path: "gateway.auth.token",
+      env: process.env,
+    });
+    if (resolvedGatewayToken) {
+      localGatewayToken = resolvedGatewayToken;
+    }
+  } catch (error) {
+    await prompter.note(
+      [
+        "Could not resolve gateway.auth.token SecretRef for setup probe.",
+        error instanceof Error ? error.message : String(error),
+      ].join("\n"),
+      "Gateway auth",
+    );
+  }
+  let localGatewayPassword =
+    process.env.OPENCLAW_GATEWAY_PASSWORD ?? process.env.CLAWDBOT_GATEWAY_PASSWORD;
+  try {
+    const resolvedGatewayPassword = await resolveSetupSecretInputString({
+      config: baseConfig,
+      value: baseConfig.gateway?.auth?.password,
+      path: "gateway.auth.password",
+      env: process.env,
+    });
+    if (resolvedGatewayPassword) {
+      localGatewayPassword = resolvedGatewayPassword;
+    }
+  } catch (error) {
+    await prompter.note(
+      [
+        "Could not resolve gateway.auth.password SecretRef for setup probe.",
+        error instanceof Error ? error.message : String(error),
+      ].join("\n"),
+      "Gateway auth",
+    );
+  }
+
+  const localProbe = await onboardHelpers.probeGatewayReachable({
+    url: localUrl,
+    token: localGatewayToken,
+    password: localGatewayPassword,
   });
+  const remoteUrl = baseConfig.gateway?.remote?.url?.trim() ?? "";
+  let remoteGatewayToken = normalizeSecretInputString(baseConfig.gateway?.remote?.token);
+  try {
+    const resolvedRemoteGatewayToken = await resolveSetupSecretInputString({
+      config: baseConfig,
+      value: baseConfig.gateway?.remote?.token,
+      path: "gateway.remote.token",
+      env: process.env,
+    });
+    if (resolvedRemoteGatewayToken) {
+      remoteGatewayToken = resolvedRemoteGatewayToken;
+    }
+  } catch (error) {
+    await prompter.note(
+      [
+        "Could not resolve gateway.remote.token SecretRef for setup probe.",
+        error instanceof Error ? error.message : String(error),
+      ].join("\n"),
+      "Gateway auth",
+    );
+  }
+  const remoteProbe = remoteUrl
+    ? await onboardHelpers.probeGatewayReachable({
+        url: remoteUrl,
+        token: remoteGatewayToken,
+      })
+    : null;
 
   const mode =
     opts.mode ??
@@ -310,12 +371,18 @@ export async function runSetupWizard(
             {
               value: "local",
               label: "Local gateway (this machine)",
-              hint: gatewayModeProbeSummary.hints.local,
+              hint: localProbe.ok
+                ? `Gateway reachable (${localUrl})`
+                : `No gateway detected (${localUrl})`,
             },
             {
               value: "remote",
               label: "Remote gateway (info-only)",
-              hint: gatewayModeProbeSummary.hints.remote,
+              hint: !remoteUrl
+                ? "No remote URL configured yet"
+                : remoteProbe?.ok
+                  ? `Gateway reachable (${remoteUrl})`
+                  : `Configured but unreachable (${remoteUrl})`,
             },
           ],
         })) as OnboardMode));
@@ -419,6 +486,14 @@ export async function runSetupWizard(
   }
 
   await warnIfModelConfigLooksOff(nextConfig, prompter);
+  // Freeze the shared local setup intent here before later wizard steps add
+  // more branching, so finalize can reason from the same inputs as CLI setup.
+  const setupIntent = createLocalSetupIntent({
+    workspaceDir,
+    authChoice,
+    installDaemon: opts.installDaemon,
+    skipHealth: opts.skipHealth,
+  });
 
   const { configureGatewayForSetup } = await import("./setup.gateway-config.js");
   const gateway = await configureGatewayForSetup({
@@ -433,8 +508,21 @@ export async function runSetupWizard(
   });
   nextConfig = gateway.nextConfig;
   const settings = gateway.settings;
+  const onboardingPlan = createLocalOnboardingPlan({
+    executionMode: "interactive",
+    flow,
+    intent: setupIntent,
+    gatewayState: settings,
+    executionPlan: resolveLocalSetupExecutionPlan({
+      intent: setupIntent,
+      executionMode: "interactive",
+      flow,
+      platform: process.platform,
+    }),
+    opts,
+  });
 
-  if (opts.skipChannels ?? opts.skipProviders) {
+  if (onboardingPlan.steps.channels.decision === "skip") {
     await prompter.note("Skipping channel setup.", "Channels");
   } else {
     const { listChannelPlugins } = await import("../channels/plugins/index.js");
@@ -462,7 +550,7 @@ export async function runSetupWizard(
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
   });
 
-  if (opts.skipSearch) {
+  if (onboardingPlan.steps.search.decision === "skip") {
     await prompter.note("Skipping search setup.", "Search");
   } else {
     const { setupSearch } = await import("../commands/onboard-search.js");
@@ -472,7 +560,7 @@ export async function runSetupWizard(
     });
   }
 
-  if (opts.skipSkills) {
+  if (onboardingPlan.steps.skills.decision === "skip") {
     await prompter.note("Skipping skills setup.", "Skills");
   } else {
     const { setupSkills } = await import("../commands/onboard-skills.js");
@@ -493,6 +581,8 @@ export async function runSetupWizard(
     baseConfig,
     nextConfig,
     workspaceDir,
+    intent: setupIntent,
+    onboardingPlan,
     settings,
     prompter,
     runtime,

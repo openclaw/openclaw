@@ -26,6 +26,7 @@ const { loadAuthProfileStoreForRuntime } = await import("./auth-profiles.js");
 
 describe("auth profiles read-only external CLI sync", () => {
   afterEach(() => {
+    delete process.env.OPENCLAW_DISABLE_EXTERNAL_CLI_AUTH_SYNC;
     vi.clearAllMocks();
   });
 
@@ -56,6 +57,37 @@ describe("auth profiles read-only external CLI sync", () => {
       const persisted = JSON.parse(fs.readFileSync(authPath, "utf8")) as AuthProfileStore;
       expect(persisted.profiles["qwen-portal:default"]).toBeUndefined();
       expect(persisted.profiles["openai:default"]).toMatchObject({
+        type: "api_key",
+        provider: "openai",
+        key: "sk-test",
+      });
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips external CLI sync entirely when disabled by env", () => {
+    process.env.OPENCLAW_DISABLE_EXTERNAL_CLI_AUTH_SYNC = "1";
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-readonly-sync-"));
+    try {
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      const baseline: AuthProfileStore = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-test",
+          },
+        },
+      };
+      fs.writeFileSync(authPath, `${JSON.stringify(baseline, null, 2)}\n`, "utf8");
+
+      const loaded = loadAuthProfileStoreForRuntime(agentDir, { readOnly: true });
+
+      expect(mocks.syncExternalCliCredentials).not.toHaveBeenCalled();
+      expect(loaded.profiles["qwen-portal:default"]).toBeUndefined();
+      expect(loaded.profiles["openai:default"]).toMatchObject({
         type: "api_key",
         provider: "openai",
         key: "sk-test",

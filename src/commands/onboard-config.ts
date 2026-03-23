@@ -1,25 +1,11 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { DmScope } from "../config/types.base.js";
 import type { ToolProfileId } from "../config/types.tools.js";
-import { resolveUserPath } from "../utils.js";
 
 export const ONBOARDING_DEFAULT_DM_SCOPE: DmScope = "per-channel-peer";
 export const ONBOARDING_DEFAULT_TOOLS_PROFILE: ToolProfileId = "coding";
 
-export function resolveOnboardingWorkspaceDir(params: {
-  requestedWorkspace?: string;
-  configuredWorkspace?: string;
-  defaultWorkspaceDir: string;
-}): string {
-  const raw = (
-    params.requestedWorkspace ??
-    params.configuredWorkspace ??
-    params.defaultWorkspaceDir
-  ).trim();
-  return resolveUserPath(raw);
-}
-
-export function applyOnboardingWorkspaceConfig(
+export function applyLocalSetupWorkspaceConfig(
   baseConfig: OpenClawConfig,
   workspaceDir: string,
 ): OpenClawConfig {
@@ -32,15 +18,6 @@ export function applyOnboardingWorkspaceConfig(
         workspace: workspaceDir,
       },
     },
-  };
-}
-
-export function applyLocalSetupWorkspaceConfig(
-  baseConfig: OpenClawConfig,
-  workspaceDir: string,
-): OpenClawConfig {
-  return {
-    ...applyOnboardingWorkspaceConfig(baseConfig, workspaceDir),
     gateway: {
       ...baseConfig.gateway,
       mode: "local",

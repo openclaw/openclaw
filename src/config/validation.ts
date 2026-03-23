@@ -351,8 +351,6 @@ function validateConfigObjectWithPluginsBase(
     const registry = loadPluginManifestRegistry({
       config,
       workspaceDir: workspaceDir ?? undefined,
-      // Config validation is a read path; avoid discovery-side chmod writes here.
-      repairBundledPermissions: false,
       env: opts.env,
     });
 

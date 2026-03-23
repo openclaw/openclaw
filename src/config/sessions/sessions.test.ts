@@ -143,6 +143,25 @@ describe("session path safety", () => {
 });
 
 describe("resolveSessionResetPolicy", () => {
+  it("defaults chat session policies to manual persistence", () => {
+    const policy = resolveSessionResetPolicy({
+      sessionCfg: {} as SessionConfig,
+      resetType: "direct",
+    });
+
+    expect(policy.mode).toBe("manual");
+  });
+
+  it("allows callers like cron to keep a different default mode", () => {
+    const policy = resolveSessionResetPolicy({
+      sessionCfg: {} as SessionConfig,
+      resetType: "direct",
+      defaultMode: "daily",
+    });
+
+    expect(policy.mode).toBe("daily");
+  });
+
   describe("backward compatibility: resetByType.dm -> direct", () => {
     it("does not use dm fallback for group/thread types", () => {
       const sessionCfg = {
@@ -156,7 +175,7 @@ describe("resolveSessionResetPolicy", () => {
         resetType: "group",
       });
 
-      expect(groupPolicy.mode).toBe("daily");
+      expect(groupPolicy.mode).toBe("manual");
     });
   });
 });

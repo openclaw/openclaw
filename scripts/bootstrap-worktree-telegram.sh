@@ -22,11 +22,11 @@ copy_if_exists() {
 }
 
 # Bot token pool for worktree assignment.
-# Claiming now happens on first canonical `telegram-live-runtime.sh ensure` run.
-# Tokens that also exist in the stable/main Telegram config are reserved and
-# rejected during claim to prevent worktree runtime hijacking.
 copy_if_exists "$MAIN_REPO/.env.bots" "./.env.bots"
-if [[ ! -f "./.env.bots" ]]; then
+
+if [[ -f "./.env.bots" ]]; then
+  bash scripts/assign-bot.sh
+else
   echo "skip: .env.bots missing in main repo"
 fi
 
@@ -43,4 +43,4 @@ elif [[ -f "$MAIN_REPO/scripts/telegram-e2e/userbot.session" ]]; then
     "./scripts/telegram-e2e/tmp/userbot.session"
 fi
 
-echo "telegram bootstrap complete (token claim deferred to first ensure)"
+echo "telegram bootstrap complete"

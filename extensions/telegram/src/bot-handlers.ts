@@ -41,11 +41,7 @@ import {
 import { dispatchPluginInteractiveHandler } from "../../../src/plugins/interactive.js";
 import { resolveAgentRoute } from "../../../src/routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../src/routing/session-key.js";
-import {
-  applyFutureThreadModelDefaultToSessionEntry,
-  applyModelOverrideToSessionEntry,
-} from "../../../src/sessions/model-overrides.js";
-import { resolveFutureThreadParentSessionKey } from "../../../src/sessions/session-key-utils.js";
+import { applyModelOverrideToSessionEntry } from "../../../src/sessions/model-overrides.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   isSenderAllowed,
@@ -61,15 +57,20 @@ import {
 } from "./bot-updates.js";
 import { resolveMedia } from "./bot/delivery.js";
 import {
+  buildTelegramThreadParams,
   getTelegramTextParts,
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
   resolveTelegramInboundThreadId,
+  resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
-import { resolveTelegramConversationRoute } from "./conversation-route.js";
+import {
+  resolveTelegramConversationBaseSessionKey,
+  resolveTelegramConversationRoute,
+} from "./conversation-route.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
 import {
   isTelegramExecApprovalApprover,
@@ -93,10 +94,6 @@ import {
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
-import {
-  isTelegramTopicCreateServiceMessage,
-  seedTelegramThreadSessionOnTopicCreate,
-} from "./thread-session-seeding.js";
 
 const APPROVE_CALLBACK_DATA_RE =
   /^\/approve(?:@[^\s]+)?\s+[A-Za-z0-9][A-Za-z0-9._:-]*\s+(allow-once|allow-always|deny)\b/i;
@@ -340,7 +337,13 @@ export const registerTelegramHandlers = ({
       senderId: params.senderId,
       topicAgentId: topicConfig?.agentId,
     });
-    const baseSessionKey = route.sessionKey;
+    const baseSessionKey = resolveTelegramConversationBaseSessionKey({
+      cfg,
+      route,
+      chatId: params.chatId,
+      isGroup: params.isGroup,
+      senderId: params.senderId,
+    });
     const threadKeys =
       dmThreadId != null
         ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${params.chatId}:${dmThreadId}` })
@@ -1011,6 +1014,17 @@ export const registerTelegramHandlers = ({
     try {
       media = await resolveMedia(ctx, mediaMaxBytes, opts.token, telegramTransport);
     } catch (mediaErr) {
+      const isGroupChat = msg.chat.type === "group" || msg.chat.type === "supergroup";
+      const isForumChat = msg.chat.is_forum === true;
+      const messageThreadId = resolveTelegramInboundThreadId(msg);
+      const threadParams =
+        buildTelegramThreadParams(
+          resolveTelegramThreadSpec({
+            isGroup: isGroupChat,
+            isForum: isForumChat,
+            messageThreadId,
+          }),
+        ) ?? {};
       if (isMediaSizeLimitError(mediaErr)) {
         if (sendOversizeWarning) {
           const limitMb = Math.round(mediaMaxBytes / (1024 * 1024));
@@ -1020,6 +1034,7 @@ export const registerTelegramHandlers = ({
             fn: () =>
               bot.api.sendMessage(chatId, `⚠️ File too large. Maximum size is ${limitMb}MB.`, {
                 reply_to_message_id: msg.message_id,
+                ...threadParams,
               }),
           }).catch(() => {});
         }
@@ -1033,6 +1048,7 @@ export const registerTelegramHandlers = ({
         fn: () =>
           bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
             reply_to_message_id: msg.message_id,
+            ...threadParams,
           }),
       }).catch(() => {});
       return;
@@ -1161,17 +1177,6 @@ export const registerTelegramHandlers = ({
         }
         return await bot.api.deleteMessage(callbackMessage.chat.id, callbackMessage.message_id);
       };
-      const replyToCallbackChat = async (
-        text: string,
-        params?: Parameters<typeof bot.api.sendMessage>[2],
-      ) => {
-        const replyFn = (ctx as { reply?: unknown }).reply;
-        if (typeof replyFn === "function") {
-          return await ctx.reply(text, params);
-        }
-        return await bot.api.sendMessage(callbackMessage.chat.id, text, params);
-      };
-
       const chatId = callbackMessage.chat.id;
       const isGroup =
         callbackMessage.chat.type === "group" || callbackMessage.chat.type === "supergroup";
@@ -1201,6 +1206,28 @@ export const registerTelegramHandlers = ({
 
       const messageThreadId = resolveTelegramInboundThreadId(callbackMessage);
       const isForum = callbackMessage.chat.is_forum === true;
+      const callbackThreadParams =
+        buildTelegramThreadParams(
+          resolveTelegramThreadSpec({
+            isGroup,
+            isForum,
+            messageThreadId,
+          }),
+        ) ?? {};
+      const replyToCallbackChat = async (
+        text: string,
+        params?: Parameters<typeof bot.api.sendMessage>[2],
+      ) => {
+        const mergedParams = {
+          ...callbackThreadParams,
+          ...(params ?? {}),
+        };
+        const replyFn = (ctx as { reply?: unknown }).reply;
+        if (typeof replyFn === "function") {
+          return await ctx.reply(text, mergedParams);
+        }
+        return await bot.api.sendMessage(callbackMessage.chat.id, text, mergedParams);
+      };
       const eventAuthContext = await resolveTelegramEventAuthorizationContext({
         chatId,
         isGroup,
@@ -1515,27 +1542,6 @@ export const registerTelegramHandlers = ({
                   isDefault: isDefaultSelection,
                 },
               });
-
-              // Model-picker callbacks bypass directive handling, so we must
-              // mirror the same "future thread default" write here. Without
-              // this, selecting a model inside a Telegram topic only updates
-              // the current topic and new sibling topics keep the old default.
-              const parentSessionKey = resolveFutureThreadParentSessionKey({
-                sessionKey,
-                channelHint: "telegram",
-              });
-              if (parentSessionKey) {
-                const parentEntry = store[parentSessionKey] ?? {};
-                store[parentSessionKey] = parentEntry;
-                applyFutureThreadModelDefaultToSessionEntry({
-                  entry: parentEntry,
-                  selection: {
-                    provider: selection.provider,
-                    model: selection.model,
-                    isDefault: isDefaultSelection,
-                  },
-                });
-              }
             });
 
             // Update message to show success with visual feedback
@@ -1701,38 +1707,6 @@ export const registerTelegramHandlers = ({
           logger,
         });
         if (!dmAuthorized) {
-          return;
-        }
-      }
-
-      const isTopicCreateServiceMessage = isTelegramTopicCreateServiceMessage({
-        message: event.msg,
-        isGroup: event.isGroup,
-        resolvedThreadId,
-        dmThreadId,
-      });
-      if (isTopicCreateServiceMessage) {
-        // Snapshot future-thread defaults at Telegram topic creation time.
-        // Otherwise an older topic with no prior turns looks "new" later and
-        // incorrectly inherits newer parent defaults on first real message.
-        await seedTelegramThreadSessionOnTopicCreate({
-          cfg: loadConfig(),
-          accountId,
-          chatId: event.chatId,
-          isGroup: event.isGroup,
-          senderId: event.senderId,
-          resolvedThreadId,
-          dmThreadId,
-          topicAgentId: topicConfig?.agentId,
-        });
-
-        const hasRenderableTopicCreateContent =
-          Boolean(getTelegramTextParts(event.msg).text.trim()) || hasInboundMedia(event.msg);
-        if (!hasRenderableTopicCreateContent) {
-          // Pure topic-create service messages must stop here. Letting them
-          // flow into normal reply/session init overwrites the seeded snapshot
-          // with a blank child entry, which reintroduces retroactive
-          // inheritance for older topics.
           return;
         }
       }

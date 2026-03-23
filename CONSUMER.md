@@ -9,6 +9,7 @@
 This is not a feature branch for the upstream OpenClaw project.
 
 This is the **consumer product** — a simplified, packaged version of OpenClaw that:
+
 - Ships as a macOS app
 - Uses Telegram as the primary command interface
 - Is designed for non-technical users who want a personal AI operator
@@ -41,6 +42,7 @@ Not a chatbot. Not another agent framework. A practical operator that does real 
 ## Current Sprint (Week 1)
 
 **Goal:** Three things must be true by end of week:
+
 1. Consumer branch runs independently (separate OPENCLAW_HOME, port 19001)
 2. Browser spike complete — clear winner chosen with benchmark data
 3. Flight search works end-to-end from Telegram
@@ -52,12 +54,14 @@ Not a chatbot. Not another agent framework. A practical operator that does real 
 Benchmark these 4 approaches on 5 tasks:
 
 **Approaches:**
+
 1. Browserbase (cloud Chrome, CAPTCHA solving, session persistence)
 2. OpenClaw Chrome Extension (improved — controls user's real Chrome)
 3. Computer-use vision (screenshots + clicks)
 4. Claude Chrome approach (investigate/adapt — note: some sites are blocked)
 
 **Benchmark tasks:**
+
 1. Flight search + price comparison (Google Flights / Kayak)
 2. Fill out a web form (booking/signup)
 3. Read + summarize a webpage
@@ -65,6 +69,7 @@ Benchmark these 4 approaches on 5 tasks:
 5. Multi-step: search → compare → act
 
 **Scoring priority:**
+
 1. Can it use the user's real logged-in browser sessions? (highest priority)
 2. Speed
 3. Reliability (% complete without failure)
@@ -124,18 +129,18 @@ Your live bot at `~/.openclaw` stays untouched.
 
 ## Key Decisions Already Made
 
-| Decision | Choice |
-|----------|--------|
-| Telegram bot | Shared bot default + optional BYOK token |
-| Desktop UX | Menu bar + simplified app (rework existing, don't rebuild) |
-| Model routing | Bundled keys + BYOK option (Cursor model) |
-| Safety mode | Power only for sprint |
-| Billing | Stripe, after product works, not in sprint |
-| Legal | Needs counsel before public launch |
-| Beta users | Founder (you) is user #1 |
-| Hardware messaging | "Best on dedicated Mac (Mini recommended)" |
-| Support | Founder-led personal onboarding |
-| Managed hosting | Phase 2, not in scope |
+| Decision           | Choice                                                     |
+| ------------------ | ---------------------------------------------------------- |
+| Telegram bot       | Shared bot default + optional BYOK token                   |
+| Desktop UX         | Menu bar + simplified app (rework existing, don't rebuild) |
+| Model routing      | Bundled keys + BYOK option (Cursor model)                  |
+| Safety mode        | Power only for sprint                                      |
+| Billing            | Stripe, after product works, not in sprint                 |
+| Legal              | Needs counsel before public launch                         |
+| Beta users         | Founder (you) is user #1                                   |
+| Hardware messaging | "Best on dedicated Mac (Mini recommended)"                 |
+| Support            | Founder-led personal onboarding                            |
+| Managed hosting    | Phase 2, not in scope                                      |
 
 ---
 
@@ -143,10 +148,11 @@ Your live bot at `~/.openclaw` stays untouched.
 
 All product docs live in `docs/consumer/` on this branch:
 
-| File | Purpose |
-|------|---------|
-| `docs/consumer/openclaw-consumer-execution-spec.md` | Full execution plan — all decisions, sprint breakdown, what's cut |
-| `docs/consumer/CODEX-PROMPT.md` | Codex kickoff prompt for each sprint phase |
-| `docs/consumer/openclaw-consumer-go-to-market-plan.md` | GTM plan, architecture, pricing |
-| `docs/consumer/openclaw-consumer-brutal-execution-board.md` | 30-day execution board |
-| `docs/consumer/openclaw-consumer-investor-brief-1page.md` | 1-page investor brief |
+| File                                                        | Purpose                                                           |
+| ----------------------------------------------------------- | ----------------------------------------------------------------- |
+| `docs/consumer/openclaw-consumer-execution-spec.md`         | Full execution plan — all decisions, sprint breakdown, what's cut |
+| `docs/consumer/CODEX-PROMPT.md`                             | Codex kickoff prompt for each sprint phase                        |
+| `docs/consumer/openclaw-consumer-go-to-market-plan.md`      | GTM plan, architecture, pricing                                   |
+| `docs/consumer/openclaw-consumer-brutal-execution-board.md` | 30-day execution board                                            |
+| `docs/consumer/openclaw-consumer-investor-brief-1page.md`   | 1-page investor brief                                             |
+| `docs/consumer/gui-control-mvp-decision.md`                 | Deferred-MVP product decision for consumer GUI control            |

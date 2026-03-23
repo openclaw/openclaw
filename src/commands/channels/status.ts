@@ -280,7 +280,7 @@ export async function channelsStatusCommand(
   opts: ChannelsStatusOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const timeoutMs = Number(opts.timeout ?? 10_000);
+  const timeoutMs = Number(opts.timeout ?? (opts.probe ? 20_000 : 10_000));
   const statusLabel = opts.probe ? "Checking channel status (probe)…" : "Checking channel status…";
   const shouldLogStatus = opts.json !== true && !process.stderr.isTTY;
   if (shouldLogStatus) {

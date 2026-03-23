@@ -207,7 +207,8 @@ the workspace is writable. See [Memory](/concepts/memory) and
 ## Lifecycle
 
 - Reset policy: sessions are reused until they expire, and expiry is evaluated on the next inbound message.
-- Daily reset: defaults to **4:00 AM local time on the gateway host**. A session is stale once its last update is earlier than the most recent daily reset time.
+- Manual reset: default chat behavior. Sessions stay alive until the user explicitly sends `/new` or `/reset`.
+- Daily reset (optional): starts a fresh session after the configured local boundary time. A session is stale once its last update is earlier than the most recent daily reset time.
 - Idle reset (optional): `idleMinutes` adds a sliding idle window. When both daily and idle resets are configured, **whichever expires first** forces a new session.
 - Legacy idle-only: if you set `session.idleMinutes` without any `session.reset`/`resetByType` config, OpenClaw stays in idle-only mode for backward compatibility.
 - Per-type overrides (optional): `resetByType` lets you override the policy for `direct`, `group`, and `thread` sessions (thread = Slack/Discord threads, Telegram topics, Matrix threads when provided by the connector).
@@ -255,23 +256,38 @@ Runtime override (owner only):
       alice: ["telegram:123456789", "discord:987654321012345678"],
     },
     reset: {
-      // Defaults: mode=daily, atHour=4 (gateway host local time).
+      // Default chat behavior is mode=manual.
+      // If you switch to daily, atHour defaults to 4 (gateway host local time).
       // If you also set idleMinutes, whichever expires first wins.
-      mode: "daily",
-      atHour: 4,
-      idleMinutes: 120,
+      mode: "manual",
     },
     resetByType: {
-      thread: { mode: "daily", atHour: 4 },
+      thread: { mode: "manual" },
       direct: { mode: "idle", idleMinutes: 240 },
       group: { mode: "idle", idleMinutes: 120 },
     },
+    // Example time-based override for one specific channel.
     resetByChannel: {
-      discord: { mode: "idle", idleMinutes: 10080 },
+      discord: { mode: "daily", atHour: 4, idleMinutes: 120 },
     },
     resetTriggers: ["/new", "/reset"],
     store: "~/.openclaw/agents/{agentId}/sessions/sessions.json",
     mainKey: "main",
+  },
+}
+```
+
+If you want the old behavior globally, configure it explicitly:
+
+```json5
+// ~/.openclaw/openclaw.json
+{
+  session: {
+    reset: {
+      mode: "daily",
+      atHour: 4,
+      idleMinutes: 120,
+    },
   },
 }
 ```

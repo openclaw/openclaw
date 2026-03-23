@@ -1,72 +1,91 @@
-import type { ChildProcess } from "node:child_process";
-import { EventEmitter } from "node:events";
-import { PassThrough } from "node:stream";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveCliSpawnInvocation } from "./qmd-process.js";
 
-const spawnMock = vi.hoisted(() => vi.fn());
-const killProcessTreeMock = vi.hoisted(() => vi.fn());
+describe("resolveCliSpawnInvocation", () => {
+  let tempDir = "";
+  let platformSpy: { mockRestore(): void } | null = null;
+  const originalPath = process.env.PATH;
+  const originalPathExt = process.env.PATHEXT;
 
-vi.mock("node:child_process", () => ({
-  spawn: (...args: unknown[]) => spawnMock(...args),
-}));
-
-vi.mock("../process/kill-tree.js", () => ({
-  killProcessTree: (...args: unknown[]) => killProcessTreeMock(...args),
-}));
-
-const { runCliCommand } = await import("./qmd-process.js");
-
-function createChildProcessMock(pid = 12345) {
-  const child = new EventEmitter() as EventEmitter & ChildProcess;
-  child.pid = pid;
-  child.stdin = new PassThrough() as ChildProcess["stdin"];
-  child.stdout = new PassThrough() as ChildProcess["stdout"];
-  child.stderr = new PassThrough() as ChildProcess["stderr"];
-  child.kill = vi.fn(() => true) as ChildProcess["kill"];
-  return child;
-}
-
-describe("runCliCommand abort handling", () => {
-  beforeEach(() => {
-    spawnMock.mockReset();
-    killProcessTreeMock.mockReset();
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qmd-win-spawn-"));
+    platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   });
 
-  it("rejects immediately without spawning when the abort signal is already aborted", async () => {
-    const abort = new AbortController();
-    abort.abort(new Error("stop"));
-
-    await expect(
-      runCliCommand({
-        commandSummary: "qmd update",
-        spawnInvocation: { command: "qmd", argv: ["update"] },
-        env: {},
-        cwd: "/tmp",
-        maxOutputChars: 10_000,
-        abortSignal: abort.signal,
-      }),
-    ).rejects.toThrow("qmd update aborted");
-
-    expect(spawnMock).not.toHaveBeenCalled();
+  afterEach(async () => {
+    platformSpy?.mockRestore();
+    process.env.PATH = originalPath;
+    process.env.PATHEXT = originalPathExt;
+    if (tempDir) {
+      await fs.rm(tempDir, { recursive: true, force: true });
+      tempDir = "";
+    }
   });
 
-  it("kills the process tree and rejects promptly when aborted mid-run", async () => {
-    const child = createChildProcessMock();
-    spawnMock.mockReturnValue(child);
-    const abort = new AbortController();
+  it("unwraps npm cmd shims to a direct node entrypoint", async () => {
+    const binDir = path.join(tempDir, "node_modules", ".bin");
+    const packageDir = path.join(tempDir, "node_modules", "qmd");
+    const scriptPath = path.join(packageDir, "dist", "cli.js");
+    await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+    await fs.mkdir(binDir, { recursive: true });
+    await fs.writeFile(path.join(binDir, "qmd.cmd"), "@echo off\r\n", "utf8");
+    await fs.writeFile(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: "qmd", version: "0.0.0", bin: { qmd: "dist/cli.js" } }),
+      "utf8",
+    );
+    await fs.writeFile(scriptPath, "module.exports = {};\n", "utf8");
 
-    const commandPromise = runCliCommand({
-      commandSummary: "qmd update",
-      spawnInvocation: { command: "qmd", argv: ["update"] },
-      env: {},
-      cwd: "/tmp",
-      maxOutputChars: 10_000,
-      abortSignal: abort.signal,
+    process.env.PATH = `${binDir};${originalPath ?? ""}`;
+    process.env.PATHEXT = ".CMD;.EXE";
+
+    const invocation = resolveCliSpawnInvocation({
+      command: "qmd",
+      args: ["query", "hello"],
+      env: process.env,
+      packageName: "qmd",
     });
 
-    abort.abort(new Error("stop"));
+    expect(invocation.command).toBe(process.execPath);
+    expect(invocation.argv).toEqual([scriptPath, "query", "hello"]);
+    expect(invocation.shell).not.toBe(true);
+    expect(invocation.windowsHide).toBe(true);
+  });
 
-    await expect(commandPromise).rejects.toThrow("qmd update aborted");
-    expect(killProcessTreeMock).toHaveBeenCalledWith(12345, { graceMs: 0 });
+  it("fails closed when a Windows cmd shim cannot be resolved without shell execution", async () => {
+    const binDir = path.join(tempDir, "bad-bin");
+    await fs.mkdir(binDir, { recursive: true });
+    await fs.writeFile(path.join(binDir, "qmd.cmd"), "@echo off\r\nREM no entrypoint\r\n", "utf8");
+
+    process.env.PATH = `${binDir};${originalPath ?? ""}`;
+    process.env.PATHEXT = ".CMD;.EXE";
+
+    expect(() =>
+      resolveCliSpawnInvocation({
+        command: "qmd",
+        args: ["query", "hello"],
+        env: process.env,
+        packageName: "qmd",
+      }),
+    ).toThrow(/without shell execution/);
+  });
+
+  it("keeps bare commands bare when no Windows wrapper exists on PATH", () => {
+    process.env.PATH = originalPath ?? "";
+    process.env.PATHEXT = ".CMD;.EXE";
+
+    const invocation = resolveCliSpawnInvocation({
+      command: "qmd",
+      args: ["query", "hello"],
+      env: process.env,
+      packageName: "qmd",
+    });
+
+    expect(invocation.command).toBe("qmd");
+    expect(invocation.argv).toEqual(["query", "hello"]);
+    expect(invocation.shell).not.toBe(true);
   });
 });

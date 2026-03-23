@@ -67,7 +67,10 @@ import {
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
-import { resolveTelegramConversationRoute } from "./conversation-route.js";
+import {
+  resolveTelegramConversationBaseSessionKey,
+  resolveTelegramConversationRoute,
+} from "./conversation-route.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import type { TelegramTransport } from "./fetch.js";
 import {
@@ -716,7 +719,13 @@ export const registerTelegramNativeCommands = ({
             });
             return;
           }
-          const baseSessionKey = route.sessionKey;
+          const baseSessionKey = resolveTelegramConversationBaseSessionKey({
+            cfg,
+            route,
+            chatId,
+            isGroup,
+            senderId,
+          });
           // DMs: use raw messageThreadId for thread sessions (not resolvedThreadId which is for forums)
           const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
           const threadKeys =
@@ -872,6 +881,17 @@ export const registerTelegramNativeCommands = ({
             return;
           }
           const chatId = msg.chat.id;
+          const isGroupChat = msg.chat.type === "group" || msg.chat.type === "supergroup";
+          const isForumChat = msg.chat.is_forum === true;
+          const messageThreadId = resolveTelegramInboundThreadId(msg);
+          const threadParams =
+            buildTelegramThreadParams(
+              resolveTelegramThreadSpec({
+                isGroup: isGroupChat,
+                isForum: isForumChat,
+                messageThreadId,
+              }),
+            ) ?? {};
           const rawText = ctx.match?.trim() ?? "";
           const commandBody = `/${pluginCommand.command}${rawText ? ` ${rawText}` : ""}`;
           const match = matchPluginCommand(commandBody);
@@ -879,7 +899,7 @@ export const registerTelegramNativeCommands = ({
             await withTelegramApiErrorLogging({
               operation: "sendMessage",
               runtime,
-              fn: () => bot.api.sendMessage(chatId, "Command not found."),
+              fn: () => bot.api.sendMessage(chatId, "Command not found.", threadParams),
             });
             return;
           }

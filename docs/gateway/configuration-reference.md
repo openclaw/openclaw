@@ -1558,12 +1558,10 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
       alice: ["telegram:123456789", "discord:987654321012345678"],
     },
     reset: {
-      mode: "daily", // daily | idle
-      atHour: 4,
-      idleMinutes: 60,
+      mode: "manual", // manual | daily | idle
     },
     resetByType: {
-      thread: { mode: "daily", atHour: 4 },
+      thread: { mode: "manual" },
       direct: { mode: "idle", idleMinutes: 240 },
       group: { mode: "idle", idleMinutes: 120 },
     },

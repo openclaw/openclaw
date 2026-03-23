@@ -119,11 +119,6 @@ export type SessionEntry = {
    */
   futureThreadProviderOverride?: string;
   futureThreadModelOverride?: string;
-  /**
-   * Parent-chat default thinking level for future thread/topic sessions.
-   * Existing threads intentionally remain unchanged.
-   */
-  futureThreadThinkingLevelOverride?: string;
   authProfileOverride?: string;
   authProfileOverrideSource?: "auto" | "user";
   authProfileOverrideCompactionCount?: number;

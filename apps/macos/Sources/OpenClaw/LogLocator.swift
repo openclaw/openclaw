@@ -7,7 +7,7 @@ enum LogLocator {
         {
             return URL(fileURLWithPath: override)
         }
-        return URL(fileURLWithPath: "/tmp/openclaw")
+        return URL(fileURLWithPath: "/tmp/\(AppFlavor.current.defaultLogDirName)")
     }
 
     private static var stdoutLog: URL {

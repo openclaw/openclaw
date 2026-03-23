@@ -38,6 +38,12 @@ struct MenuContent: View {
             set: { self.state.execApprovalMode = $0 })
     }
 
+    private var showsConsumerMenu: Bool {
+        // Consumer mode keeps the menu bar focused on lifecycle + entry points.
+        // Operational controls remain available once the user explicitly opts into Advanced.
+        AppFlavor.current.isConsumer && !self.state.showAdvancedSettings
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Toggle(isOn: self.activeBinding) {
@@ -63,97 +69,11 @@ struct MenuContent: View {
             .disabled(self.state.connectionMode == .unconfigured)
 
             Divider()
-            Toggle(isOn: self.heartbeatsBinding) {
-                HStack(spacing: 8) {
-                    Label("Send Heartbeats", systemImage: "waveform.path.ecg")
-                    Spacer(minLength: 0)
-                    self.statusLine(label: self.heartbeatStatus.label, color: self.heartbeatStatus.color)
-                }
+            if self.showsConsumerMenu {
+                self.consumerActions
+            } else {
+                self.operatorActions
             }
-            Toggle(
-                isOn: Binding(
-                    get: { self.browserControlEnabled },
-                    set: { enabled in
-                        self.browserControlEnabled = enabled
-                        Task { await self.saveBrowserControlEnabled(enabled) }
-                    })) {
-                Label("Browser Control", systemImage: "globe")
-            }
-            Toggle(isOn: self.$cameraEnabled) {
-                Label("Allow Camera", systemImage: "camera")
-            }
-            Picker(selection: self.execApprovalModeBinding) {
-                ForEach(ExecApprovalQuickMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            } label: {
-                Label("Exec Approvals", systemImage: "terminal")
-            }
-            Toggle(isOn: Binding(get: { self.state.canvasEnabled }, set: { self.state.canvasEnabled = $0 })) {
-                Label("Allow Canvas", systemImage: "rectangle.and.pencil.and.ellipsis")
-            }
-            .onChange(of: self.state.canvasEnabled) { _, enabled in
-                if !enabled {
-                    CanvasManager.shared.hideAll()
-                }
-            }
-            Toggle(isOn: self.voiceWakeBinding) {
-                Label("Voice Wake", systemImage: "mic.fill")
-            }
-            .disabled(!voiceWakeSupported)
-            .opacity(voiceWakeSupported ? 1 : 0.5)
-            if self.showVoiceWakeMicPicker {
-                self.voiceWakeMicMenu
-            }
-            Divider()
-            Button {
-                Task { @MainActor in
-                    await self.openDashboard()
-                }
-            } label: {
-                Label("Open Dashboard", systemImage: "gauge")
-            }
-            Button {
-                Task { @MainActor in
-                    let sessionKey = await WebChatManager.shared.preferredSessionKey()
-                    WebChatManager.shared.show(sessionKey: sessionKey)
-                }
-            } label: {
-                Label("Open Chat", systemImage: "bubble.left.and.bubble.right")
-            }
-            if self.state.canvasEnabled {
-                Button {
-                    Task { @MainActor in
-                        if self.state.canvasPanelVisible {
-                            CanvasManager.shared.hideAll()
-                        } else {
-                            let sessionKey = await GatewayConnection.shared.mainSessionKey()
-                            // Don't force a navigation on re-open: preserve the current web view state.
-                            _ = try? CanvasManager.shared.show(sessionKey: sessionKey, path: nil)
-                        }
-                    }
-                } label: {
-                    Label(
-                        self.state.canvasPanelVisible ? "Close Canvas" : "Open Canvas",
-                        systemImage: "rectangle.inset.filled.on.rectangle")
-                }
-            }
-            Button {
-                Task { await self.state.setTalkEnabled(!self.state.talkEnabled) }
-            } label: {
-                Label(self.state.talkEnabled ? "Stop Talk Mode" : "Talk Mode", systemImage: "waveform.circle.fill")
-            }
-            .disabled(!voiceWakeSupported)
-            .opacity(voiceWakeSupported ? 1 : 0.5)
-            Divider()
-            Button("Settings…") { self.open(tab: .general) }
-                .keyboardShortcut(",", modifiers: [.command])
-            self.debugMenu
-            Button("About OpenClaw") { self.open(tab: .about) }
-            if let updater, updater.isAvailable, self.updateStatus.isUpdateReady {
-                Button("Update ready, restart now?") { updater.checkForUpdates(nil) }
-            }
-            Button("Quit") { NSApplication.shared.terminate(nil) }
         }
         .task(id: self.state.swabbleEnabled) {
             if self.state.swabbleEnabled {
@@ -186,14 +106,125 @@ struct MenuContent: View {
         }
     }
 
+    @ViewBuilder
+    private var consumerActions: some View {
+        Button {
+            Task { @MainActor in
+                let sessionKey = await WebChatManager.shared.preferredSessionKey()
+                WebChatManager.shared.show(sessionKey: sessionKey)
+            }
+        } label: {
+            Label("Open Chat", systemImage: "bubble.left.and.bubble.right")
+        }
+        Button("Settings…") { self.open(tab: .general) }
+            .keyboardShortcut(",", modifiers: [.command])
+        Button("About \(AppFlavor.current.appName)") { self.open(tab: .about) }
+        Button("Quit \(AppFlavor.current.appName)") { NSApplication.shared.terminate(nil) }
+    }
+
+    @ViewBuilder
+    private var operatorActions: some View {
+        Toggle(isOn: self.heartbeatsBinding) {
+            HStack(spacing: 8) {
+                Label("Send Heartbeats", systemImage: "waveform.path.ecg")
+                Spacer(minLength: 0)
+                self.statusLine(label: self.heartbeatStatus.label, color: self.heartbeatStatus.color)
+            }
+        }
+        Toggle(
+            isOn: Binding(
+                get: { self.browserControlEnabled },
+                set: { enabled in
+                    self.browserControlEnabled = enabled
+                    Task { await self.saveBrowserControlEnabled(enabled) }
+                })) {
+            Label("Browser Control", systemImage: "globe")
+        }
+        Toggle(isOn: self.$cameraEnabled) {
+            Label("Allow Camera", systemImage: "camera")
+        }
+        Picker(selection: self.execApprovalModeBinding) {
+            ForEach(ExecApprovalQuickMode.allCases) { mode in
+                Text(mode.title).tag(mode)
+            }
+        } label: {
+            Label("Exec Approvals", systemImage: "terminal")
+        }
+        Toggle(isOn: Binding(get: { self.state.canvasEnabled }, set: { self.state.canvasEnabled = $0 })) {
+            Label("Allow Canvas", systemImage: "rectangle.and.pencil.and.ellipsis")
+        }
+        .onChange(of: self.state.canvasEnabled) { _, enabled in
+            if !enabled {
+                CanvasManager.shared.hideAll()
+            }
+        }
+        Toggle(isOn: self.voiceWakeBinding) {
+            Label("Voice Wake", systemImage: "mic.fill")
+        }
+        .disabled(!voiceWakeSupported)
+        .opacity(voiceWakeSupported ? 1 : 0.5)
+        if self.showVoiceWakeMicPicker {
+            self.voiceWakeMicMenu
+        }
+        Divider()
+        Button {
+            Task { @MainActor in
+                await self.openDashboard()
+            }
+        } label: {
+            Label("Open Dashboard", systemImage: "gauge")
+        }
+        Button {
+            Task { @MainActor in
+                let sessionKey = await WebChatManager.shared.preferredSessionKey()
+                WebChatManager.shared.show(sessionKey: sessionKey)
+            }
+        } label: {
+            Label("Open Chat", systemImage: "bubble.left.and.bubble.right")
+        }
+        if self.state.canvasEnabled {
+            Button {
+                Task { @MainActor in
+                    if self.state.canvasPanelVisible {
+                        CanvasManager.shared.hideAll()
+                    } else {
+                        let sessionKey = await GatewayConnection.shared.mainSessionKey()
+                        // Don't force a navigation on re-open: preserve the current web view state.
+                        _ = try? CanvasManager.shared.show(sessionKey: sessionKey, path: nil)
+                    }
+                }
+            } label: {
+                Label(
+                    self.state.canvasPanelVisible ? "Close Canvas" : "Open Canvas",
+                    systemImage: "rectangle.inset.filled.on.rectangle")
+            }
+        }
+        Button {
+            Task { await self.state.setTalkEnabled(!self.state.talkEnabled) }
+        } label: {
+            Label(self.state.talkEnabled ? "Stop Talk Mode" : "Talk Mode", systemImage: "waveform.circle.fill")
+        }
+        .disabled(!voiceWakeSupported)
+        .opacity(voiceWakeSupported ? 1 : 0.5)
+        Divider()
+        Button("Settings…") { self.open(tab: .general) }
+            .keyboardShortcut(",", modifiers: [.command])
+        self.debugMenu
+        Button("About \(AppFlavor.current.appName)") { self.open(tab: .about) }
+        if let updater, updater.isAvailable, self.updateStatus.isUpdateReady {
+            Button("Update ready, restart now?") { updater.checkForUpdates(nil) }
+        }
+        Button("Quit") { NSApplication.shared.terminate(nil) }
+    }
+
     private var connectionLabel: String {
         switch self.state.connectionMode {
         case .unconfigured:
-            "OpenClaw Not Configured"
+            AppFlavor.current.isConsumer ? "Setup Needed" : "OpenClaw Not Configured"
         case .remote:
-            "Remote OpenClaw Active"
+            AppFlavor.current.isConsumer ? "Remote AI Operator Active" : "Remote OpenClaw Active"
         case .local:
-            "OpenClaw Active"
+            AppFlavor.current.isConsumer ? "AI Operator Active" : "OpenClaw Active"
         }
     }
 

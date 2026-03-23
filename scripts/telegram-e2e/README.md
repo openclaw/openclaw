@@ -2,10 +2,6 @@
 
 Goal: run live Telegram end-to-end checks for thread model inheritance without re-discovering setup every time.
 
-Manual Telegram verification is the release gate. The probe/runner is support
-tooling and should not block closure if Telegram behavior is correct but the
-probe is flaky.
-
 This validates:
 
 1. Group forum topics: `/model` in topic A becomes default for newly created topic B in the same group.
@@ -87,76 +83,6 @@ Use one source of truth in your main checkout, then copy into each worktree.
    - `bash scripts/bootstrap-worktree-telegram.sh`
 4. Smoke check from that worktree:
    - `scripts/telegram-e2e/userbot-send-live.sh --chat "<chat-id-or-username>" --text "handoff smoke"`
-5. First runtime claim happens on first canonical ensure run:
-   - `scripts/telegram-live-runtime.sh ensure`
-   - This auto-claims a tester bot token for the worktree (or hard-fails if none are available).
-   - Pool tokens that are already present in the stable/main Telegram config are treated as reserved and are never claimed by worktree live tests.
-
-## Scaling the tester bot pool
-
-If you want multiple Codex worktrees or agents to run Telegram live validation in parallel, grow the tester bot pool first.
-
-Rule of thumb:
-
-- one concurrently live-tested worktree needs one tester bot token
-- if you expect `5` parallel Telegram live lanes, provision at least `5` tester bots
-- keep stable/default, personal, and research bots out of the tester pool
-
-Create additional tester bots with BotFather:
-
-1. In Telegram, open `@BotFather`.
-2. Run `/newbot`.
-3. Give it a clear tester name (for example `Jarvis Email 2`).
-4. Save the bot token somewhere local-only.
-5. Add the bot to your dedicated Telegram E2E chats/topics.
-6. Grant whatever Telegram permissions your live checks require.
-
-Register new tester bots locally by appending them to `.env.bots`:
-
-```bash
-# email-2
-BOT_TOKEN=<botId>:<token>
-```
-
-Then rerun:
-
-```bash
-scripts/telegram-live-runtime.sh ensure
-```
-
-New worktrees auto-claim on first `ensure` run. They do not need a token claim at worktree creation time.
-
-## Token claim lifecycle
-
-Tester bot claims are worktree-scoped, not PR-scoped.
-
-This is intentional:
-
-- one worktree may produce multiple PRs over time
-- the same worktree should keep the same tester bot across reruns
-- PR merge/close/archive does not necessarily mean the worktree is done
-
-Current behavior:
-
-- first `ensure` auto-claims a tester bot for the current worktree
-- later `ensure` runs retain the same token when it is still valid for that worktree
-- `release` explicitly frees the current worktree claim and stops its isolated runtime
-- if no unclaimed tester bot exists, `ensure` hard-fails with `pool_exhausted`
-- merged or archived PRs do not automatically free tester tokens today
-
-Supported release flow for an inactive worktree:
-
-```bash
-scripts/telegram-live-runtime.sh release
-```
-
-After release, rerun `scripts/telegram-live-runtime.sh ensure` in the worktree that should claim next.
-
-Recommended follow-up after this PR:
-
-- add a stale-claim garbage collector that only releases claims for missing/inactive worktrees
-- keep release logic tied to worktree lifecycle, not PR lifecycle
-- optionally add a lease/queue mechanism if you want worktrees to wait for a free tester bot instead of hard-failing immediately
 
 ## Required values and anchors
 
@@ -165,9 +91,8 @@ Recommended follow-up after this PR:
 - `TELEGRAM_API_ID`
 - `TELEGRAM_API_HASH`
 - `USERBOT_SESSION` (optional override; default is `scripts/telegram-e2e/tmp/userbot.session`)
-- `TG_BOT_TOKEN` (optional; worktree live runner prefers the claimed `TELEGRAM_BOT_TOKEN` from repo-root `.env.local`)
+- `TG_BOT_TOKEN` (`<botId>:<token>`)
 - `TG_BIN` (absolute path to built `tg`)
-- `TG_PROBE_MODEL` (optional model used by `probe_dm_thread_inheritance.py`)
 - `TG_FORUM_CHAT_ID` (group chat id, usually `-100...`)
 - `TG_DM_CHAT_ID` (bot DM chat id)
 
@@ -193,61 +118,13 @@ Default remains `openai-codex/gpt-5.3-codex`.
 
 ## Critical runtime rule (prevents false negatives)
 
-Use the canonical runtime entrypoint before live assertions:
+Run the gateway from the same branch/worktree you are validating:
 
 ```bash
-scripts/telegram-live-runtime.sh ensure
+node dist/index.js gateway run --bind loopback --port 18789 --force
 ```
 
-This enforces:
-
-1. named branch (not detached `HEAD`)
-2. tester token claim/pool guard
-3. deterministic isolated runtime (`runtime_port`, `runtime_state_dir`)
-4. ownership and health proof lines
-5. plugin isolation for live runtime (`plugins.allow=["telegram"]`, `plugins.slots.memory=none`)
-
-Do not manually start `gateway run` for Telegram live tests.
-
-When a worktree is done with Telegram live testing, free its claim explicitly:
-
-```bash
-scripts/telegram-live-runtime.sh release
-```
-
-### Plugin isolation note (important)
-
-The canonical worktree live runtime intentionally allows only the bundled Telegram plugin to keep startup deterministic and prevent cross-worktree plugin side effects.
-
-If your test case depends on plugin behavior, do not use the isolated Telegram live runtime path for that assertion. Run that plugin-specific validation in the appropriate plugin-focused test lane instead.
-
-`scripts/telegram-live-preflight.sh` now also prints:
-
-- current branch
-- current worktree path
-- assigned bot username/id
-- token claim count across git worktrees
-
-It fails fast if the same Telegram bot token is claimed by more than one
-worktree.
-
-## DM probe helper
-
-Use the DM probe for debugging, not as the final ship gate:
-
-```bash
-scripts/telegram-e2e/.venv/bin/python scripts/telegram-e2e/probe_dm_thread_inheritance.py \
-  --chat "${TG_DM_CHAT_ID:-@Artem_jarvis_exec_bot}" \
-  --target-model "anthropic/claude-sonnet-4-6"
-```
-
-The probe now:
-
-- resolves bot identity dynamically from Telegram
-- prints bot username/id diagnostics
-- accepts multiple valid DM-thread reply shapes
-- prints ignored-message diagnostics on timeout
-- fails fast when another Telethon process already owns the same userbot session
+If another checkout/global runtime is serving Telegram, your E2E result is invalid for this branch.
 
 ## Deterministic gateway recovery (main runtime)
 
@@ -315,10 +192,23 @@ scripts/telegram-e2e/run-model-inheritance-e2e.sh \
 ```
 
 Pass signal is `PASS: thread B reports expected model (...)`.
-The runner auto-calls `scripts/telegram-live-runtime.sh handoff-main` on exit.
-The runner also clears the isolated runtime's saved session for thread B before
-querying it, so a reused anchor topic behaves like a new thread for deterministic
-inheritance checks.
+
+## ACP handoff validation status
+
+Live result (2026-03-20, tester lane `tg-finance`): `ACP one-shot = passed`.
+
+Evidence signature:
+
+- Telegram request: `run this in codex and reply exactly <token>`
+- Bot reply contains exact `<token>`
+- Gateway log contains ACP success run marker:
+  - `:agent:codex:acp:...:ok`
+  - `[agent:nested] ... <token>`
+
+Scope note:
+
+- This confirms one-shot ACP delegation from Telegram to Codex and return-to-parent reply flow.
+- This does **not** by itself prove persistent thread-bound ACP session behavior across follow-up turns.
 
 ## Known behavior and failure recovery
 
@@ -336,13 +226,8 @@ inheritance checks.
   - Verify chat id/username and account access.
 - `E_AMBIGUOUS_SESSION`: both legacy and canonical session files exist.
   - Set `USERBOT_SESSION` explicitly or remove one file.
-- `E_SESSION_BUSY`: another Telethon process already owns the sqlite session.
-  - Stop the other probe/send/wait process before retrying.
 - HTTP `503` or no bot replies usually means gateway is not fully started yet.
   - Wait for provider-start logs and retry.
-- `gateway status` / RPC probe can still report unhealthy while Telegram replies
-  are flowing in the same lane.
-  - Treat actual Telegram message replies as the stronger signal.
 - If inherited model fails while unchanged-existing-thread passes, verify gateway runtime path and branch first.
 
 ## Notes

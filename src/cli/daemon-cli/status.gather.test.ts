@@ -68,24 +68,10 @@ let cliLoadedConfig: Record<string, unknown> = {
     bind: "loopback",
   },
 };
-const daemonLoadConfig = vi.fn(() => daemonLoadedConfig);
-const cliLoadConfig = vi.fn(() => cliLoadedConfig);
-const daemonLoadConfigReadOnly = vi.fn(() => daemonLoadedConfig);
-const cliLoadConfigReadOnly = vi.fn(() => cliLoadedConfig);
-const configIoEnvArgs: Array<Record<string, string | undefined>> = [];
 
 vi.mock("../../config/config.js", () => ({
-  createConfigIO: ({
-    configPath,
-    env,
-  }: {
-    configPath: string;
-    env: Record<string, string | undefined>;
-  }) => {
-    configIoEnvArgs.push(env);
+  createConfigIO: ({ configPath }: { configPath: string }) => {
     const isDaemon = configPath.includes("/openclaw-daemon/");
-    const loadConfig = isDaemon ? daemonLoadConfig : cliLoadConfig;
-    const loadConfigReadOnly = isDaemon ? daemonLoadConfigReadOnly : cliLoadConfigReadOnly;
     return {
       readConfigFileSnapshot: async () => ({
         path: configPath,
@@ -93,8 +79,7 @@ vi.mock("../../config/config.js", () => ({
         valid: true,
         issues: [],
       }),
-      loadConfig,
-      loadConfigReadOnly,
+      loadConfig: () => (isDaemon ? daemonLoadedConfig : cliLoadedConfig),
     };
   },
   resolveConfigPath: (env: NodeJS.ProcessEnv, stateDir: string) => resolveConfigPath(env, stateDir),
@@ -174,11 +159,6 @@ describe("gatherDaemonStatus", () => {
     callGatewayStatusProbe.mockClear();
     loadGatewayTlsRuntime.mockClear();
     inspectGatewayRestart.mockClear();
-    daemonLoadConfig.mockClear();
-    cliLoadConfig.mockClear();
-    daemonLoadConfigReadOnly.mockClear();
-    cliLoadConfigReadOnly.mockClear();
-    configIoEnvArgs.length = 0;
     daemonLoadedConfig = {
       gateway: {
         bind: "lan",
@@ -215,31 +195,6 @@ describe("gatherDaemonStatus", () => {
     expect(status.gateway?.probeUrl).toBe("wss://127.0.0.1:19001");
     expect(status.rpc?.url).toBe("wss://127.0.0.1:19001");
     expect(status.rpc?.ok).toBe(true);
-  });
-
-  it("loads cli and daemon configs via read-only config path", async () => {
-    await gatherDaemonStatus({
-      rpc: {},
-      probe: false,
-      deep: false,
-    });
-
-    expect(cliLoadConfigReadOnly).toHaveBeenCalledTimes(1);
-    expect(daemonLoadConfigReadOnly).toHaveBeenCalledTimes(1);
-    expect(cliLoadConfig).not.toHaveBeenCalled();
-    expect(daemonLoadConfig).not.toHaveBeenCalled();
-  });
-
-  it("isolates daemon status config reads from process env object identity", async () => {
-    await gatherDaemonStatus({
-      rpc: {},
-      probe: false,
-      deep: false,
-    });
-
-    expect(configIoEnvArgs).toHaveLength(2);
-    expect(configIoEnvArgs[0]).not.toBe(process.env);
-    expect(configIoEnvArgs[1]).not.toBe(process.env);
   });
 
   it("does not force local TLS fingerprint when probe URL is explicitly overridden", async () => {

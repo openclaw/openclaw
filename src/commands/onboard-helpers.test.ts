@@ -2,14 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   normalizeGatewayTokenInput,
   openUrl,
-  resolveGatewayModeProbeSummary,
   resolveBrowserOpenCommand,
   resolveControlUiLinks,
   validateGatewayPasswordInput,
 } from "./onboard-helpers.js";
 
 const mocks = vi.hoisted(() => ({
-  callGateway: vi.fn(async () => ({})),
   runCommandWithTimeout: vi.fn<
     (
       argv: string[],
@@ -29,20 +27,12 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: mocks.runCommandWithTimeout,
 }));
 
-vi.mock("../gateway/call.js", () => ({
-  callGateway: mocks.callGateway,
-}));
-
 vi.mock("../infra/tailnet.js", () => ({
   pickPrimaryTailnetIPv4: mocks.pickPrimaryTailnetIPv4,
 }));
 
 afterEach(() => {
   vi.unstubAllEnvs();
-  mocks.callGateway.mockReset();
-  mocks.callGateway.mockResolvedValue({});
-  mocks.pickPrimaryTailnetIPv4.mockReset();
-  mocks.pickPrimaryTailnetIPv4.mockReturnValue(undefined);
 });
 
 describe("openUrl", () => {
@@ -121,99 +111,6 @@ describe("resolveControlUiLinks", () => {
     });
     expect(links.httpUrl).toBe("http://127.0.0.1:18789/");
     expect(links.wsUrl).toBe("ws://127.0.0.1:18789");
-  });
-});
-
-describe("resolveGatewayModeProbeSummary", () => {
-  it("uses the configured local port and env-first credential precedence", async () => {
-    mocks.callGateway.mockImplementation(async ({ url }: { url: string }) => {
-      if (url === "ws://127.0.0.1:24567") {
-        return {};
-      }
-      throw new Error("remote down");
-    });
-
-    const summary = await resolveGatewayModeProbeSummary({
-      cfg: {
-        gateway: {
-          auth: {
-            token: "config-token",
-            password: "config-password",
-          },
-          remote: {
-            url: "wss://remote.example",
-            token: "config-remote-token",
-          },
-        },
-      },
-      localPort: 24567,
-      env: {
-        ...process.env,
-        OPENCLAW_GATEWAY_TOKEN: "env-token",
-      },
-      resolveSecretInput: async ({ path }) => {
-        if (path === "gateway.auth.token") {
-          return "resolved-token";
-        }
-        if (path === "gateway.auth.password") {
-          return "resolved-password";
-        }
-        if (path === "gateway.remote.token") {
-          return "resolved-remote-token";
-        }
-        return undefined;
-      },
-    });
-
-    expect(summary.localUrl).toBe("ws://127.0.0.1:24567");
-    expect(summary.credentials.localToken).toBe("env-token");
-    expect(summary.credentials.localPassword).toBe("resolved-password");
-    expect(summary.credentials.remoteToken).toBe("resolved-remote-token");
-    expect(summary.hints.local).toBe("Gateway reachable (ws://127.0.0.1:24567)");
-    expect(summary.hints.remote).toBe("Configured but unreachable (wss://remote.example)");
-    expect(mocks.callGateway).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        url: "ws://127.0.0.1:24567",
-        token: "env-token",
-        password: "resolved-password",
-      }),
-    );
-  });
-
-  it("reports secret resolution failures and falls back to direct config values", async () => {
-    const onSecretResolveError = vi.fn();
-    mocks.callGateway.mockResolvedValue({});
-
-    const summary = await resolveGatewayModeProbeSummary({
-      cfg: {
-        gateway: {
-          auth: {
-            token: " direct-token ",
-          },
-          remote: {
-            url: "wss://remote.example",
-            token: " direct-remote-token ",
-          },
-        },
-      },
-      localPort: 18789,
-      resolveSecretInput: async ({ path }) => {
-        if (path === "gateway.auth.token") {
-          throw new Error("missing env ref");
-        }
-        return undefined;
-      },
-      onSecretResolveError,
-    });
-
-    expect(onSecretResolveError).toHaveBeenCalledWith(
-      expect.objectContaining({
-        path: "gateway.auth.token",
-      }),
-    );
-    expect(summary.credentials.localToken).toBe("direct-token");
-    expect(summary.credentials.remoteToken).toBe("direct-remote-token");
   });
 });
 

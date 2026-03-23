@@ -690,6 +690,10 @@ export async function spawnAcpDirect(
       parentSessionKey,
       childSessionKey: sessionKey,
       agentId: targetAgentId,
+      replyChannel: requesterOrigin?.channel,
+      replyTo: inferredDeliveryTo,
+      replyAccountId: requesterOrigin?.accountId ?? undefined,
+      threadId: deliveryThreadId,
       logPath: streamLogPath,
       emitStartNotice: false,
     });
@@ -737,6 +741,10 @@ export async function spawnAcpDirect(
         parentSessionKey,
         childSessionKey: sessionKey,
         agentId: targetAgentId,
+        replyChannel: requesterOrigin?.channel,
+        replyTo: inferredDeliveryTo,
+        replyAccountId: requesterOrigin?.accountId ?? undefined,
+        threadId: deliveryThreadId,
         logPath: streamLogPath,
         emitStartNotice: false,
       });

@@ -481,23 +481,27 @@ describe("runSetupWizard", () => {
     const note = vi.fn(async () => {});
     const prompter = buildWizardPrompter({ note });
     const runtime = createRuntime();
-    resolveGatewayModeProbeSummary.mockImplementationOnce(async (params) => {
-      await params.onSecretResolveError?.({
-        path: "gateway.auth.password",
-        error: new Error("missing env ref"),
-      });
-      return {
-        localUrl: "ws://127.0.0.1:18789",
-        remoteUrl: "",
-        localProbe: { ok: false },
-        remoteProbe: null,
-        hints: {
-          local: "No gateway detected (ws://127.0.0.1:18789)",
-          remote: "No remote URL configured yet",
-        },
-        credentials: {},
-      };
-    });
+    resolveGatewayModeProbeSummary.mockImplementationOnce(
+      async (params: {
+        onSecretResolveError?: (args: { path: string; error: Error }) => Promise<void> | void;
+      }) => {
+        await params.onSecretResolveError?.({
+          path: "gateway.auth.password",
+          error: new Error("missing env ref"),
+        });
+        return {
+          localUrl: "ws://127.0.0.1:18789",
+          remoteUrl: "",
+          localProbe: { ok: false },
+          remoteProbe: null,
+          hints: {
+            local: "No gateway detected (ws://127.0.0.1:18789)",
+            remote: "No remote URL configured yet",
+          },
+          credentials: {},
+        };
+      },
+    );
 
     await runSetupWizard(
       {
@@ -548,6 +552,92 @@ describe("runSetupWizard", () => {
     expect(configureGatewayForSetup).toHaveBeenCalledWith(
       expect.objectContaining({
         secretInputMode: "ref", // pragma: allowlist secret
+      }),
+    );
+  });
+
+  it("threads shared local setup intent into finalize", async () => {
+    finalizeSetupWizard.mockClear();
+    const workspaceDir = await makeCaseDir("intent-workspace-");
+    const prompter = buildWizardPrompter({});
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        mode: "local",
+        workspace: workspaceDir,
+        authChoice: "skip",
+        installDaemon: false,
+        skipProviders: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      createRuntime(),
+      prompter,
+    );
+
+    expect(finalizeSetupWizard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        intent: {
+          mode: "local",
+          workspaceDir,
+          authChoice: "skip",
+          daemonPreference: "skip",
+          healthRequested: false,
+        },
+      }),
+    );
+  });
+
+  it("threads default onboarding-plan decisions into finalize", async () => {
+    finalizeSetupWizard.mockClear();
+    const workspaceDir = await makeCaseDir("default-plan-workspace-");
+    const prompter = buildWizardPrompter({});
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "advanced",
+        mode: "local",
+        workspace: workspaceDir,
+        authChoice: "skip",
+        skipProviders: true,
+        skipSearch: true,
+        skipSkills: true,
+        skipUi: true,
+      },
+      createRuntime(),
+      prompter,
+    );
+
+    expect(finalizeSetupWizard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        intent: {
+          mode: "local",
+          workspaceDir,
+          authChoice: "skip",
+          daemonPreference: "default",
+          healthRequested: true,
+        },
+        onboardingPlan: expect.objectContaining({
+          steps: expect.objectContaining({
+            daemon: expect.objectContaining({
+              decision: "prompt",
+              reason: "advanced-confirmation",
+            }),
+            health: expect.objectContaining({
+              decision: "run",
+              expectation: "pending-daemon-decision",
+            }),
+            channels: expect.objectContaining({
+              decision: "skip",
+              reason: "user-skip",
+            }),
+          }),
+        }),
       }),
     );
   });

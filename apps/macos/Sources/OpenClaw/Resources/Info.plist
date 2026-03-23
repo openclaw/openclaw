@@ -12,6 +12,8 @@
     <string>6.0</string>
     <key>CFBundleName</key>
     <string>OpenClaw</string>
+    <key>CFBundleDisplayName</key>
+    <string>OpenClaw</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -31,6 +33,8 @@
             </array>
         </dict>
     </array>
+    <key>OpenClawAppVariant</key>
+    <string>standard</string>
     <key>LSMinimumSystemVersion</key>
     <string>15.0</string>
     <key>LSUIElement</key>
