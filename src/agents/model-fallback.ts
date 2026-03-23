@@ -725,18 +725,34 @@ export async function runWithModelFallback<T>(params: {
       if (isLikelyContextOverflowError(errMessage)) {
         throw err;
       }
-      const normalized = params.fallbackOnErrors
-        ? (coerceToFailoverErrorWithConfig(err, params.fallbackOnErrors, {
-            provider: candidate.provider,
-            model: candidate.model,
-          }) ?? err)
-        : (coerceToFailoverError(err, {
-            provider: candidate.provider,
-            model: candidate.model,
-          }) ?? err);
+      // Handle error normalization with fallbackOnErrors config
+      // Explicitly type as FailoverError to maintain consistency with original code
+      let normalized = null as unknown as FailoverError | null;
+      let shouldTriggerFallback = true;
+
+      if (params.fallbackOnErrors) {
+        // Use config to determine if this error should trigger fallback
+        normalized = coerceToFailoverErrorWithConfig(err, params.fallbackOnErrors, {
+          provider: candidate.provider,
+          model: candidate.model,
+        });
+        // If coerceToFailoverErrorWithConfig returns null, this error should NOT trigger fallback
+        shouldTriggerFallback = normalized !== null;
+      } else {
+        // Default behavior without config
+        normalized = coerceToFailoverError(err, {
+          provider: candidate.provider,
+          model: candidate.model,
+        });
+      }
+
+      // If this error should not trigger fallback (per config), fail fast
+      if (!shouldTriggerFallback) {
+        throw err;
+      }
 
       // Even unrecognized errors should not abort the fallback loop when
-      // there are remaining candidates.  Only abort/context-overflow errors
+      // there are remaining candidates. Only abort/context-overflow errors
       // (handled above) are truly non-retryable.
       const isKnownFailover = isFailoverError(normalized);
       if (!isKnownFailover && i === candidates.length - 1) {
