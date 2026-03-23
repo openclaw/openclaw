@@ -249,14 +249,21 @@ export function startGatewayMaintenanceTimers(params: {
       }
 
       // Only broadcast when there are active (non-done) delegations to avoid noise
+      const nowBroadcast = Date.now();
       const activeDelegations = rows
         .map((r) => ({
           runId: r.run_id,
+          childSessionKey: r.child_session_key,
           sessionKey: r.requester_session_key,
           agentId: r.agent_id,
           task: r.task,
+          label: r.label,
           status: computeDelegationStatus(r),
-          elapsedMs: r.created_at != null ? Date.now() - r.created_at : 0,
+          createdAt: r.created_at ?? 0,
+          startedAt: r.started_at ?? null,
+          endedAt: r.ended_at ?? null,
+          resultPreview: r.result_preview ?? null,
+          elapsedMs: r.created_at != null ? nowBroadcast - r.created_at : 0,
         }))
         .filter((d) => d.status !== "done");
 
