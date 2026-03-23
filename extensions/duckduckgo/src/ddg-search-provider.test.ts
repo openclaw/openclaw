@@ -17,6 +17,7 @@ describe("duckduckgo web search provider", () => {
     const applied = provider.applySelectionConfig({});
 
     expect(provider.id).toBe("duckduckgo");
+    expect(provider.label).toBe("DuckDuckGo Search (experimental)");
     expect(provider.requiresCredential).toBe(false);
     expect(provider.credentialPath).toBe("");
     expect(applied.plugins?.entries?.duckduckgo?.enabled).toBe(true);
