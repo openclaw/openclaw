@@ -29,43 +29,40 @@ const {
   discoverModelsMock,
 } = hoisted;
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
-  return {
-    ...actual,
-    complete: completeMock,
-  };
-});
-
-vi.mock("../agents/minimax-vlm.js", () => ({
-  isMinimaxVlmProvider: (provider: string) =>
-    provider === "minimax" || provider === "minimax-portal",
-  isMinimaxVlmModel: (provider: string, modelId: string) =>
-    (provider === "minimax" || provider === "minimax-portal") && modelId === "MiniMax-VL-01",
-  minimaxUnderstandImage: minimaxUnderstandImageMock,
-}));
-
-vi.mock("../agents/models-config.js", () => ({
-  ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
-}));
-
-vi.mock("../agents/model-auth.js", () => ({
-  getApiKeyForModel: getApiKeyForModelMock,
-  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
-  requireApiKey: requireApiKeyMock,
-}));
-
-vi.mock("../agents/pi-model-discovery-runtime.js", () => ({
-  discoverAuthStorage: () => ({
-    setRuntimeApiKey: setRuntimeApiKeyMock,
-  }),
-  discoverModels: discoverModelsMock,
-}));
-
-const { describeImageWithModel } = await import("./image.js");
+let describeImageWithModel: typeof import("./image.js").describeImageWithModel;
 
 describe("describeImageWithModel", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.doMock("@mariozechner/pi-ai", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+      return {
+        ...actual,
+        complete: completeMock,
+      };
+    });
+    vi.doMock("../agents/minimax-vlm.js", () => ({
+      isMinimaxVlmProvider: (provider: string) =>
+        provider === "minimax" || provider === "minimax-portal",
+      isMinimaxVlmModel: (provider: string, modelId: string) =>
+        (provider === "minimax" || provider === "minimax-portal") && modelId === "MiniMax-VL-01",
+      minimaxUnderstandImage: minimaxUnderstandImageMock,
+    }));
+    vi.doMock("../agents/models-config.js", () => ({
+      ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
+    }));
+    vi.doMock("../agents/model-auth.js", () => ({
+      getApiKeyForModel: getApiKeyForModelMock,
+      resolveApiKeyForProvider: resolveApiKeyForProviderMock,
+      requireApiKey: requireApiKeyMock,
+    }));
+    vi.doMock("../agents/pi-model-discovery-runtime.js", () => ({
+      discoverAuthStorage: () => ({
+        setRuntimeApiKey: setRuntimeApiKeyMock,
+      }),
+      discoverModels: discoverModelsMock,
+    }));
+    ({ describeImageWithModel } = await import("./image.js"));
     vi.clearAllMocks();
     minimaxUnderstandImageMock.mockResolvedValue("portal ok");
     discoverModelsMock.mockReturnValue({

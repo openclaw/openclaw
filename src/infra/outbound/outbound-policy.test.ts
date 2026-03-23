@@ -3,6 +3,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
+let applyCrossContextDecoration: typeof import("./outbound-policy.js").applyCrossContextDecoration;
+let buildCrossContextDecoration: typeof import("./outbound-policy.js").buildCrossContextDecoration;
+let enforceCrossContextPolicy: typeof import("./outbound-policy.js").enforceCrossContextPolicy;
+let shouldApplyCrossContextMarker: typeof import("./outbound-policy.js").shouldApplyCrossContextMarker;
+
 class TestDiscordUiContainer extends Container {}
 
 const mocks = vi.hoisted(() => ({
@@ -47,19 +52,6 @@ const mocks = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("./channel-adapters.js", () => ({
-  getChannelMessageAdapter: mocks.getChannelMessageAdapter,
-}));
-
-vi.mock("./target-normalization.js", () => ({
-  normalizeTargetForProvider: mocks.normalizeTargetForProvider,
-}));
-
-vi.mock("./target-resolver.js", () => ({
-  formatTargetDisplay: mocks.formatTargetDisplay,
-  lookupDirectoryDisplay: mocks.lookupDirectoryDisplay,
-}));
-
 const slackConfig = {
   channels: {
     slack: {
@@ -75,15 +67,20 @@ const discordConfig = {
   },
 } as OpenClawConfig;
 
-let applyCrossContextDecoration: typeof import("./outbound-policy.js").applyCrossContextDecoration;
-let buildCrossContextDecoration: typeof import("./outbound-policy.js").buildCrossContextDecoration;
-let enforceCrossContextPolicy: typeof import("./outbound-policy.js").enforceCrossContextPolicy;
-let shouldApplyCrossContextMarker: typeof import("./outbound-policy.js").shouldApplyCrossContextMarker;
-
 describe("outbound policy helpers", () => {
   beforeEach(async () => {
-    vi.clearAllMocks();
     vi.resetModules();
+    vi.clearAllMocks();
+    vi.doMock("./channel-adapters.js", () => ({
+      getChannelMessageAdapter: mocks.getChannelMessageAdapter,
+    }));
+    vi.doMock("./target-normalization.js", () => ({
+      normalizeTargetForProvider: mocks.normalizeTargetForProvider,
+    }));
+    vi.doMock("./target-resolver.js", () => ({
+      formatTargetDisplay: mocks.formatTargetDisplay,
+      lookupDirectoryDisplay: mocks.lookupDirectoryDisplay,
+    }));
     ({
       applyCrossContextDecoration,
       buildCrossContextDecoration,
