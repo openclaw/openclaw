@@ -114,8 +114,12 @@ merge_framework_machos() {
   done < <(find "$primary" -type f -print0)
 }
 
-echo "📦 Ensuring deps (pnpm install)"
-(cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
+if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
+  echo "📦 Ensuring deps (pnpm install)"
+  (cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
+else
+  echo "📦 Skipping pnpm install (SKIP_PNPM_INSTALL=1)"
+fi
 
 if [[ -z "${APP_BUILD:-}" ]]; then
   APP_BUILD="$GIT_BUILD_NUMBER"
