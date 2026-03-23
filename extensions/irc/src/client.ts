@@ -333,6 +333,25 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
           for (const command of nickServCommands) {
             sendRaw(command);
           }
+          // If we're on a fallback nick and have NickServ credentials,
+          // GHOST the desired nick and reclaim it.
+          if (
+            currentNick.toLowerCase() !== desiredNick.toLowerCase() &&
+            options.nickserv?.enabled !== false &&
+            options.nickserv?.password?.trim()
+          ) {
+            const service = sanitizeIrcTarget(options.nickserv.service?.trim() || "NickServ");
+            const nsPassword = sanitizeIrcOutboundText(options.nickserv.password);
+            sendRaw(`PRIVMSG ${service} :GHOST ${desiredNick} ${nsPassword}`);
+            // Delay the NICK reclaim slightly to let GHOST complete.
+            setTimeout(() => {
+              try {
+                sendRaw(`NICK ${desiredNick}`);
+              } catch {
+                // Socket may have closed; ignore.
+              }
+            }, 1000);
+          }
         } catch (err) {
           fail(err);
         }
