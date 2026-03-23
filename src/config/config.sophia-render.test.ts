@@ -34,14 +34,19 @@ describe("sophia/openclaw.render.json", () => {
         provider: "elevenlabs",
         elevenlabs: {
           voiceId: "aFueGIISJUmscc05ZNfD",
-          modelId: "eleven_v3",
+          modelId: "eleven_multilingual_v2",
         },
       },
     });
     expect(
-      ((raw.messages as { tts?: { elevenlabs?: { voiceSettings?: unknown } } }).tts?.elevenlabs
-        ?.voiceSettings ?? undefined) === undefined,
-    ).toBe(true);
+      (raw.messages as { tts?: { elevenlabs?: { voiceSettings?: Record<string, unknown> } } }).tts
+        ?.elevenlabs?.voiceSettings,
+    ).toMatchObject({
+      speed: 0.92,
+      stability: 0.6,
+      similarityBoost: 0.82,
+      style: 0,
+    });
     expect(raw.channels).toMatchObject({
       whatsapp: {
         ackReaction: {
