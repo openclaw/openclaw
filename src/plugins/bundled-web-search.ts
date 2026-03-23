@@ -1,5 +1,6 @@
 import { bundledWebSearchPluginRegistrations } from "../bundled-web-search-registry.js";
 import { listBundledWebSearchPluginIds as listBundledWebSearchPluginIdsFromIds } from "./bundled-web-search-ids.js";
+import { resolveBundledWebSearchPluginId as resolveBundledWebSearchPluginIdFromMap } from "./bundled-web-search-provider-ids.js";
 import { capturePluginRegistration } from "./captured-registration.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
@@ -76,8 +77,5 @@ export function listBundledWebSearchProviders(): PluginWebSearchProviderEntry[] 
 export function resolveBundledWebSearchPluginId(
   providerId: string | undefined,
 ): string | undefined {
-  if (!providerId) {
-    return undefined;
-  }
-  return loadBundledWebSearchProviders().find((provider) => provider.id === providerId)?.pluginId;
+  return resolveBundledWebSearchPluginIdFromMap(providerId);
 }
