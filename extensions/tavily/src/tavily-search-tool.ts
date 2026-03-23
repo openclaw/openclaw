@@ -5,11 +5,13 @@ import { runTavilySearch } from "./tavily-client.js";
 
 function optionalStringEnum<const T extends readonly string[]>(
   values: T,
-  options?: { description?: string },
+  options: { description?: string } = {},
 ) {
   return Type.Optional(
-    Type.Union(values.map((value) => Type.Literal(value)) as never, {
-      description: options?.description,
+    Type.Unsafe<T[number]>({
+      type: "string",
+      enum: [...values],
+      ...options,
     }),
   );
 }

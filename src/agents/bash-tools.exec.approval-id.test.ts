@@ -636,7 +636,7 @@ describe("exec approvals", () => {
     });
 
     const text = expectApprovalUnavailableText(result);
-    expect(text).toContain("chat exec approvals are not enabled on Discord");
+    expect(text).toContain("Discord does not support chat exec approvals.");
     expect(text).toContain("Web UI or terminal UI");
   });
 
@@ -673,7 +673,8 @@ describe("exec approvals", () => {
     });
 
     const text = expectApprovalUnavailableText(result);
-    expect(text).toContain("Approval required. I sent the allowed approvers DMs.");
+    expect(text).toContain("Telegram does not support chat exec approvals.");
+    expect(text).toContain("Web UI or terminal UI");
   });
 
   it("denies node obfuscated command when approval request times out", async () => {

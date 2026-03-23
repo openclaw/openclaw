@@ -222,7 +222,7 @@ describe("resolveAnnounceTarget", () => {
       sessionKey: "agent:main:discord:group:dev",
       displayKey: "agent:main:discord:group:dev",
     });
-    expect(target).toEqual({ channel: "discord", to: "channel:dev" });
+    expect(target).toEqual({ channel: "discord", to: "group:dev" });
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 

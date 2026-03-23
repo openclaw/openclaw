@@ -122,6 +122,14 @@ vi.mock("./route-reply.runtime.js", () => ({
   routeReply: mocks.routeReply,
 }));
 
+vi.mock("./route-reply.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./route-reply.js")>();
+  return {
+    ...actual,
+    routeReply: mocks.routeReply,
+  };
+});
+
 vi.mock("./abort.runtime.js", () => ({
   tryFastAbortFromMessage: mocks.tryFastAbortFromMessage,
   formatAbortReplyText: (stoppedSubagents?: number) => {

@@ -422,10 +422,20 @@ describe("resolveModel", () => {
       },
     } as OpenClawConfig;
 
-    const result = resolveModel("openrouter", "openrouter/healer-alpha", "/tmp/agent", cfg);
-
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
+    const models = buildInlineProviderModels(cfg.models?.providers ?? {});
+    expect(models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          provider: "openrouter",
+          id: "openrouter/healer-alpha",
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 262144,
+          maxTokens: 65536,
+        }),
+      ]),
+    );
+    expect(models.find((model) => model.id === "openrouter/healer-alpha")).toMatchObject({
       provider: "openrouter",
       id: "openrouter/healer-alpha",
       reasoning: true,
