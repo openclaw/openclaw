@@ -9928,6 +9928,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   type: "string",
                 },
               },
+              chat: {
+                type: "object",
+                properties: {
+                  showPricingThreshold: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
               dangerouslyAllowHostHeaderOriginFallback: {
                 type: "boolean",
               },
@@ -11929,6 +11938,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "gateway.controlUi.enabled": {
       label: "Control UI Enabled",
       help: "Enables serving the gateway Control UI from the gateway HTTP process when true. Keep enabled for local administration, and disable when an external control surface replaces it.",
+      tags: ["network"],
+    },
+    "gateway.controlUi.chat": {
+      label: "Control UI Chat",
+      help: "Control UI chat-surface presentation settings. Use these to tune operator-facing notices without changing backend runtime semantics.",
+      tags: ["network"],
+    },
+    "gateway.controlUi.chat.showPricingThreshold": {
+      label: "Control UI Chat Show Pricing Threshold",
+      help: "Show model-specific higher-rate pricing threshold hints in chat context notices when available. Disable if you want only model-context usage/limit information in the chat header.",
       tags: ["network"],
     },
     "gateway.auth": {
