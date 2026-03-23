@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { MemorySearchConfig } from "../config/types.tools.js";
 import type { MemoryIndexManager } from "./index.js";
@@ -44,11 +44,9 @@ describe("memory watcher config", () => {
   let workspaceDir = "";
   let extraDir = "";
 
-  beforeAll(async () => {
-    ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
-  });
-
   beforeEach(async () => {
+    vi.resetModules();
+    ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
     vi.clearAllMocks();
   });
 

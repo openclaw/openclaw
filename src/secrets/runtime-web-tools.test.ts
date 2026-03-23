@@ -1,11 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
-import * as bundledWebSearchProviders from "../plugins/web-search-providers.js";
-import * as runtimeWebSearchProviders from "../plugins/web-search-providers.runtime.js";
-import * as secretResolve from "./resolve.js";
-import { createResolverContext } from "./runtime-shared.js";
-import { resolveRuntimeWebTools } from "./runtime-web-tools.js";
 
 type ProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "duckduckgo";
 
@@ -21,6 +16,12 @@ const mockedModuleIds = [
   "../plugins/web-search-providers.js",
   "../plugins/web-search-providers.runtime.js",
 ] as const;
+
+let bundledWebSearchProviders: typeof import("../plugins/web-search-providers.js");
+let runtimeWebSearchProviders: typeof import("../plugins/web-search-providers.runtime.js");
+let secretResolve: typeof import("./resolve.js");
+let createResolverContext: typeof import("./runtime-shared.js").createResolverContext;
+let resolveRuntimeWebTools: typeof import("./runtime-web-tools.js").resolveRuntimeWebTools;
 
 vi.mock("../plugins/web-search-providers.js", () => ({
   resolveBundledPluginWebSearchProviders: resolveBundledPluginWebSearchProvidersMock,
@@ -194,7 +195,13 @@ function expectInactiveFirecrawlSecretRef(params: {
 }
 
 describe("runtime web tools resolution", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    bundledWebSearchProviders = await import("../plugins/web-search-providers.js");
+    runtimeWebSearchProviders = await import("../plugins/web-search-providers.runtime.js");
+    secretResolve = await import("./resolve.js");
+    ({ createResolverContext } = await import("./runtime-shared.js"));
+    ({ resolveRuntimeWebTools } = await import("./runtime-web-tools.js"));
     vi.mocked(bundledWebSearchProviders.resolveBundledPluginWebSearchProviders).mockClear();
     vi.mocked(runtimeWebSearchProviders.resolvePluginWebSearchProviders).mockClear();
   });

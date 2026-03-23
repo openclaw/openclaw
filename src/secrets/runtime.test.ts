@@ -3,14 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import { clearConfigCache, type OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
-import {
-  activateSecretsRuntimeSnapshot,
-  clearSecretsRuntimeSnapshot,
-  getActiveRuntimeWebToolsMetadata,
-  prepareSecretsRuntimeSnapshot,
-} from "./runtime.js";
 
 type WebProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl";
 
@@ -103,6 +97,12 @@ function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
 
 const OPENAI_ENV_KEY_REF = { source: "env", provider: "default", id: "OPENAI_API_KEY" } as const;
 
+let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
+let activateSecretsRuntimeSnapshot: typeof import("./runtime.js").activateSecretsRuntimeSnapshot;
+let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
+let getActiveRuntimeWebToolsMetadata: typeof import("./runtime.js").getActiveRuntimeWebToolsMetadata;
+let prepareSecretsRuntimeSnapshot: typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
+
 function createOpenAiFileModelsConfig(): NonNullable<OpenClawConfig["models"]> {
   return {
     providers: {
@@ -123,7 +123,15 @@ function loadAuthStoreWithProfiles(profiles: AuthProfileStore["profiles"]): Auth
 }
 
 describe("secrets runtime snapshot", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ clearConfigCache } = await import("../config/config.js"));
+    ({
+      activateSecretsRuntimeSnapshot,
+      clearSecretsRuntimeSnapshot,
+      getActiveRuntimeWebToolsMetadata,
+      prepareSecretsRuntimeSnapshot,
+    } = await import("./runtime.js"));
     resolveBundledPluginWebSearchProvidersMock.mockReset();
     resolveBundledPluginWebSearchProvidersMock.mockReturnValue(buildTestWebSearchProviders());
     resolvePluginWebSearchProvidersMock.mockReset();
