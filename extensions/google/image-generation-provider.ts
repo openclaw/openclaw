@@ -1,12 +1,14 @@
-import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
-import { normalizeGoogleModelId } from "../../agents/model-id-normalization.js";
-import { parseGeminiAuth } from "../../infra/gemini-auth.js";
+import type { ImageGenerationProviderPlugin } from "openclaw/plugin-sdk/image-generation-core";
+import {
+  normalizeGoogleModelId,
+  parseGeminiAuth,
+  resolveApiKeyForProvider,
+} from "openclaw/plugin-sdk/image-generation-core";
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
-} from "../../media-understanding/providers/shared.js";
-import type { ImageGenerationProviderPlugin } from "../../plugins/types.js";
-import { normalizeGeminiBaseUrl } from "../../utils/gemini-url.js";
+  normalizeBaseUrl,
+} from "openclaw/plugin-sdk/media-understanding";
 
 const DEFAULT_GOOGLE_IMAGE_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_GOOGLE_IMAGE_MODEL = "gemini-3.1-flash-image-preview";
@@ -132,10 +134,7 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProviderPlu
       }
 
       const model = normalizeGoogleImageModel(req.model);
-      const baseUrl = normalizeGeminiBaseUrl(
-        resolveGoogleBaseUrl(req.cfg),
-        DEFAULT_GOOGLE_IMAGE_BASE_URL,
-      );
+      const baseUrl = normalizeBaseUrl(resolveGoogleBaseUrl(req.cfg), DEFAULT_GOOGLE_IMAGE_BASE_URL);
       const allowPrivate = Boolean(req.cfg?.models?.providers?.google?.baseUrl?.trim());
       const authHeaders = parseGeminiAuth(auth.apiKey);
       const headers = new Headers(authHeaders.headers);
