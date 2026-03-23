@@ -2,12 +2,6 @@ import { Container, Separator, TextDisplay } from "@buape/carbon";
 import { beforeEach, describe, expect, it } from "vitest";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  applyCrossContextDecoration,
-  buildCrossContextDecoration,
-  enforceCrossContextPolicy,
-  shouldApplyCrossContextMarker,
-} from "./outbound-policy.js";
 
 class TestDiscordUiContainer extends Container {}
 
@@ -81,9 +75,21 @@ const discordConfig = {
   },
 } as OpenClawConfig;
 
+let applyCrossContextDecoration: typeof import("./outbound-policy.js").applyCrossContextDecoration;
+let buildCrossContextDecoration: typeof import("./outbound-policy.js").buildCrossContextDecoration;
+let enforceCrossContextPolicy: typeof import("./outbound-policy.js").enforceCrossContextPolicy;
+let shouldApplyCrossContextMarker: typeof import("./outbound-policy.js").shouldApplyCrossContextMarker;
+
 describe("outbound policy helpers", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    vi.resetModules();
+    ({
+      applyCrossContextDecoration,
+      buildCrossContextDecoration,
+      enforceCrossContextPolicy,
+      shouldApplyCrossContextMarker,
+    } = await import("./outbound-policy.js"));
   });
 
   it("allows cross-provider sends when enabled", () => {
