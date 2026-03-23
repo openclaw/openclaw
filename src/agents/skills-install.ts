@@ -98,6 +98,73 @@ function findInstallSpec(entry: SkillEntry, installId: string): SkillInstallSpec
   return undefined;
 }
 
+/**
+ * Validates package name to prevent command injection.
+ * Allows: alphanumeric, @, -, /, ., _
+ * Rejects: shell metacharacters, spaces, paths
+ */
+function validatePackageName(name: string, type: string): string | null {
+  if (!name || typeof name !== "string") {
+    return `missing ${type} package name`;
+  }
+  
+  const trimmed = name.trim();
+  if (!trimmed) {
+    return `empty ${type} package name`;
+  }
+  
+  // Reject obvious path traversal attempts
+  if (trimmed.includes("..") || trimmed.startsWith("/") || trimmed.startsWith("~")) {
+    return `invalid ${type} package name: path characters not allowed`;
+  }
+  
+  // Reject shell metacharacters
+  const shellMetachars = /[;&|`$(){}[\]\\\n\r]/;
+  if (shellMetachars.test(trimmed)) {
+    return `invalid ${type} package name: shell metacharacters not allowed`;
+  }
+  
+  // Validate allowed characters (npm/go/uv package naming conventions)
+  const validPackagePattern = /^[a-zA-Z0-9@\-./_]+$/;
+  if (!validPackagePattern.test(trimmed)) {
+    return `invalid ${type} package name: contains disallowed characters`;
+  }
+  
+  // Length check to prevent buffer issues
+  if (trimmed.length > 214) { // npm package name max length
+    return `invalid ${type} package name: exceeds maximum length`;
+  }
+  
+  return null;
+}
+
+/**
+ * Validates brew formula name.
+ */
+function validateBrewFormula(formula: string): string | null {
+  if (!formula || typeof formula !== "string") {
+    return "missing brew formula";
+  }
+  
+  const trimmed = formula.trim();
+  if (!trimmed) {
+    return "empty brew formula";
+  }
+  
+  // Reject path traversal
+  if (trimmed.includes("..") || trimmed.startsWith("/") || trimmed.startsWith("~")) {
+    return "invalid brew formula: path characters not allowed";
+  }
+  
+  // Reject shell metacharacters
+  const shellMetachars = /[;&|`$(){}[\]\\\n\r]/;
+  if (shellMetachars.test(trimmed)) {
+    return "invalid brew formula: shell metacharacters not allowed";
+  }
+  
+  return null;
+}
+
 function buildNodeInstallCommand(packageName: string, prefs: SkillsInstallPreferences): string[] {
   switch (prefs.nodeManager) {
     case "pnpm":
@@ -120,30 +187,34 @@ function buildInstallCommand(
 } {
   switch (spec.kind) {
     case "brew": {
-      if (!spec.formula) {
-        return { argv: null, error: "missing brew formula" };
+      const validationError = validateBrewFormula(spec.formula ?? "");
+      if (validationError) {
+        return { argv: null, error: validationError };
       }
-      return { argv: ["brew", "install", spec.formula] };
+      return { argv: ["brew", "install", spec.formula!] };
     }
     case "node": {
-      if (!spec.package) {
-        return { argv: null, error: "missing node package" };
+      const validationError = validatePackageName(spec.package ?? "", "node");
+      if (validationError) {
+        return { argv: null, error: validationError };
       }
       return {
-        argv: buildNodeInstallCommand(spec.package, prefs),
+        argv: buildNodeInstallCommand(spec.package!, prefs),
       };
     }
     case "go": {
-      if (!spec.module) {
-        return { argv: null, error: "missing go module" };
+      const validationError = validatePackageName(spec.module ?? "", "go");
+      if (validationError) {
+        return { argv: null, error: validationError };
       }
-      return { argv: ["go", "install", spec.module] };
+      return { argv: ["go", "install", spec.module!] };
     }
     case "uv": {
-      if (!spec.package) {
-        return { argv: null, error: "missing uv package" };
+      const validationError = validatePackageName(spec.package ?? "", "uv");
+      if (validationError) {
+        return { argv: null, error: validationError };
       }
-      return { argv: ["uv", "tool", "install", spec.package] };
+      return { argv: ["uv", "tool", "install", spec.package!] };
     }
     case "download": {
       return { argv: null, error: "download install handled separately" };
