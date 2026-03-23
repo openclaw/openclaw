@@ -406,8 +406,6 @@ export async function compactEmbeddedPiSessionDirect(
     workspaceDir: resolvedWorkspace,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
   });
-  const prevCwd = process.cwd();
-
   // Resolve compaction model: prefer config override, then fall back to caller-supplied model
   const compactionModelOverride = params.config?.agents?.defaults?.compaction?.model?.trim();
   let provider: string;
@@ -527,7 +525,6 @@ export async function compactEmbeddedPiSessionDirect(
   });
 
   let restoreSkillEnv: (() => void) | undefined;
-  process.chdir(effectiveWorkspace);
   try {
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: effectiveWorkspace,
@@ -731,7 +728,7 @@ export async function compactEmbeddedPiSessionDirect(
     const docsPath = await resolveOpenClawDocsPath({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
-      cwd: process.cwd(),
+      cwd: effectiveWorkspace,
       moduleUrl: import.meta.url,
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
@@ -1147,7 +1144,6 @@ export async function compactEmbeddedPiSessionDirect(
     return fail(reason);
   } finally {
     restoreSkillEnv?.();
-    process.chdir(prevCwd);
   }
 }
 
