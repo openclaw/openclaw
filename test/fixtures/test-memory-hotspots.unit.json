@@ -111,10 +111,6 @@
       "deltaKb": 335565,
       "sources": ["gha-23329089711-node-test-1-2:unit-fast"]
     },
-    "src/infra/outbound/outbound-policy.test.ts": {
-      "deltaKb": 334950,
-      "sources": ["gha-23329089711-node-test-2-2:unit-fast"]
-    },
     "src/config/sessions/store.pruning.test.ts": {
       "deltaKb": 333312,
       "sources": ["job2:unit-fast"]
