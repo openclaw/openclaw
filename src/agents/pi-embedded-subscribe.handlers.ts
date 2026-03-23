@@ -21,6 +21,9 @@ import type {
 
 export function createEmbeddedPiSessionEventHandler(ctx: EmbeddedPiSubscribeContext) {
   return (evt: EmbeddedPiSubscribeEvent) => {
+    if (ctx.state.initialReplayInProgress) {
+      return;
+    }
     switch (evt.type) {
       case "message_start":
         handleMessageStart(ctx, evt as never);

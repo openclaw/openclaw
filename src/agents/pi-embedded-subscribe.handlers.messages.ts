@@ -38,6 +38,22 @@ const stripTrailingDirective = (text: string): string => {
   return text.slice(0, openIndex);
 };
 
+function resolveEligibleAssistantMessage(
+  ctx: EmbeddedPiSubscribeContext,
+  message: AgentMessage | undefined,
+) {
+  if (!message || message.role !== "assistant") {
+    return null;
+  }
+  if (ctx.state.initialReplayInProgress) {
+    return null;
+  }
+  if (ctx.state.preexistingMessages.has(message)) {
+    return null;
+  }
+  return message;
+}
+
 function emitReasoningEnd(ctx: EmbeddedPiSubscribeContext) {
   if (!ctx.state.reasoningStreamOpen) {
     return;
@@ -133,8 +149,8 @@ export function handleMessageStart(
   ctx: EmbeddedPiSubscribeContext,
   evt: AgentEvent & { message: AgentMessage },
 ) {
-  const msg = evt.message;
-  if (msg?.role !== "assistant") {
+  const msg = resolveEligibleAssistantMessage(ctx, evt.message);
+  if (!msg) {
     return;
   }
 
@@ -152,8 +168,8 @@ export function handleMessageUpdate(
   ctx: EmbeddedPiSubscribeContext,
   evt: AgentEvent & { message: AgentMessage; assistantMessageEvent?: unknown },
 ) {
-  const msg = evt.message;
-  if (msg?.role !== "assistant") {
+  const msg = resolveEligibleAssistantMessage(ctx, evt.message);
+  if (!msg) {
     return;
   }
 
@@ -322,8 +338,8 @@ export function handleMessageEnd(
   ctx: EmbeddedPiSubscribeContext,
   evt: AgentEvent & { message: AgentMessage },
 ) {
-  const msg = evt.message;
-  if (msg?.role !== "assistant") {
+  const msg = resolveEligibleAssistantMessage(ctx, evt.message);
+  if (!msg) {
     return;
   }
 
