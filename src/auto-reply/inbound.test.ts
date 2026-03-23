@@ -469,6 +469,56 @@ describe("createInboundDebouncer", () => {
       setTimeoutSpy.mockRestore();
     }
   });
+
+  it("does not serialize keyed turns when debounce is disabled and no keyed chain exists", async () => {
+    const started: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        const id = items[0]?.id ?? "";
+        started.push(id);
+        if (id === "1") {
+          await firstGate;
+        }
+      },
+    });
+
+    const first = debouncer.enqueue({ key: "a", id: "1" });
+    await Promise.resolve();
+    const second = debouncer.enqueue({ key: "a", id: "2" });
+    await Promise.resolve();
+
+    expect(started).toEqual(["1", "2"]);
+
+    releaseFirst();
+    await Promise.all([first, second]);
+  });
+
+  it("swallows onError failures so keyed chains still complete", async () => {
+    const calls: string[] = [];
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        calls.push(items[0]?.id ?? "");
+        throw new Error("flush failed");
+      },
+      onError: () => {
+        throw new Error("handler failed");
+      },
+    });
+
+    await expect(debouncer.enqueue({ key: "a", id: "1" })).resolves.toBeUndefined();
+    await expect(debouncer.enqueue({ key: "a", id: "2" })).resolves.toBeUndefined();
+
+    expect(calls).toEqual(["1", "2"]);
+  });
 });
 
 describe("initSessionState BodyStripped", () => {

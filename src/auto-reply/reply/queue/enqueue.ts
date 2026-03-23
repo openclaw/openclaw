@@ -60,6 +60,7 @@ export function enqueueFollowupRun(
   settings: QueueSettings,
   dedupeMode: QueueDedupeMode = "message-id",
   runFollowup?: (run: FollowupRun) => Promise<void>,
+  restartIfIdle = true,
 ): boolean {
   const queue = getFollowupQueue(key, settings);
   const recentMessageIdKey = dedupeMode !== "none" ? buildRecentMessageIdKey(run, key) : undefined;
@@ -99,7 +100,7 @@ export function enqueueFollowupRun(
   // If drain finished and deleted the queue before this item arrived, a new queue
   // object was created (draining: false) but nobody scheduled a drain for it.
   // Use the cached callback to restart the drain now.
-  if (!queue.draining) {
+  if (restartIfIdle && !queue.draining) {
     kickFollowupDrainIfIdle(key);
   }
   return true;
