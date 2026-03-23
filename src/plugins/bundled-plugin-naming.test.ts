@@ -31,7 +31,14 @@ const DIR_ID_EXCEPTIONS = new Map<string, string>([
   // Historical directory name kept until a wider repo cleanup is worth the churn.
   ["kimi-coding", "kimi"],
 ]);
-const ALLOWED_PACKAGE_SUFFIXES = ["", "-provider", "-plugin", "-speech", "-sandbox"] as const;
+const ALLOWED_PACKAGE_SUFFIXES = [
+  "",
+  "-provider",
+  "-plugin",
+  "-speech",
+  "-sandbox",
+  "-media-understanding",
+] as const;
 
 function readJsonFile<T>(filePath: string): T {
   return JSON.parse(fs.readFileSync(filePath, "utf8")) as T;
