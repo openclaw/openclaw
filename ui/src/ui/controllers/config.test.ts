@@ -333,6 +333,56 @@ describe("saveConfig", () => {
     expect(params.baseHash).toBe("hash-save-1");
   });
 
+  it("preserves numeric-looking Discord allowFrom entries as strings", async () => {
+    const request = createRequestWithConfigGet();
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.configFormMode = "form";
+    state.configForm = {
+      channels: {
+        discord: {
+          allowFrom: ["123456789012345678", '"987654321098765432"'],
+        },
+      },
+    };
+    state.configSchema = {
+      type: "object",
+      properties: {
+        channels: {
+          type: "object",
+          properties: {
+            discord: {
+              type: "object",
+              properties: {
+                allowFrom: {
+                  type: "array",
+                  items: {
+                    anyOf: [{ type: "string" }, { type: "number" }],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    state.configSnapshot = { hash: "hash-save-discord-allowfrom" };
+
+    await saveConfig(state);
+
+    expect(request.mock.calls[0]?.[0]).toBe("config.set");
+    const params = request.mock.calls[0]?.[1] as { raw: string; baseHash: string };
+    const parsed = JSON.parse(params.raw) as {
+      channels: { discord: { allowFrom: unknown[] } };
+    };
+    expect(parsed.channels.discord.allowFrom).toEqual(["123456789012345678", "987654321098765432"]);
+    expect(parsed.channels.discord.allowFrom.every((value) => typeof value === "string")).toBe(
+      true,
+    );
+    expect(params.baseHash).toBe("hash-save-discord-allowfrom");
+  });
+
   it("skips coercion when schema is not an object", async () => {
     const request = createRequestWithConfigGet();
     const state = createState();
