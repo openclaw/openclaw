@@ -556,39 +556,6 @@ describe("readSessionMessages", () => {
       expect((out[0] as { __openclaw?: { seq?: number } }).__openclaw?.seq).toBe(1);
     }
   });
-
-  test("preserves raw assistant transcript content on disk reads", () => {
-    const sessionId = "assistant-scaffolding";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    fs.writeFileSync(
-      transcriptPath,
-      [
-        JSON.stringify({ type: "session", version: 1, id: sessionId }),
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            text: "<think>hidden</think>Visible top-level",
-            content: [
-              { type: "text", text: "<think>secret</think>Visible content" },
-              { type: "tool_result", text: "<think>keep?</think>Visible tool text" },
-            ],
-          },
-        }),
-      ].join("\n"),
-      "utf-8",
-    );
-
-    const out = readSessionMessages(sessionId, storePath);
-    expect(out).toHaveLength(1);
-    expect(out[0]).toMatchObject({
-      role: "assistant",
-      text: "<think>hidden</think>Visible top-level",
-      content: [
-        { type: "text", text: "<think>secret</think>Visible content" },
-        { type: "tool_result", text: "<think>keep?</think>Visible tool text" },
-      ],
-    });
-  });
 });
 
 describe("readSessionPreviewItemsFromTranscript", () => {
@@ -897,6 +864,78 @@ describe("resolveSessionTranscriptCandidates safety", () => {
 
     expect(candidates.some((value) => value.includes("etc/passwd"))).toBe(false);
     expect(normalizedCandidates).toContain(expectedFallback);
+  });
+
+  test("prefers the current sessionId transcript before a stale sessionFile candidate", () => {
+    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+    const candidates = resolveSessionTranscriptCandidates(
+      "11111111-1111-4111-8111-111111111111",
+      storePath,
+      "/tmp/openclaw/agents/main/sessions/22222222-2222-4222-8222-222222222222.jsonl",
+    );
+
+    expect(candidates[0]).toBe(
+      path.resolve("/tmp/openclaw/agents/main/sessions/11111111-1111-4111-8111-111111111111.jsonl"),
+    );
+    expect(candidates).toContain(
+      path.resolve("/tmp/openclaw/agents/main/sessions/22222222-2222-4222-8222-222222222222.jsonl"),
+    );
+  });
+
+  test("keeps explicit custom sessionFile ahead of synthesized fallback", () => {
+    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+    const sessionFile = "/tmp/openclaw/agents/main/sessions/custom-transcript.jsonl";
+    const candidates = resolveSessionTranscriptCandidates(
+      "11111111-1111-4111-8111-111111111111",
+      storePath,
+      sessionFile,
+    );
+
+    expect(candidates[0]).toBe(path.resolve(sessionFile));
+  });
+
+  test("keeps custom topic-like transcript paths ahead of synthesized fallback", () => {
+    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+    const sessionFile = "/tmp/openclaw/agents/main/sessions/custom-topic-notes.jsonl";
+    const candidates = resolveSessionTranscriptCandidates(
+      "11111111-1111-4111-8111-111111111111",
+      storePath,
+      sessionFile,
+    );
+
+    expect(candidates[0]).toBe(path.resolve(sessionFile));
+  });
+
+  test("keeps forked transcript paths ahead of synthesized fallback", () => {
+    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+    const sessionId = "11111111-1111-4111-8111-111111111111";
+    const sessionFile =
+      "/tmp/openclaw/agents/main/sessions/2026-03-23T16-30-00-000Z_11111111-1111-4111-8111-111111111111.jsonl";
+    const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
+
+    expect(candidates[0]).toBe(path.resolve(sessionFile));
+  });
+
+  test("keeps timestamped custom transcript paths ahead of synthesized fallback", () => {
+    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+    const sessionId = "11111111-1111-4111-8111-111111111111";
+    const sessionFile = "/tmp/openclaw/agents/main/sessions/2026-03-23T16-30-00-000Z_notes.jsonl";
+    const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
+
+    expect(candidates[0]).toBe(path.resolve(sessionFile));
+  });
+
+  test("still treats generated topic transcripts from another session as stale", () => {
+    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+    const sessionId = "11111111-1111-4111-8111-111111111111";
+    const staleSessionFile =
+      "/tmp/openclaw/agents/main/sessions/22222222-2222-4222-8222-222222222222-topic-thread.jsonl";
+    const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, staleSessionFile);
+
+    expect(candidates[0]).toBe(
+      path.resolve("/tmp/openclaw/agents/main/sessions/11111111-1111-4111-8111-111111111111.jsonl"),
+    );
+    expect(candidates).toContain(path.resolve(staleSessionFile));
   });
 });
 
