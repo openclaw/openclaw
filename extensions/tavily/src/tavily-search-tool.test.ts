@@ -1,8 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const runTavilySearch = vi.fn(async (params: Record<string, unknown>) => ({
-  ok: true,
-  params,
+const { runTavilySearch } = vi.hoisted(() => ({
+  runTavilySearch: vi.fn(async (params: Record<string, unknown>) => ({
+    ok: true,
+    params,
+  })),
 }));
 
 vi.mock("./tavily-client.js", () => ({
@@ -10,6 +12,15 @@ vi.mock("./tavily-client.js", () => ({
 }));
 
 describe("tavily search tool", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    runTavilySearch.mockReset();
+    runTavilySearch.mockImplementation(async (params: Record<string, unknown>) => ({
+      ok: true,
+      params,
+    }));
+  });
+
   it("normalizes optional parameters before invoking Tavily", async () => {
     const { createTavilySearchTool } = await import("./tavily-search-tool.js");
     const tool = createTavilySearchTool({
