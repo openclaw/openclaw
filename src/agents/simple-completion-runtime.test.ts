@@ -17,7 +17,7 @@ vi.mock("./model-auth.js", () => ({
   applyLocalNoAuthHeaderOverride: hoisted.applyLocalNoAuthHeaderOverrideMock,
 }));
 
-vi.mock("../../extensions/github-copilot/token.js", () => ({
+vi.mock("./github-copilot-token.js", () => ({
   resolveCopilotApiToken: hoisted.resolveCopilotApiTokenMock,
 }));
 
