@@ -72,6 +72,11 @@ setup flow for deploying AI assistants across common China messaging channels.
 openclaw plugins install @openclaw-china/channels
 ```
 
+Prefer this bundle when you want one package and setup flow across multiple
+China messaging platforms. If you only need a single channel, install that
+dedicated plugin instead. Avoid enabling this bundle alongside separate
+DingTalk, QQbot, or wecom plugins for the same channel in one deployment.
+
 ### Opik
 
 Official plugin that exports agent traces to Opik. Monitor agent behavior,
