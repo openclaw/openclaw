@@ -46,6 +46,7 @@ import {
   validateSessionsResetParams,
   validateSessionsResolveParams,
   validateSessionsSendParams,
+  validateSessionsStartParams,
 } from "../protocol/index.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
@@ -65,6 +66,7 @@ import {
   type SessionsPreviewResult,
   readSessionMessages,
 } from "../session-utils.js";
+import { bootstrapAgentSession } from "../sessions-bootstrap.js";
 import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { chatHandlers } from "./chat.js";
@@ -392,14 +394,44 @@ async function handleSessionSend(params: {
   if (!key) {
     return;
   }
-  const { entry, canonicalKey, storePath } = loadSessionEntry(key);
+  let { entry, canonicalKey, storePath } = loadSessionEntry(key);
   if (!entry?.sessionId) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.SESSION_NOT_FOUND, `session not found: ${key}`),
-    );
-    return;
+    const parsed = parseAgentSessionKey(key);
+    if (!parsed?.agentId) {
+      params.respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.SESSION_NOT_FOUND, `session not found: ${key}`),
+      );
+      return;
+    }
+    const bootstrap = await bootstrapAgentSession({
+      agentId: parsed.agentId,
+      context: params.context,
+    });
+    if (!bootstrap.ok) {
+      params.respond(
+        false,
+        undefined,
+        errorShape(
+          bootstrap.error.code === "AGENT_NOT_FOUND"
+            ? ErrorCodes.AGENT_NOT_FOUND
+            : ErrorCodes.SESSION_NOT_FOUND,
+          bootstrap.error.message,
+        ),
+      );
+      return;
+    }
+    // Use the bootstrapped session to continue
+    entry = bootstrap.entry;
+    canonicalKey = bootstrap.canonicalKey;
+    storePath = bootstrap.storePath;
+    // Warn in response metadata if context overflowed on previous session
+    if (bootstrap.contextOverflowed) {
+      console.warn(
+        `[sessions.send] agent ${parsed.agentId} previous session had context overflow — new session created`,
+      );
+    }
   }
 
   let interruptedActiveRun = false;
@@ -830,6 +862,41 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         reason: "send",
       });
     }
+  },
+  "sessions.start": async ({ params, respond, context }) => {
+    if (!assertValidParams(params, validateSessionsStartParams, "sessions.start", respond)) {
+      return;
+    }
+    const p = params as { agentId: string; force?: boolean };
+    const bootstrap = await bootstrapAgentSession({
+      agentId: p.agentId,
+      force: p.force ?? false,
+      context,
+    });
+    if (!bootstrap.ok) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          bootstrap.error.code === "AGENT_NOT_FOUND"
+            ? ErrorCodes.AGENT_NOT_FOUND
+            : ErrorCodes.UNAVAILABLE,
+          bootstrap.error.message,
+        ),
+      );
+      return;
+    }
+    respond(
+      true,
+      {
+        ok: true,
+        key: bootstrap.canonicalKey,
+        wasCreated: bootstrap.wasCreated,
+        contextOverflowed: bootstrap.contextOverflowed,
+        sessionId: bootstrap.entry.sessionId,
+      },
+      undefined,
+    );
   },
   "sessions.send": async ({ req, params, respond, context, client, isWebchatConnect }) => {
     await handleSessionSend({
