@@ -369,6 +369,9 @@ function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig {
         }
       : {}),
     ...(base.openai || override.openai ? { openai: { ...base.openai, ...override.openai } } : {}),
+    ...(base.microsoft || override.microsoft
+      ? { microsoft: { ...base.microsoft, ...override.microsoft } }
+      : {}),
     ...(base.edge || override.edge ? { edge: { ...base.edge, ...override.edge } } : {}),
   };
 }
