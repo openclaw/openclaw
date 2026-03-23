@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CallManagerContext } from "./context.js";
 
 const {
   addTranscriptEntryMock,
@@ -59,15 +58,12 @@ describe("voice-call outbound helpers", () => {
   });
 
   it("guards initiateCall when provider, webhook, capacity, or fromNumber are missing", async () => {
-    const base: Pick<
-      CallManagerContext,
-      "activeCalls" | "providerCallIdMap" | "config" | "storePath" | "webhookUrl"
-    > = {
+    const base = {
       activeCalls: new Map(),
       providerCallIdMap: new Map(),
       config: {
         maxConcurrentCalls: 1,
-        outbound: { defaultMode: "conversation" },
+        outbound: { defaultMode: "conversation", notifyHangupDelaySec: 0 },
       },
       storePath: "/tmp/voice-call.json",
       webhookUrl: "https://example.com/webhook",
