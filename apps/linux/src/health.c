@@ -31,6 +31,13 @@ void health_init(void) {
     pending_deep_probe = FALSE;
 }
 
+static gboolean gateway_arg_should_be_forwarded(const gchar *arg) {
+    if (!arg) return FALSE;
+    return (g_strcmp0(arg, "--port") == 0 || g_strcmp0(arg, "-p") == 0 ||
+            g_strcmp0(arg, "--token") == 0 || g_strcmp0(arg, "-t") == 0 ||
+            g_strcmp0(arg, "--password") == 0);
+}
+
 static gchar** resolve_openclaw_argv(const gchar *subcommand) {
     // Deterministic 4-tier executable resolution strategy:
     // Priority 1: Use systemd's ExecStart parsing if available (most reliable, matches what daemon runs)
@@ -69,7 +76,7 @@ static gchar** resolve_openclaw_argv(const gchar *subcommand) {
             // avoiding unsupported `run` flags that crash `status` or `probe`.
             for (gint i = gateway_idx + 1; i < len; i++) {
                 const gchar *arg = sys->exec_start_argv[i];
-                if (g_strcmp0(arg, "--port") == 0 || g_strcmp0(arg, "-p") == 0) {
+                if (gateway_arg_should_be_forwarded(arg)) {
                     g_ptr_array_add(arr, g_strdup(arg));
                     if (i + 1 < len) {
                         g_ptr_array_add(arr, g_strdup(sys->exec_start_argv[i + 1]));
@@ -417,6 +424,26 @@ static void on_deep_probe_finished(GObject *source_object, GAsyncResult *res, gp
     ProbeState ps = {0};
     ps.ran = TRUE;
     ps.last_updated = g_get_real_time();
+    
+    if (!g_subprocess_get_if_exited(subprocess) || g_subprocess_get_exit_status(subprocess) != 0) {
+        if (error) {
+            ps.summary = g_strdup_printf("Probe failed to execute: %s", error->message);
+        } else {
+            gint exit_code = g_subprocess_get_if_exited(subprocess) ? g_subprocess_get_exit_status(subprocess) : -1;
+            if (stderr_buf && stderr_buf[0] != '\0') {
+                gchar *clean_stderr = g_strstrip(g_strdup(stderr_buf));
+                ps.summary = g_strdup_printf("Probe failed (exit %d): %s", exit_code, clean_stderr);
+                g_free(clean_stderr);
+            } else {
+                ps.summary = g_strdup_printf("Probe failed (exit %d)", exit_code);
+            }
+        }
+        state_update_probe(&ps);
+        g_free(ps.summary);
+        g_free(stdout_buf);
+        g_free(stderr_buf);
+        goto check_pending;
+    }
     
     if (error) {
         ps.summary = g_strdup_printf("Probe failed to execute: %s", error->message);

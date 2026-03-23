@@ -132,6 +132,24 @@ static void test_no_summary_lines_safety(void) {
     g_free(ps2.summary);
 }
 
+static void test_combined_summary_line(void) {
+    ProbeState ps = {0};
+    health_parse_probe_stdout("Connect: ok (...) · RPC: ok", &ps);
+    g_assert_true(ps.reachable);
+    g_assert_true(ps.connect_ok);
+    g_assert_true(ps.rpc_ok);
+    g_free(ps.summary);
+}
+
+static void test_combined_summary_line_mixed(void) {
+    ProbeState ps = {0};
+    health_parse_probe_stdout("Connect: fail (...) · RPC: ok", &ps);
+    g_assert_false(ps.reachable);
+    g_assert_false(ps.connect_ok);
+    g_assert_true(ps.rpc_ok);
+    g_free(ps.summary);
+}
+
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     
@@ -147,6 +165,8 @@ int main(int argc, char **argv) {
     g_test_add_func("/health_parse/malformed_lines", test_malformed_lines);
     g_test_add_func("/health_parse/whitespace_heavy_output", test_whitespace_heavy_output);
     g_test_add_func("/health_parse/no_summary_lines_safety", test_no_summary_lines_safety);
+    g_test_add_func("/health_parse/combined_summary_line", test_combined_summary_line);
+    g_test_add_func("/health_parse/combined_summary_line_mixed", test_combined_summary_line_mixed);
     
     return g_test_run();
 }

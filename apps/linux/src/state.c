@@ -124,6 +124,23 @@ static gboolean idle_request_probe_refresh(gpointer user_data) {
     return G_SOURCE_REMOVE;
 }
 
+void health_state_clear(HealthState *hs) {
+    if (!hs) return;
+    gboolean in_flight = hs->in_flight;
+    g_free(hs->bind_host);
+    g_free(hs->probe_url);
+    memset(hs, 0, sizeof(HealthState));
+    hs->in_flight = in_flight;
+}
+
+void probe_state_clear(ProbeState *ps) {
+    if (!ps) return;
+    gboolean in_flight = ps->in_flight;
+    g_free(ps->summary);
+    memset(ps, 0, sizeof(ProbeState));
+    ps->in_flight = in_flight;
+}
+
 void state_update_systemd(const SystemdState *sys_state) {
     AppState old_state = current_state;
     gboolean became_active = (!current_sys_state.active && sys_state->active);
@@ -158,37 +175,15 @@ void state_update_systemd(const SystemdState *sys_state) {
     // Clear stale diagnostics when entering a state where background probes are disabled.
     // This prevents the UI from showing old "Healthy" or "Reachable" strings for dead services.
     if (!is_probe_disabled_state(old_state) && is_probe_disabled_state(predicted_new_state)) {
-        current_health_state.last_updated = 0;
-        current_health_state.rpc_ok = FALSE;
-        current_health_state.health_healthy = FALSE;
-        
-        g_free(current_health_state.bind_host);
-        current_health_state.bind_host = NULL;
-        
-        g_free(current_health_state.probe_url);
-        current_health_state.probe_url = NULL;
-
-        current_probe_state.last_updated = 0;
-        g_free(current_probe_state.summary);
-        current_probe_state.summary = NULL;
+        health_state_clear(&current_health_state);
+        probe_state_clear(&current_probe_state);
         
         current_health_generation++;
     } else if (became_active || unit_changed) {
         // Reset the health snapshot explicitly on the relevant systemd transition
         // or unit retargeting so the state model has a clear freshness boundary.
-        current_health_state.last_updated = 0;
-        current_health_state.rpc_ok = FALSE;
-        current_health_state.health_healthy = FALSE;
-        
-        g_free(current_health_state.bind_host);
-        current_health_state.bind_host = NULL;
-        
-        g_free(current_health_state.probe_url);
-        current_health_state.probe_url = NULL;
-
-        current_probe_state.last_updated = 0;
-        g_free(current_probe_state.summary);
-        current_probe_state.summary = NULL;
+        health_state_clear(&current_health_state);
+        probe_state_clear(&current_probe_state);
         
         current_health_generation++;
     }

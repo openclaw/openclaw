@@ -98,40 +98,41 @@ const gchar* systemd_get_canonical_unit_name(void) {
     }
     g_dir_close(dir);
 
+    gchar *env_override = NULL;
+    const gchar *raw_unit = g_getenv("OPENCLAW_SYSTEMD_UNIT");
+    const gchar *raw_profile = g_getenv("OPENCLAW_PROFILE");
+    
+    env_override = systemd_normalize_unit_override(raw_unit);
+    
+    if (!env_override && raw_profile) {
+        env_override = systemd_normalize_profile(raw_profile);
+    }
+    
+    if (env_override) {
+        gboolean found = FALSE;
+        for (guint i = 0; i < marked_units->len; i++) {
+            if (g_strcmp0(env_override, (const gchar *)g_ptr_array_index(marked_units, i)) == 0) {
+                found = TRUE;
+                break;
+            }
+        }
+        if (!found) {
+            OC_LOG_WARN(OPENCLAW_LOG_CAT_SYSTEMD, "Environment requested unit '%s' but it was not discovered as a valid gateway.", env_override);
+        }
+        cached_unit_name = env_override;
+        g_ptr_array_free(marked_units, TRUE);
+        return cached_unit_name;
+    }
+
     if (marked_units->len == 1) {
         cached_unit_name = g_strdup(g_ptr_array_index(marked_units, 0));
     } else if (marked_units->len > 1) {
         /*
          * v1 multi-unit selection rule precedence:
-         * 1. OPENCLAW_SYSTEMD_UNIT (explicit absolute unit name)
-         * 2. OPENCLAW_PROFILE (derived as openclaw-gateway-<profile>.service)
-         * 3. Prefer a candidate that is active.
-         * 4. Otherwise, prefer a candidate that is enabled.
-         * 5. Otherwise, deterministically select the first lexical candidate.
+         * 1. Prefer a candidate that is active.
+         * 2. Otherwise, prefer a candidate that is enabled.
+         * 3. Otherwise, deterministically select the first lexical candidate.
          */
-        gchar *env_override = NULL;
-        const gchar *raw_unit = g_getenv("OPENCLAW_SYSTEMD_UNIT");
-        const gchar *raw_profile = g_getenv("OPENCLAW_PROFILE");
-        
-        env_override = systemd_normalize_unit_override(raw_unit);
-        
-        if (!env_override && raw_profile) {
-            env_override = systemd_normalize_profile(raw_profile);
-        }
-        
-        if (env_override) {
-            for (guint i = 0; i < marked_units->len; i++) {
-                if (g_strcmp0(env_override, (const gchar *)g_ptr_array_index(marked_units, i)) == 0) {
-                    cached_unit_name = g_strdup(env_override);
-                    g_free(env_override);
-                    g_ptr_array_free(marked_units, TRUE);
-                    return cached_unit_name;
-                }
-            }
-            OC_LOG_WARN(OPENCLAW_LOG_CAT_SYSTEMD, "Environment requested unit '%s' but it was not discovered as a valid gateway; falling back to discovery.", env_override);
-            g_free(env_override);
-        }
-        
         const gchar *best_candidate = NULL;
         gboolean best_is_active = FALSE;
         gboolean best_is_enabled = FALSE;
