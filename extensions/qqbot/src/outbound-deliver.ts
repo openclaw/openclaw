@@ -414,9 +414,22 @@ async function sendTextChunks(
       await sendWithRetry(async (token) => {
         const ref = consumeQuoteRef();
         if (event.type === "c2c") {
-          return await sendC2CMessage(token, event.senderId, chunk, event.messageId, ref);
+          return await sendC2CMessage(
+            account.appId,
+            token,
+            event.senderId,
+            chunk,
+            event.messageId,
+            ref,
+          );
         } else if (event.type === "group" && event.groupOpenid) {
-          return await sendGroupMessage(token, event.groupOpenid, chunk, event.messageId);
+          return await sendGroupMessage(
+            account.appId,
+            token,
+            event.groupOpenid,
+            chunk,
+            event.messageId,
+          );
         } else if (event.channelId) {
           return await sendChannelMessage(token, event.channelId, chunk, event.messageId);
         }
@@ -491,9 +504,21 @@ async function sendMarkdownReply(
       try {
         await sendWithRetry(async (token) => {
           if (event.type === "c2c") {
-            await sendC2CImageMessage(token, event.senderId, imageUrl, event.messageId);
+            await sendC2CImageMessage(
+              account.appId,
+              token,
+              event.senderId,
+              imageUrl,
+              event.messageId,
+            );
           } else if (event.type === "group" && event.groupOpenid) {
-            await sendGroupImageMessage(token, event.groupOpenid, imageUrl, event.messageId);
+            await sendGroupImageMessage(
+              account.appId,
+              token,
+              event.groupOpenid,
+              imageUrl,
+              event.messageId,
+            );
           } else if (event.channelId) {
             log?.info(`${prefix} Channel does not support rich media, skipping Base64 image`);
           }
@@ -565,9 +590,22 @@ async function sendMarkdownReply(
         await sendWithRetry(async (token) => {
           const ref = consumeQuoteRef();
           if (event.type === "c2c") {
-            return await sendC2CMessage(token, event.senderId, chunk, event.messageId, ref);
+            return await sendC2CMessage(
+              account.appId,
+              token,
+              event.senderId,
+              chunk,
+              event.messageId,
+              ref,
+            );
           } else if (event.type === "group" && event.groupOpenid) {
-            return await sendGroupMessage(token, event.groupOpenid, chunk, event.messageId);
+            return await sendGroupMessage(
+              account.appId,
+              token,
+              event.groupOpenid,
+              chunk,
+              event.messageId,
+            );
           } else if (event.channelId) {
             return await sendChannelMessage(token, event.channelId, chunk, event.messageId);
           }
@@ -635,9 +673,22 @@ async function sendPlainTextReply(
         await sendWithRetry(async (token) => {
           const ref = consumeQuoteRef();
           if (event.type === "c2c") {
-            return await sendC2CMessage(token, event.senderId, chunk, event.messageId, ref);
+            return await sendC2CMessage(
+              account.appId,
+              token,
+              event.senderId,
+              chunk,
+              event.messageId,
+              ref,
+            );
           } else if (event.type === "group" && event.groupOpenid) {
-            return await sendGroupMessage(token, event.groupOpenid, chunk, event.messageId);
+            return await sendGroupMessage(
+              account.appId,
+              token,
+              event.groupOpenid,
+              chunk,
+              event.messageId,
+            );
           } else if (event.channelId) {
             return await sendChannelMessage(token, event.channelId, chunk, event.messageId);
           }

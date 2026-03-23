@@ -366,6 +366,7 @@ export async function sendPhoto(
 
     if (ctx.targetType === "c2c") {
       const r = await sendC2CImageMessage(
+        ctx.account.appId,
         token,
         ctx.targetId,
         imageUrl,
@@ -375,7 +376,13 @@ export async function sendPhoto(
       );
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
     } else if (ctx.targetType === "group") {
-      const r = await sendGroupImageMessage(token, ctx.targetId, imageUrl, ctx.replyToId);
+      const r = await sendGroupImageMessage(
+        ctx.account.appId,
+        token,
+        ctx.targetId,
+        imageUrl,
+        ctx.replyToId,
+      );
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
     } else {
       // 频道：仅支持公网 URL（Markdown 格式）
@@ -461,6 +468,7 @@ export async function sendVoice(
         const token = await getToken(ctx.account);
         if (ctx.targetType === "c2c") {
           const r = await sendC2CVoiceMessage(
+            ctx.account.appId,
             token,
             ctx.targetId,
             undefined,
@@ -470,6 +478,7 @@ export async function sendVoice(
           return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
         } else if (ctx.targetType === "group") {
           const r = await sendGroupVoiceMessage(
+            ctx.account.appId,
             token,
             ctx.targetId,
             undefined,
@@ -553,6 +562,7 @@ async function sendVoiceFromLocal(
 
     if (ctx.targetType === "c2c") {
       const r = await sendC2CVoiceMessage(
+        ctx.account.appId,
         token,
         ctx.targetId,
         uploadBase64,
@@ -564,6 +574,7 @@ async function sendVoiceFromLocal(
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
     } else if (ctx.targetType === "group") {
       const r = await sendGroupVoiceMessage(
+        ctx.account.appId,
         token,
         ctx.targetId,
         uploadBase64,
@@ -612,6 +623,7 @@ export async function sendVideoMsg(
       // 公网 URL：先尝试直传平台
       if (ctx.targetType === "c2c") {
         const r = await sendC2CVideoMessage(
+          ctx.account.appId,
           token,
           ctx.targetId,
           mediaPath,
@@ -621,6 +633,7 @@ export async function sendVideoMsg(
         return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
       } else if (ctx.targetType === "group") {
         const r = await sendGroupVideoMessage(
+          ctx.account.appId,
           token,
           ctx.targetId,
           mediaPath,
@@ -677,6 +690,7 @@ async function sendVideoFromLocal(
     const token = await getToken(ctx.account);
     if (ctx.targetType === "c2c") {
       const r = await sendC2CVideoMessage(
+        ctx.account.appId,
         token,
         ctx.targetId,
         undefined,
@@ -688,6 +702,7 @@ async function sendVideoFromLocal(
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
     } else if (ctx.targetType === "group") {
       const r = await sendGroupVideoMessage(
+        ctx.account.appId,
         token,
         ctx.targetId,
         undefined,
@@ -737,6 +752,7 @@ export async function sendDocument(
       // 公网 URL：先尝试直传平台
       if (ctx.targetType === "c2c") {
         const r = await sendC2CFileMessage(
+          ctx.account.appId,
           token,
           ctx.targetId,
           undefined,
@@ -747,6 +763,7 @@ export async function sendDocument(
         return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
       } else if (ctx.targetType === "group") {
         const r = await sendGroupFileMessage(
+          ctx.account.appId,
           token,
           ctx.targetId,
           undefined,
@@ -808,6 +825,7 @@ async function sendDocumentFromLocal(
     const token = await getToken(ctx.account);
     if (ctx.targetType === "c2c") {
       const r = await sendC2CFileMessage(
+        ctx.account.appId,
         token,
         ctx.targetId,
         fileBase64,
@@ -819,6 +837,7 @@ async function sendDocumentFromLocal(
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
     } else if (ctx.targetType === "group") {
       const r = await sendGroupFileMessage(
+        ctx.account.appId,
         token,
         ctx.targetId,
         fileBase64,
@@ -1049,7 +1068,13 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
             const accessToken = await getToken(account);
             const target = parseTarget(to);
             if (target.type === "c2c") {
-              const result = await sendC2CMessage(accessToken, target.id, item.content, replyToId);
+              const result = await sendC2CMessage(
+                account.appId,
+                accessToken,
+                target.id,
+                item.content,
+                replyToId,
+              );
               recordMessageReply(replyToId);
               lastResult = {
                 channel: "qqbot",
@@ -1059,6 +1084,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
               };
             } else if (target.type === "group") {
               const result = await sendGroupMessage(
+                account.appId,
                 accessToken,
                 target.id,
                 item.content,
@@ -1090,7 +1116,12 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
             const accessToken = await getToken(account);
             const target = parseTarget(to);
             if (target.type === "c2c") {
-              const result = await sendProactiveC2CMessage(accessToken, target.id, item.content);
+              const result = await sendProactiveC2CMessage(
+                account.appId,
+                accessToken,
+                target.id,
+                item.content,
+              );
               lastResult = {
                 channel: "qqbot",
                 messageId: result.id,
@@ -1098,7 +1129,12 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
                 refIdx: (result as any).ext_info?.ref_idx,
               };
             } else if (target.type === "group") {
-              const result = await sendProactiveGroupMessage(accessToken, target.id, item.content);
+              const result = await sendProactiveGroupMessage(
+                account.appId,
+                accessToken,
+                target.id,
+                item.content,
+              );
               lastResult = {
                 channel: "qqbot",
                 messageId: result.id,
@@ -1179,7 +1215,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
     if (!replyToId) {
       let outResult: OutboundResult;
       if (target.type === "c2c") {
-        const result = await sendProactiveC2CMessage(accessToken, target.id, text);
+        const result = await sendProactiveC2CMessage(account.appId, accessToken, target.id, text);
         outResult = {
           channel: "qqbot",
           messageId: result.id,
@@ -1187,7 +1223,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
           refIdx: (result as any).ext_info?.ref_idx,
         };
       } else if (target.type === "group") {
-        const result = await sendProactiveGroupMessage(accessToken, target.id, text);
+        const result = await sendProactiveGroupMessage(account.appId, accessToken, target.id, text);
         outResult = {
           channel: "qqbot",
           messageId: result.id,
@@ -1209,7 +1245,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
 
     // 有 replyToId，使用被动回复接口
     if (target.type === "c2c") {
-      const result = await sendC2CMessage(accessToken, target.id, text, replyToId);
+      const result = await sendC2CMessage(account.appId, accessToken, target.id, text, replyToId);
       // 记录回复次数
       recordMessageReply(replyToId);
       return {
@@ -1219,7 +1255,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
         refIdx: result.ext_info?.ref_idx,
       };
     } else if (target.type === "group") {
-      const result = await sendGroupMessage(accessToken, target.id, text, replyToId);
+      const result = await sendGroupMessage(account.appId, accessToken, target.id, text, replyToId);
       // 记录回复次数
       recordMessageReply(replyToId);
       return {
@@ -1286,7 +1322,7 @@ export async function sendProactiveMessage(
       console.log(
         `[${timestamp}] [qqbot] sendProactiveMessage: sending proactive C2C message to user=${target.id}`,
       );
-      const result = await sendProactiveC2CMessage(accessToken, target.id, text);
+      const result = await sendProactiveC2CMessage(account.appId, accessToken, target.id, text);
       console.log(
         `[${timestamp}] [qqbot] sendProactiveMessage: proactive C2C message sent successfully, messageId=${result.id}`,
       );
@@ -1300,7 +1336,7 @@ export async function sendProactiveMessage(
       console.log(
         `[${timestamp}] [qqbot] sendProactiveMessage: sending proactive group message to group=${target.id}`,
       );
-      const result = await sendProactiveGroupMessage(accessToken, target.id, text);
+      const result = await sendProactiveGroupMessage(account.appId, accessToken, target.id, text);
       console.log(
         `[${timestamp}] [qqbot] sendProactiveMessage: proactive group message sent successfully, messageId=${result.id}`,
       );
@@ -1444,9 +1480,9 @@ async function sendTextAfterMedia(ctx: MediaTargetContext, text: string): Promis
   try {
     const token = await getToken(ctx.account);
     if (ctx.targetType === "c2c") {
-      await sendC2CMessage(token, ctx.targetId, text, ctx.replyToId);
+      await sendC2CMessage(ctx.account.appId, token, ctx.targetId, text, ctx.replyToId);
     } else if (ctx.targetType === "group") {
-      await sendGroupMessage(token, ctx.targetId, text, ctx.replyToId);
+      await sendGroupMessage(ctx.account.appId, token, ctx.targetId, text, ctx.replyToId);
     }
   } catch (err) {
     console.error(`[qqbot] sendTextAfterMedia failed: ${err}`);

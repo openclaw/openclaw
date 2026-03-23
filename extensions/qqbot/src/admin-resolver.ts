@@ -163,7 +163,7 @@ export function sendStartupGreetings(
       const token = await getAccessToken(ctx.appId, ctx.clientSecret);
       const GREETING_TIMEOUT_MS = 10_000;
       await Promise.race([
-        sendProactiveC2CMessage(token, targetOpenId, plan.greeting),
+        sendProactiveC2CMessage(ctx.appId, token, targetOpenId, plan.greeting),
         new Promise((_, reject) =>
           setTimeout(
             () => reject(new Error("Startup greeting send timeout (10s)")),

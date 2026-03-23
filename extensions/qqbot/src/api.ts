@@ -23,11 +23,10 @@ try {
 }
 export const PLUGIN_USER_AGENT = `QQBotPlugin/${_pluginVersion} (Node/${process.versions.node}; ${os.platform()})`;
 
-// 运行时配置
-let currentMarkdownSupport = false;
-
-// 出站消息回调钩子：消息发送成功且回包含 ext_info.ref_idx 时触发
-// 由外层（gateway/outbound）注册，用于统一缓存 bot 出站消息的 refIdx
+// =========================================================================
+// Per-appId runtime config (avoids multi-account global state conflicts)
+// =========================================================================
+const markdownSupportMap = new Map<string, boolean>();
 
 /** 出站消息元信息（结构化存储，不做预格式化） */
 export interface OutboundMeta {
@@ -44,30 +43,31 @@ export interface OutboundMeta {
 }
 
 type OnMessageSentCallback = (refIdx: string, meta: OutboundMeta) => void;
-let onMessageSentHook: OnMessageSentCallback | null = null;
+const onMessageSentHookMap = new Map<string, OnMessageSentCallback>();
 
 /**
- * 注册出站消息回调
+ * 注册出站消息回调（按 appId 隔离）
  * 当消息发送成功且 QQ 返回 ref_idx 时，自动回调此函数
  * 用于在最底层统一缓存 bot 出站消息的 refIdx
  */
-export function onMessageSent(callback: OnMessageSentCallback): void {
-  onMessageSentHook = callback;
+export function onMessageSent(appId: string, callback: OnMessageSentCallback): void {
+  onMessageSentHookMap.set(String(appId).trim(), callback);
 }
 
 /**
- * 初始化 API 配置
+ * 初始化 API 配置（按 appId 隔离）
+ * @param appId - 机器人 AppID
  * @param options.markdownSupport - 是否支持 markdown 消息（默认 false，需要机器人具备该权限才能启用）
  */
-export function initApiConfig(options: { markdownSupport?: boolean }): void {
-  currentMarkdownSupport = options.markdownSupport === true;
+export function initApiConfig(appId: string, options: { markdownSupport?: boolean }): void {
+  markdownSupportMap.set(String(appId).trim(), options.markdownSupport === true);
 }
 
 /**
- * 获取当前是否支持 markdown
+ * 获取指定 appId 是否支持 markdown
  */
-export function isMarkdownSupport(): boolean {
-  return currentMarkdownSupport;
+export function isMarkdownSupport(appId: string): boolean {
+  return markdownSupportMap.get(String(appId).trim()) ?? false;
 }
 
 // =========================================================================
@@ -386,10 +386,11 @@ export interface MessageResponse {
 }
 
 /**
- * 发送消息并自动触发 refIdx 回调
+ * 发送消息并自动触发 refIdx 回调（按 appId 路由 hook）
  * 所有消息发送函数统一经过此处，确保每条出站消息的 refIdx 都被捕获
  */
 async function sendAndNotify(
+  appId: string,
   accessToken: string,
   method: string,
   path: string,
@@ -397,23 +398,26 @@ async function sendAndNotify(
   meta: OutboundMeta,
 ): Promise<MessageResponse> {
   const result = await apiRequest<MessageResponse>(accessToken, method, path, body);
-  if (result.ext_info?.ref_idx && onMessageSentHook) {
+  const hook = onMessageSentHookMap.get(String(appId).trim());
+  if (result.ext_info?.ref_idx && hook) {
     try {
-      onMessageSentHook(result.ext_info.ref_idx, meta);
+      hook(result.ext_info.ref_idx, meta);
     } catch (err) {
-      console.error(`[qqbot-api] onMessageSent hook error: ${err}`);
+      console.error(`[qqbot-api:${appId}] onMessageSent hook error: ${err}`);
     }
   }
   return result;
 }
 
 function buildMessageBody(
+  appId: string,
   content: string,
   msgId: string | undefined,
   msgSeq: number,
   messageReference?: string,
 ): Record<string, unknown> {
-  const body: Record<string, unknown> = currentMarkdownSupport
+  const md = isMarkdownSupport(appId);
+  const body: Record<string, unknown> = md
     ? {
         markdown: { content },
         msg_type: 2,
@@ -428,13 +432,14 @@ function buildMessageBody(
   if (msgId) {
     body.msg_id = msgId;
   }
-  if (messageReference && !currentMarkdownSupport) {
+  if (messageReference && !md) {
     body.message_reference = { message_id: messageReference };
   }
   return body;
 }
 
 export async function sendC2CMessage(
+  appId: string,
   accessToken: string,
   openid: string,
   content: string,
@@ -442,8 +447,8 @@ export async function sendC2CMessage(
   messageReference?: string,
 ): Promise<MessageResponse> {
   const msgSeq = msgId ? getNextMsgSeq(msgId) : 1;
-  const body = buildMessageBody(content, msgId, msgSeq, messageReference);
-  return sendAndNotify(accessToken, "POST", `/v2/users/${openid}/messages`, body, {
+  const body = buildMessageBody(appId, content, msgId, msgSeq, messageReference);
+  return sendAndNotify(appId, accessToken, "POST", `/v2/users/${openid}/messages`, body, {
     text: content,
   });
 }
@@ -503,21 +508,22 @@ export async function sendDmMessage(
 }
 
 export async function sendGroupMessage(
+  appId: string,
   accessToken: string,
   groupOpenid: string,
   content: string,
   msgId?: string,
 ): Promise<MessageResponse> {
   const msgSeq = msgId ? getNextMsgSeq(msgId) : 1;
-  const body = buildMessageBody(content, msgId, msgSeq);
+  const body = buildMessageBody(appId, content, msgId, msgSeq);
   return apiRequest(accessToken, "POST", `/v2/groups/${groupOpenid}/messages`, body);
 }
 
-function buildProactiveMessageBody(content: string): Record<string, unknown> {
+function buildProactiveMessageBody(appId: string, content: string): Record<string, unknown> {
   if (!content || content.trim().length === 0) {
     throw new Error("主动消息内容不能为空 (markdown.content is empty)");
   }
-  if (currentMarkdownSupport) {
+  if (isMarkdownSupport(appId)) {
     return { markdown: { content }, msg_type: 2 };
   } else {
     return { content, msg_type: 0 };
@@ -525,22 +531,24 @@ function buildProactiveMessageBody(content: string): Record<string, unknown> {
 }
 
 export async function sendProactiveC2CMessage(
+  appId: string,
   accessToken: string,
   openid: string,
   content: string,
 ): Promise<MessageResponse> {
-  const body = buildProactiveMessageBody(content);
-  return sendAndNotify(accessToken, "POST", `/v2/users/${openid}/messages`, body, {
+  const body = buildProactiveMessageBody(appId, content);
+  return sendAndNotify(appId, accessToken, "POST", `/v2/users/${openid}/messages`, body, {
     text: content,
   });
 }
 
 export async function sendProactiveGroupMessage(
+  appId: string,
   accessToken: string,
   groupOpenid: string,
   content: string,
 ): Promise<{ id: string; timestamp: string }> {
-  const body = buildProactiveMessageBody(content);
+  const body = buildProactiveMessageBody(appId, content);
   return apiRequest(accessToken, "POST", `/v2/groups/${groupOpenid}/messages`, body);
 }
 
@@ -653,6 +661,7 @@ export async function uploadGroupMedia(
 }
 
 export async function sendC2CMediaMessage(
+  appId: string,
   accessToken: string,
   openid: string,
   fileInfo: string,
@@ -662,6 +671,7 @@ export async function sendC2CMediaMessage(
 ): Promise<MessageResponse> {
   const msgSeq = msgId ? getNextMsgSeq(msgId) : 1;
   return sendAndNotify(
+    appId,
     accessToken,
     "POST",
     `/v2/users/${openid}/messages`,
@@ -694,6 +704,7 @@ export async function sendGroupMediaMessage(
 }
 
 export async function sendC2CImageMessage(
+  appId: string,
   accessToken: string,
   openid: string,
   imageUrl: string,
@@ -730,10 +741,19 @@ export async function sendC2CImageMessage(
     ...(!isBase64 ? { mediaUrl: imageUrl } : {}),
     ...(localPath ? { mediaLocalPath: localPath } : {}),
   };
-  return sendC2CMediaMessage(accessToken, openid, uploadResult.file_info, msgId, content, meta);
+  return sendC2CMediaMessage(
+    appId,
+    accessToken,
+    openid,
+    uploadResult.file_info,
+    msgId,
+    content,
+    meta,
+  );
 }
 
 export async function sendGroupImageMessage(
+  appId: string,
   accessToken: string,
   groupOpenid: string,
   imageUrl: string,
@@ -767,6 +787,7 @@ export async function sendGroupImageMessage(
 }
 
 export async function sendC2CVoiceMessage(
+  appId: string,
   accessToken: string,
   openid: string,
   voiceBase64?: string,
@@ -783,7 +804,7 @@ export async function sendC2CVoiceMessage(
     voiceBase64,
     false,
   );
-  return sendC2CMediaMessage(accessToken, openid, uploadResult.file_info, msgId, undefined, {
+  return sendC2CMediaMessage(appId, accessToken, openid, uploadResult.file_info, msgId, undefined, {
     mediaType: "voice",
     ...(ttsText ? { ttsText } : {}),
     ...(filePath ? { mediaLocalPath: filePath } : {}),
@@ -791,6 +812,7 @@ export async function sendC2CVoiceMessage(
 }
 
 export async function sendGroupVoiceMessage(
+  appId: string,
   accessToken: string,
   groupOpenid: string,
   voiceBase64?: string,
@@ -809,6 +831,7 @@ export async function sendGroupVoiceMessage(
 }
 
 export async function sendC2CFileMessage(
+  appId: string,
   accessToken: string,
   openid: string,
   fileBase64?: string,
@@ -826,7 +849,7 @@ export async function sendC2CFileMessage(
     false,
     fileName,
   );
-  return sendC2CMediaMessage(accessToken, openid, uploadResult.file_info, msgId, undefined, {
+  return sendC2CMediaMessage(appId, accessToken, openid, uploadResult.file_info, msgId, undefined, {
     mediaType: "file",
     mediaUrl: fileUrl,
     mediaLocalPath: localFilePath ?? fileName,
@@ -834,6 +857,7 @@ export async function sendC2CFileMessage(
 }
 
 export async function sendGroupFileMessage(
+  appId: string,
   accessToken: string,
   groupOpenid: string,
   fileBase64?: string,
@@ -854,6 +878,7 @@ export async function sendGroupFileMessage(
 }
 
 export async function sendC2CVideoMessage(
+  appId: string,
   accessToken: string,
   openid: string,
   videoUrl?: string,
@@ -870,7 +895,7 @@ export async function sendC2CVideoMessage(
     videoBase64,
     false,
   );
-  return sendC2CMediaMessage(accessToken, openid, uploadResult.file_info, msgId, content, {
+  return sendC2CMediaMessage(appId, accessToken, openid, uploadResult.file_info, msgId, content, {
     text: content,
     mediaType: "video",
     ...(videoUrl ? { mediaUrl: videoUrl } : {}),
@@ -879,6 +904,7 @@ export async function sendC2CVideoMessage(
 }
 
 export async function sendGroupVideoMessage(
+  appId: string,
   accessToken: string,
   groupOpenid: string,
   videoUrl?: string,

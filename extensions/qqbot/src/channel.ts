@@ -237,7 +237,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         `[qqbot:channel] sendText text preview: ${text?.slice(0, 100)}${(text?.length ?? 0) > 100 ? "..." : ""}`,
       );
       const account = resolveQQBotAccount(cfg, accountId);
-      initApiConfig({ markdownSupport: account.markdownSupport });
+      initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
       console.log(
         `[qqbot:channel] sendText resolved account: id=${account.accountId}, appId=${account.appId}, enabled=${account.enabled}`,
       );
@@ -256,7 +256,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         `[qqbot:channel] sendMedia called — accountId=${accountId}, to=${to}, replyToId=${replyToId}, mediaUrl=${mediaUrl?.slice(0, 80)}, text.length=${text?.length ?? 0}`,
       );
       const account = resolveQQBotAccount(cfg, accountId);
-      initApiConfig({ markdownSupport: account.markdownSupport });
+      initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
       console.log(
         `[qqbot:channel] sendMedia resolved account: id=${account.accountId}, appId=${account.appId}, enabled=${account.enabled}`,
       );
