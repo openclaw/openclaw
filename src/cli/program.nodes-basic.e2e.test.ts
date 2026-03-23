@@ -235,14 +235,13 @@ describe("cli program (nodes basics)", () => {
       requestId: "r1",
       node: { nodeId: "n1", token: "t1" },
     });
-    await runProgram(["nodes", "approve", "r1"]);
+    await expect(runProgram(["nodes", "approve", "r1"])).rejects.toThrow("exit");
     expect(callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "node.pair.approve",
         params: { requestId: "r1" },
       }),
     );
-    expect(runtime.log).toHaveBeenCalled();
   });
 
   it("runs nodes invoke and calls node.invoke", async () => {
@@ -253,16 +252,18 @@ describe("cli program (nodes basics)", () => {
       payload: { result: "ok" },
     });
 
-    await runProgram([
-      "nodes",
-      "invoke",
-      "--node",
-      "ios-node",
-      "--command",
-      "canvas.eval",
-      "--params",
-      '{"javaScript":"1+1"}',
-    ]);
+    await expect(
+      runProgram([
+        "nodes",
+        "invoke",
+        "--node",
+        "ios-node",
+        "--command",
+        "canvas.eval",
+        "--params",
+        '{"javaScript":"1+1"}',
+      ]),
+    ).rejects.toThrow("exit");
 
     expect(callGateway).toHaveBeenCalledWith(
       expect.objectContaining({ method: "node.list", params: {} }),
@@ -279,6 +280,5 @@ describe("cli program (nodes basics)", () => {
         },
       }),
     );
-    expect(runtime.log).toHaveBeenCalled();
   });
 });

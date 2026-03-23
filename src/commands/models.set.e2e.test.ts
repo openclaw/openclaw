@@ -4,12 +4,16 @@ const readConfigFileSnapshot = vi.fn();
 const writeConfigFile = vi.fn().mockResolvedValue(undefined);
 const loadConfig = vi.fn().mockReturnValue({});
 
-vi.mock("../config/config.js", () => ({
-  CONFIG_PATH: "/tmp/openclaw.json",
-  readConfigFileSnapshot,
-  writeConfigFile,
-  loadConfig,
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    CONFIG_PATH: "/tmp/openclaw.json",
+    readConfigFileSnapshot,
+    writeConfigFile,
+    loadConfig,
+  };
+});
 
 function mockConfigSnapshot(config: Record<string, unknown> = {}) {
   readConfigFileSnapshot.mockResolvedValue({

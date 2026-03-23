@@ -9,10 +9,9 @@ import type { TypingController } from "./typing.js";
 const handleCommandsMock = vi.fn();
 const getChannelPluginMock = vi.fn();
 
-vi.mock("./commands.js", () => ({
+vi.mock("./commands.runtime.js", () => ({
   handleCommands: (...args: unknown[]) => handleCommandsMock(...args),
   buildStatusReply: vi.fn(),
-  buildCommandContext: vi.fn(),
 }));
 
 vi.mock("../../channels/plugins/index.js", async (importOriginal) => {

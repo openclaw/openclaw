@@ -19,17 +19,25 @@ const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
   sleepWithAbortMock: vi.fn(async (_ms: number, _abortSignal?: AbortSignal) => undefined),
 }));
 
-vi.mock("./pi-embedded-runner/run/attempt.js", () => ({
-  runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
-}));
+vi.mock("./pi-embedded-runner/run/attempt.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./pi-embedded-runner/run/attempt.js")>();
+  return {
+    ...actual,
+    runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
+  };
+});
 
-vi.mock("../infra/backoff.js", () => ({
-  computeBackoff: (
-    policy: { initialMs: number; maxMs: number; factor: number; jitter: number },
-    attempt: number,
-  ) => computeBackoffMock(policy, attempt),
-  sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => sleepWithAbortMock(ms, abortSignal),
-}));
+vi.mock("../infra/backoff.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/backoff.js")>();
+  return {
+    ...actual,
+    computeBackoff: (
+      policy: { initialMs: number; maxMs: number; factor: number; jitter: number },
+      attempt: number,
+    ) => computeBackoffMock(policy, attempt),
+    sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => sleepWithAbortMock(ms, abortSignal),
+  };
+});
 
 vi.mock("./models-config.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("./models-config.js")>();

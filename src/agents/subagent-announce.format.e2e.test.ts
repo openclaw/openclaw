@@ -298,7 +298,15 @@ describe("subagent announce formatting", () => {
     hookRunSubagentDeliveryTargetMock.mockClear();
     subagentDeliveryTargetHookMock.mockReset().mockResolvedValue(undefined);
     readLatestAssistantReplyMock.mockClear().mockResolvedValue("raw subagent reply");
-    chatHistoryMock.mockReset().mockResolvedValue({ messages: [] });
+    chatHistoryMock.mockReset().mockImplementation(async (sessionKey?: string) => {
+      const text = await readLatestAssistantReplyMock(sessionKey);
+      if (!text?.trim()) {
+        return { messages: [] };
+      }
+      return {
+        messages: [{ role: "assistant", content: [{ type: "text", text }] }],
+      };
+    });
     sessionStore = {};
     sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
     setActivePluginRegistry(
