@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import { isCronSystemEvent } from "../../infra/heartbeat-events-filter.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
@@ -27,6 +29,7 @@ import { DEFAULT_JOB_TIMEOUT_MS, resolveCronJobTimeoutMs } from "./timeout-polic
 
 export { DEFAULT_JOB_TIMEOUT_MS } from "./timeout-policy.js";
 
+const execFileAsync = promisify(execFile);
 const MAX_TIMER_DELAY_MS = 60_000;
 
 /**
@@ -970,6 +973,47 @@ export async function executeJobCore(
   }
   if (abortSignal?.aborted) {
     return resolveAbortError();
+  }
+
+  // beforeRun gate: execute a user-supplied script before the LLM call.
+  // Exit 0 = proceed; non-zero = skip (zero token cost).
+  const beforeRunRaw = job.beforeRun?.trim();
+  const beforeRunScript = beforeRunRaw?.startsWith("~/")
+    ? `${process.env.HOME ?? "/root"}/${beforeRunRaw.slice(2)}`
+    : beforeRunRaw;
+  if (beforeRunScript) {
+    try {
+      await execFileAsync("bash", [beforeRunScript, job.id], {
+        timeout: 120_000,
+        env: { ...process.env, CRON_JOB_ID: job.id },
+      });
+      state.deps.log.info(
+        { jobId: job.id, script: beforeRunScript },
+        "cron: beforeRun gate passed",
+      );
+    } catch (err) {
+      const rawCode = (err as { code?: unknown }).code;
+      const exitCode = typeof rawCode === "number" ? rawCode : undefined;
+      const errCode = typeof rawCode === "string" ? rawCode : undefined;
+      const killed = (err as { killed?: boolean }).killed;
+      if (killed) {
+        state.deps.log.warn(
+          { jobId: job.id, script: beforeRunScript },
+          "cron: beforeRun gate timed out",
+        );
+      } else if (errCode === "ENOENT") {
+        state.deps.log.warn(
+          { jobId: job.id, script: beforeRunScript },
+          "cron: beforeRun script not found (bash missing)",
+        );
+      } else {
+        state.deps.log.info(
+          { jobId: job.id, script: beforeRunScript, exitCode },
+          "cron: beforeRun gate rejected",
+        );
+      }
+      return { status: "skipped", error: "before-run-gate" };
+    }
   }
 
   const res = await state.deps.runIsolatedAgentJob({

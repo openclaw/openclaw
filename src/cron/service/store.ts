@@ -305,6 +305,14 @@ export async function ensureLoaded(
       }
     }
 
+    if ("beforeRun" in raw) {
+      const beforeRun = normalizeOptionalText(raw.beforeRun);
+      if (raw.beforeRun !== beforeRun) {
+        raw.beforeRun = beforeRun;
+        mutated = true;
+      }
+    }
+
     if (typeof raw.enabled !== "boolean") {
       raw.enabled = true;
       mutated = true;
