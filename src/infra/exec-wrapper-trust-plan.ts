@@ -11,6 +11,7 @@ import {
 
 export type ExecWrapperTrustPlan = {
   argv: string[];
+  policyArgv: string[];
   wrapperChain: string[];
   policyBlocked: boolean;
   blockedWrapper?: string;
@@ -20,11 +21,13 @@ export type ExecWrapperTrustPlan = {
 
 function blockedExecWrapperTrustPlan(params: {
   argv: string[];
+  policyArgv?: string[];
   wrapperChain: string[];
   blockedWrapper: string;
 }): ExecWrapperTrustPlan {
   return {
     argv: params.argv,
+    policyArgv: params.policyArgv ?? params.argv,
     wrapperChain: params.wrapperChain,
     policyBlocked: true,
     blockedWrapper: params.blockedWrapper,
@@ -35,6 +38,7 @@ function blockedExecWrapperTrustPlan(params: {
 
 function finalizeExecWrapperTrustPlan(
   argv: string[],
+  policyArgv: string[],
   wrapperChain: string[],
   policyBlocked: boolean,
   blockedWrapper?: string,
@@ -44,6 +48,7 @@ function finalizeExecWrapperTrustPlan(
     !policyBlocked && rawExecutable.length > 0 && isShellWrapperExecutable(rawExecutable);
   return {
     argv,
+    policyArgv,
     wrapperChain,
     policyBlocked,
     blockedWrapper,
@@ -57,12 +62,15 @@ export function resolveExecWrapperTrustPlan(
   maxDepth = MAX_DISPATCH_WRAPPER_DEPTH,
 ): ExecWrapperTrustPlan {
   let current = argv;
+  let policyArgv = argv;
+  let sawShellMultiplexer = false;
   const wrapperChain: string[] = [];
   for (let depth = 0; depth < maxDepth; depth += 1) {
     const dispatchPlan = resolveDispatchWrapperTrustPlan(current, maxDepth - wrapperChain.length);
     if (dispatchPlan.policyBlocked) {
       return blockedExecWrapperTrustPlan({
         argv: dispatchPlan.argv,
+        policyArgv,
         wrapperChain,
         blockedWrapper: dispatchPlan.blockedWrapper ?? current[0] ?? "unknown",
       });
@@ -70,6 +78,9 @@ export function resolveExecWrapperTrustPlan(
     if (dispatchPlan.wrappers.length > 0) {
       wrapperChain.push(...dispatchPlan.wrappers);
       current = dispatchPlan.argv;
+      if (!sawShellMultiplexer) {
+        policyArgv = current;
+      }
       if (wrapperChain.length >= maxDepth) {
         break;
       }
@@ -80,12 +91,18 @@ export function resolveExecWrapperTrustPlan(
     if (shellMultiplexerUnwrap.kind === "blocked") {
       return blockedExecWrapperTrustPlan({
         argv: current,
+        policyArgv,
         wrapperChain,
         blockedWrapper: shellMultiplexerUnwrap.wrapper,
       });
     }
     if (shellMultiplexerUnwrap.kind === "unwrapped") {
       wrapperChain.push(shellMultiplexerUnwrap.wrapper);
+      if (!sawShellMultiplexer) {
+        // Preserve the real executable target for trust checks.
+        policyArgv = current;
+        sawShellMultiplexer = true;
+      }
       current = shellMultiplexerUnwrap.argv;
       if (wrapperChain.length >= maxDepth) {
         break;
@@ -101,6 +118,7 @@ export function resolveExecWrapperTrustPlan(
     if (dispatchOverflow.kind === "blocked" || dispatchOverflow.kind === "unwrapped") {
       return blockedExecWrapperTrustPlan({
         argv: current,
+        policyArgv,
         wrapperChain,
         blockedWrapper: dispatchOverflow.wrapper,
       });
@@ -112,11 +130,12 @@ export function resolveExecWrapperTrustPlan(
     ) {
       return blockedExecWrapperTrustPlan({
         argv: current,
+        policyArgv,
         wrapperChain,
         blockedWrapper: shellMultiplexerOverflow.wrapper,
       });
     }
   }
 
-  return finalizeExecWrapperTrustPlan(current, wrapperChain, false);
+  return finalizeExecWrapperTrustPlan(current, policyArgv, wrapperChain, false);
 }
