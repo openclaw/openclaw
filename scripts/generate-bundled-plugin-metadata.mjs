@@ -130,8 +130,7 @@ function normalizePluginManifest(raw) {
 function formatTypeScriptModule(source, { outputPath }) {
   const formatterPath = path.relative(FORMATTER_CWD, outputPath) || outputPath;
   const useDirectFormatter = process.platform !== "win32" && fs.existsSync(OXFMT_BIN);
-  const command =
-    process.platform === "win32" ? "pnpm.cmd" : useDirectFormatter ? OXFMT_BIN : "pnpm";
+  const command = useDirectFormatter ? OXFMT_BIN : "pnpm";
   const args = useDirectFormatter
     ? ["--stdin-filepath", formatterPath]
     : ["exec", "oxfmt", "--stdin-filepath", formatterPath];
@@ -139,6 +138,7 @@ function formatTypeScriptModule(source, { outputPath }) {
     cwd: FORMATTER_CWD,
     input: source,
     encoding: "utf8",
+    ...(process.platform === "win32" && !useDirectFormatter ? { shell: true } : {}),
   });
   if (formatter.status !== 0) {
     const details =

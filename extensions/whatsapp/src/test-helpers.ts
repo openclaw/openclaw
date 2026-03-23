@@ -5,8 +5,9 @@ import { vi } from "vitest";
 import type { MockBaileysSocket } from "../../../test/mocks/baileys.js";
 import { createMockBaileys } from "../../../test/mocks/baileys.js";
 
-// Use globalThis to store the mock config so it survives vi.mock hoisting
+// Use globalThis to store mock state so it survives vi.mock hoisting
 const CONFIG_KEY = Symbol.for("openclaw:testConfigMock");
+const FETCH_REMOTE_MEDIA_KEY = Symbol.for("openclaw:testFetchRemoteMediaMock");
 const DEFAULT_CONFIG = {
   channels: {
     whatsapp: {
@@ -146,16 +147,34 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
   const mockModule = Object.create(null) as Record<string, unknown>;
   Object.defineProperties(mockModule, Object.getOwnPropertyDescriptors(actual));
-  Object.defineProperty(mockModule, "saveMediaBuffer", {
-    configurable: true,
-    enumerable: true,
-    writable: true,
-    value: vi.fn().mockImplementation(async (_buf: Buffer, contentType?: string) => ({
-      id: "mid",
-      path: "/tmp/mid",
-      size: _buf.length,
-      contentType,
-    })),
+  Object.defineProperties(mockModule, {
+    saveMediaBuffer: {
+      configurable: true,
+      enumerable: true,
+      writable: true,
+      value: vi.fn().mockImplementation(async (_buf: Buffer, contentType?: string) => ({
+        id: "mid",
+        path: "/tmp/mid",
+        size: _buf.length,
+        contentType,
+      })),
+    },
+    fetchRemoteMedia: {
+      configurable: true,
+      enumerable: true,
+      writable: true,
+      value: (options: Parameters<typeof actual.fetchRemoteMedia>[0]) => {
+        const override = (globalThis as Record<symbol, unknown>)[FETCH_REMOTE_MEDIA_KEY];
+        if (typeof override === "function") {
+          return (
+            override as (
+              options: Parameters<typeof actual.fetchRemoteMedia>[0],
+            ) => ReturnType<typeof actual.fetchRemoteMedia>
+          )(options);
+        }
+        return actual.fetchRemoteMedia(options);
+      },
+    },
   });
   return mockModule;
 });

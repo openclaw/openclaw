@@ -5,7 +5,6 @@ import path from "node:path";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
-import { mockPinnedHostnameResolution } from "../../../src/test-helpers/ssrf.js";
 import type { WebInboundMessage, WebListenerCloseReason } from "./inbound.js";
 import {
   resetBaileysMocks as _resetBaileysMocks,
@@ -28,6 +27,7 @@ type MockWebListener = {
 };
 
 export const TEST_NET_IP = "203.0.113.10";
+const FETCH_REMOTE_MEDIA_KEY = Symbol.for("openclaw:testFetchRemoteMediaMock");
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>();
@@ -129,20 +129,47 @@ export async function makeSessionStore(
 }
 
 export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
-  let resolvePinnedHostnameSpy: { mockRestore: () => unknown } | undefined;
-
   beforeEach(() => {
     vi.clearAllMocks();
     _resetBaileysMocks();
     _resetLoadConfigMock();
     if (opts?.pinDns) {
-      resolvePinnedHostnameSpy = mockPinnedHostnameResolution([TEST_NET_IP]);
+      (globalThis as Record<symbol, unknown>)[FETCH_REMOTE_MEDIA_KEY] = async (options: {
+        url: string;
+        maxBytes?: number;
+      }) => {
+        const response = await globalThis.fetch(options.url);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        if (!response.body) {
+          throw new Error("empty response body");
+        }
+        const arrayBuffer = await response.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        if (typeof options.maxBytes === "number" && buffer.length > options.maxBytes) {
+          throw new Error(`content length ${buffer.length} exceeds maxBytes ${options.maxBytes}`);
+        }
+        const contentType = response.headers.get("content-type") ?? undefined;
+        let fileName: string | undefined;
+        try {
+          const parsed = new URL(options.url);
+          const base = path.basename(parsed.pathname);
+          fileName = base || undefined;
+        } catch {
+          fileName = undefined;
+        }
+        return {
+          buffer,
+          contentType,
+          fileName,
+        };
+      };
     }
   });
 
   afterEach(() => {
-    resolvePinnedHostnameSpy?.mockRestore();
-    resolvePinnedHostnameSpy = undefined;
+    delete (globalThis as Record<symbol, unknown>)[FETCH_REMOTE_MEDIA_KEY];
     resetLogger();
     setLoggerOverride(null);
     vi.useRealTimers();

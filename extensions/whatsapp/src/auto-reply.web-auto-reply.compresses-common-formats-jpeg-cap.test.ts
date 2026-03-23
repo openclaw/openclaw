@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import sharp from "sharp";
 import { describe, expect, it, vi } from "vitest";
-import { monitorWebChannel } from "./auto-reply.js";
 import {
   createMockWebListener,
   installWebAutoReplyTestHomeHooks,
@@ -15,7 +14,9 @@ installWebAutoReplyTestHomeHooks();
 
 describe("web auto-reply", () => {
   installWebAutoReplyUnitTestHooks({ pinDns: true });
-  type ListenerFactory = NonNullable<Parameters<typeof monitorWebChannel>[1]>;
+  type ListenerFactory = NonNullable<
+    Parameters<(typeof import("./auto-reply.js"))["monitorWebChannel"]>[1]
+  >;
   const SMALL_MEDIA_CAP_MB = 0.1;
   const SMALL_MEDIA_CAP_BYTES = Math.floor(SMALL_MEDIA_CAP_MB * 1024 * 1024);
 
@@ -34,6 +35,7 @@ describe("web auto-reply", () => {
       return createMockWebListener();
     };
 
+    const { monitorWebChannel } = await import("./auto-reply.js");
     await monitorWebChannel(false, listenerFactory, false, resolver);
     expect(capturedOnMessage).toBeDefined();
 
