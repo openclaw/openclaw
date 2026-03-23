@@ -27,6 +27,8 @@ export type MattermostWebSocketLike = {
   on(event: "message", listener: (data: WebSocket.RawData) => void | Promise<void>): void;
   on(event: "close", listener: (code: number, reason: Buffer) => void): void;
   on(event: "error", listener: (err: unknown) => void): void;
+  on(event: "pong", listener: () => void): void;
+  ping?: (data?: unknown, mask?: boolean, cb?: (err: Error) => void) => void;
   send(data: string): void;
   close(): void;
   terminate(): void;
@@ -54,6 +56,9 @@ type CreateMattermostConnectOnceOpts = {
   onPosted: (post: MattermostPost, payload: MattermostEventPayload) => Promise<void>;
   onReaction?: (payload: MattermostEventPayload) => Promise<void>;
   webSocketFactory?: MattermostWebSocketFactory;
+  pingIntervalMs?: number;
+  pongTimeoutMs?: number;
+  botUserId?: string;
 };
 
 export const defaultMattermostWebSocketFactory: MattermostWebSocketFactory = (url) =>
@@ -102,6 +107,8 @@ export function createMattermostConnectOnce(
   opts: CreateMattermostConnectOnceOpts,
 ): () => Promise<void> {
   const webSocketFactory = opts.webSocketFactory ?? defaultMattermostWebSocketFactory;
+  const pingIntervalMs = opts.pingIntervalMs ?? 30_000;
+  const pongTimeoutMs = opts.pongTimeoutMs ?? 10_000;
   return async () => {
     const ws = webSocketFactory(opts.wsUrl);
     const onAbort = () => ws.terminate();
@@ -111,11 +118,26 @@ export function createMattermostConnectOnce(
       return await new Promise<void>((resolve, reject) => {
         let opened = false;
         let settled = false;
+        let pingTimer: ReturnType<typeof setInterval> | undefined;
+        let pongTimer: ReturnType<typeof setTimeout> | undefined;
+
+        const clearHealthTimers = () => {
+          if (pingTimer !== undefined) {
+            clearInterval(pingTimer);
+            pingTimer = undefined;
+          }
+          if (pongTimer !== undefined) {
+            clearTimeout(pongTimer);
+            pongTimer = undefined;
+          }
+        };
+
         const resolveOnce = () => {
           if (settled) {
             return;
           }
           settled = true;
+          clearHealthTimers();
           resolve();
         };
         const rejectOnce = (error: Error) => {
@@ -123,6 +145,7 @@ export function createMattermostConnectOnce(
             return;
           }
           settled = true;
+          clearHealthTimers();
           reject(error);
         };
 
@@ -140,6 +163,27 @@ export function createMattermostConnectOnce(
               data: { token: opts.botToken },
             }),
           );
+
+          // Start ping/pong health check
+          if (ws.ping) {
+            pingTimer = setInterval(() => {
+              if (!ws.ping) {
+                return;
+              }
+              ws.ping();
+              pongTimer = setTimeout(() => {
+                opts.runtime.error?.("mattermost websocket pong timeout — terminating connection");
+                ws.terminate();
+              }, pongTimeoutMs);
+            }, pingIntervalMs);
+
+            ws.on("pong", () => {
+              if (pongTimer !== undefined) {
+                clearTimeout(pongTimer);
+                pongTimer = undefined;
+              }
+            });
+          }
         });
 
         ws.on("message", async (data) => {
@@ -149,6 +193,34 @@ export function createMattermostConnectOnce(
             payload = JSON.parse(raw) as MattermostEventPayload;
           } catch {
             return;
+          }
+
+          // Detect bot deactivation via user_updated event
+          if (payload.event === "user_updated" && opts.botUserId) {
+            try {
+              const userData =
+                typeof payload.data === "object" && payload.data !== null
+                  ? (payload.data as Record<string, unknown>)
+                  : null;
+              const userObj =
+                userData && typeof userData.user === "object" && userData.user !== null
+                  ? (userData.user as Record<string, unknown>)
+                  : null;
+              if (
+                userObj &&
+                userObj.id === opts.botUserId &&
+                typeof userObj.delete_at === "number" &&
+                userObj.delete_at !== 0
+              ) {
+                opts.runtime.error?.(
+                  "mattermost bot deactivated (user_updated delete_at !== 0) — terminating connection",
+                );
+                ws.terminate();
+                return;
+              }
+            } catch {
+              // Ignore parse errors for user_updated
+            }
           }
 
           if (payload.event === "reaction_added" || payload.event === "reaction_removed") {
@@ -178,6 +250,7 @@ export function createMattermostConnectOnce(
         });
 
         ws.on("close", (code, reason) => {
+          clearHealthTimers();
           const message = reasonToString(reason);
           opts.statusSink?.({
             connected: false,

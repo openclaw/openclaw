@@ -1634,6 +1634,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     runtime,
     webSocketFactory: opts.webSocketFactory,
     nextSeq: () => seq++,
+    botUserId,
     onPosted: async (post, payload) => {
       await debouncer.enqueue({ post, payload });
     },

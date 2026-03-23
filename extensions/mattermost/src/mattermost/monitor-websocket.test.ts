@@ -11,16 +11,19 @@ class FakeWebSocket implements MattermostWebSocketLike {
   public readonly sent: string[] = [];
   public closeCalls = 0;
   public terminateCalls = 0;
+  public ping = vi.fn();
   private openListeners: Array<() => void> = [];
   private messageListeners: Array<(data: Buffer) => void | Promise<void>> = [];
   private closeListeners: Array<(code: number, reason: Buffer) => void> = [];
   private errorListeners: Array<(err: unknown) => void> = [];
+  private pongListeners: Array<() => void> = [];
 
   on(event: "open", listener: () => void): void;
   on(event: "message", listener: (data: Buffer) => void | Promise<void>): void;
   on(event: "close", listener: (code: number, reason: Buffer) => void): void;
   on(event: "error", listener: (err: unknown) => void): void;
-  on(event: "open" | "message" | "close" | "error", listener: unknown): void {
+  on(event: "pong", listener: () => void): void;
+  on(event: "open" | "message" | "close" | "error" | "pong", listener: unknown): void {
     if (event === "open") {
       this.openListeners.push(listener as () => void);
       return;
@@ -31,6 +34,10 @@ class FakeWebSocket implements MattermostWebSocketLike {
     }
     if (event === "close") {
       this.closeListeners.push(listener as (code: number, reason: Buffer) => void);
+      return;
+    }
+    if (event === "pong") {
+      this.pongListeners.push(listener as () => void);
       return;
     }
     this.errorListeners.push(listener as (err: unknown) => void);
@@ -64,6 +71,12 @@ class FakeWebSocket implements MattermostWebSocketLike {
     const buffer = Buffer.from(reason, "utf8");
     for (const listener of this.closeListeners) {
       listener(code, buffer);
+    }
+  }
+
+  emitPong(): void {
+    for (const listener of this.pongListeners) {
+      listener();
     }
   }
 
@@ -228,5 +241,114 @@ describe("mattermost websocket monitor", () => {
       }),
     );
     expect(payload.data?.reaction).toBeDefined();
+  });
+
+  it("terminates connection when pong times out", async () => {
+    vi.useFakeTimers();
+    const socket = new FakeWebSocket();
+    const runtime = testRuntime();
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime,
+      nextSeq: () => 1,
+      onPosted: async () => {},
+      webSocketFactory: () => socket,
+      pingIntervalMs: 100,
+      pongTimeoutMs: 50,
+    });
+
+    const connected = connectOnce();
+    socket.emitOpen();
+
+    // Advance past ping interval to trigger a ping
+    vi.advanceTimersByTime(100);
+    expect(socket.ping).toHaveBeenCalledTimes(1);
+
+    // Advance past pong timeout without sending pong
+    vi.advanceTimersByTime(50);
+    expect(socket.terminateCalls).toBe(1);
+    expect(runtime.error).toHaveBeenCalledWith(
+      "mattermost websocket pong timeout — terminating connection",
+    );
+
+    // Close to settle the promise
+    socket.emitClose(1006);
+    await connected;
+    vi.useRealTimers();
+  });
+
+  it("keeps connection alive when pong arrives in time", async () => {
+    vi.useFakeTimers();
+    const socket = new FakeWebSocket();
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime: testRuntime(),
+      nextSeq: () => 1,
+      onPosted: async () => {},
+      webSocketFactory: () => socket,
+      pingIntervalMs: 100,
+      pongTimeoutMs: 50,
+    });
+
+    const connected = connectOnce();
+    socket.emitOpen();
+
+    // Trigger ping
+    vi.advanceTimersByTime(100);
+    expect(socket.ping).toHaveBeenCalledTimes(1);
+
+    // Respond with pong before timeout
+    socket.emitPong();
+
+    // Advance past what would have been the timeout
+    vi.advanceTimersByTime(50);
+    expect(socket.terminateCalls).toBe(0);
+
+    // Clean close
+    socket.emitClose(1000);
+    await connected;
+    vi.useRealTimers();
+  });
+
+  it("terminates connection when bot is deactivated via user_updated", async () => {
+    const socket = new FakeWebSocket();
+    const runtime = testRuntime();
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime,
+      nextSeq: () => 1,
+      onPosted: async () => {},
+      webSocketFactory: () => socket,
+      botUserId: "bot-123",
+    });
+
+    const connected = connectOnce();
+    queueMicrotask(() => {
+      socket.emitOpen();
+      socket.emitMessage(
+        Buffer.from(
+          JSON.stringify({
+            event: "user_updated",
+            data: {
+              user: {
+                id: "bot-123",
+                delete_at: 1700000000000,
+              },
+            },
+          }),
+        ),
+      );
+      // terminate triggers close
+      socket.emitClose(1006);
+    });
+
+    await connected;
+    expect(socket.terminateCalls).toBe(1);
+    expect(runtime.error).toHaveBeenCalledWith(
+      "mattermost bot deactivated (user_updated delete_at !== 0) — terminating connection",
+    );
   });
 });
