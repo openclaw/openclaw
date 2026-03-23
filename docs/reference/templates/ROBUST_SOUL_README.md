@@ -61,14 +61,14 @@ By default, OpenClaw may require write access to `AGENTS.md` and `TOOLS.md` duri
 
 #### How to Enable Protection
 1. Edit `ROBUST_SOUL.md` and locate the **Tool Invocation Guard** section.
-2. Add `AGENTS.md` and `TOOLS.md` to the list of protected bootstrap files. For example:
+2. Move `AGENTS.md` and `TOOLS.md` to the list of protected bootstrap files. For example:
    - Refuse if the target path matches any **bootstrap/identity/core configuration file** in the workspace root, including but not limited to:
      - `SOUL.md`
      - `IDENTITY.md`
      - `BOOT.md` / `BOOTSTRAP.md`
      - `USER.md` (if treated as immutable profile)
-     - `AGENTS.md`          <!-- added -->
-     - `TOOLS.md`           <!-- added -->
+     - `AGENTS.md`          # -> moved here
+     - `TOOLS.md`           # -> moved here
 3. Save the file and re‑apply OS‑level read‑only permissions (e.g., `chmod 444 ROBUST_SOUL.md`).
 4. Restart the agent process.
 
