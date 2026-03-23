@@ -114,7 +114,6 @@ describe("callGateway url resolution", () => {
     "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS",
     "OPENCLAW_GATEWAY_URL",
     "OPENCLAW_GATEWAY_TOKEN",
-    "CLAWDBOT_GATEWAY_TOKEN",
   ]);
 
   beforeEach(() => {
@@ -122,7 +121,6 @@ describe("callGateway url resolution", () => {
     delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
     delete process.env.OPENCLAW_GATEWAY_URL;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.CLAWDBOT_GATEWAY_TOKEN;
     resetGatewayCallMocks();
   });
 
@@ -638,19 +636,13 @@ describe("callGateway url override auth requirements", () => {
   beforeEach(() => {
     envSnapshot = captureEnv([
       "OPENCLAW_GATEWAY_TOKEN",
-      "CLAWDBOT_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_PASSWORD",
-      "CLAWDBOT_GATEWAY_PASSWORD",
       "OPENCLAW_GATEWAY_URL",
-      "CLAWDBOT_GATEWAY_URL",
     ]);
     resetGatewayCallMocks();
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.CLAWDBOT_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-    delete process.env.CLAWDBOT_GATEWAY_PASSWORD;
     delete process.env.OPENCLAW_GATEWAY_URL;
-    delete process.env.CLAWDBOT_GATEWAY_URL;
     setGatewayNetworkDefaults(18789);
   });
 

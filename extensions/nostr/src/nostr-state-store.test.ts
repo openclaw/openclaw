@@ -18,7 +18,7 @@ async function withTempStateDir<T>(fn: (dir: string) => Promise<T>) {
     state: {
       resolveStateDir: (env, homedir) => {
         const stateEnv = env ?? process.env;
-        const override = stateEnv.OPENCLAW_STATE_DIR?.trim() || stateEnv.CLAWDBOT_STATE_DIR?.trim();
+        const override = stateEnv.OPENCLAW_STATE_DIR?.trim();
         if (override) {
           return override;
         }

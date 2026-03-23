@@ -19,7 +19,6 @@ function buildGatewayProbeCredentialPolicy(params: {
     explicitAuth: params.explicitAuth,
     modeOverride: params.mode,
     mode: params.mode,
-    includeLegacyEnv: false,
     remoteTokenFallback: "remote-only" as const,
   };
 }
@@ -45,7 +44,6 @@ export async function resolveGatewayProbeAuthWithSecretInputs(params: {
     env: policy.env,
     explicitAuth: policy.explicitAuth,
     modeOverride: policy.modeOverride,
-    includeLegacyEnv: policy.includeLegacyEnv,
     remoteTokenFallback: policy.remoteTokenFallback,
   });
 }

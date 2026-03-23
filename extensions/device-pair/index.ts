@@ -183,9 +183,7 @@ function parsePositiveInteger(raw: string | undefined): number | null {
 }
 
 function resolveGatewayPort(cfg: OpenClawPluginApi["config"]): number {
-  const envPort =
-    parsePositiveInteger(process.env.OPENCLAW_GATEWAY_PORT?.trim()) ??
-    parsePositiveInteger(process.env.CLAWDBOT_GATEWAY_PORT?.trim());
+  const envPort = parsePositiveInteger(process.env.OPENCLAW_GATEWAY_PORT?.trim());
   if (envPort) {
     return envPort;
   }
@@ -290,17 +288,10 @@ async function resolveTailnetHost(): Promise<string | null> {
 function resolveAuthLabel(cfg: OpenClawPluginApi["config"]): ResolveAuthLabelResult {
   const mode = cfg.gateway?.auth?.mode;
   const token =
-    pickFirstDefined([
-      process.env.OPENCLAW_GATEWAY_TOKEN,
-      process.env.CLAWDBOT_GATEWAY_TOKEN,
-      cfg.gateway?.auth?.token,
-    ]) ?? undefined;
+    pickFirstDefined([process.env.OPENCLAW_GATEWAY_TOKEN, cfg.gateway?.auth?.token]) ?? undefined;
   const password =
-    pickFirstDefined([
-      process.env.OPENCLAW_GATEWAY_PASSWORD,
-      process.env.CLAWDBOT_GATEWAY_PASSWORD,
-      cfg.gateway?.auth?.password,
-    ]) ?? undefined;
+    pickFirstDefined([process.env.OPENCLAW_GATEWAY_PASSWORD, cfg.gateway?.auth?.password]) ??
+    undefined;
 
   if (mode === "token" || mode === "password") {
     return resolveRequiredAuthLabel(mode, { token, password });

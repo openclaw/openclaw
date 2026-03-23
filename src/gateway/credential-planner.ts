@@ -42,21 +42,6 @@ export type GatewayCredentialPlan = {
 
 type GatewaySecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
 
-function readGatewayEnv(
-  env: NodeJS.ProcessEnv,
-  names: readonly string[],
-  includeLegacyEnv: boolean,
-): string | undefined {
-  const keys = includeLegacyEnv ? names : names.slice(0, 1);
-  for (const name of keys) {
-    const value = trimToUndefined(env[name]);
-    if (value) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
 export function trimToUndefined(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -80,40 +65,20 @@ export function trimCredentialToUndefined(value: unknown): string | undefined {
   return trimmed;
 }
 
-export function readGatewayTokenEnv(
-  env: NodeJS.ProcessEnv = process.env,
-  includeLegacyEnv = true,
-): string | undefined {
-  return readGatewayEnv(
-    env,
-    ["OPENCLAW_GATEWAY_TOKEN", "CLAWDBOT_GATEWAY_TOKEN"],
-    includeLegacyEnv,
-  );
+export function readGatewayTokenEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN);
 }
 
-export function readGatewayPasswordEnv(
-  env: NodeJS.ProcessEnv = process.env,
-  includeLegacyEnv = true,
-): string | undefined {
-  return readGatewayEnv(
-    env,
-    ["OPENCLAW_GATEWAY_PASSWORD", "CLAWDBOT_GATEWAY_PASSWORD"],
-    includeLegacyEnv,
-  );
+export function readGatewayPasswordEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD);
 }
 
-export function hasGatewayTokenEnvCandidate(
-  env: NodeJS.ProcessEnv = process.env,
-  includeLegacyEnv = true,
-): boolean {
-  return Boolean(readGatewayTokenEnv(env, includeLegacyEnv));
+export function hasGatewayTokenEnvCandidate(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(readGatewayTokenEnv(env));
 }
 
-export function hasGatewayPasswordEnvCandidate(
-  env: NodeJS.ProcessEnv = process.env,
-  includeLegacyEnv = true,
-): boolean {
-  return Boolean(readGatewayPasswordEnv(env, includeLegacyEnv));
+export function hasGatewayPasswordEnvCandidate(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(readGatewayPasswordEnv(env));
 }
 
 function resolveConfiguredGatewayCredentialInput(params: {
@@ -137,17 +102,15 @@ function resolveConfiguredGatewayCredentialInput(params: {
 export function createGatewayCredentialPlan(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  includeLegacyEnv?: boolean;
   defaults?: GatewaySecretDefaults;
 }): GatewayCredentialPlan {
   const env = params.env ?? process.env;
-  const includeLegacyEnv = params.includeLegacyEnv ?? true;
   const gateway = params.config.gateway;
   const remote = gateway?.remote;
   const defaults = params.defaults ?? params.config.secrets?.defaults;
   const authMode = gateway?.auth?.mode;
-  const envToken = readGatewayTokenEnv(env, includeLegacyEnv);
-  const envPassword = readGatewayPasswordEnv(env, includeLegacyEnv);
+  const envToken = readGatewayTokenEnv(env);
+  const envPassword = readGatewayPasswordEnv(env);
 
   const localToken = resolveConfiguredGatewayCredentialInput({
     value: gateway?.auth?.token,

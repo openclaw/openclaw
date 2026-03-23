@@ -387,11 +387,8 @@ function collectGatewayConfigFindings(
     : [];
   const hasToken = typeof auth.token === "string" && auth.token.trim().length > 0;
   const hasPassword = typeof auth.password === "string" && auth.password.trim().length > 0;
-  const envTokenConfigured =
-    hasNonEmptyString(env.OPENCLAW_GATEWAY_TOKEN) || hasNonEmptyString(env.CLAWDBOT_GATEWAY_TOKEN);
-  const envPasswordConfigured =
-    hasNonEmptyString(env.OPENCLAW_GATEWAY_PASSWORD) ||
-    hasNonEmptyString(env.CLAWDBOT_GATEWAY_PASSWORD);
+  const envTokenConfigured = hasNonEmptyString(env.OPENCLAW_GATEWAY_TOKEN);
+  const envPasswordConfigured = hasNonEmptyString(env.OPENCLAW_GATEWAY_PASSWORD);
   const tokenConfiguredFromConfig = hasConfiguredSecretInput(
     sourceConfig.gateway?.auth?.token,
     sourceConfig.secrets?.defaults,
@@ -775,7 +772,6 @@ function collectBrowserControlFindings(
   const tokenConfigured =
     Boolean(browserAuth.token) ||
     hasNonEmptyString(env.OPENCLAW_GATEWAY_TOKEN) ||
-    hasNonEmptyString(env.CLAWDBOT_GATEWAY_TOKEN) ||
     hasConfiguredSecretInput(cfg.gateway?.auth?.token, cfg.secrets?.defaults);
   const passwordCanWin =
     explicitAuthMode === "password" ||
@@ -787,7 +783,6 @@ function collectBrowserControlFindings(
     Boolean(browserAuth.password) ||
     (passwordCanWin &&
       (hasNonEmptyString(env.OPENCLAW_GATEWAY_PASSWORD) ||
-        hasNonEmptyString(env.CLAWDBOT_GATEWAY_PASSWORD) ||
         hasConfiguredSecretInput(cfg.gateway?.auth?.password, cfg.secrets?.defaults)));
   if (!tokenConfigured && !passwordConfigured) {
     findings.push({

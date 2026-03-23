@@ -69,15 +69,6 @@ describe("config io paths", () => {
     });
   });
 
-  it("honors legacy CLAWDBOT_CONFIG_PATH override", async () => {
-    await withTempHome(async (home) => {
-      const customPath = await writeConfig(home, ".openclaw", 20003, "legacy-custom.json");
-      const io = createIoForHome(home, { CLAWDBOT_CONFIG_PATH: customPath } as NodeJS.ProcessEnv);
-      expect(io.configPath).toBe(customPath);
-      expect(io.loadConfig().gateway?.port).toBe(20003);
-    });
-  });
-
   it("normalizes safe-bin config entries at config load time", async () => {
     await withTempHome(async (home) => {
       const configDir = path.join(home, ".openclaw");

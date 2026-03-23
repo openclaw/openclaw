@@ -16,7 +16,6 @@ export type GatewayConnectionAuthOptions = {
   urlOverride?: string;
   urlOverrideSource?: "cli" | "env";
   modeOverride?: GatewayCredentialMode;
-  includeLegacyEnv?: boolean;
   localTokenPrecedence?: GatewayCredentialPrecedence;
   localPasswordPrecedence?: GatewayCredentialPrecedence;
   remoteTokenPrecedence?: GatewayRemoteCredentialPrecedence;
@@ -35,7 +34,6 @@ function toGatewayCredentialOptions(
     urlOverride: params.urlOverride,
     urlOverrideSource: params.urlOverrideSource,
     modeOverride: params.modeOverride,
-    includeLegacyEnv: params.includeLegacyEnv,
     localTokenPrecedence: params.localTokenPrecedence,
     localPasswordPrecedence: params.localPasswordPrecedence,
     remoteTokenPrecedence: params.remoteTokenPrecedence,

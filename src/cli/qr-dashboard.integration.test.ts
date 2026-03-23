@@ -114,9 +114,7 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     envSnapshot = captureEnv([
       "SHARED_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_TOKEN",
-      "CLAWDBOT_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_PASSWORD",
-      "CLAWDBOT_GATEWAY_PASSWORD",
     ]);
   });
 
@@ -141,9 +139,7 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     runtimeErrors.length = 0;
     vi.clearAllMocks();
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.CLAWDBOT_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-    delete process.env.CLAWDBOT_GATEWAY_PASSWORD;
     delete process.env.SHARED_GATEWAY_TOKEN;
   });
 

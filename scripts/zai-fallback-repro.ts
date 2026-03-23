@@ -6,7 +6,7 @@ import path from "node:path";
 
 type RunResult = {
   code: number | null;
-  signal: NodeJS.Signals | null;
+  signal: string | null;
   stdout: string;
   stderr: string;
 };
@@ -98,17 +98,12 @@ async function main() {
   };
   await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf8");
 
-  const sessionId =
-    process.env.OPENCLAW_ZAI_FALLBACK_SESSION_ID ??
-    process.env.CLAWDBOT_ZAI_FALLBACK_SESSION_ID ??
-    randomUUID();
+  const sessionId = process.env.OPENCLAW_ZAI_FALLBACK_SESSION_ID ?? randomUUID();
 
   const baseEnv: NodeJS.ProcessEnv = {
     ...process.env,
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_STATE_DIR: stateDir,
-    CLAWDBOT_CONFIG_PATH: configPath,
-    CLAWDBOT_STATE_DIR: stateDir,
     ZAI_API_KEY: zaiKey,
     Z_AI_API_KEY: "",
   };
