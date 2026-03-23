@@ -22,7 +22,7 @@ export {
   setSetupChannelEnabled,
   splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
-export * from "../../src/plugin-sdk/line-runtime.js";
+export * from "openclaw/plugin-sdk/line-runtime";
 
 export * from "./src/accounts.js";
 export * from "./src/bot-access.js";
