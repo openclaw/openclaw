@@ -549,6 +549,46 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(onPartialReply).toHaveBeenCalledWith({ text: "answer chunk", mediaUrls: undefined });
   });
 
+  it("suppresses partial and reasoning streams after a session reset supersedes the run", async () => {
+    const onPartialReply = vi.fn();
+    const onReasoningStream = vi.fn();
+    const sessionEntry = { sessionId: "session", updatedAt: Date.now() };
+    const sessionStore = { main: sessionEntry };
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onReasoningStream?.({ text: "Reasoning before reset" });
+      await params.onPartialReply?.({ text: "partial before reset" });
+      sessionStore.main = {
+        ...sessionStore.main,
+        sessionId: "session-reset",
+        updatedAt: Date.now(),
+      };
+      await params.onReasoningStream?.({ text: "Reasoning after reset" });
+      await params.onPartialReply?.({ text: "partial after reset" });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const { run } = createMinimalRun({
+      opts: { onPartialReply, onReasoningStream },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      typingMode: "thinking",
+      runOverrides: { reasoningLevel: "stream" },
+    });
+    await run();
+
+    expect(onReasoningStream).toHaveBeenCalledTimes(1);
+    expect(onReasoningStream).toHaveBeenCalledWith({
+      text: "Reasoning before reset",
+      mediaUrls: undefined,
+    });
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
+    expect(onPartialReply).toHaveBeenCalledWith({
+      text: "partial before reset",
+      mediaUrls: undefined,
+    });
+  });
+
   it("suppresses typing in never mode", async () => {
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onPartialReply?.({ text: "hi" });
