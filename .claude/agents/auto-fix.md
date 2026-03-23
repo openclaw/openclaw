@@ -43,28 +43,44 @@ Extract:
 - **Evidence** (log excerpt, session ID)
 - **Tool name** (which tool/RPC/integration failed)
 
-### 2. Investigate Root Cause
+### 2. Load Codebase Map
 
-Search the codebase for the relevant code path:
+Before searching, load the codeindexer repo map for structural awareness:
 
 ```bash
-# Find the tool implementation
-grep -r "<tool_name>" src/ --include="*.ts" -l
+# Load the ranked repo map (cached after first run)
+python3 .claude/skills/operator1-codeindexer/scripts/repomap.py . --tokens 2048
 
-# Find error handling paths
-grep -r "<error_keyword>" src/ --include="*.ts" -l
+# Search for symbols related to the error
+python3 .claude/skills/operator1-codeindexer/scripts/repomap.py . --search "<tool_name_or_error_keyword>"
+
+# Focus on a specific subsystem if the error category narrows it
+python3 .claude/skills/operator1-codeindexer/scripts/repomap.py . --focus src/agents/ src/gateway/
 ```
 
-Read the relevant source files. Trace the code path from the tool call to where the error occurs. Identify the root cause with file and line number.
+This gives you a ranked view of the most important files and symbols — start your investigation from the highest-ranked matches rather than blind grep.
+
+### 3. Investigate Root Cause
+
+Use the codeindexer search results to guide targeted investigation:
+
+```bash
+# Pull exact symbol source without reading the whole file
+python3 .claude/skills/operator1-codeindexer/scripts/repomap.py . --symbol "<file>::<ClassName.method>#method"
+```
+
+Then read only the specific files identified by the map. Trace the code path from the tool call to where the error occurs. Identify the root cause with file and line number.
 
 **Investigation rules:**
 
+- Start from the codeindexer search results, not blind grep
+- Use `--symbol` to pull exact function/class source before reading full files
 - Read the source code of relevant npm dependencies if needed
 - Check recent git history for related changes: `git log --oneline -20 -- <file>`
 - Look for similar past fixes: `git log --oneline --all --grep="<keyword>"`
 - Aim for high-confidence root cause — do not guess
 
-### 3. Check Fix Boundaries
+### 4. Check Fix Boundaries
 
 Before writing any code, verify the fix is within scope. See the skill for the full boundary matrix.
 
@@ -105,7 +121,7 @@ gh issue edit <NUMBER> --repo Interstellar-code/operator1 --add-label "needs-hum
 
 Then move to the next issue.
 
-### 4. Create Branch and Fix
+### 5. Create Branch and Fix
 
 ```bash
 git checkout -b auto-fix/<NUMBER>-<short-description> main
@@ -118,7 +134,7 @@ Make the minimal fix. Rules:
 - Do not touch unrelated code
 - Add a regression test when feasible
 
-### 5. Run Tests
+### 6. Run Tests
 
 ```bash
 pnpm build && pnpm test
@@ -130,7 +146,7 @@ If tests fail:
 - If the failure is pre-existing, note it in the PR but don't try to fix it
 - If build fails, investigate whether your change caused it
 
-### 6. Create PR
+### 7. Create PR
 
 ```bash
 gh pr create --repo Interstellar-code/operator1 \
@@ -166,7 +182,7 @@ EOF
 )"
 ```
 
-### 7. Log to fixes.tsv
+### 8. Log to fixes.tsv
 
 Append a row to `.claude/skills/auto-fix/data/fixes.tsv`:
 
@@ -176,7 +192,7 @@ Append a row to `.claude/skills/auto-fix/data/fixes.tsv`:
 
 Status values: `pr-open`, `merged`, `verified`, `failed`, `out-of-scope`
 
-### 8. Move to Next Issue
+### 9. Move to Next Issue
 
 After creating the PR, move to the next open issue. Do NOT wait for PR review — the auto-improve agent will verify the fix post-merge by checking if the error signature disappears from session logs.
 

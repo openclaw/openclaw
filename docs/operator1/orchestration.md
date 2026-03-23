@@ -76,6 +76,32 @@ ENG-001, ENG-002...           (engineering workspace)
 | `workspaces.update`  | WRITE | Update workspace metadata         |
 | `workspaces.archive` | WRITE | Archive a workspace (soft delete) |
 
+## Workspace Agent Management
+
+**Table:** `op1_workspace_agents`
+
+Tracks which agents are assigned to which workspaces, along with their role and operational status.
+
+### Schema
+
+| Field               | Type    | Description                                       |
+| ------------------- | ------- | ------------------------------------------------- |
+| `workspace_id`      | TEXT FK | Parent workspace (PK component)                   |
+| `agent_id`          | TEXT    | Agent identifier (PK component)                   |
+| `role`              | TEXT    | Optional role label (e.g., `lead`, `contributor`) |
+| `joined_at`         | INTEGER | Unix timestamp when agent was assigned            |
+| `status`            | TEXT    | `active` \| `inactive` \| `paused`                |
+| `capabilities_json` | TEXT    | JSON array of capability strings (optional)       |
+
+### RPC Methods
+
+| Method                         | Scope | Description                              |
+| ------------------------------ | ----- | ---------------------------------------- |
+| `workspaces.agents`            | READ  | List agents assigned to a workspace      |
+| `workspaces.assignAgent`       | WRITE | Assign an agent to a workspace           |
+| `workspaces.removeAgent`       | WRITE | Remove an agent from a workspace         |
+| `workspaces.updateAgentStatus` | WRITE | Update an agent's status or capabilities |
+
 ## Projects
 
 **Table:** `op1_projects`
@@ -96,7 +122,7 @@ Code project management. Projects represent repositories, products, or logical g
 | `keywords_json`     | TEXT    | JSON array of keywords for classification       |
 | `telegram_group`    | TEXT    | Linked Telegram group (optional)                |
 | `telegram_topic_id` | INTEGER | Linked Telegram topic (optional)                |
-| `workspace_id`      | TEXT FK | Parent workspace                                |
+| `workspace_id`      | TEXT FK | Parent workspace (added by migration v18)       |
 | `created_at`        | INTEGER | Unix timestamp                                  |
 | `updated_at`        | INTEGER | Unix timestamp                                  |
 
@@ -106,7 +132,7 @@ Projects can bind to agent sessions for context injection:
 
 ```json
 // RPC: projects.bindSession
-{ "id": "operator1", "sessionKey": "agent:neo:main" }
+{ "projectId": "operator1", "sessionKey": "agent:neo:main" }
 ```
 
 Bound sessions receive project context (AGENTS.md, USER.md, etc.) in their system prompt.
@@ -150,6 +176,17 @@ Work item tracking. Tasks support hierarchical subtasks via `parent_id` and can 
 | `updated_at`        | INTEGER | Unix timestamp                                                                            |
 | `completed_at`      | INTEGER | Unix timestamp (nullable)                                                                 |
 
+**Table:** `op1_task_comments`
+
+| Field         | Type    | Description                   |
+| ------------- | ------- | ----------------------------- |
+| `id`          | TEXT PK | UUID                          |
+| `task_id`     | TEXT FK | Parent task                   |
+| `author_id`   | TEXT    | Author identifier             |
+| `author_type` | TEXT    | `agent` \| `user` \| `system` |
+| `body`        | TEXT    | Comment body                  |
+| `created_at`  | INTEGER | Unix timestamp                |
+
 ### Indexes
 
 - `idx_tasks_workspace` — `(workspace_id, status)`
@@ -170,19 +207,67 @@ OP1-001 (parent)
 
 ### RPC Methods
 
-| Method         | Scope | Description                         |
-| -------------- | ----- | ----------------------------------- |
-| `tasks.list`   | READ  | List tasks (filterable)             |
-| `tasks.get`    | READ  | Get task by id                      |
-| `tasks.create` | WRITE | Create a new task                   |
-| `tasks.update` | WRITE | Update task (status, assignee, etc) |
-| `tasks.delete` | WRITE | Delete a task                       |
+| Method                  | Scope | Description                         |
+| ----------------------- | ----- | ----------------------------------- |
+| `tasks.list`            | READ  | List tasks (filterable)             |
+| `tasks.get`             | READ  | Get task by id                      |
+| `tasks.getByIdentifier` | READ  | Get task by workspace + identifier  |
+| `tasks.create`          | WRITE | Create a new task                   |
+| `tasks.update`          | WRITE | Update task (status, assignee, etc) |
+| `tasks.listComments`    | READ  | List comments for a task            |
+| `tasks.addComment`      | WRITE | Add a comment to a task             |
 
 ### Task Status Lifecycle
 
 ![Task Status Lifecycle](/images/task-status-lifecycle.png)
 
 _Task status flow: backlog → todo → in_progress → in_review → done (with blocked and cancelled branches)._
+
+## Task Documents & Attachments
+
+**Tables:** `op1_task_documents`, `op1_task_attachments`
+
+Tasks can have rich documents (markdown bodies) and binary attachments linked to them.
+
+### op1_task_documents Schema
+
+| Field        | Type    | Description                                         |
+| ------------ | ------- | --------------------------------------------------- |
+| `id`         | TEXT PK | UUID                                                |
+| `task_id`    | TEXT FK | Parent task                                         |
+| `title`      | TEXT    | Document title (optional)                           |
+| `format`     | TEXT    | `markdown` \| `plain` \| `html` (default: markdown) |
+| `body`       | TEXT    | Document content                                    |
+| `created_by` | TEXT    | Creator identifier (optional)                       |
+| `updated_by` | TEXT    | Last updater identifier (optional)                  |
+| `created_at` | INTEGER | Unix timestamp                                      |
+| `updated_at` | INTEGER | Unix timestamp                                      |
+
+### op1_task_attachments Schema
+
+| Field          | Type    | Description                   |
+| -------------- | ------- | ----------------------------- |
+| `id`           | TEXT PK | UUID                          |
+| `task_id`      | TEXT FK | Parent task                   |
+| `filename`     | TEXT    | Original filename             |
+| `mime_type`    | TEXT    | MIME type (optional)          |
+| `size_bytes`   | INTEGER | File size in bytes (optional) |
+| `storage_path` | TEXT    | Path to stored file           |
+| `created_by`   | TEXT    | Creator identifier (optional) |
+| `created_at`   | INTEGER | Unix timestamp                |
+
+### RPC Methods
+
+| Method                     | Scope | Description                      |
+| -------------------------- | ----- | -------------------------------- |
+| `tasks.documents.list`     | READ  | List documents for a task        |
+| `tasks.documents.get`      | READ  | Get a document by id             |
+| `tasks.documents.create`   | WRITE | Create a new task document       |
+| `tasks.documents.update`   | WRITE | Update a task document           |
+| `tasks.documents.delete`   | WRITE | Delete a task document           |
+| `tasks.attachments.list`   | READ  | List attachments for a task      |
+| `tasks.attachments.create` | WRITE | Upload/register a new attachment |
+| `tasks.attachments.delete` | WRITE | Delete an attachment             |
 
 ## Goals
 
@@ -232,15 +317,16 @@ Vision: "Become the leading AI agent framework"
 
 ### RPC Methods
 
-| Method         | Scope | Description                    |
-| -------------- | ----- | ------------------------------ |
-| `goals.list`   | READ  | List goals (filterable)        |
-| `goals.get`    | READ  | Get goal by id                 |
-| `goals.create` | WRITE | Create a new goal              |
-| `goals.update` | WRITE | Update goal (status, progress) |
-| `goals.delete` | WRITE | Delete a goal                  |
+| Method         | Scope | Description                              |
+| -------------- | ----- | ---------------------------------------- |
+| `goals.list`   | READ  | List goals (filterable by status/parent) |
+| `goals.tree`   | READ  | Return the full goal tree (adjacency)    |
+| `goals.get`    | READ  | Get goal by id                           |
+| `goals.create` | WRITE | Create a new goal                        |
+| `goals.update` | WRITE | Update goal (status, progress)           |
+| `goals.delete` | WRITE | Delete a goal                            |
 
-## Approvals
+## Exec Approvals
 
 **Table:** `security_exec_approvals`
 
@@ -305,7 +391,63 @@ All changes are recorded in `audit_state` table.
 | `exec.approval.waitDecision` | APPROVALS | Wait for approval decision     |
 | `exec.approval.resolve`      | APPROVALS | Resolve (approve/deny) request |
 
-## Activity
+## Organizational Approvals
+
+**Tables:** `op1_approvals`, `op1_approval_comments`
+
+Organizational approval flow for high-level governance decisions — agent hiring, budget overrides, and config changes. Separate from the exec-level `security_exec_approvals` system.
+
+### op1_approvals Schema
+
+| Field            | Type    | Description                                                   |
+| ---------------- | ------- | ------------------------------------------------------------- |
+| `id`             | TEXT PK | UUID                                                          |
+| `workspace_id`   | TEXT FK | Parent workspace                                              |
+| `type`           | TEXT    | `agent_hire` \| `budget_override` \| `config_change`          |
+| `status`         | TEXT    | `pending` \| `revision_requested` \| `approved` \| `rejected` |
+| `requester_id`   | TEXT    | Requesting agent or user identifier                           |
+| `requester_type` | TEXT    | `agent` \| `user` \| `system`                                 |
+| `payload_json`   | TEXT    | JSON payload describing the requested action                  |
+| `decision_note`  | TEXT    | Human note on the decision (optional)                         |
+| `decided_by`     | TEXT    | Identifier of the approver                                    |
+| `decided_at`     | INTEGER | Unix timestamp when decision was made                         |
+| `created_at`     | INTEGER | Unix timestamp                                                |
+| `updated_at`     | INTEGER | Unix timestamp                                                |
+
+### op1_approval_comments Schema
+
+| Field         | Type    | Description                   |
+| ------------- | ------- | ----------------------------- |
+| `id`          | TEXT PK | UUID                          |
+| `approval_id` | TEXT FK | Parent approval               |
+| `author_id`   | TEXT    | Comment author                |
+| `author_type` | TEXT    | `agent` \| `user` \| `system` |
+| `body`        | TEXT    | Comment text                  |
+| `created_at`  | INTEGER | Unix timestamp                |
+
+### Status Lifecycle
+
+```
+pending → revision_requested → pending (revised)
+                             → approved
+                             → rejected
+pending → approved
+pending → rejected
+```
+
+### RPC Methods
+
+| Method                    | Scope | Description                                |
+| ------------------------- | ----- | ------------------------------------------ |
+| `approvals.list`          | READ  | List approvals (filterable by status/type) |
+| `approvals.get`           | READ  | Get approval by id                         |
+| `approvals.create`        | WRITE | Submit a new approval request              |
+| `approvals.updatePayload` | WRITE | Update the payload of a pending approval   |
+| `approvals.decide`        | ADMIN | Approve or reject an approval request      |
+| `approvals.comments.list` | READ  | List comments on an approval               |
+| `approvals.comments.add`  | WRITE | Add a comment to an approval               |
+
+## Activity Log
 
 **Table:** `op1_activity_log`
 
@@ -355,48 +497,291 @@ SELECT * FROM op1_activity_log
 WHERE entity_type = 'task' AND entity_id = 'c5213aba-...';
 ```
 
-## Budgets
+### RPC Methods
 
-Workspace budget tracking using microcents (1 USD = 100,000 microcents).
+| Method              | Scope | Description                                      |
+| ------------------- | ----- | ------------------------------------------------ |
+| `activityLogs.list` | READ  | List activity log entries (filterable/paginated) |
 
-### Fields
+## Budget Policy Engine
 
-| Field                       | Location         | Description         |
-| --------------------------- | ---------------- | ------------------- |
-| `budget_monthly_microcents` | `op1_workspaces` | Monthly budget cap  |
-| `spent_monthly_microcents`  | `op1_workspaces` | Current month spend |
+**Tables:** `op1_budget_policies`, `op1_budget_incidents`, `op1_cost_events`
 
-### Microcent Conversion
+A full policy engine for budget enforcement across workspaces, agents, and projects. Policies define spending limits; incidents are raised when limits are breached; cost events record individual spend.
 
-```
-1 cent    = 1,000 microcents
-$1 USD   = 100,000 microcents
-$10 USD  = 1,000,000 microcents
-```
+Microcent conversion: `1 USD = 100,000 microcents`.
 
-Example:
+### op1_budget_policies Schema
 
-```sql
--- Set $50/month budget
-UPDATE op1_workspaces
-SET budget_monthly_microcents = 5000000
-WHERE id = 'default';
-```
+| Field               | Type    | Description                                              |
+| ------------------- | ------- | -------------------------------------------------------- |
+| `id`                | TEXT PK | UUID                                                     |
+| `workspace_id`      | TEXT FK | Parent workspace                                         |
+| `scope_type`        | TEXT    | `workspace` \| `agent` \| `project`                      |
+| `scope_id`          | TEXT    | ID of the scoped entity (workspace/agent/project id)     |
+| `amount_microcents` | INTEGER | Budget limit in microcents                               |
+| `window_kind`       | TEXT    | `calendar_month_utc` \| `lifetime`                       |
+| `warn_percent`      | INTEGER | Percentage at which a warning incident is raised (0-100) |
+| `hard_stop`         | INTEGER | If 1, block spend when limit is reached                  |
+| `created_at`        | INTEGER | Unix timestamp                                           |
+| `updated_at`        | INTEGER | Unix timestamp                                           |
 
-### Budget Enforcement
+### op1_budget_incidents Schema
 
-Budget checks are advisory by default. To enforce:
+| Field              | Type    | Description                                  |
+| ------------------ | ------- | -------------------------------------------- |
+| `id`               | TEXT PK | UUID                                         |
+| `workspace_id`     | TEXT FK | Parent workspace                             |
+| `policy_id`        | TEXT FK | Triggering policy                            |
+| `type`             | TEXT    | `warning` \| `hard_stop` \| `resolved`       |
+| `agent_id`         | TEXT    | Agent that triggered the incident (optional) |
+| `spent_microcents` | INTEGER | Spend at the time of the incident            |
+| `limit_microcents` | INTEGER | Policy limit at the time of the incident     |
+| `message`          | TEXT    | Human-readable description                   |
+| `resolved_at`      | INTEGER | Unix timestamp when resolved (null = active) |
+| `created_at`       | INTEGER | Unix timestamp                               |
 
-1. Check `spent_monthly_microcents` before operations
-2. Compare against `budget_monthly_microcents`
-3. Block or warn if exceeded
+### op1_cost_events Schema
+
+| Field             | Type    | Description                            |
+| ----------------- | ------- | -------------------------------------- |
+| `id`              | TEXT PK | UUID                                   |
+| `workspace_id`    | TEXT FK | Parent workspace                       |
+| `agent_id`        | TEXT    | Agent that incurred the cost           |
+| `session_id`      | TEXT    | Associated session (optional)          |
+| `task_id`         | TEXT    | Associated task (optional)             |
+| `project_id`      | TEXT    | Associated project (optional)          |
+| `provider`        | TEXT    | Model provider (e.g., `anthropic`)     |
+| `model`           | TEXT    | Model name (e.g., `claude-sonnet-4-6`) |
+| `input_tokens`    | INTEGER | Input token count                      |
+| `output_tokens`   | INTEGER | Output token count                     |
+| `cost_microcents` | INTEGER | Total cost in microcents               |
+| `occurred_at`     | INTEGER | Unix timestamp                         |
 
 ### RPC Methods
 
-| Method              | Scope | Description                     |
-| ------------------- | ----- | ------------------------------- |
-| `workspaces.budget` | READ  | Get budget status for workspace |
-| `usage.cost`        | READ  | Cost breakdown by model         |
+| Method                      | Scope | Description                                      |
+| --------------------------- | ----- | ------------------------------------------------ |
+| `budgets.policies.list`     | READ  | List budget policies (filterable by scope)       |
+| `budgets.policies.get`      | READ  | Get a policy by id                               |
+| `budgets.policies.create`   | WRITE | Create a new budget policy                       |
+| `budgets.policies.update`   | WRITE | Update policy amount, warn percent, or hard stop |
+| `budgets.policies.delete`   | WRITE | Delete a budget policy                           |
+| `budgets.incidents.list`    | READ  | List budget incidents (filterable)               |
+| `budgets.incidents.resolve` | WRITE | Mark an incident resolved                        |
+| `costs.events.list`         | READ  | List cost events (filterable by agent/task/time) |
+
+## Finance Events
+
+**Table:** `op1_finance_events`
+
+High-level financial ledger events that supplement raw cost tracking. While `op1_cost_events` records LLM inference spend, finance events capture the full range of financial activity including manual credits, debits, and refunds.
+
+### Schema
+
+| Field               | Type    | Description                                                                                                       |
+| ------------------- | ------- | ----------------------------------------------------------------------------------------------------------------- |
+| `id`                | TEXT PK | UUID                                                                                                              |
+| `workspace_id`      | TEXT FK | Parent workspace                                                                                                  |
+| `agent_id`          | TEXT    | Associated agent (optional)                                                                                       |
+| `task_id`           | TEXT    | Associated task (optional)                                                                                        |
+| `project_id`        | TEXT    | Associated project (optional)                                                                                     |
+| `goal_id`           | TEXT    | Associated goal (optional)                                                                                        |
+| `cost_event_id`     | TEXT    | Linked cost event (optional)                                                                                      |
+| `billing_code`      | TEXT    | Billing/cost center code (optional)                                                                               |
+| `description`       | TEXT    | Human-readable description                                                                                        |
+| `event_kind`        | TEXT    | `llm_inference` \| `tool_call` \| `budget_adjustment` \| `manual_credit` \| `manual_debit` \| `refund` \| `other` |
+| `direction`         | TEXT    | `debit` \| `credit`                                                                                               |
+| `provider`          | TEXT    | Model provider (optional)                                                                                         |
+| `model`             | TEXT    | Model name (optional)                                                                                             |
+| `amount_microcents` | INTEGER | Amount in microcents                                                                                              |
+| `created_at`        | INTEGER | Unix timestamp                                                                                                    |
+
+### Indexes
+
+- `idx_finance_events_workspace` — `(workspace_id)`
+- `idx_finance_events_agent` — `(agent_id)`
+- `idx_finance_events_created` — `(created_at)`
+
+## Execution Workspaces
+
+**Tables:** `op1_execution_workspaces`, `op1_workspace_operations`
+
+Execution workspaces represent isolated environments (worktrees, sandboxes, or local directories) where agents perform code work. Operations record individual steps taken within a workspace.
+
+### op1_execution_workspaces Schema
+
+| Field            | Type    | Description                                         |
+| ---------------- | ------- | --------------------------------------------------- |
+| `id`             | TEXT PK | UUID                                                |
+| `workspace_id`   | TEXT FK | Parent workspace (default: `default`)               |
+| `project_id`     | TEXT    | Associated project (optional)                       |
+| `task_id`        | TEXT    | Associated task (optional)                          |
+| `agent_id`       | TEXT    | Owning agent (optional)                             |
+| `name`           | TEXT    | Human-readable name                                 |
+| `mode`           | TEXT    | Execution mode (default: `local_fs`)                |
+| `status`         | TEXT    | `active` \| `archived` \| `cleanup_pending`         |
+| `workspace_path` | TEXT    | Filesystem path of the workspace                    |
+| `base_ref`       | TEXT    | Git base ref (branch or commit)                     |
+| `branch_name`    | TEXT    | Working branch name                                 |
+| `opened_at`      | INTEGER | Unix timestamp when workspace was created           |
+| `closed_at`      | INTEGER | Unix timestamp when workspace was closed (nullable) |
+| `metadata_json`  | TEXT    | Arbitrary JSON metadata                             |
+
+### op1_workspace_operations Schema
+
+| Field                    | Type    | Description                                       |
+| ------------------------ | ------- | ------------------------------------------------- |
+| `id`                     | TEXT PK | UUID                                              |
+| `execution_workspace_id` | TEXT FK | Parent execution workspace                        |
+| `operation_type`         | TEXT    | Type of operation (e.g., `git_clone`, `test_run`) |
+| `status`                 | TEXT    | `pending` \| `running` \| `completed` \| `failed` |
+| `details_json`           | TEXT    | JSON payload with operation details               |
+| `started_at`             | INTEGER | Unix timestamp                                    |
+| `completed_at`           | INTEGER | Unix timestamp (nullable)                         |
+
+### RPC Methods
+
+| Method                                  | Scope | Description                                |
+| --------------------------------------- | ----- | ------------------------------------------ |
+| `executionWorkspaces.create`            | WRITE | Create a new execution workspace           |
+| `executionWorkspaces.get`               | READ  | Get an execution workspace by id           |
+| `executionWorkspaces.list`              | READ  | List execution workspaces (filterable)     |
+| `executionWorkspaces.update`            | WRITE | Update status, path, or metadata           |
+| `executionWorkspaces.archive`           | WRITE | Archive an execution workspace             |
+| `executionWorkspaces.operations.record` | WRITE | Record a new operation                     |
+| `executionWorkspaces.operations.list`   | READ  | List operations for an execution workspace |
+
+## Agent Wakeup Requests
+
+**Table:** `op1_agent_wakeup_requests`
+
+Async wakeup queue for agents. When a task is assigned or an event occurs that requires agent attention, a wakeup request is enqueued. The agent polls and processes it on its next cycle.
+
+### Schema
+
+| Field          | Type    | Description                                          |
+| -------------- | ------- | ---------------------------------------------------- |
+| `id`           | TEXT PK | UUID                                                 |
+| `workspace_id` | TEXT FK | Parent workspace (default: `default`)                |
+| `agent_id`     | TEXT    | Target agent                                         |
+| `task_id`      | TEXT    | Associated task (optional)                           |
+| `reason`       | TEXT    | Wake reason (default: `task_assigned`)               |
+| `status`       | TEXT    | `pending` \| `processing` \| `completed` \| `failed` |
+| `payload_json` | TEXT    | JSON payload with additional context                 |
+| `created_at`   | INTEGER | Unix timestamp                                       |
+| `processed_at` | INTEGER | Unix timestamp when picked up by agent (nullable)    |
+
+### RPC Methods
+
+| Method            | Scope | Description                                        |
+| ----------------- | ----- | -------------------------------------------------- |
+| `wakeup.create`   | WRITE | Enqueue a wakeup request for an agent              |
+| `wakeup.list`     | READ  | List pending wakeup requests (filterable by agent) |
+| `wakeup.process`  | WRITE | Mark a wakeup request as processing                |
+| `wakeup.complete` | WRITE | Mark a wakeup request as completed                 |
+
+## Agent API Keys
+
+**Table:** `op1_agent_api_keys`
+
+Per-agent API keys used for authentication. Keys are stored as bcrypt hashes; only the prefix is stored in plaintext for identification.
+
+### Schema
+
+| Field          | Type    | Description                                   |
+| -------------- | ------- | --------------------------------------------- |
+| `id`           | TEXT PK | UUID                                          |
+| `agent_id`     | TEXT    | Owning agent                                  |
+| `workspace_id` | TEXT FK | Associated workspace (default: `default`)     |
+| `name`         | TEXT    | Human-readable label for the key              |
+| `key_hash`     | TEXT    | Bcrypt hash of the API key                    |
+| `key_prefix`   | TEXT    | First few characters of the key (for display) |
+| `last_used_at` | INTEGER | Unix timestamp of last use (nullable)         |
+| `revoked_at`   | INTEGER | Unix timestamp when revoked (nullable)        |
+| `created_at`   | INTEGER | Unix timestamp                                |
+
+### RPC Methods
+
+| Method                  | Scope | Description                       |
+| ----------------------- | ----- | --------------------------------- |
+| `agents.apiKeys.create` | WRITE | Create a new API key for an agent |
+| `agents.apiKeys.list`   | READ  | List API keys for an agent        |
+| `agents.apiKeys.revoke` | WRITE | Revoke an API key                 |
+
+## Agent Config Revisions
+
+**Table:** `op1_agent_config_revisions`
+
+Immutable audit trail of agent configuration changes (SOUL.md, identity files, etc.). Supports rollback to any prior revision.
+
+### Schema
+
+| Field          | Type    | Description                                     |
+| -------------- | ------- | ----------------------------------------------- |
+| `id`           | TEXT PK | UUID                                            |
+| `workspace_id` | TEXT FK | Parent workspace                                |
+| `agent_id`     | TEXT    | Target agent                                    |
+| `config_json`  | TEXT    | Full config content at the time of the revision |
+| `changed_by`   | TEXT    | Identifier of who made the change               |
+| `change_note`  | TEXT    | Human-readable description of the change        |
+| `created_at`   | INTEGER | Unix timestamp                                  |
+
+### RPC Methods
+
+| Method                      | Scope | Description                               |
+| --------------------------- | ----- | ----------------------------------------- |
+| `revisions.config.list`     | READ  | List config revisions for an agent        |
+| `revisions.config.get`      | READ  | Get a specific revision by id             |
+| `revisions.config.rollback` | ADMIN | Restore a prior revision to the workspace |
+
+## Agent Metrics
+
+Agent performance and department-level budget summaries. Metrics are derived from cost events and task history.
+
+### RPC Methods
+
+| Method                       | Scope | Description                                               |
+| ---------------------------- | ----- | --------------------------------------------------------- |
+| `agents.metrics.get`         | READ  | Get performance metrics for a single agent in a workspace |
+| `agents.metrics.list`        | READ  | List metrics for all agents in a workspace                |
+| `budgets.department.summary` | READ  | Get budget spend aggregated by department for a workspace |
+
+## Dashboard
+
+High-level aggregated summary of the orchestration system state. Useful for UI overview screens and health monitoring.
+
+### dashboard.summary Response
+
+| Field                   | Type    | Description                                      |
+| ----------------------- | ------- | ------------------------------------------------ |
+| `workspaceCount`        | INTEGER | Non-archived workspace count                     |
+| `agentCount`            | INTEGER | Distinct agents across all workspace assignments |
+| `tasksTotal`            | INTEGER | Total task count                                 |
+| `tasksInProgress`       | INTEGER | Tasks with status `in_progress`                  |
+| `tasksDone`             | INTEGER | Tasks with status `done`                         |
+| `goalsActive`           | INTEGER | Goals with status `planned` or `in_progress`     |
+| `goalsAchieved`         | INTEGER | Goals with status `achieved`                     |
+| `pendingApprovals`      | INTEGER | Organizational approvals awaiting decision       |
+| `activeBudgetIncidents` | INTEGER | Budget incidents with `resolved_at IS NULL`      |
+| `totalSpendMicrocents`  | INTEGER | Sum of all cost events                           |
+| `pendingWakeups`        | INTEGER | Wakeup requests with status `pending`            |
+
+### sidebar.badges Response
+
+| Field                   | Type    | Description                                    |
+| ----------------------- | ------- | ---------------------------------------------- |
+| `pendingApprovals`      | INTEGER | Count of pending organizational approvals      |
+| `activeBudgetIncidents` | INTEGER | Count of unresolved budget incidents           |
+| `tasksInProgress`       | INTEGER | Count of in-progress tasks                     |
+| `unreadCount`           | INTEGER | Unread messaging count (placeholder, always 0) |
+
+### RPC Methods
+
+| Method              | Scope | Description                                    |
+| ------------------- | ----- | ---------------------------------------------- |
+| `dashboard.summary` | READ  | Aggregated orchestration summary (single call) |
+| `sidebar.badges`    | READ  | Badge counts for sidebar navigation indicators |
 
 ## Architecture Diagram
 
@@ -409,8 +794,8 @@ Budget checks are advisory by default. To enforce:
 > 3. **Goal hierarchy** — vision → objective → key_result levels
 > 4. **Cross-references** — tasks linked to projects and goals
 > 5. **Activity stream** — all mutations flow to `op1_activity_log`
-> 6. **Approval flow** — elevated commands route through `security_exec_approvals`
-> 7. **Budget tracking** — spend accumulates against `budget_monthly_microcents`
+> 6. **Approval flow** — exec approvals via `security_exec_approvals`; org approvals via `op1_approvals`
+> 7. **Budget policy engine** — spend accumulates in `op1_cost_events`; policies enforced via `op1_budget_policies`
 >
 > Visual style: Match existing Operator1 architecture diagrams (clean, minimal, dark theme).
 
@@ -428,6 +813,15 @@ Quick reference for orchestration RPC methods. See [RPC Reference](/operator1/rp
 | `workspaces.update`  | WRITE | Update workspace metadata |
 | `workspaces.archive` | WRITE | Archive a workspace       |
 
+### Workspace Agent Management
+
+| Method                         | Scope | Description                      |
+| ------------------------------ | ----- | -------------------------------- |
+| `workspaces.agents`            | READ  | List agents in a workspace       |
+| `workspaces.assignAgent`       | WRITE | Assign agent to workspace        |
+| `workspaces.removeAgent`       | WRITE | Remove agent from workspace      |
+| `workspaces.updateAgentStatus` | WRITE | Update agent status/capabilities |
+
 ### Projects
 
 | Method                   | Scope | Description                    |
@@ -443,25 +837,41 @@ Quick reference for orchestration RPC methods. See [RPC Reference](/operator1/rp
 
 ### Tasks
 
-| Method         | Scope | Description             |
-| -------------- | ----- | ----------------------- |
-| `tasks.list`   | READ  | List tasks (filterable) |
-| `tasks.get`    | READ  | Get task by id          |
-| `tasks.create` | WRITE | Create a new task       |
-| `tasks.update` | WRITE | Update task             |
-| `tasks.delete` | WRITE | Delete a task           |
+| Method                  | Scope | Description                        |
+| ----------------------- | ----- | ---------------------------------- |
+| `tasks.list`            | READ  | List tasks (filterable)            |
+| `tasks.get`             | READ  | Get task by id                     |
+| `tasks.getByIdentifier` | READ  | Get task by workspace + identifier |
+| `tasks.create`          | WRITE | Create a new task                  |
+| `tasks.update`          | WRITE | Update task                        |
+| `tasks.listComments`    | READ  | List task comments                 |
+| `tasks.addComment`      | WRITE | Add a comment to a task            |
+
+### Task Documents & Attachments
+
+| Method                     | Scope | Description                 |
+| -------------------------- | ----- | --------------------------- |
+| `tasks.documents.list`     | READ  | List documents for a task   |
+| `tasks.documents.get`      | READ  | Get a document by id        |
+| `tasks.documents.create`   | WRITE | Create a task document      |
+| `tasks.documents.update`   | WRITE | Update a task document      |
+| `tasks.documents.delete`   | WRITE | Delete a task document      |
+| `tasks.attachments.list`   | READ  | List attachments for a task |
+| `tasks.attachments.create` | WRITE | Register a new attachment   |
+| `tasks.attachments.delete` | WRITE | Delete an attachment        |
 
 ### Goals
 
 | Method         | Scope | Description             |
 | -------------- | ----- | ----------------------- |
 | `goals.list`   | READ  | List goals (filterable) |
+| `goals.tree`   | READ  | Full goal tree          |
 | `goals.get`    | READ  | Get goal by id          |
 | `goals.create` | WRITE | Create a new goal       |
 | `goals.update` | WRITE | Update goal             |
 | `goals.delete` | WRITE | Delete a goal           |
 
-### Approvals
+### Exec Approvals
 
 | Method                       | Scope     | Description                |
 | ---------------------------- | --------- | -------------------------- |
@@ -471,14 +881,103 @@ Quick reference for orchestration RPC methods. See [RPC Reference](/operator1/rp
 | `exec.approval.waitDecision` | APPROVALS | Wait for approval decision |
 | `exec.approval.resolve`      | APPROVALS | Resolve approval request   |
 
+### Organizational Approvals
+
+| Method                    | Scope | Description                        |
+| ------------------------- | ----- | ---------------------------------- |
+| `approvals.list`          | READ  | List approvals                     |
+| `approvals.get`           | READ  | Get approval by id                 |
+| `approvals.create`        | WRITE | Submit an approval request         |
+| `approvals.updatePayload` | WRITE | Update payload of pending approval |
+| `approvals.decide`        | ADMIN | Approve or reject                  |
+| `approvals.comments.list` | READ  | List approval comments             |
+| `approvals.comments.add`  | WRITE | Add approval comment               |
+
+### Budget Policy Engine
+
+| Method                      | Scope | Description               |
+| --------------------------- | ----- | ------------------------- |
+| `budgets.policies.list`     | READ  | List budget policies      |
+| `budgets.policies.get`      | READ  | Get policy by id          |
+| `budgets.policies.create`   | WRITE | Create a budget policy    |
+| `budgets.policies.update`   | WRITE | Update a budget policy    |
+| `budgets.policies.delete`   | WRITE | Delete a budget policy    |
+| `budgets.incidents.list`    | READ  | List budget incidents     |
+| `budgets.incidents.resolve` | WRITE | Resolve a budget incident |
+| `costs.events.list`         | READ  | List cost events          |
+
+### Agent Wakeup Requests
+
+| Method            | Scope | Description                  |
+| ----------------- | ----- | ---------------------------- |
+| `wakeup.create`   | WRITE | Enqueue a wakeup request     |
+| `wakeup.list`     | READ  | List pending wakeup requests |
+| `wakeup.process`  | WRITE | Mark request as processing   |
+| `wakeup.complete` | WRITE | Mark request as completed    |
+
+### Agent API Keys
+
+| Method                  | Scope | Description             |
+| ----------------------- | ----- | ----------------------- |
+| `agents.apiKeys.create` | WRITE | Create an agent API key |
+| `agents.apiKeys.list`   | READ  | List agent API keys     |
+| `agents.apiKeys.revoke` | WRITE | Revoke an agent API key |
+
+### Agent Config Revisions
+
+| Method                      | Scope | Description                  |
+| --------------------------- | ----- | ---------------------------- |
+| `revisions.config.list`     | READ  | List config revisions        |
+| `revisions.config.get`      | READ  | Get a revision by id         |
+| `revisions.config.rollback` | ADMIN | Rollback to a prior revision |
+
+### Agent Metrics
+
+| Method                       | Scope | Description                           |
+| ---------------------------- | ----- | ------------------------------------- |
+| `agents.metrics.get`         | READ  | Get metrics for a single agent        |
+| `agents.metrics.list`        | READ  | List metrics for all agents           |
+| `budgets.department.summary` | READ  | Department-level budget spend summary |
+
+### Execution Workspaces
+
+| Method                                  | Scope | Description                   |
+| --------------------------------------- | ----- | ----------------------------- |
+| `executionWorkspaces.create`            | WRITE | Create an execution workspace |
+| `executionWorkspaces.get`               | READ  | Get by id                     |
+| `executionWorkspaces.list`              | READ  | List (filterable)             |
+| `executionWorkspaces.update`            | WRITE | Update status or metadata     |
+| `executionWorkspaces.archive`           | WRITE | Archive workspace             |
+| `executionWorkspaces.operations.record` | WRITE | Record an operation           |
+| `executionWorkspaces.operations.list`   | READ  | List operations               |
+
+### Dashboard
+
+| Method              | Scope | Description                  |
+| ------------------- | ----- | ---------------------------- |
+| `dashboard.summary` | READ  | Full orchestration summary   |
+| `sidebar.badges`    | READ  | Badge counts for sidebar nav |
+
+### Activity Log
+
+| Method              | Scope | Description               |
+| ------------------- | ----- | ------------------------- |
+| `activityLogs.list` | READ  | List activity log entries |
+
 ### State DB (Direct Access)
 
-| Method          | Scope | Description                     |
-| --------------- | ----- | ------------------------------- |
-| `state.tables`  | READ  | List all tables with row counts |
-| `state.schema`  | READ  | Get CREATE TABLE DDL            |
-| `state.inspect` | READ  | Paginated row browser           |
-| `state.query`   | READ  | Execute read-only SELECT        |
+| Method                | Scope | Description                              |
+| --------------------- | ----- | ---------------------------------------- |
+| `state.info`          | READ  | DB path, size, schema version, integrity |
+| `state.tables`        | READ  | List all tables with row counts          |
+| `state.schema`        | READ  | Get CREATE TABLE DDL                     |
+| `state.inspect`       | READ  | Paginated row browser                    |
+| `state.query`         | READ  | Execute read-only SELECT                 |
+| `state.settings.list` | READ  | List settings in a store/scope           |
+| `state.settings.get`  | READ  | Read a single setting                    |
+| `state.settings.set`  | ADMIN | Write a setting                          |
+| `state.audit`         | READ  | Query the audit_state trail              |
+| `state.export`        | READ  | Export one or all tables as JSON         |
 
 ## Related Documentation
 
