@@ -5,8 +5,6 @@ import type { PluginRegistry } from "./registry.js";
 import type { OpenClawPluginServiceContext, PluginLogger } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
-const pluginCheckpointLogsEnabled = process.env.OPENCLAW_PLUGIN_CHECKPOINTS === "1";
-
 function createPluginLogger(): PluginLogger {
   return {
     info: (msg) => log.info(msg),
@@ -48,18 +46,8 @@ export async function startPluginServices(params: {
 
   for (const entry of params.registry.services) {
     const service = entry.service;
-    const typedHookCountBefore = params.registry.typedHooks.length;
     try {
       await service.start(serviceContext);
-      if (pluginCheckpointLogsEnabled) {
-        const newTypedHooks = params.registry.typedHooks
-          .slice(typedHookCountBefore)
-          .filter((hook) => hook.pluginId === entry.pluginId)
-          .map((hook) => hook.hookName);
-        log.warn(
-          `[plugins][checkpoints] service started (${service.id}, plugin=${entry.pluginId}) typedHooksAdded=${newTypedHooks.length}${newTypedHooks.length > 0 ? ` hooks=${newTypedHooks.join(",")}` : ""}`,
-        );
-      }
       running.push({
         id: service.id,
         stop: service.stop ? () => service.stop?.(serviceContext) : undefined,
