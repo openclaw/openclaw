@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { useGateway } from "@/hooks/use-gateway";
 import { cn } from "@/lib/utils";
 import { useChatStore } from "@/store/chat-store";
-import type { DelegationEntry } from "@/store/delegation-store";
+import { type DelegationEntry, useDelegationStore } from "@/store/delegation-store";
 
 function getChatSessionKey(): string | null {
   return useChatStore.getState().activeSessionKey;
@@ -281,6 +281,11 @@ function DelegationActions({ runId }: { runId: string }) {
     }>(method, { runId })
       .then((result) => {
         console.log(`[delegation] ${action} succeeded for ${runId.slice(0, 8)}`);
+        // Immediately remove cancelled delegations from the UI
+        if (action === "cancel") {
+          const store = useDelegationStore.getState();
+          store.setDelegations(store.delegations.filter((d) => d.runId !== runId));
+        }
         // If the RPC returns task context, send a chat message to trigger re-delegation
         if (result?.sessionKey && result?.task && (action === "resume" || action === "retry")) {
           const prefix = action === "resume" ? "[Delegation Resume]" : "[Delegation Retry]";
