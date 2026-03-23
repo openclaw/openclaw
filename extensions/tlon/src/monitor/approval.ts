@@ -5,6 +5,7 @@
  * a notification and can approve or deny the request.
  */
 
+import crypto from "node:crypto";
 import type { PendingApproval } from "../settings.js";
 
 export type { PendingApproval };
@@ -32,7 +33,7 @@ export type CreateApprovalParams = {
  */
 export function generateApprovalId(type: ApprovalType): string {
   const timestamp = Date.now();
-  const randomPart = Math.random().toString(36).substring(2, 6);
+  const randomPart = crypto.randomBytes(8).toString("hex");
   return `${type}-${timestamp}-${randomPart}`;
 }
 

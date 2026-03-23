@@ -47,17 +47,25 @@ export function syncPluginVersions(rootDir = resolve(".")) {
   }
 
   const extensionsDir = join(rootDir, "extensions");
-  const dirs = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) =>
+  const packagesDir = join(rootDir, "packages");
+  const extensionDirs = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) =>
     entry.isDirectory(),
   );
+  const packageDirs = existsSync(packagesDir)
+    ? readdirSync(packagesDir, { withFileTypes: true }).filter((entry) => entry.isDirectory())
+    : [];
+  const dirs = [
+    ...extensionDirs.map((d) => ({ dir: d, base: extensionsDir })),
+    ...packageDirs.map((d) => ({ dir: d, base: packagesDir })),
+  ];
 
   const updated: string[] = [];
   const changelogged: string[] = [];
   const skipped: string[] = [];
   const strippedWorkspaceDevDeps: string[] = [];
 
-  for (const dir of dirs) {
-    const packagePath = join(extensionsDir, dir.name, "package.json");
+  for (const { dir, base } of dirs) {
+    const packagePath = join(base, dir.name, "package.json");
     let pkg: PackageJson;
     try {
       pkg = JSON.parse(readFileSync(packagePath, "utf8")) as PackageJson;
@@ -70,7 +78,7 @@ export function syncPluginVersions(rootDir = resolve(".")) {
       continue;
     }
 
-    const changelogPath = join(extensionsDir, dir.name, "CHANGELOG.md");
+    const changelogPath = join(base, dir.name, "CHANGELOG.md");
     if (ensureChangelogEntry(changelogPath, targetVersion)) {
       changelogged.push(pkg.name);
     }

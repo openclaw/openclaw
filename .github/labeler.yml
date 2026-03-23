@@ -16,7 +16,6 @@
 "channel: feishu":
   - changed-files:
       - any-glob-to-any-file:
-          - "src/feishu/**"
           - "extensions/feishu/**"
           - "docs/channels/feishu.md"
 "channel: googlechat":
