@@ -19,7 +19,6 @@ import {
   sendC2CFileMessage,
   sendGroupFileMessage,
 } from "./api.js";
-import { downloadFile } from "./image-server.js";
 import type { ResolvedQQBotAccount } from "./types.js";
 import {
   isAudioFile,
@@ -27,6 +26,7 @@ import {
   waitForFile,
   shouldTranscodeVoice,
 } from "./utils/audio-convert.js";
+import { downloadFile } from "./utils/file-utils.js";
 import {
   checkFileSize,
   readFileAsync,

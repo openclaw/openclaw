@@ -16,7 +16,6 @@ import {
   onMessageSent,
   PLUGIN_USER_AGENT,
 } from "./api.js";
-import { startImageServer, isImageServerRunning, type ImageServerConfig } from "./image-server.js";
 import { processAttachments, formatVoiceText } from "./inbound-attachments.js";
 import { recordKnownUser, flushKnownUsers } from "./known-users.js";
 import { createMessageQueue, type QueuedMessage } from "./message-queue.js";
@@ -58,7 +57,7 @@ import type {
 import { TypingKeepAlive, TYPING_INPUT_SECOND } from "./typing-keepalive.js";
 import { triggerUpdateCheck } from "./update-checker.js";
 import { resolveTTSConfig } from "./utils/audio-convert.js";
-import { getQQBotDataDir, runDiagnostics } from "./utils/platform.js";
+import { runDiagnostics } from "./utils/platform.js";
 import { parseFaceTags, parseRefIndices, buildAttachmentSummaries } from "./utils/text-parsing.js";
 
 // QQ Bot intents - 按权限级别分组
@@ -83,11 +82,6 @@ const MAX_RECONNECT_ATTEMPTS = 100;
 const MAX_QUICK_DISCONNECT_COUNT = 3; // 连续快速断开次数阈值
 const QUICK_DISCONNECT_THRESHOLD = 5000; // 5秒内断开视为快速断开
 
-// 图床服务器配置（可通过环境变量覆盖）
-const IMAGE_SERVER_PORT = parseInt(process.env.QQBOT_IMAGE_SERVER_PORT || "18765", 10);
-// 使用绝对路径，确保文件保存和读取使用同一目录
-const IMAGE_SERVER_DIR = process.env.QQBOT_IMAGE_SERVER_DIR || getQQBotDataDir("images");
-
 export interface GatewayContext {
   account: ResolvedQQBotAccount;
   abortSignal: AbortSignal;
@@ -99,36 +93,6 @@ export interface GatewayContext {
     error: (msg: string) => void;
     debug?: (msg: string) => void;
   };
-}
-
-/**
- * 启动图床服务器
- */
-async function ensureImageServer(
-  log?: GatewayContext["log"],
-  publicBaseUrl?: string,
-): Promise<string | null> {
-  if (isImageServerRunning()) {
-    return publicBaseUrl || `http://0.0.0.0:${IMAGE_SERVER_PORT}`;
-  }
-
-  try {
-    const config: Partial<ImageServerConfig> = {
-      port: IMAGE_SERVER_PORT,
-      storageDir: IMAGE_SERVER_DIR,
-      // 使用用户配置的公网地址，而不是 0.0.0.0
-      baseUrl: publicBaseUrl || `http://0.0.0.0:${IMAGE_SERVER_PORT}`,
-      ttlSeconds: 3600, // 1 小时过期
-    };
-    await startImageServer(config);
-    log?.info(
-      `[qqbot] Image server started on port ${IMAGE_SERVER_PORT}, baseUrl: ${config.baseUrl}`,
-    );
-    return config.baseUrl!;
-  } catch (err) {
-    log?.error(`[qqbot] Failed to start image server: ${err}`);
-    return null;
-  }
 }
 
 // 模块级变量：进程生命周期内只有首次为 true
@@ -221,19 +185,6 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
   } else {
     log?.info(
       `[qqbot:${account.accountId}] TTS not configured (voice messages will be unavailable)`,
-    );
-  }
-
-  // 如果配置了公网 URL，启动图床服务器
-  let imageServerBaseUrl: string | null = null;
-  if (account.imageServerBaseUrl) {
-    // 使用用户配置的公网地址作为 baseUrl
-    await ensureImageServer(log, account.imageServerBaseUrl);
-    imageServerBaseUrl = account.imageServerBaseUrl;
-    log?.info(`[qqbot:${account.accountId}] Image server enabled with URL: ${imageServerBaseUrl}`);
-  } else {
-    log?.info(
-      `[qqbot:${account.accountId}] Image server disabled (no imageServerBaseUrl configured)`,
     );
   }
 
