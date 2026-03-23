@@ -187,6 +187,9 @@ jobs:
       - name: Build dist
         run: pnpm build
 
+      - name: Build Control UI
+        run: pnpm ui:build
+
       - name: Upload dist artifact
         uses: actions/upload-artifact@v7
         with:
@@ -261,6 +264,7 @@ jobs:
             cache_key_suffix: "node22"
             command: |
               pnpm build
+              pnpm ui:build
               node openclaw.mjs --help
               node openclaw.mjs status --json --timeout 1
               pnpm test:build:singleton
