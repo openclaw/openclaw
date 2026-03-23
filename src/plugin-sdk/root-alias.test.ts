@@ -223,7 +223,7 @@ describe("plugin-sdk root alias", () => {
       distExists: false,
       distEntries: ["diagnostic-events-W3Hz61fI.js"],
       monolithicExports: {
-        onDiagnosticEvent: () => () => undefined,
+        r: () => () => undefined,
         slowHelper: () => "loaded",
       },
     });
