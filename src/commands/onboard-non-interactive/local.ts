@@ -4,7 +4,7 @@ import { resolveGatewayPort, writeConfigFile } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../daemon-runtime.js";
-import { applyLocalSetupWorkspaceConfig } from "../onboard-config.js";
+import { applyLocalSetupWorkspaceConfig, hasExplicitUserTimezone } from "../onboard-config.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
@@ -127,7 +127,7 @@ export async function runNonInteractiveLocalSetup(params: {
 
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
   await writeConfigFile(nextConfig, {
-    unsetPaths: baseConfig.agents?.defaults?.userTimezone
+    unsetPaths: hasExplicitUserTimezone(baseConfig)
       ? undefined
       : [["agents", "defaults", "userTimezone"]],
   });

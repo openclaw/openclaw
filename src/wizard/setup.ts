@@ -409,7 +409,8 @@ export async function runSetupWizard(
 
   if (mode === "remote") {
     const { promptRemoteGatewayConfig } = await import("../commands/onboard-remote.js");
-    const { applyOnboardAgentDefaults } = await import("../commands/onboard-config.js");
+    const { applyOnboardAgentDefaults, hasExplicitUserTimezone } =
+      await import("../commands/onboard-config.js");
     const { logConfigUpdated } = await import("../config/logging.js");
     let nextConfig = await promptRemoteGatewayConfig(baseConfig, prompter, {
       secretInputMode: opts.secretInputMode,
@@ -420,7 +421,7 @@ export async function runSetupWizard(
     };
     nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
     await writeConfigFile(nextConfig, {
-      unsetPaths: baseConfig.agents?.defaults?.userTimezone
+      unsetPaths: hasExplicitUserTimezone(baseConfig)
         ? undefined
         : [["agents", "defaults", "userTimezone"]],
     });
@@ -440,7 +441,8 @@ export async function runSetupWizard(
 
   const workspaceDir = resolveUserPath(workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE);
 
-  const { applyLocalSetupWorkspaceConfig } = await import("../commands/onboard-config.js");
+  const { applyLocalSetupWorkspaceConfig, hasExplicitUserTimezone } =
+    await import("../commands/onboard-config.js");
   let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(baseConfig, workspaceDir);
 
   const { ensureAuthProfileStore } = await import("../agents/auth-profiles.runtime.js");
@@ -584,7 +586,7 @@ export async function runSetupWizard(
 
   nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
   await writeConfigFile(nextConfig, {
-    unsetPaths: baseConfig.agents?.defaults?.userTimezone
+    unsetPaths: hasExplicitUserTimezone(baseConfig)
       ? undefined
       : [["agents", "defaults", "userTimezone"]],
   });

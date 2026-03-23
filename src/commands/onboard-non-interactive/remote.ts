@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { writeConfigFile } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import { applyOnboardAgentDefaults } from "../onboard-config.js";
+import { applyOnboardAgentDefaults, hasExplicitUserTimezone } from "../onboard-config.js";
 import { applyWizardMetadata } from "../onboard-helpers.js";
 import type { OnboardOptions } from "../onboard-types.js";
 
@@ -36,7 +36,7 @@ export async function runNonInteractiveRemoteSetup(params: {
   };
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
   await writeConfigFile(nextConfig, {
-    unsetPaths: baseConfig.agents?.defaults?.userTimezone
+    unsetPaths: hasExplicitUserTimezone(baseConfig)
       ? undefined
       : [["agents", "defaults", "userTimezone"]],
   });

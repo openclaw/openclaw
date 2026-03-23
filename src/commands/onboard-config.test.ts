@@ -3,9 +3,27 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   applyLocalSetupWorkspaceConfig,
   applyOnboardAgentDefaults,
+  hasExplicitUserTimezone,
   ONBOARDING_DEFAULT_DM_SCOPE,
   ONBOARDING_DEFAULT_TOOLS_PROFILE,
 } from "./onboard-config.js";
+
+describe("hasExplicitUserTimezone", () => {
+  it("returns false when userTimezone is absent", () => {
+    expect(hasExplicitUserTimezone({})).toBe(false);
+    expect(hasExplicitUserTimezone({ agents: { defaults: {} } })).toBe(false);
+  });
+
+  it("returns true for a non-empty explicit timezone", () => {
+    expect(
+      hasExplicitUserTimezone({ agents: { defaults: { userTimezone: "America/Denver" } } }),
+    ).toBe(true);
+  });
+
+  it("returns true for an empty-string explicit timezone (suppress-inherited pattern)", () => {
+    expect(hasExplicitUserTimezone({ agents: { defaults: { userTimezone: "" } } })).toBe(true);
+  });
+});
 
 describe("applyOnboardAgentDefaults", () => {
   it("leaves user timezone unset during onboarding when unset", () => {
