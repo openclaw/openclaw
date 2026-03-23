@@ -446,6 +446,68 @@ export function wrapToolMutationLock(
     },
   };
 }
+/**
+ * Wrap apply_patch with a workspace-root-level mutation lock.
+ * Unlike per-file locks used by write/edit, apply_patch can touch multiple
+ * files atomically, so we serialize it against all other workspace mutations
+ * using the workspace root as the lock key.
+ */
+export function wrapApplyPatchMutationLock(tool: AnyAgentTool, root: string): AnyAgentTool {
+  return {
+    ...tool,
+    execute: async (toolCallId, params, signal, onUpdate) => {
+      const lockKey = `apply_patch:${path.resolve(root)}`;
+      const previous = workspaceMutationLocks.get(lockKey) ?? Promise.resolve();
+      let release: (() => void) | undefined;
+      const current = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      workspaceMutationLocks.set(lockKey, current);
+
+      let ranMutation = false;
+      try {
+        await waitForQueuedMutation(previous, signal);
+        ranMutation = true;
+        const lockFn = await getWithWorkspaceLock();
+        return await lockFn(
+          lockKey,
+          {
+            kind: "file",
+            timeoutMs: WORKSPACE_MUTATION_LOCK_TIMEOUT_MS,
+            ttlMs: WORKSPACE_MUTATION_LOCK_TTL_MS,
+            signal,
+          },
+          async () => {
+            return await tool.execute(toolCallId, params, signal, onUpdate);
+          },
+        );
+      } finally {
+        if (ranMutation) {
+          release?.();
+          if (workspaceMutationLocks.get(lockKey) === current) {
+            workspaceMutationLocks.delete(lockKey);
+          }
+        } else {
+          void previous.then(
+            () => {
+              release?.();
+              if (workspaceMutationLocks.get(lockKey) === current) {
+                workspaceMutationLocks.delete(lockKey);
+              }
+            },
+            () => {
+              release?.();
+              if (workspaceMutationLocks.get(lockKey) === current) {
+                workspaceMutationLocks.delete(lockKey);
+              }
+            },
+          );
+        }
+      }
+    },
+  };
+}
+
 async function waitForQueuedMutation(previous: Promise<void>, signal?: AbortSignal): Promise<void> {
   if (!signal) {
     await previous;

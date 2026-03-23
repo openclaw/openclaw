@@ -3851,6 +3851,26 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.sharedWorkspaceLocking",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.sharedWorkspaceLocking.enabled",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.skipBootstrap",
       "kind": "core",
       "type": "boolean",
@@ -58852,6 +58872,16 @@
     },
     {
       "path": "secrets.providers.*.allowSymlinkCommand",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "secrets.providers.*.allowSymlinkPath",
       "kind": "core",
       "type": "boolean",
       "required": false,

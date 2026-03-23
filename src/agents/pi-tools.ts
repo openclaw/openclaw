@@ -40,6 +40,7 @@ import {
   patchToolSchemaForClaudeCompatibility,
   wrapToolMemoryFlushAppendOnlyWrite,
   wrapToolMutationLock,
+  wrapApplyPatchMutationLock,
   wrapToolWorkspaceRootGuard,
   wrapToolWorkspaceRootGuardWithOptions,
   wrapToolParamNormalization,
@@ -464,7 +465,7 @@ export function createOpenClawCodingTools(options?: {
     cleanupMs: cleanupMsOverride ?? execConfig.cleanupMs,
     scopeKey,
   });
-  const applyPatchTool =
+  const applyPatchToolRaw =
     !applyPatchEnabled || (sandboxRoot && !allowWorkspaceWrites)
       ? null
       : createApplyPatchTool({
@@ -475,6 +476,13 @@ export function createOpenClawCodingTools(options?: {
               : undefined,
           workspaceOnly: applyPatchWorkspaceOnly,
         });
+  const applyPatchTool =
+    applyPatchToolRaw && mutationLockingEnabled
+      ? wrapApplyPatchMutationLock(
+          applyPatchToolRaw as unknown as AnyAgentTool,
+          sandboxRoot ?? workspaceRoot,
+        )
+      : applyPatchToolRaw;
   const tools: AnyAgentTool[] = [
     ...base,
     ...(sandboxRoot

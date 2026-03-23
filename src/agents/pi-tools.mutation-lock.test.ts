@@ -682,3 +682,53 @@ describe("wrapToolMutationLock", () => {
     }
   });
 });
+
+describe("wrapApplyPatchMutationLock", () => {
+  it("serializes concurrent apply_patch calls on the same workspace root", async () => {
+    const { wrapApplyPatchMutationLock } = await import("./pi-tools.read.js");
+    const tempRoot = path.join(os.tmpdir(), `oc-apply-patch-lock-test-${Date.now()}`);
+    await fs.mkdir(tempRoot, { recursive: true });
+
+    const firstGate = deferred();
+    const events: string[] = [];
+
+    const base: AnyAgentTool = {
+      name: "apply_patch",
+      label: "apply_patch",
+      description: "test apply_patch",
+      parameters: {},
+      execute: async (_toolCallId, params) => {
+        const record = params as Record<string, unknown>;
+        const id = typeof record.input === "string" ? record.input : "";
+        events.push(`start:${id}`);
+        if (id === "first") {
+          await firstGate.promise;
+        }
+        events.push(`end:${id}`);
+        return textResult(id);
+      },
+    };
+
+    const locked = wrapApplyPatchMutationLock(base, tempRoot);
+
+    try {
+      const p1 = locked.execute("c1", { input: "first" });
+      // Let microtask queue flush so p1 starts executing
+      await new Promise((r) => setTimeout(r, 10));
+      const p2 = locked.execute("c2", { input: "second" });
+
+      // p1 should have started but p2 should be blocked
+      await waitUntil(() => expect(events).toContain("start:first"));
+      expect(events).not.toContain("start:second");
+
+      // Release first — second should start after
+      firstGate.resolve();
+      await p1;
+      await p2;
+
+      expect(events).toEqual(["start:first", "end:first", "start:second", "end:second"]);
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+});

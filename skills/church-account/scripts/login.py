@@ -10,9 +10,15 @@ Defaults:
     --target  https://lcr.churchofjesuschrist.org
     --cookies /tmp/church_cookies.json
 """
-import asyncio, sys, json, argparse, subprocess
+import argparse
+import asyncio
+import json
+import subprocess
+import sys
+
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
+
 
 def get_credential(key):
     return subprocess.check_output(

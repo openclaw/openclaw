@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Navigate LCR UI to find youth temple recommend expiring report."""
-import asyncio, sys, subprocess, json
+import asyncio
+import json
+import subprocess
+import sys
+
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
 
