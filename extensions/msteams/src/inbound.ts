@@ -8,13 +8,13 @@ export type MSTeamsQuoteInfo = {
  */
 export function decodeHtmlEntities(html: string): string {
   return html
-    .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/&#x27;/g, "'")
-    .replace(/&nbsp;/g, " ");
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&"); // must be last to prevent double-decoding (e.g. &amp;lt; → &lt; not <)
 }
 
 /**
@@ -37,7 +37,17 @@ export function extractMSTeamsQuoteInfo(
   attachments: Array<{ contentType?: string | null; content?: unknown }>,
 ): MSTeamsQuoteInfo | undefined {
   for (const att of attachments) {
-    const content = typeof att.content === "string" ? att.content : "";
+    // Content may be a plain string or an object with .text/.body (e.g. Adaptive Card payloads).
+    const content =
+      typeof att.content === "string"
+        ? att.content
+        : typeof att.content === "object" && att.content !== null
+          ? String(
+              (att.content as Record<string, unknown>).text ??
+                (att.content as Record<string, unknown>).body ??
+                "",
+            )
+          : "";
     if (!content) continue;
 
     // Look for the Skype Reply schema blockquote.

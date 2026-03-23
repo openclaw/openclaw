@@ -75,6 +75,12 @@ describe("msteams inbound", () => {
     it("leaves plain text unchanged", () => {
       expect(decodeHtmlEntities("hello world")).toBe("hello world");
     });
+
+    it("prevents double-decoding: &amp;lt; should become &lt; not <", () => {
+      // If &amp; were decoded first, &amp;lt; → &lt; → < (wrong).
+      // With &amp; decoded last, &amp;lt; stays as &lt; (correct).
+      expect(decodeHtmlEntities("&amp;lt;b&amp;gt;")).toBe("&lt;b&gt;");
+    });
   });
 
   describe("htmlToPlainText", () => {
@@ -175,6 +181,30 @@ describe("msteams inbound", () => {
       expect(
         extractMSTeamsQuoteInfo([{ contentType: "application/json", content: { foo: "bar" } }]),
       ).toBeUndefined();
+    });
+
+    it("handles object content with .text property containing the reply HTML", () => {
+      const htmlContent =
+        '<blockquote itemtype="http://schema.skype.com/Reply" itemscope>' +
+        '<strong itemprop="mri">Dave</strong>' +
+        '<p itemprop="copy">hello from object</p>' +
+        "</blockquote>";
+      const result = extractMSTeamsQuoteInfo([
+        { contentType: "text/html", content: { text: htmlContent } },
+      ]);
+      expect(result).toEqual({ sender: "Dave", body: "hello from object" });
+    });
+
+    it("handles object content with .body property containing the reply HTML", () => {
+      const htmlContent =
+        '<blockquote itemtype="http://schema.skype.com/Reply" itemscope>' +
+        '<strong itemprop="mri">Eve</strong>' +
+        '<p itemprop="copy">hello from body field</p>' +
+        "</blockquote>";
+      const result = extractMSTeamsQuoteInfo([
+        { contentType: "text/html", content: { body: htmlContent } },
+      ]);
+      expect(result).toEqual({ sender: "Eve", body: "hello from body field" });
     });
 
     it("finds quote in second attachment when first has no quote", () => {
