@@ -516,7 +516,6 @@ export function buildStatusMessage(args: StatusArgs): string {
     cfg: contextConfig,
     ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
     model: contextLookupModel,
-    fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
   });
   const persistedContextTokens =
     typeof entry?.contextTokens === "number" && entry.contextTokens > 0
@@ -531,15 +530,22 @@ export function buildStatusMessage(args: StatusArgs): string {
     args.explicitConfiguredContextTokens > 0
       ? args.explicitConfiguredContextTokens
       : undefined;
+  const cappedConfiguredContextTokens =
+    typeof explicitConfiguredContextTokens === "number"
+      ? typeof activeContextTokens === "number"
+        ? Math.min(explicitConfiguredContextTokens, activeContextTokens)
+        : explicitConfiguredContextTokens
+      : undefined;
   // When a fallback model is active, the selected-model context limit that
   // callers keep on the agent config is often stale. Prefer an explicit runtime
   // snapshot when available. Separately, callers can pass an explicit configured
-  // cap that should win even when it numerically matches the selected model's
-  // native window. Otherwise preserve a persisted runtime snapshot unless it
-  // still matches the selected-model window and the active runtime window differs.
+  // cap that should still apply on fallback paths, but it cannot exceed the
+  // active runtime window when that window is known. Otherwise preserve a
+  // persisted runtime snapshot unless it still matches the selected-model
+  // window and the active runtime window differs.
   const contextTokens = runtimeDiffersFromSelected
     ? (explicitRuntimeContextTokens ??
-      explicitConfiguredContextTokens ??
+      cappedConfiguredContextTokens ??
       (() => {
         if (persistedContextTokens === undefined) {
           return activeContextTokens ?? DEFAULT_CONTEXT_TOKENS;

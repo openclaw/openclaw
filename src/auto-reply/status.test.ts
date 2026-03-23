@@ -375,6 +375,7 @@ describe("buildStatusMessage", () => {
         model: "xiaomi/mimo-v2-flash",
         contextTokens: 120_000,
       },
+      explicitConfiguredContextTokens: 120_000,
       sessionEntry: {
         sessionId: "fallback-context-window-configured-cap",
         updatedAt: 0,
@@ -443,6 +444,50 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.5");
     expect(normalized).toContain("Context: 49k/128k");
     expect(normalized).not.toContain("Context: 49k/200k");
+  });
+
+  it("clamps an explicit configured context cap to the active fallback window", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            "minimax-portal": {
+              models: [{ id: "MiniMax-M2.5", contextWindow: 200_000 }],
+            },
+            xiaomi: {
+              models: [{ id: "mimo-v2-flash", contextWindow: 1_048_576 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "xiaomi/mimo-v2-flash",
+        contextTokens: 1_048_576,
+      },
+      explicitConfiguredContextTokens: 1_048_576,
+      sessionEntry: {
+        sessionId: "fallback-context-window-configured-cap-clamped",
+        updatedAt: 0,
+        providerOverride: "xiaomi",
+        modelOverride: "mimo-v2-flash",
+        modelProvider: "minimax-portal",
+        model: "MiniMax-M2.5",
+        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
+        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.5",
+        fallbackNoticeReason: "model not allowed",
+        totalTokens: 49_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      activeModelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.5");
+    expect(normalized).toContain("Context: 49k/200k");
+    expect(normalized).not.toContain("Context: 49k/1.0m");
   });
 
   it("uses per-agent sandbox config when config and session key are provided", () => {
@@ -1001,6 +1046,46 @@ describe("buildStatusMessage", () => {
       },
       { prefix: "openclaw-status-" },
     );
+  });
+
+  it("does not synthesize a 32k fallback window when the active runtime model is unknown", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            xiaomi: {
+              models: [{ id: "mimo-v2-flash", contextWindow: 128_000 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "xiaomi/mimo-v2-flash",
+      },
+      sessionEntry: {
+        sessionId: "fallback-context-window-unknown-active-model",
+        updatedAt: 0,
+        providerOverride: "xiaomi",
+        modelOverride: "mimo-v2-flash",
+        modelProvider: "custom-runtime",
+        model: "unknown-fallback-model",
+        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
+        fallbackNoticeActiveModel: "custom-runtime/unknown-fallback-model",
+        fallbackNoticeReason: "model not allowed",
+        totalTokens: 49_000,
+        contextTokens: 128_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      activeModelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fallback: custom-runtime/unknown-fallback-model");
+    expect(normalized).toContain("Context: 49k/128k");
+    expect(normalized).not.toContain("Context: 49k/32k");
   });
 });
 
