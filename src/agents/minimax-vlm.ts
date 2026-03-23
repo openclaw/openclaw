@@ -1,5 +1,9 @@
 import { isRecord } from "../utils.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+import {
+  fetchWithSsrFGuard,
+  withStrictGuardedFetchMode,
+} from "../infra/net/fetch-guard.js";
 
 type MinimaxBaseResp = {
   status_code?: number;
@@ -73,18 +77,24 @@ export async function minimaxUnderstandImage(params: {
   });
   const url = new URL("/v1/coding_plan/vlm", host).toString();
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "MM-API-Source": "OpenClaw",
-    },
-    body: JSON.stringify({
-      prompt,
-      image_url: imageDataUrl,
+  const { response: res, release } = await fetchWithSsrFGuard(
+    withStrictGuardedFetchMode({
+      url,
+      init: {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "MM-API-Source": "OpenClaw",
+        },
+        body: JSON.stringify({
+          prompt,
+          image_url: imageDataUrl,
+        }),
+      },
     }),
-  });
+  );
+  try {
 
   const traceId = res.headers.get("Trace-Id") ?? "";
   if (!res.ok) {
@@ -118,4 +128,7 @@ export async function minimaxUnderstandImage(params: {
   }
 
   return content;
+  } finally {
+    await release();
+  }
 }
