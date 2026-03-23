@@ -25,7 +25,11 @@ function writeJson(filePath: string, value: unknown): void {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-function writeBuiltPluginEntry(repoRoot: string, pluginId: string, relativePath = "index.js"): void {
+function writeBuiltPluginEntry(
+  repoRoot: string,
+  pluginId: string,
+  relativePath = "index.js",
+): void {
   const filePath = path.join(repoRoot, "dist", "extensions", pluginId, relativePath);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, "export default {};\n", "utf8");

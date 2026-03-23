@@ -38,9 +38,7 @@ function rewritePackageEntry(entry) {
 function collectRewrittenPackageEntries(openclawConfig) {
   const rewrittenExtensions = rewritePackageExtensions(openclawConfig?.extensions) ?? [];
   const rewrittenSetupEntry = rewritePackageEntry(openclawConfig?.setupEntry);
-  return rewrittenSetupEntry
-    ? [...rewrittenExtensions, rewrittenSetupEntry]
-    : rewrittenExtensions;
+  return rewrittenSetupEntry ? [...rewrittenExtensions, rewrittenSetupEntry] : rewrittenExtensions;
 }
 
 function hasBuiltPluginEntries(params) {
