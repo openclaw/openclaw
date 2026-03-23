@@ -3,7 +3,7 @@
 // 自动部署脚本
 
 import { execSync } from "child_process";
-import { readFileSync } from "fs";
+import * as fs from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
 
@@ -16,8 +16,15 @@ console.log("=== 自动部署脚本 ===\n");
 // 从品牌配置文件中读取品牌名称
 function getBrandName() {
   try {
-    const brandConfigPath = resolve(WORK_DIR, "ui", "src", "brand-config.ts");
-    const brandConfigContent = readFileSync(brandConfigPath, "utf8");
+    // 首先尝试从根目录读取（新的位置）
+    let brandConfigPath = resolve(WORK_DIR, "brand-config.ts");
+
+    // 如果根目录不存在，尝试从 ui/src 目录读取（旧的位置）
+    if (!fs.existsSync(brandConfigPath)) {
+      brandConfigPath = resolve(WORK_DIR, "ui", "src", "brand-config.ts");
+    }
+
+    const brandConfigContent = fs.readFileSync(brandConfigPath, "utf8");
     const match = brandConfigContent.match(/name:\s*["']([^"']+)["']/);
     if (match && match[1]) {
       return match[1].trim().toLowerCase();

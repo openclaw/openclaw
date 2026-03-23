@@ -131,9 +131,7 @@ function copyFiles() {
     try {
       const brandConfigPath = resolve(WORK_DIR, "ui", "src", "brand-config.ts");
       if (existsSync(brandConfigPath)) {
-        const brandConfigDestPath = resolve(BRAND_DIR, "ui", "src");
-        mkdirSync(brandConfigDestPath, { recursive: true });
-        copyFileSync(brandConfigPath, resolve(brandConfigDestPath, "brand-config.ts"));
+        copyFileSync(brandConfigPath, resolve(BRAND_DIR, "brand-config.ts"));
         console.log("品牌配置文件复制成功");
       }
     } catch (error) {
