@@ -118,7 +118,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         sessionKey: route.mainSessionKey,
         deliveryContext: {
           channel: "slack",
-          to: `user:${message.user}`,
+          // Use the DM channel ID (D-prefix) rather than the user ID (U-prefix) so
+          // routed replies skip the conversations.open lookup (which requires im:write).
+          to: `channel:${message.channel}`,
           accountId: route.accountId,
           threadId: prepared.ctxPayload.MessageThreadId,
         },

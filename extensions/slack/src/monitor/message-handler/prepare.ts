@@ -746,7 +746,12 @@ export async function prepareSlackMessage(params: {
       ? {
           sessionKey: route.mainSessionKey,
           channel: "slack",
-          to: `user:${message.user}`,
+          // Store the DM channel ID (D-prefix) rather than the user ID (U-prefix)
+          // to avoid a conversations.open lookup (which requires im:write scope)
+          // when routing replies back through the lastRoute path. The DM channel ID
+          // is stable for the lifetime of the DM and can be used directly in
+          // chat.postMessage without any additional API calls.
+          to: `channel:${message.channel}`,
           accountId: route.accountId,
           threadId: threadContext.messageThreadId,
           mainDmOwnerPin:
