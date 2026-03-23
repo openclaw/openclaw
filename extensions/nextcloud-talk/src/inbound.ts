@@ -102,13 +102,19 @@ export function resolveExplicitNextcloudTalkMention(params: {
   const configuredName = params.account.name?.trim().toLowerCase();
   const accountId = params.account.accountId.trim().toLowerCase();
   const expectedIds = new Set<string>();
-  if (accountId) expectedIds.add(accountId);
+  if (accountId) {
+    expectedIds.add(accountId);
+  }
   if (configuredApiUser) {
     expectedIds.add(configuredApiUser);
     const apiLocalPart = configuredApiUser.split("@")[0]?.trim();
-    if (apiLocalPart) expectedIds.add(apiLocalPart.toLowerCase());
+    if (apiLocalPart) {
+      expectedIds.add(apiLocalPart.toLowerCase());
+    }
   }
-  if (configuredName) expectedIds.add(configuredName);
+  if (configuredName) {
+    expectedIds.add(configuredName);
+  }
 
   return params.mentionEntries.some((entry) => {
     if ((entry.type ?? "").toLowerCase() !== "user") {

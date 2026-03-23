@@ -118,3 +118,4 @@ export {
   resolveSetupAccountId,
   setSetupChannelEnabled,
 } from "../channels/plugins/setup-wizard-helpers.js";
+export { jsonResult, readReactionParams, readStringParam } from "../agents/tools/common.js";

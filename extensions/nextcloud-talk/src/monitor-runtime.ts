@@ -3,6 +3,7 @@ import { resolveLoggerBackedRuntime } from "openclaw/plugin-sdk/extension-shared
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
+import { handleNextcloudTalkInboundReaction } from "./inbound-reaction.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import {
   createNextcloudTalkWebhookServer,
@@ -10,7 +11,11 @@ import {
 } from "./monitor.js";
 import { createNextcloudTalkReplayGuard } from "./replay-guard.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
-import type { CoreConfig, NextcloudTalkInboundMessage } from "./types.js";
+import type {
+  CoreConfig,
+  NextcloudTalkInboundMessage,
+  NextcloudTalkInboundReaction,
+} from "./types.js";
 
 const DEFAULT_WEBHOOK_PORT = 8788;
 const DEFAULT_WEBHOOK_HOST = "0.0.0.0";
@@ -30,6 +35,7 @@ export type NextcloudTalkMonitorOptions = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   onMessage?: (message: NextcloudTalkInboundMessage) => void | Promise<void>;
+  onReaction?: (reaction: NextcloudTalkInboundReaction) => void | Promise<void>;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 };
 
@@ -114,6 +120,25 @@ export async function monitorNextcloudTalkProvider(
       }
     },
     onMessage: async () => {},
+    onReaction: async (reaction) => {
+      core.channel.activity.record({
+        channel: "nextcloud-talk",
+        accountId: account.accountId,
+        direction: "inbound",
+        at: reaction.timestamp,
+      });
+      if (opts.onReaction) {
+        await opts.onReaction(reaction);
+        return;
+      }
+      await handleNextcloudTalkInboundReaction({
+        reaction,
+        account,
+        config: cfg,
+        runtime,
+        statusSink: opts.statusSink,
+      });
+    },
     onError: (error) => {
       logger.error(`[nextcloud-talk:${account.accountId}] webhook error: ${error.message}`);
     },

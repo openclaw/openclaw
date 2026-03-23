@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/status-helpers";
 import { resolveNextcloudTalkAccount, type ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { nextcloudTalkApprovalAuth } from "./approval-auth.js";
+import { nextcloudTalkMessageActions } from "./channel-actions.js";
 import { buildChannelConfigSchema, DEFAULT_ACCOUNT_ID, type ChannelPlugin } from "./channel-api.js";
 import {
   nextcloudTalkConfigAdapter,
@@ -131,6 +132,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
         collectRuntimeConfigAssignments,
       },
       setup: nextcloudTalkSetupAdapter,
+      actions: nextcloudTalkMessageActions,
       status: createComputedAccountStatusAdapter<ResolvedNextcloudTalkAccount>({
         defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
         buildChannelSummary: ({ snapshot }) =>

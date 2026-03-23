@@ -12,6 +12,7 @@ import type { NextcloudTalkReplayGuard } from "./replay-guard.js";
 import { extractNextcloudTalkHeaders, verifyNextcloudTalkSignature } from "./signature.js";
 import type {
   NextcloudTalkInboundMessage,
+  NextcloudTalkInboundReaction,
   NextcloudTalkWebhookHeaders,
   NextcloudTalkWebhookPayload,
   NextcloudTalkWebhookServerOptions,
@@ -23,7 +24,7 @@ const PREAUTH_WEBHOOK_BODY_TIMEOUT_MS = 5_000;
 const HEALTH_PATH = "/healthz";
 const WEBHOOK_AUTH_RATE_LIMIT_SCOPE = "nextcloud-talk-webhook-auth";
 const NextcloudTalkWebhookPayloadSchema: z.ZodType<NextcloudTalkWebhookPayload> = z.object({
-  type: z.enum(["Create", "Update", "Delete"]),
+  type: z.enum(["Create", "Update", "Delete", "Like", "Dislike"]),
   actor: z.object({
     type: z.literal("Person"),
     id: z.string().min(1),
@@ -41,6 +42,7 @@ const NextcloudTalkWebhookPayloadSchema: z.ZodType<NextcloudTalkWebhookPayload> 
     id: z.string().min(1),
     name: z.string(),
   }),
+  content: z.string().optional(),
 });
 const WEBHOOK_ERRORS = {
   missingSignatureHeaders: "Missing signature headers",
@@ -113,6 +115,30 @@ function parseWebhookPayload(body: string): NextcloudTalkWebhookPayload | null {
   return safeParseJsonWithSchema(NextcloudTalkWebhookPayloadSchema, body);
 }
 
+export function decodeNextcloudTalkWebhookBody(
+  body: string,
+):
+  | { kind: "message"; message: NextcloudTalkInboundMessage }
+  | { kind: "reaction"; reaction: NextcloudTalkInboundReaction }
+  | { kind: "ignore" }
+  | { kind: "invalid" } {
+  const payload = parseWebhookPayload(body);
+  if (!payload) {
+    return { kind: "invalid" };
+  }
+  if (payload.type === "Like" || payload.type === "Dislike") {
+    const emoji = payload.content?.trim();
+    if (!emoji) {
+      return { kind: "ignore" };
+    }
+    return { kind: "reaction", reaction: payloadToInboundReaction(payload, emoji) };
+  }
+  if (payload.type !== "Create") {
+    return { kind: "ignore" };
+  }
+  return { kind: "message", message: payloadToInboundMessage(payload) };
+}
+
 function writeJsonResponse(
   res: ServerResponse,
   status: number,
@@ -181,17 +207,31 @@ function decodeWebhookCreateMessage(params: {
   res: ServerResponse;
 }):
   | { kind: "message"; message: NextcloudTalkInboundMessage }
+  | { kind: "reaction"; reaction: NextcloudTalkInboundReaction }
   | { kind: "ignore" }
   | { kind: "invalid" } {
-  const payload = parseWebhookPayload(params.body);
-  if (!payload) {
+  const decoded = decodeNextcloudTalkWebhookBody(params.body);
+  if (decoded.kind === "invalid") {
     writeWebhookError(params.res, 400, WEBHOOK_ERRORS.invalidPayloadFormat);
-    return { kind: "invalid" };
+    return decoded;
   }
-  if (payload.type !== "Create") {
-    return { kind: "ignore" };
-  }
-  return { kind: "message", message: payloadToInboundMessage(payload) };
+  return decoded;
+}
+
+function payloadToInboundReaction(
+  payload: NextcloudTalkWebhookPayload,
+  emoji: string,
+): NextcloudTalkInboundReaction {
+  return {
+    messageId: payload.object.id,
+    roomToken: payload.target.id,
+    roomName: payload.target.name,
+    actorId: payload.actor.id,
+    actorName: payload.actor.name ?? "",
+    emoji,
+    operation: payload.type === "Like" ? "added" : "removed",
+    timestamp: Date.now(),
+  };
 }
 
 function payloadToInboundMessage(
@@ -230,7 +270,7 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
   start: () => Promise<void>;
   stop: () => void;
 } {
-  const { port, host, path, secret, onMessage, onError, abortSignal } = opts;
+  const { port, host, path, secret, onMessage, onReaction, onError, abortSignal } = opts;
   const maxBodyBytes =
     typeof opts.maxBodyBytes === "number" &&
     Number.isFinite(opts.maxBodyBytes) &&
@@ -310,6 +350,15 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
       }
       if (decoded.kind === "ignore") {
         writeJsonResponse(res, 200);
+        return;
+      }
+      if (decoded.kind === "reaction") {
+        writeJsonResponse(res, 200);
+        try {
+          await onReaction?.(decoded.reaction);
+        } catch (err) {
+          onError?.(err instanceof Error ? err : new Error(formatError(err)));
+        }
         return;
       }
 
