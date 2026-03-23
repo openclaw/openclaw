@@ -40,8 +40,9 @@ gchar* systemd_normalize_profile(const gchar *raw_profile) {
     if (!raw_profile) return NULL;
     gchar *trimmed = g_strstrip(g_strdup(raw_profile));
     gchar *res = NULL;
-    if (strlen(trimmed) == 0 || g_strcmp0(trimmed, "default") == 0) {
+    if (strlen(trimmed) == 0 || g_ascii_strcasecmp(trimmed, "default") == 0) {
         res = g_strdup("openclaw-gateway.service");
+    }
     } else {
         res = g_strdup_printf("openclaw-gateway-%s.service", trimmed);
     }
