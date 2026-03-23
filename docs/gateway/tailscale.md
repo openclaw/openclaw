@@ -112,6 +112,7 @@ openclaw gateway --tailscale funnel --auth password
   trust loopback as a proxy and fall back to the socket address for the
   loopback check. Add `trustedProxies` and `allowRealIpFallback` to fix
   Canvas/A2UI 401 errors:
+
   ```json5
   {
     gateway: {
