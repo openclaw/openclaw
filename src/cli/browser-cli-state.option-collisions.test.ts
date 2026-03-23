@@ -1,21 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBrowserStateCommands } from "./browser-cli-state.js";
 import { createBrowserProgram as createBrowserProgramShared } from "./browser-cli-test-helpers.js";
+import type { CliRuntimeCapture } from "./test-runtime-capture.js";
+
+const runtimeState = vi.hoisted(() => ({ capture: null as CliRuntimeCapture | null }));
+
+function getRuntimeCapture(): CliRuntimeCapture {
+  if (!runtimeState.capture) {
+    throw new Error("runtime capture not initialized");
+  }
+  return runtimeState.capture;
+}
+
+function getRuntime() {
+  return getRuntimeCapture().defaultRuntime;
+}
 
 const mocks = vi.hoisted(() => ({
   callBrowserRequest: vi.fn(async (..._args: unknown[]) => ({ ok: true })),
   runBrowserResizeWithOutput: vi.fn(async (_params: unknown) => {}),
-  runtime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    writeStdout: vi.fn((value: string) => {
-      mocks.runtime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
-    }),
-    writeJson: vi.fn((value: unknown, space = 2) => {
-      mocks.runtime.log(JSON.stringify(value, null, space));
-    }),
-    exit: vi.fn(),
-  },
 }));
 
 vi.mock("./browser-cli-shared.js", () => ({
@@ -26,9 +29,11 @@ vi.mock("./browser-cli-resize.js", () => ({
   runBrowserResizeWithOutput: mocks.runBrowserResizeWithOutput,
 }));
 
-vi.mock("../runtime.js", () => ({
-  defaultRuntime: mocks.runtime,
-}));
+vi.mock("../runtime.js", async () => {
+  const { createCliRuntimeCapture } = await import("./test-runtime-capture.js");
+  runtimeState.capture ??= createCliRuntimeCapture();
+  return { defaultRuntime: runtimeState.capture.defaultRuntime };
+});
 
 describe("browser state option collisions", () => {
   const createStateProgram = ({ withGatewayUrl = false } = {}) => {
@@ -59,11 +64,8 @@ describe("browser state option collisions", () => {
   beforeEach(() => {
     mocks.callBrowserRequest.mockClear();
     mocks.runBrowserResizeWithOutput.mockClear();
-    mocks.runtime.log.mockClear();
-    mocks.runtime.error.mockClear();
-    mocks.runtime.writeStdout.mockClear();
-    mocks.runtime.writeJson.mockClear();
-    mocks.runtime.exit.mockClear();
+    getRuntimeCapture().resetRuntimeCapture();
+    getRuntime().exit.mockImplementation(() => {});
   });
 
   it("forwards parent-captured --target-id on `browser cookies set`", async () => {
@@ -143,37 +145,37 @@ describe("browser state option collisions", () => {
     await runBrowserCommand(["set", "offline", "maybe"]);
 
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-    expect(mocks.runtime.error).toHaveBeenCalledWith(expect.stringContaining("Expected on|off"));
-    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(getRuntime().error).toHaveBeenCalledWith(expect.stringContaining("Expected on|off"));
+    expect(getRuntime().exit).toHaveBeenCalledWith(1);
   });
 
   it("errors when set media receives an invalid value", async () => {
     await runBrowserCommand(["set", "media", "sepia"]);
 
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
+    expect(getRuntime().error).toHaveBeenCalledWith(
       expect.stringContaining("Expected dark|light|none"),
     );
-    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(getRuntime().exit).toHaveBeenCalledWith(1);
   });
 
   it("errors when headers JSON is missing", async () => {
     await runBrowserCommand(["set", "headers"]);
 
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
+    expect(getRuntime().error).toHaveBeenCalledWith(
       expect.stringContaining("Missing headers JSON"),
     );
-    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(getRuntime().exit).toHaveBeenCalledWith(1);
   });
 
   it("errors when headers JSON is not an object", async () => {
     await runBrowserCommand(["set", "headers", "--json", "[]"]);
 
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
+    expect(getRuntime().error).toHaveBeenCalledWith(
       expect.stringContaining("Headers JSON must be a JSON object"),
     );
-    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(getRuntime().exit).toHaveBeenCalledWith(1);
   });
 });
