@@ -2,6 +2,7 @@ import { create } from "zustand";
 
 export interface DelegationEntry {
   runId: string;
+  sessionKey?: string;
   childSessionKey: string;
   agentId: string | null;
   task: string | null;

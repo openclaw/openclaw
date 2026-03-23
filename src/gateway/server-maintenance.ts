@@ -273,9 +273,8 @@ export function startGatewayMaintenanceTimers(params: {
         elapsedMs: r.created_at != null ? nowBroadcast - r.created_at : 0,
       }));
 
-      if (allDelegations.length > 0) {
-        params.broadcast("delegation", { delegations: allDelegations });
-      }
+      // Always broadcast — even empty array — so UI clears stale cards
+      params.broadcast("delegation", { delegations: allDelegations });
     } catch (err) {
       if (err instanceof Error && err.message.includes("no such table")) {
         return; // schema not migrated yet — skip silently

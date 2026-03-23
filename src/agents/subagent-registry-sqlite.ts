@@ -291,6 +291,28 @@ export function deleteSubagentRunFromDb(runId: string): boolean {
   }
 }
 
+export function markActiveSubagentRunsInterrupted(reason: string): number {
+  // Query op1_subagent_runs for active runs and mark them as interrupted.
+  // This runs during gateway shutdown, so use direct DB access synchronously.
+  try {
+    const db = resolveDb();
+    const now = Date.now();
+    const result = db
+      .prepare(
+        `UPDATE op1_subagent_runs
+         SET ended_at = ?,
+             outcome_json = ?,
+             ended_reason = ?,
+             cleanup_completed_at = ?
+         WHERE ended_at IS NULL AND started_at IS NOT NULL`,
+      )
+      .run(now, JSON.stringify({ status: "interrupted", reason }), reason, now);
+    return typeof result.changes === "bigint" ? Number(result.changes) : result.changes;
+  } catch {
+    return 0;
+  }
+}
+
 export function saveAllSubagentRunsToDb(runs: Map<string, SubagentRunRecord>): void {
   const db = resolveDb();
   try {

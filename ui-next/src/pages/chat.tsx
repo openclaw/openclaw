@@ -153,10 +153,17 @@ export function ChatPage() {
     return onDelegationPushEvent((payload) => {
       const evt = payload as { delegations?: DelegationEntry[] } | null;
       if (evt?.delegations) {
-        setDelegations(evt.delegations);
+        // Filter to only show delegations for the active session
+        const sessionScoped = activeSessionKey
+          ? evt.delegations.filter((d) => d.sessionKey === activeSessionKey)
+          : evt.delegations;
+        setDelegations(sessionScoped);
+      } else {
+        // Empty broadcast — clear all delegation cards
+        setDelegations([]);
       }
     });
-  }, [setDelegations]);
+  }, [activeSessionKey, setDelegations]);
 
   // After a stream finalizes, refresh history from the server to pick up
   // full message data (usage, stopReason, etc.) that the live "final" event

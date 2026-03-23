@@ -1,5 +1,6 @@
 import type { Server as HttpServer } from "node:http";
 import type { WebSocketServer } from "ws";
+import { markActiveSubagentRunsInterrupted } from "../agents/subagent-registry-sqlite.js";
 import type { CanvasHostHandler, CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
@@ -82,6 +83,15 @@ export function createGatewayCloseHandler(params: {
       clearInterval(timer);
     }
     params.nodePresenceTimers.clear();
+    // Mark all active subagent runs as interrupted before shutting down.
+    try {
+      const count = markActiveSubagentRunsInterrupted("gateway_shutdown");
+      if (count > 0) {
+        console.warn(`[gateway] Marked ${count} active subagent run(s) as interrupted on shutdown`);
+      }
+    } catch {
+      /* ignore — shutdown must not be blocked by DB errors */
+    }
     params.broadcast("shutdown", {
       reason,
       restartExpectedMs,
