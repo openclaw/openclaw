@@ -220,6 +220,7 @@ export function createSessionsSendTool(opts?: {
           : 30;
       const timeoutMs = timeoutSeconds * 1000;
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
+      const targetTimeoutSeconds = timeoutSeconds === 0 ? 30 : Math.max(1, timeoutSeconds);
       const idempotencyKey = crypto.randomUUID();
       let runId: string = idempotencyKey;
       const visibilityGuard = await createSessionVisibilityGuard({
@@ -250,6 +251,7 @@ export function createSessionsSendTool(opts?: {
         deliver: false,
         channel: INTERNAL_MESSAGE_CHANNEL,
         lane: AGENT_LANE_NESTED,
+        timeout: String(targetTimeoutSeconds),
         extraSystemPrompt: agentMessageContext,
         inputProvenance: {
           kind: "inter_session",

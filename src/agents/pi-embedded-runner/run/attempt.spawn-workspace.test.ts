@@ -185,6 +185,7 @@ vi.mock("../wait-for-idle-before-flush.js", () => ({
 
 vi.mock("../runs.js", () => ({
   setActiveEmbeddedRun: () => {},
+  updateActiveEmbeddedRunSnapshot: () => {},
   clearActiveEmbeddedRun: () => {},
   updateActiveEmbeddedRunSnapshot: () => {},
 }));
@@ -664,6 +665,12 @@ describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
     });
 
     expect(result.promptError).toBeNull();
+    expect(hoisted.acquireSessionWriteLockMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile: path.join(realWorkspace, "session.jsonl"),
+        timeoutMs: 10_000,
+      }),
+    );
     expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
     expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -677,6 +684,44 @@ describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
       expect.anything(),
       expect.objectContaining({
         workspaceDir: sandboxWorkspace,
+      }),
+    );
+  });
+
+  it("propagates non-default timeoutMs into session lock acquisition", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-timeout-workspace-"));
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-timeout-agent-dir-"));
+    tempPaths.push(workspaceDir, agentDir);
+
+    hoisted.createAgentSessionMock.mockImplementation(async () => ({
+      session: createDefaultEmbeddedSession(),
+    }));
+
+    const result = await runEmbeddedAttempt({
+      sessionId: "embedded-session",
+      sessionKey: "agent:main:main",
+      sessionFile: path.join(workspaceDir, "session.jsonl"),
+      workspaceDir,
+      agentDir,
+      config: {},
+      prompt: "no-op prompt",
+      timeoutMs: 45_000,
+      runId: "run-timeout-propagation",
+      provider: "openai",
+      modelId: "gpt-test",
+      model: testModel,
+      authStorage: {} as AuthStorage,
+      modelRegistry: {} as ModelRegistry,
+      thinkLevel: "off",
+      senderIsOwner: true,
+      disableMessageTool: true,
+    });
+
+    expect(result.promptError).toBeNull();
+    expect(hoisted.acquireSessionWriteLockMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        timeoutMs: 45_000,
       }),
     );
   });

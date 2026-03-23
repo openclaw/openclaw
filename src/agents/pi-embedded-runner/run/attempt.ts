@@ -2034,6 +2034,7 @@ export async function runEmbeddedAttempt(
 
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
+      timeoutMs: params.timeoutMs,
       maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
         timeoutMs: resolveRunTimeoutWithCompactionGraceMs({
           runTimeoutMs: params.timeoutMs,
