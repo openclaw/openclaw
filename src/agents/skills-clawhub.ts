@@ -62,7 +62,7 @@ type Logger = {
   info?: (message: string) => void;
 };
 
-const VALID_SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+const VALID_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
 function normalizeSlug(raw: string): string {
   const slug = raw.trim().toLowerCase();
