@@ -46,6 +46,7 @@ const MISTRAL_SAFE_MAX_TOKENS_BY_MODEL = {
   "magistral-small": 40_000,
   "mistral-large-latest": 16_384,
   "mistral-medium-2508": 8_192,
+  "mistral-small-latest": 16_384,
   "pixtral-large-latest": 32_768,
 } as const;
 
