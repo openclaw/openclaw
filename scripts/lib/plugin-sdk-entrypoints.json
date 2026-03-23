@@ -72,6 +72,7 @@
   "directory-runtime",
   "googlechat",
   "image-generation",
+  "image-generation-core",
   "imessage",
   "imessage-core",
   "irc",
