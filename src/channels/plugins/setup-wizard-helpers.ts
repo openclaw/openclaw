@@ -1264,8 +1264,9 @@ export function createTopLevelChannelParsedAllowFromPrompt(params: {
     parseEntries: params.parseEntries,
     getExistingAllowFrom: ({ cfg }) =>
       params.getExistingAllowFrom?.(cfg) ??
-      (((cfg.channels?.[params.channel] as { allowFrom?: Array<string | number> } | undefined)
-        ?.allowFrom ?? []) as Array<string | number>),
+      (cfg.channels?.[params.channel] as { allowFrom?: Array<string | number> } | undefined)
+        ?.allowFrom ??
+      [],
     ...(params.mergeEntries ? { mergeEntries: params.mergeEntries } : {}),
     applyAllowFrom: ({ cfg, allowFrom }) => setAllowFrom(cfg, allowFrom),
   });
