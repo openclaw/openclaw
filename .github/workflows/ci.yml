@@ -21,6 +21,7 @@ jobs:
   docs-scope:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     outputs:
       docs_only: ${{ steps.check.outputs.docs_only }}
       docs_changed: ${{ steps.check.outputs.docs_changed }}
@@ -48,6 +49,7 @@ jobs:
     needs: [docs-scope]
     if: needs.docs-scope.outputs.docs_only != 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     outputs:
       run_node: ${{ steps.scope.outputs.run_node }}
       run_macos: ${{ steps.scope.outputs.run_macos }}
@@ -86,6 +88,7 @@ jobs:
     needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     outputs:
       has_changed_extensions: ${{ steps.changed.outputs.has_changed_extensions }}
       changed_extensions_matrix: ${{ steps.changed.outputs.changed_extensions_matrix }}
@@ -129,6 +132,7 @@ jobs:
   secrets:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -209,6 +213,7 @@ jobs:
     needs: [docs-scope, changed-scope, changed-extensions, secrets]
     if: always() && needs.docs-scope.result == 'success' && (needs.changed-scope.result == 'success' || needs.changed-scope.result == 'skipped') && (needs.changed-extensions.result == 'success' || needs.changed-extensions.result == 'skipped') && needs.secrets.result == 'success'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     outputs:
       docs_only: ${{ needs.docs-scope.outputs.docs_only }}
       docs_changed: ${{ needs.docs-scope.outputs.docs_changed }}
@@ -230,6 +235,7 @@ jobs:
     needs: [preflight]
     if: github.event_name == 'push' && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -264,6 +270,7 @@ jobs:
     needs: [preflight, build-artifacts]
     if: github.event_name == 'push' && needs.preflight.outputs.docs_only != 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -289,6 +296,7 @@ jobs:
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -384,6 +392,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true' && needs.preflight.outputs.has_changed_extensions == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.preflight.outputs.changed_extensions_matrix) }}
@@ -410,6 +419,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -433,6 +443,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -530,6 +541,7 @@ jobs:
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -570,6 +582,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.docs_changed == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -589,6 +602,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.preflight.outputs.run_skills_python == 'true')
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -615,7 +629,7 @@ jobs:
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_windows == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
     runs-on: blacksmith-32vcpu-windows-2025
-    timeout-minutes: 45
+    timeout-minutes: 20
     env:
       NODE_OPTIONS: --max-old-space-size=6144
       # Keep total concurrency predictable on the 32 vCPU runner.
@@ -755,6 +769,7 @@ jobs:
     needs: [preflight]
     if: github.event_name == 'pull_request' && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_macos == 'true'
     runs-on: macos-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -831,6 +846,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_android == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
