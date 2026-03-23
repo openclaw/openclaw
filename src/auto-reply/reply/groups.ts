@@ -3,6 +3,7 @@ import {
   normalizeChannelId as normalizePluginChannelId,
 } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
+import { resolveWhatsAppGroupIntroHint } from "../../channels/plugins/whatsapp-shared.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import type { GroupKeyResolution, SessionEntry } from "../../config/sessions.js";
@@ -157,13 +158,13 @@ export function buildGroupIntro(params: {
     params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim();
   const groupSpace = params.sessionCtx.GroupSpace?.trim();
   const providerIdsLine = providerId
-    ? getChannelPlugin(providerId)?.groups?.resolveGroupIntroHint?.({
+    ? (getChannelPlugin(providerId)?.groups?.resolveGroupIntroHint?.({
         cfg: params.cfg,
         groupId,
         groupChannel,
         groupSpace,
         accountId: params.sessionCtx.AccountId,
-      })
+      }) ?? (providerId === "whatsapp" ? resolveWhatsAppGroupIntroHint() : undefined))
     : undefined;
   const silenceLine =
     activation === "always"

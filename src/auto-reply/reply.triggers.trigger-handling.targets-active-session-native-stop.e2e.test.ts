@@ -141,6 +141,10 @@ async function expectResetBlockedForNonOwner(params: { home: string }): Promise<
     ...cfg.channels.whatsapp,
     allowFrom: ["+1999"],
   };
+  cfg.commands = {
+    ...cfg.commands,
+    ownerAllowFrom: ["whatsapp:+1999"],
+  };
   cfg.session = {
     ...cfg.session,
     store: join(home, "blocked-reset.sessions.json"),
