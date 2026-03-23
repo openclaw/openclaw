@@ -141,7 +141,7 @@ describe("scanStatus", () => {
       url: "ws://127.0.0.1:18789",
       urlSource: "default",
     });
-    mocks.resolveGatewayProbeAuthResolution.mockReturnValue({
+    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
       auth: {},
       warning: undefined,
     });
@@ -202,7 +202,7 @@ describe("scanStatus", () => {
       url: "ws://127.0.0.1:18789",
       urlSource: "default",
     });
-    mocks.resolveGatewayProbeAuthResolution.mockReturnValue({
+    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
       auth: {},
       warning: undefined,
     });
@@ -254,7 +254,7 @@ describe("scanStatus", () => {
       url: "ws://127.0.0.1:18789",
       urlSource: "default",
     });
-    mocks.resolveGatewayProbeAuthResolution.mockReturnValue({
+    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
       auth: {},
       warning: undefined,
     });
@@ -301,7 +301,7 @@ describe("scanStatus", () => {
       url: "ws://127.0.0.1:18789",
       urlSource: "default",
     });
-    mocks.resolveGatewayProbeAuthResolution.mockReturnValue({
+    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
       auth: {},
       warning: undefined,
     });
@@ -342,7 +342,7 @@ describe("scanStatus", () => {
       url: "ws://127.0.0.1:18789",
       urlSource: "default",
     });
-    mocks.resolveGatewayProbeAuthResolution.mockReturnValue({
+    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
       auth: {},
       warning: undefined,
     });
@@ -410,7 +410,7 @@ describe("scanStatus", () => {
       url: "ws://127.0.0.1:18789",
       urlSource: "default",
     });
-    mocks.resolveGatewayProbeAuthResolution.mockReturnValue({
+    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
       auth: {},
       warning: undefined,
     });
@@ -482,7 +482,7 @@ describe("scanStatus", () => {
       url: "ws://127.0.0.1:18789",
       urlSource: "default",
     });
-    mocks.resolveGatewayProbeAuthResolution.mockReturnValue({
+    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
       auth: {},
       warning: undefined,
     });
@@ -545,7 +545,7 @@ describe("scanStatus", () => {
       url: "ws://127.0.0.1:18789",
       urlSource: "default",
     });
-    mocks.resolveGatewayProbeAuthResolution.mockReturnValue({
+    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
       auth: {},
       warning: undefined,
     });
