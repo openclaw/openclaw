@@ -78,12 +78,12 @@ code{font-family:'SF Mono','Fira Code',monospace;font-size:12px;background:#2126
 <body>
 
 <h1>Operator1 Dashboard</h1>
-<p class="sub">Generated: 3/23/2026, 10:17:08 PM &mdash; Refresh: <code>bun .claude/skills/auto-improve/scripts/dashboard.ts</code></p>
+<p class="sub">Generated: 3/23/2026, 10:28:40 PM &mdash; Refresh: <code>bun .claude/skills/auto-improve/scripts/dashboard.ts</code></p>
 
 <div class="tabs">
   <div class="tab active" onclick="switchTab('metrics')">Agent Improvement</div>
   <div class="tab" onclick="switchTab('platform')">Platform Improvement<span class="cnt">1</span></div>
-  <div class="tab" onclick="switchTab('history')">History<span class="cnt">31</span></div>
+  <div class="tab" onclick="switchTab('history')">History<span class="cnt">32</span></div>
 </div>
 
 <!-- ==================== AGENT IMPROVEMENT ==================== -->
@@ -122,28 +122,28 @@ code{font-family:'SF Mono','Fira Code',monospace;font-size:12px;background:#2126
   <div class="ag">
     <div class="ac"><h4>Operator1 (main)</h4>
         <div class="mr"><span class="l">Sessions</span><span>5</span></div>
-        <div class="mr"><span class="l">Composite</span><span>0.653</span></div>
+        <div class="mr"><span class="l">Composite</span><span style="font-weight:700">0.653</span></div>
         <div class="mr"><span class="l">Exec Rate</span><span>1.000</span></div>
         <div class="mr"><span class="l">Write-Back</span><span>0.400</span></div>
         <div class="mr"><span class="l">Richness</span><span>1.000</span></div>
         <div class="mr"><span class="l">Memory</span><span>0.438</span></div>
       </div><div class="ac"><h4>neo</h4>
         <div class="mr"><span class="l">Sessions</span><span>5</span></div>
-        
+        <div class="mr"><span class="l">Composite</span><span style="font-weight:700">0.564</span></div>
         <div class="mr"><span class="l">Exec Rate</span><span>1.000</span></div>
         <div class="mr"><span class="l">Write-Back</span><span>0.400</span></div>
         <div class="mr"><span class="l">Richness</span><span>0.625</span></div>
         <div class="mr"><span class="l">Memory</span><span>0.000</span></div>
       </div><div class="ac"><h4>morpheus</h4>
         <div class="mr"><span class="l">Sessions</span><span>5</span></div>
-        
+        <div class="mr"><span class="l">Composite</span><span style="font-weight:700">0.800</span></div>
         <div class="mr"><span class="l">Exec Rate</span><span>1.000</span></div>
         <div class="mr"><span class="l">Write-Back</span><span>0.600</span></div>
         <div class="mr"><span class="l">Richness</span><span>0.600</span></div>
         <div class="mr"><span class="l">Memory</span><span>1.000</span></div>
       </div><div class="ac"><h4>trinity</h4>
         <div class="mr"><span class="l">Sessions</span><span>5</span></div>
-        
+        <div class="mr"><span class="l">Composite</span><span style="font-weight:700">0.607</span></div>
         <div class="mr"><span class="l">Exec Rate</span><span>1.000</span></div>
         <div class="mr"><span class="l">Write-Back</span><span>0.600</span></div>
         <div class="mr"><span class="l">Richness</span><span>0.650</span></div>
@@ -374,7 +374,7 @@ code{font-family:'SF Mono','Fira Code',monospace;font-size:12px;background:#2126
 <div id="tab-history" class="tc">
 
 <div class="subtabs">
-  <div class="subtab active" onclick="switchSubTab('agent-hist')">Agent Improvement History<span class="cnt">30</span></div>
+  <div class="subtab active" onclick="switchSubTab('agent-hist')">Agent Improvement History<span class="cnt">31</span></div>
   <div class="subtab" onclick="switchSubTab('platform-hist')">Platform Fix History<span class="cnt">1</span></div>
 </div>
 
@@ -724,6 +724,17 @@ code{font-family:'SF Mono','Fira Code',monospace;font-size:12px;background:#2126
       <td>1.000</td>
       <td><span class="b b-keep">keep</span></td>
       <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="trinity: memory_search before Dart MCP tools; score 0.654→0.653 (noise -0.001); neo_wb 0.600→0.400 (window shift: f131e428 no write); trinity_wb stable 0.600">trinity: memory_search before Dart MCP tools; score 0.654→0.653 (noise -0.001); neo_wb 0.600→0.400 (window shift: f131e428 no write); trinity_wb stable 0.600</td>
+    </tr><tr>
+      <td>31</td>
+      <td><code>5099fa9</code></td>
+      <td><strong>0.653</strong></td>
+      <td>0.219</td>
+      <td>0.438</td>
+      <td>1.000</td>
+      <td>1.000</td>
+      <td>1.000</td>
+      <td><span class="b b-keep">keep</span></td>
+      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="morpheus: write-before-return in subagent mode; score stable 0.653; 1f20f95e did 6 web_search with 0 memory writes; added step 4 to checklist">morpheus: write-before-return in subagent mode; score stable 0.653; 1f20f95e did 6 web_search with 0 memory writes; added step 4 to checklist</td>
     </tr></tbody></table></div>
 </div>
 </div>
@@ -800,7 +811,7 @@ function sortTable(tableId, colIdx, type) {
 }
 
 // Chart data
-const trendData = [{"score":0.614,"delegation":0.352,"memory":0.19,"conciseness":0.8,"silent_reply":1,"error_rate":1,"neo_exec":0.995,"morpheus_exec":1,"trinity_exec":0.96,"op1_wb":0,"neo_wb":0.333,"morpheus_wb":0,"trinity_wb":0},{"score":0.622,"delegation":0.386,"memory":0.182,"conciseness":0.8,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.333,"trinity_wb":0.25},{"score":0.673,"delegation":0.381,"memory":0.48,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.333,"trinity_wb":0.25},{"score":0.695,"delegation":0.363,"memory":0.432,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.333,"trinity_wb":0.25},{"score":0.744,"delegation":0.384,"memory":0.643,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.333,"trinity_wb":0.25},{"score":0.763,"delegation":0.4,"memory":0.714,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.333,"trinity_wb":0.25},{"score":0.77,"delegation":0.4,"memory":0.75,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.25,"trinity_wb":0.25},{"score":0.77,"delegation":0.4,"memory":0.75,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.6,"morpheus_wb":0.25,"trinity_wb":0.25},{"score":0.77,"delegation":0.47,"memory":0.74,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.6,"morpheus_wb":0.25,"trinity_wb":0},{"score":0.763,"delegation":0.404,"memory":0.71,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.2,"neo_wb":0.6,"morpheus_wb":0.25,"trinity_wb":0.2},{"score":0.735,"delegation":0.49,"memory":0.442,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.2,"neo_wb":0.6,"morpheus_wb":0.25,"trinity_wb":0.2},{"score":0.763,"delegation":0.49,"memory":0.432,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.2,"neo_wb":0.6,"morpheus_wb":0.25,"trinity_wb":0.2},{"score":0.643,"delegation":0.078,"memory":0.6,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.976,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.2,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.719,"delegation":0.462,"memory":0.4,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.759,"delegation":0.462,"memory":0.6,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.759,"delegation":0.462,"memory":0.6,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.77,"delegation":0.635,"memory":0.4,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.77,"delegation":0.635,"memory":0.4,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0.167,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.751,"delegation":0.637,"memory":0.3,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.752,"delegation":0.639,"memory":0.3,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0.5,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.752,"delegation":0.639,"memory":0.3,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0.5,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.744,"delegation":0.639,"memory":0.3,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0.5,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.743,"delegation":0.639,"memory":0.3,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0.5,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.654,"delegation":0.181,"memory":0.5,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.649,"delegation":0.18,"memory":0.476,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.65,"delegation":0.183,"memory":0.476,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.658,"delegation":0.193,"memory":0.5,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.6,"morpheus_wb":0.6,"trinity_wb":0.4},{"score":0.65,"delegation":0.213,"memory":0.433,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.8,"morpheus_wb":0.8,"trinity_wb":0.4},{"score":0.654,"delegation":0.22,"memory":0.438,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.6,"morpheus_wb":0.8,"trinity_wb":0.6},{"score":0.653,"delegation":0.219,"memory":0.438,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.4,"morpheus_wb":0.6,"trinity_wb":0.6}];
+const trendData = [{"score":0.614,"delegation":0.352,"memory":0.19,"conciseness":0.8,"silent_reply":1,"error_rate":1,"neo_exec":0.995,"morpheus_exec":1,"trinity_exec":0.96,"op1_wb":0,"neo_wb":0.333,"morpheus_wb":0,"trinity_wb":0},{"score":0.622,"delegation":0.386,"memory":0.182,"conciseness":0.8,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.333,"trinity_wb":0.25},{"score":0.673,"delegation":0.381,"memory":0.48,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.333,"trinity_wb":0.25},{"score":0.695,"delegation":0.363,"memory":0.432,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.333,"trinity_wb":0.25},{"score":0.744,"delegation":0.384,"memory":0.643,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.333,"trinity_wb":0.25},{"score":0.763,"delegation":0.4,"memory":0.714,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.333,"trinity_wb":0.25},{"score":0.77,"delegation":0.4,"memory":0.75,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0,"neo_wb":0.4,"morpheus_wb":0.25,"trinity_wb":0.25},{"score":0.77,"delegation":0.4,"memory":0.75,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.6,"morpheus_wb":0.25,"trinity_wb":0.25},{"score":0.77,"delegation":0.47,"memory":0.74,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.6,"morpheus_wb":0.25,"trinity_wb":0},{"score":0.763,"delegation":0.404,"memory":0.71,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.2,"neo_wb":0.6,"morpheus_wb":0.25,"trinity_wb":0.2},{"score":0.735,"delegation":0.49,"memory":0.442,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.2,"neo_wb":0.6,"morpheus_wb":0.25,"trinity_wb":0.2},{"score":0.763,"delegation":0.49,"memory":0.432,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.2,"neo_wb":0.6,"morpheus_wb":0.25,"trinity_wb":0.2},{"score":0.643,"delegation":0.078,"memory":0.6,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.976,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.2,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.719,"delegation":0.462,"memory":0.4,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.759,"delegation":0.462,"memory":0.6,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.759,"delegation":0.462,"memory":0.6,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.77,"delegation":0.635,"memory":0.4,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.333,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.77,"delegation":0.635,"memory":0.4,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0.167,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.751,"delegation":0.637,"memory":0.3,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.752,"delegation":0.639,"memory":0.3,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0.5,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.752,"delegation":0.639,"memory":0.3,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0.5,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.744,"delegation":0.639,"memory":0.3,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0.5,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.743,"delegation":0.639,"memory":0.3,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":0.974,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.429,"neo_wb":0.5,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.654,"delegation":0.181,"memory":0.5,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.649,"delegation":0.18,"memory":0.476,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.65,"delegation":0.183,"memory":0.476,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.25,"morpheus_wb":0.4,"trinity_wb":0.6},{"score":0.658,"delegation":0.193,"memory":0.5,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.6,"morpheus_wb":0.6,"trinity_wb":0.4},{"score":0.65,"delegation":0.213,"memory":0.433,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.8,"morpheus_wb":0.8,"trinity_wb":0.4},{"score":0.654,"delegation":0.22,"memory":0.438,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.6,"morpheus_wb":0.8,"trinity_wb":0.6},{"score":0.653,"delegation":0.219,"memory":0.438,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.4,"morpheus_wb":0.6,"trinity_wb":0.6},{"score":0.653,"delegation":0.219,"memory":0.438,"conciseness":1,"silent_reply":1,"error_rate":1,"neo_exec":1,"morpheus_exec":1,"trinity_exec":1,"op1_wb":0.4,"neo_wb":0.4,"morpheus_wb":0.6,"trinity_wb":0.6}];
 const labels = trendData.map((_, i) => i + 1);
 
 // Dataset definitions for each view
@@ -854,7 +865,7 @@ if (ctx) {
 }
 
 // Current agent metrics for inline display
-const agentMetrics = {"main":{"sessions":5,"composite":0.6532142857142857,"delegation":0.21904761904761905,"memory":0.4375,"conciseness":1,"silent_reply":1,"error_rate":1,"exec_rate":1,"writeback":0.4,"richness":1,"prompt_size":2029,"prompt_size_score":0.2,"prompt_files":[{"file":"AGENTS.md","words":993},{"file":"SOUL.md","words":177},{"file":"TOOLS.md","words":261},{"file":"HEARTBEAT.md","words":548},{"file":"IDENTITY.md","words":50}],"tool_efficiency":1,"prompt_efficiency":0.32193902696613397,"tool_call_count":456,"tool_calls_per_message":2.8679245283018866},"neo":{"sessions":5,"composite":-1,"delegation":-1,"memory":0,"conciseness":-1,"silent_reply":-1,"error_rate":1,"exec_rate":1,"writeback":0.4,"richness":0.625,"prompt_size":1313,"prompt_size_score":0.6,"prompt_files":[{"file":"AGENTS.md","words":825},{"file":"SOUL.md","words":145},{"file":"TOOLS.md","words":36},{"file":"HEARTBEAT.md","words":256},{"file":"IDENTITY.md","words":51}],"tool_efficiency":0.8,"prompt_efficiency":-1,"tool_call_count":40,"tool_calls_per_message":8},"morpheus":{"sessions":5,"composite":-1,"delegation":-1,"memory":1,"conciseness":-1,"silent_reply":-1,"error_rate":1,"exec_rate":1,"writeback":0.6,"richness":0.6,"prompt_size":1278,"prompt_size_score":0.6,"prompt_files":[{"file":"AGENTS.md","words":791},{"file":"SOUL.md","words":153},{"file":"TOOLS.md","words":26},{"file":"HEARTBEAT.md","words":250},{"file":"IDENTITY.md","words":58}],"tool_efficiency":0.8,"prompt_efficiency":-1,"tool_call_count":36,"tool_calls_per_message":7.2},"trinity":{"sessions":5,"composite":-1,"delegation":-1,"memory":0,"conciseness":-1,"silent_reply":-1,"error_rate":1,"exec_rate":1,"writeback":0.6,"richness":0.65,"prompt_size":1454,"prompt_size_score":0.6,"prompt_files":[{"file":"AGENTS.md","words":990},{"file":"SOUL.md","words":138},{"file":"TOOLS.md","words":27},{"file":"HEARTBEAT.md","words":248},{"file":"IDENTITY.md","words":51}],"tool_efficiency":0.6,"prompt_efficiency":-1,"tool_call_count":72,"tool_calls_per_message":14.4}};
+const agentMetrics = {"main":{"sessions":5,"composite":0.6532142857142857,"delegation":0.21904761904761905,"memory":0.4375,"conciseness":1,"silent_reply":1,"error_rate":1,"exec_rate":1,"writeback":0.4,"richness":1,"prompt_size":2029,"prompt_size_score":0.2,"prompt_files":[{"file":"AGENTS.md","words":993},{"file":"SOUL.md","words":177},{"file":"TOOLS.md","words":261},{"file":"HEARTBEAT.md","words":548},{"file":"IDENTITY.md","words":50}],"tool_efficiency":1,"prompt_efficiency":0.32193902696613397,"tool_call_count":456,"tool_calls_per_message":2.8679245283018866},"neo":{"sessions":5,"composite":0.56375,"delegation":-1,"memory":0,"conciseness":-1,"silent_reply":-1,"error_rate":1,"exec_rate":1,"writeback":0.4,"richness":0.625,"prompt_size":1313,"prompt_size_score":0.6,"prompt_files":[{"file":"AGENTS.md","words":825},{"file":"SOUL.md","words":145},{"file":"TOOLS.md","words":36},{"file":"HEARTBEAT.md","words":256},{"file":"IDENTITY.md","words":51}],"tool_efficiency":0.8,"prompt_efficiency":0.42936024371667936,"tool_call_count":40,"tool_calls_per_message":8},"morpheus":{"sessions":5,"composite":0.7999999999999999,"delegation":-1,"memory":1,"conciseness":-1,"silent_reply":-1,"error_rate":1,"exec_rate":1,"writeback":0.6,"richness":0.6,"prompt_size":1297,"prompt_size_score":0.6,"prompt_files":[{"file":"AGENTS.md","words":810},{"file":"SOUL.md","words":153},{"file":"TOOLS.md","words":26},{"file":"HEARTBEAT.md","words":250},{"file":"IDENTITY.md","words":58}],"tool_efficiency":0.8,"prompt_efficiency":0.6168080185042405,"tool_call_count":36,"tool_calls_per_message":7.2},"trinity":{"sessions":5,"composite":0.6074999999999999,"delegation":-1,"memory":0,"conciseness":-1,"silent_reply":-1,"error_rate":1,"exec_rate":1,"writeback":0.6,"richness":0.65,"prompt_size":1454,"prompt_size_score":0.6,"prompt_files":[{"file":"AGENTS.md","words":990},{"file":"SOUL.md","words":138},{"file":"TOOLS.md","words":27},{"file":"HEARTBEAT.md","words":248},{"file":"IDENTITY.md","words":51}],"tool_efficiency":0.6,"prompt_efficiency":0.4178129298486932,"tool_call_count":72,"tool_calls_per_message":14.4}};
 
 const metricDefs = {
   composite: [],
@@ -878,27 +889,33 @@ function renderLeftPanel(view) {
   const agentName = {composite:'Composite',op1:'Operator1 (main)',neo:'Neo',morpheus:'Morpheus',trinity:'Trinity',all:'All Agents'}[view];
   const defs = metricDefs[view] || [];
 
+  const c = (v) => v >= 0.8 ? '#3fb950' : v >= 0.5 ? '#d29922' : '#f85149';
+  const f = (v) => v >= 0 ? v.toFixed(3) : '-';
+  const f2 = (v) => v >= 0 ? v.toFixed(2) : '-';
+
   if (view === 'composite' || view === 'all') {
     // Reset to default composite view
     const m = agentMetrics['main'];
-    const c = (v) => v >= 0.8 ? '#3fb950' : v >= 0.5 ? '#d29922' : '#f85149';
-    const f = (v) => v >= 0 ? v.toFixed(2) : '-';
     container.innerHTML =
       '<h2>Composite Score</h2>' +
-      '<div class="mv">' + f(m.composite) + '</div>' +
+      '<div class="mv">' + f2(m.composite) + '</div>' +
       '<div class="ml">Operator1 (main) &mdash; ' + m.sessions + ' sessions</div>' +
       '<div style="margin-top:16px"><h3>Metric Breakdown</h3><div class="sg">' +
       [{k:'delegation',l:'Delegation',w:'0.30'},{k:'memory',l:'Memory',w:'0.20'},{k:'conciseness',l:'Conciseness',w:'0.15'},{k:'silent_reply',l:'Silent Reply',w:'0.15'},{k:'error_rate',l:'Tool Errors',w:'0.20'}]
-        .map(d => '<div class="si"><div class="v" style="color:'+c(m[d.k])+'">'+f(m[d.k])+'</div><div class="l">'+d.l+' ('+d.w+')</div></div>').join('') +
+        .map(d => '<div class="si"><div class="v" style="color:'+c(m[d.k])+'">'+f2(m[d.k])+'</div><div class="l">'+d.l+' ('+d.w+')</div></div>').join('') +
       '</div></div>';
     return;
   }
 
   // Agent-specific view
-  const c = (v) => v >= 0.8 ? '#3fb950' : v >= 0.5 ? '#d29922' : '#f85149';
-  const f = (v) => v >= 0 ? v.toFixed(3) : '-';
-
   let html = '<h2>' + agentName + '</h2>';
+
+  // Composite score for this agent
+  if (agent.composite >= 0) {
+    html += '<div class="mv" style="margin:8px 0">' + f(agent.composite) + '</div>';
+    html += '<div class="ml" style="margin-bottom:12px">Composite &mdash; ' + agent.sessions + ' sessions</div>';
+  }
+
   html += '<div style="margin-top:8px">';
 
   // Metrics grid
