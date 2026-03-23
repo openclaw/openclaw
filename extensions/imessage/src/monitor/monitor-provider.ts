@@ -34,6 +34,7 @@ import {
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
+import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose, shouldLogVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
@@ -43,6 +44,7 @@ import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "../constants.js";
 import { probeIMessage } from "../probe.js";
 import { sendMessageIMessage } from "../send.js";
 import { normalizeIMessageHandle } from "../targets.js";
+import { resolveIMessageTypingTarget, sendIMessageTyping } from "../typing.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
 import { deliverReplies } from "./deliver.js";
 import { createSentMessageCache } from "./echo-cache.js";
@@ -401,9 +403,41 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       accountId: decision.route.accountId,
     });
 
-    const dispatcher = createReplyDispatcher({
+    const typingTarget = resolveIMessageTypingTarget({
+      chatId: decision.chatId,
+      chatIdentifier: decision.chatIdentifier,
+      chatGuid: decision.chatGuid,
+      to: decision.sender,
+    });
+    const cliPath = accountInfo.config.cliPath?.trim() || "imsg";
+    const dbPath = accountInfo.config.dbPath?.trim();
+    const sendTyping = (active: boolean) => {
+      if (!typingTarget) {
+        return;
+      }
+      sendIMessageTyping(typingTarget, {
+        cliPath,
+        dbPath: dbPath || undefined,
+        runtime,
+        active,
+      }).catch((err) => {
+        runtime.error?.(`[imessage] typing ${active ? "start" : "stop"} failed: ${String(err)}`);
+      });
+    };
+
+    let streamingActive = false;
+    const {
+      dispatcher,
+      replyOptions: typingReplyOptions,
+      markRunComplete,
+    } = createReplyDispatcherWithTyping({
       ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(cfg, decision.route.agentId),
+      onReplyStart: async () => {
+        streamingActive = true;
+        sendTyping(true);
+        await replyPipeline.typingCallbacks?.onReplyStart();
+      },
       deliver: async (payload) => {
         const target = ctxPayload.To;
         if (!target) {
@@ -426,18 +460,28 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       },
     });
 
-    const { queuedFinal } = await dispatchInboundMessage({
-      ctx: ctxPayload,
-      cfg,
-      dispatcher,
-      replyOptions: {
-        disableBlockStreaming:
-          typeof accountInfo.config.blockStreaming === "boolean"
-            ? !accountInfo.config.blockStreaming
-            : undefined,
-        onModelSelected,
-      },
-    });
+    let queuedFinal: boolean;
+    try {
+      ({ queuedFinal } = await dispatchInboundMessage({
+        ctx: ctxPayload,
+        cfg,
+        dispatcher,
+        replyOptions: {
+          ...typingReplyOptions,
+          disableBlockStreaming:
+            typeof accountInfo.config.blockStreaming === "boolean"
+              ? !accountInfo.config.blockStreaming
+              : undefined,
+          onModelSelected,
+        },
+      }));
+    } finally {
+      markRunComplete();
+      if (streamingActive) {
+        streamingActive = false;
+        sendTyping(false);
+      }
+    }
 
     if (!queuedFinal) {
       if (decision.isGroup && decision.historyKey) {
