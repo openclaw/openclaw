@@ -389,6 +389,20 @@ export async function dispatchCronDelivery(
         agentId: params.agentId,
         sessionKey: params.agentSessionKey,
       });
+      // Log cron delivery action for policy feedback (fire-and-forget)
+      try {
+        const { logPolicyAction } = await import("../../policy-feedback/gateway-bridge.js");
+        logPolicyAction({
+          agentId: params.agentId,
+          sessionKey: params.agentSessionKey,
+          actionType: "cron_run",
+          channelId: delivery.channel,
+          accountId: delivery.accountId,
+          contextSummary: `Cron job ${params.job.id} delivery`,
+        });
+      } catch {
+        // Policy feedback unavailable
+      }
       const runDelivery = async () =>
         await deliverOutboundPayloads({
           cfg: params.cfgWithAgentDefaults,

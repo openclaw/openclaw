@@ -1013,6 +1013,17 @@ export async function startGatewayServer(
     void cron.start().catch((err) => logCron.error(`failed to start: ${String(err)}`));
   }
 
+  // Initialize policy feedback subsystem (passive observer, non-critical)
+  let policyFeedbackShutdown: (() => void) | undefined;
+  if (!minimalTestGateway) {
+    void import("../policy-feedback/init.js")
+      .then(({ initializePolicyFeedback }) => initializePolicyFeedback({ agentId: defaultAgentId }))
+      .then((handle) => {
+        policyFeedbackShutdown = handle.shutdown;
+      })
+      .catch(() => {});
+  }
+
   const stopModelPricingRefresh =
     !minimalTestGateway && process.env.VITEST !== "1"
       ? startGatewayModelPricingRefresh({ config: cfgAtStart })
@@ -1341,6 +1352,7 @@ export async function startGatewayServer(
       if (diagnosticsEnabled) {
         stopDiagnosticHeartbeat();
       }
+      policyFeedbackShutdown?.();
       if (skillsRefreshTimer) {
         clearTimeout(skillsRefreshTimer);
         skillsRefreshTimer = null;
