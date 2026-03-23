@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 import { withEnvAsync } from "../../../test/helpers/extensions/env.js";
 import { useFrozenTime, useRealTime } from "../../../test/helpers/extensions/frozen-time.js";
@@ -33,22 +33,11 @@ const {
   throttlerSpy,
   useSpy,
 } = harness;
-import { resolveTelegramFetch } from "./fetch.js";
-
-// Import after the harness registers `vi.mock(...)` for grammY and Telegram internals.
-const {
-  createTelegramBot: createTelegramBotBase,
-  getTelegramSequentialKey,
-  setTelegramBotRuntimeForTest,
-} = await import("./bot.js");
-setTelegramBotRuntimeForTest(
-  telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
-);
-const createTelegramBot = (opts: Parameters<typeof createTelegramBotBase>[0]) =>
-  createTelegramBotBase({
-    ...opts,
-    telegramDeps: telegramBotDepsForTest,
-  });
+let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
+let createTelegramBot: (
+  opts: Parameters<typeof import("./bot.js").createTelegramBot>[0],
+) => ReturnType<typeof import("./bot.js").createTelegramBot>;
+let getTelegramSequentialKey: typeof import("./bot.js").getTelegramSequentialKey;
 
 const loadConfig = getLoadConfigMock();
 const loadWebMedia = getLoadWebMediaMock();
@@ -91,6 +80,24 @@ describe("createTelegramBot", () => {
   });
   afterAll(() => {
     process.env.TZ = ORIGINAL_TZ;
+  });
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ resolveTelegramFetch } = await import("./fetch.js"));
+    const {
+      createTelegramBot: createTelegramBotBase,
+      getTelegramSequentialKey: importedGetTelegramSequentialKey,
+      setTelegramBotRuntimeForTest,
+    } = await import("./bot.js");
+    setTelegramBotRuntimeForTest(
+      telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
+    );
+    getTelegramSequentialKey = importedGetTelegramSequentialKey;
+    createTelegramBot = (opts) =>
+      createTelegramBotBase({
+        ...opts,
+        telegramDeps: telegramBotDepsForTest,
+      });
   });
 
   // groupPolicy tests

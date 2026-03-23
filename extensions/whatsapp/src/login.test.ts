@@ -19,15 +19,17 @@ vi.mock("./session.js", () => {
   };
 });
 
-import { loginWeb } from "./login.js";
 import type { waitForWaConnection } from "./session.js";
-
-const { createWaSocket } = await import("./session.js");
+let loginWeb: typeof import("./login.js").loginWeb;
+let createWaSocket: typeof import("./session.js").createWaSocket;
 
 describe("web login", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.useFakeTimers();
     vi.clearAllMocks();
+    ({ loginWeb } = await import("./login.js"));
+    ({ createWaSocket } = await import("./session.js"));
   });
 
   afterEach(() => {

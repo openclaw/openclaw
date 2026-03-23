@@ -1,13 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
-import {
-  createDiscordMessageHandler,
-  preflightDiscordMessageMock,
-  processDiscordMessageMock,
-} from "./message-handler.module-test-helpers.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDiscordHandlerParams,
   createDiscordPreflightContext,
 } from "./message-handler.test-helpers.js";
+let createDiscordMessageHandler: typeof import("./message-handler.module-test-helpers.js").createDiscordMessageHandler;
+let preflightDiscordMessageMock: typeof import("./message-handler.module-test-helpers.js").preflightDiscordMessageMock;
+let processDiscordMessageMock: typeof import("./message-handler.module-test-helpers.js").processDiscordMessageMock;
 
 const eventualReplyDeliveredMock = vi.hoisted(() => vi.fn());
 type SetStatusFn = (patch: Record<string, unknown>) => void;
@@ -86,6 +84,12 @@ async function createLifecycleStopScenario(params: {
 }
 
 describe("createDiscordMessageHandler queue behavior", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ createDiscordMessageHandler, preflightDiscordMessageMock, processDiscordMessageMock } =
+      await import("./message-handler.module-test-helpers.js"));
+  });
+
   it("resets busy counters when the handler is created", () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();

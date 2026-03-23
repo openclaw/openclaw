@@ -33,7 +33,6 @@ vi.mock("./bot/delivery.replies.js", () => ({
 
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
 import {
-  createCommandBot,
   createNativeCommandTestParams as createNativeCommandTestParamsBase,
   createPrivateCommandContext,
   deliverReplies as registeredDeliverReplies,
@@ -78,6 +77,12 @@ function createNativeCommandTestParams(
     telegramDeps,
     ...params,
   });
+}
+
+function resolveDeliverRepliesCalls() {
+  return deliveryMocks.deliverReplies.mock.calls.length > 0
+    ? deliveryMocks.deliverReplies.mock.calls
+    : registeredDeliverReplies.mock.calls;
 }
 
 describe("registerTelegramNativeCommands", () => {
@@ -270,7 +275,8 @@ describe("registerTelegramNativeCommands", () => {
     expect(handler).toBeTruthy();
     await handler?.(createPrivateCommandContext());
 
-    expect(registeredDeliverReplies).toHaveBeenCalledWith(
+    const firstDeliverRepliesCall = resolveDeliverRepliesCalls().at(0) as [unknown] | undefined;
+    expect(firstDeliverRepliesCall?.[0]).toEqual(
       expect.objectContaining({
         mediaLocalRoots: expect.arrayContaining([
           expect.stringMatching(/[\\/]\.openclaw[\\/]workspace-work$/),
@@ -324,7 +330,8 @@ describe("registerTelegramNativeCommands", () => {
     expect(handler).toBeTruthy();
     await handler?.(createPrivateCommandContext());
 
-    expect(registeredDeliverReplies).toHaveBeenCalledWith(
+    const firstDeliverRepliesCall = resolveDeliverRepliesCalls().at(0) as [unknown] | undefined;
+    expect(firstDeliverRepliesCall?.[0]).toEqual(
       expect.objectContaining({
         silent: true,
         replies: [expect.objectContaining({ isError: true })],
