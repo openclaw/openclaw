@@ -200,7 +200,7 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
         startAccount: async (ctx: any) => {
           const { cfg, accountId, log } = ctx;
           const account = resolveAccount(cfg, accountId);
-          if (!validateSynologyGatewayAccountStartup({ account, accountId, log }).ok) {
+          if (!validateSynologyGatewayAccountStartup({ cfg, account, accountId, log }).ok) {
             return waitUntilAbort(ctx.abortSignal);
           }
 
