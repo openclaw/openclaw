@@ -411,7 +411,7 @@ export async function processMessage(params: {
           // web UI only; sending them here leaks chain-of-thought to end users.
           return;
         }
-        await deliverWebReply({
+        const { sentChunks } = await deliverWebReply({
           replyResult: payload,
           msg: params.msg,
           mediaLocalRoots,
@@ -424,12 +424,19 @@ export async function processMessage(params: {
           tableMode,
         });
         didSendReply = true;
-        const shouldLog = payload.text ? true : undefined;
-        params.rememberSentText(payload.text, {
-          combinedBody,
-          combinedBodySessionKey: params.route.sessionKey,
-          logVerboseMessage: shouldLog,
-        });
+        for (const chunk of sentChunks) {
+          params.rememberSentText(chunk, {
+            combinedBody,
+            combinedBodySessionKey: params.route.sessionKey,
+            logVerboseMessage: true,
+          });
+        }
+        if (payload.text && !sentChunks.includes(payload.text)) {
+          params.rememberSentText(payload.text, {
+            combinedBody,
+            combinedBodySessionKey: params.route.sessionKey,
+          });
+        }
         const fromDisplay =
           params.msg.chatType === "group" ? conversationId : (params.msg.from ?? "unknown");
         const reply = resolveSendableOutboundReplyParts(payload);

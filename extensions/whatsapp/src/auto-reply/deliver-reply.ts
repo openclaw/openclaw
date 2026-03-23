@@ -43,12 +43,13 @@ export async function deliverWebReply(params: {
   connectionId?: string;
   skipLog?: boolean;
   tableMode?: MarkdownTableMode;
-}) {
+}): Promise<{ sentChunks: string[] }> {
   const { replyResult, msg, maxMediaBytes, textLimit, replyLogger, connectionId, skipLog } = params;
+  const sentChunks: string[] = [];
   const replyStarted = Date.now();
   if (shouldSuppressReasoningReply(replyResult)) {
     whatsappOutboundLog.debug(`Suppressed reasoning payload to ${msg.from}`);
-    return;
+    return { sentChunks };
   }
   const tableMode = params.tableMode ?? "code";
   const chunkMode = params.chunkMode ?? "length";
@@ -87,6 +88,7 @@ export async function deliverWebReply(params: {
     for (const [index, chunk] of textChunks.entries()) {
       const chunkStarted = Date.now();
       await sendWithRetry(() => msg.reply(chunk), "text");
+      sentChunks.push(chunk);
       if (!skipLog) {
         const durationMs = Date.now() - chunkStarted;
         whatsappOutboundLog.debug(
@@ -108,7 +110,7 @@ export async function deliverWebReply(params: {
       },
       "auto-reply sent (text)",
     );
-    return;
+    return { sentChunks };
   }
 
   const remainingText = [...textChunks];
@@ -191,6 +193,9 @@ export async function deliverWebReply(params: {
         },
         "auto-reply sent (media)",
       );
+      if (caption) {
+        sentChunks.push(caption);
+      }
     },
     onError: async ({ error, mediaUrl, caption, isFirst }) => {
       whatsappOutboundLog.error(`Failed sending web media to ${msg.from}: ${formatError(error)}`);
@@ -207,11 +212,15 @@ export async function deliverWebReply(params: {
       }
       whatsappOutboundLog.warn(`Media skipped; sent text-only to ${msg.from}`);
       await msg.reply(fallbackText);
+      sentChunks.push(fallbackText);
     },
   });
 
   // Remaining text chunks after media
   for (const chunk of remainingText) {
     await msg.reply(chunk);
+    sentChunks.push(chunk);
   }
+
+  return { sentChunks };
 }
