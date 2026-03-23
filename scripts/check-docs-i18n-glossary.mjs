@@ -259,11 +259,15 @@ function main() {
     } catch (err) {
       if (err.code === "ENOENT" && !explicitLangs) {
         // Auto-detected lang whose file disappeared between detect and load — skip.
-        console.warn(`docs:check-i18n-glossary: glossary.${lang}.json not found; skipping ${lang}.`);
+        console.warn(
+          `docs:check-i18n-glossary: glossary.${lang}.json not found; skipping ${lang}.`,
+        );
         continue;
       }
       // Explicit --lang typo, missing file, or JSON parse error — fail fast.
-      console.error(`docs:check-i18n-glossary: failed to load glossary.${lang}.json: ${err.message}`);
+      console.error(
+        `docs:check-i18n-glossary: failed to load glossary.${lang}.json: ${err.message}`,
+      );
       process.exit(1);
     }
 
