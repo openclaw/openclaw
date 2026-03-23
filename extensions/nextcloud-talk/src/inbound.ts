@@ -28,20 +28,23 @@ import { getNextcloudTalkRuntime } from "./runtime.js";
 import { sendMessageNextcloudTalk } from "./send.js";
 import type { CoreConfig, NextcloudTalkInboundMessage } from "./types.js";
 
-function parseStructuredNextcloudTalkBody(raw: string): {
+export type NextcloudTalkMentionEntry = {
+  key: string;
+  type?: string;
+  id?: string;
+  mentionId?: string;
+  name?: string;
+};
+
+export type ParsedNextcloudTalkBody = {
   text: string;
-  explicitMention: boolean;
-  mentionDebug: Array<{
-    key: string;
-    type?: string;
-    id?: string;
-    mentionId?: string;
-    name?: string;
-  }>;
-} {
+  mentionEntries: NextcloudTalkMentionEntry[];
+};
+
+export function parseStructuredNextcloudTalkBody(raw: string): ParsedNextcloudTalkBody {
   const trimmed = raw.trim();
   if (!trimmed.startsWith("{")) {
-    return { text: raw, explicitMention: false, mentionDebug: [] };
+    return { text: raw, mentionEntries: [] };
   }
 
   try {
@@ -61,7 +64,7 @@ function parseStructuredNextcloudTalkBody(raw: string): {
     const text = typeof parsed.message === "string" ? parsed.message : raw;
     const parameters =
       parsed.parameters && typeof parsed.parameters === "object" ? parsed.parameters : {};
-    const mentionDebug = Object.entries(parameters).map(([key, value]) => ({
+    const mentionEntries = Object.entries(parameters).map(([key, value]) => ({
       key,
       type: typeof value?.type === "string" ? value.type : undefined,
       id: typeof value?.id === "string" ? value.id : undefined,
@@ -73,20 +76,14 @@ function parseStructuredNextcloudTalkBody(raw: string): {
             : undefined,
       name: typeof value?.name === "string" ? value.name : undefined,
     }));
-    return { text, explicitMention: false, mentionDebug };
+    return { text, mentionEntries };
   } catch {
-    return { text: raw, explicitMention: false, mentionDebug: [] };
+    return { text: raw, mentionEntries: [] };
   }
 }
 
-function resolveExplicitNextcloudTalkMention(params: {
-  mentionDebug: Array<{
-    key: string;
-    type?: string;
-    id?: string;
-    mentionId?: string;
-    name?: string;
-  }>;
+export function resolveExplicitNextcloudTalkMention(params: {
+  mentionEntries: NextcloudTalkMentionEntry[];
   account: ResolvedNextcloudTalkAccount;
 }): boolean {
   const configuredApiUser = params.account.config.apiUser?.trim().toLowerCase();
@@ -101,7 +98,7 @@ function resolveExplicitNextcloudTalkMention(params: {
   }
   if (configuredName) expectedIds.add(configuredName);
 
-  return params.mentionDebug.some((entry) => {
+  return params.mentionEntries.some((entry) => {
     if ((entry.type ?? "").toLowerCase() !== "user") {
       return false;
     }
@@ -155,7 +152,7 @@ export async function handleNextcloudTalkInbound(params: {
     return;
   }
   const parsedBody = parseStructuredNextcloudTalkBody(rawBody);
-  const effectiveBody = parsedBody.text?.trim() ?? rawBody;
+  const effectiveBody = parsedBody.text.trim() || rawBody;
   if (!effectiveBody) {
     return;
   }
@@ -298,9 +295,8 @@ export async function handleNextcloudTalkInbound(params: {
   }
 
   const mentionRegexes = core.channel.mentions.buildMentionRegexes(config as OpenClawConfig);
-  const mentionPatternSources = mentionRegexes.map((re) => re.source);
   const explicitMention = resolveExplicitNextcloudTalkMention({
-    mentionDebug: parsedBody.mentionDebug,
+    mentionEntries: parsedBody.mentionEntries,
     account,
   });
   const wasMentioned =
@@ -314,9 +310,6 @@ export async function handleNextcloudTalkInbound(params: {
         wildcardConfig: roomMatch.wildcardConfig,
       })
     : false;
-  runtime.log?.(
-    `nextcloud-talk: mention debug room=${roomToken} sender=${senderId} raw=${JSON.stringify(rawBody)} text=${JSON.stringify(effectiveBody)} mentionMeta=${JSON.stringify(parsedBody.mentionDebug)} patterns=${JSON.stringify(mentionPatternSources)} explicit=${explicitMention} matched=${wasMentioned} requireMention=${shouldRequireMention}`,
-  );
   const mentionGate = resolveNextcloudTalkMentionGate({
     isGroup,
     requireMention: shouldRequireMention,
