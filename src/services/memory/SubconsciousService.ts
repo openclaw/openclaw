@@ -1,3 +1,4 @@
+import { readdirSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { getRelativeTimeDescription } from "../../utils/time-format.js";
 import { GraphService, type MemoryResult } from "./GraphService.js";
@@ -272,6 +273,55 @@ Use ONLY names, events, topics from the conversation. If the latest message is a
     return filtered;
   }
 
+  /**
+   * Given a timestamp, find the closest memory file (by datetime in filename)
+   * that is at or before that timestamp. Returns a relative path like "memory/2026-02-08-0224.md".
+   */
+  private findMemoryFile(memoryDir: string, date: Date): string | undefined {
+    let entries: string[];
+    try {
+      entries = readdirSync(memoryDir).filter(
+        (f) => /^\d{4}-\d{2}-\d{2}/.test(f) && f.endsWith(".md"),
+      );
+    } catch {
+      return undefined;
+    }
+
+    // Parse filename datetime: YYYY-MM-DD[-HHMM][...].md
+    const parseFileDatetime = (name: string): Date => {
+      const m = name.match(/^(\d{4})-(\d{2})-(\d{2})(?:-(\d{2})(\d{2}))?/);
+      if (!m) {
+        return new Date(0);
+      }
+      const [, y, mo, d, hh, mm] = m;
+      return new Date(
+        Number(y),
+        Number(mo) - 1,
+        Number(d),
+        hh ? Number(hh) : 0,
+        mm ? Number(mm) : 0,
+      );
+    };
+
+    const target = date.getTime();
+    let best: string | undefined;
+    let bestDiff = Infinity;
+
+    for (const entry of entries) {
+      const dt = parseFileDatetime(entry).getTime();
+      if (dt > target) {
+        continue;
+      } // skip files after the memory timestamp
+      const diff = target - dt;
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        best = entry;
+      }
+    }
+
+    return best ? `memory/${best}` : undefined;
+  }
+
   async getFlashback(
     sessionId: string | string[],
     currentPrompt: string,
@@ -284,6 +334,8 @@ Use ONLY names, events, topics from the conversation. If the latest message is a
     /** Dedicated agent for observer query generation — should have no thinking for low latency. Falls back to agent. */
     observerAgent?: LLMClient | null,
     onEvent?: (event: { stream: string; data: unknown }) => void,
+    /** Workspace memory dir to resolve per-memory file references (e.g. ~/clawd/memory). */
+    memoryDir?: string,
   ): Promise<string> {
     if (onEvent) {
       onEvent({
@@ -369,8 +421,13 @@ Use ONLY names, events, topics from the conversation. If the latest message is a
     afterEcho.sort((a, b) => (b._score ?? 0) - (a._score ?? 0));
 
     const seenContent = new Set<string>();
-    const topMemories: Array<{ content: string; date: Date; relativeTime: string; score: number }> =
-      [];
+    const topMemories: Array<{
+      content: string;
+      date: Date;
+      relativeTime: string;
+      score: number;
+      memoryFile?: string;
+    }> = [];
 
     for (const r of afterEcho) {
       if (topMemories.length >= 3) {
@@ -398,11 +455,13 @@ Use ONLY names, events, topics from the conversation. If the latest message is a
       const finalDate = new Date(
         r.timestamp || r.message?.created_at || r.message?.createdAt || Date.now(),
       );
+      const memoryFile = memoryDir ? this.findMemoryFile(memoryDir, finalDate) : undefined;
       topMemories.push({
         content,
         date: finalDate,
         relativeTime: getRelativeTimeDescription(finalDate),
         score: r._score ?? 0,
+        memoryFile,
       });
       this.log(`  ✨ [FINAL] score=${(r._score ?? 0).toFixed(3)} "${content.substring(0, 60)}..."`);
     }
@@ -421,7 +480,9 @@ Use ONLY names, events, topics from the conversation. If the latest message is a
     }
 
     // Format top memories as a flat list (no query grouping)
-    const rewrittenLines = topMemories.map((m) => `- [${m.relativeTime}] ${m.content}`).join("\n");
+    const rewrittenLines = topMemories
+      .map((m) => `- [${m.relativeTime}] ${m.content}${m.memoryFile ? ` (→ ${m.memoryFile})` : ""}`)
+      .join("\n");
 
     const t_rewrite = 0;
     const totalTime = performance.now() - startTime;

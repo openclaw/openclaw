@@ -356,6 +356,9 @@ export default function register(api: PluginApi) {
         undefined,
         quickContext,
         config.graphiti?.rewriteMemories ?? true,
+        undefined,
+        undefined,
+        memoryDir,
       );
       respond(true, { flashbacks });
     } catch (e: unknown) {
@@ -1171,6 +1174,7 @@ export default function register(api: PluginApi) {
                 });
               }
             },
+            memoryDir,
           )
         : Promise.resolve(""),
     ]);
