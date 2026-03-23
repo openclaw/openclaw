@@ -257,6 +257,38 @@ describe("resolveGatewayInstallToken", () => {
     expect(writeConfigFileMock).not.toHaveBeenCalled();
   });
 
+  it("passes the install env through to gateway auth resolution", async () => {
+    const env = {
+      OPENCLAW_GATEWAY_PASSWORD: "dotenv-password", // pragma: allowlist secret
+    } as NodeJS.ProcessEnv;
+    shouldRequireGatewayTokenForInstallMock.mockReturnValue(false);
+    resolveGatewayAuthMock.mockReturnValue({
+      mode: "password",
+      token: undefined,
+      password: undefined,
+      allowTailscale: false,
+    });
+
+    const result = await resolveGatewayInstallToken({
+      config: {
+        gateway: { auth: {} },
+      } as OpenClawConfig,
+      env,
+      autoGenerateWhenMissing: true,
+      persistGeneratedToken: true,
+    });
+
+    expect(resolveGatewayAuthMock).toHaveBeenCalledWith({
+      authConfig: {},
+      env,
+      tailscaleMode: "off",
+    });
+    expect(result.token).toBeUndefined();
+    expect(result.unavailableReason).toBeUndefined();
+    expect(result.warnings.some((message) => message.includes("Auto-generated"))).toBe(false);
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
+
   it("skips token SecretRef resolution when token auth is not required", async () => {
     const tokenRef = { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" };
     resolveSecretInputRefMock.mockReturnValue({ ref: tokenRef });
