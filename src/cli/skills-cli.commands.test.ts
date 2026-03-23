@@ -1,124 +1,139 @@
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
-const loadConfigMock = vi.fn();
-const resolveAgentWorkspaceDirMock = vi.fn();
-const resolveDefaultAgentIdMock = vi.fn();
-const buildWorkspaceSkillStatusMock = vi.fn();
-const formatSkillsListMock = vi.fn();
-const formatSkillInfoMock = vi.fn();
-const formatSkillsCheckMock = vi.fn();
+const loadConfigMock = vi.fn(() => ({}));
+const resolveDefaultAgentIdMock = vi.fn(() => "main");
+const resolveAgentWorkspaceDirMock = vi.fn(() => "/tmp/workspace");
+const searchSkillsFromClawHubMock = vi.fn();
+const installSkillFromClawHubMock = vi.fn();
+const updateSkillsFromClawHubMock = vi.fn();
+const readTrackedClawHubSkillSlugsMock = vi.fn();
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } =
+  createCliRuntimeCapture();
+
+vi.mock("../runtime.js", () => ({
+  defaultRuntime,
+}));
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: loadConfigMock,
+  loadConfig: () => loadConfigMock(),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
-  resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
-  resolveDefaultAgentId: resolveDefaultAgentIdMock,
+  resolveDefaultAgentId: () => resolveDefaultAgentIdMock(),
+  resolveAgentWorkspaceDir: () => resolveAgentWorkspaceDirMock(),
 }));
 
-vi.mock("../agents/skills-status.js", () => ({
-  buildWorkspaceSkillStatus: buildWorkspaceSkillStatusMock,
+vi.mock("../agents/skills-clawhub.js", () => ({
+  searchSkillsFromClawHub: (...args: unknown[]) => searchSkillsFromClawHubMock(...args),
+  installSkillFromClawHub: (...args: unknown[]) => installSkillFromClawHubMock(...args),
+  updateSkillsFromClawHub: (...args: unknown[]) => updateSkillsFromClawHubMock(...args),
+  readTrackedClawHubSkillSlugs: (...args: unknown[]) => readTrackedClawHubSkillSlugsMock(...args),
 }));
 
-vi.mock("./skills-cli.format.js", () => ({
-  formatSkillsList: formatSkillsListMock,
-  formatSkillInfo: formatSkillInfoMock,
-  formatSkillsCheck: formatSkillsCheckMock,
-}));
+const { registerSkillsCli } = await import("./skills-cli.js");
 
-vi.mock("../runtime.js", () => ({
-  defaultRuntime: runtime,
-}));
-
-let registerSkillsCli: typeof import("./skills-cli.js").registerSkillsCli;
-
-beforeAll(async () => {
-  ({ registerSkillsCli } = await import("./skills-cli.js"));
-});
-
-describe("registerSkillsCli", () => {
-  const report = {
-    workspaceDir: "/tmp/workspace",
-    managedSkillsDir: "/tmp/workspace/.skills",
-    skills: [],
+describe("skills cli commands", () => {
+  const createProgram = () => {
+    const program = new Command();
+    program.exitOverride();
+    registerSkillsCli(program);
+    return program;
   };
 
-  async function runCli(args: string[]) {
-    const program = new Command();
-    registerSkillsCli(program);
-    await program.parseAsync(args, { from: "user" });
-  }
+  const runCommand = (argv: string[]) => createProgram().parseAsync(argv, { from: "user" });
 
   beforeEach(() => {
-    vi.clearAllMocks();
-    loadConfigMock.mockReturnValue({ gateway: {} });
+    resetRuntimeCapture();
+    loadConfigMock.mockReset();
+    resolveDefaultAgentIdMock.mockReset();
+    resolveAgentWorkspaceDirMock.mockReset();
+    searchSkillsFromClawHubMock.mockReset();
+    installSkillFromClawHubMock.mockReset();
+    updateSkillsFromClawHubMock.mockReset();
+    readTrackedClawHubSkillSlugsMock.mockReset();
+
+    loadConfigMock.mockReturnValue({});
     resolveDefaultAgentIdMock.mockReturnValue("main");
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
-    buildWorkspaceSkillStatusMock.mockReturnValue(report);
-    formatSkillsListMock.mockReturnValue("skills-list-output");
-    formatSkillInfoMock.mockReturnValue("skills-info-output");
-    formatSkillsCheckMock.mockReturnValue("skills-check-output");
-  });
-
-  it("runs list command with resolved report and formatter options", async () => {
-    await runCli(["skills", "list", "--eligible", "--verbose", "--json"]);
-
-    expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledWith("/tmp/workspace", {
-      config: { gateway: {} },
+    searchSkillsFromClawHubMock.mockResolvedValue([]);
+    installSkillFromClawHubMock.mockResolvedValue({
+      ok: false,
+      error: "install disabled in test",
     });
-    expect(formatSkillsListMock).toHaveBeenCalledWith(
-      report,
-      expect.objectContaining({
-        eligible: true,
-        verbose: true,
-        json: true,
-      }),
-    );
-    expect(runtime.log).toHaveBeenCalledWith("skills-list-output");
+    updateSkillsFromClawHubMock.mockResolvedValue([]);
+    readTrackedClawHubSkillSlugsMock.mockResolvedValue([]);
   });
 
-  it("runs info command and forwards skill name", async () => {
-    await runCli(["skills", "info", "peekaboo", "--json"]);
+  it("searches ClawHub skills from the native CLI", async () => {
+    searchSkillsFromClawHubMock.mockResolvedValue([
+      {
+        slug: "calendar",
+        displayName: "Calendar",
+        summary: "CalDAV helpers",
+        version: "1.2.3",
+      },
+    ]);
 
-    expect(formatSkillInfoMock).toHaveBeenCalledWith(
-      report,
-      "peekaboo",
-      expect.objectContaining({ json: true }),
-    );
-    expect(runtime.log).toHaveBeenCalledWith("skills-info-output");
+    await runCommand(["skills", "search", "calendar"]);
+
+    expect(searchSkillsFromClawHubMock).toHaveBeenCalledWith({
+      query: "calendar",
+      limit: undefined,
+    });
+    expect(runtimeLogs.some((line) => line.includes("calendar v1.2.3  Calendar"))).toBe(true);
   });
 
-  it("runs check command and writes formatter output", async () => {
-    await runCli(["skills", "check"]);
-
-    expect(formatSkillsCheckMock).toHaveBeenCalledWith(report, expect.any(Object));
-    expect(runtime.log).toHaveBeenCalledWith("skills-check-output");
-  });
-
-  it("uses list formatter for default skills action", async () => {
-    await runCli(["skills"]);
-
-    expect(formatSkillsListMock).toHaveBeenCalledWith(report, {});
-    expect(runtime.log).toHaveBeenCalledWith("skills-list-output");
-  });
-
-  it("reports runtime errors when report loading fails", async () => {
-    loadConfigMock.mockImplementationOnce(() => {
-      throw new Error("config exploded");
+  it("installs a skill from ClawHub into the active workspace", async () => {
+    installSkillFromClawHubMock.mockResolvedValue({
+      ok: true,
+      slug: "calendar",
+      version: "1.2.3",
+      targetDir: "/tmp/workspace/skills/calendar",
     });
 
-    await runCli(["skills", "list"]);
+    await runCommand(["skills", "install", "calendar", "--version", "1.2.3"]);
 
-    expect(runtime.error).toHaveBeenCalledWith("Error: config exploded");
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(buildWorkspaceSkillStatusMock).not.toHaveBeenCalled();
+    expect(installSkillFromClawHubMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/workspace",
+      slug: "calendar",
+      version: "1.2.3",
+      force: false,
+      logger: expect.any(Object),
+    });
+    expect(
+      runtimeLogs.some((line) =>
+        line.includes("Installed calendar@1.2.3 -> /tmp/workspace/skills/calendar"),
+      ),
+    ).toBe(true);
+  });
+
+  it("updates all tracked ClawHub skills", async () => {
+    readTrackedClawHubSkillSlugsMock.mockResolvedValue(["calendar"]);
+    updateSkillsFromClawHubMock.mockResolvedValue([
+      {
+        ok: true,
+        slug: "calendar",
+        previousVersion: "1.2.2",
+        version: "1.2.3",
+        changed: true,
+        targetDir: "/tmp/workspace/skills/calendar",
+      },
+    ]);
+
+    await runCommand(["skills", "update", "--all"]);
+
+    expect(readTrackedClawHubSkillSlugsMock).toHaveBeenCalledWith("/tmp/workspace");
+    expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/workspace",
+      slug: undefined,
+      logger: expect.any(Object),
+    });
+    expect(runtimeLogs.some((line) => line.includes("Updated calendar: 1.2.2 -> 1.2.3"))).toBe(
+      true,
+    );
+    expect(runtimeErrors).toEqual([]);
   });
 });

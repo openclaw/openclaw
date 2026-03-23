@@ -39,7 +39,47 @@ if [ "$#" -eq 0 ]; then
   usage
 fi
 
-files=("$@")
+path_exists_or_tracked() {
+  local candidate=$1
+  [ -e "$candidate" ] || git ls-files --error-unmatch -- "$candidate" >/dev/null 2>&1
+}
+
+append_normalized_file_arg() {
+  local raw=$1
+
+  if path_exists_or_tracked "$raw"; then
+    files+=("$raw")
+    return
+  fi
+
+  if [[ "$raw" == *$'\n'* || "$raw" == *$'\r'* ]]; then
+    local normalized=${raw//$'\r'/}
+    while IFS= read -r line; do
+      if [[ "$line" == *[![:space:]]* ]]; then
+        files+=("$line")
+      fi
+    done <<< "$normalized"
+    return
+  fi
+
+  if [[ "$raw" == *[[:space:]]* ]]; then
+    local split_paths=()
+    # Intentional IFS split for callers that pass a single shell-expanded path blob.
+    # shellcheck disable=SC2206
+    split_paths=($raw)
+    if [ "${#split_paths[@]}" -gt 1 ]; then
+      files+=("${split_paths[@]}")
+      return
+    fi
+  fi
+
+  files+=("$raw")
+}
+
+files=()
+for raw_arg in "$@"; do
+  append_normalized_file_arg "$raw_arg"
+done
 
 # Disallow "." because it stages the entire repository and defeats the helper's safety guardrails.
 for file in "${files[@]}"; do
@@ -61,10 +101,10 @@ done
 
 last_commit_error=''
 
-run_git_commit() {
+run_git_command() {
   local stderr_log
   stderr_log=$(mktemp)
-  if git commit -m "$commit_message" -- "${files[@]}" 2> >(tee "$stderr_log" >&2); then
+  if "$@" 2> >(tee "$stderr_log" >&2); then
     rm -f "$stderr_log"
     last_commit_error=''
     return 0
@@ -75,17 +115,68 @@ run_git_commit() {
   return 1
 }
 
-for file in "${files[@]}"; do
-  if [ ! -e "$file" ]; then
-    if ! git ls-files --error-unmatch -- "$file" >/dev/null 2>&1; then
-      printf 'Error: file not found: %s\n' "$file" >&2
-      exit 1
+is_git_lock_error() {
+  printf '%s\n' "$last_commit_error" | grep -Eq \
+    "Another git process seems to be running|Unable to create '.*\\.git/[^']+\\.lock'"
+}
+
+extract_git_lock_path() {
+  printf '%s\n' "$last_commit_error" |
+    sed -n "s/.*'\(.*\.git\/[^']*\.lock\)'.*/\1/p" |
+    head -n 1
+}
+
+run_git_with_lock_retry() {
+  local label=$1
+  shift
+
+  local deadline=$((SECONDS + 5))
+  local announced_retry=false
+
+  while true; do
+    if run_git_command "$@"; then
+      return 0
     fi
+
+    if ! is_git_lock_error; then
+      return 1
+    fi
+
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      break
+    fi
+
+    if [ "$announced_retry" = false ]; then
+      printf 'Git lock during %s; retrying for up to 5 seconds...\n' "$label" >&2
+      announced_retry=true
+    fi
+
+    sleep 0.5
+  done
+
+  if [ "$force_delete_lock" = true ]; then
+    local lock_path
+    lock_path=$(extract_git_lock_path)
+    if [ -n "$lock_path" ] && [ -e "$lock_path" ]; then
+      rm -f "$lock_path"
+      printf 'Removed stale git lock: %s\n' "$lock_path" >&2
+      run_git_command "$@"
+      return $?
+    fi
+  fi
+
+  return 1
+}
+
+for file in "${files[@]}"; do
+  if ! path_exists_or_tracked "$file"; then
+    printf 'Error: file not found: %s\n' "$file" >&2
+    exit 1
   fi
 done
 
-git restore --staged :/
-git add --force -- "${files[@]}"
+run_git_with_lock_retry "unstaging files" git restore --staged :/
+run_git_with_lock_retry "staging files" git add --force -- "${files[@]}"
 
 if git diff --staged --quiet; then
   printf 'Warning: no staged changes detected for: %s\n' "${files[*]}" >&2
@@ -93,21 +184,8 @@ if git diff --staged --quiet; then
 fi
 
 committed=false
-if run_git_commit; then
+if run_git_with_lock_retry "commit" git commit -m "$commit_message" -- "${files[@]}"; then
   committed=true
-elif [ "$force_delete_lock" = true ]; then
-  lock_path=$(
-    printf '%s\n' "$last_commit_error" |
-      awk -F"'" '/Unable to create .*\.git\/index\.lock/ { print $2; exit }'
-  )
-
-  if [ -n "$lock_path" ] && [ -e "$lock_path" ]; then
-    rm -f "$lock_path"
-    printf 'Removed stale git lock: %s\n' "$lock_path" >&2
-    if run_git_commit; then
-      committed=true
-    fi
-  fi
 fi
 
 if [ "$committed" = false ]; then

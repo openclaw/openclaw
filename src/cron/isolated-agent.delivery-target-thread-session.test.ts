@@ -1,24 +1,33 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseTelegramTarget } from "../../extensions/telegram/src/targets.js";
 import type { OpenClawConfig } from "../config/config.js";
 
-// Mock session store so we can control what entries exist.
 const mockStore: Record<string, Record<string, unknown>> = {};
+
 vi.mock("../config/sessions.js", () => ({
   loadSessionStore: vi.fn((storePath: string) => mockStore[storePath] ?? {}),
   resolveAgentMainSessionKey: vi.fn(({ agentId }: { agentId: string }) => `agent:${agentId}:main`),
   resolveStorePath: vi.fn((_store: unknown, _opts: unknown) => "/mock/store.json"),
 }));
 
-// Mock channel-selection to avoid real config resolution.
 vi.mock("../infra/outbound/channel-selection.js", () => ({
   resolveMessageChannelSelection: vi.fn(async () => ({ channel: "telegram" })),
 }));
 
-// Minimal mock for channel plugins (Telegram resolveTarget is an identity).
 vi.mock("../channels/plugins/index.js", () => ({
   getChannelPlugin: vi.fn(() => ({
     meta: { label: "Telegram" },
     config: {},
+    messaging: {
+      parseExplicitTarget: ({ raw }: { raw: string }) => {
+        const target = parseTelegramTarget(raw);
+        return {
+          to: target.chatId,
+          threadId: target.messageThreadId,
+          chatType: target.chatType === "unknown" ? undefined : target.chatType,
+        };
+      },
+    },
     outbound: {
       resolveTarget: ({ to }: { to?: string }) =>
         to ? { ok: true, to } : { ok: false, error: new Error("missing") },
@@ -27,7 +36,28 @@ vi.mock("../channels/plugins/index.js", () => ({
   normalizeChannelId: vi.fn((id: string) => id),
 }));
 
+const mockedModuleIds = [
+  "../channels/plugins/index.js",
+  "../config/sessions.js",
+  "../infra/outbound/channel-selection.js",
+];
+
 const { resolveDeliveryTarget } = await import("./isolated-agent/delivery-target.js");
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  for (const key of Object.keys(mockStore)) {
+    delete mockStore[key];
+  }
+});
+
+afterAll(() => {
+  vi.restoreAllMocks();
+  for (const id of mockedModuleIds) {
+    vi.doUnmock(id);
+  }
+  vi.resetModules();
+});
 
 describe("resolveDeliveryTarget thread session lookup", () => {
   const cfg: OpenClawConfig = {};
@@ -108,6 +138,27 @@ describe("resolveDeliveryTarget thread session lookup", () => {
     expect(result.to).toBe("63448508");
     expect(result.threadId).toBe(1008013);
     expect(result.channel).toBe("telegram");
+  });
+
+  it("explicit accountId overrides session lastAccountId", async () => {
+    mockStore["/mock/store.json"] = {
+      "agent:main:main": {
+        sessionId: "s1",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "-100444",
+        lastAccountId: "session-account",
+      },
+    };
+
+    const result = await resolveDeliveryTarget(cfg, "main", {
+      channel: "telegram",
+      to: "-100444",
+      accountId: "explicit-account",
+    });
+
+    expect(result.accountId).toBe("explicit-account");
+    expect(result.to).toBe("-100444");
   });
 
   it("preserves threadId from :topic: when lastTo differs", async () => {

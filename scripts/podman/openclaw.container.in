@@ -1,5 +1,5 @@
 # OpenClaw gateway — Podman Quadlet (rootless)
-# Installed by setup-podman.sh into openclaw's ~/.config/containers/systemd/
+# Installed by scripts/podman/setup.sh into openclaw's ~/.config/containers/systemd/
 # {{OPENCLAW_HOME}} is replaced at install time.
 
 [Unit]
@@ -9,7 +9,9 @@ Description=OpenClaw gateway (rootless Podman)
 Image=openclaw:local
 ContainerName=openclaw
 UserNS=keep-id
-Volume={{OPENCLAW_HOME}}/.openclaw:/home/node/.openclaw
+# Keep container UID/GID aligned with the invoking user so mounted config is readable.
+User=%U:%G
+Volume={{OPENCLAW_HOME}}/.openclaw:/home/node/.openclaw:Z
 EnvironmentFile={{OPENCLAW_HOME}}/.openclaw/.env
 Environment=HOME=/home/node
 Environment=TERM=xterm-256color

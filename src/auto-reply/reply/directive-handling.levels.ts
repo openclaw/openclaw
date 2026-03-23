@@ -3,9 +3,14 @@ import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "..
 export async function resolveCurrentDirectiveLevels(params: {
   sessionEntry?: {
     thinkingLevel?: unknown;
+    fastMode?: unknown;
     verboseLevel?: unknown;
     reasoningLevel?: unknown;
     elevatedLevel?: unknown;
+  };
+  agentEntry?: {
+    fastModeDefault?: unknown;
+    reasoningDefault?: unknown;
   };
   agentCfg?: {
     thinkingDefault?: unknown;
@@ -15,25 +20,37 @@ export async function resolveCurrentDirectiveLevels(params: {
   resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
 }): Promise<{
   currentThinkLevel: ThinkLevel | undefined;
+  currentFastMode: boolean | undefined;
   currentVerboseLevel: VerboseLevel | undefined;
   currentReasoningLevel: ReasoningLevel;
   currentElevatedLevel: ElevatedLevel | undefined;
 }> {
   const resolvedDefaultThinkLevel =
     (params.sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
-    (params.agentCfg?.thinkingDefault as ThinkLevel | undefined) ??
-    (await params.resolveDefaultThinkingLevel());
+    (await params.resolveDefaultThinkingLevel()) ??
+    (params.agentCfg?.thinkingDefault as ThinkLevel | undefined);
   const currentThinkLevel = resolvedDefaultThinkLevel;
+  const currentFastMode =
+    typeof params.sessionEntry?.fastMode === "boolean"
+      ? params.sessionEntry.fastMode
+      : typeof params.agentEntry?.fastModeDefault === "boolean"
+        ? params.agentEntry.fastModeDefault
+        : undefined;
   const currentVerboseLevel =
     (params.sessionEntry?.verboseLevel as VerboseLevel | undefined) ??
     (params.agentCfg?.verboseDefault as VerboseLevel | undefined);
+  const sessionReasoningLevel = params.sessionEntry?.reasoningLevel as ReasoningLevel | undefined;
   const currentReasoningLevel =
-    (params.sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ?? "off";
+    sessionReasoningLevel ??
+    (currentThinkLevel === "off"
+      ? ((params.agentEntry?.reasoningDefault as ReasoningLevel | undefined) ?? "off")
+      : "off");
   const currentElevatedLevel =
     (params.sessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??
     (params.agentCfg?.elevatedDefault as ElevatedLevel | undefined);
   return {
     currentThinkLevel,
+    currentFastMode,
     currentVerboseLevel,
     currentReasoningLevel,
     currentElevatedLevel,

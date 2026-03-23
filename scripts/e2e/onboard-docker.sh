@@ -74,8 +74,14 @@ TRASH
           try { text = fs.readFileSync(file, \"utf8\"); } catch { process.exit(1); }
           // Clack/script output can include lots of control sequences; keep a larger tail and strip ANSI more robustly.
           if (text.length > 120000) text = text.slice(-120000);
-          const stripAnsi = (value) =>
+          const normalizeScriptOutput = (value) =>
             value
+              // util-linux script can emit each byte on its own CRLF-delimited line.
+              // Collapse those first so ANSI/control stripping works on real sequences.
+              .replace(/\\r?\\n/g, \"\")
+              .replace(/\\r/g, \"\");
+          const stripAnsi = (value) =>
+            normalizeScriptOutput(value)
               // OSC: ESC ] ... BEL or ESC \\
               .replace(/\\x1b\\][^\\x07]*(?:\\x07|\\x1b\\\\)/g, \"\")
               // CSI: ESC [ ... cmd
@@ -160,8 +166,7 @@ TRASH
     local validate_fn="${6:-}"
 
     echo "== Wizard case: $case_name =="
-    export HOME="$home_dir"
-    mkdir -p "$HOME"
+    set_isolated_openclaw_env "$home_dir"
 
     input_fifo="$(mktemp -u "/tmp/openclaw-onboard-${case_name}.XXXXXX")"
     mkfifo "$input_fifo"
@@ -215,6 +220,15 @@ TRASH
     mktemp -d "/tmp/openclaw-e2e-$1.XXXXXX"
   }
 
+  set_isolated_openclaw_env() {
+    local home_dir="$1"
+    export HOME="$home_dir"
+    export OPENCLAW_HOME="$home_dir"
+    export OPENCLAW_STATE_DIR="$home_dir/.openclaw"
+    export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
+    mkdir -p "$OPENCLAW_STATE_DIR"
+  }
+
   assert_file() {
     local file_path="$1"
     if [ ! -f "$file_path" ]; then
@@ -233,7 +247,7 @@ TRASH
 
   select_skip_hooks() {
     # Hooks multiselect: pick "Skip for now".
-    wait_for_log "Enable hooks?" 60 true || true
+    wait_for_log "Enable hooks?" 60
     send $'"'"' \r'"'"' 0.6
   }
 
@@ -247,47 +261,47 @@ TRASH
 
   send_reset_config_only() {
     # Risk acknowledgement (default is "No").
-    wait_for_log "Continue?" 40 true || true
+    wait_for_log "Continue?" 40
     send $'"'"'y\r'"'"' 0.8
     # Select reset flow for existing config.
-    wait_for_log "Config handling" 40 true || true
+    wait_for_log "Config handling" 40
     send $'"'"'\e[B'"'"' 0.3
     send $'"'"'\e[B'"'"' 0.3
     send $'"'"'\r'"'"' 0.4
     # Reset scope -> Config only (default).
-    wait_for_log "Reset scope" 40 true || true
+    wait_for_log "Reset scope" 40
     send $'"'"'\r'"'"' 0.4
     select_skip_hooks
   }
 
   send_channels_flow() {
-    # Configure channels via configure wizard.
-    # Prompts are interactive; notes are not. Use conservative delays to stay in sync.
-    # Where will the Gateway run? -> Local (default)
-    send $'"'"'\r'"'"' 1.2
-    # Channels mode -> Configure/link (default)
-    send $'"'"'\r'"'"' 1.5
+    # Configure channels via configure wizard. Sync on prompt text so
+    # keystrokes do not drift into the wrong screen when render timing changes.
+    wait_for_log "Where will the Gateway run?" 120
+    send $'"'"'\r'"'"' 0.6
+    wait_for_log "Channels" 120
+    send $'"'"'\r'"'"' 0.6
     # Select a channel -> Finished (last option; clack wraps on Up)
-    send $'"'"'\e[A\r'"'"' 2.0
+    wait_for_log "Select a channel" 120
+    send $'"'"'\e[A\r'"'"' 0.8
     # Keep stdin open until wizard exits.
-    send "" 2.5
+    send "" 2.0
   }
 
   send_skills_flow() {
-    # configure --section skills still runs the configure wizard; the first prompt is gateway location.
-    # Avoid log-based synchronization here; clack output can fragment ANSI sequences and break matching.
-    send $'"'"'\r'"'"' 3.0
-    wait_for_log "Configure skills now?" 120 true || true
+    # configure --section skills still runs the configure wizard.
+    wait_for_log "Where will the Gateway run?" 120
+    send $'"'"'\r'"'"' 0.6
+    wait_for_log "Configure skills now?" 120
     send $'"'"'n\r'"'"' 0.8
     send "" 2.0
   }
 
-	  run_case_local_basic() {
-	    local home_dir
-	    home_dir="$(make_home local-basic)"
-	    export HOME="$home_dir"
-	    mkdir -p "$HOME"
-	    node "$OPENCLAW_ENTRY" onboard \
+  run_case_local_basic() {
+    local home_dir
+    home_dir="$(make_home local-basic)"
+    set_isolated_openclaw_env "$home_dir"
+    node "$OPENCLAW_ENTRY" onboard \
 	      --non-interactive \
 	      --accept-risk \
       --flow quickstart \
@@ -299,9 +313,9 @@ TRASH
       --skip-health
 
     # Assert config + workspace scaffolding.
-    workspace_dir="$HOME/.openclaw/workspace"
-    config_path="$HOME/.openclaw/openclaw.json"
-    sessions_dir="$HOME/.openclaw/agents/main/sessions"
+    workspace_dir="$OPENCLAW_STATE_DIR/workspace"
+    config_path="$OPENCLAW_CONFIG_PATH"
+    sessions_dir="$OPENCLAW_STATE_DIR/agents/main/sessions"
 
     assert_file "$config_path"
     assert_dir "$sessions_dir"
@@ -361,8 +375,7 @@ NODE
   run_case_remote_non_interactive() {
     local home_dir
     home_dir="$(make_home remote-non-interactive)"
-    export HOME="$home_dir"
-	    mkdir -p "$HOME"
+    set_isolated_openclaw_env "$home_dir"
 	    # Smoke test non-interactive remote config write.
 	    node "$OPENCLAW_ENTRY" onboard --non-interactive --accept-risk \
 	      --mode remote \
@@ -371,7 +384,7 @@ NODE
       --skip-skills \
       --skip-health
 
-    config_path="$HOME/.openclaw/openclaw.json"
+    config_path="$OPENCLAW_CONFIG_PATH"
     assert_file "$config_path"
 
     CONFIG_PATH="$config_path" node --input-type=module - <<'"'"'NODE'"'"'
@@ -404,10 +417,9 @@ NODE
   run_case_reset() {
     local home_dir
     home_dir="$(make_home reset-config)"
-    export HOME="$home_dir"
-    mkdir -p "$HOME/.openclaw"
+    set_isolated_openclaw_env "$home_dir"
     # Seed a remote config to exercise reset path.
-	    cat > "$HOME/.openclaw/openclaw.json" <<'"'"'JSON'"'"'
+	    cat > "$OPENCLAW_CONFIG_PATH" <<'"'"'JSON'"'"'
 {
   "meta": {},
   "agents": { "defaults": { "workspace": "/root/old" } },
@@ -430,7 +442,7 @@ JSON
       --skip-ui \
       --skip-health
 
-    config_path="$HOME/.openclaw/openclaw.json"
+    config_path="$OPENCLAW_CONFIG_PATH"
     assert_file "$config_path"
 
     CONFIG_PATH="$config_path" node --input-type=module - <<'"'"'NODE'"'"'
@@ -463,7 +475,7 @@ NODE
 	    # Channels-only configure flow.
 	    run_wizard_cmd channels "$home_dir" "node \"$OPENCLAW_ENTRY\" configure --section channels" send_channels_flow
 
-    config_path="$HOME/.openclaw/openclaw.json"
+    config_path="$OPENCLAW_CONFIG_PATH"
     assert_file "$config_path"
 
     CONFIG_PATH="$config_path" node --input-type=module - <<'"'"'NODE'"'"'
@@ -500,10 +512,9 @@ NODE
   run_case_skills() {
     local home_dir
     home_dir="$(make_home skills)"
-    export HOME="$home_dir"
-    mkdir -p "$HOME/.openclaw"
+    set_isolated_openclaw_env "$home_dir"
     # Seed skills config to ensure it survives the wizard.
-	    cat > "$HOME/.openclaw/openclaw.json" <<'"'"'JSON'"'"'
+	    cat > "$OPENCLAW_CONFIG_PATH" <<'"'"'JSON'"'"'
 {
   "meta": {},
   "skills": {
@@ -515,7 +526,7 @@ JSON
 
 	    run_wizard_cmd skills "$home_dir" "node \"$OPENCLAW_ENTRY\" configure --section skills" send_skills_flow
 
-    config_path="$HOME/.openclaw/openclaw.json"
+    config_path="$OPENCLAW_CONFIG_PATH"
     assert_file "$config_path"
 
     CONFIG_PATH="$config_path" node --input-type=module - <<'"'"'NODE'"'"'

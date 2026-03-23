@@ -56,6 +56,34 @@ async function runPack(spec: string, cwd: string, timeoutMs = 1000) {
   });
 }
 
+async function expectPackFallsBackToDetectedArchive(params: {
+  stdout: string;
+  expectedMetadata?: Record<string, unknown>;
+}) {
+  const cwd = await createTempDir("openclaw-install-source-utils-");
+  const archivePath = path.join(cwd, "openclaw-plugin-1.2.3.tgz");
+  await fs.writeFile(archivePath, "", "utf-8");
+  runCommandWithTimeoutMock.mockResolvedValue({
+    stdout: params.stdout,
+    stderr: "",
+    code: 0,
+    signal: null,
+    killed: false,
+  });
+
+  const result = await packNpmSpecToArchive({
+    spec: "openclaw-plugin@1.2.3",
+    timeoutMs: 5000,
+    cwd,
+  });
+
+  expect(result).toEqual({
+    ok: true,
+    archivePath,
+    metadata: params.expectedMetadata ?? {},
+  });
+}
+
 beforeEach(() => {
   runCommandWithTimeoutMock.mockClear();
 });
@@ -109,15 +137,18 @@ describe("resolveArchiveSourcePath", () => {
     }
   });
 
-  it("accepts supported archive extensions", async () => {
-    const { filePath } = await createFixtureFile({
-      fileName: "plugin.zip",
-      contents: "",
-    });
+  it.each(["plugin.zip", "plugin.tgz", "plugin.tar.gz"])(
+    "accepts supported archive extension %s",
+    async (fileName) => {
+      const { filePath } = await createFixtureFile({
+        fileName,
+        contents: "",
+      });
 
-    const result = await resolveArchiveSourcePath(filePath);
-    expect(result).toEqual({ ok: true, path: filePath });
-  });
+      const result = await resolveArchiveSourcePath(filePath);
+      expect(result).toEqual({ ok: true, path: filePath });
+    },
+  );
 });
 
 describe("packNpmSpecToArchive", () => {
@@ -194,54 +225,29 @@ describe("packNpmSpecToArchive", () => {
     }
   });
 
-  it("falls back to archive detected in cwd when npm pack stdout is empty", async () => {
-    const cwd = await createTempDir("openclaw-install-source-utils-");
-    const archivePath = path.join(cwd, "openclaw-plugin-1.2.3.tgz");
-    await fs.writeFile(archivePath, "", "utf-8");
-    runCommandWithTimeoutMock.mockResolvedValue({
+  it.each([
+    {
+      name: "falls back to archive detected in cwd when npm pack stdout is empty",
       stdout: " \n\n",
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-    });
-
-    const result = await packNpmSpecToArchive({
-      spec: "openclaw-plugin@1.2.3",
-      timeoutMs: 5000,
-      cwd,
-    });
-
-    expect(result).toEqual({
-      ok: true,
-      archivePath,
-      metadata: {},
-    });
-  });
-
-  it("falls back to archive detected in cwd when stdout does not contain a tgz", async () => {
-    const cwd = await createTempDir("openclaw-install-source-utils-");
-    const archivePath = path.join(cwd, "openclaw-plugin-1.2.3.tgz");
-    await fs.writeFile(archivePath, "", "utf-8");
-    runCommandWithTimeoutMock.mockResolvedValue({
+    },
+    {
+      name: "falls back to archive detected in cwd when stdout does not contain a tgz",
       stdout: "npm pack completed successfully\n",
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-    });
-
-    const result = await packNpmSpecToArchive({
-      spec: "openclaw-plugin@1.2.3",
-      timeoutMs: 5000,
-      cwd,
-    });
-
-    expect(result).toEqual({
-      ok: true,
-      archivePath,
-      metadata: {},
-    });
+    },
+    {
+      name: "falls back to cwd archive when logged JSON metadata omits filename",
+      stdout:
+        'npm notice using cache\n[{"id":"openclaw-plugin@1.2.3","name":"openclaw-plugin","version":"1.2.3","integrity":"sha512-test-integrity","shasum":"abc123"}]\n',
+      expectedMetadata: {
+        name: "openclaw-plugin",
+        version: "1.2.3",
+        resolvedSpec: "openclaw-plugin@1.2.3",
+        integrity: "sha512-test-integrity",
+        shasum: "abc123",
+      },
+    },
+  ])("$name", async ({ stdout, expectedMetadata }) => {
+    await expectPackFallsBackToDetectedArchive({ stdout, expectedMetadata });
   });
 
   it("returns friendly error for 404 (package not on npm)", async () => {

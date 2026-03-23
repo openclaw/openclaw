@@ -40,6 +40,18 @@ export async function callBrowserAct<T = unknown>(params: {
   );
 }
 
+export function logBrowserActionResult(
+  parent: BrowserParentOpts,
+  result: unknown,
+  successMessage: string,
+) {
+  if (parent?.json) {
+    defaultRuntime.writeJson(result);
+    return;
+  }
+  defaultRuntime.log(successMessage);
+}
+
 export function requireRef(ref: string | undefined) {
   const refValue = typeof ref === "string" ? ref.trim() : "";
   if (!refValue) {

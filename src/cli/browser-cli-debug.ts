@@ -5,11 +5,53 @@ import { shortenHomePath } from "../utils.js";
 import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 
+const BROWSER_DEBUG_TIMEOUT_MS = 20000;
+
+type BrowserRequestParams = Parameters<typeof callBrowserRequest>[1];
+
+type DebugContext = {
+  parent: BrowserParentOpts;
+  profile?: string;
+};
+
 function runBrowserDebug(action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
     defaultRuntime.error(danger(String(err)));
     defaultRuntime.exit(1);
   });
+}
+
+async function withDebugContext(
+  cmd: Command,
+  parentOpts: (cmd: Command) => BrowserParentOpts,
+  action: (context: DebugContext) => Promise<void>,
+) {
+  const parent = parentOpts(cmd);
+  await runBrowserDebug(() =>
+    action({
+      parent,
+      profile: parent.browserProfile,
+    }),
+  );
+}
+
+function printJsonResult(parent: BrowserParentOpts, result: unknown): boolean {
+  if (!parent.json) {
+    return false;
+  }
+  defaultRuntime.writeJson(result);
+  return true;
+}
+
+async function callDebugRequest<T>(
+  parent: BrowserParentOpts,
+  params: BrowserRequestParams,
+): Promise<T> {
+  return callBrowserRequest<T>(parent, params, { timeoutMs: BROWSER_DEBUG_TIMEOUT_MS });
+}
+
+function resolveProfileQuery(profile?: string) {
+  return profile ? { profile } : undefined;
 }
 
 function resolveDebugQuery(params: {
@@ -36,24 +78,17 @@ export function registerBrowserDebugCommands(
     .argument("<ref>", "Ref id from snapshot")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (ref: string, opts, cmd) => {
-      const parent = parentOpts(cmd);
-      const profile = parent?.browserProfile;
-      await runBrowserDebug(async () => {
-        const result = await callBrowserRequest(
-          parent,
-          {
-            method: "POST",
-            path: "/highlight",
-            query: profile ? { profile } : undefined,
-            body: {
-              ref: ref.trim(),
-              targetId: opts.targetId?.trim() || undefined,
-            },
+      await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
+        const result = await callDebugRequest(parent, {
+          method: "POST",
+          path: "/highlight",
+          query: resolveProfileQuery(profile),
+          body: {
+            ref: ref.trim(),
+            targetId: opts.targetId?.trim() || undefined,
           },
-          { timeoutMs: 20000 },
-        );
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
+        });
+        if (printJsonResult(parent, result)) {
           return;
         }
         defaultRuntime.log(`highlighted ${ref.trim()}`);
@@ -66,26 +101,19 @@ export function registerBrowserDebugCommands(
     .option("--clear", "Clear stored errors after reading", false)
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (opts, cmd) => {
-      const parent = parentOpts(cmd);
-      const profile = parent?.browserProfile;
-      await runBrowserDebug(async () => {
-        const result = await callBrowserRequest<{
+      await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
+        const result = await callDebugRequest<{
           errors: Array<{ timestamp: string; name?: string; message: string }>;
-        }>(
-          parent,
-          {
-            method: "GET",
-            path: "/errors",
-            query: resolveDebugQuery({
-              targetId: opts.targetId,
-              clear: opts.clear,
-              profile,
-            }),
-          },
-          { timeoutMs: 20000 },
-        );
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
+        }>(parent, {
+          method: "GET",
+          path: "/errors",
+          query: resolveDebugQuery({
+            targetId: opts.targetId,
+            clear: opts.clear,
+            profile,
+          }),
+        });
+        if (printJsonResult(parent, result)) {
           return;
         }
         if (!result.errors.length) {
@@ -107,10 +135,8 @@ export function registerBrowserDebugCommands(
     .option("--clear", "Clear stored requests after reading", false)
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (opts, cmd) => {
-      const parent = parentOpts(cmd);
-      const profile = parent?.browserProfile;
-      await runBrowserDebug(async () => {
-        const result = await callBrowserRequest<{
+      await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
+        const result = await callDebugRequest<{
           requests: Array<{
             timestamp: string;
             method: string;
@@ -119,22 +145,17 @@ export function registerBrowserDebugCommands(
             url: string;
             failureText?: string;
           }>;
-        }>(
-          parent,
-          {
-            method: "GET",
-            path: "/requests",
-            query: resolveDebugQuery({
-              targetId: opts.targetId,
-              filter: opts.filter,
-              clear: opts.clear,
-              profile,
-            }),
-          },
-          { timeoutMs: 20000 },
-        );
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
+        }>(parent, {
+          method: "GET",
+          path: "/requests",
+          query: resolveDebugQuery({
+            targetId: opts.targetId,
+            filter: opts.filter,
+            clear: opts.clear,
+            profile,
+          }),
+        });
+        if (printJsonResult(parent, result)) {
           return;
         }
         if (!result.requests.length) {
@@ -164,26 +185,19 @@ export function registerBrowserDebugCommands(
     .option("--no-snapshots", "Disable snapshots")
     .option("--sources", "Include sources (bigger traces)", false)
     .action(async (opts, cmd) => {
-      const parent = parentOpts(cmd);
-      const profile = parent?.browserProfile;
-      await runBrowserDebug(async () => {
-        const result = await callBrowserRequest(
-          parent,
-          {
-            method: "POST",
-            path: "/trace/start",
-            query: profile ? { profile } : undefined,
-            body: {
-              targetId: opts.targetId?.trim() || undefined,
-              screenshots: Boolean(opts.screenshots),
-              snapshots: Boolean(opts.snapshots),
-              sources: Boolean(opts.sources),
-            },
+      await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
+        const result = await callDebugRequest(parent, {
+          method: "POST",
+          path: "/trace/start",
+          query: resolveProfileQuery(profile),
+          body: {
+            targetId: opts.targetId?.trim() || undefined,
+            screenshots: Boolean(opts.screenshots),
+            snapshots: Boolean(opts.snapshots),
+            sources: Boolean(opts.sources),
           },
-          { timeoutMs: 20000 },
-        );
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
+        });
+        if (printJsonResult(parent, result)) {
           return;
         }
         defaultRuntime.log("trace started");
@@ -199,24 +213,17 @@ export function registerBrowserDebugCommands(
     )
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (opts, cmd) => {
-      const parent = parentOpts(cmd);
-      const profile = parent?.browserProfile;
-      await runBrowserDebug(async () => {
-        const result = await callBrowserRequest<{ path: string }>(
-          parent,
-          {
-            method: "POST",
-            path: "/trace/stop",
-            query: profile ? { profile } : undefined,
-            body: {
-              targetId: opts.targetId?.trim() || undefined,
-              path: opts.out?.trim() || undefined,
-            },
+      await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
+        const result = await callDebugRequest<{ path: string }>(parent, {
+          method: "POST",
+          path: "/trace/stop",
+          query: resolveProfileQuery(profile),
+          body: {
+            targetId: opts.targetId?.trim() || undefined,
+            path: opts.out?.trim() || undefined,
           },
-          { timeoutMs: 20000 },
-        );
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
+        });
+        if (printJsonResult(parent, result)) {
           return;
         }
         defaultRuntime.log(`TRACE:${shortenHomePath(result.path)}`);

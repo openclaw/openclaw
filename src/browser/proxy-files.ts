@@ -13,7 +13,7 @@ export async function persistBrowserProxyFiles(files: BrowserProxyFile[] | undef
   const mapping = new Map<string, string>();
   for (const file of files) {
     const buffer = Buffer.from(file.base64, "base64");
-    const saved = await saveMediaBuffer(buffer, file.mimeType, "browser", buffer.byteLength);
+    const saved = await saveMediaBuffer(buffer, file.mimeType, "browser");
     mapping.set(file.path, saved.path);
   }
   return mapping;

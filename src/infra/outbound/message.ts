@@ -1,3 +1,4 @@
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { callGatewayLeastPrivilege, randomIdempotencyKey } from "../../gateway/call.js";
@@ -9,16 +10,14 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../../utils/message-channel.js";
-import {
-  normalizeDeliverableOutboundChannel,
-  resolveOutboundChannelPlugin,
-} from "./channel-resolution.js";
+import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
 import {
   deliverOutboundPayloads,
   type OutboundDeliveryResult,
   type OutboundSendDeps,
 } from "./deliver.js";
+import type { OutboundMirror } from "./mirror.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
 import { buildOutboundSessionContext } from "./session-context.js";
 import { resolveOutboundTarget } from "./targets.js";
@@ -41,6 +40,7 @@ type MessageSendParams = {
   mediaUrl?: string;
   mediaUrls?: string[];
   gifPlayback?: boolean;
+  forceDocument?: boolean;
   accountId?: string;
   replyToId?: string;
   threadId?: string | number;
@@ -50,12 +50,7 @@ type MessageSendParams = {
   cfg?: OpenClawConfig;
   gateway?: MessageGatewayOptions;
   idempotencyKey?: string;
-  mirror?: {
-    sessionKey: string;
-    agentId?: string;
-    text?: string;
-    mediaUrls?: string[];
-  };
+  mirror?: OutboundMirror;
   abortSignal?: AbortSignal;
   silent?: boolean;
 };
@@ -107,18 +102,42 @@ export type MessagePollResult = {
   dryRun?: boolean;
 };
 
+function buildMessagePollResult(params: {
+  channel: string;
+  to: string;
+  normalized: {
+    question: string;
+    options: string[];
+    maxSelections: number;
+    durationSeconds?: number | null;
+    durationHours?: number | null;
+  };
+  result?: MessagePollResult["result"];
+  dryRun?: boolean;
+}): MessagePollResult {
+  return {
+    channel: params.channel,
+    to: params.to,
+    question: params.normalized.question,
+    options: params.normalized.options,
+    maxSelections: params.normalized.maxSelections,
+    durationSeconds: params.normalized.durationSeconds ?? null,
+    durationHours: params.normalized.durationHours ?? null,
+    via: "gateway",
+    ...(params.dryRun ? { dryRun: true } : { result: params.result }),
+  };
+}
+
 async function resolveRequiredChannel(params: {
   cfg: OpenClawConfig;
   channel?: string;
 }): Promise<string> {
-  if (params.channel?.trim()) {
-    const normalized = normalizeDeliverableOutboundChannel(params.channel);
-    if (!normalized) {
-      throw new Error(`Unknown channel: ${params.channel}`);
-    }
-    return normalized;
-  }
-  return (await resolveMessageChannelSelection({ cfg: params.cfg })).channel;
+  return (
+    await resolveMessageChannelSelection({
+      cfg: params.cfg,
+      channel: params.channel,
+    })
+  ).channel;
 }
 
 function resolveRequiredPlugin(channel: string, cfg: OpenClawConfig) {
@@ -185,7 +204,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     .filter(Boolean)
     .join("\n");
   const mirrorMediaUrls = normalizedPayloads.flatMap(
-    (payload) => payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
+    (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
   );
   const primaryMediaUrl = mirrorMediaUrls[0] ?? params.mediaUrl ?? null;
 
@@ -228,6 +247,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       replyToId: params.replyToId,
       threadId: params.threadId,
       gifPlayback: params.gifPlayback,
+      forceDocument: params.forceDocument,
       deps: params.deps,
       bestEffort: params.bestEffort,
       abortSignal: params.abortSignal,
@@ -237,6 +257,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
             ...params.mirror,
             text: mirrorText || params.content,
             mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
+            idempotencyKey: params.mirror.idempotencyKey ?? params.idempotencyKey,
           }
         : undefined,
     });
@@ -299,17 +320,12 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     : normalizePollInput(pollInput);
 
   if (params.dryRun) {
-    return {
+    return buildMessagePollResult({
       channel,
       to: params.to,
-      question: normalized.question,
-      options: normalized.options,
-      maxSelections: normalized.maxSelections,
-      durationSeconds: normalized.durationSeconds ?? null,
-      durationHours: normalized.durationHours ?? null,
-      via: "gateway",
+      normalized,
       dryRun: true,
-    };
+    });
   }
 
   const result = await callMessageGateway<{
@@ -337,15 +353,10 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     },
   });
 
-  return {
+  return buildMessagePollResult({
     channel,
     to: params.to,
-    question: normalized.question,
-    options: normalized.options,
-    maxSelections: normalized.maxSelections,
-    durationSeconds: normalized.durationSeconds ?? null,
-    durationHours: normalized.durationHours ?? null,
-    via: "gateway",
+    normalized,
     result,
-  };
+  });
 }

@@ -4,7 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
-import { resolveMainSessionKeyFromConfig, type SessionEntry } from "../config/sessions.js";
+import {
+  clearConfigCache,
+  clearRuntimeConfigSnapshot,
+  parseConfigJson5,
+} from "../config/config.js";
+import {
+  clearSessionStoreCacheForTest,
+  resolveMainSessionKeyFromConfig,
+  type SessionEntry,
+} from "../config/sessions.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -14,6 +23,7 @@ import {
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
+import { clearGatewaySubagentRuntime } from "../plugins/runtime/index.js";
 import { DEFAULT_AGENT_ID, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
@@ -25,7 +35,10 @@ import {
   agentCommand,
   cronIsolatedRun,
   embeddedRunMock,
+  getReplyFromConfig,
   piSdkMock,
+  resetTestPluginRegistry,
+  sendWhatsAppMock,
   sessionStoreSaveDelayMs,
   setTestConfigRoot,
   testIsNixMode,
@@ -61,6 +74,59 @@ const GATEWAY_TEST_ENV_KEYS = [
 let gatewayEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 let tempHome: string | undefined;
 let tempConfigRoot: string | undefined;
+let suiteConfigRootSeq = 0;
+
+async function persistTestSessionStorePath(storePath: string): Promise<void> {
+  const configPaths = new Set<string>();
+  if (process.env.OPENCLAW_CONFIG_PATH) {
+    configPaths.add(process.env.OPENCLAW_CONFIG_PATH);
+  }
+  if (process.env.OPENCLAW_STATE_DIR) {
+    configPaths.add(path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json"));
+  }
+  const parsedConfigs = new Map<string, Record<string, unknown>>();
+  let preservedTemplateStore: string | undefined;
+  for (const configPath of configPaths) {
+    let config: Record<string, unknown> = {};
+    try {
+      const raw = await fs.readFile(configPath, "utf-8");
+      const parsed = parseConfigJson5(raw);
+      if (
+        parsed.ok &&
+        parsed.parsed &&
+        typeof parsed.parsed === "object" &&
+        !Array.isArray(parsed.parsed)
+      ) {
+        config = parsed.parsed as Record<string, unknown>;
+      }
+    } catch {
+      config = {};
+    }
+    parsedConfigs.set(configPath, config);
+    const session =
+      config.session && typeof config.session === "object" && !Array.isArray(config.session)
+        ? (config.session as Record<string, unknown>)
+        : undefined;
+    const existingStore = typeof session?.store === "string" ? session.store.trim() : "";
+    if (!preservedTemplateStore && existingStore.includes("{agentId}")) {
+      preservedTemplateStore = existingStore;
+    }
+  }
+  const nextStoreValue = preservedTemplateStore || storePath;
+  for (const configPath of configPaths) {
+    const config = { ...parsedConfigs.get(configPath) };
+    const session =
+      config.session && typeof config.session === "object" && !Array.isArray(config.session)
+        ? { ...(config.session as Record<string, unknown>) }
+        : {};
+    session.store = nextStoreValue;
+    config.session = session;
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+  }
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+}
 
 export async function writeSessionStore(params: {
   entries: Record<string, Partial<SessionEntry>>;
@@ -86,8 +152,13 @@ export async function writeSessionStore(params: {
           });
     store[storeKey] = entry;
   }
+  // Gateway suites often reuse the same store path across tests while writing the
+  // file directly; clear the in-process cache so handlers reload the seeded state.
+  clearSessionStoreCacheForTest();
+  await persistTestSessionStorePath(storePath);
   await fs.mkdir(path.dirname(storePath), { recursive: true });
   await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+  clearSessionStoreCacheForTest();
 }
 
 async function setupGatewayTestHome() {
@@ -120,14 +191,42 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
     throw new Error("resetGatewayTestState called before temp home was initialized");
   }
   applyGatewaySkipEnv();
+  const stateDir = process.env.OPENCLAW_STATE_DIR;
+  if (stateDir) {
+    await fs.rm(stateDir, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 25,
+    });
+    await fs.mkdir(stateDir, { recursive: true });
+  }
   if (options.uniqueConfigRoot) {
-    tempConfigRoot = await fs.mkdtemp(path.join(tempHome, "openclaw-test-"));
+    const suiteRoot = path.join(tempHome, ".openclaw-test-suite");
+    await fs.mkdir(suiteRoot, { recursive: true });
+    tempConfigRoot = path.join(suiteRoot, `case-${suiteConfigRootSeq++}`);
+    await fs.rm(tempConfigRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 25,
+    });
+    await fs.mkdir(tempConfigRoot, { recursive: true });
   } else {
     tempConfigRoot = path.join(tempHome, ".openclaw-test");
-    await fs.rm(tempConfigRoot, { recursive: true, force: true });
+    await fs.rm(tempConfigRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 25,
+    });
     await fs.mkdir(tempConfigRoot, { recursive: true });
   }
   setTestConfigRoot(tempConfigRoot);
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+  resetTestPluginRegistry();
+  clearGatewaySubagentRuntime();
   sessionStoreSaveDelayMs.value = 0;
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
@@ -150,8 +249,14 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   testState.channelsConfig = undefined;
   testState.allowFrom = undefined;
   testIsNixMode.value = false;
-  cronIsolatedRun.mockClear();
-  agentCommand.mockClear();
+  cronIsolatedRun.mockReset();
+  cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "ok" });
+  agentCommand.mockReset();
+  agentCommand.mockResolvedValue(undefined);
+  getReplyFromConfig.mockReset();
+  getReplyFromConfig.mockResolvedValue(undefined);
+  sendWhatsAppMock.mockReset();
+  sendWhatsAppMock.mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" });
   embeddedRunMock.activeIds.clear();
   embeddedRunMock.abortCalls = [];
   embeddedRunMock.waitCalls = [];
@@ -167,6 +272,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
 
 async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
   vi.useRealTimers();
+  clearGatewaySubagentRuntime();
   resetLogger();
   if (options.restoreEnv) {
     gatewayEnvSnapshot?.restore();
@@ -182,6 +288,9 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
     tempHome = undefined;
   }
   tempConfigRoot = undefined;
+  if (options.restoreEnv) {
+    suiteConfigRootSeq = 0;
+  }
 }
 
 export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) {
@@ -189,10 +298,10 @@ export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) 
   if (scope === "suite") {
     beforeAll(async () => {
       await setupGatewayTestHome();
-      await resetGatewayTestState({ uniqueConfigRoot: true });
+      await resetGatewayTestState({ uniqueConfigRoot: false });
     });
     beforeEach(async () => {
-      await resetGatewayTestState({ uniqueConfigRoot: true });
+      await resetGatewayTestState({ uniqueConfigRoot: false });
     }, 60_000);
     afterEach(async () => {
       await cleanupGatewayTestHome({ restoreEnv: false });
@@ -331,6 +440,46 @@ async function startGatewayServerWithRetries(params: {
   throw new Error("failed to start gateway server after retries");
 }
 
+async function waitForWebSocketOpen(ws: WebSocket, timeoutMs = 10_000): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), timeoutMs);
+    const cleanup = () => {
+      clearTimeout(timer);
+      ws.off("open", onOpen);
+      ws.off("error", onError);
+      ws.off("close", onClose);
+    };
+    const onOpen = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (err: unknown) => {
+      cleanup();
+      reject(err instanceof Error ? err : new Error(String(err)));
+    };
+    const onClose = (code: number, reason: Buffer) => {
+      cleanup();
+      reject(new Error(`closed ${code}: ${reason.toString()}`));
+    };
+    ws.once("open", onOpen);
+    ws.once("error", onError);
+    ws.once("close", onClose);
+  });
+}
+
+async function openTrackedWebSocket(params: {
+  port: number;
+  headers?: Record<string, string>;
+}): Promise<WebSocket> {
+  const ws = new WebSocket(
+    `ws://127.0.0.1:${params.port}`,
+    params.headers ? { headers: params.headers } : undefined,
+  );
+  trackConnectChallengeNonce(ws);
+  await waitForWebSocketOpen(ws);
+  return ws;
+}
+
 export async function withGatewayServer<T>(
   fn: (ctx: { port: number; server: Awaited<ReturnType<typeof startGatewayServer>> }) => Promise<T>,
   opts?: { port?: number; serverOptions?: GatewayServerOptions },
@@ -344,6 +493,34 @@ export async function withGatewayServer<T>(
   } finally {
     await started.server.close();
   }
+}
+
+export async function createGatewaySuiteHarness(opts?: {
+  port?: number;
+  serverOptions?: GatewayServerOptions;
+}): Promise<{
+  port: number;
+  server: Awaited<ReturnType<typeof startGatewayServer>>;
+  openWs: (headers?: Record<string, string>) => Promise<WebSocket>;
+  close: () => Promise<void>;
+}> {
+  const started = await startGatewayServerWithRetries({
+    port: opts?.port ?? (await getFreePort()),
+    opts: opts?.serverOptions,
+  });
+  return {
+    port: started.port,
+    server: started.server,
+    openWs: async (headers?: Record<string, string>) => {
+      return await openTrackedWebSocket({
+        port: started.port,
+        headers,
+      });
+    },
+    close: async () => {
+      await started.server.close();
+    },
+  };
 }
 
 export async function startServerWithClient(
@@ -372,35 +549,7 @@ export async function startServerWithClient(
   port = started.port;
   const server = started.server;
 
-  const ws = new WebSocket(
-    `ws://127.0.0.1:${port}`,
-    wsHeaders ? { headers: wsHeaders } : undefined,
-  );
-  trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 10_000);
-    const cleanup = () => {
-      clearTimeout(timer);
-      ws.off("open", onOpen);
-      ws.off("error", onError);
-      ws.off("close", onClose);
-    };
-    const onOpen = () => {
-      cleanup();
-      resolve();
-    };
-    const onError = (err: unknown) => {
-      cleanup();
-      reject(err instanceof Error ? err : new Error(String(err)));
-    };
-    const onClose = (code: number, reason: Buffer) => {
-      cleanup();
-      reject(new Error(`closed ${code}: ${reason.toString()}`));
-    };
-    ws.once("open", onOpen);
-    ws.once("error", onError);
-    ws.once("close", onClose);
-  });
+  const ws = await openTrackedWebSocket({ port, headers: wsHeaders });
   return { server, ws, port, prevToken: prev, envSnapshot };
 }
 

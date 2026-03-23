@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
+import { looksLikeSessionId } from "../../sessions/session-id.js";
 
 function normalizeKey(value?: string) {
   const trimmed = value?.trim();
@@ -24,7 +25,15 @@ export function resolveDisplaySessionKey(params: { key: string; alias: string; m
   return params.key;
 }
 
-export function resolveInternalSessionKey(params: { key: string; alias: string; mainKey: string }) {
+export function resolveInternalSessionKey(params: {
+  key: string;
+  alias: string;
+  mainKey: string;
+  requesterInternalKey?: string;
+}) {
+  if (params.key === "current") {
+    return params.requesterInternalKey ?? params.key;
+  }
   if (params.key === "main") {
     return params.alias;
   }
@@ -112,11 +121,7 @@ export async function isResolvedSessionVisibleToRequester(params: {
   });
 }
 
-const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-export function looksLikeSessionId(value: string): boolean {
-  return SESSION_ID_RE.test(value.trim());
-}
+export { looksLikeSessionId };
 
 export function looksLikeSessionKey(value: string): boolean {
   const raw = value.trim();
@@ -124,7 +129,7 @@ export function looksLikeSessionKey(value: string): boolean {
     return false;
   }
   // These are canonical key shapes that should never be treated as sessionIds.
-  if (raw === "main" || raw === "global" || raw === "unknown") {
+  if (raw === "main" || raw === "global" || raw === "unknown" || raw === "current") {
     return true;
   }
   if (isAcpSessionKey(raw)) {
@@ -158,6 +163,19 @@ export type SessionReferenceResolution =
       resolvedViaSessionId: boolean;
     }
   | { ok: false; status: "error" | "forbidden"; error: string };
+
+export type VisibleSessionReferenceResolution =
+  | {
+      ok: true;
+      key: string;
+      displayKey: string;
+    }
+  | {
+      ok: false;
+      status: "forbidden";
+      error: string;
+      displayKey: string;
+    };
 
 async function resolveSessionKeyFromSessionId(params: {
   sessionId: string;
@@ -247,6 +265,42 @@ async function resolveSessionKeyFromKey(params: {
   }
 }
 
+async function tryResolveSessionKeyFromSessionId(params: {
+  sessionId: string;
+  alias: string;
+  mainKey: string;
+  requesterInternalKey?: string;
+  restrictToSpawned: boolean;
+}): Promise<Extract<SessionReferenceResolution, { ok: true }> | null> {
+  try {
+    const result = await callGateway<{ key?: string }>({
+      method: "sessions.resolve",
+      params: {
+        sessionId: params.sessionId,
+        spawnedBy: params.restrictToSpawned ? params.requesterInternalKey : undefined,
+        includeGlobal: !params.restrictToSpawned,
+        includeUnknown: !params.restrictToSpawned,
+      },
+    });
+    const key = typeof result?.key === "string" ? result.key.trim() : "";
+    if (!key) {
+      return null;
+    }
+    return {
+      ok: true,
+      key,
+      displayKey: resolveDisplaySessionKey({
+        key,
+        alias: params.alias,
+        mainKey: params.mainKey,
+      }),
+      resolvedViaSessionId: true,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function resolveSessionReference(params: {
   sessionKey: string;
   alias: string;
@@ -254,7 +308,33 @@ export async function resolveSessionReference(params: {
   requesterInternalKey?: string;
   restrictToSpawned: boolean;
 }): Promise<SessionReferenceResolution> {
-  const raw = params.sessionKey.trim();
+  const rawInput = params.sessionKey.trim();
+  if (rawInput === "current") {
+    if (!params.restrictToSpawned) {
+      const resolvedByKey = await resolveSessionKeyFromKey({
+        key: rawInput,
+        alias: params.alias,
+        mainKey: params.mainKey,
+        requesterInternalKey: params.requesterInternalKey,
+        restrictToSpawned: false,
+      });
+      if (resolvedByKey) {
+        return resolvedByKey;
+      }
+    }
+    const resolvedBySessionId = await tryResolveSessionKeyFromSessionId({
+      sessionId: rawInput,
+      alias: params.alias,
+      mainKey: params.mainKey,
+      requesterInternalKey: params.requesterInternalKey,
+      restrictToSpawned: params.restrictToSpawned,
+    });
+    if (resolvedBySessionId) {
+      return resolvedBySessionId;
+    }
+  }
+  const raw =
+    rawInput === "current" && params.requesterInternalKey ? params.requesterInternalKey : rawInput;
   if (shouldResolveSessionIdInput(raw)) {
     // Prefer key resolution to avoid misclassifying custom keys as sessionIds.
     const resolvedByKey = await resolveSessionKeyFromKey({
@@ -280,6 +360,7 @@ export async function resolveSessionReference(params: {
     key: raw,
     alias: params.alias,
     mainKey: params.mainKey,
+    requesterInternalKey: params.requesterInternalKey,
   });
   const displayKey = resolveDisplaySessionKey({
     key: resolvedKey,
@@ -287,6 +368,31 @@ export async function resolveSessionReference(params: {
     mainKey: params.mainKey,
   });
   return { ok: true, key: resolvedKey, displayKey, resolvedViaSessionId: false };
+}
+
+export async function resolveVisibleSessionReference(params: {
+  resolvedSession: Extract<SessionReferenceResolution, { ok: true }>;
+  requesterSessionKey: string;
+  restrictToSpawned: boolean;
+  visibilitySessionKey: string;
+}): Promise<VisibleSessionReferenceResolution> {
+  const resolvedKey = params.resolvedSession.key;
+  const displayKey = params.resolvedSession.displayKey;
+  const visible = await isResolvedSessionVisibleToRequester({
+    requesterSessionKey: params.requesterSessionKey,
+    targetSessionKey: resolvedKey,
+    restrictToSpawned: params.restrictToSpawned,
+    resolvedViaSessionId: params.resolvedSession.resolvedViaSessionId,
+  });
+  if (!visible) {
+    return {
+      ok: false,
+      status: "forbidden",
+      error: `Session not visible from this sandboxed agent session: ${params.visibilitySessionKey}`,
+      displayKey,
+    };
+  }
+  return { ok: true, key: resolvedKey, displayKey };
 }
 
 export function normalizeOptionalKey(value?: string) {

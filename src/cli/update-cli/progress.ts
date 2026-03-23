@@ -57,12 +57,10 @@ export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
 
   if (
     failedStep.name.startsWith("global update") &&
-    (stderr.includes("node-gyp") ||
-      stderr.includes("@discordjs/opus") ||
-      stderr.includes("prebuild"))
+    (stderr.includes("node-gyp") || stderr.includes("prebuild"))
   ) {
     hints.push(
-      "Detected native optional dependency build failure (e.g. opus). The updater retries with --omit=optional automatically.",
+      "Detected native optional dependency build failure. The updater retries with --omit=optional automatically.",
     );
     hints.push("If it still fails: npm i -g openclaw@latest --omit=optional");
   }
@@ -140,7 +138,7 @@ type PrintResultOptions = UpdateCommandOptions & {
 
 export function printResult(result: UpdateRunResult, opts: PrintResultOptions): void {
   if (opts.json) {
-    defaultRuntime.log(JSON.stringify(result, null, 2));
+    defaultRuntime.writeJson(result);
     return;
   }
 

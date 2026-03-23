@@ -22,18 +22,25 @@ import {
   findGatewayPidsOnPortSync,
 } from "./restart-stale-pids.js";
 
+let currentTimeMs = 0;
+
 beforeEach(() => {
   spawnSyncMock.mockReset();
   resolveLsofCommandSyncMock.mockReset();
   resolveGatewayPortMock.mockReset();
 
+  currentTimeMs = 0;
   resolveLsofCommandSyncMock.mockReturnValue("/usr/sbin/lsof");
   resolveGatewayPortMock.mockReturnValue(18789);
-  __testing.setSleepSyncOverride(() => {});
+  __testing.setSleepSyncOverride((ms) => {
+    currentTimeMs += ms;
+  });
+  __testing.setDateNowOverride(() => currentTimeMs);
 });
 
 afterEach(() => {
   __testing.setSleepSyncOverride(null);
+  __testing.setDateNowOverride(null);
   vi.restoreAllMocks();
 });
 
@@ -78,11 +85,17 @@ describe.runIf(process.platform !== "win32")("findGatewayPidsOnPortSync", () => 
 
 describe.runIf(process.platform !== "win32")("cleanStaleGatewayProcessesSync", () => {
   it("kills stale gateway pids discovered on the gateway port", () => {
-    spawnSyncMock.mockReturnValue({
-      error: undefined,
-      status: 0,
-      stdout: ["p6001", "copenclaw", "p6002", "copenclaw-gateway"].join("\n"),
-    });
+    spawnSyncMock
+      .mockReturnValueOnce({
+        error: undefined,
+        status: 0,
+        stdout: ["p6001", "copenclaw", "p6002", "copenclaw-gateway"].join("\n"),
+      })
+      .mockReturnValue({
+        error: undefined,
+        status: 1,
+        stdout: "",
+      });
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 
     const killed = cleanStaleGatewayProcessesSync();
@@ -93,6 +106,33 @@ describe.runIf(process.platform !== "win32")("cleanStaleGatewayProcessesSync", (
     expect(killSpy).toHaveBeenCalledWith(6002, "SIGTERM");
     expect(killSpy).toHaveBeenCalledWith(6001, "SIGKILL");
     expect(killSpy).toHaveBeenCalledWith(6002, "SIGKILL");
+  });
+
+  it("uses explicit port override when provided", () => {
+    spawnSyncMock
+      .mockReturnValueOnce({
+        error: undefined,
+        status: 0,
+        stdout: ["p7001", "copenclaw"].join("\n"),
+      })
+      .mockReturnValue({
+        error: undefined,
+        status: 1,
+        stdout: "",
+      });
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    const killed = cleanStaleGatewayProcessesSync(19999);
+
+    expect(killed).toEqual([7001]);
+    expect(resolveGatewayPortMock).not.toHaveBeenCalled();
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      "/usr/sbin/lsof",
+      ["-nP", "-iTCP:19999", "-sTCP:LISTEN", "-Fpc"],
+      expect.objectContaining({ encoding: "utf8", timeout: 2000 }),
+    );
+    expect(killSpy).toHaveBeenCalledWith(7001, "SIGTERM");
+    expect(killSpy).toHaveBeenCalledWith(7001, "SIGKILL");
   });
 
   it("returns empty when no stale listeners are found", () => {

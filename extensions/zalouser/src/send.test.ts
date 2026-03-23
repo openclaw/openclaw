@@ -1,156 +1,395 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  sendDeliveredZalouser,
   sendImageZalouser,
   sendLinkZalouser,
   sendMessageZalouser,
-  type ZalouserSendResult,
+  sendReactionZalouser,
+  sendSeenZalouser,
+  sendTypingZalouser,
 } from "./send.js";
-import { runZca } from "./zca.js";
+import { parseZalouserTextStyles } from "./text-styles.js";
+import {
+  sendZaloDeliveredEvent,
+  sendZaloLink,
+  sendZaloReaction,
+  sendZaloSeenEvent,
+  sendZaloTextMessage,
+  sendZaloTypingEvent,
+} from "./zalo-js.js";
+import { TextStyle } from "./zca-constants.js";
 
-vi.mock("./zca.js", () => ({
-  runZca: vi.fn(),
+vi.mock("./zalo-js.js", () => ({
+  sendZaloTextMessage: vi.fn(),
+  sendZaloLink: vi.fn(),
+  sendZaloTypingEvent: vi.fn(),
+  sendZaloReaction: vi.fn(),
+  sendZaloDeliveredEvent: vi.fn(),
+  sendZaloSeenEvent: vi.fn(),
 }));
 
-const mockRunZca = vi.mocked(runZca);
-const originalZcaProfile = process.env.ZCA_PROFILE;
-
-function okResult(stdout = "message_id: msg-1") {
-  return {
-    ok: true,
-    stdout,
-    stderr: "",
-    exitCode: 0,
-  };
-}
-
-function failResult(stderr = "") {
-  return {
-    ok: false,
-    stdout: "",
-    stderr,
-    exitCode: 1,
-  };
-}
+const mockSendText = vi.mocked(sendZaloTextMessage);
+const mockSendLink = vi.mocked(sendZaloLink);
+const mockSendTyping = vi.mocked(sendZaloTypingEvent);
+const mockSendReaction = vi.mocked(sendZaloReaction);
+const mockSendDelivered = vi.mocked(sendZaloDeliveredEvent);
+const mockSendSeen = vi.mocked(sendZaloSeenEvent);
 
 describe("zalouser send helpers", () => {
   beforeEach(() => {
-    mockRunZca.mockReset();
-    delete process.env.ZCA_PROFILE;
+    mockSendText.mockReset();
+    mockSendLink.mockReset();
+    mockSendTyping.mockReset();
+    mockSendReaction.mockReset();
+    mockSendDelivered.mockReset();
+    mockSendSeen.mockReset();
   });
 
-  afterEach(() => {
-    if (originalZcaProfile) {
-      process.env.ZCA_PROFILE = originalZcaProfile;
-      return;
-    }
-    delete process.env.ZCA_PROFILE;
-  });
+  it("keeps plain text literal by default", async () => {
+    mockSendText.mockResolvedValueOnce({ ok: true, messageId: "mid-1" });
 
-  it("returns validation error when thread id is missing", async () => {
-    const result = await sendMessageZalouser("", "hello");
-    expect(result).toEqual({
-      ok: false,
-      error: "No threadId provided",
-    } satisfies ZalouserSendResult);
-    expect(mockRunZca).not.toHaveBeenCalled();
-  });
-
-  it("builds text send command with truncation and group flag", async () => {
-    mockRunZca.mockResolvedValueOnce(okResult("message id: mid-123"));
-
-    const result = await sendMessageZalouser("  thread-1  ", "x".repeat(2200), {
-      profile: "profile-a",
+    const result = await sendMessageZalouser("thread-1", "**hello**", {
+      profile: "default",
       isGroup: true,
     });
 
-    expect(mockRunZca).toHaveBeenCalledWith(["msg", "send", "thread-1", "x".repeat(2000), "-g"], {
-      profile: "profile-a",
-    });
-    expect(result).toEqual({ ok: true, messageId: "mid-123" });
+    expect(mockSendText).toHaveBeenCalledWith(
+      "thread-1",
+      "**hello**",
+      expect.objectContaining({
+        profile: "default",
+        isGroup: true,
+      }),
+    );
+    expect(result).toEqual({ ok: true, messageId: "mid-1" });
   });
 
-  it("routes media sends from sendMessage and keeps text as caption", async () => {
-    mockRunZca.mockResolvedValueOnce(okResult());
+  it("formats markdown text when markdown mode is enabled", async () => {
+    mockSendText.mockResolvedValueOnce({ ok: true, messageId: "mid-1b" });
 
-    await sendMessageZalouser("thread-2", "media caption", {
-      profile: "profile-b",
-      mediaUrl: "https://cdn.example.com/video.mp4",
+    await sendMessageZalouser("thread-1", "**hello**", {
+      profile: "default",
+      isGroup: true,
+      textMode: "markdown",
+    });
+
+    expect(mockSendText).toHaveBeenCalledWith(
+      "thread-1",
+      "hello",
+      expect.objectContaining({
+        profile: "default",
+        isGroup: true,
+        textMode: "markdown",
+        textStyles: [{ start: 0, len: 5, st: TextStyle.Bold }],
+      }),
+    );
+  });
+
+  it("formats image captions in markdown mode", async () => {
+    mockSendText.mockResolvedValueOnce({ ok: true, messageId: "mid-2" });
+
+    await sendImageZalouser("thread-2", "https://example.com/a.png", {
+      profile: "p2",
+      caption: "_cap_",
+      isGroup: false,
+      textMode: "markdown",
+    });
+
+    expect(mockSendText).toHaveBeenCalledWith(
+      "thread-2",
+      "cap",
+      expect.objectContaining({
+        profile: "p2",
+        caption: undefined,
+        isGroup: false,
+        mediaUrl: "https://example.com/a.png",
+        textMode: "markdown",
+        textStyles: [{ start: 0, len: 3, st: TextStyle.Italic }],
+      }),
+    );
+  });
+
+  it("does not keep the raw markdown caption as a media fallback after formatting", async () => {
+    mockSendText.mockResolvedValueOnce({ ok: true, messageId: "mid-2b" });
+
+    await sendImageZalouser("thread-2", "https://example.com/a.png", {
+      profile: "p2",
+      caption: "```\n```",
+      isGroup: false,
+      textMode: "markdown",
+    });
+
+    expect(mockSendText).toHaveBeenCalledWith(
+      "thread-2",
+      "",
+      expect.objectContaining({
+        profile: "p2",
+        caption: undefined,
+        isGroup: false,
+        mediaUrl: "https://example.com/a.png",
+        textMode: "markdown",
+        textStyles: undefined,
+      }),
+    );
+  });
+
+  it("rechunks normalized markdown text before sending to avoid transport truncation", async () => {
+    const text = "\t".repeat(500) + "a".repeat(1500);
+    const formatted = parseZalouserTextStyles(text);
+    mockSendText
+      .mockResolvedValueOnce({ ok: true, messageId: "mid-2c-1" })
+      .mockResolvedValueOnce({ ok: true, messageId: "mid-2c-2" });
+
+    const result = await sendMessageZalouser("thread-2c", text, {
+      profile: "p2c",
+      isGroup: false,
+      textMode: "markdown",
+    });
+
+    expect(formatted.text.length).toBeGreaterThan(2000);
+    expect(mockSendText).toHaveBeenCalledTimes(2);
+    expect(mockSendText.mock.calls.map((call) => call[1]).join("")).toBe(formatted.text);
+    expect(mockSendText.mock.calls.every((call) => (call[1] as string).length <= 2000)).toBe(true);
+    expect(result).toEqual({ ok: true, messageId: "mid-2c-2" });
+  });
+
+  it("preserves text styles when splitting long formatted markdown", async () => {
+    const text = `**${"a".repeat(2501)}**`;
+    mockSendText
+      .mockResolvedValueOnce({ ok: true, messageId: "mid-2d-1" })
+      .mockResolvedValueOnce({ ok: true, messageId: "mid-2d-2" });
+
+    const result = await sendMessageZalouser("thread-2d", text, {
+      profile: "p2d",
+      isGroup: false,
+      textMode: "markdown",
+    });
+
+    expect(mockSendText).toHaveBeenNthCalledWith(
+      1,
+      "thread-2d",
+      "a".repeat(2000),
+      expect.objectContaining({
+        profile: "p2d",
+        isGroup: false,
+        textMode: "markdown",
+        textStyles: [{ start: 0, len: 2000, st: TextStyle.Bold }],
+      }),
+    );
+    expect(mockSendText).toHaveBeenNthCalledWith(
+      2,
+      "thread-2d",
+      "a".repeat(501),
+      expect.objectContaining({
+        profile: "p2d",
+        isGroup: false,
+        textMode: "markdown",
+        textStyles: [{ start: 0, len: 501, st: TextStyle.Bold }],
+      }),
+    );
+    expect(result).toEqual({ ok: true, messageId: "mid-2d-2" });
+  });
+
+  it("preserves formatted text and styles when newline chunk mode splits after parsing", async () => {
+    const text = `**${"a".repeat(1995)}**\n\nsecond paragraph`;
+    const formatted = parseZalouserTextStyles(text);
+    mockSendText
+      .mockResolvedValueOnce({ ok: true, messageId: "mid-2d-3" })
+      .mockResolvedValueOnce({ ok: true, messageId: "mid-2d-4" });
+
+    const result = await sendMessageZalouser("thread-2d-2", text, {
+      profile: "p2d-2",
+      isGroup: false,
+      textMode: "markdown",
+      textChunkMode: "newline",
+    });
+
+    expect(mockSendText).toHaveBeenCalledTimes(2);
+    expect(mockSendText.mock.calls.map((call) => call[1]).join("")).toBe(formatted.text);
+    expect(mockSendText).toHaveBeenNthCalledWith(
+      1,
+      "thread-2d-2",
+      `${"a".repeat(1995)}\n\n`,
+      expect.objectContaining({
+        profile: "p2d-2",
+        isGroup: false,
+        textMode: "markdown",
+        textChunkMode: "newline",
+        textStyles: [{ start: 0, len: 1995, st: TextStyle.Bold }],
+      }),
+    );
+    expect(mockSendText).toHaveBeenNthCalledWith(
+      2,
+      "thread-2d-2",
+      "second paragraph",
+      expect.objectContaining({
+        profile: "p2d-2",
+        isGroup: false,
+        textMode: "markdown",
+        textChunkMode: "newline",
+        textStyles: undefined,
+      }),
+    );
+    expect(result).toEqual({ ok: true, messageId: "mid-2d-4" });
+  });
+
+  it("respects an explicit text chunk limit when splitting formatted markdown", async () => {
+    const text = `**${"a".repeat(1501)}**`;
+    mockSendText
+      .mockResolvedValueOnce({ ok: true, messageId: "mid-2d-5" })
+      .mockResolvedValueOnce({ ok: true, messageId: "mid-2d-6" });
+
+    const result = await sendMessageZalouser("thread-2d-3", text, {
+      profile: "p2d-3",
+      isGroup: false,
+      textMode: "markdown",
+      textChunkLimit: 1200,
+    } as never);
+
+    expect(mockSendText).toHaveBeenCalledTimes(2);
+    expect(mockSendText).toHaveBeenNthCalledWith(
+      1,
+      "thread-2d-3",
+      "a".repeat(1200),
+      expect.objectContaining({
+        profile: "p2d-3",
+        isGroup: false,
+        textMode: "markdown",
+        textChunkLimit: 1200,
+        textStyles: [{ start: 0, len: 1200, st: TextStyle.Bold }],
+      }),
+    );
+    expect(mockSendText).toHaveBeenNthCalledWith(
+      2,
+      "thread-2d-3",
+      "a".repeat(301),
+      expect.objectContaining({
+        profile: "p2d-3",
+        isGroup: false,
+        textMode: "markdown",
+        textChunkLimit: 1200,
+        textStyles: [{ start: 0, len: 301, st: TextStyle.Bold }],
+      }),
+    );
+    expect(result).toEqual({ ok: true, messageId: "mid-2d-6" });
+  });
+
+  it("sends overflow markdown captions as follow-up text after the media message", async () => {
+    const caption = "\t".repeat(500) + "a".repeat(1500);
+    const formatted = parseZalouserTextStyles(caption);
+    mockSendText
+      .mockResolvedValueOnce({ ok: true, messageId: "mid-2e-1" })
+      .mockResolvedValueOnce({ ok: true, messageId: "mid-2e-2" });
+
+    const result = await sendImageZalouser("thread-2e", "https://example.com/long.png", {
+      profile: "p2e",
+      caption,
+      isGroup: false,
+      textMode: "markdown",
+    });
+
+    expect(mockSendText).toHaveBeenCalledTimes(2);
+    expect(mockSendText.mock.calls.map((call) => call[1]).join("")).toBe(formatted.text);
+    expect(mockSendText).toHaveBeenNthCalledWith(
+      1,
+      "thread-2e",
+      expect.any(String),
+      expect.objectContaining({
+        profile: "p2e",
+        caption: undefined,
+        isGroup: false,
+        mediaUrl: "https://example.com/long.png",
+        textMode: "markdown",
+      }),
+    );
+    expect(mockSendText).toHaveBeenNthCalledWith(
+      2,
+      "thread-2e",
+      expect.any(String),
+      expect.not.objectContaining({
+        mediaUrl: "https://example.com/long.png",
+      }),
+    );
+    expect(result).toEqual({ ok: true, messageId: "mid-2e-2" });
+  });
+
+  it("delegates link helper to JS transport", async () => {
+    mockSendLink.mockResolvedValueOnce({ ok: false, error: "boom" });
+
+    const result = await sendLinkZalouser("thread-3", "https://openclaw.ai", {
+      profile: "p3",
       isGroup: true,
     });
 
-    expect(mockRunZca).toHaveBeenCalledWith(
-      [
-        "msg",
-        "video",
-        "thread-2",
-        "-u",
-        "https://cdn.example.com/video.mp4",
-        "-m",
-        "media caption",
-        "-g",
-      ],
-      { profile: "profile-b" },
-    );
-  });
-
-  it("maps audio media to voice command", async () => {
-    mockRunZca.mockResolvedValueOnce(okResult());
-
-    await sendMessageZalouser("thread-3", "", {
-      profile: "profile-c",
-      mediaUrl: "https://cdn.example.com/clip.mp3",
-    });
-
-    expect(mockRunZca).toHaveBeenCalledWith(
-      ["msg", "voice", "thread-3", "-u", "https://cdn.example.com/clip.mp3"],
-      { profile: "profile-c" },
-    );
-  });
-
-  it("builds image command with caption and returns fallback error", async () => {
-    mockRunZca.mockResolvedValueOnce(failResult(""));
-
-    const result = await sendImageZalouser("thread-4", " https://cdn.example.com/img.png ", {
-      profile: "profile-d",
-      caption: "caption text",
+    expect(mockSendLink).toHaveBeenCalledWith("thread-3", "https://openclaw.ai", {
+      profile: "p3",
       isGroup: true,
     });
-
-    expect(mockRunZca).toHaveBeenCalledWith(
-      [
-        "msg",
-        "image",
-        "thread-4",
-        "-u",
-        "https://cdn.example.com/img.png",
-        "-m",
-        "caption text",
-        "-g",
-      ],
-      { profile: "profile-d" },
-    );
-    expect(result).toEqual({ ok: false, error: "Failed to send image" });
+    expect(result).toEqual({ ok: false, error: "boom" });
   });
 
-  it("uses env profile fallback and builds link command", async () => {
-    process.env.ZCA_PROFILE = "env-profile";
-    mockRunZca.mockResolvedValueOnce(okResult("abc123"));
+  it("delegates typing helper to JS transport", async () => {
+    await sendTypingZalouser("thread-4", { profile: "p4", isGroup: true });
 
-    const result = await sendLinkZalouser("thread-5", " https://openclaw.ai ", { isGroup: true });
-
-    expect(mockRunZca).toHaveBeenCalledWith(
-      ["msg", "link", "thread-5", "https://openclaw.ai", "-g"],
-      { profile: "env-profile" },
-    );
-    expect(result).toEqual({ ok: true, messageId: "abc123" });
+    expect(mockSendTyping).toHaveBeenCalledWith("thread-4", {
+      profile: "p4",
+      isGroup: true,
+    });
   });
 
-  it("returns caught command errors", async () => {
-    mockRunZca.mockRejectedValueOnce(new Error("zca unavailable"));
+  it("delegates reaction helper to JS transport", async () => {
+    mockSendReaction.mockResolvedValueOnce({ ok: true });
 
-    await expect(sendLinkZalouser("thread-6", "https://openclaw.ai")).resolves.toEqual({
-      ok: false,
-      error: "zca unavailable",
+    const result = await sendReactionZalouser({
+      threadId: "thread-5",
+      profile: "p5",
+      isGroup: true,
+      msgId: "100",
+      cliMsgId: "200",
+      emoji: "👍",
+    });
+
+    expect(mockSendReaction).toHaveBeenCalledWith({
+      profile: "p5",
+      threadId: "thread-5",
+      isGroup: true,
+      msgId: "100",
+      cliMsgId: "200",
+      emoji: "👍",
+      remove: undefined,
+    });
+    expect(result).toEqual({ ok: true, error: undefined });
+  });
+
+  it("delegates delivered+seen helpers to JS transport", async () => {
+    mockSendDelivered.mockResolvedValueOnce();
+    mockSendSeen.mockResolvedValueOnce();
+
+    const message = {
+      msgId: "100",
+      cliMsgId: "200",
+      uidFrom: "1",
+      idTo: "2",
+      msgType: "webchat",
+      st: 1,
+      at: 0,
+      cmd: 0,
+      ts: "123",
+    };
+
+    await sendDeliveredZalouser({ profile: "p6", isGroup: true, message, isSeen: false });
+    await sendSeenZalouser({ profile: "p6", isGroup: true, message });
+
+    expect(mockSendDelivered).toHaveBeenCalledWith({
+      profile: "p6",
+      isGroup: true,
+      message,
+      isSeen: false,
+    });
+    expect(mockSendSeen).toHaveBeenCalledWith({
+      profile: "p6",
+      isGroup: true,
+      message,
     });
   });
 });

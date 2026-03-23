@@ -9,14 +9,14 @@ Status: **extremely alpha**. The app is actively being rebuilt from the ground u
 - [x] Encrypted persistence for gateway setup/auth state
 - [x] Chat UI restyled
 - [x] Settings UI restyled and de-duplicated (gateway controls moved to Connect)
-- [ ] QR code scanning in onboarding
-- [ ] Performance improvements
-- [ ] Streaming support in chat UI
-- [ ] Request camera/location and other permissions in onboarding/settings flow
-- [ ] Push notifications for gateway/chat status updates
-- [ ] Security hardening (biometric lock, token handling, safer defaults)
-- [ ] Voice tab full functionality
-- [ ] Screen tab full functionality
+- [x] QR code scanning in onboarding
+- [x] Performance improvements
+- [x] Streaming support in chat UI
+- [x] Request camera/location and other permissions in onboarding/settings flow
+- [x] Push notifications for gateway/chat status updates
+- [x] Security hardening (biometric lock, token handling, safer defaults)
+- [x] Voice tab full functionality
+- [x] Screen tab full functionality
 - [ ] Full end-to-end QA and release hardening
 
 ## Open in Android Studio
@@ -27,9 +27,55 @@ Status: **extremely alpha**. The app is actively being rebuilt from the ground u
 
 ```bash
 cd apps/android
-./gradlew :app:assembleDebug
-./gradlew :app:installDebug
-./gradlew :app:testDebugUnitTest
+./gradlew :app:assemblePlayDebug
+./gradlew :app:installPlayDebug
+./gradlew :app:testPlayDebugUnitTest
+cd ../..
+bun run android:bundle:release
+```
+
+Third-party debug flavor:
+
+```bash
+cd apps/android
+./gradlew :app:assembleThirdPartyDebug
+./gradlew :app:installThirdPartyDebug
+./gradlew :app:testThirdPartyDebugUnitTest
+```
+
+`bun run android:bundle:release` auto-bumps Android `versionName`/`versionCode` in `apps/android/app/build.gradle.kts`, then builds two signed release bundles:
+
+- Play build: `apps/android/build/release-bundles/openclaw-<version>-play-release.aab`
+- Third-party build: `apps/android/build/release-bundles/openclaw-<version>-third-party-release.aab`
+
+Flavor-specific direct Gradle tasks:
+
+```bash
+cd apps/android
+./gradlew :app:bundlePlayRelease
+./gradlew :app:bundleThirdPartyRelease
+```
+
+## Kotlin Lint + Format
+
+```bash
+pnpm android:lint
+pnpm android:format
+```
+
+Android framework/resource lint (separate pass):
+
+```bash
+pnpm android:lint:android
+```
+
+Direct Gradle tasks:
+
+```bash
+cd apps/android
+./gradlew :app:ktlintCheck :benchmark:ktlintCheck
+./gradlew :app:ktlintFormat :benchmark:ktlintFormat
+./gradlew :app:lintDebug
 ```
 
 `gradlew` auto-detects the Android SDK at `~/Library/Android/sdk` (macOS default) if `ANDROID_SDK_ROOT` / `ANDROID_HOME` are unset.
@@ -134,8 +180,8 @@ pnpm openclaw gateway --port 18789 --verbose
 3) Approve pairing (on the gateway machine):
 
 ```bash
-openclaw nodes pending
-openclaw nodes approve <requestId>
+openclaw devices list
+openclaw devices approve <requestId>
 ```
 
 More details: `docs/platforms/android.md`.
@@ -149,6 +195,48 @@ More details: `docs/platforms/android.md`.
 - Camera:
   - `CAMERA` for `camera.snap` and `camera.clip`
   - `RECORD_AUDIO` for `camera.clip` when `includeAudio=true`
+
+## Google Play Restricted Permissions
+
+As of March 19, 2026, these manifest permissions are the main Google Play policy risk for this app:
+
+- `READ_SMS`
+- `SEND_SMS`
+- `READ_CALL_LOG`
+
+Why these matter:
+
+- Google Play treats SMS and Call Log access as highly restricted. In most cases, Play only allows them for the default SMS app, default Phone app, default Assistant, or a narrow policy exception.
+- Review usually involves a `Permissions Declaration Form`, policy justification, and demo video evidence in Play Console.
+- If we want a Play-safe build, these should be the first permissions removed behind a dedicated product flavor / variant.
+
+Current OpenClaw Android implication:
+
+- APK / sideload build can keep SMS and Call Log features.
+- Google Play build should exclude SMS send/search and Call Log search unless the product is intentionally positioned and approved as a default-handler exception case.
+- The repo now ships this split as Android product flavors:
+  - `play`: removes `READ_SMS`, `SEND_SMS`, and `READ_CALL_LOG`, and hides SMS / Call Log surfaces in onboarding, settings, and advertised node capabilities.
+  - `thirdParty`: keeps the full permission set and the existing SMS / Call Log functionality.
+
+Policy links:
+
+- [Google Play SMS and Call Log policy](https://support.google.com/googleplay/android-developer/answer/10208820?hl=en)
+- [Google Play sensitive permissions policy hub](https://support.google.com/googleplay/android-developer/answer/16558241)
+- [Android default handlers guide](https://developer.android.com/guide/topics/permissions/default-handlers)
+
+Other Play-restricted surfaces to watch if added later:
+
+- `ACCESS_BACKGROUND_LOCATION`
+- `MANAGE_EXTERNAL_STORAGE`
+- `QUERY_ALL_PACKAGES`
+- `REQUEST_INSTALL_PACKAGES`
+- `AccessibilityService`
+
+Reference links:
+
+- [Background location policy](https://support.google.com/googleplay/android-developer/answer/9799150)
+- [AccessibilityService policy](https://support.google.com/googleplay/android-developer/answer/10964491?hl=en-GB)
+- [Photo and Video Permissions policy](https://support.google.com/googleplay/android-developer/answer/14594990)
 
 ## Integration Capability Test (Preconditioned)
 
@@ -189,7 +277,7 @@ What it does:
 - Reads `node.describe` command list from the selected Android node.
 - Invokes advertised non-interactive commands.
 - Skips `screen.record` in this suite (Android requires interactive per-invocation screen-capture consent).
-- Asserts command contracts (success or expected deterministic error for safe-invalid calls like `sms.send`, `notifications.actions`, `app.update`).
+- Asserts command contracts (success or expected deterministic error for safe-invalid calls like `sms.send` and `notifications.actions`).
 
 Common failure quick-fixes:
 

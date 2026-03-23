@@ -1,5 +1,88 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveDmGroupAccessWithLists } from "../security/dm-policy-shared.js";
+export {
+  createPreCryptoDirectDmAuthorizer,
+  resolveInboundDirectDmAccessWithRuntime,
+  type DirectDmCommandAuthorizationRuntime,
+  type ResolvedInboundDirectDmAccess,
+} from "./direct-dm.js";
+
+export {
+  hasControlCommand,
+  hasInlineCommandTokens,
+  isControlCommandMessage,
+  shouldComputeCommandAuthorized,
+} from "../auto-reply/command-detection.js";
+export {
+  buildCommandText,
+  buildCommandTextFromArgs,
+  findCommandByNativeName,
+  getCommandDetection,
+  isCommandEnabled,
+  isCommandMessage,
+  isNativeCommandSurface,
+  listChatCommands,
+  listChatCommandsForConfig,
+  listNativeCommandSpecs,
+  listNativeCommandSpecsForConfig,
+  maybeResolveTextAlias,
+  normalizeCommandBody,
+  parseCommandArgs,
+  resolveCommandArgChoices,
+  resolveCommandArgMenu,
+  resolveTextCommand,
+  serializeCommandArgs,
+  shouldHandleTextCommands,
+} from "../auto-reply/commands-registry.js";
+export type {
+  ChatCommandDefinition,
+  CommandArgChoiceContext,
+  CommandArgDefinition,
+  CommandArgMenuSpec,
+  CommandArgValues,
+  CommandArgs,
+  CommandDetection,
+  CommandNormalizeOptions,
+  CommandScope,
+  NativeCommandSpec,
+  ResolvedCommandArgChoice,
+  ShouldHandleTextCommandsParams,
+} from "../auto-reply/commands-registry.js";
+export {
+  resolveCommandAuthorizedFromAuthorizers,
+  resolveControlCommandGate,
+  resolveDualTextControlCommandGate,
+  type CommandAuthorizer,
+  type CommandGatingModeWhenAccessGroupsOff,
+} from "../channels/command-gating.js";
+export {
+  resolveNativeCommandSessionTargets,
+  type ResolveNativeCommandSessionTargetsParams,
+} from "../channels/native-command-session-targets.js";
+export {
+  resolveCommandAuthorization,
+  type CommandAuthorization,
+} from "../auto-reply/command-auth.js";
+export {
+  listReservedChatSlashCommandNames,
+  listSkillCommandsForAgents,
+  listSkillCommandsForWorkspace,
+  resolveSkillCommandInvocation,
+} from "../auto-reply/skill-commands.js";
+export { buildCommandsPaginationKeyboard } from "../auto-reply/reply/commands-info.js";
+export {
+  buildModelsProviderData,
+  formatModelsAvailableHeader,
+  resolveModelsCommandReply,
+} from "../auto-reply/reply/commands-models.js";
+export type { ModelsProviderData } from "../auto-reply/reply/commands-models.js";
+export { resolveStoredModelOverride } from "../auto-reply/reply/model-selection.js";
+export type { StoredModelOverride } from "../auto-reply/reply/model-selection.js";
+export {
+  buildCommandsMessage,
+  buildCommandsMessagePaginated,
+  buildHelpMessage,
+} from "../auto-reply/status.js";
 
 export type ResolveSenderCommandAuthorizationParams = {
   cfg: OpenClawConfig;
@@ -18,6 +101,51 @@ export type ResolveSenderCommandAuthorizationParams = {
   }) => boolean;
 };
 
+export type CommandAuthorizationRuntime = {
+  shouldComputeCommandAuthorized: (rawBody: string, cfg: OpenClawConfig) => boolean;
+  resolveCommandAuthorizedFromAuthorizers: (params: {
+    useAccessGroups: boolean;
+    authorizers: Array<{ configured: boolean; allowed: boolean }>;
+  }) => boolean;
+};
+
+export type ResolveSenderCommandAuthorizationWithRuntimeParams = Omit<
+  ResolveSenderCommandAuthorizationParams,
+  "shouldComputeCommandAuthorized" | "resolveCommandAuthorizedFromAuthorizers"
+> & {
+  runtime: CommandAuthorizationRuntime;
+};
+
+/** Fast-path DM command authorization when only policy and sender allowlist state matter. */
+export function resolveDirectDmAuthorizationOutcome(params: {
+  isGroup: boolean;
+  dmPolicy: string;
+  senderAllowedForCommands: boolean;
+}): "disabled" | "unauthorized" | "allowed" {
+  if (params.isGroup) {
+    return "allowed";
+  }
+  if (params.dmPolicy === "disabled") {
+    return "disabled";
+  }
+  if (params.dmPolicy !== "open" && !params.senderAllowedForCommands) {
+    return "unauthorized";
+  }
+  return "allowed";
+}
+
+/** Runtime-backed wrapper around sender command authorization for grouped helper surfaces. */
+export async function resolveSenderCommandAuthorizationWithRuntime(
+  params: ResolveSenderCommandAuthorizationWithRuntimeParams,
+): ReturnType<typeof resolveSenderCommandAuthorization> {
+  return resolveSenderCommandAuthorization({
+    ...params,
+    shouldComputeCommandAuthorized: params.runtime.shouldComputeCommandAuthorized,
+    resolveCommandAuthorizedFromAuthorizers: params.runtime.resolveCommandAuthorizedFromAuthorizers,
+  });
+}
+
+/** Compute effective allowlists and command authorization for one inbound sender. */
 export async function resolveSenderCommandAuthorization(
   params: ResolveSenderCommandAuthorizationParams,
 ): Promise<{

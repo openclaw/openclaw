@@ -75,6 +75,25 @@ Behavior:
 - Returns messages array in the raw transcript format.
 - When given a `sessionId`, OpenClaw resolves it to the corresponding session key (missing ids error).
 
+## Gateway session history and live transcript APIs
+
+Control UI and gateway clients can use the lower level history and live transcript surfaces directly.
+
+HTTP:
+
+- `GET /sessions/{sessionKey}/history`
+- Query params: `limit`, `cursor`, `includeTools=1`, `follow=1`
+- Unknown sessions return HTTP `404` with `error.type = "not_found"`
+- `follow=1` upgrades the response to an SSE stream of transcript updates for that session
+
+WebSocket:
+
+- `sessions.subscribe` subscribes to all session lifecycle and transcript events visible to the client
+- `sessions.messages.subscribe { key }` subscribes only to `session.message` events for one session
+- `sessions.messages.unsubscribe { key }` removes that targeted transcript subscription
+- `session.message` carries appended transcript messages plus live usage metadata when available
+- `sessions.changed` emits `phase: "message"` for transcript appends so session lists can refresh counters and previews
+
 ## sessions_send
 
 Send a message into another session.
@@ -156,10 +175,14 @@ Parameters:
 - `thread?` (default false; request thread-bound routing for this spawn when supported by the channel/plugin)
 - `mode?` (`run|session`; defaults to `run`, but defaults to `session` when `thread=true`; `mode="session"` requires `thread=true`)
 - `cleanup?` (`delete|keep`, default `keep`)
+- `sandbox?` (`inherit|require`, default `inherit`; `require` rejects spawn unless the target child runtime is sandboxed)
+- `attachments?` (optional array of inline files; subagent runtime only, ACP rejects). Each entry: `{ name, content, encoding?: "utf8" | "base64", mimeType? }`. Files are materialized into the child workspace at `.openclaw/attachments/<uuid>/`. Returns a receipt with sha256 per file.
+- `attachAs?` (optional; `{ mountPath? }` hint reserved for future mount implementations)
 
 Allowlist:
 
 - `agents.list[].subagents.allowAgents`: list of agent ids allowed via `agentId` (`["*"]` to allow any). Default: only the requester agent.
+- Sandbox inheritance guard: if the requester session is sandboxed, `sessions_spawn` rejects targets that would run unsandboxed.
 
 Discovery:
 

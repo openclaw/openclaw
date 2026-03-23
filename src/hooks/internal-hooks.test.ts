@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
@@ -15,6 +16,8 @@ import {
   type MessageReceivedHookContext,
   type MessageSentHookContext,
 } from "./internal-hooks.js";
+
+const INTERNAL_HOOK_HANDLERS_KEY = Symbol.for("openclaw.internalHookHandlers");
 
 describe("hooks", () => {
   beforeEach(() => {
@@ -141,6 +144,26 @@ describe("hooks", () => {
     it("should not throw if no handlers are registered", async () => {
       const event = createInternalHookEvent("command", "new", "test-session");
       await expect(triggerInternalHook(event)).resolves.not.toThrow();
+    });
+
+    it("stores handlers in the global singleton registry", async () => {
+      const globalHooks = resolveGlobalSingleton<Map<string, Array<(event: unknown) => unknown>>>(
+        INTERNAL_HOOK_HANDLERS_KEY,
+        () => new Map<string, Array<(event: unknown) => unknown>>(),
+      );
+      const handler = vi.fn();
+      registerInternalHook("command:new", handler);
+
+      const event = createInternalHookEvent("command", "new", "test-session");
+      await triggerInternalHook(event);
+
+      expect(handler).toHaveBeenCalledWith(event);
+      expect(globalHooks.has("command:new")).toBe(true);
+
+      const injectedHandler = vi.fn();
+      globalHooks.set("command:new", [injectedHandler]);
+      await triggerInternalHook(event);
+      expect(injectedHandler).toHaveBeenCalledWith(event);
     });
   });
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
   isMessagingToolDuplicate,
   normalizeTextForComparison,
@@ -41,6 +42,14 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("sanitizes Ollama prompt-too-long payloads through the context-overflow path", () => {
+    const text =
+      'Ollama API error 400: {"StatusCode":400,"Status":"400 Bad Request","error":"prompt too long; exceeded max context length by 4 tokens"}';
+    expect(sanitizeUserFacingText(text, { errorContext: true })).toContain(
+      "Context overflow: prompt too large for the model.",
+    );
+  });
+
   it.each([
     "Changelog note: we fixed false positives for `Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.` in 2026.2.9",
     "nah it failed, hit a context overflow. the prompt was too large for the model. want me to retry it with a different approach?",
@@ -77,6 +86,14 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("Error: 429 Rate limit exceeded", { errorContext: true })).toBe(
       "⚠️ API rate limit reached. Please try again later.",
     );
+  });
+
+  it("returns a transport-specific message for prefixed ECONNREFUSED errors", () => {
+    expect(
+      sanitizeUserFacingText("Error: connect ECONNREFUSED 127.0.0.1:443", {
+        errorContext: true,
+      }),
+    ).toBe("LLM request failed: connection refused by the provider endpoint.");
   });
 
   it.each([
@@ -315,6 +332,80 @@ describe("downgradeOpenAIReasoningBlocks", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     const twice = downgradeOpenAIReasoningBlocks(once as any);
     expect(twice).toEqual(once);
+  });
+});
+
+describe("downgradeOpenAIFunctionCallReasoningPairs", () => {
+  const callIdWithReasoning = "call_123|fc_123";
+  const callIdWithoutReasoning = "call_123";
+  const readArgs = {} as Record<string, never>;
+
+  const makeToolCall = (id: string) => ({
+    type: "toolCall",
+    id,
+    name: "read",
+    arguments: readArgs,
+  });
+  const makeToolResult = (toolCallId: string, text: string) => ({
+    role: "toolResult",
+    toolCallId,
+    toolName: "read",
+    content: [{ type: "text", text }],
+  });
+  const makeReasoningAssistantTurn = (id: string) => ({
+    role: "assistant",
+    content: [
+      {
+        type: "thinking",
+        thinking: "internal",
+        thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
+      },
+      makeToolCall(id),
+    ],
+  });
+  const makePlainAssistantTurn = (id: string) => ({
+    role: "assistant",
+    content: [makeToolCall(id)],
+  });
+
+  it("strips fc ids when reasoning cannot be replayed", () => {
+    const input = [
+      makePlainAssistantTurn(callIdWithReasoning),
+      makeToolResult(callIdWithReasoning, "ok"),
+    ];
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    expect(downgradeOpenAIFunctionCallReasoningPairs(input as any)).toEqual([
+      makePlainAssistantTurn(callIdWithoutReasoning),
+      makeToolResult(callIdWithoutReasoning, "ok"),
+    ]);
+  });
+
+  it("keeps fc ids when replayable reasoning is present", () => {
+    const input = [
+      makeReasoningAssistantTurn(callIdWithReasoning),
+      makeToolResult(callIdWithReasoning, "ok"),
+    ];
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    expect(downgradeOpenAIFunctionCallReasoningPairs(input as any)).toEqual(input);
+  });
+
+  it("only rewrites tool results paired to the downgraded assistant turn", () => {
+    const input = [
+      makePlainAssistantTurn(callIdWithReasoning),
+      makeToolResult(callIdWithReasoning, "turn1"),
+      makeReasoningAssistantTurn(callIdWithReasoning),
+      makeToolResult(callIdWithReasoning, "turn2"),
+    ];
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    expect(downgradeOpenAIFunctionCallReasoningPairs(input as any)).toEqual([
+      makePlainAssistantTurn(callIdWithoutReasoning),
+      makeToolResult(callIdWithoutReasoning, "turn1"),
+      makeReasoningAssistantTurn(callIdWithReasoning),
+      makeToolResult(callIdWithReasoning, "turn2"),
+    ]);
   });
 });
 
