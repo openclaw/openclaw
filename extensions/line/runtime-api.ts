@@ -16,11 +16,15 @@ export {
   buildComputedAccountStatusSnapshot,
   buildTokenChannelStatusSummary,
 } from "openclaw/plugin-sdk/status-helpers";
-export { DEFAULT_ACCOUNT_ID, formatDocsLink, setSetupChannelEnabled, splitSetupEntries } from "openclaw/plugin-sdk/setup";
+export {
+  DEFAULT_ACCOUNT_ID,
+  formatDocsLink,
+  setSetupChannelEnabled,
+  splitSetupEntries,
+} from "openclaw/plugin-sdk/setup";
 export * from "../../src/plugin-sdk/line-runtime.js";
 
 export * from "./src/accounts.js";
-export * from "./src/actions.js";
 export * from "./src/bot-access.js";
 export * from "./src/channel-access-token.js";
 export * from "./src/config-schema.js";
@@ -29,11 +33,42 @@ export * from "./src/flex-templates.js";
 export * from "./src/group-keys.js";
 export * from "./src/markdown-to-line.js";
 export * from "./src/probe.js";
-export * from "./src/rich-menu.js";
 export * from "./src/send.js";
 export * from "./src/signature.js";
-export * from "./src/template-messages.js";
-export type { LineChannelData, LineConfig, ResolvedLineAccount } from "./src/types.js";
+export { datetimePickerAction, messageAction, postbackAction, uriAction } from "./src/rich-menu.js";
+export {
+  createDefaultMenuConfig,
+  createGridLayout,
+  type RichMenuArea,
+  type RichMenuRequest,
+  type RichMenuResponse,
+} from "./src/rich-menu.js";
+export {
+  createButtonMenu,
+  createButtonTemplate,
+  createCarouselColumn,
+  createConfirmTemplate,
+  createImageCarousel,
+  createImageCarouselColumn,
+  createLinkMenu,
+  createProductCarousel,
+  createTemplateCarousel,
+  createYesNoConfirm,
+  buildTemplateMessageFromPayload,
+  type ButtonsTemplate,
+  type CarouselColumn,
+  type CarouselTemplate,
+  type ConfirmTemplate,
+  type ImageCarouselColumn,
+  type ImageCarouselTemplate,
+  type TemplateMessage,
+} from "./src/template-messages.js";
+export type {
+  LineChannelData,
+  LineConfig,
+  LineProbeResult,
+  ResolvedLineAccount,
+} from "./src/types.js";
 export * from "./src/webhook-node.js";
 export * from "./src/webhook.js";
 export * from "./src/webhook-utils.js";
