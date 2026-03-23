@@ -79,6 +79,11 @@ interface ContentItem {
   [key: string]: unknown;
 }
 
+interface PromptFileSize {
+  file: string;
+  words: number;
+}
+
 interface AgentScores {
   agent: AgentId;
   sessions_analyzed: number;
@@ -91,6 +96,13 @@ interface AgentScores {
   tool_exec_rate: number;
   memory_writeback: number;
   memory_richness: number;
+  prompt_size: number;
+  prompt_size_score: number;
+  prompt_files: PromptFileSize[];
+  tool_efficiency: number;
+  prompt_efficiency: number;
+  tool_call_count: number;
+  tool_calls_per_message: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -457,6 +469,85 @@ function scoreMemoryRichness(agentId: AgentId): number {
 }
 
 // ---------------------------------------------------------------------------
+// Metric 10: Prompt Size (per agent)
+// ---------------------------------------------------------------------------
+
+const PROMPT_FILES = ["AGENTS.md", "SOUL.md", "TOOLS.md", "HEARTBEAT.md", "IDENTITY.md"];
+
+function scorePromptSize(agentId: AgentId): {
+  totalWords: number;
+  score: number;
+  files: PromptFileSize[];
+} {
+  const workspace = join(WORKSPACES_BASE, AGENT_WORKSPACE_MAP[agentId]);
+  const files: PromptFileSize[] = [];
+  let totalWords = 0;
+
+  for (const filename of PROMPT_FILES) {
+    const filepath = join(workspace, filename);
+    let words = 0;
+    if (existsSync(filepath)) {
+      const content = readFileSync(filepath, "utf-8");
+      words = content.split(/\s+/).filter((w) => w.length > 0).length;
+    }
+    files.push({ file: filename, words });
+    totalWords += words;
+  }
+
+  // Score: smaller prompts are better
+  let score: number;
+  if (totalWords <= 500) score = 1.0;
+  else if (totalWords <= 1000) score = 0.8;
+  else if (totalWords <= 1500) score = 0.6;
+  else if (totalWords <= 2000) score = 0.4;
+  else score = 0.2;
+
+  return { totalWords, score, files };
+}
+
+// ---------------------------------------------------------------------------
+// Metric 11: Tool Call Efficiency (per agent)
+// ---------------------------------------------------------------------------
+
+function scoreToolEfficiency(sessions: SessionEntry[][]): {
+  efficiency: number;
+  totalCalls: number;
+  callsPerMessage: number;
+} {
+  let totalCalls = 0;
+  let totalUserMessages = 0;
+
+  for (const entries of sessions) {
+    const msgs = getMessages(entries);
+    for (const msg of msgs) {
+      if (msg.role === "user") totalUserMessages++;
+      if (msg.role === "assistant") {
+        for (const item of msg.content) {
+          if (item.type === "toolCall") totalCalls++;
+        }
+      }
+    }
+  }
+
+  const callsPerMessage = totalUserMessages > 0 ? totalCalls / totalUserMessages : 0;
+
+  // Score: moderate tool use is best
+  // 0-3 calls/message = 1.0 (efficient)
+  // 3-8 = 0.8 (normal)
+  // 8-15 = 0.6 (heavy but acceptable)
+  // 15-25 = 0.4 (excessive)
+  // 25+ = 0.2 (over-calling)
+  let efficiency: number;
+  if (callsPerMessage <= 3) efficiency = 1.0;
+  else if (callsPerMessage <= 8) efficiency = 0.8;
+  else if (callsPerMessage <= 15) efficiency = 0.6;
+  else if (callsPerMessage <= 25) efficiency = 0.4;
+  else efficiency = 0.2;
+
+  return { efficiency, totalCalls, callsPerMessage };
+}
+
+// ---------------------------------------------------------------------------
 // Platform Diagnostics
 // ---------------------------------------------------------------------------
 
@@ -666,16 +757,34 @@ function scoreAgent(agentId: AgentId): AgentScores {
   const memory_writeback = scoreWriteBack(sessions);
   const memory_richness = scoreMemoryRichness(agentId);
 
-  // Composite (Operator1 only)
+  // New metrics
+  const promptInfo = scorePromptSize(agentId);
+  const toolInfo = scoreToolEfficiency(sessions);
+
+  // Composite score
   let composite = -1;
   if (agentId === "main") {
+    // Operator1: 5 weighted behavior metrics
     composite =
       delegation * WEIGHTS.delegation +
       memory * WEIGHTS.memory +
       conciseness * WEIGHTS.conciseness +
       silent_reply * WEIGHTS.silent_reply +
       error_rate * WEIGHTS.error_rate;
+  } else {
+    // Subagents: weighted from their available metrics
+    const execRate = tool_exec_rate >= 0 ? tool_exec_rate : 1.0;
+    const mem = memory >= 0 ? memory : 0.5;
+    const wb = memory_writeback >= 0 ? memory_writeback : 0;
+    const rich = memory_richness >= 0 ? memory_richness : 0;
+    const ps = promptInfo.score;
+    composite = execRate * 0.3 + mem * 0.2 + wb * 0.2 + rich * 0.15 + ps * 0.15;
   }
+
+  // Prompt efficiency = composite / (prompt_size / 1000)
+  // Higher = better (high score with small prompt)
+  const prompt_efficiency =
+    composite > 0 && promptInfo.totalWords > 0 ? composite / (promptInfo.totalWords / 1000) : -1;
 
   return {
     agent: agentId,
@@ -689,6 +798,13 @@ function scoreAgent(agentId: AgentId): AgentScores {
     tool_exec_rate,
     memory_writeback,
     memory_richness,
+    prompt_size: promptInfo.totalWords,
+    prompt_size_score: promptInfo.score,
+    prompt_files: promptInfo.files,
+    tool_efficiency: toolInfo.efficiency,
+    prompt_efficiency,
+    tool_call_count: toolInfo.totalCalls,
+    tool_calls_per_message: toolInfo.callsPerMessage,
   };
 }
 
@@ -723,6 +839,18 @@ function printTable(results: AgentScores[]) {
     console.log(`    Memory Write-Back:${fmt(main.memory_writeback)}`);
     console.log(`    Memory Richness:  ${fmt(main.memory_richness)}`);
     console.log("");
+    console.log("  Prompt & Tool Metrics:");
+    console.log(
+      `    Prompt Size:      ${main.prompt_size} words (score: ${fmt(main.prompt_size_score)})`,
+    );
+    for (const f of main.prompt_files) {
+      console.log(`      ${f.file.padEnd(16)} ${String(f.words).padStart(5)} words`);
+    }
+    console.log(
+      `    Tool Calls:       ${main.tool_call_count} total (${main.tool_calls_per_message.toFixed(1)}/msg, score: ${fmt(main.tool_efficiency)})`,
+    );
+    console.log(`    Prompt Efficiency:${fmt(main.prompt_efficiency)}`);
+    console.log("");
   }
 
   if (subs.length > 0) {
@@ -734,9 +862,11 @@ function printTable(results: AgentScores[]) {
         "WriteBack".padEnd(11) +
         "Richness".padEnd(10) +
         "Memory".padEnd(10) +
+        "PromptWds".padEnd(10) +
+        "Tools".padEnd(8) +
         "Errors",
     );
-    console.log("-".repeat(63));
+    console.log("-".repeat(81));
     for (const s of subs) {
       console.log(
         s.agent.padEnd(12) +
@@ -745,6 +875,8 @@ function printTable(results: AgentScores[]) {
           fmt(s.memory_writeback).padEnd(11) +
           fmt(s.memory_richness).padEnd(10) +
           fmt(s.memory).padEnd(10) +
+          String(s.prompt_size).padEnd(10) +
+          String(s.tool_call_count).padEnd(8) +
           fmt(s.error_rate),
       );
     }

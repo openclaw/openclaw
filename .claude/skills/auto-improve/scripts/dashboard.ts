@@ -187,30 +187,32 @@ code{font-family:'SF Mono','Fira Code',monospace;font-size:12px;background:#2126
 <div id="tab-metrics" class="tc active">
 
 <div class="grid">
-  <div class="card">
-    <h2>Composite Score</h2>
-    <div class="mv">${main ? fmt(main.composite) : "-"}<span class="mc ${diffClass}">${prevScore !== null ? diffText : ""}</span></div>
-    <div class="ml">Operator1 (main) &mdash; ${main?.sessions_analyzed || 0} sessions analyzed</div>
-    <div style="margin-top:16px">
-      <h3>Metric Breakdown</h3>
-      <div class="sg">
-        ${
-          main
-            ? [
-                { k: "delegation", l: "Delegation", w: "0.30" },
-                { k: "memory", l: "Memory", w: "0.20" },
-                { k: "conciseness", l: "Conciseness", w: "0.15" },
-                { k: "silent_reply", l: "Silent Reply", w: "0.15" },
-                { k: "error_rate", l: "Tool Errors", w: "0.20" },
-              ]
-                .map((m) => {
-                  const v = main[m.k] as number;
-                  const c = v >= 0.8 ? "#3fb950" : v >= 0.5 ? "#d29922" : "#f85149";
-                  return `<div class="si"><div class="v" style="color:${c}">${v >= 0 ? v.toFixed(2) : "-"}</div><div class="l">${m.l} (${m.w})</div></div>`;
-                })
-                .join("")
-            : ""
-        }
+  <div class="card" id="leftMetricsCard">
+    <div id="leftMetricsContent">
+      <h2>Composite Score</h2>
+      <div class="mv">${main ? fmt(main.composite) : "-"}<span class="mc ${diffClass}">${prevScore !== null ? diffText : ""}</span></div>
+      <div class="ml">Operator1 (main) &mdash; ${main?.sessions_analyzed || 0} sessions analyzed</div>
+      <div style="margin-top:16px">
+        <h3>Metric Breakdown</h3>
+        <div class="sg">
+          ${
+            main
+              ? [
+                  { k: "delegation", l: "Delegation", w: "0.30" },
+                  { k: "memory", l: "Memory", w: "0.20" },
+                  { k: "conciseness", l: "Conciseness", w: "0.15" },
+                  { k: "silent_reply", l: "Silent Reply", w: "0.15" },
+                  { k: "error_rate", l: "Tool Errors", w: "0.20" },
+                ]
+                  .map((m) => {
+                    const v = main[m.k] as number;
+                    const c = v >= 0.8 ? "#3fb950" : v >= 0.5 ? "#d29922" : "#f85149";
+                    return `<div class="si"><div class="v" style="color:${c}">${v >= 0 ? v.toFixed(2) : "-"}</div><div class="l">${m.l} (${m.w})</div></div>`;
+                  })
+                  .join("")
+              : ""
+          }
+        </div>
       </div>
     </div>
   </div>
@@ -234,10 +236,9 @@ code{font-family:'SF Mono','Fira Code',monospace;font-size:12px;background:#2126
     ${scores
       .map((a: Record<string, unknown>) => {
         const name = a.agent === "main" ? "Operator1 (main)" : String(a.agent);
-        const isMain = a.agent === "main";
         return `<div class="ac"><h4>${name}</h4>
         <div class="mr"><span class="l">Sessions</span><span>${a.sessions_analyzed}</span></div>
-        ${isMain ? `<div class="mr"><span class="l">Composite</span><span>${fmt(a.composite as number)}</span></div>` : ""}
+        <div class="mr"><span class="l">Composite</span><span style="font-weight:700">${fmt(a.composite as number)}</span></div>
         <div class="mr"><span class="l">Exec Rate</span><span>${fmt(a.tool_exec_rate as number)}</span></div>
         <div class="mr"><span class="l">Write-Back</span><span>${fmt(a.memory_writeback as number)}</span></div>
         <div class="mr"><span class="l">Richness</span><span>${fmt(a.memory_richness as number)}</span></div>
@@ -587,12 +588,134 @@ if (ctx) {
   trendChart = new Chart(ctx, { type:'line', data:{ labels, datasets:datasets.composite }, options:chartOpts });
 }
 
+// Current agent metrics for inline display
+const agentMetrics = ${JSON.stringify(
+  scores.reduce(
+    (acc: Record<string, Record<string, unknown>>, s: Record<string, unknown>) => {
+      acc[String(s.agent)] = {
+        sessions: s.sessions_analyzed as number,
+        composite: s.composite as number,
+        delegation: s.delegation as number,
+        memory: s.memory as number,
+        conciseness: s.conciseness as number,
+        silent_reply: s.silent_reply as number,
+        error_rate: s.error_rate as number,
+        exec_rate: s.tool_exec_rate as number,
+        writeback: s.memory_writeback as number,
+        richness: s.memory_richness as number,
+        prompt_size: s.prompt_size as number,
+        prompt_size_score: s.prompt_size_score as number,
+        prompt_files: s.prompt_files,
+        tool_efficiency: s.tool_efficiency as number,
+        prompt_efficiency: s.prompt_efficiency as number,
+        tool_call_count: s.tool_call_count as number,
+        tool_calls_per_message: s.tool_calls_per_message as number,
+      };
+      return acc;
+    },
+    {} as Record<string, Record<string, unknown>>,
+  ),
+)};
+
+const metricDefs = {
+  composite: [],
+  op1: [
+    {k:'composite',l:'Composite'},{k:'delegation',l:'Delegation'},{k:'memory',l:'Memory'},
+    {k:'conciseness',l:'Conciseness'},{k:'silent_reply',l:'Silent Reply'},{k:'error_rate',l:'Tool Errors'},
+    {k:'exec_rate',l:'Exec Rate'},{k:'writeback',l:'Write-Back'},{k:'richness',l:'Richness'}
+  ],
+  neo: [{k:'exec_rate',l:'Exec Rate'},{k:'writeback',l:'Write-Back'},{k:'richness',l:'Richness'},{k:'memory',l:'Memory'}],
+  morpheus: [{k:'exec_rate',l:'Exec Rate'},{k:'writeback',l:'Write-Back'},{k:'richness',l:'Richness'},{k:'memory',l:'Memory'}],
+  trinity: [{k:'exec_rate',l:'Exec Rate'},{k:'writeback',l:'Write-Back'},{k:'richness',l:'Richness'},{k:'memory',l:'Memory'}],
+  all: [],
+};
+const agentMap = {composite:'main',op1:'main',neo:'neo',morpheus:'morpheus',trinity:'trinity',all:'main'};
+
+function renderLeftPanel(view) {
+  const container = document.getElementById('leftMetricsContent');
+  const agent = agentMetrics[agentMap[view]];
+  if (!agent) return;
+
+  const agentName = {composite:'Composite',op1:'Operator1 (main)',neo:'Neo',morpheus:'Morpheus',trinity:'Trinity',all:'All Agents'}[view];
+  const defs = metricDefs[view] || [];
+
+  const c = (v) => v >= 0.8 ? '#3fb950' : v >= 0.5 ? '#d29922' : '#f85149';
+  const f = (v) => v >= 0 ? v.toFixed(3) : '-';
+  const f2 = (v) => v >= 0 ? v.toFixed(2) : '-';
+
+  if (view === 'composite' || view === 'all') {
+    // Reset to default composite view
+    const m = agentMetrics['main'];
+    container.innerHTML =
+      '<h2>Composite Score</h2>' +
+      '<div class="mv">' + f2(m.composite) + '</div>' +
+      '<div class="ml">Operator1 (main) &mdash; ' + m.sessions + ' sessions</div>' +
+      '<div style="margin-top:16px"><h3>Metric Breakdown</h3><div class="sg">' +
+      [{k:'delegation',l:'Delegation',w:'0.30'},{k:'memory',l:'Memory',w:'0.20'},{k:'conciseness',l:'Conciseness',w:'0.15'},{k:'silent_reply',l:'Silent Reply',w:'0.15'},{k:'error_rate',l:'Tool Errors',w:'0.20'}]
+        .map(d => '<div class="si"><div class="v" style="color:'+c(m[d.k])+'">'+f2(m[d.k])+'</div><div class="l">'+d.l+' ('+d.w+')</div></div>').join('') +
+      '</div></div>';
+    return;
+  }
+
+  // Agent-specific view
+  let html = '<h2>' + agentName + '</h2>';
+
+  // Composite score for this agent
+  if (agent.composite >= 0) {
+    html += '<div class="mv" style="margin:8px 0">' + f(agent.composite) + '</div>';
+    html += '<div class="ml" style="margin-bottom:12px">Composite &mdash; ' + agent.sessions + ' sessions</div>';
+  }
+
+  html += '<div style="margin-top:8px">';
+
+  // Metrics grid
+  if (defs.length) {
+    html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px">';
+    defs.forEach(d => {
+      const v = agent[d.k];
+      html += '<div style="background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:8px;text-align:center">' +
+        '<div style="font-size:18px;font-weight:700;color:'+c(v)+'">'+ f(v) +'</div>' +
+        '<div style="font-size:10px;color:#8b949e">'+d.l+'</div></div>';
+    });
+    html += '</div>';
+  }
+
+  // Prompt file breakdown
+  const pf = agentMetrics[agentMap[view]];
+  if (pf && pf.prompt_size >= 0) {
+    html += '<h3>Prompt Files</h3>';
+    html += '<div style="font-size:12px;margin-top:4px">';
+    html += '<div class="mr"><span class="l">Total</span><span style="color:'+c(pf.prompt_size_score)+'"><strong>'+pf.prompt_size+' words</strong> ('+f(pf.prompt_size_score)+')</span></div>';
+    if (pf.prompt_files) {
+      pf.prompt_files.forEach(pfile => {
+        const pct = pf.prompt_size > 0 ? Math.round(pfile.words / pf.prompt_size * 100) : 0;
+        html += '<div class="mr"><span class="l">'+pfile.file+'</span><span>'+pfile.words+' ('+pct+'%)</span></div>';
+      });
+    }
+    html += '</div>';
+  }
+
+  // Tool stats
+  if (pf && pf.tool_call_count >= 0) {
+    html += '<h3 style="margin-top:8px">Tool Usage</h3>';
+    html += '<div style="font-size:12px;margin-top:4px">';
+    html += '<div class="mr"><span class="l">Total Calls</span><span>'+pf.tool_call_count+'</span></div>';
+    html += '<div class="mr"><span class="l">Calls/Message</span><span>'+pf.tool_calls_per_message.toFixed(1)+'</span></div>';
+    html += '<div class="mr"><span class="l">Efficiency</span><span style="color:'+c(pf.tool_efficiency)+'">'+f(pf.tool_efficiency)+'</span></div>';
+    html += '</div>';
+  }
+
+  html += '</div>';
+  container.innerHTML = html;
+}
+
 function setChartView(view) {
   if (!trendChart) return;
   document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
   event.target.classList.add('active');
   trendChart.data.datasets = datasets[view];
   trendChart.update();
+  renderLeftPanel(view);
 }
 
 // Category breakdown chart
