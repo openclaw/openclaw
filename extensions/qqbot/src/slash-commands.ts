@@ -82,7 +82,7 @@ const UPGRADE_REQUIREMENTS = {
   /** OpenClaw 最低版本（YYYY.M.D 格式，如 "2026.3.10"） */
   minFrameworkVersion: "2026.3.2",
   /** 支持的操作系统列表（process.platform 值） */
-  supportedPlatforms: ["darwin", "linux"] as string[],
+  supportedPlatforms: ["darwin", "linux", "win32"] as string[],
   /** 最低 Node.js 版本 */
   minNodeVersion: "18.0.0",
 };
@@ -521,7 +521,7 @@ function getUpgradeScriptPath(): string | null {
     // 源码运行: src/slash-commands.ts → ../../scripts/
     // dist 运行: dist/src/slash-commands.js → ../../scripts/
     path.resolve(currentDir, "..", "..", "scripts", scriptName),
-    // npm 安装: node_modules/@tencent-connect/openclaw-qqbot/dist/src → ../../scripts
+    // npm 安装: node_modules/@openclaw/qqbot/dist/src → ../../scripts
     path.resolve(currentDir, "..", "scripts", scriptName),
     path.resolve(process.cwd(), "scripts", scriptName),
   ];
@@ -538,9 +538,7 @@ function getUpgradeScriptPath(): string | null {
 
   const homeDir = getHomeDir();
   for (const cli of ["openclaw", "clawdbot", "moltbot"]) {
-    candidates.push(
-      path.join(homeDir, `.${cli}`, "extensions", "openclaw-qqbot", "scripts", scriptName),
-    );
+    candidates.push(path.join(homeDir, `.${cli}`, "extensions", "qqbot", "scripts", scriptName));
   }
 
   for (const p of candidates) {

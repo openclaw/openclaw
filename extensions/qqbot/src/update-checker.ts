@@ -13,7 +13,7 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 
-const PKG_NAME = "@tencent-connect/openclaw-qqbot";
+const PKG_NAME = "@openclaw/qqbot";
 const ENCODED_PKG = encodeURIComponent(PKG_NAME);
 
 const REGISTRIES = [
