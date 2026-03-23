@@ -529,8 +529,11 @@ function validateConfigObjectWithPluginsBase(
     if (knownMemoryProviders.has(provider)) {
       return;
     }
-    // Cannot validate embedding capability from manifest - fall through to runtime
-    // Unknown providers will be validated at runtime.
+    // Warn about unknown providers - capability validation happens at runtime
+    warnings.push({
+      path: _path,
+      message: `memorySearch provider "${provider}" is not a known built-in; plugin capability will be validated at runtime`,
+    });
   };
 
   const validateMemorySearchFallback = (fallback: string | undefined, _path: string) => {
@@ -541,7 +544,11 @@ function validateConfigObjectWithPluginsBase(
     if (knownMemoryFallbacks.has(fallback)) {
       return;
     }
-    // Cannot validate embedding capability from manifest - fall through to runtime
+    // Warn about unknown fallbacks - capability validation happens at runtime
+    warnings.push({
+      path: _path,
+      message: `memorySearch fallback "${fallback}" is not a known built-in; plugin capability will be validated at runtime`,
+    });
   };
 
   const defaultMemorySearch = config.agents?.defaults?.memorySearch;

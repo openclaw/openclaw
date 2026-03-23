@@ -392,7 +392,9 @@ async function resolveKeyEntry(params: {
       if (!hasCapability) {
         continue;
       }
-      const entry = await checkProvider(providerId, undefined);
+      // Use default model for image capability
+      const model = cap === "image" ? DEFAULT_IMAGE_MODELS[providerId] : undefined;
+      const entry = await checkProvider(providerId, model);
       if (entry) {
         return entry;
       }

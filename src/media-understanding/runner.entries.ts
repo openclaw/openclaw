@@ -494,15 +494,21 @@ export async function runProviderEntry(params: {
           transcribeAudio?: unknown;
           describeVideo?: unknown;
         };
-      }) =>
-        normalizeMediaProviderId(e.provider.id) === providerId &&
-        (capability === "image"
-          ? e.provider.describeImage
-          : capability === "audio"
-            ? e.provider.transcribeAudio
-            : capability === "video"
-              ? e.provider.describeVideo
-              : false),
+      }) => {
+        const caps = e.provider.routingCapabilities;
+        const capabilitiesArray = Array.isArray(caps) ? caps : [];
+        return (
+          normalizeMediaProviderId(e.provider.id) === providerId &&
+          capabilitiesArray.includes(capability) &&
+          (capability === "image"
+            ? e.provider.describeImage
+            : capability === "audio"
+              ? e.provider.transcribeAudio
+              : capability === "video"
+                ? e.provider.describeVideo
+                : false)
+        );
+      },
     );
     const pluginImplementsHandler = !!pluginEntry;
     const imageAuth = await resolveProviderExecutionContext({
@@ -600,16 +606,33 @@ export async function runProviderEntry(params: {
     // Get auth for all providers (built-in and plugins)
     // Require API key for built-in, allow plugins without keys (local engines)
     // Check if plugin actually implements this specific handler (not inherited from built-in)
+    // Also require "audio" routing capability to be declared
     const audioPluginEntry =
       pluginRegistry?.providers.find(
         (e: {
           provider: { id: string; routingCapabilities?: unknown; transcribeAudio?: unknown };
-        }) => normalizeMediaProviderId(e.provider.id) === providerId && e.provider.transcribeAudio,
+        }) => {
+          const caps = e.provider.routingCapabilities;
+          const capabilitiesArray = Array.isArray(caps) ? caps : [];
+          return (
+            normalizeMediaProviderId(e.provider.id) === providerId &&
+            capabilitiesArray.includes("audio") &&
+            e.provider.transcribeAudio
+          );
+        },
       ) ??
       pluginRegistry?.mediaUnderstandingProviders.find(
         (e: {
           provider: { id: string; routingCapabilities?: unknown; transcribeAudio?: unknown };
-        }) => normalizeMediaProviderId(e.provider.id) === providerId && e.provider.transcribeAudio,
+        }) => {
+          const caps = e.provider.routingCapabilities;
+          const capabilitiesArray = Array.isArray(caps) ? caps : [];
+          return (
+            normalizeMediaProviderId(e.provider.id) === providerId &&
+            capabilitiesArray.includes("audio") &&
+            e.provider.transcribeAudio
+          );
+        },
       );
     const pluginImplementsAudio = !!audioPluginEntry;
     const auth = await resolveProviderExecutionContext({
