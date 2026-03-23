@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 MACOS_VM="macOS Tahoe"
 WINDOWS_VM="Windows 11"
-LINUX_VM="Ubuntu 25.10"
+LINUX_VM="Ubuntu 24.04.3 ARM64"
 OPENAI_API_KEY_ENV="OPENAI_API_KEY"
 PACKAGE_SPEC=""
 JSON_OUTPUT=0
@@ -203,8 +203,8 @@ case "\$version" in
     ;;
 esac
 /opt/homebrew/bin/openclaw models set openai/gpt-5.4
-/opt/homebrew/bin/node /opt/homebrew/lib/node_modules/openclaw/openclaw.mjs gateway status --deep --require-rpc
-/opt/homebrew/bin/node /opt/homebrew/lib/node_modules/openclaw/openclaw.mjs agent --agent main --session-id parallels-npm-update-macos-$head_short --message "Reply with exact ASCII text OK only." --json
+/opt/homebrew/bin/openclaw gateway status --deep --require-rpc
+/opt/homebrew/bin/openclaw agent --agent main --session-id parallels-npm-update-macos-$head_short --message "Reply with exact ASCII text OK only." --json
 EOF
   prlctl exec "$MACOS_VM" --current-user /bin/bash /tmp/openclaw-main-update.sh
 }
