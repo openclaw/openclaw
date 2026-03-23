@@ -210,6 +210,58 @@ const gchar* systemd_get_canonical_unit_name(void) {
     return cached_unit_name;
 }
 
+static gchar** parse_single_env_file(const gchar *env_file, const gchar *home_dir, gboolean is_optional, gchar **file_env) {
+    gchar *expanded_h = NULL;
+    const gchar *target_file = env_file;
+    
+    if (strstr(target_file, "%h")) {
+        gchar **parts = g_strsplit(target_file, "%h", -1);
+        expanded_h = g_strjoinv(home_dir, parts);
+        g_strfreev(parts);
+        target_file = expanded_h;
+    }
+    
+    gchar *resolved_path = NULL;
+    if (!g_path_is_absolute(target_file)) {
+        gchar *systemd_user_dir = g_build_filename(home_dir, ".config", "systemd", "user", NULL);
+        resolved_path = g_build_filename(systemd_user_dir, target_file, NULL);
+        g_free(systemd_user_dir);
+        target_file = resolved_path;
+    }
+    
+    gchar *file_contents = NULL;
+    if (g_file_get_contents(target_file, &file_contents, NULL, NULL)) {
+        gchar **env_lines = g_strsplit(file_contents, "\n", -1);
+        for (gint j = 0; env_lines[j] != NULL; j++) {
+            gchar *env_line = g_strstrip(env_lines[j]);
+            if (env_line[0] == '#' || env_line[0] == ';' || env_line[0] == '\0') continue;
+            
+            gchar *eq = strchr(env_line, '=');
+            if (eq) {
+                gchar *key = g_strndup(env_line, eq - env_line);
+                gchar *val = g_strstrip(eq + 1);
+                gsize val_len = strlen(val);
+                if (val_len >= 2 && ((val[0] == '"' && val[val_len-1] == '"') ||
+                                     (val[0] == '\'' && val[val_len-1] == '\''))) {
+                    val[val_len-1] = '\0';
+                    val++;
+                }
+                file_env = g_environ_setenv(file_env, key, val, TRUE);
+                g_free(key);
+            }
+        }
+        g_strfreev(env_lines);
+        g_free(file_contents);
+    } else if (!is_optional) {
+        OC_LOG_WARN(OPENCLAW_LOG_CAT_SYSTEMD, "Failed to read EnvironmentFile: %s", target_file);
+    }
+    
+    g_free(expanded_h);
+    g_free(resolved_path);
+    
+    return file_env;
+}
+
 static gchar** parse_environment_file(const gchar *env_val, const gchar *home_dir, gchar **file_env) {
     gint argc = 0;
     gchar **argv = NULL;
@@ -227,51 +279,7 @@ static gchar** parse_environment_file(const gchar *env_val, const gchar *home_di
             
             if (env_file[0] == '\0') continue;
             
-            gchar *expanded_h = NULL;
-            if (strstr(env_file, "%h")) {
-                gchar **parts = g_strsplit(env_file, "%h", -1);
-                expanded_h = g_strjoinv(home_dir, parts);
-                g_strfreev(parts);
-                env_file = expanded_h;
-            }
-            
-            gchar *resolved_path = NULL;
-            if (!g_path_is_absolute(env_file)) {
-                gchar *systemd_user_dir = g_build_filename(home_dir, ".config", "systemd", "user", NULL);
-                resolved_path = g_build_filename(systemd_user_dir, env_file, NULL);
-                g_free(systemd_user_dir);
-                env_file = resolved_path;
-            }
-            
-            gchar *file_contents = NULL;
-            if (g_file_get_contents(env_file, &file_contents, NULL, NULL)) {
-                gchar **env_lines = g_strsplit(file_contents, "\n", -1);
-                for (gint j = 0; env_lines[j] != NULL; j++) {
-                    gchar *env_line = g_strstrip(env_lines[j]);
-                    if (env_line[0] == '#' || env_line[0] == ';' || env_line[0] == '\0') continue;
-                    
-                    gchar *eq = strchr(env_line, '=');
-                    if (eq) {
-                        gchar *key = g_strndup(env_line, eq - env_line);
-                        gchar *val = g_strstrip(eq + 1);
-                        gsize val_len = strlen(val);
-                        if (val_len >= 2 && ((val[0] == '"' && val[val_len-1] == '"') ||
-                                             (val[0] == '\'' && val[val_len-1] == '\''))) {
-                            val[val_len-1] = '\0';
-                            val++;
-                        }
-                        file_env = g_environ_setenv(file_env, key, val, TRUE);
-                        g_free(key);
-                    }
-                }
-                g_strfreev(env_lines);
-                g_free(file_contents);
-            } else if (!is_optional) {
-                OC_LOG_WARN(OPENCLAW_LOG_CAT_SYSTEMD, "Failed to read EnvironmentFile: %s", env_file);
-            }
-            
-            g_free(expanded_h);
-            g_free(resolved_path);
+            file_env = parse_single_env_file(env_file, home_dir, is_optional, file_env);
         }
         g_strfreev(argv);
     }
