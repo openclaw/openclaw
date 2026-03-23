@@ -224,11 +224,6 @@ describe("sessions.usage", () => {
 
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        const mainSessionsDir = path.join(stateDir, "agents", "main", "sessions");
-        fs.mkdirSync(mainSessionsDir, { recursive: true });
-        fs.writeFileSync(path.join(mainSessionsDir, "s-webchat.jsonl"), "", "utf-8");
-        fs.writeFileSync(path.join(mainSessionsDir, "s-telegram.jsonl"), "", "utf-8");
-
         // Two sessions: webchat origin delivered into a telegram group, and
         // a telegram origin delivered into a webchat group. storeEntry.channel
         // is the delivery target; origin.provider is the originating channel.
