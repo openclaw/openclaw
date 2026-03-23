@@ -64,6 +64,9 @@ const GATEWAY_LIVE_HEARTBEAT_MS = Math.max(
 const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set([
   "google/gemini-3-flash-preview",
   "google/gemini-3-pro-preview",
+  "google/gemini-3.1-flash-lite-preview",
+  "google/gemini-3.1-pro-preview",
+  "google/gemini-3.1-pro-preview-customtools",
 ]);
 const GATEWAY_LIVE_MAX_MODELS = resolveGatewayLiveMaxModels();
 const GATEWAY_LIVE_SUITE_TIMEOUT_MS = resolveGatewayLiveSuiteTimeoutMs(GATEWAY_LIVE_MAX_MODELS);
@@ -297,7 +300,7 @@ function maybeStripAssistantScaffoldingForLiveModel(text: string, modelKey?: str
 }
 
 describe("maybeStripAssistantScaffoldingForLiveModel", () => {
-  it("strips scaffolding for the gemini 3.1 flash alias and targeted live models", () => {
+  it("strips scaffolding for Gemini preview models with known transcript wrappers", () => {
     expect(
       maybeStripAssistantScaffoldingForLiveModel(
         "<think>hidden</think>Visible",
@@ -307,7 +310,19 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
     expect(
       maybeStripAssistantScaffoldingForLiveModel(
         "<think>hidden</think>Visible",
-        "google/gemini-3-pro-preview",
+        "google/gemini-3.1-flash-lite-preview",
+      ),
+    ).toBe("Visible");
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
+        "<think>hidden</think>Visible",
+        "google/gemini-3.1-pro-preview",
+      ),
+    ).toBe("Visible");
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
+        "<think>hidden</think>Visible",
+        "google/gemini-3.1-pro-preview-customtools",
       ),
     ).toBe("Visible");
     expect(
