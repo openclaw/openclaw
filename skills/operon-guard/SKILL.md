@@ -53,18 +53,33 @@ pip install operon-guard
 
 ### Verify a skill before installing it
 
+> **Important:** `operon-guard test path/to/skill/` only performs meaningful behavioral
+> verification when the skill directory contains Python entry points. If the skill has no
+> Python scripts — no `.py` files in `scripts/` and no `main.py`, `run.py`, `agent.py`,
+> or `skill.py` in the root — `operon-guard` tests a synthetic stub that echoes the
+> skill's `SKILL.md` content. That stub will reliably pass (it is deterministic, harmless,
+> and fast) but tells you nothing about real agent behavior. Before running the test,
+> confirm the skill has Python code:
+>
+> ```bash
+> ls path/to/skill/scripts/*.py path/to/skill/main.py path/to/skill/run.py 2>/dev/null
+> ```
+>
+> If that returns nothing, the skill is instruction-only and `operon-guard test` does not
+> apply. If it returns Python files, proceed:
+
 ```bash
 operon-guard test path/to/skill/
 ```
 
-> **Note:** When pointing at a skill directory, `operon-guard` searches for Python files
-> in this order: (1) `.py` files in `scripts/` sorted alphabetically, skipping
-> `__init__`, `conftest`, `setup`, `utils`, `helpers`, and `constants`; then (2)
-> `main.py`, `run.py`, `agent.py`, `skill.py` in the skill root. It loads the first
-> file found. Within that file it looks for an entry-point callable in order: `run`,
-> `main`, `execute`, `process`, `agent`, `handle`. If none match, the command fails —
-> it does **not** fall back to other files. To target a specific file, pass the path
-> explicitly: `operon-guard test path/to/skill/my_agent.py:run`
+> **Note:** `operon-guard` searches for Python entry points in this order: (1) `.py`
+> files in `scripts/` sorted alphabetically, skipping `__init__`, `conftest`, `setup`,
+> `utils`, `helpers`, and `constants`; then (2) `main.py`, `run.py`, `agent.py`,
+> `skill.py` in the skill root. It loads the first file found. Within that file it looks
+> for an entry-point callable in order: `run`, `main`, `execute`, `process`, `agent`,
+> `handle`. If none match, the command fails — it does **not** fall back to other files.
+> To target a specific file, pass the path explicitly:
+> `operon-guard test path/to/skill/my_agent.py:run`
 
 ### Quick safety scan
 
