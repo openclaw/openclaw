@@ -1,94 +1,31 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { signalOutbound } from "../../channels/plugins/outbound/signal.js";
-import { telegramOutbound } from "../../channels/plugins/outbound/telegram.js";
-import { whatsappOutbound } from "../../channels/plugins/outbound/whatsapp.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
-import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
+import {
+  clearDeliverTestRegistry,
+  hookMocks,
+  internalHookMocks,
+  logMocks,
+  mocks,
+  queueMocks,
+  resetDeliverTestState,
+  resetDeliverTestMocks,
+  runChunkedWhatsAppDelivery as runChunkedWhatsAppDeliveryHelper,
+  whatsappChunkConfig,
+} from "./deliver.test-helpers.js";
 
-const mocks = vi.hoisted(() => ({
-  appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
-}));
-const hookMocks = vi.hoisted(() => ({
-  runner: {
-    hasHooks: vi.fn(() => false),
-    runMessageSent: vi.fn(async () => {}),
-  },
-}));
-const internalHookMocks = vi.hoisted(() => ({
-  createInternalHookEvent: vi.fn(),
-  triggerInternalHook: vi.fn(async () => {}),
-}));
-const queueMocks = vi.hoisted(() => ({
-  enqueueDelivery: vi.fn(async () => "mock-queue-id"),
-  ackDelivery: vi.fn(async () => {}),
-  failDelivery: vi.fn(async () => {}),
-}));
-const logMocks = vi.hoisted(() => ({
-  warn: vi.fn(),
-}));
+type DeliverModule = typeof import("./deliver.js");
 
-vi.mock("../../config/sessions.js", async () => {
-  const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
-    "../../config/sessions.js",
-  );
-  return {
-    ...actual,
-    appendAssistantMessageToSessionTranscript: mocks.appendAssistantMessageToSessionTranscript,
-  };
-});
-vi.mock("../../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: () => hookMocks.runner,
-}));
-vi.mock("../../hooks/internal-hooks.js", () => ({
-  createInternalHookEvent: internalHookMocks.createInternalHookEvent,
-  triggerInternalHook: internalHookMocks.triggerInternalHook,
-}));
-vi.mock("./delivery-queue.js", () => ({
-  enqueueDelivery: queueMocks.enqueueDelivery,
-  ackDelivery: queueMocks.ackDelivery,
-  failDelivery: queueMocks.failDelivery,
-}));
-vi.mock("../../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => {
-    const makeLogger = () => ({
-      warn: logMocks.warn,
-      info: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-      child: vi.fn(() => makeLogger()),
-    });
-    return makeLogger();
-  },
-}));
-
-const { deliverOutboundPayloads } = await import("./deliver.js");
-
-const whatsappChunkConfig: OpenClawConfig = {
-  channels: { whatsapp: { textChunkLimit: 4000 } },
-};
+let deliverOutboundPayloads: DeliverModule["deliverOutboundPayloads"];
 
 async function runChunkedWhatsAppDelivery(params?: {
-  mirror?: Parameters<typeof deliverOutboundPayloads>[0]["mirror"];
+  mirror?: Parameters<DeliverModule["deliverOutboundPayloads"]>[0]["mirror"];
 }) {
-  const sendWhatsApp = vi
-    .fn()
-    .mockResolvedValueOnce({ messageId: "w1", toJid: "jid" })
-    .mockResolvedValueOnce({ messageId: "w2", toJid: "jid" });
-  const cfg: OpenClawConfig = {
-    channels: { whatsapp: { textChunkLimit: 2 } },
-  };
-  const results = await deliverOutboundPayloads({
-    cfg,
-    channel: "whatsapp",
-    to: "+1555",
-    payloads: [{ text: "abcd" }],
-    deps: { sendWhatsApp },
+  return await runChunkedWhatsAppDeliveryHelper({
+    deliverOutboundPayloads,
     ...(params?.mirror ? { mirror: params.mirror } : {}),
   });
-  return { sendWhatsApp, results };
 }
 
 async function deliverSingleWhatsAppForHookTest(params?: { sessionKey?: string }) {
@@ -140,27 +77,15 @@ function expectSuccessfulWhatsAppInternalHookPayload(
 }
 
 describe("deliverOutboundPayloads lifecycle", () => {
-  beforeEach(() => {
-    setActivePluginRegistry(defaultRegistry);
-    hookMocks.runner.hasHooks.mockClear();
-    hookMocks.runner.hasHooks.mockReturnValue(false);
-    hookMocks.runner.runMessageSent.mockClear();
-    hookMocks.runner.runMessageSent.mockResolvedValue(undefined);
-    internalHookMocks.createInternalHookEvent.mockClear();
-    internalHookMocks.createInternalHookEvent.mockImplementation(createInternalHookEventPayload);
-    internalHookMocks.triggerInternalHook.mockClear();
-    queueMocks.enqueueDelivery.mockClear();
-    queueMocks.enqueueDelivery.mockResolvedValue("mock-queue-id");
-    queueMocks.ackDelivery.mockClear();
-    queueMocks.ackDelivery.mockResolvedValue(undefined);
-    queueMocks.failDelivery.mockClear();
-    queueMocks.failDelivery.mockResolvedValue(undefined);
-    logMocks.warn.mockClear();
-    mocks.appendAssistantMessageToSessionTranscript.mockClear();
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ deliverOutboundPayloads } = await import("./deliver.js"));
+    resetDeliverTestState();
+    resetDeliverTestMocks({ includeSessionMocks: true });
   });
 
   afterEach(() => {
-    setActivePluginRegistry(emptyRegistry);
+    clearDeliverTestRegistry();
   });
 
   it("continues on errors when bestEffort is enabled", async () => {
@@ -389,27 +314,3 @@ describe("deliverOutboundPayloads lifecycle", () => {
     );
   });
 });
-
-const emptyRegistry = createTestRegistry([]);
-const defaultRegistry = createTestRegistry([
-  {
-    pluginId: "telegram",
-    plugin: createOutboundTestPlugin({ id: "telegram", outbound: telegramOutbound }),
-    source: "test",
-  },
-  {
-    pluginId: "signal",
-    plugin: createOutboundTestPlugin({ id: "signal", outbound: signalOutbound }),
-    source: "test",
-  },
-  {
-    pluginId: "whatsapp",
-    plugin: createOutboundTestPlugin({ id: "whatsapp", outbound: whatsappOutbound }),
-    source: "test",
-  },
-  {
-    pluginId: "imessage",
-    plugin: createIMessageTestPlugin(),
-    source: "test",
-  },
-]);

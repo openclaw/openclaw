@@ -19,6 +19,16 @@ describe("target error helpers", () => {
     );
   });
 
+  it("treats blank hints the same as no hint", () => {
+    expect(missingTargetMessage("Slack", "   ")).toBe("Delivering to Slack requires target");
+    expect(ambiguousTargetMessage("Discord", "general", "   ")).toBe(
+      'Ambiguous target "general" for Discord. Provide a unique name or an explicit id.',
+    );
+    expect(unknownTargetMessage("Discord", "general", "   ")).toBe(
+      'Unknown target "general" for Discord.',
+    );
+  });
+
   it("formats ambiguous and unknown target messages with labeled hints", () => {
     expect(ambiguousTargetMessage("Discord", "general")).toBe(
       'Ambiguous target "general" for Discord. Provide a unique name or an explicit id.',
@@ -34,6 +44,15 @@ describe("target error helpers", () => {
     );
     expect(unknownTargetError("Discord", "general").message).toBe(
       'Unknown target "general" for Discord.',
+    );
+  });
+
+  it("trims non-blank hints before formatting them", () => {
+    expect(missingTargetMessage("Slack", "  Use channel:C123  ")).toBe(
+      "Delivering to Slack requires target Use channel:C123",
+    );
+    expect(unknownTargetMessage("Discord", "general", "  Use channel:123  ")).toBe(
+      'Unknown target "general" for Discord. Hint: Use channel:123',
     );
   });
 });

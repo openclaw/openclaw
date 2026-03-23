@@ -66,8 +66,8 @@ export function createProfileTabOps({
   const capabilities = getBrowserProfileCapabilities(profile);
 
   const listTabs = async (): Promise<BrowserTab[]> => {
-    if (profile.driver === "existing-session") {
-      return await listChromeMcpTabs(profile.name);
+    if (capabilities.usesChromeMcp) {
+      return await listChromeMcpTabs(profile.name, profile.userDataDir);
     }
 
     if (capabilities.usesPersistentPlaywright) {
@@ -139,9 +139,9 @@ export function createProfileTabOps({
   const openTab = async (url: string): Promise<BrowserTab> => {
     const ssrfPolicyOpts = withBrowserNavigationPolicy(state().resolved.ssrfPolicy);
 
-    if (profile.driver === "existing-session") {
+    if (capabilities.usesChromeMcp) {
       await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
-      const page = await openChromeMcpTab(profile.name, url);
+      const page = await openChromeMcpTab(profile.name, url, profile.userDataDir);
       const profileState = getProfileState();
       profileState.lastTargetId = page.targetId;
       await assertBrowserNavigationResultAllowed({ url: page.url, ...ssrfPolicyOpts });

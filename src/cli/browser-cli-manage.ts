@@ -1,5 +1,7 @@
 import type { Command } from "commander";
+import { redactCdpUrl } from "../browser/cdp.helpers.js";
 import type {
+  BrowserTransport,
   BrowserCreateProfileResult,
   BrowserDeleteProfileResult,
   BrowserResetProfileResult,
@@ -23,7 +25,7 @@ function printJsonResult(parent: BrowserParentOpts, payload: unknown): boolean {
   if (!parent?.json) {
     return false;
   }
-  defaultRuntime.log(JSON.stringify(payload, null, 2));
+  defaultRuntime.writeJson(payload);
   return true;
 }
 
@@ -87,7 +89,7 @@ function runBrowserCommand(action: () => Promise<void>) {
 
 function logBrowserTabs(tabs: BrowserTab[], json?: boolean) {
   if (json) {
-    defaultRuntime.log(JSON.stringify({ tabs }, null, 2));
+    defaultRuntime.writeJson({ tabs });
     return;
   }
   if (tabs.length === 0) {
@@ -99,6 +101,33 @@ function logBrowserTabs(tabs: BrowserTab[], json?: boolean) {
       .map((t, i) => `${i + 1}. ${t.title || "(untitled)"}\n   ${t.url}\n   id: ${t.targetId}`)
       .join("\n"),
   );
+}
+
+function usesChromeMcpTransport(params: {
+  transport?: BrowserTransport;
+  driver?: "openclaw" | "existing-session";
+}): boolean {
+  return params.transport === "chrome-mcp" || params.driver === "existing-session";
+}
+
+function formatBrowserConnectionSummary(params: {
+  transport?: BrowserTransport;
+  driver?: "openclaw" | "existing-session";
+  isRemote?: boolean;
+  cdpPort?: number | null;
+  cdpUrl?: string | null;
+  userDataDir?: string | null;
+}): string {
+  if (usesChromeMcpTransport(params)) {
+    const userDataDir = params.userDataDir ? shortenHomePath(params.userDataDir) : null;
+    return userDataDir
+      ? `transport: chrome-mcp, userDataDir: ${userDataDir}`
+      : "transport: chrome-mcp";
+  }
+  if (params.isRemote) {
+    return `cdpUrl: ${params.cdpUrl ?? "(unset)"}`;
+  }
+  return `port: ${params.cdpPort ?? "(unset)"}`;
 }
 
 export function registerBrowserManageCommands(
@@ -122,8 +151,17 @@ export function registerBrowserManageCommands(
             `profile: ${status.profile ?? "openclaw"}`,
             `enabled: ${status.enabled}`,
             `running: ${status.running}`,
-            `cdpPort: ${status.cdpPort}`,
-            `cdpUrl: ${status.cdpUrl ?? `http://127.0.0.1:${status.cdpPort}`}`,
+            `transport: ${
+              usesChromeMcpTransport(status) ? "chrome-mcp" : (status.transport ?? "cdp")
+            }`,
+            ...(!usesChromeMcpTransport(status)
+              ? [
+                  `cdpPort: ${status.cdpPort ?? "(unset)"}`,
+                  `cdpUrl: ${redactCdpUrl(status.cdpUrl ?? `http://127.0.0.1:${status.cdpPort}`)}`,
+                ]
+              : status.userDataDir
+                ? [`userDataDir: ${shortenHomePath(status.userDataDir)}`]
+                : []),
             `browser: ${status.chosenBrowser ?? "unknown"}`,
             `detectedBrowser: ${status.detectedBrowser ?? "unknown"}`,
             `detectedPath: ${detectedDisplay}`,
@@ -407,7 +445,7 @@ export function registerBrowserManageCommands(
               const status = p.running ? "running" : "stopped";
               const tabs = p.running ? ` (${p.tabCount} tabs)` : "";
               const def = p.isDefault ? " [default]" : "";
-              const loc = p.isRemote ? `cdpUrl: ${p.cdpUrl}` : `port: ${p.cdpPort}`;
+              const loc = formatBrowserConnectionSummary(p);
               const remote = p.isRemote ? " [remote]" : "";
               const driver = p.driver !== "openclaw" ? ` [${p.driver}]` : "";
               return `${p.name}: ${status}${tabs}${def}${remote}${driver}\n  ${loc}, color: ${p.color}`;
@@ -423,12 +461,19 @@ export function registerBrowserManageCommands(
     .requiredOption("--name <name>", "Profile name (lowercase, numbers, hyphens)")
     .option("--color <hex>", "Profile color (hex format, e.g. #0066CC)")
     .option("--cdp-url <url>", "CDP URL for remote Chrome (http/https)")
-    .option(
-      "--driver <driver>",
-      "Profile driver (openclaw|extension|existing-session). Default: openclaw",
-    )
+    .option("--user-data-dir <path>", "User data dir for existing-session Chromium attach")
+    .option("--driver <driver>", "Profile driver (openclaw|existing-session). Default: openclaw")
     .action(
-      async (opts: { name: string; color?: string; cdpUrl?: string; driver?: string }, cmd) => {
+      async (
+        opts: {
+          name: string;
+          color?: string;
+          cdpUrl?: string;
+          userDataDir?: string;
+          driver?: string;
+        },
+        cmd,
+      ) => {
         const parent = parentOpts(cmd);
         await runBrowserCommand(async () => {
           const result = await callBrowserRequest<BrowserCreateProfileResult>(
@@ -440,12 +485,8 @@ export function registerBrowserManageCommands(
                 name: opts.name,
                 color: opts.color,
                 cdpUrl: opts.cdpUrl,
-                driver:
-                  opts.driver === "extension"
-                    ? "extension"
-                    : opts.driver === "existing-session"
-                      ? "existing-session"
-                      : undefined,
+                userDataDir: opts.userDataDir,
+                driver: opts.driver === "existing-session" ? "existing-session" : undefined,
               },
             },
             { timeoutMs: 10_000 },
@@ -453,16 +494,12 @@ export function registerBrowserManageCommands(
           if (printJsonResult(parent, result)) {
             return;
           }
-          const loc = result.isRemote ? `  cdpUrl: ${result.cdpUrl}` : `  port: ${result.cdpPort}`;
+          const loc = `  ${formatBrowserConnectionSummary(result)}`;
           defaultRuntime.log(
             info(
               `🦞 Created profile "${result.profile}"\n${loc}\n  color: ${result.color}${
-                opts.driver === "extension"
-                  ? "\n  driver: extension"
-                  : opts.driver === "existing-session"
-                    ? "\n  driver: existing-session"
-                    : ""
-              }`,
+                result.userDataDir ? `\n  userDataDir: ${shortenHomePath(result.userDataDir)}` : ""
+              }${opts.driver === "existing-session" ? "\n  driver: existing-session" : ""}`,
             ),
           );
         });

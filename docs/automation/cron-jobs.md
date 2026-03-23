@@ -25,7 +25,9 @@ Troubleshooting: [/automation/troubleshooting](/automation/troubleshooting)
 - Jobs persist under `~/.openclaw/cron/` so restarts don’t lose schedules.
 - Two execution styles:
   - **Main session**: enqueue a system event, then run on the next heartbeat.
-  - **Isolated**: run a dedicated agent turn in `cron:<jobId>`, with delivery (announce by default or none).
+  - **Isolated**: run a dedicated agent turn in `cron:<jobId>` or a custom session, with delivery (announce by default or none).
+  - **Current session**: bind to the session where the cron is created (`sessionTarget: "current"`).
+  - **Custom session**: run in a persistent named session (`sessionTarget: "session:custom-id"`).
 - Wakeups are first-class: a job can request “wake now” vs “next heartbeat”.
 - Webhook posting is per job via `delivery.mode = "webhook"` + `delivery.to = "<url>"`.
 - Legacy fallback remains for stored jobs with `notify: true` when `cron.webhook` is set, migrate those jobs to webhook delivery mode.
@@ -86,6 +88,14 @@ Think of a cron job as: **when** to run + **what** to do.
 2. **Choose where it runs**
    - `sessionTarget: "main"` → run during the next heartbeat with main context.
    - `sessionTarget: "isolated"` → run a dedicated agent turn in `cron:<jobId>`.
+   - `sessionTarget: "current"` → bind to the current session (resolved at creation time to `session:<sessionKey>`).
+   - `sessionTarget: "session:custom-id"` → run in a persistent named session that maintains context across runs.
+
+   Default behavior (unchanged):
+   - `systemEvent` payloads default to `main`
+   - `agentTurn` payloads default to `isolated`
+
+   To use current session binding, explicitly set `sessionTarget: "current"`.
 
 3. **Choose the payload**
    - Main session → `payload.kind = "systemEvent"`
@@ -147,12 +157,13 @@ See [Heartbeat](/gateway/heartbeat).
 
 #### Isolated jobs (dedicated cron sessions)
 
-Isolated jobs run a dedicated agent turn in session `cron:<jobId>`.
+Isolated jobs run a dedicated agent turn in session `cron:<jobId>` or a custom session.
 
 Key behaviors:
 
 - Prompt is prefixed with `[cron:<jobId> <job name>]` for traceability.
-- Each run starts a **fresh session id** (no prior conversation carry-over).
+- Each run starts a **fresh session id** (no prior conversation carry-over), unless using a custom session.
+- Custom sessions (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
 - Default behavior: if `delivery` is omitted, isolated jobs announce a summary (`delivery.mode = "announce"`).
 - `delivery.mode` chooses what happens:
   - `announce`: deliver a summary to the target channel and post a brief summary to the main session.
@@ -250,7 +261,7 @@ Isolated jobs (`agentTurn`) can set `lightContext: true` to run with lightweight
 Isolated jobs can deliver output to a channel via the top-level `delivery` config:
 
 - `delivery.mode`: `announce` (channel delivery), `webhook` (HTTP POST), or `none`.
-- `delivery.channel`: `whatsapp` / `telegram` / `discord` / `slack` / `mattermost` (plugin) / `signal` / `imessage` / `last`.
+- `delivery.channel`: `whatsapp` / `telegram` / `discord` / `slack` / `signal` / `imessage` / `irc` / `googlechat` / `line` / `last`, plus extension channels like `msteams` / `mattermost` (plugins).
 - `delivery.to`: channel-specific recipient target.
 
 `announce` delivery is only valid for isolated jobs (`sessionTarget: "isolated"`).
@@ -321,12 +332,42 @@ Recurring, isolated job with delivery:
 }
 ```
 
+Recurring job bound to current session (auto-resolved at creation):
+
+```json
+{
+  "name": "Daily standup",
+  "schedule": { "kind": "cron", "expr": "0 9 * * *" },
+  "sessionTarget": "current",
+  "payload": {
+    "kind": "agentTurn",
+    "message": "Summarize yesterday's progress."
+  }
+}
+```
+
+Recurring job in a custom persistent session:
+
+```json
+{
+  "name": "Project monitor",
+  "schedule": { "kind": "every", "everyMs": 300000 },
+  "sessionTarget": "session:project-alpha-monitor",
+  "payload": {
+    "kind": "agentTurn",
+    "message": "Check project status and update the running log."
+  }
+}
+```
+
 Notes:
 
 - `schedule.kind`: `at` (`at`), `every` (`everyMs`), or `cron` (`expr`, optional `tz`).
 - `schedule.at` accepts ISO 8601 (timezone optional; treated as UTC when omitted).
 - `everyMs` is milliseconds.
-- `sessionTarget` must be `"main"` or `"isolated"` and must match `payload.kind`.
+- `sessionTarget`: `"main"`, `"isolated"`, `"current"`, or `"session:<custom-id>"`.
+- `"current"` is resolved to `"session:<sessionKey>"` at creation time.
+- Custom sessions (`session:xxx`) maintain persistent context across runs.
 - Optional fields: `agentId`, `description`, `enabled`, `deleteAfterRun` (defaults to true for `at`),
   `delivery`.
 - `wakeMode` defaults to `"now"` when omitted.
@@ -659,7 +700,7 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 
 ## Troubleshooting
 
-### “Nothing runs”
+### "Nothing runs"
 
 - Check cron is enabled: `cron.enabled` and `OPENCLAW_SKIP_CRON`.
 - Check the Gateway is running continuously (cron runs inside the Gateway process).

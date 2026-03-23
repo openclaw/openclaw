@@ -15,6 +15,149 @@ function createAlwaysConfiguredPluginConfig(account: Record<string, unknown> = {
 }
 
 describe("runMessageAction plugin dispatch", () => {
+  describe("alias-based plugin action dispatch", () => {
+    const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
+      jsonResult({
+        ok: true,
+        params,
+      }),
+    );
+
+    const feishuLikePlugin: ChannelPlugin = {
+      id: "feishu",
+      meta: {
+        id: "feishu",
+        label: "Feishu",
+        selectionLabel: "Feishu",
+        docsPath: "/channels/feishu",
+        blurb: "Feishu action dispatch test plugin.",
+      },
+      capabilities: { chatTypes: ["direct", "channel"] },
+      config: createAlwaysConfiguredPluginConfig(),
+      actions: {
+        describeMessageTool: () => ({ actions: ["pin", "list-pins", "member-info"] }),
+        supportsAction: ({ action }) =>
+          action === "pin" || action === "list-pins" || action === "member-info",
+        handleAction,
+      },
+    };
+
+    beforeEach(() => {
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "feishu",
+            source: "test",
+            plugin: feishuLikePlugin,
+          },
+        ]),
+      );
+      handleAction.mockClear();
+    });
+
+    afterEach(() => {
+      setActivePluginRegistry(createTestRegistry([]));
+      vi.clearAllMocks();
+    });
+
+    it("dispatches messageId/chatId-based Feishu actions through the shared runner", async () => {
+      await runMessageAction({
+        cfg: {
+          channels: {
+            feishu: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "pin",
+        params: {
+          channel: "feishu",
+          messageId: "om_123",
+        },
+        dryRun: false,
+      });
+
+      await runMessageAction({
+        cfg: {
+          channels: {
+            feishu: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "list-pins",
+        params: {
+          channel: "feishu",
+          chatId: "oc_123",
+        },
+        dryRun: false,
+      });
+
+      expect(handleAction).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          action: "pin",
+          params: expect.objectContaining({
+            messageId: "om_123",
+          }),
+        }),
+      );
+      expect(handleAction).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          action: "list-pins",
+          params: expect.objectContaining({
+            chatId: "oc_123",
+          }),
+        }),
+      );
+    });
+
+    it("routes execution context ids into plugin handleAction", async () => {
+      await runMessageAction({
+        cfg: {
+          channels: {
+            feishu: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "pin",
+        params: {
+          channel: "feishu",
+          messageId: "om_123",
+        },
+        defaultAccountId: "ops",
+        requesterSenderId: "trusted-user",
+        sessionKey: "agent:alpha:main",
+        sessionId: "session-123",
+        agentId: "alpha",
+        toolContext: {
+          currentChannelId: "chat:oc_123",
+          currentThreadTs: "thread-456",
+          currentMessageId: "msg-789",
+        },
+        dryRun: false,
+      });
+
+      expect(handleAction).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          action: "pin",
+          accountId: "ops",
+          requesterSenderId: "trusted-user",
+          sessionKey: "agent:alpha:main",
+          sessionId: "session-123",
+          agentId: "alpha",
+          toolContext: expect.objectContaining({
+            currentChannelId: "chat:oc_123",
+            currentThreadTs: "thread-456",
+            currentMessageId: "msg-789",
+          }),
+        }),
+      );
+    });
+  });
+
   describe("media caption behavior", () => {
     afterEach(() => {
       setActivePluginRegistry(createTestRegistry([]));
@@ -74,6 +217,66 @@ describe("runMessageAction plugin dispatch", () => {
         }),
       );
     });
+
+    it("does not misclassify send as poll when zero-valued poll params are present", async () => {
+      const sendMedia = vi.fn().mockResolvedValue({
+        channel: "testchat",
+        messageId: "m2",
+        chatId: "c1",
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "testchat",
+            source: "test",
+            plugin: createOutboundTestPlugin({
+              id: "testchat",
+              outbound: {
+                deliveryMode: "direct",
+                sendText: vi.fn().mockResolvedValue({
+                  channel: "testchat",
+                  messageId: "t2",
+                  chatId: "c1",
+                }),
+                sendMedia,
+              },
+            }),
+          },
+        ]),
+      );
+      const cfg = {
+        channels: {
+          testchat: {
+            enabled: true,
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = await runMessageAction({
+        cfg,
+        action: "send",
+        params: {
+          channel: "testchat",
+          target: "channel:abc",
+          media: "https://example.com/file.txt",
+          message: "hello",
+          pollDurationHours: 0,
+          pollDurationSeconds: 0,
+          pollMulti: false,
+          pollQuestion: "",
+          pollOption: [],
+        },
+        dryRun: false,
+      });
+
+      expect(result.kind).toBe("send");
+      expect(sendMedia).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "hello",
+          mediaUrl: "https://example.com/file.txt",
+        }),
+      );
+    });
   });
 
   describe("card-only send behavior", () => {
@@ -97,7 +300,7 @@ describe("runMessageAction plugin dispatch", () => {
       capabilities: { chatTypes: ["direct"] },
       config: createAlwaysConfiguredPluginConfig(),
       actions: {
-        listActions: () => ["send"],
+        describeMessageTool: () => ({ actions: ["send"] }),
         supportsAction: ({ action }) => action === "send",
         handleAction,
       },
@@ -189,7 +392,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
       },
       actions: {
-        listActions: () => ["poll"],
+        describeMessageTool: () => ({ actions: ["poll"] }),
         supportsAction: ({ action }) => action === "poll",
         handleAction,
       },
@@ -265,6 +468,100 @@ describe("runMessageAction plugin dispatch", () => {
     });
   });
 
+  describe("plugin-owned poll semantics", () => {
+    const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
+      jsonResult({
+        ok: true,
+        forwarded: {
+          to: params.to ?? null,
+          pollQuestion: params.pollQuestion ?? null,
+          pollOption: params.pollOption ?? null,
+          pollDurationSeconds: params.pollDurationSeconds ?? null,
+          pollPublic: params.pollPublic ?? null,
+        },
+      }),
+    );
+
+    const discordPollPlugin: ChannelPlugin = {
+      id: "discord",
+      meta: {
+        id: "discord",
+        label: "Discord",
+        selectionLabel: "Discord",
+        docsPath: "/channels/discord",
+        blurb: "Discord plugin-owned poll test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: createAlwaysConfiguredPluginConfig(),
+      messaging: {
+        targetResolver: {
+          looksLikeId: () => true,
+        },
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["poll"] }),
+        supportsAction: ({ action }) => action === "poll",
+        handleAction,
+      },
+    };
+
+    beforeEach(() => {
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "discord",
+            source: "test",
+            plugin: discordPollPlugin,
+          },
+        ]),
+      );
+      handleAction.mockClear();
+    });
+
+    afterEach(() => {
+      setActivePluginRegistry(createTestRegistry([]));
+      vi.clearAllMocks();
+    });
+
+    it("lets non-telegram plugins own extra poll fields", async () => {
+      const result = await runMessageAction({
+        cfg: {
+          channels: {
+            discord: {
+              token: "tok",
+            },
+          },
+        } as OpenClawConfig,
+        action: "poll",
+        params: {
+          channel: "discord",
+          target: "channel:123",
+          pollQuestion: "Lunch?",
+          pollOption: ["Pizza", "Sushi"],
+          pollDurationSeconds: 120,
+          pollPublic: true,
+        },
+        dryRun: false,
+      });
+
+      expect(result.kind).toBe("poll");
+      expect(result.handledBy).toBe("plugin");
+      expect(handleAction).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "poll",
+          channel: "discord",
+          params: expect.objectContaining({
+            to: "channel:123",
+            pollQuestion: "Lunch?",
+            pollOption: ["Pizza", "Sushi"],
+            pollDurationSeconds: 120,
+            pollPublic: true,
+          }),
+        }),
+      );
+    });
+  });
+
   describe("components parsing", () => {
     const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
       jsonResult({
@@ -285,7 +582,7 @@ describe("runMessageAction plugin dispatch", () => {
       capabilities: { chatTypes: ["direct"] },
       config: createAlwaysConfiguredPluginConfig({}),
       actions: {
-        listActions: () => ["send"],
+        describeMessageTool: () => ({ actions: ["send"] }),
         supportsAction: ({ action }) => action === "send",
         handleAction,
       },
@@ -367,7 +664,7 @@ describe("runMessageAction plugin dispatch", () => {
         resolveAccount: () => ({}),
       },
       actions: {
-        listActions: () => ["send"],
+        describeMessageTool: () => ({ actions: ["send"] }),
         handleAction,
       },
     };

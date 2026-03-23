@@ -1,9 +1,9 @@
-import { getChannelDock } from "../../channels/dock.js";
 import {
   getChannelPlugin,
   normalizeChannelId as normalizePluginChannelId,
 } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
+import { resolveWhatsAppGroupIntroHint } from "../../channels/plugins/whatsapp-shared.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import type { GroupKeyResolution, SessionEntry } from "../../config/sessions.js";
@@ -39,7 +39,7 @@ function resolveDockChannelId(raw?: string | null): ChannelId | null {
     return null;
   }
   try {
-    if (getChannelDock(normalized as ChannelId)) {
+    if (getChannelPlugin(normalized as ChannelId)) {
       return normalized as ChannelId;
     }
   } catch {
@@ -68,7 +68,7 @@ export function resolveGroupRequireMention(params: {
   const groupSpace = ctx.GroupSpace?.trim();
   let requireMention: boolean | undefined;
   try {
-    requireMention = getChannelDock(channel)?.groups?.resolveRequireMention?.({
+    requireMention = getChannelPlugin(channel)?.groups?.resolveRequireMention?.({
       cfg,
       groupId,
       groupChannel,
@@ -158,13 +158,13 @@ export function buildGroupIntro(params: {
     params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim();
   const groupSpace = params.sessionCtx.GroupSpace?.trim();
   const providerIdsLine = providerId
-    ? getChannelDock(providerId)?.groups?.resolveGroupIntroHint?.({
+    ? (getChannelPlugin(providerId)?.groups?.resolveGroupIntroHint?.({
         cfg: params.cfg,
         groupId,
         groupChannel,
         groupSpace,
         accountId: params.sessionCtx.AccountId,
-      })
+      }) ?? (providerId === "whatsapp" ? resolveWhatsAppGroupIntroHint() : undefined))
     : undefined;
   const silenceLine =
     activation === "always"

@@ -1,3 +1,5 @@
+import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
+
 export type RoleRef = {
   role: string;
   name?: string;
@@ -22,60 +24,6 @@ export type RoleSnapshotOptions = {
   /** Remove unnamed structural elements and empty branches. */
   compact?: boolean;
 };
-
-const INTERACTIVE_ROLES = new Set([
-  "button",
-  "link",
-  "textbox",
-  "checkbox",
-  "radio",
-  "combobox",
-  "listbox",
-  "menuitem",
-  "menuitemcheckbox",
-  "menuitemradio",
-  "option",
-  "searchbox",
-  "slider",
-  "spinbutton",
-  "switch",
-  "tab",
-  "treeitem",
-]);
-
-const CONTENT_ROLES = new Set([
-  "heading",
-  "cell",
-  "gridcell",
-  "columnheader",
-  "rowheader",
-  "listitem",
-  "article",
-  "region",
-  "main",
-  "navigation",
-]);
-
-const STRUCTURAL_ROLES = new Set([
-  "generic",
-  "group",
-  "list",
-  "table",
-  "row",
-  "rowgroup",
-  "grid",
-  "treegrid",
-  "menu",
-  "menubar",
-  "toolbar",
-  "tablist",
-  "tree",
-  "directory",
-  "document",
-  "application",
-  "presentation",
-  "none",
-]);
 
 export function getRoleSnapshotStats(snapshot: string, refs: RoleRefMap): RoleSnapshotStats {
   const interactive = Object.values(refs).filter((r) => INTERACTIVE_ROLES.has(r.role)).length;
