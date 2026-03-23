@@ -9318,6 +9318,224 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             },
             additionalProperties: false,
           },
+          hooks: {
+            type: "object",
+            properties: {
+              beforeRun: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    script: {
+                      type: "string",
+                    },
+                    priority: {
+                      type: "integer",
+                      minimum: -9007199254740991,
+                      maximum: 9007199254740991,
+                    },
+                    timeoutMs: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    filter: {
+                      type: "object",
+                      properties: {
+                        workflow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        jobId: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        jobName: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        agentId: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                  },
+                  required: ["script"],
+                  additionalProperties: false,
+                },
+              },
+              afterComplete: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    script: {
+                      type: "string",
+                    },
+                    priority: {
+                      type: "integer",
+                      minimum: -9007199254740991,
+                      maximum: 9007199254740991,
+                    },
+                    timeoutMs: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    filter: {
+                      type: "object",
+                      properties: {
+                        workflow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        jobId: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        jobName: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        agentId: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                  },
+                  required: ["script"],
+                  additionalProperties: false,
+                },
+              },
+              onFailure: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    script: {
+                      type: "string",
+                    },
+                    priority: {
+                      type: "integer",
+                      minimum: -9007199254740991,
+                      maximum: 9007199254740991,
+                    },
+                    timeoutMs: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    filter: {
+                      type: "object",
+                      properties: {
+                        workflow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        jobId: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        jobName: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        agentId: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                  },
+                  required: ["script"],
+                  additionalProperties: false,
+                },
+              },
+              afterRun: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    script: {
+                      type: "string",
+                    },
+                    priority: {
+                      type: "integer",
+                      minimum: -9007199254740991,
+                      maximum: 9007199254740991,
+                    },
+                    timeoutMs: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    filter: {
+                      type: "object",
+                      properties: {
+                        workflow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        jobId: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        jobName: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        agentId: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                  },
+                  required: ["script"],
+                  additionalProperties: false,
+                },
+              },
+            },
+            additionalProperties: false,
+          },
         },
         additionalProperties: false,
       },

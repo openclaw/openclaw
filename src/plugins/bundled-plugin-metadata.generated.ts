@@ -3025,6 +3025,115 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "twilio-sms",
+    idHint: "twilio-sms",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/twilio-sms",
+    packageVersion: "2026.3.17",
+    packageDescription: "OpenClaw Twilio SMS inbound extension",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "twilio-sms",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          fromNumber: {
+            type: "string",
+            pattern: "^\\+[1-9]\\d{1,14}$",
+          },
+          twilio: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              accountSid: {
+                type: "string",
+              },
+              authToken: {
+                type: "string",
+              },
+            },
+          },
+          serve: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              port: {
+                type: "integer",
+                minimum: 1,
+              },
+              bind: {
+                type: "string",
+              },
+              path: {
+                type: "string",
+              },
+            },
+          },
+          publicUrl: {
+            type: "string",
+          },
+          inboundPolicy: {
+            type: "string",
+            enum: ["open", "allowlist"],
+          },
+          allowFrom: {
+            type: "array",
+            items: {
+              type: "string",
+              pattern: "^\\+[1-9]\\d{1,14}$",
+            },
+          },
+          skipSignatureVerification: {
+            type: "boolean",
+          },
+        },
+      },
+      uiHints: {
+        fromNumber: {
+          label: "From Number",
+          placeholder: "+15550001234",
+        },
+        "twilio.accountSid": {
+          label: "Twilio Account SID",
+        },
+        "twilio.authToken": {
+          label: "Twilio Auth Token",
+          sensitive: true,
+        },
+        "serve.port": {
+          label: "Webhook Port",
+        },
+        "serve.bind": {
+          label: "Webhook Bind",
+          advanced: true,
+        },
+        "serve.path": {
+          label: "Webhook Path",
+          advanced: true,
+        },
+        publicUrl: {
+          label: "Public Webhook URL",
+        },
+        inboundPolicy: {
+          label: "Inbound Policy",
+        },
+        allowFrom: {
+          label: "Inbound Allowlist",
+        },
+        skipSignatureVerification: {
+          label: "Skip Signature Verification",
+          advanced: true,
+        },
+      },
+    },
+  },
+  {
     dirName: "twitch",
     idHint: "twitch",
     source: {
