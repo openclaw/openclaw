@@ -829,6 +829,10 @@
       "destination": "/install/azure"
     },
     {
+      "source": "/azure-containers",
+      "destination": "/install/azure-containers"
+    },
+    {
       "source": "/platforms/fly",
       "destination": "/install/fly"
     },
@@ -843,6 +847,10 @@
     {
       "source": "/platforms/azure",
       "destination": "/install/azure"
+    },
+    {
+      "source": "/platforms/azure-containers",
+      "destination": "/install/azure-containers"
     },
     {
       "source": "/platforms/macos-vm",
@@ -921,6 +929,7 @@
                 "group": "Hosting",
                 "pages": [
                   "install/azure",
+                  "install/azure-containers",
                   "install/digitalocean",
                   "install/docker-vm-runtime",
                   "install/exe-dev",

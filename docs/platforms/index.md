@@ -30,6 +30,7 @@ Native companion apps for Windows are also planned; the Gateway is recommended v
 - Hetzner (Docker): [Hetzner](/install/hetzner)
 - GCP (Compute Engine): [GCP](/install/gcp)
 - Azure (Linux VM): [Azure](/install/azure)
+- Azure (Container Apps): [Azure Container Apps](/install/azure-containers)
 - exe.dev (VM + HTTPS proxy): [exe.dev](/install/exe-dev)
 
 ## Common links
