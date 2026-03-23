@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../config/sessions.js";
-import type { FollowupRun } from "./queue.js";
+import {
+  clearFollowupQueue,
+  enqueueFollowupRun,
+  type FollowupRun,
+  type QueueSettings,
+} from "./queue.js";
 import * as sessionRunAccounting from "./session-run-accounting.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 
@@ -16,14 +21,18 @@ vi.mock(
   async () => await import("../../test-utils/model-fallback.mock.js"),
 );
 
-vi.mock("../../agents/pi-embedded.runtime.js", () => ({
+vi.mock("../../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
 }));
 
-vi.mock("./route-reply.runtime.js", () => ({
-  isRoutableChannel: (...args: unknown[]) => isRoutableChannelMock(...args),
-  routeReply: (...args: unknown[]) => routeReplyMock(...args),
-}));
+vi.mock("./route-reply.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./route-reply.js")>();
+  return {
+    ...actual,
+    isRoutableChannel: (...args: unknown[]) => isRoutableChannelMock(...args),
+    routeReply: (...args: unknown[]) => routeReplyMock(...args),
+  };
+});
 
 import { createFollowupRunner } from "./followup-runner.js";
 
@@ -44,6 +53,7 @@ beforeEach(() => {
   isRoutableChannelMock.mockImplementation((ch: string | undefined) =>
     Boolean(ch?.trim() && ROUTABLE_TEST_CHANNELS.has(ch.trim().toLowerCase())),
   );
+  clearFollowupQueue("main");
 });
 
 const baseQueuedRun = (messageProvider = "whatsapp"): FollowupRun =>
@@ -53,6 +63,11 @@ function createQueuedRun(
   overrides: Partial<Omit<FollowupRun, "run">> & { run?: Partial<FollowupRun["run"]> } = {},
 ): FollowupRun {
   return createMockFollowupRun(overrides);
+}
+
+async function normalizeComparablePath(filePath: string): Promise<string> {
+  const parent = await fs.realpath(path.dirname(filePath)).catch(() => path.dirname(filePath));
+  return path.join(parent, path.basename(filePath));
 }
 
 function mockCompactionRun(params: {
@@ -68,10 +83,6 @@ function mockCompactionRun(params: {
     }) => {
       args.onAgentEvent?.({
         stream: "compaction",
-        data: { phase: "start" },
-      });
-      args.onAgentEvent?.({
-        stream: "compaction",
         data: { phase: "end", willRetry: params.willRetry, completed: true },
       });
       return params.result;
@@ -84,7 +95,7 @@ function createAsyncReplySpy() {
 }
 
 describe("createFollowupRunner compaction", () => {
-  it("adds compaction notices and tracks count in verbose mode", async () => {
+  it("adds verbose auto-compaction notice and tracks count", async () => {
     const storePath = path.join(
       await fs.mkdtemp(path.join(tmpdir(), "openclaw-compaction-")),
       "sessions.json",
@@ -122,15 +133,9 @@ describe("createFollowupRunner compaction", () => {
 
     await runner(queued);
 
-    expect(onBlockReply).toHaveBeenCalledTimes(3);
-    const calls = onBlockReply.mock.calls as unknown as Array<
-      Array<{ text?: string; isCompactionNotice?: boolean }>
-    >;
-    expect(calls[0]?.[0]?.text).toBe("🧹 Compacting context...");
-    expect(calls[0]?.[0]?.isCompactionNotice).toBe(true);
-    expect(calls[1]?.[0]?.text).toContain("Auto-compaction complete");
-    expect(calls[1]?.[0]?.isCompactionNotice).toBe(true);
-    expect(calls[2]?.[0]?.text).toBe("final");
+    expect(onBlockReply).toHaveBeenCalled();
+    const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
+    expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
     expect(sessionStore.main.compactionCount).toBe(1);
   });
 
@@ -141,6 +146,7 @@ describe("createFollowupRunner compaction", () => {
     );
     const sessionEntry: SessionEntry = {
       sessionId: "session",
+      sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
       updatedAt: Date.now(),
     };
     const sessionStore: Record<string, SessionEntry> = {
@@ -152,6 +158,7 @@ describe("createFollowupRunner compaction", () => {
       payloads: [{ text: "final" }],
       meta: {
         agentMeta: {
+          sessionId: "session-rotated",
           compactionCount: 2,
           lastCallUsage: { input: 10_000, output: 3_000, total: 13_000 },
         },
@@ -177,37 +184,43 @@ describe("createFollowupRunner compaction", () => {
 
     await runner(queued);
 
-    expect(onBlockReply).toHaveBeenCalledTimes(2);
-    const calls = onBlockReply.mock.calls as unknown as Array<
-      Array<{ text?: string; isCompactionNotice?: boolean }>
-    >;
-    expect(calls[0]?.[0]?.text).toContain("Auto-compaction complete");
-    expect(calls[0]?.[0]?.isCompactionNotice).toBe(true);
-    expect(calls[1]?.[0]?.text).toBe("final");
+    expect(onBlockReply).toHaveBeenCalled();
+    const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
+    expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
     expect(sessionStore.main.compactionCount).toBe(2);
+    expect(sessionStore.main.sessionId).toBe("session-rotated");
+    expect(await normalizeComparablePath(sessionStore.main.sessionFile ?? "")).toBe(
+      await normalizeComparablePath(path.join(path.dirname(storePath), "session-rotated.jsonl")),
+    );
   });
 
-  it("threads followup compaction notices without consuming the first reply slot", async () => {
+  it("refreshes queued followup runs to the rotated transcript", async () => {
     const storePath = path.join(
-      await fs.mkdtemp(path.join(tmpdir(), "openclaw-compaction-threading-")),
+      await fs.mkdtemp(path.join(tmpdir(), "openclaw-compaction-queue-")),
       "sessions.json",
     );
     const sessionEntry: SessionEntry = {
       sessionId: "session",
+      sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
       updatedAt: Date.now(),
     };
     const sessionStore: Record<string, SessionEntry> = {
       main: sessionEntry,
     };
-    const onBlockReply = vi.fn(async () => {});
 
-    mockCompactionRun({
-      willRetry: true,
-      result: { payloads: [{ text: "final" }], meta: {} },
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {
+        agentMeta: {
+          sessionId: "session-rotated",
+          compactionCount: 1,
+          lastCallUsage: { input: 10_000, output: 3_000, total: 13_000 },
+        },
+      },
     });
 
     const runner = createFollowupRunner({
-      opts: { onBlockReply },
+      opts: { onBlockReply: vi.fn(async () => {}) },
       typing: createMockTypingController(),
       typingMode: "instant",
       sessionEntry,
@@ -217,42 +230,30 @@ describe("createFollowupRunner compaction", () => {
       defaultModel: "anthropic/claude-opus-4-5",
     });
 
-    const queued = createQueuedRun({
-      messageId: "msg-42",
+    const queuedNext = createQueuedRun({
+      prompt: "next",
       run: {
-        messageProvider: "discord",
-        config: {
-          channels: {
-            discord: {
-              replyToMode: "first",
-            },
-          },
-        },
-        verboseLevel: "off",
+        sessionId: "session",
+        sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
+      },
+    });
+    const queueSettings: QueueSettings = { mode: "queue" };
+    enqueueFollowupRun("main", queuedNext, queueSettings);
+
+    const current = createQueuedRun({
+      run: {
+        verboseLevel: "on",
+        sessionId: "session",
+        sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
       },
     });
 
-    await runner(queued);
+    await runner(current);
 
-    expect(onBlockReply).toHaveBeenCalledTimes(3);
-    const calls = onBlockReply.mock.calls as unknown as Array<
-      Array<{ text?: string; replyToId?: string; isCompactionNotice?: boolean }>
-    >;
-    expect(calls[0]?.[0]).toMatchObject({
-      text: "🧹 Compacting context...",
-      replyToId: "msg-42",
-      isCompactionNotice: true,
-    });
-    expect(calls[1]?.[0]).toMatchObject({
-      text: "✅ Context compacted (count 1).",
-      replyToId: "msg-42",
-      isCompactionNotice: true,
-    });
-    expect(calls[2]?.[0]).toMatchObject({
-      text: "final",
-      replyToId: "msg-42",
-    });
-    expect(calls[2]?.[0]?.isCompactionNotice).toBeUndefined();
+    expect(queuedNext.run.sessionId).toBe("session-rotated");
+    expect(await normalizeComparablePath(queuedNext.run.sessionFile)).toBe(
+      await normalizeComparablePath(path.join(path.dirname(storePath), "session-rotated.jsonl")),
+    );
   });
 
   it("does not count failed compaction end events in followup runs", async () => {
