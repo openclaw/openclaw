@@ -213,6 +213,7 @@ export async function applyInlineDirectiveOverrides(params: {
       currentReasoningLevel,
       currentElevatedLevel,
       surface: ctx.Surface,
+      gatewayClientScopes: ctx.GatewayClientScopes,
     });
     let statusReply: ReplyPayload | undefined;
     if (directives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender) {
@@ -317,6 +318,8 @@ export async function applyInlineDirectiveOverrides(params: {
     initialModelLabel,
     formatModelSwitchEvent,
     agentCfg,
+    surface: ctx.Surface,
+    gatewayClientScopes: ctx.GatewayClientScopes,
   });
   provider = persisted.provider;
   model = persisted.model;
