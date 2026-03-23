@@ -18,6 +18,7 @@ import {
   registerInternalHook,
   unregisterInternalHook,
 } from "../hooks/internal-hooks.js";
+import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { featureFlagsForMode } from "./config.js";
 import type { PolicyFeedbackEngine, PolicyMode } from "./types.js";
 
@@ -97,6 +98,12 @@ function pruneStalePendingActions(): void {
 // Hook handlers
 // ---------------------------------------------------------------------------
 
+/** Resolve the agent ID from a session key, falling back to the default. */
+function resolveAgentIdFromSession(sessionKey: string, defaultAgentId: string): string {
+  const parsed = parseAgentSessionKey(sessionKey);
+  return parsed?.agentId ?? defaultAgentId;
+}
+
 function createMessageReceivedHandler(
   engine: PolicyFeedbackEngine,
   getMode: () => PolicyMode,
@@ -117,6 +124,7 @@ function createMessageReceivedHandler(
 
       const { from, channelId, accountId, conversationId } = event.context;
       const sessionKey = event.sessionKey;
+      const effectiveAgentId = resolveAgentIdFromSession(sessionKey, agentId);
 
       // 1. Store pending action (will be promoted on message:sent).
       // Keyed by sessionKey — intentionally overwrites prior inbound for the
@@ -149,7 +157,7 @@ function createMessageReceivedHandler(
             action.correlated = true;
             await engine.logOutcome({
               actionId: action.actionId,
-              agentId,
+              agentId: effectiveAgentId,
               outcomeType: "user_replied",
               value: Math.min(1, 1 - elapsed / MAX_CORRELATION_AGE_MS),
               horizonMs: elapsed,
@@ -194,6 +202,7 @@ function createMessageSentHandler(
 
       const { to, channelId, success, accountId } = event.context;
       const sessionKey = event.sessionKey;
+      const effectiveAgentId = resolveAgentIdFromSession(sessionKey, agentId);
 
       // Promote pending action to confirmed
       if (flags.enableActionLogging) {
@@ -201,7 +210,7 @@ function createMessageSentHandler(
         pendingActions.delete(sessionKey);
 
         const { actionId } = await engine.logAction({
-          agentId,
+          agentId: effectiveAgentId,
           sessionKey,
           actionType: "agent_reply",
           channelId,
@@ -234,7 +243,7 @@ function createMessageSentHandler(
         if (flags.enableOutcomeLogging) {
           await engine.logOutcome({
             actionId,
-            agentId,
+            agentId: effectiveAgentId,
             outcomeType: success ? "delivery_success" : "delivery_failure",
             value: success ? 1 : 0,
             metadata: { channelId },

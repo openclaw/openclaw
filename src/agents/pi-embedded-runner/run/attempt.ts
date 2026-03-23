@@ -1981,15 +1981,8 @@ export async function runEmbeddedAttempt(
         "../../../policy-feedback/gateway-bridge.js"
       );
       if (isPolicyFeedbackActive()) {
-        let userHour: number | undefined;
-        try {
-          const userNow = new Date(
-            new Date().toLocaleString("en-US", { timeZone: userTimezone || undefined }),
-          );
-          userHour = userNow.getHours();
-        } catch {
-          userHour = new Date().getHours(); // Fallback to server time
-        }
+        // Aggregates are indexed by UTC hour, so pass UTC here for consistent lookup.
+        const userHour = new Date().getUTCHours();
         policyHintsSection = await getPolicyHintsForPrompt({
           agentId: runtimeInfo.agentId ?? "default",
           sessionKey: params.sessionKey ?? "",
