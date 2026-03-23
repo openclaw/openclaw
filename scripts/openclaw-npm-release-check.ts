@@ -39,6 +39,8 @@ const BETA_VERSION_REGEX =
 const CORRECTION_TAG_REGEX = /^(?<base>\d{4}\.[1-9]\d?\.[1-9]\d?)-(?<correction>[1-9]\d*)$/;
 const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const MAX_CALVER_DISTANCE_DAYS = 2;
+const REQUIRED_PACKED_PATHS = ["dist/control-ui/index.html"];
+const NPM_COMMAND = process.platform === "win32" ? "npm.cmd" : "npm";
 
 function normalizeRepoUrl(value: unknown): string {
   if (typeof value !== "string") {
@@ -286,6 +288,72 @@ function loadPackageJson(): PackageJson {
   return JSON.parse(readFileSync("package.json", "utf8")) as PackageJson;
 }
 
+function runNpmCommand(args: string[]): string {
+  const npmExecPath = process.env.npm_execpath;
+  if (typeof npmExecPath === "string" && npmExecPath.length > 0) {
+    return execFileSync(process.execPath, [npmExecPath, ...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  }
+  return execFileSync(NPM_COMMAND, args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+type NpmPackFileEntry = {
+  path?: string;
+};
+
+type NpmPackResult = {
+  filename?: string;
+  files?: NpmPackFileEntry[];
+};
+
+function collectPackedTarballErrors(): string[] {
+  const errors: string[] = [];
+  let stdout = "";
+  try {
+    stdout = runNpmCommand(["pack", "--json", "--dry-run"]);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    errors.push(`Failed to inspect npm tarball contents via \`npm pack --json --dry-run\`: ${message}`);
+    return errors;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    errors.push("Failed to parse JSON output from `npm pack --json --dry-run`.");
+    return errors;
+  }
+
+  const packResults = Array.isArray(parsed) ? (parsed as NpmPackResult[]) : [];
+  const firstResult = packResults[0];
+  if (!firstResult || !Array.isArray(firstResult.files)) {
+    errors.push("`npm pack --json --dry-run` did not return a files list to validate.");
+    return errors;
+  }
+
+  const packedPaths = new Set(
+    firstResult.files
+      .map((entry) => entry.path)
+      .filter((path): path is string => typeof path === "string" && path.length > 0),
+  );
+
+  for (const requiredPath of REQUIRED_PACKED_PATHS) {
+    if (!packedPaths.has(requiredPath)) {
+      errors.push(
+        `npm package is missing required path "${requiredPath}". Ensure UI assets are built and included before publish.`,
+      );
+    }
+  }
+
+  return errors;
+}
+
 function main(): number {
   const pkg = loadPackageJson();
   const now = new Date();
@@ -297,7 +365,8 @@ function main(): number {
     releaseMainRef: process.env.RELEASE_MAIN_REF,
     now,
   });
-  const errors = [...metadataErrors, ...tagErrors];
+  const tarballErrors = collectPackedTarballErrors();
+  const errors = [...metadataErrors, ...tagErrors, ...tarballErrors];
 
   if (errors.length > 0) {
     for (const error of errors) {
