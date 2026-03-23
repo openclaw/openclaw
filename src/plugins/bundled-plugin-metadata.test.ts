@@ -161,4 +161,36 @@ describe("bundled plugin metadata", () => {
     });
     expect(entries.map((entry) => entry.dirName)).toEqual(["acpx"]);
   });
+
+  it("forwards env through writeBundledPluginMetadataModule", () => {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-bundled-plugin-write-env-"),
+    );
+    tempDirs.push(tempRoot);
+
+    writeJson(path.join(tempRoot, "extensions", "acpx", "package.json"), {
+      name: "@openclaw/acpx",
+      version: "2026.3.22",
+      openclaw: {
+        extensions: ["./index.ts"],
+      },
+    });
+    writeJson(path.join(tempRoot, "extensions", "acpx", "openclaw.plugin.json"), {
+      id: "acpx",
+      configSchema: { type: "object" },
+    });
+
+    const result = writeBundledPluginMetadataModule({
+      repoRoot: tempRoot,
+      outputPath: "src/plugins/bundled-plugin-metadata.generated.ts",
+      env: { OPENCLAW_INCLUDE_OPTIONAL_BUNDLED: "1" },
+    });
+    expect(result.wrote).toBe(true);
+
+    const generated = fs.readFileSync(
+      path.join(tempRoot, "src/plugins/bundled-plugin-metadata.generated.ts"),
+      "utf8",
+    );
+    expect(generated).toContain('dirName: "acpx"');
+  });
 });

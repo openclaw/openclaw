@@ -225,9 +225,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = ${JSON.stringify(entries, null,
 
 export function writeBundledPluginMetadataModule(params = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
+  const env = params.env ?? process.env;
   const outputPath = path.resolve(repoRoot, params.outputPath ?? DEFAULT_OUTPUT_PATH);
   const next = formatTypeScriptModule(
-    renderBundledPluginMetadataModule(collectBundledPluginMetadata({ repoRoot })),
+    renderBundledPluginMetadataModule(collectBundledPluginMetadata({ repoRoot, env })),
     { outputPath },
   );
   const current = readIfExists(outputPath);
