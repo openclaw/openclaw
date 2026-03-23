@@ -69,6 +69,7 @@ import type {
   AgentIdentityResult,
   ConfigSnapshot,
   ConfigUiHints,
+  ChatModelOverride,
   CronJob,
   CronRunLogEntry,
   CronStatus,
@@ -158,9 +159,13 @@ export class OpenClawApp extends LitElement {
   @state() fallbackStatus: FallbackStatus | null = null;
   @state() chatAvatarUrl: string | null = null;
   @state() chatThinkingLevel: string | null = null;
+  @state() chatModelOverrides: Record<string, ChatModelOverride | null> = {};
+  @state() chatModelsLoading = false;
+  @state() chatModelCatalog: ModelCatalogEntry[] = [];
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatAttachments: ChatAttachment[] = [];
   @state() chatManualRefreshInFlight = false;
+  @state() navDrawerOpen = false;
 
   onSlashAction?: (action: string) => void;
 
@@ -283,8 +288,8 @@ export class OpenClawApp extends LitElement {
   @state() sessionsSortColumn: "key" | "kind" | "updated" | "tokens" = "updated";
   @state() sessionsSortDir: "asc" | "desc" = "desc";
   @state() sessionsPage = 0;
-  @state() sessionsPageSize = 10;
-  @state() sessionsActionsOpenKey: string | null = null;
+  @state() sessionsPageSize = 25;
+  @state() sessionsSelectedKeys: Set<string> = new Set();
 
   @state() usageLoading = false;
   @state() usageResult: import("./types.js").SessionsUsageResult | null = null;
@@ -541,6 +546,7 @@ export class OpenClawApp extends LitElement {
 
   setTab(next: Tab) {
     setTabInternal(this as unknown as Parameters<typeof setTabInternal>[0], next);
+    this.navDrawerOpen = false;
   }
 
   setTheme(next: ThemeName, context?: Parameters<typeof setThemeInternal>[2]) {
@@ -554,6 +560,14 @@ export class OpenClawApp extends LitElement {
       next,
       context,
     );
+  }
+
+  setBorderRadius(value: number) {
+    applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], {
+      ...this.settings,
+      borderRadius: value,
+    });
+    this.requestUpdate();
   }
 
   buildThemeOrder(active: ThemeName): ThemeName[] {

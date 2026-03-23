@@ -53,7 +53,7 @@ Ask how they want to reach you:
 
 Guide them through whichever they pick.
 
-## When You're Done
+## When you are done
 
 Delete this file. You don't need a bootstrap script anymore — you're you now.
 

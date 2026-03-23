@@ -169,6 +169,7 @@ export async function buildStatusReply(params: {
       cfg,
       provider,
       model,
+      agentId: statusAgentId,
       sessionEntry,
     }).enabled;
   const statusText = buildStatusMessage({

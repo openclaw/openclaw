@@ -115,7 +115,7 @@ Token resolution order is account-aware. In practice, config values win over env
 
     `channels.telegram.allowFrom` accepts numeric Telegram user IDs. `telegram:` / `tg:` prefixes are accepted and normalized.
     `dmPolicy: "allowlist"` with empty `allowFrom` blocks all DMs and is rejected by config validation.
-    The onboarding wizard accepts `@username` input and resolves it to numeric IDs.
+    Onboarding accepts `@username` input and resolves it to numeric IDs.
     If you upgraded and your config contains `@username` allowlist entries, run `openclaw doctor --fix` to resolve them (best-effort; requires a Telegram bot token).
     If you previously relied on pairing-store allowlist files, `openclaw doctor --fix` can recover entries into `channels.telegram.allowFrom` in allowlist flows (for example when `dmPolicy: "allowlist"` has no explicit IDs yet).
 
@@ -346,7 +346,13 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     1. `/pair` generates setup code
     2. paste code in iOS app
-    3. `/pair approve` approves latest pending request
+    3. `/pair pending` lists pending requests (including role/scopes)
+    4. approve the request:
+       - `/pair approve <requestId>` for explicit approval
+       - `/pair approve` when there is only one pending request
+       - `/pair approve latest` for most recent
+
+    If a device retries with changed auth details (for example role/scopes/public key), the previous pending request is superseded and the new request uses a different `requestId`. Re-run `/pair pending` before approving.
 
     More details: [Pairing](/channels/pairing#pair-via-telegram-recommended-for-ios).
 
@@ -781,6 +787,11 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
     - `--poll-anonymous`
     - `--poll-public`
     - `--thread-id` for forum topics (or use a `:topic:` target)
+
+    Telegram send also supports:
+
+    - `--buttons` for inline keyboards when `channels.telegram.capabilities.inlineButtons` allows it
+    - `--force-document` to send outbound images and GIFs as documents instead of compressed photo or animated-media uploads
 
     Action gating:
 

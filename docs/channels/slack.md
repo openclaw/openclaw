@@ -218,6 +218,55 @@ For actions/directory reads, user token can be preferred when configured. For wr
   - if encoded option values exceed Slack limits, the flow falls back to buttons
 - For long option payloads, Slash command argument menus use a confirm dialog before dispatching a selected value.
 
+## Interactive replies
+
+Slack can render agent-authored interactive reply controls, but this feature is disabled by default.
+
+Enable it globally:
+
+```json5
+{
+  channels: {
+    slack: {
+      capabilities: {
+        interactiveReplies: true,
+      },
+    },
+  },
+}
+```
+
+Or enable it for one Slack account only:
+
+```json5
+{
+  channels: {
+    slack: {
+      accounts: {
+        ops: {
+          capabilities: {
+            interactiveReplies: true,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+When enabled, agents can emit Slack-only reply directives:
+
+- `[[slack_buttons: Approve:approve, Reject:reject]]`
+- `[[slack_select: Choose a target | Canary:canary, Production:production]]`
+
+These directives compile into Slack Block Kit and route clicks or selections back through the existing Slack interaction event path.
+
+Notes:
+
+- This is Slack-specific UI. Other channels do not translate Slack Block Kit directives into their own button systems.
+- The interactive callback values are OpenClaw-generated opaque tokens, not raw agent-authored values.
+- If generated interactive blocks would exceed Slack Block Kit limits, OpenClaw falls back to the original text reply instead of sending an invalid blocks payload.
+
 Default slash command settings:
 
 - `enabled: false`
