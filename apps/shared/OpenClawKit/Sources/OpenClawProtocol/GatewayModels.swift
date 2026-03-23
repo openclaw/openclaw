@@ -1266,6 +1266,78 @@ public struct SessionsListParams: Codable, Sendable {
     }
 }
 
+public struct SessionsSearchParams: Codable, Sendable {
+    public let query: String
+    public let limit: Int?
+    public let activeminutes: Int?
+    public let kinds: [String]?
+    public let keys: [String]?
+    public let requestersessionkey: String?
+    public let sandboxed: Bool?
+
+    public init(
+        query: String,
+        limit: Int?,
+        activeminutes: Int?,
+        kinds: [String]?,
+        keys: [String]?,
+        requestersessionkey: String?,
+        sandboxed: Bool?)
+    {
+        self.query = query
+        self.limit = limit
+        self.activeminutes = activeminutes
+        self.kinds = kinds
+        self.keys = keys
+        self.requestersessionkey = requestersessionkey
+        self.sandboxed = sandboxed
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case query
+        case limit
+        case activeminutes = "activeMinutes"
+        case kinds
+        case keys
+        case requestersessionkey = "requesterSessionKey"
+        case sandboxed
+    }
+}
+
+public struct SessionsRecallParams: Codable, Sendable {
+    public let query: String
+    public let maxtokens: Int?
+    public let limit: Int?
+    public let scope: AnyCodable?
+    public let requestersessionkey: String?
+    public let sandboxed: Bool?
+
+    public init(
+        query: String,
+        maxtokens: Int?,
+        limit: Int?,
+        scope: AnyCodable?,
+        requestersessionkey: String?,
+        sandboxed: Bool?)
+    {
+        self.query = query
+        self.maxtokens = maxtokens
+        self.limit = limit
+        self.scope = scope
+        self.requestersessionkey = requestersessionkey
+        self.sandboxed = sandboxed
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case query
+        case maxtokens = "maxTokens"
+        case limit
+        case scope
+        case requestersessionkey = "requesterSessionKey"
+        case sandboxed
+    }
+}
+
 public struct SessionsPreviewParams: Codable, Sendable {
     public let keys: [String]
     public let limit: Int?
