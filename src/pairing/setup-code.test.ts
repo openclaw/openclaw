@@ -72,11 +72,8 @@ describe("pairing setup code", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
-    vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "");
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
-    vi.stubEnv("CLAWDBOT_GATEWAY_PASSWORD", "");
     vi.stubEnv("OPENCLAW_GATEWAY_PORT", "");
-    vi.stubEnv("CLAWDBOT_GATEWAY_PORT", "");
   });
 
   beforeEach(async () => {

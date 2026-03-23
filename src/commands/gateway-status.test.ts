@@ -420,7 +420,6 @@ describe("gateway-status command", () => {
       {
         CUSTOM_GATEWAY_TOKEN: "resolved-gateway-token",
         OPENCLAW_GATEWAY_TOKEN: undefined,
-        CLAWDBOT_GATEWAY_TOKEN: undefined,
       },
       async () => {
         readBestEffortConfig.mockResolvedValueOnce({
