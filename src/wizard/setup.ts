@@ -409,10 +409,15 @@ export async function runSetupWizard(
 
   if (mode === "remote") {
     const { promptRemoteGatewayConfig } = await import("../commands/onboard-remote.js");
+    const { applyOnboardAgentDefaults } = await import("../commands/onboard-config.js");
     const { logConfigUpdated } = await import("../config/logging.js");
     let nextConfig = await promptRemoteGatewayConfig(baseConfig, prompter, {
       secretInputMode: opts.secretInputMode,
     });
+    nextConfig = {
+      ...nextConfig,
+      agents: applyOnboardAgentDefaults(nextConfig),
+    };
     nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
     await writeConfigFile(nextConfig);
     logConfigUpdated(runtime);

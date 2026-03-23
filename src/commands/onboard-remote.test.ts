@@ -201,23 +201,4 @@ describe("promptRemoteGatewayConfig", () => {
       id: "OPENCLAW_GATEWAY_TOKEN",
     });
   });
-
-  it("seeds userTimezone during remote onboarding when unset", async () => {
-    const text: WizardPrompter["text"] = vi.fn(async (params) => {
-      if (params.message === "Gateway WebSocket URL") {
-        return "wss://remote.example.com:18789";
-      }
-      return "";
-    }) as WizardPrompter["text"];
-
-    const { next } = await runRemotePrompt({
-      text,
-      confirm: false,
-      selectResponses: { "Gateway auth": "off" },
-    });
-
-    expect(next.agents?.defaults?.userTimezone).toBe(
-      Intl.DateTimeFormat().resolvedOptions().timeZone,
-    );
-  });
 });

@@ -7,7 +7,6 @@ import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import { resolveSecretInputModeForEnvSelection } from "../plugins/provider-auth-mode.js";
 import { promptSecretRefForSetup } from "../plugins/provider-auth-ref.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { applyOnboardAgentDefaults } from "./onboard-config.js";
 import { detectBinary } from "./onboard-helpers.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
@@ -234,7 +233,6 @@ export async function promptRemoteGatewayConfig(
 
   return {
     ...cfg,
-    agents: applyOnboardAgentDefaults(cfg),
     gateway: {
       ...cfg.gateway,
       mode: "remote",
