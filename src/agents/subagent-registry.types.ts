@@ -55,6 +55,8 @@ export type SubagentRunRecord = {
   fallbackFrozenResultText?: string | null;
   /** Timestamp when fallbackFrozenResultText was preserved. */
   fallbackFrozenResultCapturedAt?: number;
+  /** Set once completeSubagentRun has executed its full finalization path. */
+  completionFinalized?: boolean;
   /** Set after the subagent_ended hook has been emitted successfully once. */
   endedHookEmittedAt?: number;
   attachmentsDir?: string;

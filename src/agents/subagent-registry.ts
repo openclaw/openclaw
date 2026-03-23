@@ -545,9 +545,11 @@ export async function completeSubagentRun(params: {
     entry.suppressAnnounceReason === "killed" &&
     (entry.cleanupHandled || typeof entry.cleanupCompletedAt === "number");
 
-  // Idempotency: if the run already ended, bail out to avoid mutating endedAt
-  // a second time or re-triggering farewell/cleanup side-effects.
-  if (typeof entry.endedAt === "number" && !isRecoveryFromKill) {
+  // Idempotency: bail only if completeSubagentRun already ran its full
+  // finalization path. Using entry.completionFinalized (not entry.endedAt)
+  // so that the normal first call from waitForSubagentCompletion — which
+  // populates endedAt before calling us — still executes cleanup/announce.
+  if (entry.completionFinalized && !isRecoveryFromKill) {
     return;
   }
 
@@ -556,6 +558,7 @@ export async function completeSubagentRun(params: {
     entry.suppressAnnounceReason = undefined;
     entry.cleanupHandled = false;
     entry.cleanupCompletedAt = undefined;
+    entry.completionFinalized = false;
     mutated = true;
   }
 
@@ -576,6 +579,9 @@ export async function completeSubagentRun(params: {
   if (await freezeRunResultAtCompletion(entry)) {
     mutated = true;
   }
+
+  // Mark finalization complete so duplicate calls are no-ops.
+  entry.completionFinalized = true;
 
   if (mutated) {
     persistSubagentRuns();
@@ -1312,6 +1318,7 @@ export function replaceSubagentRunAfterSteer(params: {
     accumulatedRuntimeMs,
     endedAt: undefined,
     endedReason: undefined,
+    completionFinalized: false,
     endedHookEmittedAt: undefined,
     wakeOnDescendantSettle: undefined,
     outcome: undefined,

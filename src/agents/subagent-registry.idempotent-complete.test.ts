@@ -48,6 +48,7 @@ const emitSessionLifecycleEventMock = vi.fn();
 
 vi.mock("./subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,
+  captureSubagentCompletionReply: vi.fn(async () => undefined),
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -89,7 +90,33 @@ describe("completeSubagentRun idempotency", () => {
     });
   };
 
-  it("second call is a no-op for an already-ended run", async () => {
+  it("first completion runs full finalization even when endedAt is pre-set", async () => {
+    registerRun("run-idem-0");
+
+    // Simulate what waitForSubagentCompletion does: set endedAt on the entry
+    // BEFORE calling completeSubagentRun.
+    const runs0 = mod.listSubagentRunsForRequester("agent:main:main");
+    const preEntry = runs0.find((r) => r.runId === "run-idem-0");
+    expect(preEntry).toBeDefined();
+    preEntry!.endedAt = 500;
+
+    await mod.completeSubagentRun({
+      runId: "run-idem-0",
+      endedAt: 500,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: false,
+    });
+
+    const afterEntry = runs0.find((r) => r.runId === "run-idem-0");
+    // completionFinalized proves the full finalization path ran.
+    expect(afterEntry?.completionFinalized).toBe(true);
+    expect(afterEntry?.endedAt).toBe(500);
+    expect(afterEntry?.outcome).toEqual({ status: "ok" });
+    expect(afterEntry?.endedReason).toBe(SUBAGENT_ENDED_REASON_COMPLETE);
+  });
+
+  it("second call is a no-op for a finalized run", async () => {
     registerRun("run-idem-1");
 
     // First completion should succeed.
@@ -104,6 +131,7 @@ describe("completeSubagentRun idempotency", () => {
     const runs1 = mod.listSubagentRunsForRequester("agent:main:main");
     const entry1 = runs1.find((r) => r.runId === "run-idem-1");
     expect(entry1?.endedAt).toBe(1000);
+    expect(entry1?.completionFinalized).toBe(true);
 
     emitSessionLifecycleEventMock.mockClear();
 
@@ -131,7 +159,7 @@ describe("completeSubagentRun idempotency", () => {
     await mod.completeSubagentRun({
       runId: "run-idem-2",
       endedAt: 1000,
-      outcome: { status: "killed" },
+      outcome: { status: "error", error: "killed" },
       reason: SUBAGENT_ENDED_REASON_KILLED,
       triggerCleanup: false,
     });

@@ -932,7 +932,7 @@ export async function spawnAcpDirect(
         spawnMode,
       });
     } catch (err) {
-      log.warn("registerSubagentRun failed for run %s: %s", childRunId, err);
+      log.warn("registerSubagentRun failed", { runId: childRunId, err: String(err) });
     }
     parentRelay?.notifyStarted();
     return {

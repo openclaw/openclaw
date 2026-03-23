@@ -61,8 +61,10 @@ describe("startAcpSpawnParentStreamRelay", () => {
     vi.useRealTimers();
   });
 
-  function collectedTexts() {
-    return enqueueSystemEventSpy.mock.calls.map((call) => String(call[0] ?? ""));
+  function collectedTexts(): string[] {
+    return enqueueSystemEventSpy.mock.calls.map((call: [string, ...unknown[]]) =>
+      String(call[0] ?? ""),
+    );
   }
 
   it("relays assistant progress and completion to the parent session", () => {
