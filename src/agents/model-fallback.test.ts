@@ -762,6 +762,72 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
+  it("skips disallowed runtime fallback providers in private mode", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["ollama/llama-3"],
+          },
+        },
+      },
+      privateMode: {
+        enabled: true,
+        localOnly: {
+          enabled: true,
+          allowedProviders: ["ollama"],
+          failOnDisallowedProviders: false,
+        },
+      },
+    });
+    const run = vi.fn().mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toEqual([["ollama", "llama-3"]]);
+  });
+
+  it("fails closed when private mode blocks the full runtime fallback chain", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+        },
+      },
+      privateMode: {
+        enabled: true,
+        localOnly: {
+          enabled: true,
+          allowedProviders: ["ollama"],
+          failOnDisallowedProviders: false,
+        },
+      },
+    });
+    const run = vi.fn();
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+      }),
+    ).rejects.toThrow(
+      "privateMode blocked all runtime model fallback candidates; allowed providers: [ollama]",
+    );
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it("defaults provider/model when missing (regression #946)", async () => {
     const cfg = makeCfg({
       agents: {
