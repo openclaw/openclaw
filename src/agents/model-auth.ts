@@ -6,7 +6,7 @@ import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { buildProviderMissingAuthMessageWithPlugin } from "../plugins/provider-runtime.runtime.js";
+import { buildProviderMissingAuthMessageWithPlugin } from "../plugins/provider-runtime.js";
 import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
 import {
   normalizeOptionalSecretInput,
@@ -369,7 +369,7 @@ export async function resolveApiKeyForProvider(params: {
       })
     : undefined;
   if (owningPluginIds?.length) {
-    const pluginMissingAuthMessage = await buildProviderMissingAuthMessageWithPlugin({
+    const pluginMissingAuthMessage = buildProviderMissingAuthMessageWithPlugin({
       provider,
       config: cfg,
       context: {
