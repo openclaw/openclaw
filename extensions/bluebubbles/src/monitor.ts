@@ -603,6 +603,13 @@ export async function handleBlueBubblesWebhookRequest(
           })
           .catch((err) => {
             if (!retryReenqueuedFromFlushFailure) {
+              if (
+                params.entry.replayScopeKey &&
+                pendingInboundWebhookReplayScopes.get(params.entry.replayScopeKey) ===
+                  params.replayKey
+              ) {
+                pendingInboundWebhookReplayScopes.delete(params.entry.replayScopeKey);
+              }
               pendingInboundWebhookReplayKeys.delete(params.replayKey);
             }
             params.entry.target.runtime.error?.(

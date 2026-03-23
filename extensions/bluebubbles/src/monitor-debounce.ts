@@ -258,8 +258,7 @@ export function createBlueBubblesDebounceRegistry(params: {
         },
       });
 
-      targetDebouncers.set(target, debouncer);
-      return {
+      const wrappedDebouncer: BlueBubblesDebouncer = {
         enqueue: async (entry) => {
           if (
             entry.eventType === "updated-message" &&
@@ -276,6 +275,8 @@ export function createBlueBubblesDebounceRegistry(params: {
         },
         flushKey: (key) => debouncer.flushKey(key),
       };
+      targetDebouncers.set(target, wrappedDebouncer);
+      return wrappedDebouncer;
     },
     removeDebouncer: (target) => {
       targetDebouncers.delete(target);
