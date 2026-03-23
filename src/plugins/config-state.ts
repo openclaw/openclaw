@@ -33,6 +33,7 @@ export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
   "anthropic",
   "byteplus",
   "cloudflare-ai-gateway",
+  "deepseek",
   "device-pair",
   "github-copilot",
   "google",
@@ -193,7 +194,7 @@ const hasExplicitMemorySlot = (plugins?: OpenClawConfig["plugins"]) =>
 const hasExplicitMemoryEntry = (plugins?: OpenClawConfig["plugins"]) =>
   Boolean(plugins?.entries && Object.prototype.hasOwnProperty.call(plugins.entries, "memory-core"));
 
-const hasExplicitPluginConfig = (plugins?: OpenClawConfig["plugins"]) => {
+export const hasExplicitPluginConfig = (plugins?: OpenClawConfig["plugins"]) => {
   if (!plugins) {
     return false;
   }

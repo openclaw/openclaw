@@ -1,33 +1,49 @@
 import { RateLimitError } from "@buape/carbon";
 import { ChannelType, Routes } from "discord-api-types/v10";
+import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  addRoleDiscord,
-  banMemberDiscord,
-  createThreadDiscord,
-  listGuildEmojisDiscord,
-  listThreadsDiscord,
-  reactMessageDiscord,
-  removeRoleDiscord,
-  sendMessageDiscord,
-  sendPollDiscord,
-  sendStickerDiscord,
-  timeoutMemberDiscord,
-  uploadEmojiDiscord,
-  uploadStickerDiscord,
-} from "./send.js";
 import { makeDiscordRest } from "./send.test-harness.js";
 
-vi.mock("../../whatsapp/src/media.js", async () => {
+vi.mock("openclaw/plugin-sdk/web-media", async () => {
   const { discordWebMediaMockFactory } = await import("./send.test-harness.js");
   return discordWebMediaMockFactory();
 });
 
-describe("sendMessageDiscord", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+let addRoleDiscord: typeof import("./send.js").addRoleDiscord;
+let banMemberDiscord: typeof import("./send.js").banMemberDiscord;
+let createThreadDiscord: typeof import("./send.js").createThreadDiscord;
+let listGuildEmojisDiscord: typeof import("./send.js").listGuildEmojisDiscord;
+let listThreadsDiscord: typeof import("./send.js").listThreadsDiscord;
+let reactMessageDiscord: typeof import("./send.js").reactMessageDiscord;
+let removeRoleDiscord: typeof import("./send.js").removeRoleDiscord;
+let sendMessageDiscord: typeof import("./send.js").sendMessageDiscord;
+let sendPollDiscord: typeof import("./send.js").sendPollDiscord;
+let sendStickerDiscord: typeof import("./send.js").sendStickerDiscord;
+let timeoutMemberDiscord: typeof import("./send.js").timeoutMemberDiscord;
+let uploadEmojiDiscord: typeof import("./send.js").uploadEmojiDiscord;
+let uploadStickerDiscord: typeof import("./send.js").uploadStickerDiscord;
 
+beforeEach(async () => {
+  vi.resetModules();
+  ({
+    addRoleDiscord,
+    banMemberDiscord,
+    createThreadDiscord,
+    listGuildEmojisDiscord,
+    listThreadsDiscord,
+    reactMessageDiscord,
+    removeRoleDiscord,
+    sendMessageDiscord,
+    sendPollDiscord,
+    sendStickerDiscord,
+    timeoutMemberDiscord,
+    uploadEmojiDiscord,
+    uploadStickerDiscord,
+  } = await import("./send.js"));
+  vi.clearAllMocks();
+});
+
+describe("sendMessageDiscord", () => {
   it("creates a thread", async () => {
     const { rest, getMock, postMock } = makeDiscordRest();
     postMock.mockResolvedValue({ id: "t1" });
@@ -288,6 +304,7 @@ describe("uploadEmojiDiscord", () => {
         },
       }),
     );
+    expect(loadWebMediaRaw).toHaveBeenCalledWith("file:///tmp/party.png", 256 * 1024);
   });
 });
 
@@ -325,6 +342,7 @@ describe("uploadStickerDiscord", () => {
         },
       }),
     );
+    expect(loadWebMediaRaw).toHaveBeenCalledWith("file:///tmp/wave.png", 512 * 1024);
   });
 });
 

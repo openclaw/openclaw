@@ -5,35 +5,37 @@ import { formatUncaughtError } from "./infra/errors.js";
 import { isMainModule } from "./infra/is-main.js";
 import { installUnhandledRejectionHandler } from "./infra/unhandled-rejections.js";
 
-const library = await import("./library.js");
-
-export const assertWebChannel = library.assertWebChannel;
-export const applyTemplate = library.applyTemplate;
-export const createDefaultDeps = library.createDefaultDeps;
-export const deriveSessionKey = library.deriveSessionKey;
-export const describePortOwner = library.describePortOwner;
-export const ensureBinary = library.ensureBinary;
-export const ensurePortAvailable = library.ensurePortAvailable;
-export const getReplyFromConfig = library.getReplyFromConfig;
-export const handlePortError = library.handlePortError;
-export const loadConfig = library.loadConfig;
-export const loadSessionStore = library.loadSessionStore;
-export const monitorWebChannel = library.monitorWebChannel;
-export const normalizeE164 = library.normalizeE164;
-export const PortInUseError = library.PortInUseError;
-export const promptYesNo = library.promptYesNo;
-export const resolveSessionKey = library.resolveSessionKey;
-export const resolveStorePath = library.resolveStorePath;
-export const runCommandWithTimeout = library.runCommandWithTimeout;
-export const runExec = library.runExec;
-export const saveSessionStore = library.saveSessionStore;
-export const toWhatsappJid = library.toWhatsappJid;
-export const waitForever = library.waitForever;
-
 type LegacyCliDeps = {
   installGaxiosFetchCompat: () => Promise<void>;
   runCli: (argv: string[]) => Promise<void>;
 };
+
+type LibraryExports = typeof import("./library.js");
+
+// These bindings are populated only for library consumers. The CLI entry stays
+// on the lean path and must not read them while running as main.
+export let assertWebChannel: LibraryExports["assertWebChannel"];
+export let applyTemplate: LibraryExports["applyTemplate"];
+export let createDefaultDeps: LibraryExports["createDefaultDeps"];
+export let deriveSessionKey: LibraryExports["deriveSessionKey"];
+export let describePortOwner: LibraryExports["describePortOwner"];
+export let ensureBinary: LibraryExports["ensureBinary"];
+export let ensurePortAvailable: LibraryExports["ensurePortAvailable"];
+export let getReplyFromConfig: LibraryExports["getReplyFromConfig"];
+export let handlePortError: LibraryExports["handlePortError"];
+export let loadConfig: LibraryExports["loadConfig"];
+export let loadSessionStore: LibraryExports["loadSessionStore"];
+export let monitorWebChannel: LibraryExports["monitorWebChannel"];
+export let normalizeE164: LibraryExports["normalizeE164"];
+export let PortInUseError: LibraryExports["PortInUseError"];
+export let promptYesNo: LibraryExports["promptYesNo"];
+export let resolveSessionKey: LibraryExports["resolveSessionKey"];
+export let resolveStorePath: LibraryExports["resolveStorePath"];
+export let runCommandWithTimeout: LibraryExports["runCommandWithTimeout"];
+export let runExec: LibraryExports["runExec"];
+export let saveSessionStore: LibraryExports["saveSessionStore"];
+export let toWhatsappJid: LibraryExports["toWhatsappJid"];
+export let waitForever: LibraryExports["waitForever"];
 
 async function loadLegacyCliDeps(): Promise<LegacyCliDeps> {
   const [{ installGaxiosFetchCompat }, { runCli }] = await Promise.all([
@@ -56,6 +58,33 @@ export async function runLegacyCliEntry(
 const isMain = isMainModule({
   currentFile: fileURLToPath(import.meta.url),
 });
+
+if (!isMain) {
+  ({
+    assertWebChannel,
+    applyTemplate,
+    createDefaultDeps,
+    deriveSessionKey,
+    describePortOwner,
+    ensureBinary,
+    ensurePortAvailable,
+    getReplyFromConfig,
+    handlePortError,
+    loadConfig,
+    loadSessionStore,
+    monitorWebChannel,
+    normalizeE164,
+    PortInUseError,
+    promptYesNo,
+    resolveSessionKey,
+    resolveStorePath,
+    runCommandWithTimeout,
+    runExec,
+    saveSessionStore,
+    toWhatsappJid,
+    waitForever,
+  } = await import("./library.js"));
+}
 
 if (isMain) {
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.

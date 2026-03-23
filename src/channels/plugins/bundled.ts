@@ -16,8 +16,6 @@ import { slackSetupPlugin } from "../../../extensions/slack/setup-entry.js";
 import { synologyChatPlugin } from "../../../extensions/synology-chat/index.js";
 import { telegramPlugin, setTelegramRuntime } from "../../../extensions/telegram/index.js";
 import { telegramSetupPlugin } from "../../../extensions/telegram/setup-entry.js";
-import { whatsappPlugin } from "../../../extensions/whatsapp/index.js";
-import { whatsappSetupPlugin } from "../../../extensions/whatsapp/setup-entry.js";
 import { zaloPlugin } from "../../../extensions/zalo/index.js";
 import type { ChannelId, ChannelPlugin } from "./types.js";
 
@@ -34,13 +32,11 @@ export const bundledChannelPlugins = [
   slackPlugin,
   synologyChatPlugin,
   telegramPlugin,
-  whatsappPlugin,
   zaloPlugin,
 ] as ChannelPlugin[];
 
 export const bundledChannelSetupPlugins = [
   telegramSetupPlugin,
-  whatsappSetupPlugin,
   discordSetupPlugin,
   ircPlugin,
   slackSetupPlugin,
@@ -49,9 +45,18 @@ export const bundledChannelSetupPlugins = [
   lineSetupPlugin,
 ] as ChannelPlugin[];
 
-const bundledChannelPluginsById = new Map(
-  bundledChannelPlugins.map((plugin) => [plugin.id, plugin] as const),
-);
+function buildBundledChannelPluginsById(plugins: readonly ChannelPlugin[]) {
+  const byId = new Map<ChannelId, ChannelPlugin>();
+  for (const plugin of plugins) {
+    if (byId.has(plugin.id)) {
+      throw new Error(`duplicate bundled channel plugin id: ${plugin.id}`);
+    }
+    byId.set(plugin.id, plugin);
+  }
+  return byId;
+}
+
+const bundledChannelPluginsById = buildBundledChannelPluginsById(bundledChannelPlugins);
 
 export function getBundledChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
   return bundledChannelPluginsById.get(id);

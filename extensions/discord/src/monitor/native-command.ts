@@ -12,9 +12,25 @@ import {
 } from "@buape/carbon";
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/channel-runtime";
-import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/channel-runtime";
-import { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-runtime";
+import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import {
+  resolveCommandAuthorizedFromAuthorizers,
+  resolveNativeCommandSessionTargets,
+} from "openclaw/plugin-sdk/command-auth";
+import {
+  buildCommandTextFromArgs,
+  findCommandByNativeName,
+  listChatCommands,
+  parseCommandArgs,
+  resolveCommandArgChoices,
+  resolveCommandArgMenu,
+  serializeCommandArgs,
+  type ChatCommandDefinition,
+  type CommandArgDefinition,
+  type CommandArgValues,
+  type CommandArgs,
+  type NativeCommandSpec,
+} from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
@@ -30,22 +46,6 @@ import {
   resolveTextChunksWithFallback,
 } from "openclaw/plugin-sdk/reply-payload";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
-import type {
-  ChatCommandDefinition,
-  CommandArgDefinition,
-  CommandArgValues,
-  CommandArgs,
-  NativeCommandSpec,
-} from "openclaw/plugin-sdk/reply-runtime";
-import {
-  buildCommandTextFromArgs,
-  findCommandByNativeName,
-  listChatCommands,
-  parseCommandArgs,
-  resolveCommandArgChoices,
-  resolveCommandArgMenu,
-  serializeCommandArgs,
-} from "openclaw/plugin-sdk/reply-runtime";
 import { dispatchReplyWithDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -770,7 +770,7 @@ async function dispatchDiscordCommandInteraction(params: {
     sender: { id: sender.id, name: sender.name, tag: sender.tag },
   });
 
-  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg,
     agentId: effectiveRoute.agentId,
     channel: "discord",
@@ -783,7 +783,7 @@ async function dispatchDiscordCommandInteraction(params: {
     ctx: ctxPayload,
     cfg,
     dispatcherOptions: {
-      ...prefixOptions,
+      ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(cfg, effectiveRoute.agentId),
       deliver: async (payload) => {
         if (suppressReplies) {

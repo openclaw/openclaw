@@ -10,6 +10,7 @@ import {
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { createBoundDeliveryRouter } from "../infra/outbound/bound-delivery-router.js";
+import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { normalizeAccountId, normalizeMainKey } from "../routing/session-key.js";
@@ -21,6 +22,7 @@ import {
   deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
+  resolveConversationDeliveryTarget,
 } from "../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -53,7 +55,6 @@ const FAST_TEST_MODE = process.env.OPENCLAW_TEST_FAST === "1";
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
 const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 90_000;
 const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
-const GATEWAY_TIMEOUT_PATTERN = /gateway timeout/i;
 let subagentRegistryRuntimePromise: Promise<
   typeof import("./subagent-registry-runtime.js")
 > | null = null;
@@ -70,6 +71,14 @@ const DIRECT_ANNOUNCE_TRANSIENT_RETRY_DELAYS_MS = FAST_TEST_MODE
 type ToolResultMessage = {
   role?: unknown;
   content?: unknown;
+};
+
+type SubagentOutputSnapshot = {
+  latestAssistantText?: string;
+  latestSilentText?: string;
+  latestRawText?: string;
+  assistantFragments: string[];
+  toolCallCount: number;
 };
 
 function resolveSubagentAnnounceTimeoutMs(cfg: ReturnType<typeof loadConfig>): number {
@@ -108,7 +117,7 @@ const TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /no active .* listener/i,
   /gateway not connected/i,
   /gateway closed \(1006/i,
-  GATEWAY_TIMEOUT_PATTERN,
+  /gateway timeout/i,
   /\b(econnreset|econnrefused|etimedout|enotfound|ehostunreach|network error)\b/i,
 ];
 
@@ -132,11 +141,6 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
     return false;
   }
   return TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message));
-}
-
-function isGatewayTimeoutError(error: unknown): boolean {
-  const message = summarizeDeliveryError(error);
-  return Boolean(message) && GATEWAY_TIMEOUT_PATTERN.test(message);
 }
 
 async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Promise<void> {
@@ -166,7 +170,6 @@ async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Prom
 
 async function runAnnounceDeliveryWithRetry<T>(params: {
   operation: string;
-  noRetryOnGatewayTimeout?: boolean;
   signal?: AbortSignal;
   run: () => Promise<T>;
 }): Promise<T> {
@@ -178,9 +181,6 @@ async function runAnnounceDeliveryWithRetry<T>(params: {
     try {
       return await params.run();
     } catch (err) {
-      if (params.noRetryOnGatewayTimeout && isGatewayTimeoutError(err)) {
-        throw err;
-      }
       const delayMs = DIRECT_ANNOUNCE_TRANSIENT_RETRY_DELAYS_MS[retryIndex];
       if (delayMs == null || !isTransientAnnounceDeliveryError(err) || params.signal?.aborted) {
         throw err;
@@ -285,42 +285,131 @@ function extractSubagentOutputText(message: unknown): string {
   return "";
 }
 
-async function readLatestSubagentOutput(sessionKey: string): Promise<string | undefined> {
-  try {
-    const latestAssistant = await readLatestAssistantReply({
-      sessionKey,
-      limit: 50,
-    });
-    if (latestAssistant?.trim()) {
-      return latestAssistant;
-    }
-  } catch {
-    // Best-effort: fall back to richer history parsing below.
+function countAssistantToolCalls(content: unknown): number {
+  if (!Array.isArray(content)) {
+    return 0;
   }
+  let count = 0;
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const type = (block as { type?: unknown }).type;
+    if (
+      type === "toolCall" ||
+      type === "tool_use" ||
+      type === "toolUse" ||
+      type === "functionCall" ||
+      type === "function_call"
+    ) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutputSnapshot {
+  const snapshot: SubagentOutputSnapshot = {
+    assistantFragments: [],
+    toolCallCount: 0,
+  };
+  for (const message of messages) {
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    const role = (message as { role?: unknown }).role;
+    if (role === "assistant") {
+      snapshot.toolCallCount += countAssistantToolCalls((message as { content?: unknown }).content);
+      const text = extractSubagentOutputText(message).trim();
+      if (!text) {
+        continue;
+      }
+      if (isAnnounceSkip(text) || isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+        snapshot.latestSilentText = text;
+        snapshot.latestAssistantText = undefined;
+        snapshot.assistantFragments = [];
+        continue;
+      }
+      snapshot.latestSilentText = undefined;
+      snapshot.latestAssistantText = text;
+      snapshot.assistantFragments.push(text);
+      continue;
+    }
+    const text = extractSubagentOutputText(message).trim();
+    if (text) {
+      snapshot.latestRawText = text;
+    }
+  }
+  return snapshot;
+}
+
+function formatSubagentPartialProgress(
+  snapshot: SubagentOutputSnapshot,
+  outcome?: SubagentRunOutcome,
+): string | undefined {
+  if (snapshot.latestSilentText) {
+    return undefined;
+  }
+  const timedOut = outcome?.status === "timeout";
+  if (snapshot.assistantFragments.length === 0 && (!timedOut || snapshot.toolCallCount === 0)) {
+    return undefined;
+  }
+  const parts: string[] = [];
+  if (timedOut && snapshot.toolCallCount > 0) {
+    parts.push(
+      `[Partial progress: ${snapshot.toolCallCount} tool call(s) executed before timeout]`,
+    );
+  }
+  if (snapshot.assistantFragments.length > 0) {
+    parts.push(snapshot.assistantFragments.slice(-3).join("\n\n---\n\n"));
+  }
+  return parts.join("\n\n") || undefined;
+}
+
+function selectSubagentOutputText(
+  snapshot: SubagentOutputSnapshot,
+  outcome?: SubagentRunOutcome,
+): string | undefined {
+  if (snapshot.latestSilentText) {
+    return snapshot.latestSilentText;
+  }
+  if (snapshot.latestAssistantText) {
+    return snapshot.latestAssistantText;
+  }
+  const partialProgress = formatSubagentPartialProgress(snapshot, outcome);
+  if (partialProgress) {
+    return partialProgress;
+  }
+  return snapshot.latestRawText;
+}
+
+async function readSubagentOutput(
+  sessionKey: string,
+  outcome?: SubagentRunOutcome,
+): Promise<string | undefined> {
   const history = await callGateway<{ messages?: Array<unknown> }>({
     method: "chat.history",
-    params: { sessionKey, limit: 50 },
+    params: { sessionKey, limit: 100 },
   });
   const messages = Array.isArray(history?.messages) ? history.messages : [];
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const msg = messages[i];
-    const text = extractSubagentOutputText(msg);
-    if (text) {
-      return text;
-    }
+  const selected = selectSubagentOutputText(summarizeSubagentOutputHistory(messages), outcome);
+  if (selected?.trim()) {
+    return selected;
   }
-  return undefined;
+  const latestAssistant = await readLatestAssistantReply({ sessionKey, limit: 100 });
+  return latestAssistant?.trim() ? latestAssistant : undefined;
 }
 
 async function readLatestSubagentOutputWithRetry(params: {
   sessionKey: string;
   maxWaitMs: number;
+  outcome?: SubagentRunOutcome;
 }): Promise<string | undefined> {
   const RETRY_INTERVAL_MS = FAST_TEST_MODE ? FAST_TEST_RETRY_INTERVAL_MS : 100;
   const deadline = Date.now() + Math.max(0, Math.min(params.maxWaitMs, 15_000));
   let result: string | undefined;
   while (Date.now() < deadline) {
-    result = await readLatestSubagentOutput(params.sessionKey);
+    result = await readSubagentOutput(params.sessionKey, params.outcome);
     if (result?.trim()) {
       return result;
     }
@@ -332,7 +421,7 @@ async function readLatestSubagentOutputWithRetry(params: {
 export async function captureSubagentCompletionReply(
   sessionKey: string,
 ): Promise<string | undefined> {
-  const immediate = await readLatestSubagentOutput(sessionKey);
+  const immediate = await readSubagentOutput(sessionKey);
   if (immediate?.trim()) {
     return immediate;
   }
@@ -537,7 +626,11 @@ async function resolveSubagentCompletionOrigin(params: {
       ? String(requesterOrigin.threadId).trim()
       : undefined;
   const conversationId =
-    threadId || (to?.startsWith("channel:") ? to.slice("channel:".length) : "");
+    threadId ||
+    resolveConversationIdFromTargets({
+      targets: [to],
+    }) ||
+    "";
   const requesterConversation: ConversationRef | undefined =
     channel && conversationId ? { channel, accountId, conversationId } : undefined;
 
@@ -548,15 +641,21 @@ async function resolveSubagentCompletionOrigin(params: {
     failClosed: false,
   });
   if (route.mode === "bound" && route.binding) {
+    const boundTarget = resolveConversationDeliveryTarget({
+      channel: route.binding.conversation.channel,
+      conversationId: route.binding.conversation.conversationId,
+      parentConversationId: route.binding.conversation.parentConversationId,
+    });
     return mergeDeliveryContext(
       {
         channel: route.binding.conversation.channel,
         accountId: route.binding.conversation.accountId,
-        to: `channel:${route.binding.conversation.conversationId}`,
+        to: boundTarget.to,
         threadId:
-          requesterOrigin?.threadId != null && requesterOrigin.threadId !== ""
+          boundTarget.threadId ??
+          (requesterOrigin?.threadId != null && requesterOrigin.threadId !== ""
             ? String(requesterOrigin.threadId)
-            : undefined,
+            : undefined),
       },
       requesterOrigin,
     );
@@ -799,7 +898,6 @@ async function sendSubagentAnnounceDirectly(params: {
       operation: params.expectsCompletionMessage
         ? "completion direct announce agent call"
         : "direct announce agent call",
-      noRetryOnGatewayTimeout: params.expectsCompletionMessage && shouldDeliverExternally,
       signal: params.signal,
       run: async () =>
         await callGateway({
@@ -1309,28 +1407,19 @@ export async function runSubagentAnnounceFlow(params: {
         (isAnnounceSkip(fallbackReply) || isSilentReplyText(fallbackReply, SILENT_REPLY_TOKEN));
 
       if (!reply) {
-        reply = await readLatestSubagentOutput(params.childSessionKey);
+        reply = await readSubagentOutput(params.childSessionKey, outcome);
       }
 
       if (!reply?.trim()) {
         reply = await readLatestSubagentOutputWithRetry({
           sessionKey: params.childSessionKey,
           maxWaitMs: params.timeoutMs,
+          outcome,
         });
       }
 
       if (!reply?.trim() && fallbackReply && !fallbackIsSilent) {
         reply = fallbackReply;
-      }
-
-      if (
-        !expectsCompletionMessage &&
-        !reply?.trim() &&
-        childSessionId &&
-        isEmbeddedPiRunActive(childSessionId)
-      ) {
-        shouldDeleteChildSession = false;
-        return false;
       }
 
       if (isAnnounceSkip(reply) || isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {

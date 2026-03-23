@@ -1,3 +1,4 @@
+import { resolveNodeStartupTlsEnvironment } from "../../bootstrap/node-startup-env.js";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
@@ -54,19 +55,28 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
   if (loaded) {
     if (!opts.force) {
-      emit({
-        ok: true,
-        result: "already-installed",
-        message: `Gateway service already ${service.loadedText}.`,
-        service: buildDaemonServiceSnapshot(service, loaded),
-      });
-      if (!json) {
-        defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
-        defaultRuntime.log(
-          `Reinstall with: ${formatCliCommand("openclaw gateway install --force")}`,
-        );
+      if (await gatewayServiceNeedsAutoNodeExtraCaCertsRefresh({ service, env: process.env })) {
+        const message = "Gateway service is missing the nvm TLS CA bundle; refreshing the install.";
+        if (json) {
+          warnings.push(message);
+        } else {
+          defaultRuntime.log(message);
+        }
+      } else {
+        emit({
+          ok: true,
+          result: "already-installed",
+          message: `Gateway service already ${service.loadedText}.`,
+          service: buildDaemonServiceSnapshot(service, loaded),
+        });
+        if (!json) {
+          defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
+          defaultRuntime.log(
+            `Reinstall with: ${formatCliCommand("openclaw gateway install --force")}`,
+          );
+        }
+        return;
       }
-      return;
     }
   }
 
@@ -119,4 +129,37 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       });
     },
   });
+}
+
+async function gatewayServiceNeedsAutoNodeExtraCaCertsRefresh(params: {
+  service: ReturnType<typeof resolveGatewayService>;
+  env: Record<string, string | undefined>;
+}): Promise<boolean> {
+  try {
+    const currentCommand = await params.service.readCommand(params.env);
+    if (!currentCommand) {
+      return false;
+    }
+    const currentExecPath = currentCommand.programArguments[0]?.trim();
+    if (!currentExecPath) {
+      return false;
+    }
+    const currentEnvironment = currentCommand.environment ?? {};
+    const currentNodeExtraCaCerts = currentEnvironment.NODE_EXTRA_CA_CERTS?.trim();
+    const expectedNodeExtraCaCerts = resolveNodeStartupTlsEnvironment({
+      env: {
+        ...params.env,
+        ...currentEnvironment,
+        NODE_EXTRA_CA_CERTS: undefined,
+      },
+      execPath: currentExecPath,
+      includeDarwinDefaults: false,
+    }).NODE_EXTRA_CA_CERTS;
+    if (!expectedNodeExtraCaCerts) {
+      return false;
+    }
+    return currentNodeExtraCaCerts !== expectedNodeExtraCaCerts;
+  } catch {
+    return false;
+  }
 }

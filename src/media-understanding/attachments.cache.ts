@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { buildRandomTempFilePath } from "openclaw/plugin-sdk/temp-path";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { isAbortError } from "../infra/unhandled-rejections.js";
 import { fetchRemoteMedia, MediaFetchError } from "../media/fetch.js";
@@ -11,9 +10,10 @@ import {
 } from "../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { detectMime } from "../media/mime.js";
+import { buildRandomTempFilePath } from "../plugin-sdk/temp-path.js";
 import { normalizeAttachmentPath } from "./attachments.normalize.js";
 import { MediaUnderstandingSkipError } from "./errors.js";
-import { fetchWithTimeout } from "./providers/shared.js";
+import { fetchWithTimeout } from "./shared.js";
 import type { MediaAttachment } from "./types.js";
 
 type MediaBufferResult = {

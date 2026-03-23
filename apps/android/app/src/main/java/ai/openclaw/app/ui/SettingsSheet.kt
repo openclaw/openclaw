@@ -149,8 +149,10 @@ fun SettingsSheet(viewModel: MainViewModel) {
 
   val smsPermissionAvailable =
     remember {
-      context.packageManager?.hasSystemFeature(PackageManager.FEATURE_TELEPHONY) == true
+      BuildConfig.OPENCLAW_ENABLE_SMS &&
+        context.packageManager?.hasSystemFeature(PackageManager.FEATURE_TELEPHONY) == true
     }
+  val callLogPermissionAvailable = remember { BuildConfig.OPENCLAW_ENABLE_CALL_LOG }
   val photosPermission =
     if (Build.VERSION.SDK_INT >= 33) {
       Manifest.permission.READ_MEDIA_IMAGES
@@ -247,12 +249,16 @@ fun SettingsSheet(viewModel: MainViewModel) {
     remember {
       mutableStateOf(
         ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) ==
+          PackageManager.PERMISSION_GRANTED &&
+          ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) ==
           PackageManager.PERMISSION_GRANTED,
       )
     }
   val smsPermissionLauncher =
-    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-      smsPermissionGranted = granted
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { perms ->
+      val sendOk = perms[Manifest.permission.SEND_SMS] == true
+      val readOk = perms[Manifest.permission.READ_SMS] == true
+      smsPermissionGranted = sendOk && readOk
       viewModel.refreshGatewayConnection()
     }
 
@@ -287,6 +293,8 @@ fun SettingsSheet(viewModel: MainViewModel) {
               PackageManager.PERMISSION_GRANTED
           smsPermissionGranted =
             ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) ==
+              PackageManager.PERMISSION_GRANTED &&
+              ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) ==
               PackageManager.PERMISSION_GRANTED
         }
       }
@@ -507,7 +515,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
               colors = listItemColors,
               headlineContent = { Text("SMS", style = mobileHeadline) },
               supportingContent = {
-                Text("Send SMS from this device.", style = mobileCallout)
+                Text("Send and search SMS from this device.", style = mobileCallout)
               },
               trailingContent = {
                 Button(
@@ -515,7 +523,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
                     if (smsPermissionGranted) {
                       openAppSettings(context)
                     } else {
-                      smsPermissionLauncher.launch(Manifest.permission.SEND_SMS)
+                      smsPermissionLauncher.launch(arrayOf(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS))
                     }
                   },
                   colors = settingsPrimaryButtonColors(),
@@ -616,31 +624,33 @@ fun SettingsSheet(viewModel: MainViewModel) {
               }
             },
           )
-          HorizontalDivider(color = mobileBorder)
-          ListItem(
-            modifier = Modifier.fillMaxWidth(),
-            colors = listItemColors,
-            headlineContent = { Text("Call Log", style = mobileHeadline) },
-            supportingContent = { Text("Search recent call history.", style = mobileCallout) },
-            trailingContent = {
-              Button(
-                onClick = {
-                  if (callLogPermissionGranted) {
-                    openAppSettings(context)
-                  } else {
-                    callLogPermissionLauncher.launch(Manifest.permission.READ_CALL_LOG)
-                  }
-                },
-                colors = settingsPrimaryButtonColors(),
-                shape = RoundedCornerShape(14.dp),
-              ) {
-                Text(
-                  if (callLogPermissionGranted) "Manage" else "Grant",
-                  style = mobileCallout.copy(fontWeight = FontWeight.Bold),
-                )
-              }
-            },
-          )
+          if (callLogPermissionAvailable) {
+            HorizontalDivider(color = mobileBorder)
+            ListItem(
+              modifier = Modifier.fillMaxWidth(),
+              colors = listItemColors,
+              headlineContent = { Text("Call Log", style = mobileHeadline) },
+              supportingContent = { Text("Search recent call history.", style = mobileCallout) },
+              trailingContent = {
+                Button(
+                  onClick = {
+                    if (callLogPermissionGranted) {
+                      openAppSettings(context)
+                    } else {
+                      callLogPermissionLauncher.launch(Manifest.permission.READ_CALL_LOG)
+                    }
+                  },
+                  colors = settingsPrimaryButtonColors(),
+                  shape = RoundedCornerShape(14.dp),
+                ) {
+                  Text(
+                    if (callLogPermissionGranted) "Manage" else "Grant",
+                    style = mobileCallout.copy(fontWeight = FontWeight.Bold),
+                  )
+                }
+              },
+            )
+          }
           if (motionAvailable) {
             HorizontalDivider(color = mobileBorder)
             ListItem(

@@ -31,6 +31,7 @@ apps/android/.gradle/
 apps/android/app/build/
 apps/android/.cxx/
 apps/android/.kotlin/
+apps/android/benchmark/results/
 
 # Bun build artifacts
 *.bun-build
@@ -100,8 +101,6 @@ USER.md
 /local/
 package-lock.json
 .claude/
-.agents/
-.agents
 .agent/
 skills-lock.json
 

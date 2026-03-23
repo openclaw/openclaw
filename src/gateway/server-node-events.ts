@@ -288,16 +288,18 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         sessionId,
         now,
       });
+      const runId = randomUUID();
 
       // Ensure chat UI clients refresh when this run completes (even though it wasn't started via chat.send).
-      // This maps agent bus events (keyed by sessionId) to chat events (keyed by clientRunId).
-      ctx.addChatRun(sessionId, {
+      // This maps agent bus events (keyed by per-turn runId) to chat events (keyed by clientRunId).
+      ctx.addChatRun(runId, {
         sessionKey: canonicalKey,
         clientRunId: `voice-${randomUUID()}`,
       });
 
       void agentCommandFromIngress(
         {
+          runId,
           message: text,
           sessionId,
           sessionKey: canonicalKey,
@@ -404,7 +406,6 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       const deliver = deliverRequested && Boolean(channel && to);
       const deliveryChannel = deliver ? channel : undefined;
       const deliveryTo = deliver ? to : undefined;
-
       if (deliverRequested && !deliver) {
         ctx.logGateway.warn(
           `agent delivery disabled node=${nodeId}: missing session delivery route (channel=${channel ?? "-"} to=${to ?? "-"})`,
@@ -430,6 +431,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
 
       void agentCommandFromIngress(
         {
+          runId: sessionId,
           message,
           images,
           sessionId,
