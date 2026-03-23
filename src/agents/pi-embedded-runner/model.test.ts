@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { discoverModels } from "../pi-model-discovery.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
 vi.mock("../pi-model-discovery.js", () => ({
@@ -62,7 +63,10 @@ function resolveModelForTest(
   agentDir?: string,
   cfg?: OpenClawConfig,
 ) {
+  const resolvedAgentDir = agentDir ?? "/tmp/agent";
   return resolveModel(provider, modelId, agentDir, cfg, {
+    authStorage: { mocked: true } as never,
+    modelRegistry: discoverModels({ mocked: true } as never, resolvedAgentDir),
     runtimeHooks: createRuntimeHooks(),
   });
 }
@@ -74,7 +78,10 @@ function resolveModelAsyncForTest(
   cfg?: OpenClawConfig,
   options?: { retryTransientProviderRuntimeMiss?: boolean },
 ) {
+  const resolvedAgentDir = agentDir ?? "/tmp/agent";
   return resolveModelAsync(provider, modelId, agentDir, cfg, {
+    authStorage: { mocked: true } as never,
+    modelRegistry: discoverModels({ mocked: true } as never, resolvedAgentDir),
     ...options,
     runtimeHooks: createRuntimeHooks(),
   });
