@@ -224,6 +224,10 @@ if (\$version -notmatch '$head_short') {
   throw 'version mismatch: expected substring $head_short'
 }
 & \$openclaw models set openai/gpt-5.4
+# Windows can keep the old hashed dist modules alive across in-place global npm upgrades.
+# Restart the gateway/service before verifying status or the next agent turn.
+& \$openclaw gateway restart
+Start-Sleep -Seconds 5
 & \$openclaw gateway status --deep --require-rpc
 & \$openclaw agent --agent main --session-id parallels-npm-update-windows-$head_short --message 'Reply with exact ASCII text OK only.' --json
 EOF
