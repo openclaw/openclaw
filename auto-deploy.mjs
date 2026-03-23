@@ -141,7 +141,8 @@ function startGateway() {
 
   console.log("正在启动网关服务...");
   try {
-    execSync(`pm2 start openclaw.mjs --name "${serviceName}" -- gateway`, {
+    // 添加 --max-restarts 0 选项，避免 PM2 无限重启
+    execSync(`pm2 start openclaw.mjs --name "${serviceName}" --max-restarts 0 -- gateway`, {
       cwd: WORK_DIR,
       stdio: "inherit",
     });
@@ -178,7 +179,8 @@ function startDashboard() {
 
   console.log("正在启动Web UI...");
   try {
-    execSync(`pm2 start openclaw.mjs --name "${serviceName}" -- dashboard`, {
+    // 添加 --max-restarts 0 选项，避免 PM2 无限重启
+    execSync(`pm2 start openclaw.mjs --name "${serviceName}" --max-restarts 0 -- dashboard`, {
       cwd: WORK_DIR,
       stdio: "inherit",
     });
