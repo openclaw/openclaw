@@ -59,7 +59,11 @@ afterEach(() => {
 
 describe("memory cli", () => {
   function spyRuntimeLogs() {
-    return vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value: unknown, space = 2) => {
+      logSpy(JSON.stringify(value, null, space));
+    });
+    return logSpy;
   }
 
   function spyRuntimeJson() {
