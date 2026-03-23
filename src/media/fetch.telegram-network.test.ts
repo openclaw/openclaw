@@ -167,12 +167,19 @@ describe("fetchRemoteMedia telegram network policy", () => {
           dispatcher?: {
             options?: {
               uri?: string;
+              requestTls?: Record<string, unknown>;
             };
           };
         })
       | undefined;
 
     expect(init?.dispatcher?.options?.uri).toBe("http://127.0.0.1:7890");
+    expect(init?.dispatcher?.options?.requestTls).toEqual(
+      expect.objectContaining({
+        autoSelectFamily: false,
+        lookup: expect.any(Function),
+      }),
+    );
     expect(undiciMocks.proxyAgentCtor).toHaveBeenCalled();
   });
 

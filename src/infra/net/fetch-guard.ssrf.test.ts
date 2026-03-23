@@ -140,6 +140,21 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(result.response.status).toBe(200);
   });
 
+  it("fails closed for plain HTTP targets when explicit proxy mode requires pinned DNS", async () => {
+    const fetchImpl = vi.fn();
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://public.example/resource",
+        fetchImpl,
+        dispatcherPolicy: {
+          mode: "explicit-proxy",
+          proxyUrl: "http://127.0.0.1:7890",
+        },
+      }),
+    ).rejects.toThrow(/explicit proxy ssrf pinning requires https targets/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("blocks redirect chains that hop to private hosts", async () => {
     const lookupFn = createPublicLookup();
     const fetchImpl = await expectRedirectFailure({
