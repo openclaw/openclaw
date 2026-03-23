@@ -129,7 +129,16 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
   }
 
   function isExempt(ip: string): boolean {
-    return exemptLoopback && isLoopbackAddress(ip);
+    // Security note: loopback exemption allows local attackers or compromised
+    // local processes to bypass rate limiting. When exemptLoopback is true,
+    // we still enforce a higher threshold (10x normal) to limit abuse.
+    if (!exemptLoopback || !isLoopbackAddress(ip)) return false;
+    // Enforce a relaxed but present limit for loopback to mitigate
+    // local privilege escalation via auth brute-force.
+    const { key } = resolveKey(ip, AUTH_RATE_LIMIT_SCOPE_DEFAULT);
+    const entry = entries.get(key);
+    if (!entry) return true;
+    return entry.attempts.length < maxAttempts * 10;
   }
 
   function slideWindow(entry: RateLimitEntry, now: number): void {

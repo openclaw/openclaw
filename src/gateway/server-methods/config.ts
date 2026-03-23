@@ -1,4 +1,4 @@
-import { exec } from "node:child_process";
+import { execFile } from "node:child_process";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
@@ -539,8 +539,11 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const configPath = createConfigIO().configPath;
     const platform = process.platform;
-    const cmd = platform === "darwin" ? "open" : platform === "win32" ? "start" : "xdg-open";
-    exec(`${cmd} ${JSON.stringify(configPath)}`, (err) => {
+    const cmd = platform === "darwin" ? "open" : platform === "win32" ? "cmd.exe" : "xdg-open";
+    // Security fix: use execFile instead of exec to prevent shell injection.
+    // On Windows, "start" is a shell builtin, so we use cmd.exe /c start instead.
+    const args = platform === "win32" ? ["/c", "start", "", configPath] : [configPath];
+    execFile(cmd, args, (err) => {
       if (err) {
         respond(true, { ok: false, path: configPath, error: err.message }, undefined);
         return;
