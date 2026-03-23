@@ -21,9 +21,11 @@ import { isTrustedSafeBinPath } from "./exec-safe-bin-trust.js";
 import {
   extractShellWrapperInlineCommand,
   isShellWrapperExecutable,
+  normalizeExecutableToken,
 } from "./exec-wrapper-resolution.js";
 import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
 import { expandHomePrefix } from "./home-dir.js";
+import { POSIX_INLINE_COMMAND_FLAGS, resolveInlineCommandMatch } from "./shell-inline-command.js";
 
 function hasShellLineContinuation(command: string): boolean {
   return /\\(?:\r\n|\n|\r)/.test(command);
@@ -113,6 +115,7 @@ type ExecAllowlistContext = {
   safeBins: Set<string>;
   safeBinProfiles?: Readonly<Record<string, SafeBinProfile>>;
   cwd?: string;
+  env?: NodeJS.ProcessEnv;
   platform?: string | null;
   trustedSafeBinDirs?: ReadonlySet<string>;
   skillBins?: readonly SkillBinTrustEntry[];
@@ -125,6 +128,7 @@ function pickExecAllowlistContext(params: ExecAllowlistContext): ExecAllowlistCo
     safeBins: params.safeBins,
     safeBinProfiles: params.safeBinProfiles,
     cwd: params.cwd,
+    env: params.env,
     platform: params.platform,
     trustedSafeBinDirs: params.trustedSafeBinDirs,
     skillBins: params.skillBins,
@@ -224,6 +228,18 @@ function evaluateSegments(
         : segment.resolution;
     const executableMatch = matchAllowlist(params.allowlist, candidateResolution);
     const inlineCommand = extractShellWrapperInlineCommand(allowlistSegment.argv);
+    const shellPositionalArgvCandidatePath = resolveShellWrapperPositionalArgvCandidatePath({
+      segment: allowlistSegment,
+      cwd: params.cwd,
+      env: params.env,
+    });
+    const shellPositionalArgvMatch = shellPositionalArgvCandidatePath
+      ? matchAllowlist(params.allowlist, {
+          rawExecutable: shellPositionalArgvCandidatePath,
+          resolvedPath: shellPositionalArgvCandidatePath,
+          executableName: path.basename(shellPositionalArgvCandidatePath),
+        })
+      : null;
     const shellScriptCandidatePath =
       inlineCommand === null
         ? resolveShellWrapperScriptCandidatePath({
@@ -238,7 +254,7 @@ function evaluateSegments(
           executableName: path.basename(shellScriptCandidatePath),
         })
       : null;
-    const match = executableMatch ?? shellScriptMatch;
+    const match = executableMatch ?? shellPositionalArgvMatch ?? shellScriptMatch;
     if (match) {
       matches.push(match);
     }
@@ -408,6 +424,47 @@ function resolveShellWrapperScriptCandidatePath(params: {
   return path.resolve(base, expanded);
 }
 
+function resolveShellWrapperPositionalArgvCandidatePath(params: {
+  segment: ExecCommandSegment;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+}): string | undefined {
+  if (!isShellWrapperSegment(params.segment)) {
+    return undefined;
+  }
+
+  const argv = params.segment.argv;
+  if (!Array.isArray(argv) || argv.length < 4) {
+    return undefined;
+  }
+
+  const wrapper = normalizeExecutableToken(argv[0] ?? "");
+  if (!["ash", "bash", "dash", "fish", "ksh", "sh", "zsh"].includes(wrapper)) {
+    return undefined;
+  }
+
+  const inlineMatch = resolveInlineCommandMatch(argv, POSIX_INLINE_COMMAND_FLAGS, {
+    allowCombinedC: true,
+  });
+  if (inlineMatch.valueTokenIndex === null || !inlineMatch.command) {
+    return undefined;
+  }
+  if (!/(?:^|[^\\$])\$(?:0|\{0\})/.test(inlineMatch.command)) {
+    return undefined;
+  }
+
+  const carriedExecutable = argv
+    .slice(inlineMatch.valueTokenIndex + 1)
+    .map((token) => token.trim())
+    .find((token) => token.length > 0);
+  if (!carriedExecutable) {
+    return undefined;
+  }
+
+  const resolution = resolveCommandResolutionFromArgv([carriedExecutable], params.cwd, params.env);
+  return resolveAllowlistCandidatePath(resolution, params.cwd);
+}
+
 function collectAllowAlwaysPatterns(params: {
   segment: ExecCommandSegment;
   cwd?: string;
@@ -439,6 +496,15 @@ function collectAllowAlwaysPatterns(params: {
   }
   if (!trustPlan.shellWrapperExecutable) {
     params.out.add(candidatePath);
+    return;
+  }
+  const positionalArgvPath = resolveShellWrapperPositionalArgvCandidatePath({
+    segment,
+    cwd: params.cwd,
+    env: params.env,
+  });
+  if (positionalArgvPath) {
+    params.out.add(positionalArgvPath);
     return;
   }
   const inlineCommand =
