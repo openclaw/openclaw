@@ -301,7 +301,7 @@ async function emitToolResultOutput(params: {
   if (ctx.shouldEmitToolOutput()) {
     const outputText = extractToolResultText(sanitizedResult);
     if (outputText) {
-      ctx.emitToolOutput(toolName, meta, outputText);
+      ctx.emitToolOutput(toolName, meta, outputText, result);
     }
     if (!hasStructuredMedia) {
       return;
@@ -316,7 +316,7 @@ async function emitToolResultOutput(params: {
   if (!mediaReply) {
     return;
   }
-  const mediaUrls = filterToolResultMediaUrls(toolName, mediaReply.mediaUrls);
+  const mediaUrls = filterToolResultMediaUrls(toolName, mediaReply.mediaUrls, result);
   if (mediaUrls.length === 0) {
     return;
   }

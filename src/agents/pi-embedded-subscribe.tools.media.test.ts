@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   extractToolResultMediaArtifact,
   extractToolResultMediaPaths,
+  filterToolResultMediaUrls,
   isToolResultMediaTrusted,
 } from "./pi-embedded-subscribe.tools.js";
 
@@ -262,5 +263,27 @@ describe("extractToolResultMediaPaths", () => {
 
   it("trusts image_generate local MEDIA paths", () => {
     expect(isToolResultMediaTrusted("image_generate")).toBe(true);
+  });
+
+  it("does not trust local MEDIA paths for MCP-provenance results", () => {
+    expect(
+      filterToolResultMediaUrls("browser", ["/tmp/screenshot.png"], {
+        details: {
+          mcpServer: "probe",
+          mcpTool: "browser",
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it("still allows remote MEDIA urls for MCP-provenance results", () => {
+    expect(
+      filterToolResultMediaUrls("browser", ["https://example.com/screenshot.png"], {
+        details: {
+          mcpServer: "probe",
+          mcpTool: "browser",
+        },
+      }),
+    ).toEqual(["https://example.com/screenshot.png"]);
   });
 });
