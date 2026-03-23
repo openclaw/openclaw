@@ -149,6 +149,10 @@ describe("device-pair /pair qr", () => {
     const text = requireText(result);
 
     expect(pluginApiMocks.renderQrPngBase64).toHaveBeenCalledTimes(1);
+    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledWith({
+      roles: ["node"],
+      scopes: [],
+    });
     expect(text).toContain("Scan this QR code with the OpenClaw iOS app:");
     expect(text).toContain("![OpenClaw pairing QR](data:image/png;base64,ZmFrZXBuZw==)");
     expect(text).toContain("- Security: single-use bootstrap token");
