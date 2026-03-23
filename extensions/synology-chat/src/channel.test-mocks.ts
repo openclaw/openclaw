@@ -101,6 +101,7 @@ export function makeSecurityAccount(overrides: Record<string, unknown> = {}) {
     incomingUrl: "https://nas/incoming",
     nasHost: "h",
     webhookPath: "/w",
+    dangerouslyAllowNameMatching: false,
     dmPolicy: "allowlist" as const,
     allowedUserIds: [],
     rateLimitPerMinute: 30,

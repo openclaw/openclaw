@@ -29,7 +29,13 @@ import { synologyChatSetupAdapter, synologyChatSetupWizard } from "./setup-surfa
 import type { ResolvedSynologyChatAccount } from "./types.js";
 
 const CHANNEL_ID = "synology-chat";
-const SynologyChatConfigSchema = buildChannelConfigSchema(z.object({}).passthrough());
+const SynologyChatConfigSchema = buildChannelConfigSchema(
+  z
+    .object({
+      dangerouslyAllowNameMatching: z.boolean().optional(),
+    })
+    .passthrough(),
+);
 
 const resolveSynologyChatDmPolicy = createScopedDmSecurityResolver<ResolvedSynologyChatAccount>({
   channelKey: CHANNEL_ID,
@@ -51,6 +57,7 @@ const synologyChatConfigAdapter = createHybridChannelConfigAdapter<ResolvedSynol
     "incomingUrl",
     "nasHost",
     "webhookPath",
+    "dangerouslyAllowNameMatching",
     "dmPolicy",
     "allowedUserIds",
     "rateLimitPerMinute",
@@ -73,6 +80,9 @@ const collectSynologyChatSecurityWarnings =
     (account) =>
       account.allowInsecureSsl &&
       "- Synology Chat: SSL verification is disabled (allowInsecureSsl=true). Only use this for local NAS with self-signed certificates.",
+    (account) =>
+      account.dangerouslyAllowNameMatching &&
+      "- Synology Chat: dangerouslyAllowNameMatching=true re-enables mutable username/nickname recipient matching for replies. Prefer stable numeric user IDs.",
     (account) =>
       account.dmPolicy === "open" &&
       '- Synology Chat: dmPolicy="open" allows any user to message the bot. Consider "allowlist" for production use.',
