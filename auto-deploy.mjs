@@ -213,6 +213,16 @@ async function main() {
     process.exit(1);
   }
 
+  // 运行配置向导
+  console.log("正在运行配置向导...");
+  try {
+    execSync("node openclaw.mjs setup", { cwd: WORK_DIR, stdio: "inherit" });
+    console.log("配置完成");
+  } catch (error) {
+    console.warn("配置向导执行失败:", error.message);
+    // 继续执行，不中断部署过程
+  }
+
   // 检查端口是否被占用
   if (checkPort(18789)) {
     console.warn("端口 18789 已被占用，可能需要停止其他服务");
