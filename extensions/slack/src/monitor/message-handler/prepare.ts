@@ -487,7 +487,13 @@ export async function prepareSlackMessage(params: {
     commandAuthorized,
   });
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
-  if (isRoom && shouldRequireMention && mentionGate.shouldSkip) {
+  // When the event source is "app_mention", Slack has already confirmed this bot
+  // was explicitly mentioned. Skip the mention gate — the text-based detection in
+  // mentionGate can fail due to dedup race conditions (message event arrives before
+  // app_mention, sets dedup key, then app_mention is either deduped or the text-based
+  // mention check fails because the message was already processed without wasMentioned).
+  // See: https://github.com/openclaw/openclaw/issues/34833
+  if (isRoom && shouldRequireMention && mentionGate.shouldSkip && opts.source !== "app_mention") {
     ctx.logger.info({ channel: message.channel, reason: "no-mention" }, "skipping channel message");
     const pendingText = (message.text ?? "").trim();
     const fallbackFile = message.files?.[0]?.name
