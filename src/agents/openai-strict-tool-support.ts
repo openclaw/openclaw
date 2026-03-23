@@ -80,7 +80,10 @@ export function hasOpenRouterStrictToolSupportRoute(model: {
 
   const modelId = typeof model.id === "string" ? model.id.trim().toLowerCase() : "";
   const exclusiveProvider = resolveExclusiveOpenRouterProvider(model);
-  if (exclusiveProvider === "openai" || exclusiveProvider === "azure") {
+  if (exclusiveProvider === "openai") {
+    return true;
+  }
+  if (exclusiveProvider === "azure" && modelId.startsWith("openai/")) {
     return true;
   }
   if (modelId.startsWith("openai/")) {
