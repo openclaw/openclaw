@@ -89,6 +89,7 @@ export function resolveAccount(
     incomingUrl: merged.incomingUrl ?? envIncomingUrl,
     nasHost: merged.nasHost ?? envNasHost,
     webhookPath: merged.webhookPath ?? "/webhook/synology",
+    dangerouslyAllowNameMatching: merged.dangerouslyAllowNameMatching ?? false,
     dmPolicy: merged.dmPolicy ?? "allowlist",
     allowedUserIds: parseAllowedUserIds(merged.allowedUserIds ?? envAllowedUserIds),
     rateLimitPerMinute: merged.rateLimitPerMinute ?? envRateLimitValue,

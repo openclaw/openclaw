@@ -107,6 +107,7 @@ describe("createSynologyChatPlugin", () => {
         incomingUrl: "u",
         nasHost: "h",
         webhookPath: "/w",
+        dangerouslyAllowNameMatching: false,
         dmPolicy: "allowlist" as const,
         allowedUserIds: ["user1"],
         rateLimitPerMinute: 30,
@@ -169,6 +170,13 @@ describe("createSynologyChatPlugin", () => {
       const account = makeSecurityAccount({ allowInsecureSsl: true });
       const warnings = plugin.security.collectWarnings({ account });
       expect(warnings.some((w: string) => w.includes("SSL"))).toBe(true);
+    });
+
+    it("warns when dangerous name matching is enabled", () => {
+      const plugin = createSynologyChatPlugin();
+      const account = makeSecurityAccount({ dangerouslyAllowNameMatching: true });
+      const warnings = plugin.security.collectWarnings({ account });
+      expect(warnings.some((w: string) => w.includes("dangerouslyAllowNameMatching"))).toBe(true);
     });
 
     it("warns when dmPolicy is open", () => {
