@@ -13,7 +13,7 @@ import type { TypingMode } from "../../config/types.js";
 import { resolveGatewaySessionStoreTarget } from "../../gateway/session-utils.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import type { TemplateContext } from "../templating.js";
-import type { GetReplyOptions } from "../types.js";
+import type { BlockReplyContext, GetReplyOptions } from "../types.js";
 import {
   enqueueFollowupRun,
   refreshQueuedFollowupSession,
@@ -28,7 +28,7 @@ type AgentRunParams = {
   onAssistantMessageStart?: () => Promise<void> | void;
   onReasoningStream?: (payload: { text?: string }) => Promise<void> | void;
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
-  onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
+  onToolResult?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
 };
 
@@ -662,9 +662,14 @@ describe("runReplyAgent typing (heartbeat)", () => {
       }
 
       if (testCase.shouldForward) {
-        expect(onToolResult).toHaveBeenCalledWith({
+        expect(onToolResult).toHaveBeenCalledTimes(1);
+        const [payload, context] = onToolResult.mock.calls[0] ?? [];
+        expect(payload).toEqual({
           text: testCase.toolText,
           mediaUrls: [],
+        });
+        expect(context).toMatchObject({
+          abortSignal: expect.any(AbortSignal),
         });
       } else {
         expect(onToolResult).not.toHaveBeenCalled();
@@ -694,7 +699,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
     await run();
 
-    expect(onToolResult).toHaveBeenCalledWith({
+    expect(onToolResult).toHaveBeenCalledTimes(1);
+    const [toolPayload, toolContext] = onToolResult.mock.calls[0] ?? [];
+    expect(toolPayload).toEqual({
       text: "Approval required.\n\n```txt\n/approve 117ba06d allow-once\n```",
       channelData: {
         execApproval: {
@@ -703,6 +710,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
           allowedDecisions: ["allow-once", "allow-always", "deny"],
         },
       },
+    });
+    expect(toolContext).toMatchObject({
+      abortSignal: expect.any(AbortSignal),
     });
   });
 

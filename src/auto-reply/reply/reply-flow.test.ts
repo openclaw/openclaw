@@ -1770,6 +1770,41 @@ describe("followup queue drain restart after idle window", () => {
     expect(calls[0]?.prompt).toBe("before-reset");
     expect(calls[1]?.prompt).toBe("after-reset");
   });
+
+  it("pauses queues created after reset cleanup begins until resumed", async () => {
+    const key = `test-pause-future-followups-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+
+    const { clearSessionQueues, resumeFollowupDrain } = await import("./queue.js");
+    clearSessionQueues([key], {
+      clearFollowups: false,
+      clearDrainCallbacks: false,
+      clearLanes: false,
+      pauseFollowups: true,
+    });
+
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "after-reset" }), settings);
+    scheduleFollowupDrain(key, runFollowup);
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(calls).toHaveLength(0);
+
+    resumeFollowupDrain(key);
+
+    await vi.waitFor(
+      () => {
+        expect(calls).toHaveLength(1);
+      },
+      { timeout: 1_000 },
+    );
+
+    expect(calls[0]?.prompt).toBe("after-reset");
+  });
 });
 
 const emptyCfg = {} as OpenClawConfig;

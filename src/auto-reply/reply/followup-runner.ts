@@ -27,6 +27,7 @@ import type { OriginatingChannelType } from "../templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
+import { runAbortableDelivery } from "./abortable-delivery.js";
 import { resolveRunAuthProfile } from "./agent-runner-utils.js";
 import {
   resolveOriginAccountId,
@@ -112,7 +113,14 @@ export function createFollowupRunner(params: {
    * session's current dispatcher. This ensures replies go back to
    * where the message originated.
    */
-  const sendFollowupPayloads = async (payloads: ReplyPayload[], queued: FollowupRun) => {
+  const sendFollowupPayloads = async (
+    payloads: ReplyPayload[],
+    queued: FollowupRun,
+    controls: {
+      isQueuedRunSuperseded: () => boolean;
+      shouldDropSupersededQueuedRun: () => boolean;
+    },
+  ) => {
     // Check if we should route to originating channel.
     const { originatingChannel, originatingTo } = queued;
     const shouldRouteToOriginating = isRoutableChannel(originatingChannel) && originatingTo;
@@ -123,6 +131,9 @@ export function createFollowupRunner(params: {
     }
 
     for (const payload of payloads) {
+      if (controls.shouldDropSupersededQueuedRun()) {
+        return;
+      }
       if (!payload || !hasOutboundReplyContent(payload)) {
         continue;
       }
@@ -133,39 +144,58 @@ export function createFollowupRunner(params: {
         continue;
       }
       await typingSignals.signalTextDelta(payload.text);
+      if (controls.shouldDropSupersededQueuedRun()) {
+        return;
+      }
 
       // Route to originating channel if set, otherwise fall back to dispatcher.
-      if (shouldRouteToOriginating) {
-        const result = await routeReply({
-          payload,
-          channel: originatingChannel,
-          to: originatingTo,
-          sessionKey: queued.run.sessionKey,
-          accountId: queued.originatingAccountId,
-          threadId: queued.originatingThreadId,
-          cfg: queued.run.config,
-        });
-        if (!result.ok) {
-          const errorMsg = result.error ?? "unknown error";
-          logVerbose(`followup queue: route-reply failed: ${errorMsg}`);
-          // Fall back to the caller-provided dispatcher only when the
-          // originating channel matches the session's message provider.
-          // In that case onBlockReply was created by the same channel's
-          // handler and delivers to the correct destination.  For true
-          // cross-channel routing (origin !== provider), falling back
-          // would send to the wrong channel, so we drop the payload.
-          const provider = resolveOriginMessageProvider({
-            provider: queued.run.messageProvider,
-          });
-          const origin = resolveOriginMessageProvider({
-            originatingChannel,
-          });
-          if (opts?.onBlockReply && origin && origin === provider) {
-            await opts.onBlockReply(payload);
+      const delivery = await runAbortableDelivery({
+        shouldAbort: controls.isQueuedRunSuperseded,
+        outerSignal: opts?.abortSignal,
+        run: async (abortSignal) => {
+          if (shouldRouteToOriginating) {
+            const result = await routeReply({
+              payload,
+              channel: originatingChannel,
+              to: originatingTo,
+              sessionKey: queued.run.sessionKey,
+              accountId: queued.originatingAccountId,
+              threadId: queued.originatingThreadId,
+              cfg: queued.run.config,
+              abortSignal,
+            });
+            if (!result.ok) {
+              if (abortSignal.aborted && controls.isQueuedRunSuperseded()) {
+                return;
+              }
+              const errorMsg = result.error ?? "unknown error";
+              logVerbose(`followup queue: route-reply failed: ${errorMsg}`);
+              // Fall back to the caller-provided dispatcher only when the
+              // originating channel matches the session's message provider.
+              // In that case onBlockReply was created by the same channel's
+              // handler and delivers to the correct destination.  For true
+              // cross-channel routing (origin !== provider), falling back
+              // would send to the wrong channel, so we drop the payload.
+              const provider = resolveOriginMessageProvider({
+                provider: queued.run.messageProvider,
+              });
+              const origin = resolveOriginMessageProvider({
+                originatingChannel,
+              });
+              if (opts?.onBlockReply && origin && origin === provider) {
+                await opts.onBlockReply(payload, { abortSignal });
+              }
+            }
+            return;
           }
-        }
-      } else if (opts?.onBlockReply) {
-        await opts.onBlockReply(payload);
+          if (opts?.onBlockReply) {
+            await opts.onBlockReply(payload, { abortSignal });
+          }
+        },
+      });
+      if (!delivery.completed) {
+        controls.shouldDropSupersededQueuedRun();
+        return;
       }
     }
   };
@@ -535,7 +565,10 @@ export function createFollowupRunner(params: {
       if (shouldDropSupersededQueuedRun()) {
         return;
       }
-      await sendFollowupPayloads(finalPayloads, queued);
+      await sendFollowupPayloads(finalPayloads, queued, {
+        isQueuedRunSuperseded,
+        shouldDropSupersededQueuedRun,
+      });
     } finally {
       // Both signals are required for the typing controller to clean up.
       // The main inbound dispatch path calls markDispatchIdle() from the

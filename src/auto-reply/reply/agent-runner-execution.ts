@@ -45,6 +45,7 @@ import {
   SILENT_REPLY_TOKEN,
 } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { runAbortableDelivery } from "./abortable-delivery.js";
 import {
   buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
@@ -550,11 +551,22 @@ export async function runAgentTurnWithFallback(params: {
                             if (params.shouldSuppressOutboundDelivery?.()) {
                               return;
                             }
-                            }
-                            await onToolResult({
-                              ...payload,
-                              text,
+                            const delivery = await runAbortableDelivery({
+                              shouldAbort: params.shouldSuppressOutboundDelivery ?? (() => false),
+                              outerSignal: params.opts?.abortSignal,
+                              run: async (abortSignal) => {
+                                await onToolResult(
+                                  {
+                                    ...payload,
+                                    text,
+                                  },
+                                  { abortSignal },
+                                );
+                              },
                             });
+                            if (!delivery.completed) {
+                              return;
+                            }
                           })
                           .catch((err) => {
                             // Keep chain healthy after an error so later tool results still deliver.

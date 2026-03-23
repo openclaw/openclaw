@@ -665,7 +665,7 @@ export async function dispatchReplyFromConfig(params: {
         ...params.replyOptions,
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
-        onToolResult: (payload: ReplyPayload) => {
+        onToolResult: (payload: ReplyPayload, context?: BlockReplyContext) => {
           const run = async () => {
             const ttsPayload = await maybeApplyTtsToPayload({
               payload,
@@ -680,7 +680,7 @@ export async function dispatchReplyFromConfig(params: {
               return;
             }
             if (shouldRouteToOriginating) {
-              await sendPayloadAsync(deliveryPayload, undefined, false);
+              await sendPayloadAsync(deliveryPayload, context?.abortSignal, false);
             } else {
               dispatcher.sendToolResult(deliveryPayload);
             }

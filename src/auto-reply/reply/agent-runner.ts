@@ -160,28 +160,15 @@ export async function runReplyAgent(params: {
   let activeSessionEntry = sessionEntry;
   const activeSessionStore = sessionStore;
   let activeIsNewSession = isNewSession;
-  const SESSION_ENTRY_RELOAD_THROTTLE_MS = 100;
-  let latestSessionEntryCheckedAt = 0;
-  let latestSessionEntryCache: SessionEntry | undefined;
   const loadLatestSessionEntry = () => {
-    const now = Date.now();
-    if (
-      latestSessionEntryCheckedAt > 0 &&
-      now - latestSessionEntryCheckedAt < SESSION_ENTRY_RELOAD_THROTTLE_MS
-    ) {
-      return latestSessionEntryCache;
-    }
-    latestSessionEntryCheckedAt = now;
     const latest = loadCanonicalLatestSessionEntry({
       sessionKey,
       storePath,
     });
     if (!latest.entry) {
-      latestSessionEntryCache = undefined;
       return undefined;
     }
     activeSessionEntry = latest.entry;
-    latestSessionEntryCache = latest.entry;
     cacheResolvedSessionEntry(activeSessionStore, latest.entry, [
       sessionKey ?? "",
       latest.canonicalKey ?? "",
