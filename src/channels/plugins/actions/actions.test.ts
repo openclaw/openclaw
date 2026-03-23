@@ -738,6 +738,37 @@ describe("telegramMessageActions", () => {
         }),
       },
       {
+        name: "media-only send preserves asDocument",
+        action: "send" as const,
+        params: {
+          to: "123",
+          media: "https://example.com/photo.jpg",
+          asDocument: true,
+        },
+        expectedPayload: expect.objectContaining({
+          action: "sendMessage",
+          to: "123",
+          media: "https://example.com/photo.jpg",
+          asDocument: true,
+        }),
+      },
+      {
+        name: "explicit forceDocument false beats asDocument alias",
+        action: "send" as const,
+        params: {
+          to: "123",
+          media: "https://example.com/photo.jpg",
+          forceDocument: false,
+          asDocument: true,
+        },
+        expectedPayload: expect.objectContaining({
+          action: "sendMessage",
+          to: "123",
+          media: "https://example.com/photo.jpg",
+          forceDocument: false,
+        }),
+      },
+      {
         name: "silent send forwards silent flag",
         action: "send" as const,
         params: {
