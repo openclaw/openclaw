@@ -170,6 +170,8 @@ describe("doctor matrix provider helpers", () => {
     // Config should have stale refs removed
     expect(result.config.plugins?.installs?.matrix).toBeUndefined();
     expect(result.config.plugins?.load?.paths).toEqual(["/other/path"]);
+    // Allowlist should have matrix removed but keep other entries
+    expect(result.config.plugins?.allow).toEqual(["other-plugin"]);
   });
 
   it("returns no changes when Matrix install path exists", async () => {
