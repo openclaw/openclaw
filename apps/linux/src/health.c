@@ -238,6 +238,68 @@ static GSubprocess *spawn_gateway_subprocess(const gchar *subcommand, GError **e
     return subprocess;
 }
 
+static void parse_health_json(const gchar *stdout_buf, HealthState *hs) {
+    g_autoptr(GError) error = NULL;
+    g_autoptr(JsonParser) parser = json_parser_new();
+    
+    if (!json_parser_load_from_data(parser, stdout_buf, -1, &error)) {
+        return;
+    }
+    
+    JsonNode *root = json_parser_get_root(parser);
+    if (!JSON_NODE_HOLDS_OBJECT(root)) {
+        return;
+    }
+
+    JsonObject *root_obj = json_node_get_object(root);
+    
+    if (json_object_has_member(root_obj, "service")) {
+        JsonObject *service_obj = json_object_get_object_member(root_obj, "service");
+        if (json_object_has_member(service_obj, "loaded")) {
+            hs->loaded = json_object_get_boolean_member(service_obj, "loaded");
+        }
+        if (json_object_has_member(service_obj, "configAudit")) {
+            JsonObject *config_audit = json_object_get_object_member(service_obj, "configAudit");
+            if (json_object_has_member(config_audit, "ok")) {
+                hs->config_audit_ok = json_object_get_boolean_member(config_audit, "ok");
+            }
+            if (json_object_has_member(config_audit, "issues")) {
+                JsonArray *issues = json_object_get_array_member(config_audit, "issues");
+                if (issues) {
+                    hs->config_issues_count = json_array_get_length(issues);
+                }
+            }
+        }
+    }
+    
+    if (json_object_has_member(root_obj, "rpc")) {
+        JsonObject *rpc_obj = json_object_get_object_member(root_obj, "rpc");
+        if (json_object_has_member(rpc_obj, "ok")) {
+            hs->rpc_ok = json_object_get_boolean_member(rpc_obj, "ok");
+        }
+    }
+    
+    if (json_object_has_member(root_obj, "health")) {
+        JsonObject *health_obj = json_object_get_object_member(root_obj, "health");
+        if (json_object_has_member(health_obj, "healthy")) {
+            hs->health_healthy = json_object_get_boolean_member(health_obj, "healthy");
+        }
+    }
+    
+    if (json_object_has_member(root_obj, "gateway")) {
+        JsonObject *gateway_obj = json_object_get_object_member(root_obj, "gateway");
+        if (json_object_has_member(gateway_obj, "bindHost")) {
+            hs->bind_host = g_strdup(json_object_get_string_member(gateway_obj, "bindHost"));
+        }
+        if (json_object_has_member(gateway_obj, "port")) {
+            hs->port = json_object_get_int_member(gateway_obj, "port");
+        }
+        if (json_object_has_member(gateway_obj, "probeUrl")) {
+            hs->probe_url = g_strdup(json_object_get_string_member(gateway_obj, "probeUrl"));
+        }
+    }
+}
+
 static void on_health_probe_finished(GObject *source_object, GAsyncResult *res, gpointer user_data) {
     guint64 launch_gen = 0;
     if (user_data) {
@@ -247,10 +309,6 @@ static void on_health_probe_finished(GObject *source_object, GAsyncResult *res, 
     
     GSubprocess *subprocess = G_SUBPROCESS(source_object);
     g_autoptr(GError) error = NULL;
-    // Declared before any goto to prevent __attribute__((cleanup)) from
-    // firing on an uninitialized garbage pointer when goto jumps past
-    // the assignment.  Initialized to NULL so cleanup is a safe no-op.
-    g_autoptr(JsonParser) parser = NULL;
     gchar *stdout_buf = NULL;
     gchar *stderr_buf = NULL;
     
@@ -264,83 +322,11 @@ static void on_health_probe_finished(GObject *source_object, GAsyncResult *res, 
         goto check_pending;
     }
     
-    if (error || !g_subprocess_get_if_exited(subprocess) || g_subprocess_get_exit_status(subprocess) != 0) {
-        HealthState hs = {0};
-        hs.last_updated = g_get_real_time();
-        state_update_health(&hs);
-        g_free(stdout_buf);
-        g_free(stderr_buf);
-        goto check_pending;
-    }
-    
-    parser = json_parser_new();
-    if (!json_parser_load_from_data(parser, stdout_buf, -1, &error)) {
-        HealthState hs = {0};
-        hs.last_updated = g_get_real_time();
-        state_update_health(&hs);
-        g_free(stdout_buf);
-        g_free(stderr_buf);
-        goto check_pending;
-    }
-    
-    JsonNode *root = json_parser_get_root(parser);
-    if (!JSON_NODE_HOLDS_OBJECT(root)) {
-        HealthState hs = {0};
-        hs.last_updated = g_get_real_time();
-        state_update_health(&hs);
-        g_free(stdout_buf);
-        g_free(stderr_buf);
-        goto check_pending;
-    }
-
-    JsonObject *root_obj = json_node_get_object(root);
     HealthState hs = {0};
     hs.last_updated = g_get_real_time();
     
-    if (json_object_has_member(root_obj, "service")) {
-        JsonObject *service_obj = json_object_get_object_member(root_obj, "service");
-        if (json_object_has_member(service_obj, "loaded")) {
-            hs.loaded = json_object_get_boolean_member(service_obj, "loaded");
-        }
-        if (json_object_has_member(service_obj, "configAudit")) {
-            JsonObject *config_audit = json_object_get_object_member(service_obj, "configAudit");
-            if (json_object_has_member(config_audit, "ok")) {
-                hs.config_audit_ok = json_object_get_boolean_member(config_audit, "ok");
-            }
-            if (json_object_has_member(config_audit, "issues")) {
-                JsonArray *issues = json_object_get_array_member(config_audit, "issues");
-                if (issues) {
-                    hs.config_issues_count = json_array_get_length(issues);
-                }
-            }
-        }
-    }
-    
-    if (json_object_has_member(root_obj, "rpc")) {
-        JsonObject *rpc_obj = json_object_get_object_member(root_obj, "rpc");
-        if (json_object_has_member(rpc_obj, "ok")) {
-            hs.rpc_ok = json_object_get_boolean_member(rpc_obj, "ok");
-        }
-    }
-    
-    if (json_object_has_member(root_obj, "health")) {
-        JsonObject *health_obj = json_object_get_object_member(root_obj, "health");
-        if (json_object_has_member(health_obj, "healthy")) {
-            hs.health_healthy = json_object_get_boolean_member(health_obj, "healthy");
-        }
-    }
-    
-    if (json_object_has_member(root_obj, "gateway")) {
-        JsonObject *gateway_obj = json_object_get_object_member(root_obj, "gateway");
-        if (json_object_has_member(gateway_obj, "bindHost")) {
-            hs.bind_host = g_strdup(json_object_get_string_member(gateway_obj, "bindHost"));
-        }
-        if (json_object_has_member(gateway_obj, "port")) {
-            hs.port = json_object_get_int_member(gateway_obj, "port");
-        }
-        if (json_object_has_member(gateway_obj, "probeUrl")) {
-            hs.probe_url = g_strdup(json_object_get_string_member(gateway_obj, "probeUrl"));
-        }
+    if (!error && g_subprocess_get_if_exited(subprocess) && g_subprocess_get_exit_status(subprocess) == 0) {
+        parse_health_json(stdout_buf, &hs);
     }
     
     state_update_health(&hs);
