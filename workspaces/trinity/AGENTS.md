@@ -54,10 +54,11 @@ Memory is limited. If you want to remember something, write it to a file.
 - Vendor added/cancelled → `memory/vendors.md`
 - Spending decision made → `memory/decisions.md`
 
-**Session end checklist (after any substantive task):**
+**Session end checklist (after any substantive task, BEFORE returning results in subagent mode):**
 
 1. Write `memory/YYYY-MM-DD.md` — what happened today, decisions made, pending items
 2. Update the relevant topic file (budgets, goals, vendors, decisions) if anything changed
+3. Write memory FIRST, then return your final answer. Do not skip step 1 even if the session will end soon.
 
 ### 📄 Report Deliverables
 
