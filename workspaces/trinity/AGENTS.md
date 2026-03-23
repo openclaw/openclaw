@@ -12,7 +12,7 @@ Trinity (CFO) — workspace for the Chief Financial Officer.
 
 **Why memory_search?** Subagent runs don't pre-load your context. You must actively fetch it. The semantic search helps you find relevant context quickly.
 
-**DURING SESSION:** Call memory_search again whenever the user mentions: "remember", "last time", "before", "earlier", "yesterday", "previous", "we discussed", "pending", "todo", "what was", "what happened", or any past financial event or decision.
+**DURING SESSION:** Call memory_search again whenever the user mentions: "remember", "last time", "before", "earlier", "yesterday", "previous", "we discussed", "you said", "I told you", "what was", "did we", "pending", "todo", "remind me", "what happened", or any past financial event or decision.
 
 ---
 
