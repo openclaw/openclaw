@@ -1,7 +1,7 @@
 {
-  "replies_today": 23,
-  "replies_this_hour": 57,
-  "last_reply_time": 1774220489.624437,
+  "replies_today": 34,
+  "replies_this_hour": 68,
+  "last_reply_time": 1774233084.6761842,
   "last_observe_time": 0,
   "replied_tweets": [
     "https://x.com/rocklambros/status/2035733282240045128",
@@ -32,7 +32,19 @@
     "https://x.com/VoltAgentAI/status/2035833043919753396",
     "https://x.com/creatorOSoffice/status/2035848338843590704",
     "https://x.com/VoltAgentAI/status/2035829196304285987",
-    "https://x.com/doublenickk/status/2035857425023066584"
+    "https://x.com/doublenickk/status/2035857425023066584",
+    "https://x.com/battyterm/status/2035833755726651683",
+    "https://x.com/Cordum_io/status/2035850004418769290",
+    "https://x.com/LeeLinAI123/status/2035854517191999890",
+    "https://x.com/aakashgupta/status/2035805431516246363",
+    "https://x.com/lidangzzz/status/2035870534534144132",
+    "https://x.com/show4653/status/2035880323335238055",
+    "https://x.com/Mikhailbox/status/2035861608178577792",
+    "https://x.com/Grand_Rooster/status/2035881358497624430",
+    "https://x.com/grok/status/2035865824016076861",
+    "https://x.com/SoludevTech/status/2035899603590287549",
+    "https://x.com/simonw/status/2035879637595947026",
+    "https://x.com/LeeLeepenkman/status/2035901767062524331"
   ],
   "quality_scores": [
     6.24,
@@ -57,7 +69,18 @@
     5.24,
     7.24,
     7.5,
-    7.0
+    7.0,
+    7.24,
+    7.24,
+    5.62,
+    7.42,
+    5.34,
+    7.42,
+    7.5,
+    7.24,
+    7.34,
+    7.24,
+    5.42
   ],
   "date": "2026-03-23"
 }
