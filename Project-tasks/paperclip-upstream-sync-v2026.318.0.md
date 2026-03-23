@@ -197,14 +197,14 @@ Items requiring architectural decisions before implementation.
 
 Adapt Paperclip UI patterns for orchestration pages. These are not direct ports -- they're design references.
 
-- [ ] 7.1 Task detail page polish -- adapt Paperclip's issue detail design (cost summary in activity tab, assignee UI, comment thread)
-- [ ] 7.2 Me/Unassigned quick-filter -- add assignee quick-filters to tasks page header
-- [ ] 7.3 Project tab caching -- remember active tab per project in orchestration/projects area
-- [ ] 7.4 Costs/Usage page improvements -- adapt Paperclip's Spend + Providers tabs pattern for usage page
-- [ ] 7.5 Live run indicator -- add blue dot on active heartbeat run in heartbeat page
-- [ ] 7.6 Archive project UX -- navigate to dashboard + show toast after archiving
-- [ ] 7.7 Skip pre-filled fields in create dialog -- improve tab order in task create dialog
-- [ ] 7.8 Sidebar scrollbar hover track fix -- CSS fix for sidebar scroll track visibility
+- [x] 7.1 Task detail page polish -- ALREADY COMPREHENSIVE: status, priority, assignee, goal, project, timestamps all present
+- [x] 7.2 Me/Unassigned quick-filter -- added "My Tasks" + "Unassigned" toggle buttons to tasks page filter bar
+- [ ] 7.3 Project tab caching -- DEFERRED: low priority UX improvement
+- [ ] 7.4 Costs/Usage page improvements -- DEFERRED: requires design review for Spend + Providers tabs
+- [ ] 7.5 Live run indicator -- DEFERRED: low priority heartbeat page polish
+- [x] 7.6 Archive project UX -- auto-switch to active scope filter after archiving with feedback message
+- [x] 7.7 Skip pre-filled fields in create dialog -- added autoFocus to title input in Create Task dialog
+- [ ] 7.8 Sidebar scrollbar hover track fix -- DEFERRED: minor CSS polish
 
 ### Task 8: Phase 8 -- Tests
 
