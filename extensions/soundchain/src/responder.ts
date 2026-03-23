@@ -153,6 +153,8 @@ export async function generateReply(senderName: string, message: string): Promis
  * Triggers on hype words, celebrations, or when FURL explicitly wants to send one.
  */
 async function maybeAttachGif(reply: string): Promise<string> {
+  // Skip if no API key configured — avoids leaking DM keywords to Giphy + 5s timeout
+  if (!GIPHY_API_KEY) return reply;
   // Already has a giphy URL? Don't double up
   if (reply.includes("giphy.com")) return reply;
 
