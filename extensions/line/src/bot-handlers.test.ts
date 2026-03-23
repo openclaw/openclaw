@@ -1,6 +1,6 @@
 import type { MessageEvent, PostbackEvent } from "@line/bot-sdk";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { LineAccountConfig } from "./types.js";
 
 // Avoid pulling in globals/pairing/media dependencies; this suite only asserts
@@ -209,18 +209,24 @@ async function startInflightReplayDuplicate(params: {
 }
 
 describe("handleLineWebhookEvents", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
     vi.resetModules();
+    buildLineMessageContextMock.mockReset();
+    buildLineMessageContextMock.mockImplementation(async () => ({
+      ctxPayload: { From: "line:group:group-1" },
+      replyToken: "reply-token",
+      route: { agentId: "default" },
+      isGroup: true,
+      accountId: "default",
+    }));
+    buildLinePostbackContextMock.mockReset();
+    buildLinePostbackContextMock.mockImplementation(async () => null as unknown);
+    readAllowFromStoreMock.mockReset();
+    readAllowFromStoreMock.mockImplementation(async () => [] as string[]);
+    upsertPairingRequestMock.mockReset();
+    upsertPairingRequestMock.mockImplementation(async () => ({ code: "CODE", created: true }));
     ({ handleLineWebhookEvents, createLineWebhookReplayCache } = await import("./bot-handlers.js"));
   });
-
-  beforeEach(() => {
-    buildLineMessageContextMock.mockReset().mockResolvedValue(buildDefaultLineMessageContext());
-    buildLinePostbackContextMock.mockReset().mockResolvedValue(null as unknown);
-    readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-    upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "CODE", created: true });
-  });
-
   it("blocks group messages when groupPolicy is disabled", async () => {
     const processMessage = vi.fn();
     const event = {

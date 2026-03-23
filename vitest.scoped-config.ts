@@ -64,12 +64,14 @@ export function createScopedVitestConfig(
     [...(baseTest.exclude ?? []), ...(options?.exclude ?? [])],
     scopedDir,
   );
+  const isolate = resolveVitestIsolation(options?.env);
 
   return defineConfig({
     ...base,
     test: {
       ...baseTest,
-      isolate: resolveVitestIsolation(options?.env),
+      isolate,
+      runner: "./test/non-isolated-runner.ts",
       ...(scopedDir ? { dir: scopedDir } : {}),
       include: relativizeScopedPatterns(include, scopedDir),
       exclude,
