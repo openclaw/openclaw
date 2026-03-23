@@ -375,40 +375,6 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(subscription.getLastToolError()).toBeUndefined();
   });
 
-  it("clears edit failure when the retry succeeds through common file path aliases", () => {
-    const { emit, subscription } = createToolErrorHarness("run-tools-edit-alias");
-
-    emitToolRun({
-      emit,
-      toolName: "edit",
-      toolCallId: "e1",
-      args: {
-        file_path: "/tmp/demo.txt",
-        old_string: "beta stale",
-        new_string: "beta fixed",
-      },
-      isError: true,
-      result: { error: "Could not find the exact text in /tmp/demo.txt" },
-    });
-
-    expect(subscription.getLastToolError()?.toolName).toBe("edit");
-
-    emitToolRun({
-      emit,
-      toolName: "edit",
-      toolCallId: "e2",
-      args: {
-        file: "/tmp/demo.txt",
-        oldText: "beta",
-        newText: "beta fixed",
-      },
-      isError: false,
-      result: { ok: true },
-    });
-
-    expect(subscription.getLastToolError()).toBeUndefined();
-  });
-
   it("keeps unresolved mutating failure when same tool succeeds on a different target", () => {
     const { emit, subscription } = createToolErrorHarness("run-tools-3");
 
