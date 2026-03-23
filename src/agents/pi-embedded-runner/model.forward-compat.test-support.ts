@@ -1,8 +1,4 @@
 import { expect } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
-import { resolveModel, resolveModelWithRegistry } from "./model.js";
-
-const AGENT_DIR = "/tmp/agent";
 
 export function buildForwardCompatTemplate(params: {
   id: string;
@@ -30,47 +26,32 @@ export function buildForwardCompatTemplate(params: {
   };
 }
 
-export function expectResolvedForwardCompatFallback(params: {
-  provider: string;
-  id: string;
+export function expectResolvedForwardCompatFallbackResult(params: {
+  result: {
+    error?: string;
+    model?: unknown;
+  };
   expectedModel: Record<string, unknown>;
-  cfg?: OpenClawConfig;
 }) {
-  const result = resolveModel(params.provider, params.id, AGENT_DIR, params.cfg);
-  expect(result.error).toBeUndefined();
-  expect(result.model).toMatchObject(params.expectedModel);
+  expect(params.result.error).toBeUndefined();
+  expect(params.result.model).toMatchObject(params.expectedModel);
 }
 
-export function expectResolvedForwardCompatFallbackWithRegistry(params: {
-  provider: string;
-  id: string;
+export function expectResolvedForwardCompatFallbackWithRegistryResult(params: {
+  result: unknown;
   expectedModel: Record<string, unknown>;
-  cfg?: OpenClawConfig;
-  registryEntries: readonly {
-    provider: string;
-    modelId: string;
-    model: unknown;
-  }[];
 }) {
-  const result = resolveModelWithRegistry({
-    provider: params.provider,
-    modelId: params.id,
-    cfg: params.cfg,
-    agentDir: AGENT_DIR,
-    modelRegistry: {
-      find(provider: string, modelId: string) {
-        const match = params.registryEntries.find(
-          (entry) => entry.provider === provider && entry.modelId === modelId,
-        );
-        return match?.model ?? null;
-      },
-    } as never,
-  });
-  expect(result).toMatchObject(params.expectedModel);
+  expect(params.result).toMatchObject(params.expectedModel);
 }
 
-export function expectUnknownModelError(provider: string, id: string) {
-  const result = resolveModel(provider, id, AGENT_DIR);
+export function expectUnknownModelErrorResult(
+  result: {
+    error?: string;
+    model?: unknown;
+  },
+  provider: string,
+  id: string,
+) {
   expect(result.model).toBeUndefined();
   expect(result.error).toBe(`Unknown model: ${provider}/${id}`);
 }
