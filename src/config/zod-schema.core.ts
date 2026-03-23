@@ -198,6 +198,7 @@ export const ModelCompatSchema = z
     thinkingFormat: z
       .union([
         z.literal("openai"),
+        z.literal("openrouter"),
         z.literal("zai"),
         z.literal("qwen"),
         z.literal("qwen-chat-template"),

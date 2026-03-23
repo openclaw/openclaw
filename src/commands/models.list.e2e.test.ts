@@ -32,39 +32,60 @@ const modelRegistryState = {
 };
 let previousExitCode: typeof process.exitCode;
 
-vi.mock("../config/config.js", () => ({
-  CONFIG_PATH: "/tmp/openclaw.json",
-  STATE_DIR: "/tmp/openclaw-state",
-  loadConfig,
-  readConfigFileSnapshotForWrite,
-  setRuntimeConfigSnapshot,
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    CONFIG_PATH: "/tmp/openclaw.json",
+    STATE_DIR: "/tmp/openclaw-state",
+    loadConfig,
+    readConfigFileSnapshotForWrite,
+    setRuntimeConfigSnapshot,
+  };
+});
 
-vi.mock("../agents/models-config.js", () => ({
-  ensureOpenClawModelsJson,
-}));
+vi.mock("../agents/models-config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/models-config.js")>();
+  return {
+    ...actual,
+    ensureOpenClawModelsJson,
+  };
+});
 
-vi.mock("../agents/agent-paths.js", () => ({
-  resolveOpenClawAgentDir,
-}));
+vi.mock("../agents/agent-paths.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/agent-paths.js")>();
+  return {
+    ...actual,
+    resolveOpenClawAgentDir,
+  };
+});
 
-vi.mock("../agents/auth-profiles.js", () => ({
-  ensureAuthProfileStore,
-  listProfilesForProvider,
-  resolveAuthProfileDisplayLabel,
-  resolveAuthStorePathForDisplay,
-  resolveProfileUnusableUntilForDisplay,
-}));
+vi.mock("../agents/auth-profiles.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/auth-profiles.js")>();
+  return {
+    ...actual,
+    ensureAuthProfileStore,
+    listProfilesForProvider,
+    resolveAuthProfileDisplayLabel,
+    resolveAuthStorePathForDisplay,
+    resolveProfileUnusableUntilForDisplay,
+  };
+});
 
-vi.mock("../agents/model-auth.js", () => ({
-  resolveEnvApiKey,
-  resolveAwsSdkEnvVarName,
-  hasUsableCustomProviderApiKey,
-  resolveUsableCustomProviderApiKey,
-  getCustomProviderApiKey,
-}));
+vi.mock("../agents/model-auth.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/model-auth.js")>();
+  return {
+    ...actual,
+    resolveEnvApiKey,
+    resolveAwsSdkEnvVarName,
+    hasUsableCustomProviderApiKey,
+    resolveUsableCustomProviderApiKey,
+    getCustomProviderApiKey,
+  };
+});
 
-vi.mock("../agents/pi-model-discovery.js", () => {
+vi.mock("../agents/pi-model-discovery.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/pi-model-discovery.js")>();
   class MockModelRegistry {
     find(provider: string, id: string) {
       return (
@@ -89,6 +110,7 @@ vi.mock("../agents/pi-model-discovery.js", () => {
   }
 
   return {
+    ...actual,
     discoverAuthStorage: () => ({}) as unknown,
     discoverModels: () => new MockModelRegistry() as unknown,
   };

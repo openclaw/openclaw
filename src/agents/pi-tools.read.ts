@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
 import {
@@ -10,6 +9,7 @@ import {
   readFileWithinRoot,
   writeFileWithinRoot,
 } from "../infra/fs-safe.js";
+import { trySafeFileURLToPath } from "../infra/local-file-access.js";
 // Lazy-load workspace lock manager to avoid startup memory overhead.
 let _withWorkspaceLock:
   | typeof import("../infra/workspace-lock-manager.js").withWorkspaceLock
@@ -526,22 +526,11 @@ function mapContainerPathToWorkspaceRoot(params: {
 
   let candidate = params.filePath.startsWith("@") ? params.filePath.slice(1) : params.filePath;
   if (/^file:\/\//i.test(candidate)) {
-    try {
-      candidate = fileURLToPath(candidate);
-    } catch {
-      try {
-        const parsed = new URL(candidate);
-        if (parsed.protocol !== "file:") {
-          return params.filePath;
-        }
-        candidate = decodeURIComponent(parsed.pathname || "");
-        if (!candidate.startsWith("/")) {
-          return params.filePath;
-        }
-      } catch {
-        return params.filePath;
-      }
+    const localFilePath = trySafeFileURLToPath(candidate);
+    if (!localFilePath) {
+      return params.filePath;
     }
+    candidate = localFilePath;
   }
 
   const posixCandidate = path.posix.normalize(candidate.replace(/\\/g, "/"));
