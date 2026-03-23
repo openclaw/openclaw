@@ -26,6 +26,7 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
+  AssistantMessageEventStream,
   Context,
   Message,
   StopReason,
@@ -69,10 +70,11 @@ interface WsSession {
 /** Module-level registry: sessionId → WsSession */
 const wsRegistry = new Map<string, WsSession>();
 
-type AssistantMessageEventStreamLike = AsyncIterable<AssistantMessageEvent> & {
+type AssistantMessageEventStreamLike = {
   push(event: AssistantMessageEvent): void;
   end(result?: AssistantMessage): void;
   result(): Promise<AssistantMessage>;
+  [Symbol.asyncIterator](): AsyncIterator<AssistantMessageEvent>;
 };
 
 class LocalAssistantMessageEventStream implements AssistantMessageEventStreamLike {
@@ -114,7 +116,7 @@ class LocalAssistantMessageEventStream implements AssistantMessageEventStreamLik
     }
     while (this.waiting.length > 0) {
       const waiter = this.waiting.shift();
-      waiter?.({ value: undefined as AssistantMessageEvent, done: true });
+      waiter?.({ value: undefined as unknown as AssistantMessageEvent, done: true });
     }
   }
 
@@ -142,10 +144,10 @@ class LocalAssistantMessageEventStream implements AssistantMessageEventStreamLik
   }
 }
 
-function createEventStream(): AssistantMessageEventStreamLike {
+function createEventStream(): AssistantMessageEventStream {
   return typeof createAssistantMessageEventStream === "function"
     ? createAssistantMessageEventStream()
-    : new LocalAssistantMessageEventStream();
+    : (new LocalAssistantMessageEventStream() as unknown as AssistantMessageEventStream);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
