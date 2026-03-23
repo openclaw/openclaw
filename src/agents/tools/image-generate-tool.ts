@@ -13,7 +13,7 @@ import type {
 import { getImageMetadata } from "../../media/image-ops.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
-import { PROVIDER_ENV_VARS } from "../../secrets/provider-env-vars.js";
+import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import { resolveUserPath } from "../../utils.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
@@ -108,7 +108,7 @@ const ImageGenerateToolSchema = Type.Object({
 });
 
 function getImageGenerationProviderAuthEnvVars(providerId: string): string[] {
-  return [...(PROVIDER_ENV_VARS[providerId] ?? [])];
+  return getProviderEnvVars(providerId);
 }
 
 function resolveImageGenerationModelCandidates(

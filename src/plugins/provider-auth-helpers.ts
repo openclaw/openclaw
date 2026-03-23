@@ -12,7 +12,7 @@ import {
   type SecretInput,
   type SecretRef,
 } from "../config/types.secrets.js";
-import { PROVIDER_ENV_VARS } from "../secrets/provider-env-vars.js";
+import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 
@@ -41,7 +41,7 @@ function parseEnvSecretRef(value: string): SecretRef | null {
 }
 
 function resolveProviderDefaultEnvSecretRef(provider: string): SecretRef {
-  const envVars = PROVIDER_ENV_VARS[provider];
+  const envVars = getProviderEnvVars(provider);
   const envVar = envVars?.find((candidate) => candidate.trim().length > 0);
   if (!envVar) {
     throw new Error(

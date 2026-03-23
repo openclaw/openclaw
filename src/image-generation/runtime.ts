@@ -7,7 +7,7 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { PROVIDER_ENV_VARS } from "../secrets/provider-env-vars.js";
+import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { getImageGenerationProvider, listImageGenerationProviders } from "./provider-registry.js";
 import type {
   GeneratedImageAsset,
@@ -108,7 +108,7 @@ function buildNoImageGenerationModelConfiguredMessage(cfg: OpenClawConfig): stri
     ({ id: "google", defaultModel: "gemini-3-pro-image-preview" } as const);
   const authHints = providers
     .flatMap((provider) => {
-      const envVars = PROVIDER_ENV_VARS[provider.id] ?? [];
+      const envVars = getProviderEnvVars(provider.id);
       if (envVars.length === 0) {
         return [];
       }
