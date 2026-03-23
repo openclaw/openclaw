@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { parseChatAllowTargetPrefixes } from "./target-parsing-helpers.js";
 import {
   formatIMessageChatTarget,
   isAllowedIMessageSender,
@@ -54,6 +55,19 @@ describe("imessage targets", () => {
     expect(normalizeIMessageHandle("CHATIDENT:foo")).toBe("chat_identifier:foo");
   });
 
+  it("parseChatAllowTargetPrefixes returns null for hex chat_id", () => {
+    // Allow-list parser must silently reject hex (no throw) so the entry
+    // is treated as an unrecognised handle rather than silently matching.
+    const result = parseChatAllowTargetPrefixes({
+      trimmed: "chat_id:2ecba0e20f3a4299b0efb228a5990731",
+      lower: "chat_id:2ecba0e20f3a4299b0efb228a5990731",
+      chatIdPrefixes: ["chat_id:", "chat:", "chatid:"],
+      chatGuidPrefixes: ["chat_guid:", "guid:"],
+      chatIdentifierPrefixes: ["chat_identifier:", "chatidentifier:", "chatident:"],
+    });
+    expect(result).toBeNull();
+  });
+
   it("rejects hex identifiers with chat_id prefix", () => {
     expect(() => parseIMessageTarget("chat_id:2ecba0e20f3a4299b0efb228a5990731")).toThrow(
       "Invalid chat_id: 2ecba0e20f3a4299b0efb228a5990731. Use chat_identifier: for hex identifiers.",
@@ -63,6 +77,17 @@ describe("imessage targets", () => {
   it("accepts numeric chat_id", () => {
     const target = parseIMessageTarget("chat_id:123");
     expect(target).toEqual({ kind: "chat_id", chatId: 123 });
+  });
+
+  it("does not match hex as chat_id in allowFrom (regression: parseInt truncation)", () => {
+    // Before fix: parseInt("2ecba0e20f3a4299b0efb228a5990731", 10) = 2,
+    // so a hex value in allowFrom would have wrongly matched chatId:2.
+    const ok = isAllowedIMessageSender({
+      allowFrom: ["chat_id:2ecba0e20f3a4299b0efb228a5990731"],
+      sender: "+1555",
+      chatId: 2,
+    });
+    expect(ok).toBe(false);
   });
 
   it("checks allowFrom against chat_id", () => {
