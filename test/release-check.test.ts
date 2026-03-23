@@ -3,6 +3,7 @@ import {
   collectAppcastSparkleVersionErrors,
   collectBundledExtensionManifestErrors,
   collectForbiddenPackPaths,
+  collectMissingPackPaths,
   collectPackUnpackedSizeErrors,
 } from "../scripts/release-check.ts";
 
@@ -65,6 +66,34 @@ describe("collectForbiddenPackPaths", () => {
         "node_modules/.bin/openclaw",
       ]),
     ).toEqual(["extensions/tlon/node_modules/.bin/tlon", "node_modules/.bin/openclaw"]);
+  });
+});
+
+describe("collectMissingPackPaths", () => {
+  it("requires control-ui entrypoint and hashed assets in the npm pack", () => {
+    expect(
+      collectMissingPackPaths([
+        "dist/index.js",
+        "dist/entry.js",
+        "dist/plugin-sdk/root-alias.cjs",
+        "dist/build-info.json",
+      ]),
+    ).toEqual(
+      expect.arrayContaining(["dist/control-ui/index.html", "dist/control-ui/assets/*"]),
+    );
+  });
+
+  it("accepts packs that include control-ui index.html plus at least one built asset", () => {
+    expect(
+      collectMissingPackPaths([
+        "dist/index.js",
+        "dist/entry.js",
+        "dist/plugin-sdk/root-alias.cjs",
+        "dist/build-info.json",
+        "dist/control-ui/index.html",
+        "dist/control-ui/assets/app-abc123.js",
+      ]),
+    ).not.toContain("dist/control-ui/index.html");
   });
 });
 

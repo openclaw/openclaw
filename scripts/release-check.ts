@@ -23,7 +23,9 @@ const requiredPathGroups = [
   ...listPluginSdkDistArtifacts(),
   "dist/plugin-sdk/root-alias.cjs",
   "dist/build-info.json",
+  "dist/control-ui/index.html",
 ];
+const requiredPathPrefixes = ["dist/control-ui/assets/"];
 const forbiddenPrefixes = ["dist-runtime/", "dist/OpenClaw.app/"];
 // 2026.3.12 ballooned to ~213.6 MiB unpacked and correlated with low-memory
 // startup/doctor OOM reports. Keep enough headroom for the current pack while
@@ -129,6 +131,26 @@ export function collectPackUnpackedSizeErrors(results: Iterable<PackResult>): st
   }
 
   return errors;
+}
+
+export function collectMissingPackPaths(paths: Iterable<string>): string[] {
+  const presentPaths = new Set(paths);
+  const missing = requiredPathGroups
+    .flatMap((group) => {
+      if (Array.isArray(group)) {
+        return group.some((path) => presentPaths.has(path)) ? [] : [group.join(" or ")];
+      }
+      return presentPaths.has(group) ? [] : [group];
+    })
+    .toSorted();
+
+  for (const prefix of requiredPathPrefixes) {
+    if (![...presentPaths].some((path) => path.startsWith(prefix))) {
+      missing.push(`${prefix}*`);
+    }
+  }
+
+  return missing.toSorted();
 }
 
 function extractTag(item: string, tag: string): string | null {
@@ -294,14 +316,7 @@ async function main() {
   const files = results.flatMap((entry) => entry.files ?? []);
   const paths = new Set(files.map((file) => file.path));
 
-  const missing = requiredPathGroups
-    .flatMap((group) => {
-      if (Array.isArray(group)) {
-        return group.some((path) => paths.has(path)) ? [] : [group.join(" or ")];
-      }
-      return paths.has(group) ? [] : [group];
-    })
-    .toSorted();
+  const missing = collectMissingPackPaths(paths);
   const forbidden = collectForbiddenPackPaths(paths);
   const sizeErrors = collectPackUnpackedSizeErrors(results);
 
