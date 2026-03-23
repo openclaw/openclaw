@@ -34,7 +34,7 @@ describe("phase hooks merger", () => {
   });
 
   it("before_model_resolve keeps higher-priority override values", async () => {
-    addTypedHook(registry, "before_model_resolve", "low", () => ({ modelOverride: "gpt-4o" }), 1);
+    addTypedHook(registry, "before_model_resolve", "low", () => ({ modelOverride: "gpt-5.4" }), 1);
     addTypedHook(
       registry,
       "before_model_resolve",

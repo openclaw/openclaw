@@ -9,7 +9,7 @@ const createMockConfig = () => ({
   session: { mainKey: "main", scope: "per-sender" },
   agents: {
     defaults: {
-      model: { primary: "anthropic/claude-opus-4-5" },
+      model: { primary: "openai/gpt-5.4" },
       models: {},
     },
   },
@@ -64,15 +64,15 @@ vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: async () => [
     {
       provider: "anthropic",
-      id: "claude-opus-4-5",
-      name: "Opus",
+      id: "claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6",
       contextWindow: 200000,
     },
     {
-      provider: "anthropic",
-      id: "claude-sonnet-4-5",
-      name: "Sonnet",
-      contextWindow: 200000,
+      provider: "openai",
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      contextWindow: 400000,
     },
   ],
 }));
@@ -124,7 +124,7 @@ function installSandboxedSessionStatusConfig() {
     },
     agents: {
       defaults: {
-        model: { primary: "anthropic/claude-opus-4-5" },
+        model: { primary: "openai/gpt-5.4" },
         models: {},
         sandbox: { sessionToolsVisibility: "spawned" },
       },
@@ -304,8 +304,8 @@ describe("session_status tool", () => {
       "agent:main:subagent:child": {
         sessionId: "s-child",
         updatedAt: 20,
-        providerOverride: "anthropic",
-        modelOverride: "claude-opus-4-5",
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
       },
     });
 
@@ -313,7 +313,7 @@ describe("session_status tool", () => {
 
     const result = await tool.execute("call-current-subagent", {
       sessionKey: "current",
-      model: "anthropic/claude-sonnet-4-5",
+      model: "anthropic/claude-sonnet-4-6",
     });
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
@@ -322,7 +322,7 @@ describe("session_status tool", () => {
       "/tmp/main/sessions.json",
       expect.objectContaining({
         "agent:main:subagent:child": expect.objectContaining({
-          modelOverride: "claude-sonnet-4-5",
+          modelOverride: "claude-sonnet-4-6",
         }),
       }),
     );
@@ -422,7 +422,7 @@ describe("session_status tool", () => {
     await expect(
       tool.execute("call6", {
         sessionKey: "agent:main:main",
-        model: "anthropic/claude-sonnet-4-5",
+        model: "anthropic/claude-sonnet-4-6",
       }),
     ).rejects.toThrow(expectedError);
 
@@ -515,7 +515,7 @@ describe("session_status tool", () => {
         sessionId: "s1",
         updatedAt: 10,
         providerOverride: "anthropic",
-        modelOverride: "claude-sonnet-4-5",
+        modelOverride: "claude-sonnet-4-6",
         authProfileOverride: "p1",
       },
     });
