@@ -55,6 +55,7 @@ import {
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
+import { registerSubagentRun } from "./subagent-registry.js";
 
 const log = createSubsystemLogger("agents/acp-spawn");
 
@@ -911,6 +912,23 @@ export async function spawnAcpDirect(
         emitStartNotice: false,
       });
     }
+    try {
+      registerSubagentRun({
+        runId: childRunId,
+        childSessionKey: sessionKey,
+        controllerSessionKey: requesterInternalKey,
+        requesterSessionKey: requesterInternalKey,
+        requesterOrigin,
+        requesterDisplayKey: parentSessionKey,
+        task: params.task,
+        cleanup: "keep",
+        label: params.label || undefined,
+        workspaceDir: resolveAcpSessionCwd(initialized.meta) || params.cwd || undefined,
+        runTimeoutSeconds: 0,
+        expectsCompletionMessage: true,
+        spawnMode,
+      });
+    } catch {}
     parentRelay?.notifyStarted();
     return {
       status: "accepted",

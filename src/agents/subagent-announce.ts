@@ -9,6 +9,7 @@ import {
   resolveStorePath,
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
+import { loadSessionEntry, readSessionMessages } from "../gateway/session-utils.js";
 import { createBoundDeliveryRouter } from "../infra/outbound/bound-delivery-router.js";
 import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
@@ -383,21 +384,46 @@ function selectSubagentOutputText(
   return snapshot.latestRawText;
 }
 
+function readSubagentOutputFromTranscript(
+  sessionKey: string,
+  outcome?: SubagentRunOutcome,
+): string | undefined {
+  try {
+    const { storePath, entry } = loadSessionEntry(sessionKey);
+    const sessionId = entry?.sessionId?.trim();
+    if (!sessionId) {
+      return undefined;
+    }
+    const messages = readSessionMessages(sessionId, storePath, entry.sessionFile);
+    const selected = selectSubagentOutputText(summarizeSubagentOutputHistory(messages), outcome);
+    return selected?.trim() ? selected : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function readSubagentOutput(
   sessionKey: string,
   outcome?: SubagentRunOutcome,
 ): Promise<string | undefined> {
-  const history = await callGateway<{ messages?: Array<unknown> }>({
-    method: "chat.history",
-    params: { sessionKey, limit: 100 },
-  });
-  const messages = Array.isArray(history?.messages) ? history.messages : [];
-  const selected = selectSubagentOutputText(summarizeSubagentOutputHistory(messages), outcome);
-  if (selected?.trim()) {
-    return selected;
-  }
-  const latestAssistant = await readLatestAssistantReply({ sessionKey, limit: 100 });
-  return latestAssistant?.trim() ? latestAssistant : undefined;
+  try {
+    const history = await callGateway<{ messages?: Array<unknown> }>({
+      method: "chat.history",
+      params: { sessionKey, limit: 100 },
+    });
+    const messages = Array.isArray(history?.messages) ? history.messages : [];
+    const selected = selectSubagentOutputText(summarizeSubagentOutputHistory(messages), outcome);
+    if (selected?.trim()) {
+      return selected;
+    }
+  } catch {}
+  try {
+    const latestAssistant = await readLatestAssistantReply({ sessionKey, limit: 100 });
+    if (latestAssistant?.trim()) {
+      return latestAssistant;
+    }
+  } catch {}
+  return readSubagentOutputFromTranscript(sessionKey, outcome);
 }
 
 async function readLatestSubagentOutputWithRetry(params: {

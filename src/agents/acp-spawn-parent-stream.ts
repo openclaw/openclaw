@@ -2,7 +2,13 @@ import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
+import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import {
+  completeSubagentRun,
+  SUBAGENT_ENDED_REASON_COMPLETE,
+  SUBAGENT_ENDED_REASON_ERROR,
+} from "./subagent-registry.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
@@ -246,6 +252,77 @@ export function startAcpSpawnParentStreamRelay(params: {
     flushTimer.unref?.();
   };
 
+  const finalizeCompletedRelay = async (wait: {
+    status?: string;
+    error?: string;
+    startedAt?: number;
+    endedAt?: number;
+  }): Promise<boolean> => {
+    const startedAt = toFiniteNumber(wait.startedAt);
+    const endedAt = toFiniteNumber(wait.endedAt) ?? Date.now();
+    flushPending();
+    if (wait.status === "error") {
+      const errorText = toTrimmedString(wait.error);
+      if (errorText) {
+        emit(`${relayLabel} run failed: ${errorText}`, `${contextPrefix}:error`);
+      } else {
+        emit(`${relayLabel} run failed.`, `${contextPrefix}:error`);
+      }
+      await completeSubagentRun({
+        runId,
+        endedAt,
+        outcome: { status: "error", error: errorText },
+        reason: SUBAGENT_ENDED_REASON_ERROR,
+        sendFarewell: true,
+        triggerCleanup: true,
+      });
+      dispose();
+      return true;
+    }
+    const durationMs =
+      startedAt != null && endedAt >= startedAt ? endedAt - startedAt : undefined;
+    if (durationMs != null) {
+      emit(
+        `${relayLabel} run completed in ${Math.max(1, Math.round(durationMs / 1000))}s.`,
+        `${contextPrefix}:done`,
+      );
+    } else {
+      emit(`${relayLabel} run completed.`, `${contextPrefix}:done`);
+    }
+    await completeSubagentRun({
+      runId,
+      endedAt,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      sendFarewell: true,
+      triggerCleanup: true,
+    });
+    dispose();
+    return true;
+  };
+
+  const probeForCompletedRelay = async (timeoutMs = 1): Promise<boolean> => {
+    try {
+      const wait = await callGateway<{
+        status?: string;
+        error?: string;
+        startedAt?: number;
+        endedAt?: number;
+      }>({
+        method: "agent.wait",
+        params: {
+          runId,
+          timeoutMs: Math.max(1, Math.floor(timeoutMs)),
+        },
+        timeoutMs: Math.max(1_500, Math.floor(timeoutMs) + 1_000),
+      });
+      if (wait?.status === "ok" || wait?.status === "error") {
+        return await finalizeCompletedRelay(wait);
+      }
+    } catch {}
+    return false;
+  };
+
   const noOutputWatcherTimer = setInterval(() => {
     if (disposed || noOutputNoticeMs <= 0) {
       return;
@@ -256,11 +333,16 @@ export function startAcpSpawnParentStreamRelay(params: {
     if (Date.now() - lastProgressAt < noOutputNoticeMs) {
       return;
     }
-    stallNotified = true;
-    emit(
-      `${relayLabel} has produced no output for ${Math.round(noOutputNoticeMs / 1000)}s. It may be waiting for interactive input.`,
-      `${contextPrefix}:stall`,
-    );
+    void probeForCompletedRelay().then((completed) => {
+      if (disposed || completed || stallNotified) {
+        return;
+      }
+      stallNotified = true;
+      emit(
+        `${relayLabel} has produced no output for ${Math.round(noOutputNoticeMs / 1000)}s. It may be waiting for interactive input.`,
+        `${contextPrefix}:stall`,
+      );
+    });
   }, noOutputPollMs);
   noOutputWatcherTimer.unref?.();
 
@@ -268,11 +350,16 @@ export function startAcpSpawnParentStreamRelay(params: {
     if (disposed) {
       return;
     }
-    emit(
-      `${relayLabel} stream relay timed out after ${Math.max(1, Math.round(maxRelayLifetimeMs / 1000))}s without completion.`,
-      `${contextPrefix}:timeout`,
-    );
-    dispose();
+    void probeForCompletedRelay(250).then((completed) => {
+      if (disposed || completed) {
+        return;
+      }
+      emit(
+        `${relayLabel} stream relay timed out after ${Math.max(1, Math.round(maxRelayLifetimeMs / 1000))}s without completion.`,
+        `${contextPrefix}:timeout`,
+      );
+      dispose();
+    });
   }, maxRelayLifetimeMs);
   relayLifetimeTimer.unref?.();
 
