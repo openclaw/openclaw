@@ -8,11 +8,28 @@ import { optionalBundledClusterSet } from "./lib/optional-bundled-clusters.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const srcRoot = path.join(repoRoot, "src");
+const extensionsRoot = path.join(repoRoot, "extensions");
+const testRoot = path.join(repoRoot, "test");
 const workspacePackagePaths = ["ui/package.json"];
 const compareStrings = (left, right) => left.localeCompare(right);
+const HELP_TEXT = `Usage: node scripts/audit-seams.mjs [--help]
+
+Audit repo seam inventory and emit JSON to stdout.
+
+Sections:
+  duplicatedSeamFamilies       Plugin SDK seam families imported from multiple production files
+  overlapFiles                 Production files that touch multiple seam families
+  optionalClusterStaticLeaks   Optional extension/plugin clusters referenced from the static graph
+  missingPackages              Workspace packages whose deps are not mirrored at the root
+  seamTestInventory            High-signal seam candidates with nearby-test gap signals
+
+Notes:
+  - Output is JSON only.
+  - For clean redirected JSON through package scripts, prefer:
+      pnpm --silent audit:seams > seam-inventory.json
+`;
 
 async function collectWorkspacePackagePaths() {
-  const extensionsRoot = path.join(repoRoot, "extensions");
   const entries = await fs.readdir(extensionsRoot, { withFileTypes: true });
   for (const entry of entries) {
     if (entry.isDirectory()) {
@@ -59,6 +76,41 @@ async function walkCodeFiles(rootDir) {
       out.push(fullPath);
     }
   }
+  await walk(rootDir);
+  return out.toSorted((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
+}
+
+async function walkAllCodeFiles(rootDir, options = {}) {
+  const out = [];
+  const includeTests = options.includeTests === true;
+
+  async function walk(dir) {
+    let entries = [];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name === "dist" || entry.name === "node_modules") {
+        continue;
+      }
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(fullPath);
+        continue;
+      }
+      if (!entry.isFile() || !isCodeFile(entry.name)) {
+        continue;
+      }
+      const relativePath = normalizePath(fullPath);
+      if (!includeTests && !isProductionLikeFile(relativePath)) {
+        continue;
+      }
+      out.push(fullPath);
+    }
+  }
+
   await walk(rootDir);
   return out.toSorted((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
 }
@@ -429,6 +481,156 @@ async function buildMissingPackages() {
   });
 }
 
+function stemFromRelativePath(relativePath) {
+  return relativePath.replace(/\.(m|c)?[jt]sx?$/, "");
+}
+
+function describeSeamKinds(relativePath, source) {
+  const seamKinds = [];
+  if (
+    relativePath.startsWith("src/agents/tools/") &&
+    /details\s*:\s*{[\s\S]*\bmedia\b\s*:/.test(source)
+  ) {
+    seamKinds.push("tool-result-media");
+  }
+  if (
+    /reply-delivery|reply-delivery\.ts|reply\/.*delivery|outbound\/deliver|outbound\/message/.test(
+      relativePath,
+    ) &&
+    /\bmediaUrl\b|\bmediaUrls\b|resolveSendableOutboundReplyParts/.test(source)
+  ) {
+    seamKinds.push("reply-delivery-media");
+  }
+  if (
+    relativePath.startsWith("extensions/") &&
+    /(outbound-adapter|reply-delivery|send|delivery|messenger)\.ts$/.test(relativePath) &&
+    /\bmediaUrl\b|\bmediaUrls\b|filename|audioAsVoice/.test(source)
+  ) {
+    seamKinds.push("channel-media-adapter");
+  }
+  if (
+    /blockStreamingEnabled|directlySentBlockKeys|resolveSendableOutboundReplyParts/.test(source) &&
+    /\bmediaUrl\b|\bmediaUrls\b/.test(source)
+  ) {
+    seamKinds.push("streaming-media-handoff");
+  }
+  return [...new Set(seamKinds)].toSorted(compareStrings);
+}
+
+function buildTestIndex(testFiles) {
+  return testFiles.map((filePath) => {
+    const relativePath = normalizePath(filePath);
+    const stem = stemFromRelativePath(relativePath)
+      .replace(/\.test$/, "")
+      .replace(/\.spec$/, "");
+    const baseName = path.basename(stem);
+    return {
+      filePath,
+      relativePath,
+      stem,
+      baseName,
+    };
+  });
+}
+
+function findRelatedTests(relativePath, testIndex, source) {
+  const stem = stemFromRelativePath(relativePath);
+  const baseName = path.basename(stem);
+  const dirName = path.dirname(relativePath);
+  const normalizedDir = dirName.split(path.sep).join("/");
+  const pathSuffix = `${normalizedDir}/${baseName}`;
+
+  const matches = testIndex.filter((entry) => {
+    if (entry.stem === stem) {
+      return true;
+    }
+    if (entry.relativePath.includes(pathSuffix)) {
+      return true;
+    }
+    const entryDir = path.dirname(entry.relativePath).split(path.sep).join("/");
+    if (entryDir === normalizedDir && entry.baseName.includes(baseName)) {
+      return true;
+    }
+    return (
+      baseName.length >= 12 && source.includes(baseName) && entry.relativePath.includes(baseName)
+    );
+  });
+
+  return [...new Set(matches.map((entry) => entry.relativePath))].toSorted(compareStrings);
+}
+
+function determineSeamTestStatus(seamKinds, relatedTests) {
+  if (relatedTests.length === 0) {
+    return {
+      status: "gap",
+      reason: "No nearby test file references this seam candidate.",
+    };
+  }
+  if (
+    seamKinds.includes("reply-delivery-media") ||
+    seamKinds.includes("streaming-media-handoff") ||
+    seamKinds.includes("tool-result-media")
+  ) {
+    return {
+      status: "partial",
+      reason:
+        "Nearby tests exist, but this inventory does not prove cross-layer seam coverage end to end.",
+    };
+  }
+  return {
+    status: "covered-nearby",
+    reason: "Nearby test files exist for this seam candidate.",
+  };
+}
+
+async function buildSeamTestInventory() {
+  const productionFiles = [
+    ...(await walkCodeFiles(srcRoot)),
+    ...(await walkCodeFiles(extensionsRoot)),
+  ].toSorted((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
+  const testFiles = [
+    ...(await walkAllCodeFiles(srcRoot, { includeTests: true })),
+    ...(await walkAllCodeFiles(extensionsRoot, { includeTests: true })),
+    ...(await walkAllCodeFiles(testRoot, { includeTests: true })),
+  ]
+    .filter((filePath) => /\.(test|spec)\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(filePath))
+    .toSorted((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
+  const testIndex = buildTestIndex(testFiles);
+  const inventory = [];
+
+  for (const filePath of productionFiles) {
+    const relativePath = normalizePath(filePath);
+    const source = await fs.readFile(filePath, "utf8");
+    const seamKinds = describeSeamKinds(relativePath, source);
+    if (seamKinds.length === 0) {
+      continue;
+    }
+    const relatedTests = findRelatedTests(relativePath, testIndex, source);
+    const status = determineSeamTestStatus(seamKinds, relatedTests);
+    inventory.push({
+      file: relativePath,
+      seamKinds,
+      relatedTests,
+      status: status.status,
+      reason: status.reason,
+    });
+  }
+
+  return inventory.toSorted((left, right) => {
+    return (
+      left.status.localeCompare(right.status) ||
+      left.file.localeCompare(right.file) ||
+      left.seamKinds.join(",").localeCompare(right.seamKinds.join(","))
+    );
+  });
+}
+
+const args = new Set(process.argv.slice(2));
+if (args.has("--help") || args.has("-h")) {
+  process.stdout.write(`${HELP_TEXT}\n`);
+  process.exit(0);
+}
+
 await collectWorkspacePackagePaths();
 const inventory = await collectCorePluginSdkImports();
 const optionalClusterStaticLeaks = await collectOptionalClusterStaticLeaks();
@@ -437,6 +639,7 @@ const result = {
   overlapFiles: buildOverlapFiles(inventory),
   optionalClusterStaticLeaks: buildOptionalClusterStaticLeaks(optionalClusterStaticLeaks),
   missingPackages: await buildMissingPackages(),
+  seamTestInventory: await buildSeamTestInventory(),
 };
 
 process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
