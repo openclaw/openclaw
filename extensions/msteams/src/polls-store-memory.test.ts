@@ -58,6 +58,8 @@ describe("createMSTeamsPollStoreMemory", () => {
       }),
     );
 
-    await expect(store.recordVote({ pollId: "missing", voterId: "nobody", selections: ["x"] })).resolves.toBeNull();
+    await expect(
+      store.recordVote({ pollId: "missing", voterId: "nobody", selections: ["x"] }),
+    ).resolves.toBeNull();
   });
 });
