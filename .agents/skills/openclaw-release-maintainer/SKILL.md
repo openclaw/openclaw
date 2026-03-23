@@ -37,7 +37,15 @@ Use this skill for release and publish-time workflow. Keep ordinary development 
 - For fallback correction tags like `vYYYY.M.D-N`, the repo version locations still stay at `YYYY.M.D`.
 - “Bump version everywhere” means all version locations above except `appcast.xml`.
 - Release signing and notary credentials live outside the repo in the private maintainer docs.
+- Every OpenClaw release ships the npm package and macOS app together.
 - The production Sparkle feed lives at `https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml`, and the canonical published file is `appcast.xml` on `main` in the `openclaw` repo.
+- That shared production Sparkle feed is stable-only. Beta mac releases may
+  upload assets to the GitHub prerelease, but they must not replace the shared
+  `appcast.xml` unless a separate beta feed exists.
+- For fallback correction tags like `vYYYY.M.D-N`, the repo version still stays
+  at `YYYY.M.D`, but the mac release must use a strictly higher numeric
+  `APP_BUILD` / Sparkle build than the original release so existing installs
+  see it as newer.
 
 ## Build changelog-backed release notes
 
@@ -80,6 +88,15 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
 - Include mac release readiness in preflight by running or inspecting the mac
   packaging, notarization, and appcast flow for every release.
 - Treat the `appcast.xml` update on `main` as part of mac release readiness, not an optional follow-up.
+- Preflight must capture the exact tested release SHA. Publish must use that
+  same SHA, or fail if the tag no longer points to it.
+- Any fix after preflight means a new commit and a new tested SHA. Delete and
+  recreate the tag and matching GitHub release from the fixed commit, then rerun
+  preflight from scratch.
+- For stable mac releases, generate the signed `appcast.xml` before uploading
+  public release assets so the updater feed cannot lag the published binaries.
+- Serialize stable appcast-producing runs across tags so two releases do not
+  generate replacement `appcast.xml` files from the same stale seed.
 - For stable releases, confirm the latest beta already passed the broader release workflows before cutting stable.
 - If any required build, packaging step, or release workflow is red, do not say the release is ready.
 
@@ -91,12 +108,16 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
   validation/build steps without entering the gated publish job.
 - npm preflight and macOS preflight must both pass before any publish run
   starts.
+- Both publish jobs should consume the preflight-tested SHA, not a fresh tag
+  lookup on a later runner.
 - The `npm-release` environment must be approved by `@openclaw/openclaw-release-managers` before publish continues.
 - Mac publish uses `.github/workflows/macos-release.yml` for build, signing,
   notarization, release-asset upload, and signed `appcast.xml` artifact
   generation.
 - The agent must download the signed `appcast.xml` artifact from the successful
   mac workflow and then update `appcast.xml` on `main`.
+- For beta mac releases, do not update the shared production `appcast.xml`
+  unless a separate beta Sparkle feed exists.
 - `.github/workflows/macos-release.yml` still requires the `mac-release`
   environment approval.
 - Do not use `NPM_TOKEN` or the plugin OTP flow for OpenClaw releases.
@@ -109,26 +130,30 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
 2. Choose the exact target version and git tag.
 3. Make every repo version location match that tag before creating it.
 4. Update `CHANGELOG.md` and assemble the matching GitHub release notes.
-5. Run the full preflight for all relevant release builds, including mac readiness when applicable.
+5. Run the full preflight for all relevant release builds, including mac readiness.
 6. Confirm the target npm version is not already published.
 7. Create and push the git tag.
 8. Create or refresh the matching GitHub release.
 9. Start `.github/workflows/openclaw-npm-release.yml` with `preflight_only=true`
-   and wait for it to pass.
+   and wait for it to pass, capturing the tested release SHA.
 10. Start `.github/workflows/macos-release.yml` with `preflight_only=true` and
-    wait for it to pass.
+    wait for it to pass, capturing the tested release SHA.
 11. If either preflight fails, fix the issue on a new commit, delete the tag
-    and matching GitHub release, recreate them from the commit that passes, and
-    rerun both preflights before continuing.
+    and matching GitHub release, recreate them from the fixed commit, and rerun
+    both preflights from scratch before continuing. Never reuse old preflight
+    results after the commit changes.
 12. Start `.github/workflows/openclaw-npm-release.yml` with the same tag for
-    the real publish.
+    the real publish, pinned to the preflight-tested SHA.
 13. Wait for `npm-release` approval from `@openclaw/openclaw-release-managers`.
 14. Start `.github/workflows/macos-release.yml` for the real publish and wait
-    for `mac-release` approval and success.
-15. After the mac workflow succeeds, download the signed `appcast.xml`
-    artifact from that run, update `appcast.xml` on `main`, and verify the
+    for `mac-release` approval and success, pinned to the preflight-tested SHA.
+15. For stable releases, generate the signed `appcast.xml` before the public
+    mac assets are uploaded, then download the signed `appcast.xml` artifact
+    from the successful mac run, update `appcast.xml` on `main`, and verify the
     feed.
-16. After publish, verify npm and any attached release artifacts.
+16. For beta releases, publish the mac assets but do not update the shared
+    production `appcast.xml` unless a separate beta feed exists.
+17. After publish, verify npm and any attached release artifacts.
 
 ## GHSA advisory work
 
