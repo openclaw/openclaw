@@ -668,8 +668,7 @@ export function createOpenClawReadTool(
         if (offsetMatch) {
           const requestedOffset = offsetMatch[1];
           const totalLines = offsetMatch[2];
-          const filePath =
-            typeof record?.path === "string" ? String(record.path) : "<unknown>";
+          const filePath = typeof record?.path === "string" ? String(record.path) : "<unknown>";
           result = {
             content: [
               {
