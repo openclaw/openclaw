@@ -235,7 +235,7 @@ bash pty:true workdir:~/project command:"opencode run 'Your task'"
 # Install: npm install -g @mariozechner/pi-coding-agent
 bash pty:true workdir:~/project command:"pi 'Your task'"
 
-# Non-interactive mode (PTY still recommended)
+# Non-interactive mode (PTY required)
 bash pty:true command:"pi -p 'Summarize src/'"
 
 # Different provider/model
@@ -333,7 +333,7 @@ This triggers an immediate wake event — Skippy gets pinged in seconds, not 10 
 
 ## Learnings (Jan 2026)
 
-- **PTY is essential:** Coding agents are interactive terminal apps. Without `pty:true`, output breaks or agent hangs.
+- **PTY is essential for Codex/Pi/OpenCode:** These agents are interactive terminal apps. Without `pty:true`, output breaks or agent hangs. Claude Code and Kimi CLI use `--print` mode instead (no PTY needed).
 - **Git repo required:** Codex won't run outside a git directory. Use `mktemp -d && git init` for scratch work.
 - **exec is your friend:** `codex exec "prompt"` runs and exits cleanly - perfect for one-shots.
 - **submit vs write:** Use `submit` to send input + Enter, `write` for raw data without newline.
