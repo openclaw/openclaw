@@ -401,6 +401,9 @@ _${rootCmd}_root_completion() {
 
 ${generateZshSubcommands(program, rootCmd)}
 
+if ! type compdef > /dev/null 2>&1; then
+  autoload -Uz compinit && compinit
+fi
 compdef _${rootCmd}_root_completion ${rootCmd}
 `;
   return script;

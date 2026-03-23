@@ -27,6 +27,21 @@ describe("completion-cli", () => {
     expect(script).toContain("--force[Force the action]");
   });
 
+  it("zsh completion script includes compinit guard before compdef call (issue #14289)", () => {
+    const script = getCompletionScript("zsh", createCompletionProgram());
+
+    // On fresh zsh setups compinit is not called, so compdef is unavailable.
+    // The generated script must guard against this by autoloading compinit first.
+    expect(script).toContain("compinit");
+    expect(script).toContain("type compdef");
+
+    // Guard must appear before the compdef invocation
+    const compdefIndex = script.indexOf("compdef _openclaw_root_completion");
+    const guardIndex = script.indexOf("compinit");
+    expect(guardIndex).toBeGreaterThan(-1);
+    expect(guardIndex).toBeLessThan(compdefIndex);
+  });
+
   it("generates PowerShell command paths without the executable prefix", () => {
     const script = getCompletionScript("powershell", createCompletionProgram());
 
