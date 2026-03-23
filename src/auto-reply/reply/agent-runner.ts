@@ -7,7 +7,6 @@ import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
-  loadSessionStore,
   resolveAgentIdFromSessionKey,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -62,6 +61,10 @@ import {
 } from "./queue.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
+import {
+  cacheResolvedSessionEntry,
+  loadCanonicalLatestSessionEntry,
+} from "./session-entry-resolution.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
@@ -158,18 +161,20 @@ export async function runReplyAgent(params: {
   const activeSessionStore = sessionStore;
   let activeIsNewSession = isNewSession;
   const loadLatestSessionEntry = () => {
-    if (!sessionKey || !storePath) {
+    const latest = loadCanonicalLatestSessionEntry({
+      sessionKey,
+      storePath,
+    });
+    if (!latest.entry) {
       return undefined;
     }
-    const latestEntry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
-    if (!latestEntry) {
-      return undefined;
-    }
-    activeSessionEntry = latestEntry;
-    if (activeSessionStore) {
-      activeSessionStore[sessionKey] = latestEntry;
-    }
-    return latestEntry;
+    activeSessionEntry = latest.entry;
+    cacheResolvedSessionEntry(activeSessionStore, latest.entry, [
+      sessionKey ?? "",
+      latest.canonicalKey ?? "",
+      ...latest.storeKeys,
+    ]);
+    return latest.entry;
   };
   const resolveCurrentSessionEntry = () =>
     loadLatestSessionEntry() ??
@@ -860,10 +865,19 @@ export async function runReplyAgent(params: {
 
       if (verboseEnabled) {
         const suffix = typeof count === "number" ? ` (count ${count})` : "";
-        verboseNotices.push({
-          text: `🧹 Auto-compaction complete${suffix}.`,
-          isCompactionNotice: true,
-        });
+        const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+        const compactionNotice = currentMessageId
+          ? applyReplyToMode({
+              text: `🧹 Auto-compaction complete${suffix}.`,
+              replyToId: currentMessageId,
+              replyToCurrent: true,
+              isCompactionNotice: true,
+            })
+          : {
+              text: `🧹 Auto-compaction complete${suffix}.`,
+              isCompactionNotice: true,
+            };
+        verboseNotices.push(compactionNotice);
       }
     }
     if (verboseNotices.length > 0) {

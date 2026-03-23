@@ -2,9 +2,15 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessions from "../../config/sessions.js";
+import {
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+} from "../../config/sessions/paths.js";
 import type { TypingMode } from "../../config/types.js";
+import { resolveGatewaySessionStoreTarget } from "../../gateway/session-utils.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
@@ -825,6 +831,54 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
+  it("threads compaction notices without consuming the first reply slot", async () => {
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "end", willRetry: false, completed: true },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const { run } = createMinimalRun({
+      resolvedVerboseLevel: "on",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      runOverrides: {
+        config: {
+          channels: {
+            whatsapp: {
+              replyToMode: "first",
+            },
+          },
+        } as ReturnType<typeof loadConfig>,
+      },
+    });
+
+    const res = await run();
+
+    expect(Array.isArray(res)).toBe(true);
+    const payloads = res as Array<{
+      text?: string;
+      isCompactionNotice?: boolean;
+      replyToId?: string;
+    }>;
+    expect(payloads[0]).toMatchObject({
+      isCompactionNotice: true,
+      replyToId: "msg",
+    });
+    expect(payloads[1]).toMatchObject({
+      text: "final",
+      replyToId: "msg",
+    });
+  });
+
   it("announces model fallback only when verbose mode is enabled", async () => {
     const cases = [
       { name: "verbose on", verbose: "on" as const, expectNotice: true },
@@ -1292,6 +1346,58 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(persisted.main.fallbackNoticeSelectedModel).toBeUndefined();
       expect(persisted.main.fallbackNoticeActiveModel).toBeUndefined();
       expect(persisted.main.fallbackNoticeReason).toBeUndefined();
+    });
+  });
+
+  it("reloads reset sessions through canonical store aliases", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const target = resolveGatewaySessionStoreTarget({ cfg: loadConfig(), key: "main" });
+      const reboundEntry: SessionEntry = {
+        sessionId: "session-new",
+        sessionFile: "/tmp/session-new.jsonl",
+        updatedAt: Date.now(),
+      };
+      const staleEntry: SessionEntry = {
+        sessionId: "session-old",
+        sessionFile: "/tmp/session-old.jsonl",
+        updatedAt: Date.now() - 1_000,
+      };
+      const sessionStore = { main: staleEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({ [target.canonicalKey]: reboundEntry }),
+        "utf-8",
+      );
+
+      state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "ok" }],
+        meta: {},
+      });
+
+      const { run } = createMinimalRun({
+        sessionEntry: staleEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      await run();
+
+      const call = state.runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+        sessionId?: string;
+        sessionFile?: string;
+      };
+      expect(call.sessionId).toBe("session-new");
+      expect(call.sessionFile).toBe(
+        resolveSessionFilePath(
+          "session-new",
+          reboundEntry,
+          resolveSessionFilePathOptions({ storePath }),
+        ),
+      );
+      expect(sessionStore.main.sessionId).toBe("session-new");
     });
   });
 

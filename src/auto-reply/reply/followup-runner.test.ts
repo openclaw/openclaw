@@ -1,16 +1,19 @@
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions/store.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loadConfig } from "../../config/config.js";
+import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../config/sessions.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
+import { resolveGatewaySessionStoreTarget } from "../../gateway/session-utils.js";
 import {
   clearFollowupQueue,
   enqueueFollowupRun,
@@ -742,6 +745,65 @@ describe("createFollowupRunner session resets", () => {
     expect(sessionStore.main.compactionCount).toBe(1);
   });
 
+  it("reloads reset sessions through canonical store aliases", async () => {
+    const dir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-canonical-"));
+    const storePath = path.join(dir, "sessions.json");
+    const target = resolveGatewaySessionStoreTarget({ cfg: loadConfig(), key: "main" });
+    const reboundEntry: SessionEntry = {
+      sessionId: "session-new",
+      sessionFile: "/tmp/session-new.jsonl",
+      updatedAt: Date.now(),
+    };
+    await fs.writeFile(storePath, JSON.stringify({ [target.canonicalKey]: reboundEntry }), "utf-8");
+
+    const sessionStore: Record<string, SessionEntry> = {
+      main: {
+        sessionId: "session-old",
+        sessionFile: "/tmp/session-old.jsonl",
+        updatedAt: Date.now() - 1_000,
+      },
+    };
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: sessionStore.main,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          sessionId: "session-old",
+          sessionFile: "/tmp/session-old.jsonl",
+        },
+      }),
+    );
+
+    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+      sessionId?: string;
+      sessionFile?: string;
+    };
+    expect(call.sessionId).toBe("session-new");
+    expect(call.sessionFile).toBe(
+      resolveSessionFilePath(
+        "session-new",
+        reboundEntry,
+        resolveSessionFilePathOptions({ storePath }),
+      ),
+    );
+    expect(sessionStore.main.sessionId).toBe("session-new");
+  });
+
   it("preserves topic transcript suffixes when rebinding to a reset session without sessionFile", async () => {
     const sessionStore: Record<string, SessionEntry> = {
       main: {
@@ -973,6 +1035,54 @@ describe("createFollowupRunner reply threading", () => {
     );
 
     expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "final",
+        replyToId: "msg-42",
+      }),
+    );
+  });
+
+  it("threads compaction notices without consuming the first reply slot", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    mockCompactionRun({
+      willRetry: true,
+      result: { payloads: [{ text: "final" }], meta: {} },
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        messageId: "msg-42",
+        run: {
+          verboseLevel: "on",
+          messageProvider: "discord",
+          config: {
+            channels: {
+              discord: {
+                replyToMode: "first",
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(onBlockReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        text: expect.stringContaining("Auto-compaction complete"),
+        isCompactionNotice: true,
+        replyToId: "msg-42",
+      }),
+    );
+    expect(onBlockReply).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({
         text: "final",
         replyToId: "msg-42",
