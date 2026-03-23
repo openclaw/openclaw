@@ -1,1 +1,1 @@
-export { updateSessionStore } from "./store.js";
+export { updateSessionStore, updateSessionStoreEntry } from "./store.js";
