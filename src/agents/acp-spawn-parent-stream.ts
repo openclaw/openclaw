@@ -319,7 +319,9 @@ export function startAcpSpawnParentStreamRelay(params: {
       if (wait?.status === "ok" || wait?.status === "error") {
         return await finalizeCompletedRelay(wait);
       }
-    } catch {}
+    } catch (err) {
+      logEvent("probe_error", { error: String(err) });
+    }
     return false;
   };
 
