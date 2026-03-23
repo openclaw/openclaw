@@ -5,12 +5,12 @@ import {
   DEFAULT_SEARCH_COUNT,
   getScopedCredentialValue,
   MAX_SEARCH_COUNT,
-  mergeScopedSearchConfig,
   readCachedSearchPayload,
   readConfiguredSecretString,
   readNumberParam,
   readProviderEnvValue,
   readStringParam,
+  mergeScopedSearchConfig,
   resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
@@ -20,148 +20,21 @@ import {
   type SearchConfigRecord,
   type WebSearchProviderPlugin,
   type WebSearchProviderToolDefinition,
-  withTrustedWebSearchEndpoint,
-  wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
+import {
+  buildXaiWebSearchPayload,
+  extractXaiWebSearchContent,
+  requestXaiWebSearch,
+  resolveXaiInlineCitations,
+  resolveXaiSearchConfig,
+  resolveXaiWebSearchModel,
+} from "./web-search-shared.js";
 
-const XAI_API_ENDPOINT = "https://api.x.ai/v1/responses";
-const DEFAULT_GROK_MODEL = "grok-4-1-fast";
-
-type GrokConfig = {
-  apiKey?: string;
-  model?: string;
-  inlineCitations?: boolean;
-};
-
-type GrokSearchResponse = {
-  output?: Array<{
-    type?: string;
-    role?: string;
-    text?: string;
-    content?: Array<{
-      type?: string;
-      text?: string;
-      annotations?: Array<{
-        type?: string;
-        url?: string;
-        start_index?: number;
-        end_index?: number;
-      }>;
-    }>;
-    annotations?: Array<{
-      type?: string;
-      url?: string;
-      start_index?: number;
-      end_index?: number;
-    }>;
-  }>;
-  output_text?: string;
-  citations?: string[];
-  inline_citations?: Array<{
-    start_index: number;
-    end_index: number;
-    url: string;
-  }>;
-};
-
-function resolveGrokConfig(searchConfig?: SearchConfigRecord): GrokConfig {
-  const grok = searchConfig?.grok;
-  return grok && typeof grok === "object" && !Array.isArray(grok) ? (grok as GrokConfig) : {};
-}
-
-function resolveGrokApiKey(grok?: GrokConfig): string | undefined {
+function resolveGrokApiKey(grok?: Record<string, unknown>): string | undefined {
   return (
     readConfiguredSecretString(grok?.apiKey, "tools.web.search.grok.apiKey") ??
     readProviderEnvValue(["XAI_API_KEY"])
-  );
-}
-
-function resolveGrokModel(grok?: GrokConfig): string {
-  const model = typeof grok?.model === "string" ? grok.model.trim() : "";
-  return model || DEFAULT_GROK_MODEL;
-}
-
-function resolveGrokInlineCitations(grok?: GrokConfig): boolean {
-  return grok?.inlineCitations === true;
-}
-
-function extractGrokContent(data: GrokSearchResponse): {
-  text: string | undefined;
-  annotationCitations: string[];
-} {
-  for (const output of data.output ?? []) {
-    if (output.type === "message") {
-      for (const block of output.content ?? []) {
-        if (block.type === "output_text" && typeof block.text === "string" && block.text) {
-          const urls = (block.annotations ?? [])
-            .filter(
-              (annotation) =>
-                annotation.type === "url_citation" && typeof annotation.url === "string",
-            )
-            .map((annotation) => annotation.url as string);
-          return { text: block.text, annotationCitations: [...new Set(urls)] };
-        }
-      }
-    }
-    if (output.type === "output_text" && typeof output.text === "string" && output.text) {
-      const urls = (Array.isArray(output.annotations) ? output.annotations : [])
-        .filter(
-          (annotation) => annotation.type === "url_citation" && typeof annotation.url === "string",
-        )
-        .map((annotation) => annotation.url as string);
-      return { text: output.text, annotationCitations: [...new Set(urls)] };
-    }
-  }
-
-  return {
-    text: typeof data.output_text === "string" ? data.output_text : undefined,
-    annotationCitations: [],
-  };
-}
-
-async function runGrokSearch(params: {
-  query: string;
-  apiKey: string;
-  model: string;
-  timeoutSeconds: number;
-  inlineCitations: boolean;
-}): Promise<{
-  content: string;
-  citations: string[];
-  inlineCitations?: GrokSearchResponse["inline_citations"];
-}> {
-  return withTrustedWebSearchEndpoint(
-    {
-      url: XAI_API_ENDPOINT,
-      timeoutSeconds: params.timeoutSeconds,
-      init: {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${params.apiKey}`,
-        },
-        body: JSON.stringify({
-          model: params.model,
-          input: [{ role: "user", content: params.query }],
-          tools: [{ type: "web_search" }],
-        }),
-      },
-    },
-    async (res) => {
-      if (!res.ok) {
-        const detail = await res.text();
-        throw new Error(`xAI API error (${res.status}): ${detail || res.statusText}`);
-      }
-
-      const data = (await res.json()) as GrokSearchResponse;
-      const { text, annotationCitations } = extractGrokContent(data);
-      return {
-        content: text ?? "No response",
-        citations: (data.citations ?? []).length > 0 ? data.citations! : annotationCitations,
-        inlineCitations: data.inline_citations,
-      };
-    },
   );
 }
 
@@ -197,7 +70,7 @@ function createGrokToolDefinition(
         return unsupportedResponse;
       }
 
-      const grokConfig = resolveGrokConfig(searchConfig);
+      const grokConfig = resolveXaiSearchConfig(searchConfig);
       const apiKey = resolveGrokApiKey(grokConfig);
       if (!apiKey) {
         return {
@@ -213,8 +86,8 @@ function createGrokToolDefinition(
         readNumberParam(params, "count", { integer: true }) ??
         searchConfig?.maxResults ??
         undefined;
-      const model = resolveGrokModel(grokConfig);
-      const inlineCitations = resolveGrokInlineCitations(grokConfig);
+      const model = resolveXaiWebSearchModel(searchConfig);
+      const inlineCitations = resolveXaiInlineCitations(searchConfig);
       const cacheKey = buildSearchCacheKey([
         "grok",
         query,
@@ -228,28 +101,22 @@ function createGrokToolDefinition(
       }
 
       const start = Date.now();
-      const result = await runGrokSearch({
+      const result = await requestXaiWebSearch({
         query,
         apiKey,
         model,
         timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
         inlineCitations,
       });
-      const payload = {
+      const payload = buildXaiWebSearchPayload({
         query,
         provider: "grok",
         model,
         tookMs: Date.now() - start,
-        externalContent: {
-          untrusted: true,
-          source: "web_search",
-          provider: "grok",
-          wrapped: true,
-        },
-        content: wrapWebContent(result.content),
+        content: result.content,
         citations: result.citations,
         inlineCitations: result.inlineCitations,
-      };
+      });
       writeCachedSearchPayload(cacheKey, payload, resolveSearchCacheTtlMs(searchConfig));
       return payload;
     },
@@ -260,7 +127,8 @@ export function createGrokWebSearchProvider(): WebSearchProviderPlugin {
   return {
     id: "grok",
     label: "Grok (xAI)",
-    hint: "xAI web-grounded responses",
+    hint: "Requires xAI API key · xAI web-grounded responses",
+    credentialLabel: "xAI API key",
     envVars: ["XAI_API_KEY"],
     placeholder: "xai-...",
     signupUrl: "https://console.x.ai/",
@@ -289,7 +157,15 @@ export function createGrokWebSearchProvider(): WebSearchProviderPlugin {
 
 export const __testing = {
   resolveGrokApiKey,
-  resolveGrokModel,
-  resolveGrokInlineCitations,
-  extractGrokContent,
+  resolveGrokModel: (grok?: Record<string, unknown>) =>
+    resolveXaiWebSearchModel(grok ? { grok } : undefined),
+  resolveGrokInlineCitations: (grok?: Record<string, unknown>) =>
+    resolveXaiInlineCitations(grok ? { grok } : undefined),
+  extractGrokContent: extractXaiWebSearchContent,
+  extractXaiWebSearchContent,
+  resolveXaiInlineCitations,
+  resolveXaiSearchConfig,
+  resolveXaiWebSearchModel,
+  requestXaiWebSearch,
+  buildXaiWebSearchPayload,
 } as const;

@@ -3,7 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
-import { createMessageToolButtonsSchema } from "../../plugin-sdk/message-tool-schema.js";
+import { createMessageToolButtonsSchema } from "../../plugin-sdk/channel-actions.js";
 type CreateMessageTool = typeof import("./message-tool.js").createMessageTool;
 type SetActivePluginRegistry = typeof import("../../plugins/runtime.js").setActivePluginRegistry;
 type CreateTestRegistry = typeof import("../../test-utils/channel-plugins.js").createTestRegistry;
@@ -151,6 +151,7 @@ async function executeSend(params: {
 }) {
   const tool = createMessageTool({
     config: {} as never,
+    runMessageAction: mocks.runMessageAction as never,
     ...params.toolOptions,
   });
   await tool.execute("1", {
@@ -187,6 +188,9 @@ describe("message tool secret scoping", () => {
     const tool = createMessageTool({
       currentChannelProvider: "discord",
       agentAccountId: "ops",
+      loadConfig: mocks.loadConfig as never,
+      resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway as never,
+      runMessageAction: mocks.runMessageAction as never,
     });
 
     await tool.execute("1", {
@@ -216,6 +220,7 @@ describe("message tool agent routing", () => {
     const tool = createMessageTool({
       agentSessionKey: "agent:alpha:main",
       config: {} as never,
+      runMessageAction: mocks.runMessageAction as never,
     });
 
     await tool.execute("1", {

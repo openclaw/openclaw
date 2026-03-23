@@ -35,6 +35,7 @@ import {
   FailoverError,
   resolveFailoverStatus,
 } from "../failover-error.js";
+import { shouldAllowCooldownProbeForReason } from "../failover-policy.js";
 import {
   applyLocalNoAuthHeaderOverride,
   ensureAuthProfileStore,
@@ -66,6 +67,7 @@ import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
+import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModelAsync } from "./model.js";
@@ -305,7 +307,6 @@ export async function runEmbeddedPiAgent(
         workspaceDir: resolvedWorkspace,
         allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
       });
-      const prevCwd = process.cwd();
 
       let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
@@ -753,10 +754,7 @@ export async function runEmbeddedPiAgent(
         const allowTransientCooldownProbe =
           params.allowTransientCooldownProbe === true &&
           allAutoProfilesInCooldown &&
-          (unavailableReason === "rate_limit" ||
-            unavailableReason === "overloaded" ||
-            unavailableReason === "billing" ||
-            unavailableReason === "unknown");
+          shouldAllowCooldownProbeForReason(unavailableReason);
         let didTransientCooldownProbe = false;
 
         while (profileIndex < profileCandidates.length) {
@@ -960,6 +958,7 @@ export async function runEmbeddedPiAgent(
             skillsSnapshot: params.skillsSnapshot,
             prompt,
             images: params.images,
+            clientTools: params.clientTools,
             disableTools: params.disableTools,
             provider,
             modelId,
@@ -1131,6 +1130,39 @@ export async function runEmbeddedPiAgent(
                 }
               }
               try {
+                const overflowCompactionRuntimeContext = {
+                  ...buildEmbeddedCompactionRuntimeContext({
+                    sessionKey: params.sessionKey,
+                    messageChannel: params.messageChannel,
+                    messageProvider: params.messageProvider,
+                    agentAccountId: params.agentAccountId,
+                    currentChannelId: params.currentChannelId,
+                    currentThreadTs: params.currentThreadTs,
+                    currentMessageId: params.currentMessageId,
+                    authProfileId: lastProfileId,
+                    workspaceDir: resolvedWorkspace,
+                    agentDir,
+                    config: params.config,
+                    skillsSnapshot: params.skillsSnapshot,
+                    senderIsOwner: params.senderIsOwner,
+                    senderId: params.senderId,
+                    provider,
+                    modelId,
+                    thinkLevel,
+                    reasoningLevel: params.reasoningLevel,
+                    bashElevated: params.bashElevated,
+                    extraSystemPrompt: params.extraSystemPrompt,
+                    ownerNumbers: params.ownerNumbers,
+                  }),
+                  runId: params.runId,
+                  trigger: "overflow",
+                  ...(observedOverflowTokens !== undefined
+                    ? { currentTokenCount: observedOverflowTokens }
+                    : {}),
+                  diagId: overflowDiagId,
+                  attempt: overflowCompactionAttempts,
+                  maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
+                };
                 compactResult = await contextEngine.compact({
                   sessionId: params.sessionId,
                   sessionKey: params.sessionKey,
@@ -1141,40 +1173,18 @@ export async function runEmbeddedPiAgent(
                     : {}),
                   force: true,
                   compactionTarget: "budget",
-                  runtimeContext: {
-                    ...buildEmbeddedCompactionRuntimeContext({
-                      sessionKey: params.sessionKey,
-                      messageChannel: params.messageChannel,
-                      messageProvider: params.messageProvider,
-                      agentAccountId: params.agentAccountId,
-                      currentChannelId: params.currentChannelId,
-                      currentThreadTs: params.currentThreadTs,
-                      currentMessageId: params.currentMessageId,
-                      authProfileId: lastProfileId,
-                      workspaceDir: resolvedWorkspace,
-                      agentDir,
-                      config: params.config,
-                      skillsSnapshot: params.skillsSnapshot,
-                      senderIsOwner: params.senderIsOwner,
-                      senderId: params.senderId,
-                      provider,
-                      modelId,
-                      thinkLevel,
-                      reasoningLevel: params.reasoningLevel,
-                      bashElevated: params.bashElevated,
-                      extraSystemPrompt: params.extraSystemPrompt,
-                      ownerNumbers: params.ownerNumbers,
-                    }),
-                    runId: params.runId,
-                    trigger: "overflow",
-                    ...(observedOverflowTokens !== undefined
-                      ? { currentTokenCount: observedOverflowTokens }
-                      : {}),
-                    diagId: overflowDiagId,
-                    attempt: overflowCompactionAttempts,
-                    maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
-                  },
+                  runtimeContext: overflowCompactionRuntimeContext,
                 });
+                if (compactResult.ok && compactResult.compacted) {
+                  await runContextEngineMaintenance({
+                    contextEngine,
+                    sessionId: params.sessionId,
+                    sessionKey: params.sessionKey,
+                    sessionFile: params.sessionFile,
+                    reason: "compaction",
+                    runtimeContext: overflowCompactionRuntimeContext,
+                  });
+                }
               } catch (compactErr) {
                 log.warn(
                   `contextEngine.compact() threw during overflow recovery for ${provider}/${modelId}: ${String(compactErr)}`,
@@ -1700,7 +1710,6 @@ export async function runEmbeddedPiAgent(
       } finally {
         await contextEngine.dispose?.();
         stopRuntimeAuthRefreshTimer();
-        process.chdir(prevCwd);
       }
     }),
   );

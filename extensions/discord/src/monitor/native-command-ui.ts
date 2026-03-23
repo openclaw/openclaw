@@ -11,22 +11,20 @@ import {
   type StringSelectMenuInteraction,
 } from "@buape/carbon";
 import { ButtonStyle } from "discord-api-types/v10";
-import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
   listChatCommands,
   resolveCommandArgChoices,
+  resolveStoredModelOverride,
   serializeCommandArgs,
-} from "openclaw/plugin-sdk/reply-runtime";
-import { resolveStoredModelOverride } from "openclaw/plugin-sdk/reply-runtime";
-import type {
-  ChatCommandDefinition,
-  CommandArgDefinition,
-  CommandArgValues,
-  CommandArgs,
-} from "openclaw/plugin-sdk/reply-runtime";
+  type ChatCommandDefinition,
+  type CommandArgDefinition,
+  type CommandArgValues,
+  type CommandArgs,
+} from "openclaw/plugin-sdk/command-auth";
+import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { chunkItems, withTimeout } from "openclaw/plugin-sdk/text-runtime";

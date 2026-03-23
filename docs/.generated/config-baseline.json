@@ -4112,6 +4112,20 @@
       "hasChildren": false
     },
     {
+      "path": "agents.list.*.fastModeDefault",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Agent Fast Mode Default",
+      "help": "Optional per-agent default for fast mode. Applies when no per-message or session fast-mode override is set.",
+      "hasChildren": false
+    },
+    {
       "path": "agents.list.*.groupChat",
       "kind": "core",
       "type": "object",
@@ -5227,6 +5241,25 @@
       "hasChildren": false
     },
     {
+      "path": "agents.list.*.reasoningDefault",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "on",
+        "off",
+        "stream"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Agent Reasoning Default",
+      "help": "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
+      "hasChildren": false
+    },
+    {
       "path": "agents.list.*.runtime",
       "kind": "core",
       "type": "object",
@@ -6288,6 +6321,29 @@
       "hasChildren": false
     },
     {
+      "path": "agents.list.*.thinkingDefault",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "adaptive"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Agent Thinking Default",
+      "help": "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
+      "hasChildren": false
+    },
+    {
       "path": "agents.list.*.tools",
       "kind": "core",
       "type": "object",
@@ -6808,6 +6864,16 @@
         "allowlist",
         "full"
       ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.tools.exec.strictInlineEval",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -31032,6 +31098,26 @@
       "hasChildren": false
     },
     {
+      "path": "channels.synology-chat.dangerouslyAllowInheritedWebhookPath",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.synology-chat.dangerouslyAllowNameMatching",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram",
       "kind": "channel",
       "type": "object",
@@ -31183,6 +31269,49 @@
         "number",
         "string"
       ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.apiRoot",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.autoTopicLabel",
+      "kind": "channel",
+      "type": [
+        "boolean",
+        "object"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.telegram.accounts.*.autoTopicLabel.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.autoTopicLabel.prompt",
+      "kind": "channel",
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -31477,6 +31606,39 @@
         "number",
         "string"
       ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.direct.*.autoTopicLabel",
+      "kind": "channel",
+      "type": [
+        "boolean",
+        "object"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.telegram.accounts.*.direct.*.autoTopicLabel.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.direct.*.autoTopicLabel.prompt",
+      "kind": "channel",
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -33093,6 +33255,69 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.apiRoot",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Telegram API Root URL",
+      "help": "Custom Telegram Bot API root URL. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.autoTopicLabel",
+      "kind": "channel",
+      "type": [
+        "boolean",
+        "object"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Telegram Auto Topic Label",
+      "help": "Auto-rename DM forum topics on first message using LLM. Default: true. Set to false to disable, or use object form { enabled: true, prompt: '...' } for custom prompt.",
+      "hasChildren": true
+    },
+    {
+      "path": "channels.telegram.autoTopicLabel.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Telegram Auto Topic Label Enabled",
+      "help": "Whether auto topic labeling is enabled. Default: true.",
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.autoTopicLabel.prompt",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Telegram Auto Topic Label Prompt",
+      "help": "Custom prompt for LLM-based topic naming. The user message is appended after the prompt.",
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.blockStreaming",
       "kind": "channel",
       "type": "boolean",
@@ -33417,6 +33642,39 @@
         "number",
         "string"
       ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.direct.*.autoTopicLabel",
+      "kind": "channel",
+      "type": [
+        "boolean",
+        "object"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.telegram.direct.*.autoTopicLabel.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.direct.*.autoTopicLabel.prompt",
+      "kind": "channel",
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -41919,6 +42177,46 @@
       "hasChildren": true
     },
     {
+      "path": "hooks.internal.installs.*.clawhubChannel",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "hooks.internal.installs.*.clawhubFamily",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "hooks.internal.installs.*.clawhubPackage",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "hooks.internal.installs.*.clawhubUrl",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "hooks.internal.installs.*.hooks",
       "kind": "core",
       "type": "array",
@@ -45455,7 +45753,7 @@
         "storage"
       ],
       "label": "Node Browser Proxy Allowed Profiles",
-      "help": "Optional allowlist of browser profile names exposed through node proxy routing. Leave empty to expose all configured profiles, or use a tight list to enforce least-privilege profile access.",
+      "help": "Optional allowlist of browser profile names exposed through node proxy routing. Leave empty to preserve the default full profile surface, including profile create/delete routes. When set, OpenClaw enforces least-privilege profile access and blocks persistent profile create/delete through the proxy.",
       "hasChildren": true
     },
     {
@@ -45766,7 +46064,7 @@
         "advanced"
       ],
       "label": "Expected acpx Version",
-      "help": "Exact version to enforce (for example 0.1.16) or \"any\" to skip strict version matching.",
+      "help": "Exact version to enforce or \"any\" to skip strict version matching.",
       "hasChildren": false
     },
     {
@@ -47032,6 +47330,127 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.deepgram",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/deepgram-provider",
+      "help": "OpenClaw Deepgram media-understanding provider (plugin: deepgram)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.deepgram.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/deepgram-provider Config",
+      "help": "Plugin-defined config payload for deepgram.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.deepgram.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/deepgram-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.deepgram.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.deepgram.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.deepgram.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.deepgram.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.deepgram.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.deepgram.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.device-pair",
       "kind": "plugin",
       "type": "object",
@@ -47867,6 +48286,170 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.duckduckgo",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/duckduckgo-plugin",
+      "help": "OpenClaw DuckDuckGo plugin (plugin: duckduckgo)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.duckduckgo.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/duckduckgo-plugin Config",
+      "help": "Plugin-defined config payload for duckduckgo.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.duckduckgo.config.webSearch",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.duckduckgo.config.webSearch.region",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "DuckDuckGo Region",
+      "help": "Optional DuckDuckGo region code such as us-en, uk-en, or de-de.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.duckduckgo.config.webSearch.safeSearch",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "strict",
+        "moderate",
+        "off"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "DuckDuckGo SafeSearch",
+      "help": "SafeSearch level for DuckDuckGo results.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.duckduckgo.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/duckduckgo-plugin",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.duckduckgo.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.duckduckgo.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.duckduckgo.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.duckduckgo.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.duckduckgo.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.duckduckgo.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.elevenlabs",
       "kind": "plugin",
       "type": "object",
@@ -47975,6 +48558,155 @@
     },
     {
       "path": "plugins.entries.elevenlabs.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.exa",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/exa-plugin",
+      "help": "OpenClaw Exa plugin (plugin: exa)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.exa.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/exa-plugin Config",
+      "help": "Plugin-defined config payload for exa.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.exa.config.webSearch",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.exa.config.webSearch.apiKey",
+      "kind": "plugin",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security"
+      ],
+      "label": "Exa API Key",
+      "help": "Exa Search API key (fallback: EXA_API_KEY env var).",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.exa.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/exa-plugin",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.exa.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.exa.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.exa.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.exa.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.exa.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.exa.subagent.allowModelOverride",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -48785,6 +49517,127 @@
     },
     {
       "path": "plugins.entries.googlechat.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.groq",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/groq-provider",
+      "help": "OpenClaw Groq media-understanding provider (plugin: groq)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.groq.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/groq-provider Config",
+      "help": "Plugin-defined config payload for groq.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.groq.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/groq-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.groq.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.groq.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.groq.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.groq.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.groq.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.groq.subagent.allowModelOverride",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -57447,6 +58300,46 @@
       "hasChildren": true
     },
     {
+      "path": "plugins.installs.*.clawhubChannel",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.installs.*.clawhubFamily",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.installs.*.clawhubPackage",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.installs.*.clawhubUrl",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "plugins.installs.*.installedAt",
       "kind": "core",
       "type": "string",
@@ -60200,6 +61093,20 @@
       ],
       "label": "Exec Security",
       "help": "Execution security posture selector controlling sandbox/approval expectations for command execution. Keep strict security mode for untrusted prompts and relax only for trusted operator workflows.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.exec.strictInlineEval",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools"
+      ],
+      "label": "Require Inline-Eval Approval",
+      "help": "Require explicit approval for interpreter inline-eval forms such as `python -c`, `node -e`, `ruby -e`, or `osascript -e`. Prevents silent allowlist reuse and downgrades allow-always to ask-each-time for those forms.",
       "hasChildren": false
     },
     {

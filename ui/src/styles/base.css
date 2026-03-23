@@ -218,15 +218,28 @@
 }
 
 :root[data-theme="dash"] {
-  /* Accent — warm amber on chocolate */
-  --ring: #d4915c;
-  --accent: #d4915c;
-  --accent-hover: #e0a876;
-  --accent-muted: #d4915c;
-  --accent-subtle: rgba(212, 145, 92, 0.14);
-  --accent-glow: rgba(212, 145, 92, 0.22);
-  --primary: #d4915c;
+  /*
+   * Accent — chocolate brown on deep cocoa
+   *
+   * WCAG 2.1 AA audit (bg = #1a1210, relative luminance ≈ 0.0069):
+   *   --accent #b47840  L ≈ 0.235  contrast ≈ 5.0:1  AA text ✓  (floor: #a8703c → 4.4:1, fails)
+   *   --accent-hover #c8885a  L ≈ 0.306  contrast ≈ 6.3:1  ✓
+   *   --primary-foreground #1a1210 on #b47840 button: 5.0:1 AA ✓
+   *   focus-ring at 80% opacity: ≈ 3.5:1 against bg ✓ (non-text 3:1 required)
+   */
+  --ring: #b47840;
+  --accent: #b47840;
+  --accent-hover: #c8885a;
+  --accent-muted: #b47840;
+  --accent-subtle: rgba(180, 120, 64, 0.16);
+  --accent-glow: rgba(180, 120, 64, 0.24);
+  --primary: #b47840;
   --primary-foreground: #1a1210;
+
+  /* Focus — match chocolate accent, slightly higher ring opacity for dark bg visibility */
+  --focus: rgba(180, 120, 64, 0.2);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 80%, transparent);
+  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
 
   /* Surfaces — deep cocoa tones */
   --bg: #1a1210;
@@ -261,9 +274,9 @@
 
   --secondary: #221a16;
   --secondary-foreground: #ece0d8;
-  --accent-2: #c8a06e;
-  --accent-2-muted: rgba(200, 160, 110, 0.7);
-  --accent-2-subtle: rgba(200, 160, 110, 0.1);
+  --accent-2: #a88050;
+  --accent-2-muted: rgba(168, 128, 80, 0.7);
+  --accent-2-subtle: rgba(168, 128, 80, 0.12);
 
   --shadow-sm: 0 1px 2px rgba(10, 6, 4, 0.35);
   --shadow-md: 0 4px 16px rgba(10, 6, 4, 0.45);
@@ -273,14 +286,23 @@
 }
 
 :root[data-theme="dash-light"] {
-  /* Accent — rich brown on parchment */
-  --ring: #7a522e;
-  --accent: #7a522e;
-  --accent-hover: #6b4526;
-  --accent-muted: #7a522e;
-  --accent-subtle: rgba(122, 82, 46, 0.1);
-  --accent-glow: rgba(122, 82, 46, 0.14);
-  --primary: #7a522e;
+  /*
+   * Accent — deep chocolate on warm parchment
+   *
+   * WCAG 2.1 AA audit (bg = #f7f2ec, relative luminance ≈ 0.893):
+   *   --accent #6e4828  L ≈ 0.081  contrast ≈ 7.2:1  AAA text ✓
+   *   --accent-hover #5c3c20  L ≈ 0.054  contrast ≈ 8.9:1  ✓
+   *   --primary-foreground #ffffff on #6e4828 button: 8.0:1 AAA ✓
+   *   focus-ring at 70% opacity: ≈ 3.4:1 against parchment bg ✓
+   */
+  --ring: #6e4828;
+  --accent: #6e4828;
+  --accent-hover: #5c3c20;
+  --accent-muted: #6e4828;
+  --accent-subtle: rgba(110, 72, 40, 0.12);
+  --accent-glow: rgba(110, 72, 40, 0.16);
+  --primary: #6e4828;
+  --primary-foreground: #ffffff;
 
   /* Surfaces — warm parchment tones */
   --bg: #f7f2ec;
@@ -316,9 +338,9 @@
 
   --secondary: #f0e8e0;
   --secondary-foreground: #4a3828;
-  --accent-2: #7a5c38;
-  --accent-2-muted: rgba(122, 92, 56, 0.75);
-  --accent-2-subtle: rgba(122, 92, 56, 0.08);
+  --accent-2: #6a4e30;
+  --accent-2-muted: rgba(106, 78, 48, 0.75);
+  --accent-2-subtle: rgba(106, 78, 48, 0.1);
 
   --shadow-sm: 0 1px 2px rgba(60, 40, 20, 0.06);
   --shadow-md: 0 4px 12px rgba(60, 40, 20, 0.08);
@@ -528,10 +550,17 @@ select {
 @keyframes glow-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 rgba(255, 92, 92, 0);
+    box-shadow: 0 0 0 transparent;
   }
   50% {
     box-shadow: 0 0 20px var(--accent-glow);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glow-pulse,
+  [class*="glow-pulse"] {
+    animation: none !important;
   }
 }
 
