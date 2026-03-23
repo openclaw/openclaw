@@ -223,6 +223,31 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Context: 1.0k/66k");
   });
 
+  it("keeps context usage unknown when totalTokens is missing", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/pi:opus",
+        contextTokens: 32_000,
+      },
+      sessionEntry: {
+        sessionId: "unknown-usage",
+        updatedAt: 0,
+        inputTokens: 1_200,
+        outputTokens: 800,
+        contextTokens: 32_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Tokens: 1.2k in / 800 out");
+    expect(normalized).toContain("Context: ?/32k");
+    expect(normalized).not.toContain("Context: 2.0k/32k");
+  });
+
   it("uses per-agent sandbox config when config and session key are provided", () => {
     const text = buildStatusMessage({
       config: {
