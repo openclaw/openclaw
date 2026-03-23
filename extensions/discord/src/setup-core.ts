@@ -7,6 +7,7 @@ import type {
   ChannelSetupDmPolicy,
   ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup-runtime";
+import { createStandardChannelSetupStatus } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import {
   inspectDiscordSetupAccount,
@@ -99,7 +100,8 @@ export function createDiscordSetupWizardBase(handlers: {
 
   return {
     channel,
-    status: {
+    status: createStandardChannelSetupStatus({
+      channelLabel: "Discord",
       configuredLabel: "configured",
       unconfiguredLabel: "needs token",
       configuredHint: "configured",
@@ -111,7 +113,7 @@ export function createDiscordSetupWizardBase(handlers: {
           const account = inspectDiscordSetupAccount({ cfg, accountId });
           return account.configured;
         }),
-    },
+    }),
     credentials: [
       {
         inputKey: "token",

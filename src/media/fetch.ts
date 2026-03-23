@@ -4,7 +4,7 @@ import { fetchWithSsrFGuard, withStrictGuardedFetchMode } from "../infra/net/fet
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { detectMime, extensionForMime } from "./mime.js";
-import { readResponseWithLimit } from "./read-response-with-limit.js";
+import { readResponseTextSnippet, readResponseWithLimit } from "./read-response-with-limit.js";
 
 type FetchMediaResult = {
   buffer: Buffer;
@@ -71,20 +71,19 @@ function parseContentDispositionFileName(header?: string | null): string | undef
   return undefined;
 }
 
-async function readErrorBodySnippet(res: Response, maxChars = 200): Promise<string | undefined> {
+async function readErrorBodySnippet(
+  res: Response,
+  opts?: {
+    maxChars?: number;
+    chunkTimeoutMs?: number;
+  },
+): Promise<string | undefined> {
   try {
-    const text = await res.text();
-    if (!text) {
-      return undefined;
-    }
-    const collapsed = text.replace(/\s+/g, " ").trim();
-    if (!collapsed) {
-      return undefined;
-    }
-    if (collapsed.length <= maxChars) {
-      return collapsed;
-    }
-    return `${collapsed.slice(0, maxChars)}…`;
+    return await readResponseTextSnippet(res, {
+      maxBytes: 8 * 1024,
+      maxChars: opts?.maxChars,
+      chunkTimeoutMs: opts?.chunkTimeoutMs,
+    });
   } catch {
     return undefined;
   }
@@ -185,7 +184,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
       if (!res.body) {
         detail = `HTTP ${res.status}${statusText}; empty response body`;
       } else {
-        const snippet = await readErrorBodySnippet(res);
+        const snippet = await readErrorBodySnippet(res, { chunkTimeoutMs: readIdleTimeoutMs });
         if (snippet) {
           detail += `; body: ${snippet}`;
         }

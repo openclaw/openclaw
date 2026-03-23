@@ -8,6 +8,12 @@ vi.mock("undici", async (importOriginal) => {
   const actual = await importOriginal<typeof import("undici")>();
   return {
     ...actual,
+    Agent:
+      actual.Agent ??
+      class Agent {
+        close() {}
+        destroy() {}
+      },
     fetch: undiciFetch,
   };
 });

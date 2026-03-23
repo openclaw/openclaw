@@ -1,5 +1,6 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { vi } from "vitest";
 import type { MockBaileysSocket } from "../../../test/mocks/baileys.js";
 import { createMockBaileys } from "../../../test/mocks/baileys.js";
@@ -30,6 +31,21 @@ export function setLoadConfigMock(fn: unknown) {
 
 export function resetLoadConfigMock() {
   (globalThis as Record<symbol, unknown>)[CONFIG_KEY] = () => DEFAULT_CONFIG;
+}
+
+function resolveStorePathFallback(store?: string, opts?: { agentId?: string }) {
+  if (!store) {
+    const agentId = (opts?.agentId?.trim() || "main").toLowerCase();
+    return path.join(
+      process.env.HOME ?? "/tmp",
+      ".openclaw",
+      "agents",
+      agentId,
+      "sessions",
+      "sessions.json",
+    );
+  }
+  return path.resolve(store.replaceAll("{agentId}", opts?.agentId?.trim() || "main"));
 }
 
 vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
@@ -92,7 +108,10 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
       configurable: true,
       enumerable: true,
       writable: true,
-      value: actual.resolveStorePath,
+      value:
+        typeof actual.resolveStorePath === "function"
+          ? actual.resolveStorePath
+          : resolveStorePathFallback,
     },
   });
   return mockModule;

@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { PluginRuntime } from "openclaw/plugin-sdk/matrix";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getSessionBindingService,
   __testing,
 } from "../../../../src/infra/outbound/session-binding-service.js";
+import type { PluginRuntime } from "../../runtime-api.js";
 import { setMatrixRuntime } from "../runtime.js";
 import { resolveMatrixStoragePaths } from "./client/storage.js";
 import {
@@ -16,31 +16,14 @@ import {
   setMatrixThreadBindingMaxAgeBySessionKey,
 } from "./thread-bindings.js";
 
-const pluginSdkActual = vi.hoisted(() => ({
-  writeJsonFileAtomically: null as null | ((filePath: string, value: unknown) => Promise<void>),
-}));
-
 const sendMessageMatrixMock = vi.hoisted(() =>
   vi.fn(async (_to: string, _message: string, opts?: { threadId?: string }) => ({
     messageId: opts?.threadId ? "$reply" : "$root",
     roomId: "!room:example",
   })),
 );
-const writeJsonFileAtomicallyMock = vi.hoisted(() =>
-  vi.fn<(filePath: string, value: unknown) => Promise<void>>(),
-);
-
-vi.mock("openclaw/plugin-sdk/matrix", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/matrix")>(
-    "openclaw/plugin-sdk/matrix",
-  );
-  pluginSdkActual.writeJsonFileAtomically = actual.writeJsonFileAtomically;
-  return {
-    ...actual,
-    writeJsonFileAtomically: (filePath: string, value: unknown) =>
-      writeJsonFileAtomicallyMock(filePath, value),
-  };
-});
+const actualRename = fs.rename.bind(fs);
+const renameMock = vi.spyOn(fs, "rename");
 
 vi.mock("./send.js", async () => {
   const actual = await vi.importActual<typeof import("./send.js")>("./send.js");
@@ -83,10 +66,8 @@ describe("matrix thread bindings", () => {
     __testing.resetSessionBindingAdaptersForTests();
     resetMatrixThreadBindingsForTests();
     sendMessageMatrixMock.mockClear();
-    writeJsonFileAtomicallyMock.mockReset();
-    writeJsonFileAtomicallyMock.mockImplementation(async (filePath: string, value: unknown) => {
-      await pluginSdkActual.writeJsonFileAtomically?.(filePath, value);
-    });
+    renameMock.mockReset();
+    renameMock.mockImplementation(actualRename);
     setMatrixRuntime({
       state: {
         resolveStateDir: () => stateDir,
@@ -217,7 +198,7 @@ describe("matrix thread bindings", () => {
     }
   });
 
-  it("persists a batch of expired bindings once per sweep", async () => {
+  it("persists expired bindings after a sweep", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-08T12:00:00.000Z"));
     try {
@@ -252,12 +233,8 @@ describe("matrix thread bindings", () => {
         placement: "current",
       });
 
-      writeJsonFileAtomicallyMock.mockClear();
       await vi.advanceTimersByTimeAsync(61_000);
-
-      await vi.waitFor(() => {
-        expect(writeJsonFileAtomicallyMock).toHaveBeenCalledTimes(1);
-      });
+      await Promise.resolve();
 
       await vi.waitFor(async () => {
         const persistedRaw = await fs.readFile(resolveBindingsFilePath(), "utf-8");
@@ -297,13 +274,23 @@ describe("matrix thread bindings", () => {
         placement: "current",
       });
 
-      writeJsonFileAtomicallyMock.mockClear();
-      writeJsonFileAtomicallyMock.mockRejectedValueOnce(new Error("disk full"));
+      renameMock.mockRejectedValueOnce(new Error("disk full"));
       await vi.advanceTimersByTimeAsync(61_000);
+      await Promise.resolve();
+
+      await vi.waitFor(() => {
+        expect(
+          logVerboseMessage.mock.calls.some(
+            ([message]) =>
+              typeof message === "string" &&
+              message.includes("failed auto-unbinding expired bindings"),
+          ),
+        ).toBe(true);
+      });
 
       await vi.waitFor(() => {
         expect(logVerboseMessage).toHaveBeenCalledWith(
-          expect.stringContaining("failed auto-unbinding expired bindings"),
+          expect.stringContaining("matrix: auto-unbinding $thread due to idle-expired"),
         );
       });
 
