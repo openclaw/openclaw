@@ -1,12 +1,34 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   parseClawHubPluginSpec,
+  resolveClawHubAuthToken,
+  searchClawHubSkills,
   resolveLatestVersionFromPackage,
   satisfiesGatewayMinimum,
   satisfiesPluginApiRange,
 } from "./clawhub.js";
 
 describe("clawhub helpers", () => {
+  const originalHome = process.env.HOME;
+
+  afterEach(() => {
+    delete process.env.OPENCLAW_CLAWHUB_TOKEN;
+    delete process.env.CLAWHUB_TOKEN;
+    delete process.env.CLAWHUB_AUTH_TOKEN;
+    delete process.env.OPENCLAW_CLAWHUB_CONFIG_PATH;
+    delete process.env.CLAWHUB_CONFIG_PATH;
+    delete process.env.CLAWDHUB_CONFIG_PATH;
+    delete process.env.XDG_CONFIG_HOME;
+    if (originalHome == null) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
+    }
+  });
+
   it("parses explicit ClawHub package specs", () => {
     expect(parseClawHubPluginSpec("clawhub:demo")).toEqual({
       name: "demo",
@@ -63,5 +85,81 @@ describe("clawhub helpers", () => {
     expect(satisfiesGatewayMinimum("OpenClaw 2026.3.22", "2026.3.0")).toBe(true);
     expect(satisfiesGatewayMinimum("2026.2.9", "2026.3.0")).toBe(false);
     expect(satisfiesGatewayMinimum("unknown", "2026.3.0")).toBe(false);
+  });
+
+  it("resolves ClawHub auth token from config.json", async () => {
+    const configRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-config-"));
+    const configPath = path.join(configRoot, "clawhub", "config.json");
+    process.env.OPENCLAW_CLAWHUB_CONFIG_PATH = configPath;
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(configPath, JSON.stringify({ auth: { token: "cfg-token-123" } }), "utf8");
+
+    await expect(resolveClawHubAuthToken()).resolves.toBe("cfg-token-123");
+  });
+
+  it("resolves ClawHub auth token from the legacy config path override", async () => {
+    const configRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawdhub-config-"));
+    const configPath = path.join(configRoot, "config.json");
+    process.env.CLAWDHUB_CONFIG_PATH = configPath;
+    await fs.writeFile(configPath, JSON.stringify({ token: "legacy-token-123" }), "utf8");
+
+    await expect(resolveClawHubAuthToken()).resolves.toBe("legacy-token-123");
+  });
+
+  it.runIf(process.platform === "darwin")(
+    "resolves ClawHub auth token from the macOS Application Support path",
+    async () => {
+      const fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-home-"));
+      const configPath = path.join(
+        fakeHome,
+        "Library",
+        "Application Support",
+        "clawhub",
+        "config.json",
+      );
+      const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+      try {
+        await fs.mkdir(path.dirname(configPath), { recursive: true });
+        await fs.writeFile(configPath, JSON.stringify({ token: "macos-token-123" }), "utf8");
+
+        await expect(resolveClawHubAuthToken()).resolves.toBe("macos-token-123");
+      } finally {
+        homedirSpy.mockRestore();
+      }
+    },
+  );
+
+  it.runIf(process.platform === "darwin")(
+    "falls back to XDG_CONFIG_HOME on macOS when Application Support has no config",
+    async () => {
+      const fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-home-"));
+      const xdgRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-xdg-"));
+      const configPath = path.join(xdgRoot, "clawhub", "config.json");
+      const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+      process.env.XDG_CONFIG_HOME = xdgRoot;
+      try {
+        await fs.mkdir(path.dirname(configPath), { recursive: true });
+        await fs.writeFile(configPath, JSON.stringify({ token: "xdg-token-123" }), "utf8");
+
+        await expect(resolveClawHubAuthToken()).resolves.toBe("xdg-token-123");
+      } finally {
+        homedirSpy.mockRestore();
+      }
+    },
+  );
+
+  it("injects resolved auth token into ClawHub requests", async () => {
+    process.env.OPENCLAW_CLAWHUB_TOKEN = "env-token-123";
+    const fetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      expect(url).toContain("/api/v1/search");
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer env-token-123");
+      return new Response(JSON.stringify({ results: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    await expect(searchClawHubSkills({ query: "calendar", fetchImpl })).resolves.toEqual([]);
   });
 });
