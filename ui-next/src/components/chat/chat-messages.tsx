@@ -659,8 +659,41 @@ export function ChatMessageBubble({
               </span>
             </div>
           )}
-          <div className="bg-primary text-primary-foreground rounded-2xl rounded-br-sm px-5 py-3.5 shadow-lg shadow-primary/10 ring-1 ring-white/10">
-            <p className="text-sm whitespace-pre-wrap leading-relaxed font-sans">{text}</p>
+          <div className="bg-primary text-primary-foreground rounded-2xl rounded-br-sm shadow-lg shadow-primary/10 ring-1 ring-white/10 overflow-hidden">
+            {/* Reply quote block — rendered when message starts with "> [Re: #N]" */}
+            {(() => {
+              const replyMatch = text.match(/^> \[Re: #(\d+)\] (.+?)(\n\n([\s\S]*))?$/s);
+              if (!replyMatch) {
+                return (
+                  <div className="px-5 py-3.5">
+                    <p className="text-sm whitespace-pre-wrap leading-relaxed font-sans">{text}</p>
+                  </div>
+                );
+              }
+              const [, seqNum, quotedText, , bodyText] = replyMatch;
+              return (
+                <>
+                  {/* Quoted reply block — dark contrast card */}
+                  <div className="mx-3 mt-3 rounded-lg bg-black/30 backdrop-blur-sm border border-white/10 px-3 py-2 flex items-start gap-2">
+                    <div className="w-0.5 shrink-0 self-stretch bg-white/40 rounded-full" />
+                    <div className="min-w-0">
+                      <span className="text-[10px] font-bold text-white/50 uppercase tracking-wider">
+                        RE: #{seqNum}
+                      </span>
+                      <p className="text-xs text-white/70 leading-relaxed mt-0.5 line-clamp-2">
+                        {quotedText}
+                      </p>
+                    </div>
+                  </div>
+                  {/* Main message body */}
+                  <div className="px-5 py-3.5">
+                    <p className="text-sm whitespace-pre-wrap leading-relaxed font-sans">
+                      {bodyText?.trim() ?? ""}
+                    </p>
+                  </div>
+                </>
+              );
+            })()}
             <MessageImages msg={msg} />
           </div>
           {/* User message actions */}
