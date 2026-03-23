@@ -369,7 +369,7 @@ export async function resolveApiKeyForProvider(params: {
       })
     : undefined;
   if (owningPluginIds?.length) {
-    const pluginMissingAuthMessage = buildProviderMissingAuthMessageWithPlugin({
+    const pluginMissingAuthMessage = await buildProviderMissingAuthMessageWithPlugin({
       provider,
       config: cfg,
       context: {
