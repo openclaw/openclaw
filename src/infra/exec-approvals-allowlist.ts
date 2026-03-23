@@ -20,7 +20,6 @@ import {
 import { isTrustedSafeBinPath } from "./exec-safe-bin-trust.js";
 import {
   extractShellWrapperInlineCommand,
-  isDispatchWrapperExecutable,
   isShellWrapperExecutable,
   unwrapKnownShellMultiplexerInvocation,
   unwrapKnownDispatchWrapperInvocation,
@@ -342,10 +341,6 @@ function isShellWrapperSegment(segment: ExecCommandSegment): boolean {
   return hasSegmentExecutableMatch(segment, isShellWrapperExecutable);
 }
 
-function isDispatchWrapperSegment(segment: ExecCommandSegment): boolean {
-  return hasSegmentExecutableMatch(segment, isDispatchWrapperExecutable);
-}
-
 const SHELL_WRAPPER_OPTIONS_WITH_VALUE = new Set([
   "-c",
   "--command",
@@ -441,9 +436,12 @@ function collectAllowAlwaysPatterns(params: {
     });
   };
 
-  if (isDispatchWrapperSegment(params.segment)) {
-    const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(params.segment.argv);
-    if (dispatchUnwrap.kind !== "unwrapped" || dispatchUnwrap.argv.length === 0) {
+  const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(params.segment.argv);
+  if (dispatchUnwrap.kind === "blocked") {
+    return;
+  }
+  if (dispatchUnwrap.kind === "unwrapped") {
+    if (dispatchUnwrap.argv.length === 0) {
       return;
     }
     recurseWithArgv(dispatchUnwrap.argv);
