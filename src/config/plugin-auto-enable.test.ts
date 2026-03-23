@@ -200,6 +200,31 @@ describe("applyPluginAutoEnable", () => {
     expect(validated.ok).toBe(true);
   });
 
+  it("does not re-emit built-in auto-enable changes when rerun with plugins.allow set", () => {
+    const first = applyPluginAutoEnable({
+      config: {
+        channels: {
+          whatsapp: {
+            allowFrom: ["+15555550123"],
+          },
+        },
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      env: {},
+    });
+
+    const second = applyPluginAutoEnable({
+      config: first.config,
+      env: {},
+    });
+
+    expect(first.changes).toHaveLength(1);
+    expect(second.changes).toEqual([]);
+    expect(second.config).toEqual(first.config);
+  });
+
   it("respects explicit disable", () => {
     const result = applyPluginAutoEnable({
       config: {
