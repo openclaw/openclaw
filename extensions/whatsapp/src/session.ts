@@ -7,6 +7,7 @@ import {
   makeWASocket,
   useMultiFileAuthState,
 } from "@whiskeysockets/baileys";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import { danger, success } from "openclaw/plugin-sdk/runtime-env";
@@ -92,6 +93,20 @@ async function safeSaveCreds(
   }
 }
 
+/** Check if any WhatsApp group is configured with requireMention: "monitor". */
+function hasMonitorGroups(): boolean {
+  try {
+    const cfg = loadConfig();
+    const groups = (cfg.channels as Record<string, any>)?.whatsapp?.groups;
+    if (!groups) return false;
+    return Object.values(groups).some(
+      (g: any) => g?.requireMention === "monitor",
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Create a Baileys socket backed by the multi-file auth store we keep on disk.
  * Consumers can opt into QR printing for interactive login flows.
@@ -124,7 +139,7 @@ export async function createWaSocket(
     printQRInTerminal: false,
     browser: ["openclaw", "cli", VERSION],
     syncFullHistory: false,
-    shouldSyncHistoryMessage: () => true,
+    shouldSyncHistoryMessage: hasMonitorGroups() ? () => true : undefined,
     markOnlineOnConnect: false,
   });
 
@@ -154,7 +169,7 @@ export async function createWaSocket(
         if (connection === "open" && verbose) {
           console.log(success("WhatsApp Web connected."));
         }
-        if (connection === "open") {
+        if (connection === "open" && hasMonitorGroups()) {
           try {
             if (typeof (sock as any).communityFetchAllParticipating === "function") {
               (sock as any)

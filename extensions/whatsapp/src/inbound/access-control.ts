@@ -102,7 +102,7 @@ export async function checkInboundAccessControl(params: {
   // Monitor-only groups bypass all sender-level filtering.
   // Read raw config value directly since "monitor" is a custom string value.
   const rawRequireMention = cfg.channels?.whatsapp?.groups?.[params.remoteJid]?.requireMention;
-  if (params.group && rawRequireMention === ("monitor" as any)) {
+  if (params.group && rawRequireMention === "monitor") {
     return {
       allowed: true,
       shouldMarkRead: true,
