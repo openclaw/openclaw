@@ -374,6 +374,10 @@ async function resolveSynologyReplyUserId(params: {
   payload: SynologyWebhookPayload;
   log?: WebhookHandlerDeps["log"];
 }): Promise<string> {
+  if (!params.account.dangerouslyAllowNameMatching) {
+    return params.payload.user_id;
+  }
+
   const chatUserId = await resolveChatUserId(
     params.account.incomingUrl,
     params.payload.username,

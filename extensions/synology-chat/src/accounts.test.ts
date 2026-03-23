@@ -66,6 +66,7 @@ describe("resolveAccount", () => {
     expect(account.accountId).toBe("default");
     expect(account.enabled).toBe(true);
     expect(account.webhookPath).toBe("/webhook/synology");
+    expect(account.dangerouslyAllowNameMatching).toBe(false);
     expect(account.dmPolicy).toBe("allowlist");
     expect(account.rateLimitPerMinute).toBe(30);
     expect(account.botName).toBe("OpenClaw");
@@ -100,8 +101,13 @@ describe("resolveAccount", () => {
         "synology-chat": {
           token: "base-tok",
           botName: "BaseName",
+          dangerouslyAllowNameMatching: false,
           accounts: {
-            work: { token: "work-tok", botName: "WorkBot" },
+            work: {
+              token: "work-tok",
+              botName: "WorkBot",
+              dangerouslyAllowNameMatching: true,
+            },
           },
         },
       },
@@ -109,6 +115,42 @@ describe("resolveAccount", () => {
     const account = resolveAccount(cfg, "work");
     expect(account.token).toBe("work-tok");
     expect(account.botName).toBe("WorkBot");
+    expect(account.dangerouslyAllowNameMatching).toBe(true);
+  });
+
+  it("inherits dangerous name matching from base config when not overridden", () => {
+    const cfg = {
+      channels: {
+        "synology-chat": {
+          dangerouslyAllowNameMatching: true,
+          accounts: {
+            work: { token: "work-tok" },
+          },
+        },
+      },
+    };
+
+    const account = resolveAccount(cfg, "work");
+    expect(account.dangerouslyAllowNameMatching).toBe(true);
+  });
+
+  it("allows a named account to disable inherited dangerous name matching", () => {
+    const cfg = {
+      channels: {
+        "synology-chat": {
+          dangerouslyAllowNameMatching: true,
+          accounts: {
+            work: {
+              token: "work-tok",
+              dangerouslyAllowNameMatching: false,
+            },
+          },
+        },
+      },
+    };
+
+    const account = resolveAccount(cfg, "work");
+    expect(account.dangerouslyAllowNameMatching).toBe(false);
   });
 
   it("parses comma-separated allowedUserIds string", () => {
