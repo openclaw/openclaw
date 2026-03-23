@@ -64,12 +64,23 @@ export async function probeGateway(opts: {
 
   return await new Promise<GatewayProbeResult>((resolve) => {
     let settled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const clearProbeTimer = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    };
+    const armProbeTimer = (onTimeout: () => void) => {
+      clearProbeTimer();
+      timer = setTimeout(onTimeout, clampProbeTimeoutMs(opts.timeoutMs));
+    };
     const settle = (result: Omit<GatewayProbeResult, "url">) => {
       if (settled) {
         return;
       }
       settled = true;
-      clearTimeout(timer);
+      clearProbeTimer();
       client.stop();
       resolve({ url: opts.url, ...result });
     };
@@ -105,6 +116,20 @@ export async function probeGateway(opts: {
           });
           return;
         }
+        // Once the gateway has accepted the session, a slow follow-up RPC should no longer
+        // downgrade the probe to "unreachable". Give detail fetching its own budget.
+        armProbeTimer(() => {
+          settle({
+            ok: false,
+            connectLatencyMs,
+            error: "timeout",
+            close,
+            health: null,
+            status: null,
+            presence: null,
+            configSnapshot: null,
+          });
+        });
         try {
           if (detailLevel === "presence") {
             const presence = await client.request("system-presence");
@@ -151,7 +176,7 @@ export async function probeGateway(opts: {
       },
     });
 
-    const timer = setTimeout(() => {
+    armProbeTimer(() => {
       settle({
         ok: false,
         connectLatencyMs,
@@ -162,7 +187,7 @@ export async function probeGateway(opts: {
         presence: null,
         configSnapshot: null,
       });
-    }, clampProbeTimeoutMs(opts.timeoutMs));
+    });
 
     client.start();
   });
