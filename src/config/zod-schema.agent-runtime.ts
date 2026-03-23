@@ -34,6 +34,7 @@ export const HeartbeatSchema = z
     ackMaxChars: z.number().int().nonnegative().optional(),
     suppressToolErrorWarnings: z.boolean().optional(),
     lightContext: z.boolean().optional(),
+    beforeRun: z.string().optional(),
   })
   .strict()
   .superRefine((val, ctx) => {
