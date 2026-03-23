@@ -341,7 +341,11 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/duckduckgo: {}
+
   extensions/elevenlabs: {}
+
+  extensions/exa: {}
 
   extensions/fal: {}
 

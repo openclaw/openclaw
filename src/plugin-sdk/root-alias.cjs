@@ -65,10 +65,6 @@ function resolveControlCommandGate(params) {
 }
 
 function onDiagnosticEvent(listener) {
-  const monolithic = loadMonolithicSdk();
-  if (monolithic && typeof monolithic.onDiagnosticEvent === "function") {
-    return monolithic.onDiagnosticEvent(listener);
-  }
   const diagnosticEvents = loadDiagnosticEventsModule();
   if (!diagnosticEvents || typeof diagnosticEvents.onDiagnosticEvent !== "function") {
     throw new Error("openclaw/plugin-sdk root alias could not resolve onDiagnosticEvent");
@@ -152,7 +148,7 @@ function loadMonolithicSdk() {
     }
   }
 
-  monolithicSdk = getJiti(false)(path.join(__dirname, "compat.ts"));
+  monolithicSdk = getJiti(false)(path.join(getPackageRoot(), "src", "plugin-sdk", "compat.ts"));
   return monolithicSdk;
 }
 
@@ -179,7 +175,7 @@ function loadDiagnosticEventsModule() {
   }
 
   diagnosticEventsModule = getJiti(false)(
-    path.join(__dirname, "..", "infra", "diagnostic-events.ts"),
+    path.join(getPackageRoot(), "src", "infra", "diagnostic-events.ts"),
   );
   return diagnosticEventsModule;
 }

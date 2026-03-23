@@ -13,11 +13,25 @@ export function resolveVitestIsolation(
 
 export function createScopedVitestConfig(
   include: string[],
-  options?: { exclude?: string[]; pool?: "threads" | "forks" },
+  options?: {
+    dir?: string;
+    exclude?: string[];
+    pool?: "threads" | "forks";
+    passWithNoTests?: boolean;
+  },
 ) {
   const base = baseConfig as unknown as Record<string, unknown>;
   const baseTest =
-    (baseConfig as { test?: { exclude?: string[]; pool?: "threads" | "forks" } }).test ?? {};
+    (
+      baseConfig as {
+        test?: {
+          dir?: string;
+          exclude?: string[];
+          pool?: "threads" | "forks";
+          passWithNoTests?: boolean;
+        };
+      }
+    ).test ?? {};
   const exclude = [...(baseTest.exclude ?? []), ...(options?.exclude ?? [])];
 
   return defineConfig({
@@ -25,9 +39,13 @@ export function createScopedVitestConfig(
     test: {
       ...baseTest,
       isolate: resolveVitestIsolation(),
+      ...(options?.dir ? { dir: options.dir } : {}),
       include,
       exclude,
       ...(options?.pool ? { pool: options.pool } : {}),
+      ...(options?.passWithNoTests !== undefined
+        ? { passWithNoTests: options.passWithNoTests }
+        : {}),
     },
   });
 }
