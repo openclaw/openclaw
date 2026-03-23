@@ -106,8 +106,8 @@ const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
 const MOONSHOT_CN_BASE_URL = "https://api.moonshot.cn/v1";
 const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2.5";
 const MOONSHOT_DEFAULT_MODEL_REF = `moonshot/${MOONSHOT_DEFAULT_MODEL_ID}`;
-const MOONSHOT_DEFAULT_CONTEXT_WINDOW = 256000;
-const MOONSHOT_DEFAULT_MAX_TOKENS = 8192;
+const MOONSHOT_DEFAULT_CONTEXT_WINDOW = 262144;
+const MOONSHOT_DEFAULT_MAX_TOKENS = 262144;
 const MOONSHOT_DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
 const QIANFAN_BASE_URL = "https://qianfan.baidubce.com/v2";
