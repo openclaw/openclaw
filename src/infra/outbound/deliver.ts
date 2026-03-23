@@ -353,6 +353,8 @@ function createMessageSentEmitter(params: {
   channel: Exclude<OutboundChannel, "none">;
   to: string;
   accountId?: string;
+  sessionKey?: string;
+  agentId?: string;
   sessionKeyForInternalHooks?: string;
   mirrorIsGroup?: boolean;
   mirrorGroupId?: string;
@@ -371,6 +373,8 @@ function createMessageSentEmitter(params: {
       channelId: params.channel,
       accountId: params.accountId ?? undefined,
       conversationId: params.to,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
       messageId: event.messageId,
       isGroup: params.mirrorIsGroup,
       groupId: params.mirrorGroupId,
@@ -408,6 +412,22 @@ function createMessageSentEmitter(params: {
   return { emitMessageSent, hasMessageSentHooks };
 }
 
+function resolveMessageHookContext(params: {
+  channel: Exclude<OutboundChannel, "none">;
+  to: string;
+  accountId?: string;
+  session?: OutboundSessionContext;
+  mirror?: DeliverOutboundPayloadsCoreParams["mirror"];
+}) {
+  return {
+    channelId: params.channel,
+    accountId: params.accountId ?? undefined,
+    conversationId: params.to,
+    sessionKey: params.mirror?.sessionKey ?? params.session?.key,
+    agentId: params.mirror?.agentId ?? params.session?.agentId,
+  };
+}
+
 async function applyMessageSendingHook(params: {
   hookRunner: ReturnType<typeof getGlobalHookRunner>;
   enabled: boolean;
@@ -416,6 +436,8 @@ async function applyMessageSendingHook(params: {
   to: string;
   channel: Exclude<OutboundChannel, "none">;
   accountId?: string;
+  sessionKey?: string;
+  agentId?: string;
 }): Promise<{
   cancelled: boolean;
   payload: ReplyPayload;
@@ -442,6 +464,9 @@ async function applyMessageSendingHook(params: {
       {
         channelId: params.channel,
         accountId: params.accountId ?? undefined,
+        conversationId: params.to,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
       },
     );
     if (sendingResult?.cancel) {
@@ -621,7 +646,14 @@ async function deliverOutboundPayloadsCore(
   };
   const normalizedPayloads = normalizePayloadsForChannelDelivery(payloads, channel, handler);
   const hookRunner = getGlobalHookRunner();
-  const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
+  const messageHookContext = resolveMessageHookContext({
+    channel,
+    to,
+    accountId,
+    session: params.session,
+    mirror: params.mirror,
+  });
+  const sessionKeyForInternalHooks = messageHookContext.sessionKey;
   const mirrorIsGroup = params.mirror?.isGroup;
   const mirrorGroupId = params.mirror?.groupId;
   const { emitMessageSent, hasMessageSentHooks } = createMessageSentEmitter({
@@ -629,18 +661,20 @@ async function deliverOutboundPayloadsCore(
     channel,
     to,
     accountId,
+    sessionKey: messageHookContext.sessionKey,
+    agentId: messageHookContext.agentId,
     sessionKeyForInternalHooks,
     mirrorIsGroup,
     mirrorGroupId,
   });
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
-  if (hasMessageSentHooks && params.session?.agentId && !sessionKeyForInternalHooks) {
+  if (hasMessageSentHooks && messageHookContext.agentId && !sessionKeyForInternalHooks) {
     log.warn(
       "deliverOutboundPayloads: session.agentId present without session key; internal message:sent hook will be skipped",
       {
         channel,
         to,
-        agentId: params.session.agentId,
+        agentId: messageHookContext.agentId,
       },
     );
   }
@@ -658,6 +692,8 @@ async function deliverOutboundPayloadsCore(
         to,
         channel,
         accountId,
+        sessionKey: messageHookContext.sessionKey,
+        agentId: messageHookContext.agentId,
       });
       if (hookResult.cancelled) {
         continue;

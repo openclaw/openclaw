@@ -74,6 +74,8 @@ describe("message hook mappers", () => {
       channelId: "telegram",
       accountId: "acc-1",
       conversationId: "telegram:chat:456",
+      sessionKey: undefined,
+      agentId: undefined,
     });
     expect(toPluginMessageReceivedEvent(canonical)).toEqual({
       from: "telegram:user:123",
@@ -171,6 +173,8 @@ describe("message hook mappers", () => {
       channelId: "telegram",
       accountId: "acc-1",
       messageId: "out-1",
+      sessionKey: "agent:main:telegram:chat:456",
+      agentId: "main",
       isGroup: true,
       groupId: "telegram:chat:456",
     });
@@ -179,6 +183,8 @@ describe("message hook mappers", () => {
       channelId: "telegram",
       accountId: "acc-1",
       conversationId: "telegram:chat:456",
+      sessionKey: "agent:main:telegram:chat:456",
+      agentId: "main",
     });
     expect(toPluginMessageSentEvent(canonical)).toEqual({
       to: "telegram:chat:456",

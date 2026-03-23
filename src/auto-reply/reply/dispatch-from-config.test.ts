@@ -2008,6 +2008,7 @@ describe("dispatchReplyFromConfig", () => {
       SenderUsername: "alice",
       SenderE164: "+15555550123",
       AccountId: "acc-1",
+      SessionKey: "agent:main:main",
       GroupSpace: "guild-123",
       GroupChannel: "alerts",
     });
@@ -2036,6 +2037,8 @@ describe("dispatchReplyFromConfig", () => {
         channelId: "telegram",
         accountId: "acc-1",
         conversationId: "telegram:999",
+        sessionKey: "agent:main:main",
+        agentId: "main",
       }),
     );
   });

@@ -25,6 +25,8 @@ export type CanonicalInboundMessageHookContext = {
   channelId: string;
   accountId?: string;
   conversationId?: string;
+  sessionKey?: string;
+  agentId?: string;
   messageId?: string;
   senderId?: string;
   senderName?: string;
@@ -51,6 +53,8 @@ export type CanonicalSentMessageHookContext = {
   channelId: string;
   accountId?: string;
   conversationId?: string;
+  sessionKey?: string;
+  agentId?: string;
   messageId?: string;
   isGroup?: boolean;
   groupId?: string;
@@ -61,6 +65,8 @@ export function deriveInboundMessageHookContext(
   overrides?: {
     content?: string;
     messageId?: string;
+    sessionKey?: string;
+    agentId?: string;
   },
 ): CanonicalInboundMessageHookContext {
   const content =
@@ -89,6 +95,8 @@ export function deriveInboundMessageHookContext(
     channelId,
     accountId: ctx.AccountId,
     conversationId,
+    sessionKey: overrides?.sessionKey ?? ctx.SessionKey,
+    agentId: overrides?.agentId,
     messageId:
       overrides?.messageId ??
       ctx.MessageSidFull ??
@@ -121,6 +129,8 @@ export function buildCanonicalSentMessageHookContext(params: {
   channelId: string;
   accountId?: string;
   conversationId?: string;
+  sessionKey?: string;
+  agentId?: string;
   messageId?: string;
   isGroup?: boolean;
   groupId?: string;
@@ -133,6 +143,8 @@ export function buildCanonicalSentMessageHookContext(params: {
     channelId: params.channelId,
     accountId: params.accountId,
     conversationId: params.conversationId ?? params.to,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
     messageId: params.messageId,
     isGroup: params.isGroup,
     groupId: params.groupId,
@@ -146,6 +158,8 @@ export function toPluginMessageContext(
     channelId: canonical.channelId,
     accountId: canonical.accountId,
     conversationId: canonical.conversationId,
+    sessionKey: canonical.sessionKey,
+    agentId: canonical.agentId,
   };
 }
 
