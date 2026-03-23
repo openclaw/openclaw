@@ -4,28 +4,15 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../config/home-env.test-harness.js";
+import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
-const mockLog = vi.fn();
-const mockError = vi.fn();
-const mockExit = vi.fn((code: number) => {
-  throw new Error(`__exit__:${code}`);
-});
+const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const mockLog = defaultRuntime.log;
+const mockError = defaultRuntime.error;
 
-vi.mock("../runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../runtime.js")>();
-  return {
-    ...actual,
-    defaultRuntime: {
-      ...actual.defaultRuntime,
-      log: (...args: unknown[]) => mockLog(...args),
-      error: (...args: unknown[]) => mockError(...args),
-      writeStdout: (value: string) => mockLog(value.endsWith("\n") ? value.slice(0, -1) : value),
-      writeJson: (value: unknown, space = 2) =>
-        mockLog(JSON.stringify(value, null, space > 0 ? space : undefined)),
-      exit: (code: number) => mockExit(code),
-    },
-  };
-});
+vi.mock("../runtime.js", () => ({
+  defaultRuntime,
+}));
 
 const tempDirs: string[] = [];
 
@@ -52,6 +39,7 @@ describe("mcp cli", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetRuntimeCapture();
   });
 
   afterEach(async () => {

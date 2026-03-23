@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
 const agentCliCommandMock = vi.fn();
 const agentsAddCommandMock = vi.fn();
@@ -12,17 +13,7 @@ const agentsUnbindCommandMock = vi.fn();
 const setVerboseMock = vi.fn();
 const createDefaultDepsMock = vi.fn(() => ({ deps: true }));
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  writeStdout: vi.fn((value: string) => {
-    runtime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
-  }),
-  writeJson: vi.fn((value: unknown, space = 2) => {
-    runtime.log(JSON.stringify(value, null, space));
-  }),
-  exit: vi.fn(),
-};
+const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 vi.mock("../../commands/agent-via-gateway.js", () => ({
   agentCliCommand: agentCliCommandMock,
@@ -80,6 +71,8 @@ describe("registerAgentCommands", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetRuntimeCapture();
+    runtime.exit.mockImplementation(() => {});
     agentCliCommandMock.mockResolvedValue(undefined);
     agentsAddCommandMock.mockResolvedValue(undefined);
     agentsBindingsCommandMock.mockResolvedValue(undefined);
