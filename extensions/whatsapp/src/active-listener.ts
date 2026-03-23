@@ -1,7 +1,6 @@
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import type { PollInput } from "openclaw/plugin-sdk/media-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
-import { resolveGlobalSingleton } from "openclaw/plugin-sdk/text-runtime";
 
 export type ActiveWebSendOptions = {
   gifPlayback?: boolean;
@@ -29,8 +28,11 @@ export type ActiveWebListener = {
   close?: () => Promise<void>;
 };
 
-// Use process-global symbol keys to survive bundler code-splitting and loader
-// cache splits without depending on fragile string property names.
+// WhatsApp is the only channel that shares a live stateful object (the Baileys
+// WebSocket connection) between inbound and outbound code paths. The bundler
+// was marking `resolveGlobalSingleton()` as `@__PURE__` and inlining it to a
+// bare `new Map()` per chunk, so each code-split chunk got its own empty Map.
+// Direct `globalThis` property access cannot be tree-shaken or inlined.
 const WHATSAPP_ACTIVE_LISTENER_STATE_KEY = Symbol.for("openclaw.whatsapp.activeListenerState");
 
 type ActiveListenerState = {
@@ -38,13 +40,14 @@ type ActiveListenerState = {
   current: ActiveWebListener | null;
 };
 
-const state = resolveGlobalSingleton<ActiveListenerState>(
-  WHATSAPP_ACTIVE_LISTENER_STATE_KEY,
-  () => ({
+const g = globalThis as unknown as Record<symbol, ActiveListenerState | undefined>;
+if (!g[WHATSAPP_ACTIVE_LISTENER_STATE_KEY]) {
+  g[WHATSAPP_ACTIVE_LISTENER_STATE_KEY] = {
     listeners: new Map<string, ActiveWebListener>(),
     current: null,
-  }),
-);
+  };
+}
+const state = g[WHATSAPP_ACTIVE_LISTENER_STATE_KEY];
 
 function getCurrentListener(): ActiveWebListener | null {
   return state.current;
