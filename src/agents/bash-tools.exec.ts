@@ -42,6 +42,7 @@ import {
   resolveWorkdir,
   truncateMiddle,
 } from "./bash-tools.shared.js";
+import { stripXmlArgValueSuffix } from "./pi-tools.params.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 
 export type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -224,6 +225,10 @@ export function createExecTool(
       if (!params.command) {
         throw new Error("Provide a command to start.");
       }
+
+      // Strip malformed XML closing-tag suffixes leaked by some providers (e.g. Qwen/DashScope).
+      // See https://github.com/openclaw/openclaw/issues/48780
+      params.command = stripXmlArgValueSuffix(params.command);
 
       const maxOutput = DEFAULT_MAX_OUTPUT;
       const pendingMaxOutput = DEFAULT_PENDING_MAX_OUTPUT;

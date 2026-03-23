@@ -82,6 +82,35 @@ function normalizeTextLikeParam(record: Record<string, unknown>, key: string) {
   }
 }
 
+/**
+ * Strip malformed XML closing-tag suffixes from tool call argument values.
+ *
+ * Some models (e.g. Qwen via DashScope) emit tool call arguments with
+ * trailing XML fragments like `</arg_value>>` or `</arg_value>` appended
+ * to string values. This corrupts exec commands and file paths on Windows
+ * (and elsewhere). Strip these artifacts so the actual argument value is
+ * preserved.
+ *
+ * @see https://github.com/openclaw/openclaw/issues/48780
+ */
+const XML_ARG_VALUE_SUFFIX_RE = /<\/arg_value>>{0,2}$/;
+
+export function stripXmlArgValueSuffix(value: string): string {
+  if (!value || !value.includes("</arg_value>")) {
+    return value;
+  }
+  return value.replace(XML_ARG_VALUE_SUFFIX_RE, "");
+}
+
+function stripXmlArgValueSuffixFromRecord(record: Record<string, unknown>): void {
+  for (const key of Object.keys(record)) {
+    const value = record[key];
+    if (typeof value === "string" && value.includes("</arg_value>")) {
+      record[key] = stripXmlArgValueSuffix(value);
+    }
+  }
+}
+
 // Normalize tool parameters from Claude Code conventions to pi-coding-agent conventions.
 // Claude Code uses file_path/old_string/new_string while pi-coding-agent uses path/oldText/newText.
 // This prevents models trained on Claude Code from getting stuck in tool-call loops.
@@ -111,6 +140,9 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
   normalizeTextLikeParam(normalized, "content");
   normalizeTextLikeParam(normalized, "oldText");
   normalizeTextLikeParam(normalized, "newText");
+  // Strip malformed XML closing-tag suffixes leaked by some providers (e.g. Qwen/DashScope).
+  // See https://github.com/openclaw/openclaw/issues/48780
+  stripXmlArgValueSuffixFromRecord(normalized);
   return normalized;
 }
 
