@@ -1,7 +1,4 @@
-import {
-  createLazyRuntimeMethodBinder,
-  createLazyRuntimeModule,
-} from "../shared/lazy-runtime.js";
+import { createLazyRuntimeMethodBinder, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 
 const loadImageRuntime = createLazyRuntimeModule(() => import("./image.js"));
 const bindImageRuntime = createLazyRuntimeMethodBinder(loadImageRuntime);
