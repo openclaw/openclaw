@@ -62,8 +62,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val sessions by viewModel.chatSessions.collectAsState()
 
   LaunchedEffect(mainSessionKey) {
-    viewModel.loadChat(mainSessionKey)
-    viewModel.refreshChatSessions(limit = 200)
+    viewModel.loadChat(mainSessionKey, sessionsLimit = 200)
   }
 
   val context = LocalContext.current
