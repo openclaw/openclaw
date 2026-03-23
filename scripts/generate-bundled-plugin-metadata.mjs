@@ -8,6 +8,7 @@ const GENERATED_BY = "scripts/generate-bundled-plugin-metadata.mjs";
 const DEFAULT_OUTPUT_PATH = "src/plugins/bundled-plugin-metadata.generated.ts";
 const MANIFEST_KEY = "openclaw";
 const FORMATTER_CWD = path.resolve(import.meta.dirname, "..");
+const OXFMT_BIN = path.join(FORMATTER_CWD, "node_modules", ".bin", "oxfmt");
 const CANONICAL_PACKAGE_ID_ALIASES = {
   "elevenlabs-speech": "elevenlabs",
   "microsoft-speech": "microsoft",
@@ -128,15 +129,17 @@ function normalizePluginManifest(raw) {
 
 function formatTypeScriptModule(source, { outputPath }) {
   const formatterPath = path.relative(FORMATTER_CWD, outputPath) || outputPath;
-  const formatter = spawnSync(
-    process.platform === "win32" ? "pnpm.cmd" : "pnpm",
-    ["exec", "oxfmt", "--stdin-filepath", formatterPath],
-    {
-      cwd: FORMATTER_CWD,
-      input: source,
-      encoding: "utf8",
-    },
-  );
+  const useDirectFormatter = process.platform !== "win32" && fs.existsSync(OXFMT_BIN);
+  const command =
+    process.platform === "win32" ? "pnpm.cmd" : useDirectFormatter ? OXFMT_BIN : "pnpm";
+  const args = useDirectFormatter
+    ? ["--stdin-filepath", formatterPath]
+    : ["exec", "oxfmt", "--stdin-filepath", formatterPath];
+  const formatter = spawnSync(command, args, {
+    cwd: FORMATTER_CWD,
+    input: source,
+    encoding: "utf8",
+  });
   if (formatter.status !== 0) {
     const details =
       formatter.stderr?.trim() ||
