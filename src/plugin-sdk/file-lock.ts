@@ -100,6 +100,18 @@ async function releaseHeldLock(normalizedFile: string): Promise<void> {
   await fs.rm(current.lockPath, { force: true }).catch(() => undefined);
 }
 
+export function resetFileLockStateForTest(): void {
+  for (const [normalizedFile, held] of HELD_LOCKS) {
+    try {
+      void held.handle.close().catch(() => undefined);
+    } catch {
+      // Best-effort test cleanup only.
+    }
+    void fs.rm(held.lockPath, { force: true }).catch(() => undefined);
+    HELD_LOCKS.delete(normalizedFile);
+  }
+}
+
 /** Acquire a re-entrant process-local file lock backed by a `.lock` sidecar file. */
 export async function acquireFileLock(
   filePath: string,
