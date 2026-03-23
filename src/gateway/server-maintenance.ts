@@ -260,27 +260,25 @@ export function startGatewayMaintenanceTimers(params: {
         }
       }
 
-      // Only broadcast when there are active (non-done) delegations to avoid noise
+      // Broadcast ALL delegations (including recently completed/failed) so UI can update status
       const nowBroadcast = Date.now();
-      const activeDelegations = rows
-        .map((r) => ({
-          runId: r.run_id,
-          childSessionKey: r.child_session_key,
-          sessionKey: r.requester_session_key,
-          agentId: r.agent_id,
-          task: r.task,
-          label: r.label,
-          status: computeDelegationStatus(r),
-          createdAt: r.created_at ?? 0,
-          startedAt: r.started_at ?? null,
-          endedAt: r.ended_at ?? null,
-          resultPreview: r.result_preview ?? null,
-          elapsedMs: r.created_at != null ? nowBroadcast - r.created_at : 0,
-        }))
-        .filter((d) => d.status !== "done" && d.status !== "failed");
+      const allDelegations = rows.map((r) => ({
+        runId: r.run_id,
+        childSessionKey: r.child_session_key,
+        sessionKey: r.requester_session_key,
+        agentId: r.agent_id,
+        task: r.task,
+        label: r.label,
+        status: computeDelegationStatus(r),
+        createdAt: r.created_at ?? 0,
+        startedAt: r.started_at ?? null,
+        endedAt: r.ended_at ?? null,
+        resultPreview: r.result_preview ?? null,
+        elapsedMs: r.created_at != null ? nowBroadcast - r.created_at : 0,
+      }));
 
-      if (activeDelegations.length > 0) {
-        params.broadcast("delegation", { delegations: activeDelegations });
+      if (allDelegations.length > 0) {
+        params.broadcast("delegation", { delegations: allDelegations });
       }
     } catch (err) {
       if (err instanceof Error && err.message.includes("no such table")) {
