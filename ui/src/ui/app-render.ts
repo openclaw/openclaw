@@ -9,8 +9,9 @@ import { refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
   renderChatControls,
+  renderChatModelSelect,
   renderChatMobileToggle,
-  renderChatSessionSelect,
+  renderChatSidebarSection,
   renderTab,
   renderSidebarConnectionStatus,
   renderTopbarThemeModeToggle,
@@ -483,6 +484,9 @@ export function renderApp(state: AppViewState) {
             <div class="sidebar-shell__body">
               <nav class="sidebar-nav">
                 ${TAB_GROUPS.map((group) => {
+                  if (group.label === "chat") {
+                    return renderChatSidebarSection(state);
+                  }
                   const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
                   const hasActiveTab = group.tabs.some((tab) => tab === state.tab);
                   const showItems = navCollapsed || hasActiveTab || !isGroupCollapsed;
@@ -602,7 +606,7 @@ export function renderApp(state: AppViewState) {
               <div>
                 ${
                   isChat
-                    ? renderChatSessionSelect(state)
+                    ? html`<div class="chat-controls__session-row">${renderChatModelSelect(state)}</div>`
                     : html`<div class="page-title">${titleForTab(state.tab)}</div>`
                 }
                 ${isChat ? nothing : html`<div class="page-sub">${subtitleForTab(state.tab)}</div>`}
@@ -1439,7 +1443,6 @@ export function renderApp(state: AppViewState) {
                 canAbort: Boolean(state.chatRunId),
                 onAbort: () => void state.handleAbortChat(),
                 onQueueRemove: (id) => state.removeQueuedMessage(id),
-                onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
                 onClearHistory: async () => {
                   if (!state.client || !state.connected) {
                     return;

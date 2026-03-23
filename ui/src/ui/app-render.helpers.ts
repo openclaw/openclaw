@@ -20,11 +20,46 @@ import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 import type { ModelCatalogEntry, SessionsListResult } from "./types.ts";
+import type { ChatAttachment } from "./ui-types.ts";
 
 type SessionDefaultsSnapshot = {
   mainSessionKey?: string;
   mainKey?: string;
 };
+
+type SessionDefaultsAgentSnapshot = {
+  defaultAgentId?: string;
+};
+
+type ComposerSnapshot = {
+  message: string;
+  attachments: ChatAttachment[];
+};
+
+function cloneComposerSnapshot(state: AppViewState): ComposerSnapshot {
+  return {
+    message: state.chatMessage,
+    attachments: [...state.chatAttachments],
+  };
+}
+
+function resolveActiveChatAgentId(
+  state: Pick<AppViewState, "sessionKey" | "hello" | "agentsList">,
+) {
+  const parsed = parseAgentSessionKey(state.sessionKey);
+  if (parsed?.agentId) {
+    return parsed.agentId;
+  }
+  const snapshot = state.hello?.snapshot as
+    | { sessionDefaults?: SessionDefaultsAgentSnapshot }
+    | undefined;
+  const fallback = snapshot?.sessionDefaults?.defaultAgentId?.trim();
+  if (fallback) {
+    return fallback;
+  }
+  const listFallback = state.agentsList?.defaultId?.trim();
+  return listFallback || "main";
+}
 
 function resolveSidebarChatSessionKey(state: AppViewState): string {
   const snapshot = state.hello?.snapshot as
@@ -133,42 +168,103 @@ function renderCronFilterIcon(hiddenCount: number) {
   `;
 }
 
-export function renderChatSessionSelect(state: AppViewState) {
+function resolveSidebarChatSessions(state: AppViewState) {
   const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
-  const modelSelect = renderChatModelSelect(state);
+  const sessions = sessionGroups.flatMap((group) => group.options);
+
+  if (!sessions.some((entry) => entry.key === state.sessionKey)) {
+    const parsed = parseAgentSessionKey(state.sessionKey);
+    sessions.unshift({
+      key: state.sessionKey,
+      label: resolveSessionScopedOptionLabel(
+        state.sessionKey,
+        state.sessionsResult?.sessions?.find((candidate) => candidate.key === state.sessionKey),
+        parsed?.rest,
+      ),
+      scopeLabel: "",
+      title: state.sessionKey,
+    });
+  }
+
+  return sessions.map((option) => ({
+    key: option.key,
+    label: option.label,
+    title: option.title,
+  }));
+}
+
+export function renderChatSidebarSection(state: AppViewState) {
+  if (state.settings.navCollapsed) {
+    return html`<section class="nav-section nav-section--chat">
+      ${renderTab(state, "chat", { collapsed: true })}
+    </section>`;
+  }
+
+  const isGroupCollapsed = state.settings.navGroupsCollapsed.chat ?? false;
+  const showItems = !isGroupCollapsed;
+  const sessions = resolveSidebarChatSessions(state);
+  const canCreate = state.connected && !state.chatRunId && !state.newChatSessionPending;
+
+  const toggleSection = () => {
+    const next = { ...state.settings.navGroupsCollapsed };
+    next.chat = !isGroupCollapsed;
+    state.applySettings({
+      ...state.settings,
+      navGroupsCollapsed: next,
+    });
+  };
+
+  const handleSessionClick = (sessionKey: string) => {
+    if (state.tab !== "chat") {
+      state.setTab("chat");
+    }
+    if (sessionKey === state.sessionKey) {
+      return;
+    }
+    switchChatSession(state, sessionKey);
+  };
+
   return html`
-    <div class="chat-controls__session-row">
-      <label class="field chat-controls__session">
-        <select
-          .value=${state.sessionKey}
-          ?disabled=${!state.connected || sessionGroups.length === 0}
-          @change=${(e: Event) => {
-            const next = (e.target as HTMLSelectElement).value;
-            if (state.sessionKey === next) {
-              return;
-            }
-            switchChatSession(state, next);
-          }}
+    <section class="nav-section nav-section--chat ${!showItems ? "nav-section--collapsed" : ""}">
+      <div class="nav-section__header">
+        <button class="nav-section__label" @click=${toggleSection} aria-expanded=${showItems}>
+          <span class="nav-section__label-text">${t("nav.chat")}</span>
+          <span class="nav-section__chevron">${icons.chevronDown}</span>
+        </button>
+        <button
+          type="button"
+          class="nav-section__action"
+          title="New chat session"
+          aria-label="New chat session"
+          ?disabled=${!canCreate}
+          @click=${() => void createNewChatSession(state)}
         >
-          ${repeat(
-            sessionGroups,
-            (group) => group.id,
-            (group) =>
-              html`<optgroup label=${group.label}>
-                ${repeat(
-                  group.options,
-                  (entry) => entry.key,
-                  (entry) =>
-                    html`<option value=${entry.key} title=${entry.title}>
-                      ${entry.label}
-                    </option>`,
-                )}
-              </optgroup>`,
-          )}
-        </select>
-      </label>
-      ${modelSelect}
-    </div>
+          ${icons.plus}
+        </button>
+      </div>
+      <div class="nav-section__items nav-section__items--chat">
+        ${repeat(
+          sessions,
+          (entry) => entry.key,
+          (entry) => {
+            const isActive = entry.key === state.sessionKey && state.tab === "chat";
+            return html`
+              <button
+                type="button"
+                class="nav-item nav-item--session ${isActive ? "nav-item--active" : ""}"
+                data-chat-session-key=${entry.key}
+                title=${entry.title}
+                aria-current=${isActive ? "page" : "false"}
+                @click=${() => handleSessionClick(entry.key)}
+              >
+                <span class="nav-item__icon nav-item__icon--session" aria-hidden="true"></span>
+                <span class="nav-item__text">${entry.label}</span>
+              </button>
+            `;
+          },
+        )}
+      </div>
+    </section>
   `;
 }
 
@@ -512,6 +608,46 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
   void refreshSessionOptions(state);
 }
 
+export async function createNewChatSession(state: AppViewState) {
+  const client = (state as unknown as OpenClawApp).client;
+  if (!client || !state.connected || state.newChatSessionPending) {
+    return;
+  }
+  const raw = window.prompt("Session name (optional):");
+  if (raw === null) {
+    return;
+  }
+  const label = raw.trim() || undefined;
+  const composerSnapshot = cloneComposerSnapshot(state);
+  const agentId = resolveActiveChatAgentId(state);
+  state.newChatSessionPending = true;
+  state.lastError = null;
+  try {
+    const result = await client.request<{ ok: boolean; key?: string }>("sessions.create", {
+      agentId,
+      ...(label ? { label } : {}),
+    });
+    if (!result?.key) {
+      state.lastError = "Session was created but no session key was returned.";
+      await refreshSessionOptions(state);
+      return;
+    }
+    const restoreCurrentDraft = state.chatMessage !== composerSnapshot.message;
+    const draftToRestore = restoreCurrentDraft ? state.chatMessage : composerSnapshot.message;
+    const attachmentsToRestore = restoreCurrentDraft
+      ? [...state.chatAttachments]
+      : composerSnapshot.attachments;
+    state.chatAttachments = [];
+    switchChatSession(state, result.key);
+    state.chatMessage = draftToRestore;
+    state.chatAttachments = attachmentsToRestore;
+  } catch (err) {
+    state.lastError = String(err);
+  } finally {
+    state.newChatSessionPending = false;
+  }
+}
+
 async function refreshSessionOptions(state: AppViewState) {
   await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
     activeMinutes: 0,
@@ -583,7 +719,7 @@ function buildChatModelOptions(
   return options;
 }
 
-function renderChatModelSelect(state: AppViewState) {
+export function renderChatModelSelect(state: AppViewState) {
   const currentOverride = resolveModelOverrideValue(state);
   const defaultModel = resolveDefaultModelValue(state);
   const options = buildChatModelOptions(

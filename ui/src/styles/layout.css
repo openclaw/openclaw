@@ -521,11 +521,58 @@
   background: color-mix(in srgb, var(--bg-hover) 72%, transparent);
 }
 
+.nav-section__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nav-section__header .nav-section__label {
+  flex: 1;
+  min-width: 0;
+}
+
 .nav-section__label-text {
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+.nav-section__action {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
+}
+
+.nav-section__action:hover:not(:disabled) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-hover) 72%, transparent);
+  border-color: color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.nav-section__action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.nav-section__action svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
 }
 
 .nav-section__chevron {
@@ -609,6 +656,20 @@
 
 .nav-item:hover .nav-item__icon {
   opacity: 1;
+}
+
+.nav-item--session .nav-item__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nav-item__icon--session {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 999px;
+  background: currentColor;
 }
 
 .nav-item.active,
