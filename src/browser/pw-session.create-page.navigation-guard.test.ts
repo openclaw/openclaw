@@ -1,5 +1,5 @@
 import { chromium } from "playwright-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import * as chromeModule from "./chrome.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
@@ -7,6 +7,15 @@ import { closePlaywrightBrowserConnection, createPageViaPlaywright } from "./pw-
 
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
 const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl");
+
+function clearProxyEnv() {
+  vi.stubEnv("HTTP_PROXY", undefined);
+  vi.stubEnv("HTTPS_PROXY", undefined);
+  vi.stubEnv("http_proxy", undefined);
+  vi.stubEnv("https_proxy", undefined);
+  vi.stubEnv("ALL_PROXY", undefined);
+  vi.stubEnv("all_proxy", undefined);
+}
 
 function installBrowserMocks() {
   const pageOn = vi.fn();
@@ -63,6 +72,10 @@ afterEach(async () => {
 });
 
 describe("pw-session createPageViaPlaywright navigation guard", () => {
+  beforeEach(() => {
+    clearProxyEnv();
+  });
+
   it("blocks unsupported non-network URLs", async () => {
     const { pageGoto } = installBrowserMocks();
 

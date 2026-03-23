@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError, type LookupFn } from "../infra/net/ssrf.js";
 import {
   assertBrowserNavigationAllowed,
@@ -8,12 +8,25 @@ import {
   requiresInspectableBrowserNavigationRedirects,
 } from "./navigation-guard.js";
 
+function clearProxyEnv() {
+  vi.stubEnv("HTTP_PROXY", undefined);
+  vi.stubEnv("HTTPS_PROXY", undefined);
+  vi.stubEnv("http_proxy", undefined);
+  vi.stubEnv("https_proxy", undefined);
+  vi.stubEnv("ALL_PROXY", undefined);
+  vi.stubEnv("all_proxy", undefined);
+}
+
 function createLookupFn(address: string): LookupFn {
   const family = address.includes(":") ? 6 : 4;
   return vi.fn(async () => [{ address, family }]) as unknown as LookupFn;
 }
 
 describe("browser navigation guard", () => {
+  beforeEach(() => {
+    clearProxyEnv();
+  });
+
   afterEach(() => {
     vi.unstubAllEnvs();
   });

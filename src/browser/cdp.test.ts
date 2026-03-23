@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
@@ -11,6 +11,14 @@ import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 describe("cdp", () => {
   let httpServer: ReturnType<typeof createServer> | null = null;
   let wsServer: WebSocketServer | null = null;
+  const clearProxyEnv = () => {
+    vi.stubEnv("HTTP_PROXY", undefined);
+    vi.stubEnv("HTTPS_PROXY", undefined);
+    vi.stubEnv("http_proxy", undefined);
+    vi.stubEnv("https_proxy", undefined);
+    vi.stubEnv("ALL_PROXY", undefined);
+    vi.stubEnv("all_proxy", undefined);
+  };
 
   const startWsServer = async () => {
     wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
@@ -55,7 +63,12 @@ describe("cdp", () => {
     return (httpServer.address() as { port: number }).port;
   };
 
+  beforeEach(() => {
+    clearProxyEnv();
+  });
+
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await new Promise<void>((resolve) => {
       if (!httpServer) {
         return resolve();
