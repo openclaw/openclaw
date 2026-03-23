@@ -12,9 +12,14 @@ void health_parse_probe_stdout(const gchar *stdout_buf, ProbeState *ps) {
             if (strstr(line, "Connect: ok") || strstr(line, "· Connect: ok")) {
                 ps->connect_ok = TRUE;
                 ps->reachable = TRUE;
-            } else if (g_str_has_prefix(g_strstrip(g_strdup(line)), "Connect: ok")) {
-                ps->connect_ok = TRUE;
-                ps->reachable = TRUE;
+            } else {
+                gchar *stripped_line = g_strdup(line);
+                g_strstrip(stripped_line);
+                if (g_str_has_prefix(stripped_line, "Connect: ok")) {
+                    ps->connect_ok = TRUE;
+                    ps->reachable = TRUE;
+                }
+                g_free(stripped_line);
             }
             
             if (strstr(line, "RPC: ok") || strstr(line, "· RPC: ok")) {
