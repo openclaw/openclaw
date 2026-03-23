@@ -91,6 +91,7 @@ docker run --rm -t \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e HOME=/home/node \
   -e NODE_OPTIONS=--disable-warning=ExperimentalWarning \
+  -e OPENCLAW_SKIP_CHANNELS=1 \
   -e OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED="$AUTH_DIRS_CSV" \
   -e OPENCLAW_LIVE_TEST=1 \
   -e OPENCLAW_LIVE_MODELS="${OPENCLAW_LIVE_MODELS:-modern}" \

@@ -435,6 +435,8 @@ These run `pnpm test:live` inside the repo Docker image, mounting your local con
 The live-model Docker runners also bind-mount the current checkout read-only and
 stage it into a temporary workdir inside the container. This keeps the runtime
 image slim while still running Vitest against your exact local source/config.
+They also set `OPENCLAW_SKIP_CHANNELS=1` so gateway live probes do not start
+real Telegram/Discord/etc. channel workers inside the container.
 `test:docker:live-models` still runs `pnpm test:live`, so pass through
 `OPENCLAW_LIVE_GATEWAY_*` as well when you need to narrow or exclude gateway
 live coverage from that Docker lane.
