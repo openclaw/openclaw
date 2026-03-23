@@ -10,7 +10,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-export type SearchProvider = "perplexity" | "brave" | "gemini" | "grok" | "kimi";
+export type SearchProvider = "perplexity" | "brave" | "gemini" | "grok" | "kimi" | "bocha";
 
 type SearchProviderEntry = {
   value: SearchProvider;
@@ -22,6 +22,14 @@ type SearchProviderEntry = {
 };
 
 export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
+  {
+    value: "bocha",
+    label: "Bocha Search",
+    hint: "Structured results · time filters · Bing-compatible",
+    envKeys: ["BOCHA_API_KEY"],
+    placeholder: "sk-...",
+    signupUrl: "https://open.bocha.cn/",
+  },
   {
     value: "brave",
     label: "Brave Search",
@@ -81,6 +89,8 @@ function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown 
       return search?.grok?.apiKey;
     case "kimi":
       return search?.kimi?.apiKey;
+    case "bocha":
+      return search?.bocha?.apiKey;
   }
 }
 
@@ -143,6 +153,9 @@ export function applySearchKey(
       break;
     case "kimi":
       search.kimi = { ...search.kimi, apiKey: key };
+      break;
+    case "bocha":
+      search.bocha = { ...search.bocha, apiKey: key };
       break;
   }
   return {

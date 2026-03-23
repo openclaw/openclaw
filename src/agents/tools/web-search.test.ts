@@ -22,11 +22,15 @@ const {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolveBochaApiKey,
+  resolveBochaModel,
+  resolveBochaBaseUrl,
   resolveBraveMode,
 } = __testing;
 
 const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
 const moonshotApiKeyEnv = ["MOONSHOT_API", "KEY"].join("_");
+const bochaApiKeyEnv = ["BOCHA_API", "KEY"].join("_");
 const openRouterApiKeyEnv = ["OPENROUTER_API", "KEY"].join("_");
 const perplexityApiKeyEnv = ["PERPLEXITY_API", "KEY"].join("_");
 const openRouterPerplexityApiKey = ["sk", "or", "v1", "test"].join("-");
@@ -138,22 +142,33 @@ describe("web_search brave language param normalization", () => {
 });
 
 describe("web_search freshness normalization", () => {
-  it("accepts Brave shortcut values and maps for Perplexity", () => {
+  it("accepts Brave shortcut values and maps for Perplexity and Bocha", () => {
     expect(normalizeFreshness("pd", "brave")).toBe("pd");
     expect(normalizeFreshness("PW", "brave")).toBe("pw");
     expect(normalizeFreshness("pd", "perplexity")).toBe("day");
     expect(normalizeFreshness("pw", "perplexity")).toBe("week");
+    expect(normalizeFreshness("pd", "bocha")).toBe("oneDay");
+    expect(normalizeFreshness("pw", "bocha")).toBe("oneWeek");
   });
 
-  it("accepts Perplexity values and maps for Brave", () => {
+  it("accepts Perplexity values and maps for Brave and Bocha", () => {
     expect(normalizeFreshness("day", "perplexity")).toBe("day");
     expect(normalizeFreshness("week", "perplexity")).toBe("week");
     expect(normalizeFreshness("day", "brave")).toBe("pd");
     expect(normalizeFreshness("week", "brave")).toBe("pw");
+    expect(normalizeFreshness("day", "bocha")).toBe("oneDay");
+    expect(normalizeFreshness("week", "bocha")).toBe("oneWeek");
   });
 
-  it("accepts valid date ranges for Brave", () => {
+  it("accepts valid date ranges for Brave and Bocha", () => {
     expect(normalizeFreshness("2024-01-01to2024-01-31", "brave")).toBe("2024-01-01to2024-01-31");
+    expect(normalizeFreshness("2024-01-01to2024-01-31", "bocha")).toBe("2024-01-01..2024-01-31");
+  });
+
+  it("accepts Bocha specific values", () => {
+    expect(normalizeFreshness("noLimit", "bocha")).toBe("noLimit");
+    expect(normalizeFreshness("oneDay", "bocha")).toBe("oneDay");
+    expect(normalizeFreshness("2024-01-01", "bocha")).toBe("2024-01-01");
   });
 
   it("rejects invalid values", () => {
@@ -369,6 +384,38 @@ describe("extractKimiCitations", () => {
         ],
       }).toSorted(),
     ).toEqual(["https://example.com/a", "https://example.com/b", "https://example.com/c"]);
+  });
+});
+
+describe("web_search bocha config resolution", () => {
+  it("uses config apiKey when provided", () => {
+    expect(resolveBochaApiKey({ apiKey: "bocha-test-key" })).toBe("bocha-test-key"); // pragma: allowlist secret
+  });
+
+  it("falls back to BOCHA_API_KEY", () => {
+    const bochaEnvValue = "bocha-env"; // pragma: allowlist secret
+    withEnv({ [bochaApiKeyEnv]: bochaEnvValue }, () => {
+      expect(resolveBochaApiKey({})).toBe(bochaEnvValue);
+    });
+  });
+
+  it("returns undefined when no Bocha key is configured", () => {
+    withEnv({ BOCHA_API_KEY: undefined }, () => {
+      expect(resolveBochaApiKey({})).toBeUndefined();
+      expect(resolveBochaApiKey(undefined)).toBeUndefined();
+    });
+  });
+
+  it("resolves default model and baseUrl", () => {
+    expect(resolveBochaModel({})).toBe("web-search");
+    expect(resolveBochaBaseUrl({})).toBe("https://api.bocha.cn/v1");
+  });
+
+  it("uses config model and baseUrl when provided", () => {
+    expect(resolveBochaModel({ model: "bocha-model" })).toBe("bocha-model");
+    expect(resolveBochaBaseUrl({ baseUrl: "https://example.com/bocha" })).toBe(
+      "https://example.com/bocha",
+    );
   });
 });
 

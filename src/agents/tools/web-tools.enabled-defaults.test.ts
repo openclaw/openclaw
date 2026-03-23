@@ -68,7 +68,29 @@ function createKimiSearchTool(kimiConfig?: { apiKey?: string; baseUrl?: string; 
   });
 }
 
-function createProviderSearchTool(provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi") {
+function createBochaSearchTool(bochaConfig?: {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+}) {
+  return createWebSearchTool({
+    config: {
+      tools: {
+        web: {
+          search: {
+            provider: "bocha",
+            ...(bochaConfig ? { bocha: bochaConfig } : {}),
+          },
+        },
+      },
+    },
+    sandboxed: true,
+  });
+}
+
+function createProviderSearchTool(
+  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "bocha",
+) {
   const searchConfig =
     provider === "perplexity"
       ? { provider, perplexity: { apiKey: "pplx-config-test" } } // pragma: allowlist secret
@@ -78,7 +100,9 @@ function createProviderSearchTool(provider: "brave" | "perplexity" | "grok" | "g
           ? { provider, gemini: { apiKey: "gemini-config-test" } } // pragma: allowlist secret
           : provider === "kimi"
             ? { provider, kimi: { apiKey: "moonshot-config-test" } } // pragma: allowlist secret
-            : { provider, apiKey: "brave-config-test" }; // pragma: allowlist secret
+            : provider === "bocha"
+              ? { provider, bocha: { apiKey: "bocha-config-test" } } // pragma: allowlist secret
+              : { provider, apiKey: "brave-config-test" }; // pragma: allowlist secret
   return createWebSearchTool({
     config: {
       tools: {
@@ -121,7 +145,7 @@ function installPerplexityChatFetch() {
 }
 
 function createProviderSuccessPayload(
-  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi",
+  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "bocha",
 ) {
   if (provider === "brave") {
     return { web: { results: [] } };
@@ -141,6 +165,9 @@ function createProviderSuccessPayload(
         },
       ],
     };
+  }
+  if (provider === "bocha") {
+    return { data: { webPages: { value: [] } } };
   }
   return {
     choices: [{ finish_reason: "stop", message: { role: "assistant", content: "ok" } }],
@@ -270,7 +297,7 @@ describe("web_search provider proxy dispatch", () => {
     global.fetch = priorFetch;
   });
 
-  it.each(["brave", "perplexity", "grok", "gemini", "kimi"] as const)(
+  it.each(["brave", "perplexity", "grok", "gemini", "kimi", "bocha"] as const)(
     "uses proxy-aware dispatcher for %s provider when HTTP_PROXY is configured",
     async (provider) => {
       vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
@@ -612,6 +639,80 @@ describe("web_search kimi provider", () => {
     expect(details.provider).toBe("kimi");
     expect(details.citations).toEqual(["https://openclaw.ai/docs"]);
     expect(details.content).toContain("final answer");
+  });
+});
+
+describe("web_search bocha provider", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+    webSearchTesting.SEARCH_CACHE.clear();
+  });
+
+  it("returns a setup hint when Bocha key is missing", async () => {
+    vi.stubEnv("BOCHA_API_KEY", "");
+    const tool = createBochaSearchTool();
+    const result = await tool?.execute?.("call-1", { query: "test" });
+    expect(result?.details).toMatchObject({ error: "missing_bocha_api_key" });
+  });
+
+  it("calls Bocha API and returns results", async () => {
+    vi.stubEnv("BOCHA_API_KEY", "bocha-test-key"); // pragma: allowlist secret
+    const mockFetch = installMockFetch({
+      data: {
+        webPages: {
+          value: [
+            {
+              name: "Bocha",
+              url: "https://bocha.cn",
+              snippet: "Bocha search",
+              summary: "Bocha summary",
+              datePublished: "2025-02-23T08:18:30+08:00",
+              dateLastCrawled: "2024-01-01",
+            },
+          ],
+        },
+      },
+    });
+
+    const tool = createBochaSearchTool();
+    const result = await tool?.execute?.("call-1", { query: "test" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://api.bocha.cn/v1/web-search");
+    const body = parseFirstRequestBody(mockFetch);
+    expect(body.query).toBe("test");
+    expect(result?.details).toMatchObject({
+      provider: "bocha",
+      results: [
+        {
+          title: expect.stringContaining("Bocha"),
+          url: "https://bocha.cn",
+          description: expect.stringContaining("Bocha summary"),
+          published: "2025-02-23T08:18:30+08:00",
+        },
+      ],
+    });
+  });
+
+  it("passes count, freshness and summary to Bocha API", async () => {
+    vi.stubEnv("BOCHA_API_KEY", "bocha-test-key"); // pragma: allowlist secret
+    const mockFetch = installMockFetch({ data: { webPages: { value: [] } } });
+    const tool = createBochaSearchTool();
+    await tool?.execute?.("call-1", {
+      query: "test-params",
+      count: 7,
+      freshness: "oneDay",
+      summary: true,
+    });
+
+    const body = parseFirstRequestBody(mockFetch);
+    expect(body.query).toBe("test-params");
+    expect(body.count).toBe(7);
+    expect(body.freshness).toBe("oneDay");
+    expect(body.summary).toBe(true);
   });
 });
 
