@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
-// 自动部署脚本 (Node.js 版本)
+// 自动部署脚本
 
-import { execSync, exec } from 'child_process';
-import { resolve, dirname } from 'path';
+import { execSync } from 'child_process';
+import { dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);

@@ -1,7 +1,5 @@
 #!/usr/bin/env node
 
-// 自动打包部署脚本 (Node.js 版本)
-
 import { execSync } from "child_process";
 import { mkdirSync, rmSync, copyFileSync, cpSync, readFileSync } from "fs";
 import { resolve, dirname } from "path";
@@ -35,7 +33,7 @@ const BRAND_NAME = getBrandName();
 const OUTPUT_DIR = resolve(WORK_DIR, "deploy");
 const BRAND_DIR = resolve(OUTPUT_DIR, BRAND_NAME);
 
-console.log("=== 自动打包部署脚本 ===\n");
+console.log("=== 自动打包脚本 ===\n");
 
 // 检查pnpm是否安装
 function checkPNPM() {
@@ -132,6 +130,8 @@ try {
 
   // 压缩文件夹
   const zipPath = resolve(OUTPUT_DIR, `${BRAND_NAME}.zip`);
+  let compressionSuccess = false;
+
   try {
     rmSync(zipPath, { force: true });
   } catch (error) {
@@ -142,16 +142,35 @@ try {
   try {
     execSync(`zip -r "${zipPath}" "${BRAND_NAME}"`, { cwd: OUTPUT_DIR, stdio: "inherit" });
     console.log("压缩成功");
+    compressionSuccess = true;
   } catch (error) {
-    console.warn("zip命令失败，尝试使用其他方式...");
-    // 这里可以添加其他压缩方式的逻辑
+    console.warn("zip命令失败，尝试使用PowerShell压缩...");
+    try {
+      // 使用PowerShell进行压缩（Windows兼容）
+      const powershellCommand = `Compress-Archive -Path "${BRAND_NAME}" -DestinationPath "${BRAND_NAME}.zip" -Force`;
+      execSync(`powershell -Command "${powershellCommand}"`, { cwd: OUTPUT_DIR, stdio: "inherit" });
+      console.log("PowerShell压缩成功");
+      compressionSuccess = true;
+    } catch (psError) {
+      console.error("压缩失败:", psError.message);
+      compressionSuccess = false;
+    }
   }
 
   // 清理临时文件
   rmSync(BRAND_DIR, { recursive: true, force: true });
 
-  console.log("\n打包部署完成！");
-  console.log(`输出文件: ${zipPath}`);
+  if (compressionSuccess) {
+    console.log("\n打包完成！");
+    console.log(`输出文件: ${zipPath}`);
+    console.log("\n下一步操作:");
+    console.log("1. 解压生成的zip文件到目标服务器");
+    console.log("2. 在目标服务器上执行: node auto-deploy.mjs");
+  } else {
+    console.error("\n打包完成，但压缩失败！");
+    console.error("请手动压缩deploy目录中的文件");
+    process.exit(1);
+  }
 } catch (error) {
   console.error("复制文件或压缩失败:", error.message);
   process.exit(1);
