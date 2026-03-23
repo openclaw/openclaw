@@ -50,6 +50,7 @@ const cleanupTempArtifacts = () => {
 };
 const existingUnitConfigFiles = (entries) => existingFiles(entries).filter(isUnitConfigTestFile);
 const baseThreadPinnedFiles = existingFiles(behaviorManifest.base?.threadPinned ?? []);
+const extensionForkIsolatedFiles = existingFiles(behaviorManifest.extensions?.isolated ?? []);
 const unitForkIsolatedFiles = existingUnitConfigFiles(behaviorManifest.unit.isolated);
 const unitThreadPinnedFiles = existingUnitConfigFiles(behaviorManifest.unit.threadPinned);
 const unitBehaviorOverrideSet = new Set([...unitForkIsolatedFiles, ...unitThreadPinnedFiles]);
@@ -91,6 +92,8 @@ const disableIsolation =
   process.env.OPENCLAW_TEST_NO_ISOLATE !== "false";
 const includeGatewaySuite = process.env.OPENCLAW_TEST_INCLUDE_GATEWAY === "1";
 const includeExtensionsSuite = process.env.OPENCLAW_TEST_INCLUDE_EXTENSIONS === "1";
+const noIsolateArgs = disableIsolation ? ["--isolate=false"] : [];
+const skipDefaultRuns = process.env.OPENCLAW_TEST_SKIP_DEFAULT === "1";
 const parsePoolOverride = (value, fallback) => {
   if (value === "threads" || value === "forks") {
     return value;
@@ -261,7 +264,8 @@ const defaultUnitPool = parsePoolOverride(process.env.OPENCLAW_TEST_UNIT_DEFAULT
 const isTargetedIsolatedUnitFile = (fileFilter) =>
   unitForkIsolatedFiles.includes(fileFilter) || unitMemoryIsolatedFiles.includes(fileFilter);
 const inferTarget = (fileFilter) => {
-  const isolated = isTargetedIsolatedUnitFile(fileFilter);
+  const isolated =
+    isTargetedIsolatedUnitFile(fileFilter) || extensionForkIsolatedFiles.includes(fileFilter);
   if (isUnitConfigTestFile(fileFilter)) {
     return { owner: "unit", isolated };
   }
@@ -392,9 +396,14 @@ const unitFastExcludedFileSet = new Set(unitFastExcludedFiles);
 const unitFastCandidateFiles = allKnownUnitFiles.filter(
   (file) => !unitFastExcludedFileSet.has(file),
 );
-const extensionSharedCandidateFiles = allKnownTestFiles.filter((file) =>
-  file.startsWith("extensions/"),
+const extensionForkIsolatedFileSet = new Set(extensionForkIsolatedFiles);
+const extensionSharedCandidateFiles = allKnownTestFiles.filter(
+  (file) => file.startsWith("extensions/") && !extensionForkIsolatedFileSet.has(file),
 );
+const extensionIsolatedEntries = extensionForkIsolatedFiles.map((file) => ({
+  name: `extensions-${path.basename(file, ".test.ts")}-isolated`,
+  args: ["vitest", "run", "--config", "vitest.extensions.config.ts", "--pool=forks", file],
+}));
 const defaultUnitFastLaneCount = isCI && !isWindows ? 3 : 1;
 const unitFastLaneCount = Math.max(
   1,
@@ -437,7 +446,7 @@ const unitFastEntries = unitFastBuckets.flatMap((files, index) => {
         "--config",
         "vitest.unit.config.ts",
         `--pool=${defaultUnitPool}`,
-        ...(disableIsolation ? ["--isolate=false"] : []),
+        ...noIsolateArgs,
       ],
     }));
 });
@@ -448,7 +457,15 @@ const heavyUnitBuckets = packFilesByDuration(
 );
 const unitHeavyEntries = heavyUnitBuckets.map((files, index) => ({
   name: `unit-heavy-${String(index + 1)}`,
-  args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=forks", ...files],
+  args: [
+    "vitest",
+    "run",
+    "--config",
+    "vitest.unit.config.ts",
+    "--pool=forks",
+    ...noIsolateArgs,
+    ...files,
+  ],
 }));
 const unitThreadEntries =
   unitThreadPinnedFiles.length > 0
@@ -461,6 +478,7 @@ const unitThreadEntries =
             "--config",
             "vitest.unit.config.ts",
             "--pool=threads",
+            ...noIsolateArgs,
             ...unitThreadPinnedFiles,
           ],
         },
@@ -468,39 +486,66 @@ const unitThreadEntries =
     : [];
 const unitIsolatedEntries = unitForkIsolatedFiles.map((file) => ({
   name: `unit-${path.basename(file, ".test.ts")}-isolated`,
-  args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=forks", file],
+  args: [
+    "vitest",
+    "run",
+    "--config",
+    "vitest.unit.config.ts",
+    "--pool=forks",
+    ...noIsolateArgs,
+    file,
+  ],
 }));
 const baseRuns = [
-  ...(shouldSplitUnitRuns
-    ? [
-        ...unitFastEntries,
-        ...unitIsolatedEntries,
-        ...unitHeavyEntries,
-        ...unitMemoryIsolatedFiles.map((file) => ({
-          name: `unit-${path.basename(file, ".test.ts")}-memory-isolated`,
-          args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=forks", file],
-        })),
-        ...unitThreadEntries,
-        ...channelSingletonFiles.map((file) => ({
-          name: `${path.basename(file, ".test.ts")}-channels-isolated`,
-          args: ["vitest", "run", "--config", "vitest.channels.config.ts", "--pool=forks", file],
-        })),
-      ]
-    : [
-        {
-          name: "unit",
-          args: [
-            "vitest",
-            "run",
-            "--config",
-            "vitest.unit.config.ts",
-            "--pool=forks",
-            ...(disableIsolation ? ["--isolate=false"] : []),
-          ],
-        },
-      ]),
+  ...(skipDefaultRuns
+    ? []
+    : shouldSplitUnitRuns
+      ? [
+          ...unitFastEntries,
+          ...unitIsolatedEntries,
+          ...unitHeavyEntries,
+          ...unitMemoryIsolatedFiles.map((file) => ({
+            name: `unit-${path.basename(file, ".test.ts")}-memory-isolated`,
+            args: [
+              "vitest",
+              "run",
+              "--config",
+              "vitest.unit.config.ts",
+              "--pool=forks",
+              ...noIsolateArgs,
+              file,
+            ],
+          })),
+          ...unitThreadEntries,
+          ...channelSingletonFiles.map((file) => ({
+            name: `${path.basename(file, ".test.ts")}-channels-isolated`,
+            args: [
+              "vitest",
+              "run",
+              "--config",
+              "vitest.channels.config.ts",
+              "--pool=forks",
+              ...noIsolateArgs,
+              file,
+            ],
+          })),
+        ]
+      : [
+          {
+            name: "unit",
+            args: [
+              "vitest",
+              "run",
+              "--config",
+              "vitest.unit.config.ts",
+              "--pool=forks",
+              ...noIsolateArgs,
+            ],
+          },
+        ]),
   ...(includeExtensionsSuite
     ? [
+        ...extensionIsolatedEntries,
         {
           name: "extensions",
           env:
@@ -512,7 +557,7 @@ const baseRuns = [
                   ),
                 }
               : undefined,
-          args: ["vitest", "run", "--config", "vitest.extensions.config.ts"],
+          args: ["vitest", "run", "--config", "vitest.extensions.config.ts", ...noIsolateArgs],
         },
       ]
     : []),
@@ -520,7 +565,14 @@ const baseRuns = [
     ? [
         {
           name: "gateway",
-          args: ["vitest", "run", "--config", "vitest.gateway.config.ts", "--pool=forks"],
+          args: [
+            "vitest",
+            "run",
+            "--config",
+            "vitest.gateway.config.ts",
+            "--pool=forks",
+            ...noIsolateArgs,
+          ],
         },
       ]
     : []),
@@ -563,7 +615,7 @@ const createTargetedEntry = (owner, isolated, filters) => {
         "--config",
         "vitest.unit.config.ts",
         `--pool=${forceForks ? "forks" : defaultUnitPool}`,
-        ...(disableIsolation ? ["--isolate=false"] : []),
+        ...noIsolateArgs,
         ...filters,
       ],
     };
@@ -571,43 +623,82 @@ const createTargetedEntry = (owner, isolated, filters) => {
   if (owner === "unit-threads") {
     return {
       name,
-      args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=threads", ...filters],
+      args: [
+        "vitest",
+        "run",
+        "--config",
+        "vitest.unit.config.ts",
+        "--pool=threads",
+        ...noIsolateArgs,
+        ...filters,
+      ],
     };
   }
   if (owner === "base-threads") {
     return {
       name,
-      args: ["vitest", "run", "--config", "vitest.config.ts", "--pool=threads", ...filters],
+      args: [
+        "vitest",
+        "run",
+        "--config",
+        "vitest.config.ts",
+        "--pool=threads",
+        ...noIsolateArgs,
+        ...filters,
+      ],
     };
   }
   if (owner === "extensions") {
     return {
       name,
-      args: ["vitest", "run", "--config", "vitest.extensions.config.ts", ...filters],
+      args: [
+        "vitest",
+        "run",
+        "--config",
+        "vitest.extensions.config.ts",
+        ...(forceForks ? ["--pool=forks"] : []),
+        ...noIsolateArgs,
+        ...filters,
+      ],
     };
   }
   if (owner === "gateway") {
     return {
       name,
-      args: ["vitest", "run", "--config", "vitest.gateway.config.ts", "--pool=forks", ...filters],
+      args: [
+        "vitest",
+        "run",
+        "--config",
+        "vitest.gateway.config.ts",
+        "--pool=forks",
+        ...noIsolateArgs,
+        ...filters,
+      ],
     };
   }
   if (owner === "channels") {
     return {
       name,
-      args: ["vitest", "run", "--config", "vitest.channels.config.ts", ...filters],
+      args: [
+        "vitest",
+        "run",
+        "--config",
+        "vitest.channels.config.ts",
+        ...noIsolateArgs,
+        ...filters,
+      ],
     };
   }
   if (owner === "live") {
     return {
       name,
-      args: ["vitest", "run", "--config", "vitest.live.config.ts", ...filters],
+      args: ["vitest", "run", "--config", "vitest.live.config.ts", ...noIsolateArgs, ...filters],
     };
   }
   if (owner === "e2e") {
     return {
       name,
-      args: ["vitest", "run", "--config", "vitest.e2e.config.ts", ...filters],
+      args: ["vitest", "run", "--config", "vitest.e2e.config.ts", ...noIsolateArgs, ...filters],
     };
   }
   return {
@@ -617,6 +708,7 @@ const createTargetedEntry = (owner, isolated, filters) => {
       "run",
       "--config",
       "vitest.config.ts",
+      ...noIsolateArgs,
       ...(forceForks ? ["--pool=forks"] : []),
       ...filters,
     ],
