@@ -543,6 +543,69 @@ describe("createInboundDebouncer", () => {
 
     vi.useRealTimers();
   });
+
+  it("keeps same-key overflow work ordered after falling back to immediate flushes", async () => {
+    const started: string[] = [];
+    const finished: string[] = [];
+    let releaseOverflow!: () => void;
+    const overflowGate = new Promise<void>((resolve) => {
+      releaseOverflow = resolve;
+    });
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 50,
+      maxTrackedKeys: 1,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        const ids = items.map((entry) => entry.id).join(",");
+        started.push(ids);
+        if (ids === "2") {
+          await overflowGate;
+        }
+        finished.push(ids);
+      },
+    });
+
+    try {
+      await debouncer.enqueue({ key: "a", id: "1" });
+      const callCountBeforeOverflow = setTimeoutSpy.mock.calls.length;
+      clearTimeout(
+        setTimeoutSpy.mock.results[callCountBeforeOverflow - 1]?.value as ReturnType<
+          typeof setTimeout
+        >,
+      );
+
+      const overflowEnqueue = debouncer.enqueue({ key: "b", id: "2" });
+      await vi.waitFor(() => {
+        expect(started).toEqual(["2"]);
+      });
+
+      const bufferedEnqueue = debouncer.enqueue({ key: "b", id: "3" });
+      const bufferedTimerIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call, index) => index >= callCountBeforeOverflow && call[1] === 50,
+      );
+      expect(bufferedTimerIndex).toBeGreaterThanOrEqual(callCountBeforeOverflow);
+      clearTimeout(
+        setTimeoutSpy.mock.results[bufferedTimerIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+      const bufferedFlush = (
+        setTimeoutSpy.mock.calls[bufferedTimerIndex]?.[0] as (() => Promise<void>) | undefined
+      )?.();
+
+      await Promise.resolve();
+      expect(started).toEqual(["2"]);
+      expect(finished).toEqual([]);
+
+      releaseOverflow();
+      await Promise.all([overflowEnqueue, bufferedEnqueue, bufferedFlush]);
+
+      expect(started).toEqual(["2", "3"]);
+      expect(finished).toEqual(["2", "3"]);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
 });
 
 describe("initSessionState BodyStripped", () => {
