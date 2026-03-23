@@ -3009,7 +3009,7 @@
           "exportName": "buildChannelOutboundSessionRoute",
           "kind": "function",
           "source": {
-            "line": 161,
+            "line": 162,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3045,7 +3045,7 @@
           "exportName": "createChannelPluginBase",
           "kind": "function",
           "source": {
-            "line": 435,
+            "line": 436,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3054,7 +3054,7 @@
           "exportName": "createChatChannelPlugin",
           "kind": "function",
           "source": {
-            "line": 412,
+            "line": 413,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3063,7 +3063,7 @@
           "exportName": "defineChannelPluginEntry",
           "kind": "function",
           "source": {
-            "line": 244,
+            "line": 245,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3081,7 +3081,7 @@
           "exportName": "defineSetupPluginEntry",
           "kind": "function",
           "source": {
-            "line": 275,
+            "line": 276,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3110,6 +3110,15 @@
           "source": {
             "line": 13,
             "path": "src/plugins/config-schema.ts"
+          }
+        },
+        {
+          "declaration": "export function enqueueKeyedTask<T>(params: { tails: Map<string, Promise<void>>; key: string; task: () => Promise<T>; hooks?: KeyedAsyncQueueHooks | undefined; }): Promise<...>;",
+          "exportName": "enqueueKeyedTask",
+          "kind": "function",
+          "source": {
+            "line": 7,
+            "path": "src/plugin-sdk/keyed-async-queue.ts"
           }
         },
         {
@@ -3261,7 +3270,7 @@
           "exportName": "stripChannelTargetPrefix",
           "kind": "function",
           "source": {
-            "line": 141,
+            "line": 142,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3270,7 +3279,7 @@
           "exportName": "stripTargetKindPrefix",
           "kind": "function",
           "source": {
-            "line": 153,
+            "line": 154,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3342,7 +3351,7 @@
           "exportName": "ChannelOutboundSessionRouteParams",
           "kind": "type",
           "source": {
-            "line": 136,
+            "line": 137,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3830,6 +3839,15 @@
           "source": {
             "line": 1,
             "path": "src/infra/provider-usage.types.ts"
+          }
+        },
+        {
+          "declaration": "export class KeyedAsyncQueue",
+          "exportName": "KeyedAsyncQueue",
+          "kind": "class",
+          "source": {
+            "line": 34,
+            "path": "src/plugin-sdk/keyed-async-queue.ts"
           }
         }
       ],
