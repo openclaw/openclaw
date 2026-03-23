@@ -1,10 +1,8 @@
 import { ChannelType } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NativeCommandSpec } from "../../../../src/auto-reply/commands-registry.js";
-import * as dispatcherModule from "../../../../src/auto-reply/reply/provider-dispatcher.js";
 import { setDefaultChannelPluginRegistryForTests } from "../../../../src/commands/channel-test-helpers.js";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
-import * as pluginCommandsModule from "../../../../src/plugins/commands.js";
 import { clearPluginCommands, registerPluginCommand } from "../../../../src/plugins/commands.js";
 import {
   createMockCommandInteraction,
@@ -20,6 +18,11 @@ const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() =>
     ok: true,
   })),
 );
+const runtimeModuleMocks = vi.hoisted(() => ({
+  matchPluginCommand: vi.fn(),
+  executePluginCommand: vi.fn(),
+  dispatchReplyWithDispatcher: vi.fn(),
+}));
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
@@ -29,6 +32,24 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
       ensureConfiguredBindingRouteReadyMock(
         ...(args as Parameters<EnsureConfiguredBindingRouteReadyFn>),
       ),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>();
+  return {
+    ...actual,
+    matchPluginCommand: (...args: unknown[]) => runtimeModuleMocks.matchPluginCommand(...args),
+    executePluginCommand: (...args: unknown[]) => runtimeModuleMocks.executePluginCommand(...args),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+  return {
+    ...actual,
+    dispatchReplyWithDispatcher: (...args: unknown[]) =>
+      runtimeModuleMocks.dispatchReplyWithDispatcher(...args),
   };
 });
 
@@ -61,6 +82,7 @@ function createConfig(): OpenClawConfig {
 }
 
 async function loadCreateDiscordNativeCommand() {
+  vi.resetModules();
   return (await import("./native-command.js")).createDiscordNativeCommand;
 }
 
@@ -123,9 +145,7 @@ async function expectPairCommandReply(params: {
     cfg: params.cfg,
     name: params.commandName,
   });
-  const dispatchSpy = vi
-    .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
-    .mockResolvedValue({} as never);
+  const dispatchSpy = runtimeModuleMocks.dispatchReplyWithDispatcher;
 
   await (command as { run: (interaction: unknown) => Promise<void> }).run(
     Object.assign(params.interaction, {
@@ -152,7 +172,7 @@ async function createStatusCommand(cfg: OpenClawConfig) {
 }
 
 function createDispatchSpy() {
-  return vi.spyOn(dispatcherModule, "dispatchReplyWithDispatcher").mockResolvedValue({
+  return runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue({
     counts: {
       final: 1,
       block: 0,
@@ -182,10 +202,9 @@ async function expectBoundStatusCommandDispatch(params: {
   interaction: MockCommandInteraction;
   expectedPattern: RegExp;
 }) {
-  const command = await createStatusCommand(params.cfg);
-
-  vi.spyOn(pluginCommandsModule, "matchPluginCommand").mockReturnValue(null);
+  runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
   const dispatchSpy = createDispatchSpy();
+  const command = await createStatusCommand(params.cfg);
 
   await (command as { run: (interaction: unknown) => Promise<void> }).run(
     params.interaction as unknown,
@@ -195,7 +214,7 @@ async function expectBoundStatusCommandDispatch(params: {
 }
 
 describe("Discord native plugin command dispatch", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     clearPluginCommands();
     setDefaultChannelPluginRegistryForTests();
@@ -203,6 +222,25 @@ describe("Discord native plugin command dispatch", () => {
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({
       ok: true,
     });
+    const actualPluginRuntime = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/plugin-runtime")
+    >("openclaw/plugin-sdk/plugin-runtime");
+    runtimeModuleMocks.matchPluginCommand.mockReset();
+    runtimeModuleMocks.matchPluginCommand.mockImplementation(
+      actualPluginRuntime.matchPluginCommand,
+    );
+    runtimeModuleMocks.executePluginCommand.mockReset();
+    runtimeModuleMocks.executePluginCommand.mockImplementation(
+      actualPluginRuntime.executePluginCommand,
+    );
+    runtimeModuleMocks.dispatchReplyWithDispatcher.mockReset();
+    runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue({
+      counts: {
+        final: 1,
+        block: 0,
+        tool: 0,
+      },
+    } as never);
   });
 
   it("executes plugin commands from the real registry through the native Discord command path", async () => {
@@ -277,10 +315,10 @@ describe("Discord native plugin command dispatch", () => {
       }),
     ).toEqual({ ok: true });
 
-    const executeSpy = vi.spyOn(pluginCommandsModule, "executePluginCommand");
-    const dispatchSpy = vi
-      .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
-      .mockResolvedValue({} as never);
+    const executeSpy = runtimeModuleMocks.executePluginCommand;
+    const dispatchSpy = runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue(
+      {} as never,
+    );
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
@@ -301,7 +339,6 @@ describe("Discord native plugin command dispatch", () => {
       description: "List cron jobs",
       acceptsArgs: false,
     };
-    const command = await createNativeCommand(cfg, commandSpec);
     const interaction = createInteraction();
     const pluginMatch = {
       command: {
@@ -314,15 +351,14 @@ describe("Discord native plugin command dispatch", () => {
       args: undefined,
     };
 
-    vi.spyOn(pluginCommandsModule, "matchPluginCommand").mockReturnValue(
-      pluginMatch as ReturnType<typeof pluginCommandsModule.matchPluginCommand>,
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(pluginMatch as never);
+    const executeSpy = runtimeModuleMocks.executePluginCommand.mockResolvedValue({
+      text: "direct plugin output",
+    });
+    const dispatchSpy = runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue(
+      {} as never,
     );
-    const executeSpy = vi
-      .spyOn(pluginCommandsModule, "executePluginCommand")
-      .mockResolvedValue({ text: "direct plugin output" });
-    const dispatchSpy = vi
-      .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
-      .mockResolvedValue({} as never);
+    const command = await createNativeCommand(cfg, commandSpec);
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
@@ -410,7 +446,6 @@ describe("Discord native plugin command dispatch", () => {
         },
       },
     } as OpenClawConfig;
-    const command = await createStatusCommand(cfg);
     const interaction = createInteraction({
       channelType: ChannelType.GuildText,
       channelId,
@@ -418,8 +453,9 @@ describe("Discord native plugin command dispatch", () => {
       guildName: "Ops",
     });
 
-    vi.spyOn(pluginCommandsModule, "matchPluginCommand").mockReturnValue(null);
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
     const dispatchSpy = createDispatchSpy();
+    const command = await createStatusCommand(cfg);
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
@@ -500,18 +536,17 @@ describe("Discord native plugin command dispatch", () => {
       guildId,
       guildName: "Ops",
     });
+    ensureConfiguredBindingRouteReadyMock.mockResolvedValue({
+      ok: false,
+      error: "acpx exited with code 1",
+    });
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
+    const dispatchSpy = createDispatchSpy();
     const command = await createNativeCommand(cfg, {
       name: "new",
       description: "Start a new session.",
       acceptsArgs: true,
     });
-
-    ensureConfiguredBindingRouteReadyMock.mockResolvedValue({
-      ok: false,
-      error: "acpx exited with code 1",
-    });
-    vi.spyOn(pluginCommandsModule, "matchPluginCommand").mockReturnValue(null);
-    const dispatchSpy = createDispatchSpy();
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 

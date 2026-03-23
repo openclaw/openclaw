@@ -47,8 +47,15 @@ import {
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
 import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
-import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import type { TypingSignaler } from "./typing-mode.js";
+
+let replyMediaPathsRuntimePromise: Promise<typeof import("./reply-media-paths.runtime.js")> | null =
+  null;
+
+function loadReplyMediaPathsRuntime() {
+  replyMediaPathsRuntimePromise ??= import("./reply-media-paths.runtime.js");
+  return replyMediaPathsRuntimePromise;
+}
 
 export type RuntimeFallbackAttempt = {
   provider: string;
@@ -109,6 +116,7 @@ export async function runAgentTurnWithFallback(params: {
   const directlySentBlockKeys = new Set<string>();
 
   const runId = params.opts?.runId ?? crypto.randomUUID();
+  const { createReplyMediaPathNormalizer } = await loadReplyMediaPathsRuntime();
   const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
     cfg: params.followupRun.run.config,
     sessionKey: params.sessionKey,

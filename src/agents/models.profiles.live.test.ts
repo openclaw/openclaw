@@ -19,6 +19,7 @@ import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
 const DIRECT_ENABLED = Boolean(process.env.OPENCLAW_LIVE_MODELS?.trim());
 const REQUIRE_PROFILE_KEYS = isTruthyEnvValue(process.env.OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS);
+const LIVE_HEARTBEAT_MS = Math.max(1_000, toInt(process.env.OPENCLAW_LIVE_HEARTBEAT_MS, 30_000));
 
 const describeLive = LIVE ? describe : describe.skip;
 
@@ -43,7 +44,29 @@ function parseModelFilter(raw?: string): Set<string> | null {
 }
 
 function logProgress(message: string): void {
-  console.log(`[live] ${message}`);
+  process.stderr.write(`[live] ${message}\n`);
+}
+
+function formatElapsedSeconds(ms: number): string {
+  return `${Math.max(1, Math.round(ms / 1_000))}s`;
+}
+
+async function withLiveHeartbeat<T>(operation: Promise<T>, context: string): Promise<T> {
+  const startedAt = Date.now();
+  let heartbeatCount = 0;
+  const timer = setInterval(() => {
+    heartbeatCount += 1;
+    logProgress(`${context}: still running (${formatElapsedSeconds(Date.now() - startedAt)})`);
+  }, LIVE_HEARTBEAT_MS);
+  timer.unref?.();
+  try {
+    return await operation;
+  } finally {
+    clearInterval(timer);
+    if (heartbeatCount > 0) {
+      logProgress(`${context}: completed after ${formatElapsedSeconds(Date.now() - startedAt)}`);
+    }
+  }
 }
 
 function formatFailurePreview(
@@ -237,6 +260,7 @@ async function completeSimpleWithTimeout<TApi extends Api>(
   context: Parameters<typeof completeSimple<TApi>>[1],
   options: Parameters<typeof completeSimple<TApi>>[2],
   timeoutMs: number,
+  progressContext: string,
 ) {
   const maxTimeoutMs = Math.max(1, timeoutMs);
   const controller = new AbortController();
@@ -252,13 +276,16 @@ async function completeSimpleWithTimeout<TApi extends Api>(
     hardTimer.unref?.();
   });
   try {
-    return await Promise.race([
-      completeSimple(model, context, {
-        ...options,
-        signal: controller.signal,
-      }),
-      timeout,
-    ]);
+    return await withLiveHeartbeat(
+      Promise.race([
+        completeSimple(model, context, {
+          ...options,
+          signal: controller.signal,
+        }),
+        timeout,
+      ]),
+      progressContext,
+    );
   } finally {
     clearTimeout(abortTimer);
     if (hardTimer) {
@@ -271,6 +298,7 @@ async function completeOkWithRetry(params: {
   model: Model<Api>;
   apiKey: string;
   timeoutMs: number;
+  progressLabel: string;
 }) {
   const runOnce = async (maxTokens: number) => {
     const res = await completeSimpleWithTimeout(
@@ -291,6 +319,7 @@ async function completeOkWithRetry(params: {
         maxTokens,
       },
       params.timeoutMs,
+      `${params.progressLabel}: prompt call (maxTokens=${maxTokens})`,
     );
     const text = res.content
       .filter((block) => block.type === "text")
@@ -395,6 +424,9 @@ describeLive("live models (profile keys)", () => {
         );
       }
       logProgress(`[live-models] running ${selectedCandidates.length} models`);
+      logProgress(
+        `[live-models] heartbeat=${formatElapsedSeconds(LIVE_HEARTBEAT_MS)} timeout=${formatElapsedSeconds(perModelTimeoutMs)}`,
+      );
       const total = selectedCandidates.length;
 
       for (const [index, entry] of selectedCandidates.entries()) {
@@ -441,6 +473,7 @@ describeLive("live models (profile keys)", () => {
                   maxTokens: 128,
                 },
                 perModelTimeoutMs,
+                `${progressLabel}: tool-only regression first call`,
               );
 
               let toolCall = first.content.find((b) => b.type === "toolCall");
@@ -470,6 +503,7 @@ describeLive("live models (profile keys)", () => {
                     maxTokens: 128,
                   },
                   perModelTimeoutMs,
+                  `${progressLabel}: tool-only regression retry ${i + 1}`,
                 );
 
                 toolCall = first.content.find((b) => b.type === "toolCall");
@@ -514,6 +548,7 @@ describeLive("live models (profile keys)", () => {
                   maxTokens: 256,
                 },
                 perModelTimeoutMs,
+                `${progressLabel}: tool-only regression followup`,
               );
 
               const secondText = second.content
@@ -530,6 +565,7 @@ describeLive("live models (profile keys)", () => {
               model,
               apiKey,
               timeoutMs: perModelTimeoutMs,
+              progressLabel,
             });
 
             if (ok.res.stopReason === "error") {
@@ -602,6 +638,11 @@ describeLive("live models (profile keys)", () => {
             ) {
               logProgress(`${progressLabel}: rate limit, retrying with next key`);
               continue;
+            }
+            if (model.provider === "anthropic" && isAnthropicRateLimitError(message)) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (anthropic rate limit)`);
+              break;
             }
             if (model.provider === "anthropic" && isAnthropicBillingError(message)) {
               if (attempt + 1 < attemptMax) {

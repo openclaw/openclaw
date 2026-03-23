@@ -310,6 +310,31 @@ describe("applyExtraParamsToAgent", () => {
     return payload;
   }
 
+  function runResolvedModelIdCase(params: {
+    applyProvider: string;
+    applyModelId: string;
+    model: Model<"anthropic-messages"> | Model<"openai-completions">;
+    cfg?: Record<string, unknown>;
+    extraParamsOverride?: Record<string, unknown>;
+  }): string {
+    let resolvedModelId = params.model.id;
+    const baseStreamFn: StreamFn = (model) => {
+      resolvedModelId = String(model.id ?? "");
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    applyExtraParamsToAgent(
+      agent,
+      params.cfg as Parameters<typeof applyExtraParamsToAgent>[1],
+      params.applyProvider,
+      params.applyModelId,
+      params.extraParamsOverride,
+    );
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(params.model, context, {});
+    return resolvedModelId;
+  }
+
   function runParallelToolCallsPayloadMutationCase(params: {
     applyProvider: string;
     applyModelId: string;
@@ -1122,7 +1147,7 @@ describe("applyExtraParamsToAgent", () => {
     );
   });
 
-  it("removes invalid negative Google thinkingBudget and maps Gemini 3.1 to thinkingLevel", () => {
+  it("sanitizes invalid Atproxy Gemini negative thinking budgets", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -1318,7 +1343,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.transport).toBe("auto");
   });
 
-  it("defaults OpenAI transport to auto (WebSocket-first)", () => {
+  it("defaults OpenAI transport to auto without websocket warm-up", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
     applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5");
@@ -1825,6 +1850,86 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.reasoning).toEqual({ effort: "medium" });
     expect(payload.text).toEqual({ verbosity: "high" });
     expect(payload.service_tier).toBe("default");
+  });
+
+  it("maps MiniMax /fast to the matching highspeed model", () => {
+    const resolvedModelId = runResolvedModelIdCase({
+      applyProvider: "minimax",
+      applyModelId: "MiniMax-M2.7",
+      extraParamsOverride: { fastMode: true },
+      model: {
+        api: "anthropic-messages",
+        provider: "minimax",
+        id: "MiniMax-M2.7",
+        baseUrl: "https://api.minimax.io/anthropic",
+      } as Model<"anthropic-messages">,
+    });
+
+    expect(resolvedModelId).toBe("MiniMax-M2.7-highspeed");
+  });
+
+  it("maps MiniMax M2.1 /fast to the matching highspeed model", () => {
+    const resolvedModelId = runResolvedModelIdCase({
+      applyProvider: "minimax",
+      applyModelId: "MiniMax-M2.1",
+      extraParamsOverride: { fastMode: true },
+      model: {
+        api: "anthropic-messages",
+        provider: "minimax",
+        id: "MiniMax-M2.1",
+        baseUrl: "https://api.minimax.io/anthropic",
+      } as Model<"anthropic-messages">,
+    });
+
+    expect(resolvedModelId).toBe("MiniMax-M2.1-highspeed");
+  });
+
+  it("keeps explicit MiniMax highspeed models unchanged when /fast is off", () => {
+    const resolvedModelId = runResolvedModelIdCase({
+      applyProvider: "minimax-portal",
+      applyModelId: "MiniMax-M2.7-highspeed",
+      extraParamsOverride: { fastMode: false },
+      model: {
+        api: "anthropic-messages",
+        provider: "minimax-portal",
+        id: "MiniMax-M2.7-highspeed",
+        baseUrl: "https://api.minimax.io/anthropic",
+      } as unknown as Model<"anthropic-messages">,
+    });
+
+    expect(resolvedModelId).toBe("MiniMax-M2.7-highspeed");
+  });
+
+  it("maps xAI /fast to the current Grok fast model", () => {
+    const resolvedModelId = runResolvedModelIdCase({
+      applyProvider: "xai",
+      applyModelId: "grok-4",
+      extraParamsOverride: { fastMode: true },
+      model: {
+        api: "openai-completions",
+        provider: "xai",
+        id: "grok-4",
+        baseUrl: "https://api.x.ai/v1",
+      } as unknown as Model<"openai-completions">,
+    });
+
+    expect(resolvedModelId).toBe("grok-4-fast");
+  });
+
+  it("keeps explicit xAI fast models unchanged when /fast is off", () => {
+    const resolvedModelId = runResolvedModelIdCase({
+      applyProvider: "xai",
+      applyModelId: "grok-4-1-fast",
+      extraParamsOverride: { fastMode: false },
+      model: {
+        api: "openai-completions",
+        provider: "xai",
+        id: "grok-4-1-fast",
+        baseUrl: "https://api.x.ai/v1",
+      } as Model<"openai-completions">,
+    });
+
+    expect(resolvedModelId).toBe("grok-4-1-fast");
   });
 
   it("injects service_tier=auto for Anthropic fast mode on direct API-key models", () => {

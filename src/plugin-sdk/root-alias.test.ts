@@ -22,7 +22,9 @@ type EmptySchema = {
 
 function loadRootAliasWithStubs(options?: {
   distExists?: boolean;
+  env?: Record<string, string | undefined>;
   monolithicExports?: Record<string | symbol, unknown>;
+  aliasPath?: string;
 }) {
   let createJitiCalls = 0;
   let jitiLoadCalls = 0;
@@ -33,7 +35,11 @@ function loadRootAliasWithStubs(options?: {
   };
   const wrapper = vm.runInNewContext(
     `(function (exports, require, module, __filename, __dirname) {${rootAliasSource}\n})`,
-    {},
+    {
+      process: {
+        env: options?.env ?? {},
+      },
+    },
     { filename: rootAliasPath },
   ) as (
     exports: Record<string, unknown>,
@@ -43,6 +49,7 @@ function loadRootAliasWithStubs(options?: {
     __dirname: string,
   ) => void;
   const module = { exports: {} as Record<string, unknown> };
+  const aliasPath = options?.aliasPath ?? rootAliasPath;
   const localRequire = ((id: string) => {
     if (id === "node:path") {
       return path;
@@ -73,7 +80,7 @@ function loadRootAliasWithStubs(options?: {
     }
     throw new Error(`unexpected require: ${id}`);
   }) as NodeJS.Require;
-  wrapper(module.exports, localRequire, module, rootAliasPath, path.dirname(rootAliasPath));
+  wrapper(module.exports, localRequire, module, aliasPath, path.dirname(aliasPath));
   return {
     moduleExports: module.exports,
     get createJitiCalls() {
@@ -155,6 +162,45 @@ describe("plugin-sdk root alias", () => {
 
     expect((lazyModule.moduleExports.slowHelper as () => string)()).toBe("loaded");
     expect(lazyModule.createJitiOptions.at(-1)?.tryNative).toBe(true);
+  });
+
+  it("prefers source loading under vitest even when compat resolves to dist", () => {
+    const lazyModule = loadRootAliasWithStubs({
+      distExists: true,
+      env: { VITEST: "1" },
+      monolithicExports: {
+        slowHelper: () => "loaded",
+      },
+    });
+
+    expect((lazyModule.moduleExports.slowHelper as () => string)()).toBe("loaded");
+    expect(lazyModule.createJitiOptions.at(-1)?.tryNative).toBe(false);
+  });
+
+  it("falls back to src files even when the alias itself is loaded from dist", () => {
+    const packageRoot = path.dirname(path.dirname(rootAliasPath));
+    const distAliasPath = path.join(packageRoot, "dist", "plugin-sdk", "root-alias.cjs");
+    const lazyModule = loadRootAliasWithStubs({
+      aliasPath: distAliasPath,
+      distExists: false,
+      monolithicExports: {
+        onDiagnosticEvent: () => () => undefined,
+        slowHelper: () => "loaded",
+      },
+    });
+
+    expect((lazyModule.moduleExports.slowHelper as () => string)()).toBe("loaded");
+    expect(lazyModule.loadedSpecifiers).toContain(
+      path.join(packageRoot, "src", "plugin-sdk", "compat.ts"),
+    );
+    expect(
+      typeof (lazyModule.moduleExports.onDiagnosticEvent as (listener: () => void) => () => void)(
+        () => undefined,
+      ),
+    ).toBe("function");
+    expect(lazyModule.loadedSpecifiers).toContain(
+      path.join(packageRoot, "src", "infra", "diagnostic-events.ts"),
+    );
   });
 
   it("forwards delegateCompactionToRuntime through the compat-backed root alias", () => {

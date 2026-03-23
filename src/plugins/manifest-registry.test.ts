@@ -250,7 +250,7 @@ describe("loadPluginManifestRegistry", () => {
 
     const registry = loadPluginManifestRegistry({
       cache: false,
-      env: { OPENCLAW_VERSION: "2026.3.13" },
+      env: { OPENCLAW_VERSION: "2026.3.21" },
       candidates: [
         createPluginCandidate({
           idHint: "synology-chat",
@@ -260,7 +260,7 @@ describe("loadPluginManifestRegistry", () => {
           packageManifest: {
             install: {
               npmSpec: "@openclaw/synology-chat",
-              minHostVersion: ">=2026.3.14",
+              minHostVersion: ">=2026.3.22",
             },
           },
         }),
@@ -270,7 +270,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins).toEqual([]);
     expect(
       registry.diagnostics.some((diag) =>
-        diag.message.includes("plugin requires OpenClaw >=2026.3.14, but this host is 2026.3.13"),
+        diag.message.includes("plugin requires OpenClaw >=2026.3.22, but this host is 2026.3.21"),
       ),
     ).toBe(true);
   });
@@ -290,7 +290,7 @@ describe("loadPluginManifestRegistry", () => {
           packageManifest: {
             install: {
               npmSpec: "@openclaw/synology-chat",
-              minHostVersion: "2026.3.14",
+              minHostVersion: "2026.3.22",
             },
           },
         }),
@@ -321,7 +321,7 @@ describe("loadPluginManifestRegistry", () => {
           packageManifest: {
             install: {
               npmSpec: "@openclaw/synology-chat",
-              minHostVersion: ">=2026.3.14",
+              minHostVersion: ">=2026.3.22",
             },
           },
         }),
@@ -493,6 +493,23 @@ describe("loadPluginManifestRegistry", () => {
     const registry = loadRegistry([
       createPluginCandidate({
         idHint: "openshell-sandbox",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+    ]);
+
+    expect(registry.diagnostics.some((diag) => diag.message.includes("plugin id mismatch"))).toBe(
+      false,
+    );
+  });
+
+  it("accepts media-understanding-style id hints without warning", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "groq", configSchema: { type: "object" } });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "groq-media-understanding",
         rootDir: dir,
         origin: "bundled",
       }),
@@ -836,7 +853,7 @@ describe("loadPluginManifestRegistry", () => {
         packageManifest: {
           install: {
             npmSpec: "@openclaw/synology-chat",
-            minHostVersion: ">=2026.3.14",
+            minHostVersion: ">=2026.3.22",
           },
         },
       }),
@@ -847,7 +864,7 @@ describe("loadPluginManifestRegistry", () => {
       candidates,
       env: {
         ...process.env,
-        OPENCLAW_VERSION: "2026.3.13",
+        OPENCLAW_VERSION: "2026.3.21",
       },
     });
     const newerHost = loadPluginManifestRegistry({
@@ -855,17 +872,17 @@ describe("loadPluginManifestRegistry", () => {
       candidates,
       env: {
         ...process.env,
-        OPENCLAW_VERSION: "2026.3.14",
+        OPENCLAW_VERSION: "2026.3.22",
       },
     });
 
     expect(olderHost.plugins).toEqual([]);
     expect(
-      olderHost.diagnostics.some((diag) => diag.message.includes("this host is 2026.3.13")),
+      olderHost.diagnostics.some((diag) => diag.message.includes("this host is 2026.3.21")),
     ).toBe(true);
     expect(newerHost.plugins.some((plugin) => plugin.id === "synology-chat")).toBe(true);
     expect(
-      newerHost.diagnostics.some((diag) => diag.message.includes("this host is 2026.3.13")),
+      newerHost.diagnostics.some((diag) => diag.message.includes("this host is 2026.3.21")),
     ).toBe(false);
   });
 });

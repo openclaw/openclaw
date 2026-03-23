@@ -183,9 +183,7 @@ function parsePositiveInteger(raw: string | undefined): number | null {
 }
 
 function resolveGatewayPort(cfg: OpenClawPluginApi["config"]): number {
-  const envPort =
-    parsePositiveInteger(process.env.OPENCLAW_GATEWAY_PORT?.trim()) ??
-    parsePositiveInteger(process.env.CLAWDBOT_GATEWAY_PORT?.trim());
+  const envPort = parsePositiveInteger(process.env.OPENCLAW_GATEWAY_PORT?.trim());
   if (envPort) {
     return envPort;
   }
@@ -290,17 +288,10 @@ async function resolveTailnetHost(): Promise<string | null> {
 function resolveAuthLabel(cfg: OpenClawPluginApi["config"]): ResolveAuthLabelResult {
   const mode = cfg.gateway?.auth?.mode;
   const token =
-    pickFirstDefined([
-      process.env.OPENCLAW_GATEWAY_TOKEN,
-      process.env.CLAWDBOT_GATEWAY_TOKEN,
-      cfg.gateway?.auth?.token,
-    ]) ?? undefined;
+    pickFirstDefined([process.env.OPENCLAW_GATEWAY_TOKEN, cfg.gateway?.auth?.token]) ?? undefined;
   const password =
-    pickFirstDefined([
-      process.env.OPENCLAW_GATEWAY_PASSWORD,
-      process.env.CLAWDBOT_GATEWAY_PASSWORD,
-      cfg.gateway?.auth?.password,
-    ]) ?? undefined;
+    pickFirstDefined([process.env.OPENCLAW_GATEWAY_PASSWORD, cfg.gateway?.auth?.password]) ??
+    undefined;
 
   if (mode === "token" || mode === "password") {
     return resolveRequiredAuthLabel(mode, { token, password });
@@ -577,6 +568,9 @@ export default definePluginEntry({
         const args = ctx.args?.trim() ?? "";
         const tokens = args.split(/\s+/).filter(Boolean);
         const action = tokens[0]?.toLowerCase() ?? "";
+        const gatewayClientScopes = Array.isArray(ctx.gatewayClientScopes)
+          ? ctx.gatewayClientScopes
+          : null;
         api.logger.info?.(
           `device-pair: /pair invoked channel=${ctx.channel} sender=${ctx.senderId ?? "unknown"} action=${
             action || "new"
@@ -598,6 +592,15 @@ export default definePluginEntry({
         }
 
         if (action === "approve") {
+          if (
+            gatewayClientScopes &&
+            !gatewayClientScopes.includes("operator.pairing") &&
+            !gatewayClientScopes.includes("operator.admin")
+          ) {
+            return {
+              text: "⚠️ This command requires operator.pairing for internal gateway callers.",
+            };
+          }
           const requested = tokens[1]?.trim();
           const list = await listDevicePairing();
           if (list.pending.length === 0) {
