@@ -64,8 +64,9 @@ let agentRunnerMemoryRuntimePromise: Promise<
   typeof import("./agent-runner-memory.runtime.js")
 > | null = null;
 let usageCostRuntimePromise: Promise<typeof import("./usage-cost.runtime.js")> | null = null;
-let contextTokensRuntimePromise: Promise<typeof import("../../agents/context-tokens.runtime.js")> | null =
-  null;
+let contextTokensRuntimePromise: Promise<
+  typeof import("../../agents/context-tokens.runtime.js")
+> | null = null;
 
 function loadPiEmbeddedQueueRuntime() {
   piEmbeddedQueueRuntimePromise ??= import("../../agents/pi-embedded-queue.runtime.js");
