@@ -480,7 +480,7 @@
   font-size: 15px;
   font-weight: 650;
   letter-spacing: -0.02em;
-  color: var(--text-strong);
+  color: var(--accent);
 }
 
 .settings-appearance__hint {
@@ -550,7 +550,7 @@
 .settings-theme-card__label {
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-strong);
+  color: var(--accent);
 }
 
 /* Roundness options */

@@ -161,7 +161,7 @@
 }
 
 .topnav-shell .dashboard-header__breadcrumb-current {
-  color: var(--text-strong);
+  color: var(--accent);
   font-weight: 650;
   white-space: nowrap;
   overflow: hidden;
@@ -910,7 +910,7 @@
   font-weight: 650;
   letter-spacing: -0.03em;
   line-height: 1.2;
-  color: var(--text-strong);
+  color: var(--accent);
 }
 
 .page-sub {
