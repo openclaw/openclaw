@@ -167,7 +167,7 @@ describe("dashboardCommand", () => {
     }
   });
 
-  it("respects --no-open and skips browser attempts", async () => {
+  it("respects --no-open and tells user token URL is in clipboard", async () => {
     mockSnapshot();
     copyToClipboardMock.mockResolvedValue(true);
 
@@ -175,6 +175,17 @@ describe("dashboardCommand", () => {
 
     expect(detectBrowserOpenSupportMock).not.toHaveBeenCalled();
     expect(openUrlMock).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Browser launch disabled (--no-open). Token-authenticated URL copied to clipboard.",
+    );
+  });
+
+  it("respects --no-open with plain URL hint when clipboard fails", async () => {
+    mockSnapshot();
+    copyToClipboardMock.mockResolvedValue(false);
+
+    await dashboardCommand(runtime, { noOpen: true });
+
     expect(runtime.log).toHaveBeenCalledWith(
       "Browser launch disabled (--no-open). Use the URL above.",
     );

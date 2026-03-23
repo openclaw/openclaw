@@ -111,7 +111,10 @@ export async function dashboardCommand(
       });
     }
   } else {
-    hint = "Browser launch disabled (--no-open). Use the URL above.";
+    hint =
+      copied && includeTokenInUrl
+        ? "Browser launch disabled (--no-open). Token-authenticated URL copied to clipboard."
+        : "Browser launch disabled (--no-open). Use the URL above.";
   }
 
   if (opened) {
