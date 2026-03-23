@@ -1,8 +1,31 @@
 import { describe, expect, it } from "vitest";
-import channelsConfig from "../vitest.channels.config.ts";
-import extensionsConfig from "../vitest.extensions.config.ts";
-import gatewayConfig from "../vitest.gateway.config.ts";
 import { createScopedVitestConfig, resolveVitestIsolation } from "../vitest.scoped-config.ts";
+
+async function withEnvValue<T>(
+  key: string,
+  value: string | undefined,
+  run: () => Promise<T> | T,
+): Promise<T> {
+  const previous = process.env[key];
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
+  }
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = previous;
+    }
+  }
+}
+
+async function importFreshConfig<T>(specifier: string): Promise<T> {
+  return (await import(`${specifier}?t=${Date.now()}`)) as T;
+}
 
 describe("resolveVitestIsolation", () => {
   it("defaults shared scoped configs to non-isolated workers", () => {
@@ -42,21 +65,47 @@ describe("createScopedVitestConfig", () => {
 });
 
 describe("scoped vitest configs", () => {
-  it("defaults channel tests to non-isolated mode", () => {
-    expect(channelsConfig.test?.isolate).toBe(false);
+  it("defaults channel tests to non-isolated mode", async () => {
+    const channelsConfig = await withEnvValue("OPENCLAW_VITEST_INCLUDE_FILE", undefined, async () =>
+      importFreshConfig<{ default: { test?: { isolate?: boolean } } }>(
+        "../vitest.channels.config.ts",
+      ),
+    );
+    expect(channelsConfig.default.test?.isolate).toBe(false);
   });
 
-  it("defaults extension tests to non-isolated mode", () => {
-    expect(extensionsConfig.test?.isolate).toBe(false);
+  it("defaults extension tests to non-isolated mode", async () => {
+    const extensionsConfig = await withEnvValue(
+      "OPENCLAW_VITEST_INCLUDE_FILE",
+      undefined,
+      async () =>
+        importFreshConfig<{ default: { test?: { isolate?: boolean } } }>(
+          "../vitest.extensions.config.ts",
+        ),
+    );
+    expect(extensionsConfig.default.test?.isolate).toBe(false);
   });
 
-  it("normalizes extension include patterns relative to the scoped dir", () => {
-    expect(extensionsConfig.test?.dir).toBe("extensions");
-    expect(extensionsConfig.test?.include).toEqual(["**/*.test.ts"]);
+  it("normalizes extension include patterns relative to the scoped dir", async () => {
+    const extensionsConfig = await withEnvValue(
+      "OPENCLAW_VITEST_INCLUDE_FILE",
+      undefined,
+      async () =>
+        importFreshConfig<{ default: { test?: { dir?: string; include?: string[] } } }>(
+          "../vitest.extensions.config.ts",
+        ),
+    );
+    expect(extensionsConfig.default.test?.dir).toBe("extensions");
+    expect(extensionsConfig.default.test?.include).toEqual(["**/*.test.ts"]);
   });
 
-  it("normalizes gateway include patterns relative to the scoped dir", () => {
-    expect(gatewayConfig.test?.dir).toBe("src/gateway");
-    expect(gatewayConfig.test?.include).toEqual(["**/*.test.ts"]);
+  it("normalizes gateway include patterns relative to the scoped dir", async () => {
+    const gatewayConfig = await withEnvValue("OPENCLAW_VITEST_INCLUDE_FILE", undefined, async () =>
+      importFreshConfig<{ default: { test?: { dir?: string; include?: string[] } } }>(
+        "../vitest.gateway.config.ts",
+      ),
+    );
+    expect(gatewayConfig.default.test?.dir).toBe("src/gateway");
+    expect(gatewayConfig.default.test?.include).toEqual(["**/*.test.ts"]);
   });
 });
