@@ -154,13 +154,7 @@ describe("systemd availability", () => {
 
   it("returns false when transport endpoint is not connected", async () => {
     execFileMock.mockImplementation((_cmd, _args, _opts, cb) => {
-      const err = new Error("Transport endpoint is not connected") as Error & {
-        stderr?: string;
-        code?: number;
-      };
-      err.stderr = "Transport endpoint is not connected";
-      err.code = 1;
-      cb(err, "", "");
+      cb(createExecFileError("Transport endpoint is not connected"), "", "");
     });
     await expect(isSystemdUserServiceAvailable()).resolves.toBe(false);
   });
