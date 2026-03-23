@@ -124,18 +124,11 @@ export async function statusAllCommand(
     const remoteUrlMissing = isRemoteMode && !remoteUrlRaw;
     const gatewayMode = isRemoteMode ? "remote" : "local";
 
-    const localProbeAuthResolution = await resolveGatewayProbeAuthSafeWithSecretInputs({
+    const probeAuthResolution = await resolveGatewayProbeAuthSafeWithSecretInputs({
       cfg,
-      mode: "local",
+      mode: isRemoteMode && !remoteUrlMissing ? "remote" : "local",
       env: process.env,
     });
-    const remoteProbeAuthResolution = await resolveGatewayProbeAuthSafeWithSecretInputs({
-      cfg,
-      mode: "remote",
-      env: process.env,
-    });
-    const probeAuthResolution =
-      isRemoteMode && !remoteUrlMissing ? remoteProbeAuthResolution : localProbeAuthResolution;
     const probeAuth = probeAuthResolution.auth;
 
     const gatewayProbe = await probeGateway({
@@ -196,8 +189,8 @@ export async function statusAllCommand(
     const callOverrides = remoteUrlMissing
       ? {
           url: connection.url,
-          token: localProbeAuthResolution.auth.token,
-          password: localProbeAuthResolution.auth.password,
+          token: probeAuthResolution.auth.token,
+          password: probeAuthResolution.auth.password,
         }
       : {};
 
