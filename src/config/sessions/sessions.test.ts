@@ -450,7 +450,19 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     });
 
     const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
-    expect(emitSpy).toHaveBeenCalledWith(sessionFile);
+    expect(emitSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile,
+        sessionKey,
+        messageId: expect.any(String),
+        message: expect.objectContaining({
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: "Hello from delivery mirror!" }],
+        }),
+      }),
+    );
     emitSpy.mockRestore();
   });
 
