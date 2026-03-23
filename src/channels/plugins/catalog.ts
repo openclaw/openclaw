@@ -52,7 +52,7 @@ const ORIGIN_PRIORITY: Record<PluginOrigin, number> = {
   bundled: 3,
 };
 
-const EXTERNAL_CATALOG_PRIORITY = ORIGIN_PRIORITY.bundled ?? 99;
+const EXTERNAL_CATALOG_PRIORITY = ORIGIN_PRIORITY.bundled + 1;
 const FALLBACK_CATALOG_PRIORITY = EXTERNAL_CATALOG_PRIORITY + 1;
 
 type ExternalCatalogEntry = {
