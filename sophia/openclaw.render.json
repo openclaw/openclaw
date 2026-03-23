@@ -117,6 +117,7 @@
   "channels": {
     "whatsapp": {
       "enabled": true,
+      "selfChatMode": true,
       "dmPolicy": "pairing",
       "allowFrom": ["+393894991082"],
       "groupPolicy": "allowlist",
