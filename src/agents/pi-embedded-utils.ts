@@ -67,44 +67,91 @@ export function stripDeepSeekDsmlToolCallXml(text: string): string {
  * NVIDIA NIM-hosted models (kimi-k2.5, deepseek-v3.2) sometimes emit their
  * response as a Python-formatted content array rather than plain text, e.g.:
  *   [{'type': 'text', 'text': 'actual response here'}]
- * This detects that pattern and extracts the text values from it.
+ * This detects that pattern and extracts the text values from it iteratively
+ * to handle multiple levels of nesting and escaping using a manual state machine.
  */
 export function extractFromNimSerializedContent(text: string): string {
-  if (!text) {
+  if (!text || typeof text !== "string") {
     return text;
   }
-  const trimmed = text.trim();
-  // Only trigger on text that looks like a Python list-of-dicts starting with [{
-  if (!trimmed.startsWith("[{")) {
-    return text;
-  }
-  // Must contain a 'type': 'text' entry (Python single-quote style)
-  if (!/['"]type['"]\s*:\s*['"]text['"]/.test(trimmed)) {
-    return text;
-  }
+  let current = text.trim();
+  let iterations = 0;
 
-  // Extract all 'text': 'value' pairs (handles escaped single quotes inside value)
-  const parts: string[] = [];
-  const singleQuoteRe = /'text'\s*:\s*'((?:[^'\\]|\\.)*)'/g;
-  let match: RegExpExecArray | null;
-  while ((match = singleQuoteRe.exec(trimmed)) !== null) {
-    parts.push(match[1].replace(/\\'/g, "'"));
-  }
-
-  if (parts.length === 0) {
-    // Fall back to double-quoted variant just in case
-    const doubleQuoteRe = /"text"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
-    while ((match = doubleQuoteRe.exec(trimmed)) !== null) {
-      parts.push(match[1].replace(/\\"/g, '"'));
+  // Function to find the end of a quoted string handling backslash escaping
+  const findValueEnd = (str: string, startIdx: number, quoteChar: string): number => {
+    let escaped = false;
+    for (let i = startIdx; i < str.length; i++) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (str[i] === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (str[i] === quoteChar) {
+        return i;
+      }
     }
+    return -1;
+  };
+
+  // Continuously unwrap as long as it looks like a serialized Python/JSON list of dicts.
+  // We handle escaped variants (e.g. \\'[{\') by ignoring leading backslashes.
+  while (current.replace(/^\\+/g, "").startsWith("[{") && iterations < 10) {
+    const parts: string[] = [];
+    const textKeyRe = /['"]text['"]\s*:\s*/g;
+    let match: RegExpExecArray | null;
+
+    while ((match = textKeyRe.exec(current)) !== null) {
+      const valueStartIdx = match.index + match[0].length;
+      const quoteChar = current[valueStartIdx];
+      if (quoteChar !== "'" && quoteChar !== '"') {
+        continue;
+      }
+
+      const valueEndIdx = findValueEnd(current, valueStartIdx + 1, quoteChar);
+      if (valueEndIdx === -1) {
+        continue;
+      }
+
+      const rawValue = current.substring(valueStartIdx + 1, valueEndIdx);
+      // Unescape one level of backslashes for common Python/JSON serialization patterns
+      const unescaped = rawValue.replace(/\\(.)/g, (m, char) => {
+        if (char === "\\") {
+          return "\\";
+        }
+        if (char === "'") {
+          return "'";
+        }
+        if (char === '"') {
+          return '"';
+        }
+        if (char === "n") {
+          return "\n";
+        }
+        if (char === "r") {
+          return "\r";
+        }
+        if (char === "t") {
+          return "\t";
+        }
+        return char;
+      });
+      parts.push(unescaped);
+      // Advance regex to skip this value
+      textKeyRe.lastIndex = valueEndIdx + 1;
+    }
+
+    if (parts.length === 0) {
+      break;
+    }
+
+    current = parts.join("\n").trim();
+    iterations++;
   }
 
-  if (parts.length === 0) {
-    return text;
-  }
-
-  const extracted = parts.join("\n").trim();
-  return extracted || text;
+  return current;
 }
 
 /**
