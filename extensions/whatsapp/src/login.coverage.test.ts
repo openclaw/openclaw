@@ -1,6 +1,5 @@
 import { rmSync } from "node:fs";
 import fs from "node:fs/promises";
-import { DisconnectReason } from "@whiskeysockets/baileys";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loginWeb } from "./login.js";
 import {
@@ -38,7 +37,8 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
   };
 });
 
-vi.mock("./session.js", () => {
+vi.mock("./session.js", async () => {
+  const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
   const authDir = resolveTestAuthDir();
   const sockA = { ws: { close: vi.fn() } };
   const sockB = { ws: { close: vi.fn() } };
@@ -53,6 +53,7 @@ vi.mock("./session.js", () => {
   );
   const waitForCredsSaveQueueWithTimeout = vi.fn(async () => {});
   return {
+    ...actual,
     createWaSocket,
     waitForWaConnection,
     formatError,
@@ -128,7 +129,7 @@ describe("loginWeb coverage", () => {
 
   it("clears creds and throws when logged out", async () => {
     waitForWaConnectionMock.mockRejectedValueOnce({
-      output: { statusCode: DisconnectReason.loggedOut },
+      output: { statusCode: 401 },
     });
 
     await expect(loginWeb(false, waitForWaConnectionMock as never)).rejects.toThrow(
