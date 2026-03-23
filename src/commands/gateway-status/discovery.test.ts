@@ -82,9 +82,8 @@ describe("pickAutoSshTargetFromDiscovery", () => {
       domain: "local.",
       host,
       port,
-      addresses: [host],
       txt: {},
-    }) as Parameters<typeof pickAutoSshTargetFromDiscovery>[0]["discovery"][0];
+    }) satisfies Parameters<typeof pickAutoSshTargetFromDiscovery>[0]["discovery"][0];
 
   it("returns the first beacon whose sshTarget parses successfully", () => {
     const result = pickAutoSshTargetFromDiscovery({
