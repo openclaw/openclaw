@@ -1,13 +1,12 @@
 import type { AnyMessageContent, proto, WAMessage } from "@whiskeysockets/baileys";
 import { DisconnectReason, isJidGroup } from "@whiskeysockets/baileys";
-import { createInboundDebouncer } from "../../../../src/auto-reply/inbound-debounce.js";
-import { formatLocationText } from "../../../../src/channels/location.js";
-import { logVerbose, shouldLogVerbose } from "../../../../src/globals.js";
-import { recordChannelActivity } from "../../../../src/infra/channel-activity.js";
-import { getChildLogger } from "../../../../src/logging/logger.js";
-import { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
-import { saveMediaBuffer } from "../../../../src/media/store.js";
-import { jidToE164, resolveJidToE164 } from "../../../../src/utils.js";
+import { createInboundDebouncer, formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
+import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
+import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
+import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
+import { jidToE164, resolveJidToE164 } from "openclaw/plugin-sdk/text-runtime";
 import { createWaSocket, getStatusCode, waitForWaConnection } from "../session.js";
 import { checkInboundAccessControl } from "./access-control.js";
 import { isRecentInboundMessage } from "./dedupe.js";
@@ -18,6 +17,7 @@ import {
   extractMentionedJids,
   extractText,
 } from "./extract.js";
+import { attachEmitterListener, closeInboundMonitorSocket } from "./lifecycle.js";
 import { downloadInboundMedia } from "./media.js";
 import { createWebSendApi } from "./send-api.js";
 import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
@@ -430,8 +430,6 @@ export async function monitorWebInbox(options: {
       await enqueueInboundMessage(msg, inbound, enriched);
     }
   };
-  sock.ev.on("messages.upsert", handleMessagesUpsert);
-
   const handleConnectionUpdate = (
     update: Partial<import("@whiskeysockets/baileys").ConnectionState>,
   ) => {
@@ -449,7 +447,24 @@ export async function monitorWebInbox(options: {
       resolveClose({ status: undefined, isLoggedOut: false, error: err });
     }
   };
-  sock.ev.on("connection.update", handleConnectionUpdate);
+  const detachMessagesUpsert = attachEmitterListener(
+    sock.ev as unknown as {
+      on: (event: string, listener: (...args: unknown[]) => void) => void;
+      off?: (event: string, listener: (...args: unknown[]) => void) => void;
+      removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;
+    },
+    "messages.upsert",
+    handleMessagesUpsert as unknown as (...args: unknown[]) => void,
+  );
+  const detachConnectionUpdate = attachEmitterListener(
+    sock.ev as unknown as {
+      on: (event: string, listener: (...args: unknown[]) => void) => void;
+      off?: (event: string, listener: (...args: unknown[]) => void) => void;
+      removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;
+    },
+    "connection.update",
+    handleConnectionUpdate as unknown as (...args: unknown[]) => void,
+  );
 
   const sendApi = createWebSendApi({
     sock: {
@@ -462,24 +477,9 @@ export async function monitorWebInbox(options: {
   return {
     close: async () => {
       try {
-        const ev = sock.ev as unknown as {
-          off?: (event: string, listener: (...args: unknown[]) => void) => void;
-          removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;
-        };
-        const messagesUpsertHandler = handleMessagesUpsert as unknown as (
-          ...args: unknown[]
-        ) => void;
-        const connectionUpdateHandler = handleConnectionUpdate as unknown as (
-          ...args: unknown[]
-        ) => void;
-        if (typeof ev.off === "function") {
-          ev.off("messages.upsert", messagesUpsertHandler);
-          ev.off("connection.update", connectionUpdateHandler);
-        } else if (typeof ev.removeListener === "function") {
-          ev.removeListener("messages.upsert", messagesUpsertHandler);
-          ev.removeListener("connection.update", connectionUpdateHandler);
-        }
-        sock.ws?.close();
+        detachMessagesUpsert();
+        detachConnectionUpdate();
+        closeInboundMonitorSocket(sock);
       } catch (err) {
         logVerbose(`Socket close failed: ${String(err)}`);
       }

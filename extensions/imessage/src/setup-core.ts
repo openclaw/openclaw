@@ -1,18 +1,23 @@
-import { createPatchedAccountSetupAdapter } from "../../../src/channels/plugins/setup-helpers.js";
 import {
+  createCliPathTextInput,
+  createDelegatedSetupWizardProxy,
+  createDelegatedTextInputShouldPrompt,
+  createPatchedAccountSetupAdapter,
   parseSetupEntriesAllowingWildcard,
-  promptParsedAllowFromForScopedChannel,
+  promptParsedAllowFromForAccount,
+  setAccountAllowFromForChannel,
   setChannelDmPolicyWithAllowFrom,
   setSetupChannelEnabled,
   type OpenClawConfig,
   type WizardPrompter,
-} from "../../../src/plugin-sdk-internal/setup.js";
+} from "openclaw/plugin-sdk/setup";
 import type {
   ChannelSetupAdapter,
   ChannelSetupDmPolicy,
   ChannelSetupWizard,
-} from "../../../src/plugin-sdk-internal/setup.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
+  ChannelSetupWizardTextInput,
+} from "openclaw/plugin-sdk/setup";
+import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import {
   listIMessageAccountIds,
   resolveDefaultIMessageAccountId,
@@ -65,14 +70,13 @@ function buildIMessageSetupPatch(input: {
   };
 }
 
-async function promptIMessageAllowFrom(params: {
+export async function promptIMessageAllowFrom(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
   accountId?: string;
 }): Promise<OpenClawConfig> {
-  return promptParsedAllowFromForScopedChannel({
+  return promptParsedAllowFromForAccount({
     cfg: params.cfg,
-    channel,
     accountId: params.accountId,
     defaultAccountId: resolveDefaultIMessageAccountId(params.cfg),
     prompter: params.prompter,
@@ -92,111 +96,107 @@ async function promptIMessageAllowFrom(params: {
     parseEntries: parseIMessageAllowFromEntries,
     getExistingAllowFrom: ({ cfg, accountId }) =>
       resolveIMessageAccount({ cfg, accountId }).config.allowFrom ?? [],
+    applyAllowFrom: ({ cfg, accountId, allowFrom }) =>
+      setAccountAllowFromForChannel({
+        cfg,
+        channel,
+        accountId,
+        allowFrom,
+      }),
   });
 }
+
+export const imessageDmPolicy: ChannelSetupDmPolicy = {
+  label: "iMessage",
+  channel,
+  policyKey: "channels.imessage.dmPolicy",
+  allowFromKey: "channels.imessage.allowFrom",
+  getCurrent: (cfg: OpenClawConfig) => cfg.channels?.imessage?.dmPolicy ?? "pairing",
+  setPolicy: (cfg: OpenClawConfig, policy) =>
+    setChannelDmPolicyWithAllowFrom({
+      cfg,
+      channel,
+      dmPolicy: policy,
+    }),
+  promptAllowFrom: promptIMessageAllowFrom,
+};
+
+function resolveIMessageCliPath(params: { cfg: OpenClawConfig; accountId: string }) {
+  return resolveIMessageAccount(params).config.cliPath ?? "imsg";
+}
+
+export function createIMessageCliPathTextInput(
+  shouldPrompt: NonNullable<ChannelSetupWizardTextInput["shouldPrompt"]>,
+): ChannelSetupWizardTextInput {
+  return createCliPathTextInput({
+    inputKey: "cliPath",
+    message: "imsg CLI path",
+    resolvePath: ({ cfg, accountId }) => resolveIMessageCliPath({ cfg, accountId }),
+    shouldPrompt,
+    helpTitle: "iMessage",
+    helpLines: ["imsg CLI path required to enable iMessage."],
+  });
+}
+
+export const imessageCompletionNote = {
+  title: "iMessage next steps",
+  lines: [
+    "This is still a work in progress.",
+    "Ensure OpenClaw has Full Disk Access to Messages DB.",
+    "Grant Automation permission for Messages when prompted.",
+    "List chats with: imsg chats --limit 20",
+    `Docs: ${formatDocsLink("/imessage", "imessage")}`,
+  ],
+};
 
 export const imessageSetupAdapter: ChannelSetupAdapter = createPatchedAccountSetupAdapter({
   channelKey: channel,
   buildPatch: (input) => buildIMessageSetupPatch(input),
 });
 
-type IMessageSetupWizardHandlers = {
-  resolveStatusLines: NonNullable<ChannelSetupWizard["status"]>["resolveStatusLines"];
-  resolveSelectionHint: NonNullable<ChannelSetupWizard["status"]>["resolveSelectionHint"];
-  resolveQuickstartScore: NonNullable<ChannelSetupWizard["status"]>["resolveQuickstartScore"];
-  shouldPromptCliPath: NonNullable<
-    NonNullable<ChannelSetupWizard["textInputs"]>[number]["shouldPrompt"]
-  >;
+export const imessageSetupStatusBase = {
+  configuredLabel: "configured",
+  unconfiguredLabel: "needs setup",
+  configuredHint: "imsg found",
+  unconfiguredHint: "imsg missing",
+  configuredScore: 1,
+  unconfiguredScore: 0,
+  resolveConfigured: ({ cfg }: { cfg: OpenClawConfig }) =>
+    listIMessageAccountIds(cfg).some((accountId) => {
+      const account = resolveIMessageAccount({ cfg, accountId });
+      return Boolean(
+        account.config.cliPath ||
+        account.config.dbPath ||
+        account.config.allowFrom ||
+        account.config.service ||
+        account.config.region,
+      );
+    }),
 };
 
-export function createIMessageSetupWizardBase(
-  handlers: IMessageSetupWizardHandlers,
-): ChannelSetupWizard {
-  const imessageDmPolicy: ChannelSetupDmPolicy = {
-    label: "iMessage",
+export function createIMessageSetupWizardProxy(loadWizard: () => Promise<ChannelSetupWizard>) {
+  return createDelegatedSetupWizardProxy({
     channel,
-    policyKey: "channels.imessage.dmPolicy",
-    allowFromKey: "channels.imessage.allowFrom",
-    getCurrent: (cfg: OpenClawConfig) => cfg.channels?.imessage?.dmPolicy ?? "pairing",
-    setPolicy: (cfg: OpenClawConfig, policy) =>
-      setChannelDmPolicyWithAllowFrom({
-        cfg,
-        channel,
-        dmPolicy: policy,
-      }),
-    promptAllowFrom: promptIMessageAllowFrom,
-  };
-
-  return {
-    channel,
+    loadWizard,
     status: {
-      configuredLabel: "configured",
-      unconfiguredLabel: "needs setup",
-      configuredHint: "imsg found",
-      unconfiguredHint: "imsg missing",
-      configuredScore: 1,
-      unconfiguredScore: 0,
-      resolveConfigured: ({ cfg }) =>
-        listIMessageAccountIds(cfg).some((accountId) => {
-          const account = resolveIMessageAccount({ cfg, accountId });
-          return Boolean(
-            account.config.cliPath ||
-            account.config.dbPath ||
-            account.config.allowFrom ||
-            account.config.service ||
-            account.config.region,
-          );
-        }),
-      resolveStatusLines: handlers.resolveStatusLines,
-      resolveSelectionHint: handlers.resolveSelectionHint,
-      resolveQuickstartScore: handlers.resolveQuickstartScore,
+      configuredLabel: imessageSetupStatusBase.configuredLabel,
+      unconfiguredLabel: imessageSetupStatusBase.unconfiguredLabel,
+      configuredHint: imessageSetupStatusBase.configuredHint,
+      unconfiguredHint: imessageSetupStatusBase.unconfiguredHint,
+      configuredScore: imessageSetupStatusBase.configuredScore,
+      unconfiguredScore: imessageSetupStatusBase.unconfiguredScore,
     },
     credentials: [],
     textInputs: [
-      {
-        inputKey: "cliPath",
-        message: "imsg CLI path",
-        initialValue: ({ cfg, accountId }) =>
-          resolveIMessageAccount({ cfg, accountId }).config.cliPath ?? "imsg",
-        currentValue: ({ cfg, accountId }) =>
-          resolveIMessageAccount({ cfg, accountId }).config.cliPath ?? "imsg",
-        shouldPrompt: handlers.shouldPromptCliPath,
-        confirmCurrentValue: false,
-        applyCurrentValue: true,
-        helpTitle: "iMessage",
-        helpLines: ["imsg CLI path required to enable iMessage."],
-      },
+      createIMessageCliPathTextInput(
+        createDelegatedTextInputShouldPrompt({
+          loadWizard,
+          inputKey: "cliPath",
+        }),
+      ),
     ],
-    completionNote: {
-      title: "iMessage next steps",
-      lines: [
-        "This is still a work in progress.",
-        "Ensure OpenClaw has Full Disk Access to Messages DB.",
-        "Grant Automation permission for Messages when prompted.",
-        "List chats with: imsg chats --limit 20",
-        `Docs: ${formatDocsLink("/imessage", "imessage")}`,
-      ],
-    },
+    completionNote: imessageCompletionNote,
     dmPolicy: imessageDmPolicy,
     disable: (cfg: OpenClawConfig) => setSetupChannelEnabled(cfg, channel, false),
-  } satisfies ChannelSetupWizard;
-}
-
-export function createIMessageSetupWizardProxy(
-  loadWizard: () => Promise<{ imessageSetupWizard: ChannelSetupWizard }>,
-) {
-  return createIMessageSetupWizardBase({
-    resolveStatusLines: async (params) =>
-      (await loadWizard()).imessageSetupWizard.status.resolveStatusLines?.(params) ?? [],
-    resolveSelectionHint: async (params) =>
-      await (await loadWizard()).imessageSetupWizard.status.resolveSelectionHint?.(params),
-    resolveQuickstartScore: async (params) =>
-      await (await loadWizard()).imessageSetupWizard.status.resolveQuickstartScore?.(params),
-    shouldPromptCliPath: async (params) => {
-      const input = (await loadWizard()).imessageSetupWizard.textInputs?.find(
-        (entry) => entry.inputKey === "cliPath",
-      );
-      return (await input?.shouldPrompt?.(params)) ?? false;
-    },
   });
 }

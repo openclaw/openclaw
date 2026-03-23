@@ -1,7 +1,4 @@
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { readJsonFile, runVitestJsonReport } from "./test-report-utils.mjs";
 
 function readEnvNumber(name) {
   const raw = process.env[name]?.trim();
@@ -59,32 +56,17 @@ function formatMs(ms) {
 }
 
 const opts = parseArgs(process.argv.slice(2));
-const reportPath = path.join(os.tmpdir(), `openclaw-vitest-perf-${Date.now()}.json`);
-const cmd = [
-  "vitest",
-  "run",
-  "--config",
-  opts.config,
-  "--reporter=json",
-  "--outputFile",
-  reportPath,
-];
-
 const startedAt = process.hrtime.bigint();
-const run = spawnSync("pnpm", cmd, {
-  stdio: "inherit",
-  env: process.env,
+const reportPath = runVitestJsonReport({
+  config: opts.config,
+  prefix: "openclaw-vitest-perf",
 });
 const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
-
-if (run.status !== 0) {
-  process.exit(run.status ?? 1);
-}
 
 let totalFileDurationMs = 0;
 let fileCount = 0;
 try {
-  const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+  const report = readJsonFile(reportPath);
   for (const result of report.testResults ?? []) {
     if (typeof result.startTime === "number" && typeof result.endTime === "number") {
       totalFileDurationMs += Math.max(0, result.endTime - result.startTime);

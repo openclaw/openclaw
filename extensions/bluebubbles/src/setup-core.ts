@@ -1,22 +1,21 @@
 import {
+  createTopLevelChannelDmPolicySetter,
+  normalizeAccountId,
   patchScopedAccountConfig,
   prepareScopedSetupConfig,
-} from "../../../src/channels/plugins/setup-helpers.js";
-import { setTopLevelChannelDmPolicyWithAllowFrom } from "../../../src/channels/plugins/setup-wizard-helpers.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { DmPolicy } from "../../../src/config/types.js";
-import { normalizeAccountId } from "../../../src/routing/session-key.js";
+  type ChannelSetupAdapter,
+  type DmPolicy,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/setup";
 import { applyBlueBubblesConnectionConfig } from "./config-apply.js";
 
 const channel = "bluebubbles" as const;
+const setBlueBubblesTopLevelDmPolicy = createTopLevelChannelDmPolicySetter({
+  channel,
+});
 
 export function setBlueBubblesDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy): OpenClawConfig {
-  return setTopLevelChannelDmPolicyWithAllowFrom({
-    cfg,
-    channel,
-    dmPolicy,
-  });
+  return setBlueBubblesTopLevelDmPolicy(cfg, dmPolicy);
 }
 
 export function setBlueBubblesAllowFrom(

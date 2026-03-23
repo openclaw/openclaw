@@ -191,8 +191,8 @@
     bottom: 10px;
     width: 3px;
     border-radius: 999px;
-    background: color-mix(in srgb, #2de3d1 86%, transparent);
-    box-shadow: 0 0 14px color-mix(in srgb, #2de3d1 34%, transparent);
+    background: color-mix(in srgb, var(--accent) 86%, transparent);
+    box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 34%, transparent);
   }
 
   .sidebar--collapsed .sidebar-shell__footer {
@@ -214,6 +214,10 @@
     min-height: 44px;
     padding: 0;
     justify-content: center;
+  }
+
+  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar-mode-switch {
+    display: none;
   }
 }
 
@@ -244,7 +248,7 @@
   }
 
   .topnav-shell__content {
-    order: 3;
+    display: none;
     width: 100%;
   }
 
@@ -275,7 +279,17 @@
   }
 
   .topbar-theme-mode {
-    flex-shrink: 0;
+    display: none;
+  }
+
+  .sidebar-mode-switch {
+    display: block;
+  }
+
+  .sidebar-mode-switch .topbar-theme-mode {
+    display: inline-flex;
+    width: 100%;
+    justify-content: center;
   }
 
   .topbar-status .pill {
@@ -635,5 +649,115 @@
     width: 24px;
     height: 24px;
     font-size: 12px;
+  }
+}
+
+/* ===========================================
+   Sessions table – responsive column hiding
+   =========================================== */
+
+/* nth-child is 1-based and includes the checkbox column (col 1). */
+
+/* ≤1400px: hide Verbose (col 9) and Reasoning (col 10) */
+@media (max-width: 1400px) {
+  .data-table th:nth-child(9),
+  .data-table td:nth-child(9),
+  .data-table th:nth-child(10),
+  .data-table td:nth-child(10) {
+    display: none;
+  }
+}
+
+/* ≤1100px: also hide Fast (col 8) and Kind (col 4) */
+@media (max-width: 1100px) {
+  .data-table th:nth-child(4),
+  .data-table td:nth-child(4),
+  .data-table th:nth-child(8),
+  .data-table td:nth-child(8) {
+    display: none;
+  }
+
+  .data-table th,
+  .data-table td {
+    padding: 8px 10px;
+  }
+}
+
+/* ≤900px: also hide Thinking (col 7) and Label (col 3) */
+@media (max-width: 900px) {
+  .data-table th:nth-child(3),
+  .data-table td:nth-child(3),
+  .data-table th:nth-child(7),
+  .data-table td:nth-child(7) {
+    display: none;
+  }
+}
+
+/* ≤768px: also hide Tokens (col 6); tighten padding; stack pagination */
+@media (max-width: 768px) {
+  .data-table th:nth-child(6),
+  .data-table td:nth-child(6) {
+    display: none;
+  }
+
+  .data-table th,
+  .data-table td {
+    padding: 8px 6px;
+    font-size: 12px;
+  }
+
+  .data-table-pagination {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 10px 8px;
+  }
+
+  .data-table-pagination__info {
+    text-align: center;
+  }
+
+  .data-table-pagination__controls {
+    justify-content: center;
+  }
+
+  .data-table-search input {
+    font-size: 14px;
+    padding: 8px 10px;
+  }
+
+  .data-table-wrapper {
+    border-radius: var(--radius-sm);
+  }
+
+  .session-key-cell {
+    max-width: 200px;
+  }
+
+  .session-key-cell .session-link,
+  .session-key-cell .session-key-display-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+
+  .filters {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+}
+
+/* ≤500px: tighten further, truncate key column */
+@media (max-width: 500px) {
+  .data-table th,
+  .data-table td {
+    padding: 6px 4px;
+    font-size: 11px;
+  }
+
+  .session-key-cell {
+    max-width: 140px;
   }
 }

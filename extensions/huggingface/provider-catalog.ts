@@ -1,10 +1,10 @@
 import {
   buildHuggingfaceModelDefinition,
   discoverHuggingfaceModels,
+  type ModelProviderConfig,
   HUGGINGFACE_BASE_URL,
   HUGGINGFACE_MODEL_CATALOG,
-} from "../../src/agents/huggingface-models.js";
-import type { ModelProviderConfig } from "../../src/config/types.models.js";
+} from "openclaw/plugin-sdk/provider-models";
 
 export async function buildHuggingfaceProvider(
   discoveryApiKey?: string,

@@ -13,6 +13,7 @@ import { buildServiceEnvironment } from "../daemon/service-env.js";
 import {
   emitDaemonInstallRuntimeWarning,
   resolveDaemonInstallRuntimeInputs,
+  resolveDaemonNodeBinDir,
 } from "./daemon-install-plan.shared.js";
 import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
@@ -70,6 +71,26 @@ function collectReferencedServiceEnvVars(params: {
   return entries;
 }
 
+function buildGatewayInstallEnvironment(params: {
+  env: Record<string, string | undefined>;
+  config?: OpenClawConfig;
+  authStore?: AuthProfileStore;
+  serviceEnvironment: Record<string, string | undefined>;
+}): Record<string, string | undefined> {
+  const environment: Record<string, string | undefined> = {
+    ...collectDurableServiceEnvVars({
+      env: params.env,
+      config: params.config,
+    }),
+    ...collectAuthProfileServiceEnvVars({
+      env: params.env,
+      authStore: params.authStore,
+    }),
+  };
+  Object.assign(environment, params.serviceEnvironment);
+  return environment;
+}
+
 export async function buildGatewayInstallPlan(params: {
   env: Record<string, string | undefined>;
   port: number;
@@ -107,6 +128,9 @@ export async function buildGatewayInstallPlan(params: {
       process.platform === "darwin"
         ? resolveGatewayLaunchAgentLabel(params.env.OPENCLAW_PROFILE)
         : undefined,
+    // Keep npm/pnpm available to the service when the selected daemon node comes from
+    // a version-manager bin directory that isn't covered by static PATH guesses.
+    extraPathDirs: resolveDaemonNodeBinDir(nodePath),
   });
   const authStore = params.authStore ?? loadAuthProfileStoreForSecretsRuntime();
 
@@ -123,9 +147,6 @@ export async function buildGatewayInstallPlan(params: {
       value: authStore,
     }),
   };
-  Object.assign(environment, serviceEnvironment);
-
-  return { programArguments, workingDirectory, environment };
 }
 
 export function gatewayInstallErrorHint(platform = process.platform): string {

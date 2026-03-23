@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to backfill (for example v2026.3.13)
+        description: Existing release tag to backfill (for example v2026.3.22)
         required: true
         type: string
 
@@ -174,6 +174,8 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
+          cache-from: type=gha,scope=docker-release-amd64
+          cache-to: type=gha,mode=max,scope=docker-release-amd64
           build-args: |
             OPENCLAW_VARIANT=slim
             OPENCLAW_GIT_COMMIT=${{ github.sha }}
@@ -292,6 +294,8 @@ jobs:
         with:
           context: .
           platforms: linux/arm64
+          cache-from: type=gha,scope=docker-release-arm64
+          cache-to: type=gha,mode=max,scope=docker-release-arm64
           build-args: |
             OPENCLAW_VARIANT=slim
             OPENCLAW_GIT_COMMIT=${{ github.sha }}

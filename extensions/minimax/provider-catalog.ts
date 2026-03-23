@@ -1,15 +1,22 @@
-import type { ModelDefinitionConfig, ModelProviderConfig } from "../../src/config/types.models.js";
+import type {
+  ModelDefinitionConfig,
+  ModelProviderConfig,
+} from "openclaw/plugin-sdk/provider-models";
+import {
+  MINIMAX_DEFAULT_MODEL_ID,
+  MINIMAX_TEXT_MODEL_CATALOG,
+  MINIMAX_TEXT_MODEL_ORDER,
+} from "openclaw/plugin-sdk/provider-models";
 
 const MINIMAX_PORTAL_BASE_URL = "https://api.minimax.io/anthropic";
-export const MINIMAX_DEFAULT_MODEL_ID = "MiniMax-M2.5";
 const MINIMAX_DEFAULT_VISION_MODEL_ID = "MiniMax-VL-01";
-const MINIMAX_DEFAULT_CONTEXT_WINDOW = 200000;
-const MINIMAX_DEFAULT_MAX_TOKENS = 8192;
+const MINIMAX_DEFAULT_CONTEXT_WINDOW = 204800;
+const MINIMAX_DEFAULT_MAX_TOKENS = 131072;
 const MINIMAX_API_COST = {
   input: 0.3,
   output: 1.2,
-  cacheRead: 0.03,
-  cacheWrite: 0.12,
+  cacheRead: 0.06,
+  cacheWrite: 0.375,
 };
 
 function buildMinimaxModel(params: {
@@ -45,15 +52,13 @@ function buildMinimaxCatalog(): ModelDefinitionConfig[] {
       reasoning: false,
       input: ["text", "image"],
     }),
-    buildMinimaxTextModel({
-      id: MINIMAX_DEFAULT_MODEL_ID,
-      name: "MiniMax M2.5",
-      reasoning: true,
-    }),
-    buildMinimaxTextModel({
-      id: "MiniMax-M2.5-highspeed",
-      name: "MiniMax M2.5 Highspeed",
-      reasoning: true,
+    ...MINIMAX_TEXT_MODEL_ORDER.map((id) => {
+      const model = MINIMAX_TEXT_MODEL_CATALOG[id];
+      return buildMinimaxTextModel({
+        id,
+        name: model.name,
+        reasoning: model.reasoning,
+      });
     }),
   ];
 }

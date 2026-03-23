@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache } from "../config/config.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
 
@@ -203,12 +203,6 @@ describe("exec approvals", () => {
   let previousHome: string | undefined;
   let previousUserProfile: string | undefined;
 
-  beforeAll(async () => {
-    ({ callGatewayTool } = await import("./tools/gateway.js"));
-    ({ createExecTool } = await import("./bash-tools.exec.js"));
-    ({ detectCommandObfuscation } = await import("../infra/exec-obfuscation-detect.js"));
-  });
-
   beforeEach(async () => {
     previousHome = process.env.HOME;
     previousUserProfile = process.env.USERPROFILE;
@@ -216,6 +210,10 @@ describe("exec approvals", () => {
     process.env.HOME = tempDir;
     // Windows uses USERPROFILE for os.homedir()
     process.env.USERPROFILE = tempDir;
+    vi.resetModules();
+    ({ callGatewayTool } = await import("./tools/gateway.js"));
+    ({ createExecTool } = await import("./bash-tools.exec.js"));
+    ({ detectCommandObfuscation } = await import("../infra/exec-obfuscation-detect.js"));
   });
 
   afterEach(() => {
@@ -636,7 +634,7 @@ describe("exec approvals", () => {
     });
 
     const text = expectApprovalUnavailableText(result);
-    expect(text).toContain("chat exec approvals are not enabled on Discord");
+    expect(text).toContain("Discord does not support chat exec approvals.");
     expect(text).toContain("Web UI or terminal UI");
   });
 
@@ -673,7 +671,8 @@ describe("exec approvals", () => {
     });
 
     const text = expectApprovalUnavailableText(result);
-    expect(text).toContain("Approval required. I sent the allowed approvers DMs.");
+    expect(text).toContain("Telegram does not support chat exec approvals.");
+    expect(text).toContain("Web UI or terminal UI");
   });
 
   it("denies node obfuscated command when approval request times out", async () => {

@@ -4,7 +4,7 @@ read_when:
   - Enabling text-to-speech for replies
   - Configuring TTS providers or limits
   - Using /tts commands
-title: "Text-to-Speech"
+title: "Text-to-Speech (legacy path)"
 ---
 
 # Text-to-speech (TTS)
@@ -390,9 +390,9 @@ Notes:
 
 ## Agent tool
 
-The `tts` tool converts text to speech and returns a `MEDIA:` path. When the
-result is Telegram-compatible, the tool includes `[[audio_as_voice]]` so
-Telegram sends a voice bubble.
+The `tts` tool converts text to speech and returns an audio attachment for
+reply delivery. When the result is Telegram-compatible, OpenClaw marks it for
+voice-bubble delivery.
 
 ## Gateway RPC
 

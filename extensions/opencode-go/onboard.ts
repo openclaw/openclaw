@@ -1,6 +1,9 @@
-import { applyAgentDefaultModelPrimary } from "../../src/commands/onboard-auth.config-shared.js";
-import { OPENCODE_GO_DEFAULT_MODEL_REF } from "../../src/commands/opencode-go-model-default.js";
-import type { OpenClawConfig } from "../../src/config/config.js";
+import { OPENCODE_GO_DEFAULT_MODEL_REF } from "openclaw/plugin-sdk/provider-models";
+import {
+  applyAgentDefaultModelPrimary,
+  withAgentModelAliases,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/provider-onboard";
 
 export { OPENCODE_GO_DEFAULT_MODEL_REF };
 
@@ -11,21 +14,19 @@ const OPENCODE_GO_ALIAS_DEFAULTS: Record<string, string> = {
 };
 
 export function applyOpencodeGoProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const models = { ...cfg.agents?.defaults?.models };
-  for (const [modelRef, alias] of Object.entries(OPENCODE_GO_ALIAS_DEFAULTS)) {
-    models[modelRef] = {
-      ...models[modelRef],
-      alias: models[modelRef]?.alias ?? alias,
-    };
-  }
-
   return {
     ...cfg,
     agents: {
       ...cfg.agents,
       defaults: {
         ...cfg.agents?.defaults,
-        models,
+        models: withAgentModelAliases(
+          cfg.agents?.defaults?.models,
+          Object.entries(OPENCODE_GO_ALIAS_DEFAULTS).map(([modelRef, alias]) => ({
+            modelRef,
+            alias,
+          })),
+        ),
       },
     },
   };

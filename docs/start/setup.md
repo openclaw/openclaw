@@ -23,11 +23,11 @@ Last updated: 2026-03-20
 
 ## Prereqs (from source)
 
-- Node `>=22`
+- Node 24 recommended (Node 22 LTS, currently `22.16+`, still supported)
 - `pnpm`
 - Docker (optional; only for containerized setup/e2e — see [Docker](/install/docker))
 
-## Tailoring strategy (so updates don’t hurt)
+## Tailoring strategy (so updates do not hurt)
 
 If you want “100% tailored to me” _and_ easy updates, keep your customization in:
 

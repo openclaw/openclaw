@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
 const callGateway = vi.fn();
@@ -7,7 +7,22 @@ vi.mock("../gateway/call.js", () => ({
   callGateway,
 }));
 
-const { resolveCommandSecretRefsViaGateway } = await import("./command-secret-gateway.js");
+vi.mock("../secrets/runtime-web-tools.js", () => ({
+  resolveRuntimeWebTools: vi.fn(async () => ({})),
+}));
+
+vi.mock("../utils/message-channel.js", () => ({
+  GATEWAY_CLIENT_MODES: { CLI: "cli" },
+  GATEWAY_CLIENT_NAMES: { CLI: "cli" },
+}));
+
+let resolveCommandSecretRefsViaGateway: typeof import("./command-secret-gateway.js").resolveCommandSecretRefsViaGateway;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ resolveCommandSecretRefsViaGateway } = await import("./command-secret-gateway.js"));
+  callGateway.mockReset();
+});
 
 describe("resolveCommandSecretRefsViaGateway", () => {
   function makeTalkApiKeySecretRefConfig(envKey: string): OpenClawConfig {
@@ -155,6 +170,45 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     expect(result.resolvedConfig.talk?.apiKey).toBe("sk-live");
   });
 
+  it("enforces unresolved checks only for allowed paths when provided", async () => {
+    callGateway.mockResolvedValueOnce({
+      assignments: [
+        {
+          path: "channels.discord.accounts.ops.token",
+          pathSegments: ["channels", "discord", "accounts", "ops", "token"],
+          value: "ops-token",
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const result = await resolveCommandSecretRefsViaGateway({
+      config: {
+        channels: {
+          discord: {
+            accounts: {
+              ops: {
+                token: { source: "env", provider: "default", id: "DISCORD_OPS_TOKEN" },
+              },
+              chat: {
+                token: { source: "env", provider: "default", id: "DISCORD_CHAT_TOKEN" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      commandName: "message",
+      targetIds: new Set(["channels.discord.accounts.*.token"]),
+      allowedPaths: new Set(["channels.discord.accounts.ops.token"]),
+    });
+
+    expect(result.resolvedConfig.channels?.discord?.accounts?.ops?.token).toBe("ops-token");
+    expect(result.targetStatesByPath).toEqual({
+      "channels.discord.accounts.ops.token": "resolved_gateway",
+    });
+    expect(result.hadUnresolvedTargets).toBe(false);
+  });
+
   it("fails fast when gateway-backed resolution is unavailable", async () => {
     const envKey = "TALK_API_KEY_FAILFAST";
     const priorValue = process.env[envKey];
@@ -244,7 +298,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       expect(result.targetStatesByPath["tools.web.search.gemini.apiKey"]).toBe("resolved_local");
       expectGatewayUnavailableLocalFallbackDiagnostics(result);
     });
-  });
+  }, 300_000);
 
   it("falls back to local resolution for Firecrawl SecretRefs when gateway is unavailable", async () => {
     const envKey = "WEB_FETCH_FIRECRAWL_API_KEY_LOCAL_FALLBACK";

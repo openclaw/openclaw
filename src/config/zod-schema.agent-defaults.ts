@@ -56,6 +56,7 @@ export const AgentDefaultsSchema = z
   .object({
     model: AgentModelSchema.optional(),
     imageModel: AgentModelSchema.optional(),
+    imageGenerationModel: AgentModelSchema.optional(),
     pdfModel: AgentModelSchema.optional(),
     pdfMaxBytesMb: z.number().positive().optional(),
     pdfMaxPages: z.number().int().positive().optional(),
@@ -224,7 +225,7 @@ export const AgentDefaultsSchema = z
           .describe(
             "Maximum number of active children a single agent session can spawn (default: 5).",
           ),
-        archiveAfterMinutes: z.number().int().positive().optional(),
+        archiveAfterMinutes: z.number().int().min(0).optional(),
         model: AgentModelSchema.optional(),
         escalation: SubagentEscalationSchema.optional(),
         thinking: z.string().optional(),

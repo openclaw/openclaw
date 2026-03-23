@@ -8,6 +8,7 @@ pnpm-lock.yaml
 bun.lock
 bun.lockb
 coverage
+__openclaw_vitest__/
 __pycache__/
 *.pyc
 .tsbuildinfo
@@ -29,6 +30,7 @@ apps/android/.gradle/
 apps/android/app/build/
 apps/android/.cxx/
 apps/android/.kotlin/
+apps/android/benchmark/results/
 
 # Bun build artifacts
 *.bun-build
@@ -97,8 +99,6 @@ USER.md
 /local/
 package-lock.json
 .claude/
-.agents/
-.agents
 .agent/
 # Explicitly allow tracked maintainer workflow and skill content (must follow .agent/.agents rules)
 !.agent/workflows/

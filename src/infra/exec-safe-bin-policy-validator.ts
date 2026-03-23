@@ -4,6 +4,7 @@ import {
   collectKnownLongFlags,
   type SafeBinProfile,
 } from "./exec-safe-bin-policy-profiles.js";
+import { validateSafeBinSemantics } from "./exec-safe-bin-semantics.js";
 
 function isPathLikeToken(value: string): boolean {
   const trimmed = value.trim();
@@ -137,7 +138,7 @@ function validatePositionalCount(positional: string[], profile: SafeBinProfile):
   return true;
 }
 
-export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): boolean {
+function collectPositionalTokens(args: string[], profile: SafeBinProfile): string[] | null {
   const allowedValueFlags = profile.allowedValueFlags ?? NO_FLAGS;
   const deniedFlags = profile.deniedFlags ?? NO_FLAGS;
   const knownLongFlags =
@@ -163,7 +164,7 @@ export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): bo
           continue;
         }
         if (!consumePositionalToken(rest, positional)) {
-          return false;
+          return null;
         }
       }
       break;
@@ -171,7 +172,7 @@ export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): bo
 
     if (token.kind === "positional") {
       if (!consumePositionalToken(token.raw, positional)) {
-        return false;
+        return null;
       }
       i += 1;
       continue;
@@ -189,7 +190,7 @@ export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): bo
         longFlagPrefixMap,
       });
       if (nextIndex < 0) {
-        return false;
+        return null;
       }
       i = nextIndex;
       continue;
@@ -204,10 +205,28 @@ export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): bo
       deniedFlags,
     });
     if (nextIndex < 0) {
-      return false;
+      return null;
     }
     i = nextIndex;
   }
 
-  return validatePositionalCount(positional, profile);
+  return positional;
+}
+
+export function validateSafeBinArgv(
+  args: string[],
+  profile: SafeBinProfile,
+  options?: { binName?: string },
+): boolean {
+  const positional = collectPositionalTokens(args, profile);
+  if (!positional) {
+    return false;
+  }
+  if (!validatePositionalCount(positional, profile)) {
+    return false;
+  }
+  return validateSafeBinSemantics({
+    binName: options?.binName,
+    positional,
+  });
 }

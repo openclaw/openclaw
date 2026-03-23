@@ -3,9 +3,6 @@ import path from "node:path";
 import { collectSubagentAllowlistAudit } from "../agents/subagent-target-readiness.js";
 import { normalizeChatChannelId } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
-import { getChannelsCommandSecretTargetIds } from "../cli/command-secret-targets.js";
-import { listRouteBindings } from "../config/bindings.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH, migrateLegacyConfig, readConfigFileSnapshot } from "../config/config.js";
 import { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
@@ -53,14 +50,8 @@ import {
   isZalouserMutableGroupEntry,
 } from "../security/mutable-allowlist-detectors.js";
 import { note } from "../terminal/note.js";
-import { resolveHomeDir } from "../utils.js";
-import {
-  formatConfigPath,
-  noteIncludeConfinementWarning,
-  noteOpencodeProviderOverrides,
-  resolveConfigPathTarget,
-  stripUnknownConfigKeys,
-} from "./doctor-config-analysis.js";
+import { noteOpencodeProviderOverrides } from "./doctor-config-analysis.js";
+import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import { autoMigrateLegacyStateDir } from "./doctor-state-migrations.js";
@@ -1838,84 +1829,61 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
 }) {
   const shouldRepair = params.options.repair === true || params.options.yes === true;
-  const stateDirResult = await autoMigrateLegacyStateDir({ env: process.env });
-  if (stateDirResult.changes.length > 0) {
-    note(stateDirResult.changes.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
-  }
-  if (stateDirResult.warnings.length > 0) {
-    note(stateDirResult.warnings.map((entry) => `- ${entry}`).join("\n"), "Doctor warnings");
-  }
-
-  const legacyConfigChanges = await maybeMigrateLegacyConfig();
-  if (legacyConfigChanges.length > 0) {
-    note(legacyConfigChanges.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
-  }
-
-  let snapshot = await readConfigFileSnapshot();
-  const baseCfg = snapshot.config ?? {};
+  const preflight = await runDoctorConfigPreflight();
+  let snapshot = preflight.snapshot;
+  const baseCfg = preflight.baseConfig;
   let cfg: OpenClawConfig = baseCfg;
   let candidate = structuredClone(baseCfg);
   let pendingChanges = false;
-  let shouldWriteConfig = false;
-  const fixHints: string[] = [];
-  if (snapshot.exists && !snapshot.valid && snapshot.legacyIssues.length === 0) {
-    note("Config invalid; doctor will run with best-effort config.", "Config");
-    noteIncludeConfinementWarning(snapshot);
-  }
-  const warnings = snapshot.warnings ?? [];
-  if (warnings.length > 0) {
-    const lines = formatConfigIssueLines(warnings, "-").join("\n");
-    note(lines, "Config warnings");
-  }
+  let fixHints: string[] = [];
+  const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
 
-  if (snapshot.legacyIssues.length > 0) {
-    note(
-      formatConfigIssueLines(snapshot.legacyIssues, "-").join("\n"),
-      "Compatibility config keys detected",
-    );
-    const { config: migrated, changes } = migrateLegacyConfig(snapshot.parsed);
-    if (changes.length > 0) {
-      note(changes.join("\n"), "Doctor changes");
-    }
-    if (migrated) {
-      candidate = migrated;
-      pendingChanges = pendingChanges || changes.length > 0;
-    }
-    if (shouldRepair) {
-      // Compatibility migration (2026-01-02, commit: 16420e5b) — normalize per-provider allowlists; move WhatsApp gating into channels.whatsapp.allowFrom.
-      if (migrated) {
-        cfg = migrated;
-      }
-    } else {
-      fixHints.push(
-        `Run "${formatCliCommand("openclaw doctor --fix")}" to apply compatibility migrations.`,
-      );
-    }
+  const legacyStep = applyLegacyCompatibilityStep({
+    snapshot,
+    state: { cfg, candidate, pendingChanges, fixHints },
+    shouldRepair,
+    doctorFixCommand,
+  });
+  ({ cfg, candidate, pendingChanges, fixHints } = legacyStep.state);
+  if (legacyStep.issueLines.length > 0) {
+    note(legacyStep.issueLines.join("\n"), "Compatibility config keys detected");
+  }
+  if (legacyStep.changeLines.length > 0) {
+    note(legacyStep.changeLines.join("\n"), "Doctor changes");
   }
 
   const normalized = normalizeCompatibilityConfigValues(candidate);
   if (normalized.changes.length > 0) {
     note(normalized.changes.join("\n"), "Doctor changes");
-    candidate = normalized.config;
-    pendingChanges = true;
-    if (shouldRepair) {
-      cfg = normalized.config;
-    } else {
-      fixHints.push(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply these changes.`);
-    }
+    ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
+      state: { cfg, candidate, pendingChanges, fixHints },
+      mutation: normalized,
+      shouldRepair,
+      fixHint: `Run "${doctorFixCommand}" to apply these changes.`,
+    }));
   }
 
   const autoEnable = applyPluginAutoEnable({ config: candidate, env: process.env });
   if (autoEnable.changes.length > 0) {
     note(autoEnable.changes.join("\n"), "Doctor changes");
-    candidate = autoEnable.config;
-    pendingChanges = true;
-    if (shouldRepair) {
-      cfg = autoEnable.config;
-    } else {
-      fixHints.push(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply these changes.`);
-    }
+    ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
+      state: { cfg, candidate, pendingChanges, fixHints },
+      mutation: autoEnable,
+      shouldRepair,
+      fixHint: `Run "${doctorFixCommand}" to apply these changes.`,
+    }));
   }
+
+  const matrixSequence = await runMatrixDoctorSequence({
+    cfg: candidate,
+    env: process.env,
+    shouldRepair,
+  });
+  emitDoctorNotes({
+    note,
+    changeNotes: matrixSequence.changeNotes,
+    warningNotes: matrixSequence.warningNotes,
+  });
 
   const missingDefaultAccountBindingWarnings =
     collectMissingDefaultAccountBindingWarnings(candidate);
@@ -1928,61 +1896,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   }
 
   if (shouldRepair) {
-    const repair = await maybeRepairTelegramAllowFromUsernames(candidate);
-    if (repair.changes.length > 0) {
-      note(repair.changes.join("\n"), "Doctor changes");
-      candidate = repair.config;
-      pendingChanges = true;
-      cfg = repair.config;
-    }
-
-    const discordRepair = maybeRepairDiscordNumericIds(candidate);
-    if (discordRepair.changes.length > 0) {
-      note(discordRepair.changes.join("\n"), "Doctor changes");
-      candidate = discordRepair.config;
-      pendingChanges = true;
-      cfg = discordRepair.config;
-    }
-
-    const allowFromRepair = maybeRepairOpenPolicyAllowFrom(candidate);
-    if (allowFromRepair.changes.length > 0) {
-      note(allowFromRepair.changes.join("\n"), "Doctor changes");
-      candidate = allowFromRepair.config;
-      pendingChanges = true;
-      cfg = allowFromRepair.config;
-    }
-
-    const allowlistRepair = await maybeRepairAllowlistPolicyAllowFrom(candidate);
-    if (allowlistRepair.changes.length > 0) {
-      note(allowlistRepair.changes.join("\n"), "Doctor changes");
-      candidate = allowlistRepair.config;
-      pendingChanges = true;
-      cfg = allowlistRepair.config;
-    }
-
-    const emptyAllowlistWarnings = detectEmptyAllowlistPolicy(candidate);
-    if (emptyAllowlistWarnings.length > 0) {
-      note(emptyAllowlistWarnings.join("\n"), "Doctor warnings");
-    }
-
-    const toolsBySenderRepair = maybeRepairLegacyToolsBySenderKeys(candidate);
-    if (toolsBySenderRepair.changes.length > 0) {
-      note(toolsBySenderRepair.changes.join("\n"), "Doctor changes");
-      candidate = toolsBySenderRepair.config;
-      pendingChanges = true;
-      cfg = toolsBySenderRepair.config;
-    }
-
-    const safeBinProfileRepair = maybeRepairExecSafeBinProfiles(candidate);
-    if (safeBinProfileRepair.changes.length > 0) {
-      note(safeBinProfileRepair.changes.join("\n"), "Doctor changes");
-      candidate = safeBinProfileRepair.config;
-      pendingChanges = true;
-      cfg = safeBinProfileRepair.config;
-    }
-    if (safeBinProfileRepair.warnings.length > 0) {
-      note(safeBinProfileRepair.warnings.join("\n"), "Doctor warnings");
-    }
+    const repairSequence = await runDoctorRepairSequence({
+      state: { cfg, candidate, pendingChanges, fixHints },
+      doctorFixCommand,
+    });
+    ({ cfg, candidate, pendingChanges, fixHints } = repairSequence.state);
+    emitDoctorNotes({
+      note,
+      changeNotes: repairSequence.changeNotes,
+      warningNotes: repairSequence.warningNotes,
+    });
   } else {
     const hits = scanTelegramAllowFromUsernameEntries(candidate);
     if (hits.length > 0) {
@@ -2120,69 +2043,37 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   const mutableAllowlistHits = scanMutableAllowlistEntries(candidate);
   if (mutableAllowlistHits.length > 0) {
-    const channels = Array.from(new Set(mutableAllowlistHits.map((hit) => hit.channel))).toSorted();
-    const exampleLines = mutableAllowlistHits
-      .slice(0, 8)
-      .map((hit) => `- ${hit.path}: ${hit.entry}`)
-      .join("\n");
-    const remaining =
-      mutableAllowlistHits.length > 8
-        ? `- +${mutableAllowlistHits.length - 8} more mutable allowlist entries.`
-        : null;
-    const flagPaths = Array.from(new Set(mutableAllowlistHits.map((hit) => hit.dangerousFlagPath)));
-    const flagHint =
-      flagPaths.length === 1
-        ? flagPaths[0]
-        : `${flagPaths[0]} (and ${flagPaths.length - 1} other scope flags)`;
-    note(
-      [
-        `- Found ${mutableAllowlistHits.length} mutable allowlist ${mutableAllowlistHits.length === 1 ? "entry" : "entries"} across ${channels.join(", ")} while name matching is disabled by default.`,
-        exampleLines,
-        ...(remaining ? [remaining] : []),
-        `- Option A (break-glass): enable ${flagHint}=true to keep name/email/nick matching.`,
-        "- Option B (recommended): resolve names/emails/nicks to stable sender IDs and rewrite the allowlist entries.",
-      ].join("\n"),
-      "Doctor warnings",
-    );
+    note(collectMutableAllowlistWarnings(mutableAllowlistHits).join("\n"), "Doctor warnings");
   }
 
-  const unknown = stripUnknownConfigKeys(candidate);
-  if (unknown.removed.length > 0) {
-    const lines = unknown.removed.map((path) => `- ${path}`).join("\n");
-    candidate = unknown.config;
-    pendingChanges = true;
-    if (shouldRepair) {
-      cfg = unknown.config;
-      note(lines, "Doctor changes");
-    } else {
-      note(lines, "Unknown config keys");
-      fixHints.push('Run "openclaw doctor --fix" to remove these keys.');
-    }
+  const unknownStep = applyUnknownConfigKeyStep({
+    state: { cfg, candidate, pendingChanges, fixHints },
+    shouldRepair,
+    doctorFixCommand,
+  });
+  ({ cfg, candidate, pendingChanges, fixHints } = unknownStep.state);
+  if (unknownStep.removed.length > 0) {
+    const lines = unknownStep.removed.map((path) => `- ${path}`).join("\n");
+    note(lines, shouldRepair ? "Doctor changes" : "Unknown config keys");
   }
 
-  if (!shouldRepair && pendingChanges) {
-    const shouldApply = await params.confirm({
-      message: "Apply recommended config repairs now?",
-      initialValue: true,
-    });
-    if (shouldApply) {
-      cfg = candidate;
-      shouldWriteConfig = true;
-    } else if (fixHints.length > 0) {
-      note(fixHints.join("\n"), "Doctor");
-    }
-  }
-
-  if (shouldRepair && pendingChanges) {
-    shouldWriteConfig = true;
-  }
+  const finalized = await finalizeDoctorConfigFlow({
+    cfg,
+    candidate,
+    pendingChanges,
+    shouldRepair,
+    fixHints,
+    confirm: params.confirm,
+    note,
+  });
+  cfg = finalized.cfg;
 
   noteOpencodeProviderOverrides(cfg);
 
   return {
     cfg,
     path: snapshot.path ?? CONFIG_PATH,
-    shouldWriteConfig,
+    shouldWriteConfig: finalized.shouldWriteConfig,
     sourceConfigValid: snapshot.valid,
   };
 }

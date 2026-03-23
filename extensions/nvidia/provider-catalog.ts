@@ -1,4 +1,4 @@
-import type { ModelProviderConfig } from "../../src/config/types.models.js";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-models";
 
 const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
 const NVIDIA_DEFAULT_MODEL_ID = "nvidia/llama-3.1-nemotron-70b-instruct";

@@ -1,15 +1,8 @@
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import {
-  buildPluginSdkPackageExports,
-  buildPluginSdkSpecifiers,
-  pluginSdkEntrypoints,
-} from "./entrypoints.js";
-import * as sdk from "./index.js";
+import { buildPluginSdkPackageExports } from "./entrypoints.js";
 
 const pluginSdkSpecifiers = buildPluginSdkSpecifiers();
 const hasBuiltPluginSdkDist = pluginSdkEntrypoints.every((entry) =>
@@ -17,7 +10,8 @@ const hasBuiltPluginSdkDist = pluginSdkEntrypoints.every((entry) =>
 );
 
 describe("plugin-sdk exports", () => {
-  it("does not expose runtime modules", () => {
+  it("does not expose runtime modules", async () => {
+    const runtimeExports = await collectRuntimeExports(path.join(import.meta.dirname, "index.ts"));
     const forbidden = [
       "chunkMarkdownText",
       "chunkText",
@@ -55,34 +49,17 @@ describe("plugin-sdk exports", () => {
     ];
 
     for (const key of forbidden) {
-      expect(Object.prototype.hasOwnProperty.call(sdk, key)).toBe(false);
+      expect(runtimeExports.has(key)).toBe(false);
     }
   });
 
-  // Verify critical functions that extensions depend on are exported and callable.
-  // Regression guard for #27569 where isDangerousNameMatchingEnabled was missing
-  // from the compiled output, breaking mattermost/googlechat/msteams/irc plugins.
-  it("exports critical functions used by channel extensions", () => {
-    const requiredFunctions = [
-      "isDangerousNameMatchingEnabled",
-      "createAccountListHelpers",
-      "buildAgentMediaPayload",
-      "createReplyPrefixOptions",
-      "createTypingCallbacks",
-      "logInboundDrop",
-      "logTypingFailure",
-      "buildPendingHistoryContextFromMap",
-      "clearHistoryEntriesIfEnabled",
-      "recordPendingHistoryEntryIfEnabled",
-      "resolveControlCommandGate",
-      "resolveDmGroupAccessWithLists",
-      "resolveAllowlistProviderRuntimeGroupPolicy",
-      "resolveDefaultGroupPolicy",
-      "resolveChannelMediaMaxBytes",
-      "warnMissingProviderGroupPolicyFallbackOnce",
-      "createDedupeCache",
-      "formatInboundFromLabel",
-      "resolveRuntimeGroupPolicy",
+  it("keeps the root runtime surface intentionally small", async () => {
+    const runtimeExports = await collectRuntimeExports(path.join(import.meta.dirname, "index.ts"));
+    expect([...runtimeExports].toSorted()).toEqual([
+      "buildFalImageGenerationProvider",
+      "buildGoogleImageGenerationProvider",
+      "buildOpenAIImageGenerationProvider",
+      "delegateCompactionToRuntime",
       "emptyPluginConfigSchema",
       "normalizePluginHttpPath",
       "registerPluginHttpRoute",

@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/feishu";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../runtime-api.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -18,6 +18,7 @@ const getChatMembersMock = vi.hoisted(() => vi.fn());
 const getFeishuMemberInfoMock = vi.hoisted(() => vi.fn());
 const listFeishuDirectoryPeersLiveMock = vi.hoisted(() => vi.fn());
 const listFeishuDirectoryGroupsLiveMock = vi.hoisted(() => vi.fn());
+const feishuOutboundSendMediaMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./probe.js", () => ({
   probeFeishu: probeFeishuMock,
@@ -28,25 +29,35 @@ vi.mock("./client.js", () => ({
 }));
 
 vi.mock("./channel.runtime.js", () => ({
-  addReactionFeishu: addReactionFeishuMock,
-  createPinFeishu: createPinFeishuMock,
-  editMessageFeishu: editMessageFeishuMock,
-  getChatInfo: getChatInfoMock,
-  getChatMembers: getChatMembersMock,
-  getFeishuMemberInfo: getFeishuMemberInfoMock,
-  getMessageFeishu: getMessageFeishuMock,
-  listFeishuDirectoryGroupsLive: listFeishuDirectoryGroupsLiveMock,
-  listFeishuDirectoryPeersLive: listFeishuDirectoryPeersLiveMock,
-  listPinsFeishu: listPinsFeishuMock,
-  listReactionsFeishu: listReactionsFeishuMock,
-  probeFeishu: probeFeishuMock,
-  removePinFeishu: removePinFeishuMock,
-  removeReactionFeishu: removeReactionFeishuMock,
-  sendCardFeishu: sendCardFeishuMock,
-  sendMessageFeishu: sendMessageFeishuMock,
+  feishuChannelRuntime: {
+    addReactionFeishu: addReactionFeishuMock,
+    createPinFeishu: createPinFeishuMock,
+    editMessageFeishu: editMessageFeishuMock,
+    getChatInfo: getChatInfoMock,
+    getChatMembers: getChatMembersMock,
+    getFeishuMemberInfo: getFeishuMemberInfoMock,
+    getMessageFeishu: getMessageFeishuMock,
+    listFeishuDirectoryGroupsLive: listFeishuDirectoryGroupsLiveMock,
+    listFeishuDirectoryPeersLive: listFeishuDirectoryPeersLiveMock,
+    listPinsFeishu: listPinsFeishuMock,
+    listReactionsFeishu: listReactionsFeishuMock,
+    probeFeishu: probeFeishuMock,
+    removePinFeishu: removePinFeishuMock,
+    removeReactionFeishu: removeReactionFeishuMock,
+    sendCardFeishu: sendCardFeishuMock,
+    sendMessageFeishu: sendMessageFeishuMock,
+    feishuOutbound: {
+      sendText: vi.fn(),
+      sendMedia: feishuOutboundSendMediaMock,
+    },
+  },
 }));
 
 import { feishuPlugin } from "./channel.js";
+
+function getDescribedActions(cfg: OpenClawConfig): string[] {
+  return [...(feishuPlugin.actions?.describeMessageTool?.({ cfg })?.actions ?? [])];
+}
 
 describe("feishuPlugin.status.probeAccount", () => {
   it("uses current account credentials for multi-account config", async () => {
@@ -106,7 +117,7 @@ describe("feishuPlugin actions", () => {
   });
 
   it("advertises the expanded Feishu action surface", () => {
-    expect(feishuPlugin.actions?.listActions?.({ cfg })).toEqual([
+    expect(getDescribedActions(cfg)).toEqual([
       "send",
       "read",
       "edit",
@@ -136,7 +147,7 @@ describe("feishuPlugin actions", () => {
       },
     } as OpenClawConfig;
 
-    expect(feishuPlugin.actions?.listActions?.({ cfg: disabledCfg })).toEqual([
+    expect(getDescribedActions(disabledCfg)).toEqual([
       "send",
       "read",
       "edit",
@@ -192,6 +203,38 @@ describe("feishuPlugin actions", () => {
       replyInThread: false,
     });
     expect(result?.details).toMatchObject({ ok: true, messageId: "om_card", chatId: "oc_group_1" });
+  });
+
+  it("sends media through the outbound adapter", async () => {
+    feishuOutboundSendMediaMock.mockResolvedValueOnce({
+      channel: "feishu",
+      messageId: "om_media",
+      details: { messageId: "om_media", chatId: "oc_group_1" },
+    });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        message: "test",
+        media: "/tmp/image.png",
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+      mediaLocalRoots: ["/tmp"],
+    } as never);
+
+    expect(feishuOutboundSendMediaMock).toHaveBeenCalledWith({
+      cfg,
+      to: "chat:oc_group_1",
+      text: "test",
+      mediaUrl: "/tmp/image.png",
+      accountId: undefined,
+      mediaLocalRoots: ["/tmp"],
+      replyToId: undefined,
+    });
+    expect(result?.details).toMatchObject({ messageId: "om_media" });
   });
 
   it("reads messages", async () => {

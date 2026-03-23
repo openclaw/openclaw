@@ -3,31 +3,29 @@ import {
   VENICE_BASE_URL,
   VENICE_DEFAULT_MODEL_REF,
   VENICE_MODEL_CATALOG,
-} from "../../src/agents/venice-models.js";
+} from "openclaw/plugin-sdk/provider-models";
 import {
-  applyAgentDefaultModelPrimary,
-  applyProviderConfigWithModelCatalog,
-} from "../../src/commands/onboard-auth.config-shared.js";
-import type { OpenClawConfig } from "../../src/config/config.js";
+  createModelCatalogPresetAppliers,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/provider-onboard";
 
 export { VENICE_DEFAULT_MODEL_REF };
 
-export function applyVeniceProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const models = { ...cfg.agents?.defaults?.models };
-  models[VENICE_DEFAULT_MODEL_REF] = {
-    ...models[VENICE_DEFAULT_MODEL_REF],
-    alias: models[VENICE_DEFAULT_MODEL_REF]?.alias ?? "Kimi K2.5",
-  };
-
-  return applyProviderConfigWithModelCatalog(cfg, {
-    agentModels: models,
+const venicePresetAppliers = createModelCatalogPresetAppliers({
+  primaryModelRef: VENICE_DEFAULT_MODEL_REF,
+  resolveParams: (_cfg: OpenClawConfig) => ({
     providerId: "venice",
     api: "openai-completions",
     baseUrl: VENICE_BASE_URL,
     catalogModels: VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition),
-  });
+    aliases: [{ modelRef: VENICE_DEFAULT_MODEL_REF, alias: "Kimi K2.5" }],
+  }),
+});
+
+export function applyVeniceProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  return venicePresetAppliers.applyProviderConfig(cfg);
 }
 
 export function applyVeniceConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return applyAgentDefaultModelPrimary(applyVeniceProviderConfig(cfg), VENICE_DEFAULT_MODEL_REF);
+  return venicePresetAppliers.applyConfig(cfg);
 }

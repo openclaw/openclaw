@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HealthSummary } from "../commands/health.js";
+import type { ChatAbortControllerEntry } from "./chat-abort.js";
 
 const cleanOldMediaMock = vi.fn(async () => {});
 const processPendingReceiptsMock = vi.fn(() => ({
@@ -22,6 +23,18 @@ vi.mock("../operator-control/task-store.js", () => ({
 }));
 
 const MEDIA_CLEANUP_TTL_MS = 24 * 60 * 60_000;
+const ABORTED_RUN_TTL_MS = 60 * 60_000;
+
+function createActiveRun(sessionKey: string): ChatAbortControllerEntry {
+  const now = Date.now();
+  return {
+    controller: new AbortController(),
+    sessionId: "sess-1",
+    sessionKey,
+    startedAtMs: now,
+    expiresAtMs: now + ABORTED_RUN_TTL_MS,
+  };
+}
 
 function createMaintenanceTimerDeps() {
   return {
@@ -36,6 +49,7 @@ function createMaintenanceTimerDeps() {
     chatRunState: { abortedRuns: new Map() },
     chatRunBuffers: new Map(),
     chatDeltaSentAt: new Map(),
+    chatDeltaLastBroadcastLen: new Map(),
     removeChatRun: () => undefined,
     agentRunSeq: new Map(),
     nodeSendToSession: () => {},
