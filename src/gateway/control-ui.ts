@@ -233,8 +233,21 @@ function serveResolvedFile(res: ServerResponse, filePath: string, body: Buffer) 
   res.end(body);
 }
 
-function serveResolvedIndexHtml(res: ServerResponse, body: string) {
-  const hashes = computeInlineScriptHashes(body);
+function serveResolvedIndexHtml(res: ServerResponse, body: string, basePath: string) {
+  // Inject basePath into the HTML so the frontend knows the correct basePath from the start.
+  // This fixes the issue where the frontend infers basePath from URL pathname before
+  // the bootstrap config is loaded, causing a mismatch when the gateway serves at a different path.
+  let html = body;
+  if (basePath) {
+    // Use JSON.stringify to safely escape the basePath and prevent XSS attacks
+    const escapedPath = JSON.stringify(basePath);
+    const script = `<script>window.__OPENCLAW_CONTROL_UI_BASE_PATH__=${escapedPath};</script>`;
+    // Insert after the opening <head> tag, before any other content.
+    // Use a callback function to avoid replacement-token expansion (e.g., $&, $`, $').
+    html = html.replace(/<head[^>]*>/i, (match) => match + script);
+  }
+  // Compute CSP hashes for any inline scripts (including the basePath script we may have injected)
+  const hashes = computeInlineScriptHashes(html);
   if (hashes.length > 0) {
     res.setHeader(
       "Content-Security-Policy",
@@ -243,7 +256,7 @@ function serveResolvedIndexHtml(res: ServerResponse, body: string) {
   }
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
-  res.end(body);
+  res.end(html);
 }
 
 function isExpectedSafePathError(error: unknown): boolean {
@@ -450,7 +463,7 @@ export function handleControlUiHttpRequest(
         return true;
       }
       if (path.basename(safeFile.path) === "index.html") {
-        serveResolvedIndexHtml(res, fs.readFileSync(safeFile.fd, "utf8"));
+        serveResolvedIndexHtml(res, fs.readFileSync(safeFile.fd, "utf8"), basePath);
         return true;
       }
       serveResolvedFile(res, safeFile.path, fs.readFileSync(safeFile.fd));
@@ -478,7 +491,7 @@ export function handleControlUiHttpRequest(
       if (respondHeadForFile(req, res, safeIndex.path)) {
         return true;
       }
-      serveResolvedIndexHtml(res, fs.readFileSync(safeIndex.fd, "utf8"));
+      serveResolvedIndexHtml(res, fs.readFileSync(safeIndex.fd, "utf8"), basePath);
       return true;
     } finally {
       fs.closeSync(safeIndex.fd);
