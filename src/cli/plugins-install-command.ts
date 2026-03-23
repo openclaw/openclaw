@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { cleanStaleMatrixPluginConfig } from "../commands/doctor/providers/matrix.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig, readBestEffortConfig } from "../config/config.js";
 import { installHooksFromNpmSpec, installHooksFromPath } from "../hooks/install.js";
@@ -170,12 +171,28 @@ async function tryInstallHookPackFromNpmSpec(params: {
 // loadConfig() throws when config is invalid; fall back to best-effort so
 // repair-oriented installs (e.g. reinstalling a broken Matrix plugin) can
 // still proceed from a partially valid config snapshot.
+// Only catch config-validation errors — real failures (fs permission, OOM)
+// must surface so the user sees the actual problem.
+// After loading, clean any stale Matrix plugin references so that
+// persistPluginInstall() → writeConfigFile() does not fail validation
+// on paths that no longer exist (#52899 concern 4).
 async function loadConfigForInstall(): Promise<OpenClawConfig> {
+  let cfg: OpenClawConfig;
   try {
-    return loadConfig();
-  } catch {
-    return readBestEffortConfig();
+    cfg = loadConfig();
+  } catch (err) {
+    if (isConfigValidationError(err)) {
+      cfg = await readBestEffortConfig();
+    } else {
+      throw err;
+    }
   }
+  const cleaned = await cleanStaleMatrixPluginConfig(cfg);
+  return cleaned.config;
+}
+
+function isConfigValidationError(err: unknown): boolean {
+  return err instanceof Error && (err as { code?: string }).code === "INVALID_CONFIG";
 }
 
 export async function runPluginInstallCommand(params: {
