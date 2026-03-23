@@ -140,6 +140,11 @@ import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import {
+  assembleAttemptContextEngine,
+  finalizeAttemptContextEngineTurn,
+  runAttemptContextEngineBootstrap,
+} from "./attempt.context-engine-helpers.js";
+import {
   appendAttemptCacheTtlIfNeeded,
   composeSystemPromptWithHookContext,
   resolveAttemptSpawnWorkspaceDir,
@@ -2066,32 +2071,30 @@ export async function runEmbeddedAttempt(
       });
       trackSessionManagerAccess(params.sessionFile);
 
-      if (hadSessionFile && (params.contextEngine?.bootstrap || params.contextEngine?.maintain)) {
-        try {
-          if (typeof params.contextEngine?.bootstrap === "function") {
-            await params.contextEngine.bootstrap({
-              sessionId: params.sessionId,
-              sessionKey: params.sessionKey,
-              sessionFile: params.sessionFile,
-            });
-          }
+      await runAttemptContextEngineBootstrap({
+        hadSessionFile,
+        contextEngine: params.contextEngine,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        sessionFile: params.sessionFile,
+        sessionManager,
+        runtimeContext: buildAfterTurnRuntimeContext({
+          attempt: params,
+          workspaceDir: effectiveWorkspace,
+          agentDir,
+        }),
+        runMaintenance: async (contextParams) =>
           await runContextEngineMaintenance({
-            contextEngine: params.contextEngine,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            sessionFile: params.sessionFile,
-            reason: "bootstrap",
-            sessionManager,
-            runtimeContext: buildAfterTurnRuntimeContext({
-              attempt: params,
-              workspaceDir: effectiveWorkspace,
-              agentDir,
-            }),
-          });
-        } catch (bootstrapErr) {
-          log.warn(`context engine bootstrap failed: ${String(bootstrapErr)}`);
-        }
-      }
+            contextEngine: contextParams.contextEngine as never,
+            sessionId: contextParams.sessionId,
+            sessionKey: contextParams.sessionKey,
+            sessionFile: contextParams.sessionFile,
+            reason: contextParams.reason,
+            sessionManager: contextParams.sessionManager as never,
+            runtimeContext: contextParams.runtimeContext,
+          }),
+        warn: (message) => log.warn(message),
+      });
 
       await prepareSessionManagerForRun({
         sessionManager,
@@ -2450,14 +2453,18 @@ export async function runEmbeddedAttempt(
 
         if (params.contextEngine) {
           try {
-            const assembled = await params.contextEngine.assemble({
+            const assembled = await assembleAttemptContextEngine({
+              contextEngine: params.contextEngine,
               sessionId: params.sessionId,
               sessionKey: params.sessionKey,
               messages: activeSession.messages,
               tokenBudget: params.contextTokenBudget,
-              model: params.modelId,
+              modelId: params.modelId,
               ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
             });
+            if (!assembled) {
+              throw new Error("context engine assemble returned no result");
+            }
             if (assembled.messages !== activeSession.messages) {
               activeSession.agent.replaceMessages(assembled.messages);
             }
@@ -3024,66 +3031,31 @@ export async function runEmbeddedAttempt(
             workspaceDir: effectiveWorkspace,
             agentDir,
           });
-          let postTurnFinalizationSucceeded = true;
-
-          if (typeof params.contextEngine.afterTurn === "function") {
-            try {
-              await params.contextEngine.afterTurn({
-                sessionId: sessionIdUsed,
-                sessionKey: params.sessionKey,
-                sessionFile: params.sessionFile,
-                messages: messagesSnapshot,
-                prePromptMessageCount,
-                tokenBudget: params.contextTokenBudget,
-                runtimeContext: afterTurnRuntimeContext,
-              });
-            } catch (afterTurnErr) {
-              postTurnFinalizationSucceeded = false;
-              log.warn(`context engine afterTurn failed: ${String(afterTurnErr)}`);
-            }
-          } else {
-            // Fallback: ingest new messages individually
-            const newMessages = messagesSnapshot.slice(prePromptMessageCount);
-            if (newMessages.length > 0) {
-              if (typeof params.contextEngine.ingestBatch === "function") {
-                try {
-                  await params.contextEngine.ingestBatch({
-                    sessionId: sessionIdUsed,
-                    sessionKey: params.sessionKey,
-                    messages: newMessages,
-                  });
-                } catch (ingestErr) {
-                  postTurnFinalizationSucceeded = false;
-                  log.warn(`context engine ingest failed: ${String(ingestErr)}`);
-                }
-              } else {
-                for (const msg of newMessages) {
-                  try {
-                    await params.contextEngine.ingest({
-                      sessionId: sessionIdUsed,
-                      sessionKey: params.sessionKey,
-                      message: msg,
-                    });
-                  } catch (ingestErr) {
-                    postTurnFinalizationSucceeded = false;
-                    log.warn(`context engine ingest failed: ${String(ingestErr)}`);
-                  }
-                }
-              }
-            }
-          }
-
-          if (!promptError && !aborted && !yieldAborted && postTurnFinalizationSucceeded) {
-            await runContextEngineMaintenance({
-              contextEngine: params.contextEngine,
-              sessionId: sessionIdUsed,
-              sessionKey: params.sessionKey,
-              sessionFile: params.sessionFile,
-              reason: "turn",
-              sessionManager,
-              runtimeContext: afterTurnRuntimeContext,
-            });
-          }
+          await finalizeAttemptContextEngineTurn({
+            contextEngine: params.contextEngine,
+            promptError: Boolean(promptError),
+            aborted,
+            yieldAborted,
+            sessionIdUsed,
+            sessionKey: params.sessionKey,
+            sessionFile: params.sessionFile,
+            messagesSnapshot,
+            prePromptMessageCount,
+            tokenBudget: params.contextTokenBudget,
+            runtimeContext: afterTurnRuntimeContext,
+            runMaintenance: async (contextParams) =>
+              await runContextEngineMaintenance({
+                contextEngine: contextParams.contextEngine as never,
+                sessionId: contextParams.sessionId,
+                sessionKey: contextParams.sessionKey,
+                sessionFile: contextParams.sessionFile,
+                reason: contextParams.reason,
+                sessionManager: contextParams.sessionManager as never,
+                runtimeContext: contextParams.runtimeContext,
+              }),
+            sessionManager,
+            warn: (message) => log.warn(message),
+          });
         }
 
         cacheTrace?.recordStage("session:after", {
