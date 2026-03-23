@@ -63,9 +63,14 @@ vi.mock("./openai-codex-oauth.js", () => ({
 }));
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
-vi.mock("../plugins/providers.js", () => ({
-  resolvePluginProviders,
-}));
+vi.mock("../plugins/providers.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../plugins/providers.js")>("../plugins/providers.js");
+  return {
+    ...actual,
+    resolvePluginProviders,
+  };
+});
 
 const detectZaiEndpoint = vi.hoisted(() => vi.fn<DetectZaiEndpoint>(async () => null));
 vi.mock("./zai-endpoint-detect.js", () => ({
@@ -306,7 +311,7 @@ describe("applyAuthChoice", () => {
     });
   });
 
-  it("persists GigaChat Basic credentials even when secret-input-mode is ref", async () => {
+  it("stores GigaChat Basic credentials as an env ref when secret-input-mode is ref", async () => {
     await setupTempState();
 
     process.env.GIGACHAT_CREDENTIALS = "env-oauth-credentials"; // pragma: allowlist secret
@@ -339,14 +344,14 @@ describe("applyAuthChoice", () => {
     expect(await readAuthProfile("gigachat:default")).toMatchObject({
       type: "api_key",
       provider: "gigachat",
-      key: "basic-user:basic-pass",
+      keyRef: { source: "env", provider: "default", id: "GIGACHAT_CREDENTIALS" },
       metadata: {
         authMode: "basic",
         scope: "GIGACHAT_API_PERS",
       },
     });
     expect((await readAuthProfile("gigachat:default"))?.metadata).not.toHaveProperty("insecureTls");
-    expect((await readAuthProfile("gigachat:default"))?.keyRef).toBeUndefined();
+    expect((await readAuthProfile("gigachat:default"))?.key).toBeUndefined();
   });
 
   it("captures business scope for direct GigaChat Basic onboarding", async () => {

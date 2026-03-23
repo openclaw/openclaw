@@ -244,7 +244,12 @@ export async function applyAuthChoiceApiProviders(
       ...(gigachatBasicScope ? { scope: gigachatBasicScope } : {}),
     };
 
-    await setGigachatApiKey(`${username}:${password}`, params.agentDir, undefined, basicMetadata);
+    await setGigachatApiKey(
+      `${username}:${password}`,
+      params.agentDir,
+      requestedSecretInputMode ? { secretInputMode: requestedSecretInputMode } : undefined,
+      basicMetadata,
+    );
 
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "gigachat:default",

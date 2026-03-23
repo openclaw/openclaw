@@ -100,9 +100,11 @@ async function applyGigachatNonInteractiveApiKeyChoice(params: {
   ) {
     return null;
   }
+  const targetProfileId =
+    resolved.source === "profile" && resolved.profileId ? resolved.profileId : "gigachat:default";
   return applyGigachatConfig(
     applyAuthProfileConfig(params.nextConfig, {
-      profileId: "gigachat:default",
+      profileId: targetProfileId,
       provider: "gigachat",
       mode: "api_key",
     }),

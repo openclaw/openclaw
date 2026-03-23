@@ -122,6 +122,58 @@ describe("applySimpleNonInteractiveApiKeyChoice", () => {
     expect(setGigachatApiKey).not.toHaveBeenCalled();
   });
 
+  it("keeps a reused non-default GigaChat profile active in non-interactive OAuth onboarding", async () => {
+    const agentDir = "/tmp/openclaw-agents/work/agent";
+    const nextConfig = {
+      auth: {
+        profiles: {
+          "gigachat:default": { provider: "gigachat", mode: "api_key" },
+          "gigachat:work": { provider: "gigachat", mode: "api_key" },
+        },
+        order: { gigachat: ["gigachat:default", "gigachat:work"] },
+      },
+      agents: { defaults: {} },
+    } as OpenClawConfig;
+    const resolveApiKey = vi.fn(async () => ({
+      key: "gigachat-oauth-credentials",
+      source: "profile" as const,
+      profileId: "gigachat:work",
+      metadata: {
+        authMode: "oauth",
+        scope: "GIGACHAT_API_PERS",
+      },
+    }));
+    const maybeSetResolvedApiKey = vi.fn(async (resolved, setter) => {
+      if (resolved.source === "profile") {
+        return true;
+      }
+      await setter(resolved.key);
+      return true;
+    });
+
+    await applySimpleNonInteractiveApiKeyChoice({
+      authChoice: "gigachat-api-key",
+      nextConfig,
+      baseConfig: nextConfig,
+      opts: {} as never,
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() } as never,
+      agentDir,
+      apiKeyStorageOptions: undefined,
+      resolveApiKey,
+      maybeSetResolvedApiKey,
+    });
+
+    expect(applyAuthProfileConfig).toHaveBeenCalledWith(
+      nextConfig,
+      expect.objectContaining({
+        profileId: "gigachat:work",
+        provider: "gigachat",
+        mode: "api_key",
+      }),
+    );
+    expect(setGigachatApiKey).not.toHaveBeenCalled();
+  });
+
   it("rejects business-scoped stored profiles for GigaChat personal OAuth onboarding", async () => {
     const agentDir = "/tmp/openclaw-agents/work/agent";
     const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
