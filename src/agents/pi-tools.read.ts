@@ -10,6 +10,7 @@ import {
   writeFileWithinRoot,
 } from "../infra/fs-safe.js";
 import { trySafeFileURLToPath } from "../infra/local-file-access.js";
+import { isAbortError } from "../infra/unhandled-rejections.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
@@ -356,8 +357,13 @@ async function handleOffsetOutOfRangeError(
       return withToolResultText(fallbackResult, `${diagnosticNote}\n\n${fallbackText}`);
     }
     return fallbackResult;
-  } catch {
-    // Fallback also failed — return a diagnostic-only result so the run continues.
+  } catch (fallbackError) {
+    // Re-throw AbortError so the runner can unwind the session as aborted rather
+    // than silently continuing with a fabricated success result.
+    if (isAbortError(fallbackError)) {
+      throw fallbackError;
+    }
+    // Fallback also failed (non-abort) — return a diagnostic-only result so the run continues.
     return {
       content: [
         {

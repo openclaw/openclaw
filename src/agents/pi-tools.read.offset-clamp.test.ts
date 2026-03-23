@@ -244,4 +244,38 @@ describe("tools.read offset out-of-range handling", () => {
 
     await expect(tool.execute("test-call-8", { path: "config.txt" })).rejects.toThrow("port range");
   });
+
+  it("re-throws AbortError from fallback read so the session can unwind as aborted", async () => {
+    // Simulate: initial read throws offset error (triggering fallback), but the
+    // fallback read is aborted (e.g. user cancelled). The AbortError must propagate,
+    // not be swallowed as a fake success.
+    const abortingTool = {
+      name: "Read",
+      label: "Read",
+      description: "Read file contents",
+      parameters: {},
+      inputSchema: {
+        type: "object",
+        properties: { path: { type: "string" }, offset: { type: "number" } },
+        required: ["path"],
+      },
+      execute: async (_id: string, args: Record<string, unknown>) => {
+        const offset = typeof args.offset === "number" ? args.offset : 1;
+        if (offset > 1) {
+          throw new Error(`Offset ${offset} is out of range.`);
+        }
+        // Fallback read from offset=1 throws AbortError (simulating user cancel)
+        const err = new Error("The operation was aborted");
+        err.name = "AbortError";
+        throw err;
+      },
+    } as AnyAgentTool;
+
+    const tool = createOpenClawReadTool(abortingTool);
+    await expect(
+      tool.execute("test-call-abort", { path: "file.txt", offset: 50 }),
+    ).rejects.toMatchObject({
+      name: "AbortError",
+    });
+  });
 });
