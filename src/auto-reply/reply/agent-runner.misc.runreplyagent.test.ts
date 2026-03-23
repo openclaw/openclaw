@@ -1485,6 +1485,37 @@ describe("runReplyAgent reminder commitment guard", () => {
     });
   });
 
+  it("suppresses guard note when an enabled reminder sweep cron exists for another session", async () => {
+    loadCronStoreMock.mockResolvedValueOnce({
+      version: 1,
+      jobs: [
+        {
+          id: "reminder-sweep",
+          name: "family-reminder sweep",
+          enabled: true,
+          sessionTarget: "isolated",
+          payload: { kind: "agentTurn", message: "check due reminders and deliver them" },
+          delivery: { mode: "announce" },
+          sessionKey: "other-session",
+          createdAtMs: Date.now() - 60_000,
+          updatedAtMs: Date.now() - 60_000,
+          state: {},
+        },
+      ],
+    });
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "I'll remind you tomorrow morning." }],
+      meta: {},
+      successfulCronAdds: 0,
+    });
+
+    const result = await createRun();
+    expect(result).toMatchObject({
+      text: "I'll remind you tomorrow morning.",
+    });
+  });
+
   it("still appends guard note when cron jobs for session exist but are disabled", async () => {
     loadCronStoreMock.mockResolvedValueOnce({
       version: 1,
