@@ -570,6 +570,7 @@ describe("session-memory hook", () => {
     // Metadata should be stripped, only real content stored
     expect(memoryContent).not.toContain("Conversation info (untrusted metadata)");
     expect(memoryContent).not.toContain("Sender (untrusted metadata)");
+    expect(memoryContent).not.toContain("[message_id: om_abc123]");
     expect(memoryContent).toContain("内网穿透地址是什么？");
     expect(memoryContent).toContain("assistant: 地址是 https://example.ngrok.app");
   });
