@@ -396,7 +396,8 @@ export async function getReplyFromConfig(
     // Determine the effective model for media understanding:
     // 1. If image model override was applied, use that (vision-capable)
     // 2. If channel model is vision model, use that
-    // 3. Otherwise use default model
+    // 3. If channel model exists but is text-only, use default model
+    // 4. Otherwise use original model (handles case where channel model wasn't overridden)
     // This ensures vision-capable models don't get unnecessary captions added.
     let effectiveModelForMedia: { provider: string; model: string } = {
       provider: originalProvider,
@@ -409,6 +410,10 @@ export async function getReplyFromConfig(
     } else if (channelModelOverride && channelModelIsVisionModel) {
       // Channel model is vision-capable, use that
       effectiveModelForMedia = { provider, model };
+    } else if (channelModelOverride && !channelModelIsVisionModel) {
+      // Channel model exists but is text-only - use default model to avoid
+      // passing image payloads to text-only models
+      effectiveModelForMedia = { provider: defaultProvider, model: defaultModel };
     }
 
     const appliedMediaUnderstanding = await applyMediaUnderstandingIfNeeded({

@@ -2,7 +2,11 @@ import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import {
+  findModelInCatalog,
+  modelSupportsVision,
+  type ModelCatalogEntry,
+} from "../../agents/model-catalog.js";
 import {
   buildConfiguredModelCatalog,
   buildAllowedModelSet,
@@ -500,9 +504,20 @@ export async function createModelSelectionState(params: {
       defaultProvider,
     );
     const storedProvider = storedOverride.provider || defaultProvider;
-    if (!isImageModel(storedProvider, storedOverride.model, imageModelKeys)) {
-      // Stored override is not an image model, skip it for image requests
-      skipForImageSwitch = true;
+    const storedModel = storedOverride.model;
+
+    // Check if stored override is in the configured imageModel list
+    if (!isImageModel(storedProvider, storedModel, imageModelKeys)) {
+      // Not in configured list - check catalog for vision capability
+      const catalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
+      const catalogEntry = findModelInCatalog(catalog, storedProvider, storedModel);
+      if (modelSupportsVision(catalogEntry)) {
+        // Stored model supports vision (via catalog) - add to keys and don't skip
+        imageModelKeys.add(modelKey(storedProvider, storedModel));
+      } else {
+        // Stored override is not an image model, skip it for image requests
+        skipForImageSwitch = true;
+      }
     }
   }
 
