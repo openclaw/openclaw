@@ -4,6 +4,7 @@ import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import {
   createTopLevelChannelParsedAllowFromPrompt,
   createTopLevelChannelDmPolicy,
+  createStandardChannelSetupStatus,
   mergeAllowFromEntries,
   parseSetupEntriesWithParser,
   patchTopLevelChannelConfigSection,
@@ -139,22 +140,21 @@ export const nostrSetupWizard: ChannelSetupWizard = {
   channel,
   resolveAccountIdForConfigure: () => DEFAULT_ACCOUNT_ID,
   resolveShouldPromptAccountIds: () => false,
-  status: {
+  status: createStandardChannelSetupStatus({
+    channelLabel: "Nostr",
     configuredLabel: "configured",
     unconfiguredLabel: "needs private key",
     configuredHint: "configured",
     unconfiguredHint: "needs private key",
     configuredScore: 1,
     unconfiguredScore: 0,
+    includeStatusLine: true,
     resolveConfigured: ({ cfg }) => resolveNostrAccount({ cfg }).configured,
-    resolveStatusLines: ({ cfg, configured }) => {
+    resolveExtraStatusLines: ({ cfg }) => {
       const account = resolveNostrAccount({ cfg });
-      return [
-        `Nostr: ${configured ? "configured" : "needs private key"}`,
-        `Relays: ${account.relays.length || DEFAULT_RELAYS.length}`,
-      ];
+      return [`Relays: ${account.relays.length || DEFAULT_RELAYS.length}`];
     },
-  },
+  }),
   introNote: {
     title: "Nostr setup",
     lines: NOSTR_SETUP_HELP_LINES,
