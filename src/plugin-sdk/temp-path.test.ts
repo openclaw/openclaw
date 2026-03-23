@@ -27,7 +27,7 @@ describe("buildRandomTempFilePath", () => {
     const resolved = path.resolve(result);
     const rel = path.relative(tmpRoot, resolved);
     expect(rel === ".." || rel.startsWith(`..${path.sep}`)).toBe(false);
-    expect(path.basename(result)).toBe("line-media-123-abc.jpg");
+    expect(path.basename(result)).toBe("channels-media-123-abc.jpg");
     expect(result).not.toContain("..");
   });
 });

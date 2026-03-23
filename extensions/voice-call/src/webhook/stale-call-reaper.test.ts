@@ -19,7 +19,9 @@ describe("startStaleCallReaper", () => {
     };
 
     expect(startStaleCallReaper({ manager: manager as never })).toBeNull();
-    expect(startStaleCallReaper({ manager: manager as never, staleCallReaperSeconds: 0 })).toBeNull();
+    expect(
+      startStaleCallReaper({ manager: manager as never, staleCallReaperSeconds: 0 }),
+    ).toBeNull();
   });
 
   it("reaps stale calls and ignores fresh ones", async () => {
@@ -76,7 +78,10 @@ describe("startStaleCallReaper", () => {
     await vi.advanceTimersByTimeAsync(30_000);
     await Promise.resolve();
 
-    expect(warn).toHaveBeenCalledWith("[voice-call] Reaper failed to end call call-stale:", expect.any(Error));
+    expect(warn).toHaveBeenCalledWith(
+      "[voice-call] Reaper failed to end call call-stale:",
+      expect.any(Error),
+    );
 
     stop?.();
   });
