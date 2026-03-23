@@ -318,6 +318,32 @@ describe("resolveAllowAlwaysPatterns", () => {
     expect(patterns).not.toContain("/usr/bin/nice");
   });
 
+  it("unwraps time wrappers and persists the inner executable instead", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const whoami = makeExecutable(dir, "whoami");
+    const patterns = resolveAllowAlwaysPatterns({
+      segments: [
+        {
+          raw: "/usr/bin/time -p /bin/zsh -lc whoami",
+          argv: ["/usr/bin/time", "-p", "/bin/zsh", "-lc", "whoami"],
+          resolution: {
+            rawExecutable: "/usr/bin/time",
+            resolvedPath: "/usr/bin/time",
+            executableName: "time",
+          },
+        },
+      ],
+      cwd: dir,
+      env: makePathEnv(dir),
+      platform: process.platform,
+    });
+    expect(patterns).toEqual([whoami]);
+    expect(patterns).not.toContain("/usr/bin/time");
+  });
+
   it("unwraps busybox/toybox shell applets and persists inner executables", () => {
     if (process.platform === "win32") {
       return;
@@ -420,6 +446,23 @@ describe("resolveAllowAlwaysPatterns", () => {
       dir,
       firstCommand: "/usr/bin/nice /bin/zsh -lc 'echo warmup-ok'",
       secondCommand: "/usr/bin/nice /bin/zsh -lc 'id > marker'",
+      env,
+      persistedPattern: echo,
+    });
+  });
+
+  it("prevents allow-always bypass for time wrapper chains", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const echo = makeExecutable(dir, "echo");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: "/usr/bin/time -p /bin/zsh -lc 'echo warmup-ok'",
+      secondCommand: "/usr/bin/time -p /bin/zsh -lc 'id > marker'",
       env,
       persistedPattern: echo,
     });
