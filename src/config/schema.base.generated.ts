@@ -13161,7 +13161,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "nodeHost.browserProxy.allowProfiles": {
       label: "Node Browser Proxy Allowed Profiles",
-      help: "Optional allowlist of browser profile names exposed through node proxy routing. Leave empty to expose all configured profiles, or use a tight list to enforce least-privilege profile access.",
+      help: "Optional allowlist of browser profile names exposed through node proxy routing. Leave empty to preserve the default full profile surface, including profile create/delete routes. When set, OpenClaw enforces least-privilege profile access and blocks persistent profile create/delete through the proxy.",
       tags: ["access", "network", "storage"],
     },
     media: {
@@ -16286,6 +16286,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       tags: ["security", "auth"],
     },
   },
-  version: "2026.3.22",
+  version: "2026.3.23",
   generatedAt: "2026-03-22T21:17:33.302Z",
 } as const satisfies BaseConfigSchemaResponse;
