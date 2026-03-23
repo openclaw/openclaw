@@ -1,12 +1,11 @@
 import {
   createAllowFromSection,
+  createPromptParsedAllowFromForAccount,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
-  promptParsedAllowFromForAccount,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
   type OpenClawConfig,
-  type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
 import {
   listBlueBubblesAccountIds,
@@ -49,44 +48,35 @@ function validateBlueBubblesAllowFromEntry(value: string): string | null {
   }
 }
 
-async function promptBlueBubblesAllowFrom(params: {
-  cfg: OpenClawConfig;
-  prompter: WizardPrompter;
-  accountId?: string;
-}): Promise<OpenClawConfig> {
-  return await promptParsedAllowFromForAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    defaultAccountId: resolveDefaultBlueBubblesAccountId(params.cfg),
-    prompter: params.prompter,
-    noteTitle: "BlueBubbles allowlist",
-    noteLines: [
-      "Allowlist BlueBubbles DMs by handle or chat target.",
-      "Examples:",
-      "- +15555550123",
-      "- user@example.com",
-      "- chat_id:123",
-      "- chat_guid:iMessage;-;+15555550123",
-      "Multiple entries: comma- or newline-separated.",
-      `Docs: ${formatDocsLink("/channels/bluebubbles", "bluebubbles")}`,
-    ],
-    message: "BlueBubbles allowFrom (handle or chat_id)",
-    placeholder: "+15555550123, user@example.com, chat_id:123",
-    parseEntries: (raw) => {
-      const entries = parseBlueBubblesAllowFromInput(raw);
-      for (const entry of entries) {
-        if (!validateBlueBubblesAllowFromEntry(entry)) {
-          return { entries: [], error: `Invalid entry: ${entry}` };
-        }
+const promptBlueBubblesAllowFrom = createPromptParsedAllowFromForAccount({
+  defaultAccountId: (cfg) => resolveDefaultBlueBubblesAccountId(cfg),
+  noteTitle: "BlueBubbles allowlist",
+  noteLines: [
+    "Allowlist BlueBubbles DMs by handle or chat target.",
+    "Examples:",
+    "- +15555550123",
+    "- user@example.com",
+    "- chat_id:123",
+    "- chat_guid:iMessage;-;+15555550123",
+    "Multiple entries: comma- or newline-separated.",
+    `Docs: ${formatDocsLink("/channels/bluebubbles", "bluebubbles")}`,
+  ],
+  message: "BlueBubbles allowFrom (handle or chat_id)",
+  placeholder: "+15555550123, user@example.com, chat_id:123",
+  parseEntries: (raw) => {
+    const entries = parseBlueBubblesAllowFromInput(raw);
+    for (const entry of entries) {
+      if (!validateBlueBubblesAllowFromEntry(entry)) {
+        return { entries: [], error: `Invalid entry: ${entry}` };
       }
-      return { entries };
-    },
-    getExistingAllowFrom: ({ cfg, accountId }) =>
-      resolveBlueBubblesAccount({ cfg, accountId }).config.allowFrom ?? [],
-    applyAllowFrom: ({ cfg, accountId, allowFrom }) =>
-      setBlueBubblesAllowFrom(cfg, accountId, allowFrom),
-  });
-}
+    }
+    return { entries };
+  },
+  getExistingAllowFrom: ({ cfg, accountId }) =>
+    resolveBlueBubblesAccount({ cfg, accountId }).config.allowFrom ?? [],
+  applyAllowFrom: ({ cfg, accountId, allowFrom }) =>
+    setBlueBubblesAllowFrom(cfg, accountId, allowFrom),
+});
 
 function validateBlueBubblesServerUrlInput(value: unknown): string | undefined {
   const trimmed = String(value ?? "").trim();
