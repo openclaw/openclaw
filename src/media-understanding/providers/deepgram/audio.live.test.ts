@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { isTruthyEnvValue } from "../../../infra/env.js";
 import { transcribeDeepgramAudio } from "../../../../extensions/deepgram/media-understanding-provider.js";
+import { isTruthyEnvValue } from "../../../infra/env.js";
 
 const DEEPGRAM_KEY = process.env.DEEPGRAM_API_KEY ?? "";
 const DEEPGRAM_MODEL = process.env.DEEPGRAM_MODEL?.trim() || "nova-3";
