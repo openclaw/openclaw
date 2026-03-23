@@ -285,4 +285,28 @@ describe("cron schedule error isolation", () => {
     expect(badJob.state.scheduleErrorCount).toBe(2);
     expect(badJob.state.lastError).toBe("schedule error: previous");
   });
+
+  it("does not increment thrown cron errors during read-only maintenance repair", () => {
+    const badJob = createJob({
+      id: "bad-timezone-read",
+      name: "Bad Timezone Read",
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "Invalid/Timezone" },
+      state: {
+        nextRunAtMs: undefined,
+        scheduleErrorCount: 2,
+        lastError: "schedule error: previous",
+      },
+    });
+    const state = createMockState([badJob]);
+
+    const changed = recomputeNextRunsForMaintenance(state, {
+      treatUndefinedAsScheduleError: false,
+    });
+
+    expect(changed).toBe(false);
+    expect(badJob.enabled).toBe(true);
+    expect(badJob.state.nextRunAtMs).toBeUndefined();
+    expect(badJob.state.scheduleErrorCount).toBe(2);
+    expect(badJob.state.lastError).toBe("schedule error: previous");
+  });
 });

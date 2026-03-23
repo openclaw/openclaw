@@ -105,7 +105,9 @@ function mergeManualRunSnapshotAfterReload(params: {
     reloaded.enabled = preservedEnabled;
     reloaded.state.nextRunAtMs = preservedNextRunAtMs;
     reloaded.state.scheduleErrorCount = preservedScheduleErrorCount;
-    reloaded.state.lastError = preservedScheduleErrorText;
+    reloaded.state.lastError = preservedScheduleErrorText?.startsWith("schedule error:")
+      ? preservedScheduleErrorText
+      : params.snapshot.state.lastError;
   } else {
     reloaded.enabled = params.snapshot.enabled;
   }

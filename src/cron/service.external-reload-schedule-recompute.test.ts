@@ -881,6 +881,50 @@ describe("forceReload repairs externally changed schedules", () => {
     expect(state.store?.jobs[0]?.state.lastError).toBeUndefined();
   });
 
+  it("does not restore stale non-schedule lastError after manual-run reload merge", async () => {
+    const store = await makeStorePath();
+    let nowMs = Date.parse("2026-03-19T01:44:00.000Z");
+    const jobId = "manual-run-reload-keeps-non-schedule-error-cleared";
+
+    const createJob = (expr: string, lastError: string) => ({
+      ...createCronJob({
+        id: jobId,
+        expr,
+        nextRunAtMs: Date.parse("2026-03-19T23:30:00.000Z"),
+        lastError,
+      }),
+      sessionTarget: "isolated" as const,
+      payload: { kind: "agentTurn", message: "tick" } as const,
+    });
+
+    await writeCronStoreSnapshot({
+      storePath: store.storePath,
+      jobs: [createJob("30 23 * * *", "runtime failure before reload")],
+    });
+
+    const runIsolatedAgentJob = vi.fn(async () => {
+      await writeCronStoreSnapshot({
+        storePath: store.storePath,
+        jobs: [createJob("30 8 * * *", "runtime failure from disk")],
+      });
+      nowMs += 500;
+      return { status: "ok" as const, summary: "done" };
+    });
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => nowMs,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    expect(await run(state, jobId, "force")).toEqual({ ok: true, ran: true });
+    expect(state.store?.jobs[0]?.state.lastError).toBeUndefined();
+  });
+
   it("does not persist NaN updatedAtMs when manual-run reload sees an invalid timestamp", async () => {
     const store = await makeStorePath();
     let nowMs = Date.parse("2026-03-19T01:44:00.000Z");

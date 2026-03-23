@@ -515,7 +515,10 @@ function recomputeJobNextRunAtMs(params: {
       changed = true;
     }
   } catch (err) {
-    if (recordScheduleComputeError({ state: params.state, job: params.job, err })) {
+    if (
+      treatUndefinedAsScheduleError &&
+      recordScheduleComputeError({ state: params.state, job: params.job, err })
+    ) {
       changed = true;
     }
   }
