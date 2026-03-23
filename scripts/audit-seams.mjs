@@ -508,6 +508,10 @@ function stemFromRelativePath(relativePath) {
 
 function describeSeamKinds(relativePath, source) {
   const seamKinds = [];
+  const isReplyDeliveryPath =
+    /reply-delivery|reply-delivery\.ts|reply\/.*delivery|outbound\/deliver|outbound\/message/.test(
+      relativePath,
+    );
   if (
     relativePath.startsWith("src/agents/tools/") &&
     /details\s*:\s*{[\s\S]*\bmedia\b\s*:/.test(source)
@@ -515,22 +519,23 @@ function describeSeamKinds(relativePath, source) {
     seamKinds.push("tool-result-media");
   }
   if (
-    /reply-delivery|reply-delivery\.ts|reply\/.*delivery|outbound\/deliver|outbound\/message/.test(
-      relativePath,
-    ) &&
+    isReplyDeliveryPath &&
     /\bmediaUrl\b|\bmediaUrls\b|resolveSendableOutboundReplyParts/.test(source)
   ) {
     seamKinds.push("reply-delivery-media");
   }
   if (
     relativePath.startsWith("extensions/") &&
-    /(outbound-adapter|reply-delivery|send|delivery|messenger)\.ts$/.test(relativePath) &&
-    /\bmediaUrl\b|\bmediaUrls\b|filename|audioAsVoice/.test(source)
+    /(outbound-adapter|reply-delivery|send|delivery|messenger|channel(?:\.runtime)?)\.ts$/.test(
+      relativePath,
+    ) &&
+    (/sendMedia\b/.test(source) || /\bmediaUrl\b|\bmediaUrls\b|filename|audioAsVoice/.test(source))
   ) {
     seamKinds.push("channel-media-adapter");
   }
   if (
-    /blockStreamingEnabled|directlySentBlockKeys|resolveSendableOutboundReplyParts/.test(source) &&
+    isReplyDeliveryPath &&
+    /blockStreamingEnabled|directlySentBlockKeys/.test(source) &&
     /\bmediaUrl\b|\bmediaUrls\b/.test(source)
   ) {
     seamKinds.push("streaming-media-handoff");
@@ -569,14 +574,12 @@ function matchQualityRank(quality) {
       return 1;
     case "dir-token":
       return 2;
-    case "source-echo":
-      return 3;
     default:
-      return 4;
+      return 3;
   }
 }
 
-function findRelatedTests(relativePath, testIndex, source) {
+function findRelatedTests(relativePath, testIndex) {
   const stem = stemFromRelativePath(relativePath);
   const baseName = path.basename(stem);
   const dirName = path.dirname(relativePath);
@@ -597,14 +600,6 @@ function findRelatedTests(relativePath, testIndex, source) {
       if (sharedToken) {
         return [{ file: entry.relativePath, matchQuality: "dir-token" }];
       }
-    }
-    if (
-      baseName.length >= 12 &&
-      source.includes(baseName) &&
-      entryDir === normalizedDir &&
-      (entry.baseName === baseName || entry.baseName.startsWith(`${baseName}.`))
-    ) {
-      return [{ file: entry.relativePath, matchQuality: "source-echo" }];
     }
     return [];
   });
@@ -674,7 +669,7 @@ async function buildSeamTestInventory() {
     if (seamKinds.length === 0) {
       continue;
     }
-    const relatedTestMatches = findRelatedTests(relativePath, testIndex, source);
+    const relatedTestMatches = findRelatedTests(relativePath, testIndex);
     const status = determineSeamTestStatus(seamKinds, relatedTestMatches);
     inventory.push({
       file: relativePath,
