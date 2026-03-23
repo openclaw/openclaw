@@ -355,4 +355,34 @@ describe("runDaemonInstall", () => {
       }),
     );
   });
+
+  it("reuses env-backed service secrets during forced reinstall when the current shell is missing them", async () => {
+    service.isLoaded.mockResolvedValue(true);
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {
+        OPENAI_API_KEY: "service-openai-key",
+      },
+    } as never);
+    const previous = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      await runDaemonInstall({ json: true, force: true });
+
+      expect(buildGatewayInstallPlanMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          env: expect.objectContaining({
+            OPENAI_API_KEY: "service-openai-key",
+          }),
+        }),
+      );
+      expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previous;
+      }
+    }
+  });
 });
