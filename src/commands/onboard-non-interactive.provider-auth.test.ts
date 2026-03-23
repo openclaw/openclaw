@@ -691,6 +691,23 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
+  it("infers HPC-AI auth choice from --hpc-ai-api-key and sets default model", async () => {
+    await withOnboardEnv("openclaw-onboard-hpc-ai-infer-", async (env) => {
+      const cfg = await runOnboardingAndReadConfig(env, {
+        hpcAiApiKey: "hpc-ai-test-key", // pragma: allowlist secret
+      });
+
+      expect(cfg.auth?.profiles?.["hpc-ai:default"]?.provider).toBe("hpc-ai");
+      expect(cfg.auth?.profiles?.["hpc-ai:default"]?.mode).toBe("api_key");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("hpc-ai/minimax/minimax-m2.5");
+      await expectApiKeyProfile({
+        profileId: "hpc-ai:default",
+        provider: "hpc-ai",
+        key: "hpc-ai-test-key",
+      });
+    });
+  });
+
   it("infers QIANFAN auth choice from --qianfan-api-key and sets default model", async () => {
     await withOnboardEnv("openclaw-onboard-qianfan-infer-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {

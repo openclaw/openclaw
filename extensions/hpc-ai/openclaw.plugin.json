@@ -1,0 +1,27 @@
+{
+  "id": "hpc-ai",
+  "providers": ["hpc-ai"],
+  "providerAuthEnvVars": {
+    "hpc-ai": ["HPC_AI_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "hpc-ai",
+      "method": "api-key",
+      "choiceId": "hpc-ai-api-key",
+      "choiceLabel": "HPC-AI API key",
+      "groupId": "hpc-ai",
+      "groupLabel": "HPC-AI",
+      "groupHint": "API key",
+      "optionKey": "hpcAiApiKey",
+      "cliFlag": "--hpc-ai-api-key",
+      "cliOption": "--hpc-ai-api-key <key>",
+      "cliDescription": "HPC-AI API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

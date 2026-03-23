@@ -10,6 +10,7 @@ import falPlugin from "../../../extensions/fal/index.js";
 import githubCopilotPlugin from "../../../extensions/github-copilot/index.js";
 import googlePlugin from "../../../extensions/google/index.js";
 import groqPlugin from "../../../extensions/groq/index.js";
+import hpcAiPlugin from "../../../extensions/hpc-ai/index.js";
 import huggingFacePlugin from "../../../extensions/huggingface/index.js";
 import kilocodePlugin from "../../../extensions/kilocode/index.js";
 import kimiCodingPlugin from "../../../extensions/kimi-coding/index.js";
@@ -360,6 +361,7 @@ const bundledProviderPlugins = dedupePlugins([
   githubCopilotPlugin,
   falPlugin,
   googlePlugin,
+  hpcAiPlugin,
   huggingFacePlugin,
   kilocodePlugin,
   kimiCodingPlugin,

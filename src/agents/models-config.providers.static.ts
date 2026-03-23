@@ -22,6 +22,7 @@ export {
   buildTogetherProvider,
   buildDoubaoCodingProvider,
   buildDoubaoProvider,
+  buildHpcAiProvider,
   XIAOMI_DEFAULT_MODEL_ID,
   buildXiaomiProvider,
 } from "../plugin-sdk/provider-catalog.js";

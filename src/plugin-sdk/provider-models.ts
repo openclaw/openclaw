@@ -91,6 +91,11 @@ export {
   TOGETHER_MODEL_CATALOG,
 } from "../agents/together-models.js";
 export {
+  buildHpcAiModelDefinition,
+  HPC_AI_BASE_URL,
+  HPC_AI_MODEL_CATALOG,
+} from "../agents/hpc-ai-models.js";
+export {
   discoverVeniceModels,
   VENICE_BASE_URL,
   VENICE_DEFAULT_MODEL_REF,

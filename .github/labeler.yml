@@ -257,6 +257,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/huggingface/**"
+"extensions: hpc-ai":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/hpc-ai/**"
 "extensions: kilocode":
   - changed-files:
       - any-glob-to-any-file:

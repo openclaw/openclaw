@@ -386,6 +386,8 @@ importers:
 
   extensions/groq: {}
 
+  extensions/hpc-ai: {}
+
   extensions/huggingface: {}
 
   extensions/imessage: {}

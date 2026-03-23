@@ -298,5 +298,13 @@
   {
     "source": "Testing",
     "target": "测试"
+  },
+  {
+    "source": "HPC-AI",
+    "target": "HPC-AI"
+  },
+  {
+    "source": "HPC-AI setup (auth + model selection)",
+    "target": "HPC-AI 设置（身份验证 + 模型选择）"
   }
 ]

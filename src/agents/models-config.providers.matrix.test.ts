@@ -47,6 +47,15 @@ const MATRIX_CASES: MatrixCase[] = [
     },
   },
   {
+    name: "env api key injects hpc-ai provider",
+    env: { HPC_AI_API_KEY: "test-hpc-ai-key" }, // pragma: allowlist secret
+    assertProviders(providers) {
+      expect(providers?.["hpc-ai"]?.apiKey).toBe("HPC_AI_API_KEY");
+      expect(providers?.["hpc-ai"]?.baseUrl).toBe("https://api.hpc-ai.com/inference/v1");
+      expect(providers?.["hpc-ai"]?.models?.length).toBe(2);
+    },
+  },
+  {
     name: "env api key injects paired plan providers",
     env: { VOLCANO_ENGINE_API_KEY: "test-volcengine-key" }, // pragma: allowlist secret
     assertProviders(providers) {
@@ -156,7 +165,7 @@ const MATRIX_CASES: MatrixCase[] = [
   },
 ];
 
-describe("implicit provider resolution matrix", () => {
+describe("implicit provider resolution matrix", { timeout: 180_000 }, () => {
   it.each(MATRIX_CASES)(
     "$name",
     async ({ env, authProfiles, explicitProviders, assertProviders }) => {

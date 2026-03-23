@@ -11,6 +11,7 @@ export const BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   firecrawl: ["FIRECRAWL_API_KEY"],
   "github-copilot": ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"],
   google: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+  "hpc-ai": ["HPC_AI_API_KEY"],
   huggingface: ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"],
   kilocode: ["KILOCODE_API_KEY"],
   kimi: ["KIMI_API_KEY", "KIMICODE_API_KEY"],

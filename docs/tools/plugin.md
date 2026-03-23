@@ -77,7 +77,7 @@ and the [Plugin SDK Overview](/plugins/sdk-overview).
 <AccordionGroup>
   <Accordion title="Model providers (enabled by default)">
     `anthropic`, `byteplus`, `cloudflare-ai-gateway`, `github-copilot`, `google`,
-    `huggingface`, `kilocode`, `kimi-coding`, `minimax`, `mistral`, `modelstudio`,
+    `huggingface`, `hpc-ai`, `kilocode`, `kimi-coding`, `minimax`, `mistral`, `modelstudio`,
     `moonshot`, `nvidia`, `openai`, `opencode`, `opencode-go`, `openrouter`,
     `qianfan`, `qwen-portal-auth`, `synthetic`, `together`, `venice`,
     `vercel-ai-gateway`, `volcengine`, `xiaomi`, `zai`

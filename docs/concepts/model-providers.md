@@ -105,7 +105,7 @@ Current bundled examples:
 - `zai`: GLM-5 forward-compat fallback, `tool_stream` defaults, cache-TTL
   policy, binary-thinking/live-model policy, and usage auth + quota fetching
 - `mistral`, `opencode`, and `opencode-go`: plugin-owned capability metadata
-- `byteplus`, `cloudflare-ai-gateway`, `huggingface`, `kimi-coding`,
+- `byteplus`, `cloudflare-ai-gateway`, `huggingface`, `hpc-ai`, `kimi-coding`,
   `modelstudio`, `nvidia`, `qianfan`, `synthetic`, `together`, `venice`,
   `vercel-ai-gateway`, and `volcengine`: plugin-owned catalogs only
 - `qwen-portal`: plugin-owned catalog, OAuth login, and OAuth refresh
@@ -264,6 +264,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 - Qianfan: `qianfan` (`QIANFAN_API_KEY`)
 - Model Studio: `modelstudio` (`MODELSTUDIO_API_KEY`)
 - NVIDIA: `nvidia` (`NVIDIA_API_KEY`)
+- HPC-AI: `hpc-ai` (`HPC_AI_API_KEY`)
 - Together: `together` (`TOGETHER_API_KEY`)
 - Venice: `venice` (`VENICE_API_KEY`)
 - Xiaomi: `xiaomi` (`XIAOMI_API_KEY`)

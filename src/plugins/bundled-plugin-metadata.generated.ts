@@ -1183,6 +1183,47 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "hpc-ai",
+    idHint: "hpc-ai",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/hpc-ai-provider",
+    packageVersion: "2026.3.22",
+    packageDescription: "OpenClaw HPC-AI provider plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "hpc-ai",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      providers: ["hpc-ai"],
+      providerAuthEnvVars: {
+        "hpc-ai": ["HPC_AI_API_KEY"],
+      },
+      providerAuthChoices: [
+        {
+          provider: "hpc-ai",
+          method: "api-key",
+          choiceId: "hpc-ai-api-key",
+          choiceLabel: "HPC-AI API key",
+          groupId: "hpc-ai",
+          groupLabel: "HPC-AI",
+          groupHint: "API key",
+          optionKey: "hpcAiApiKey",
+          cliFlag: "--hpc-ai-api-key",
+          cliOption: "--hpc-ai-api-key <key>",
+          cliDescription: "HPC-AI API key",
+        },
+      ],
+    },
+  },
+  {
     dirName: "huggingface",
     idHint: "huggingface",
     source: {

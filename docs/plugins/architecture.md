@@ -732,7 +732,7 @@ api.registerProvider({
 - Mistral, OpenCode Zen, and OpenCode Go use `capabilities` only to keep
   transcript/tooling quirks out of core.
 - Catalog-only bundled providers such as `byteplus`, `cloudflare-ai-gateway`,
-  `huggingface`, `kimi-coding`, `modelstudio`, `nvidia`, `qianfan`,
+  `huggingface`, `hpc-ai`, `kimi-coding`, `modelstudio`, `nvidia`, `qianfan`,
   `synthetic`, `together`, `venice`, `vercel-ai-gateway`, and `volcengine` use
   `catalog` only.
 - Qwen portal uses `catalog`, `auth`, and `refreshOAuth`.
