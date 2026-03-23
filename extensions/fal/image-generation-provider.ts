@@ -1,6 +1,8 @@
-import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
-import type { ImageGenerationProviderPlugin } from "../../plugins/types.js";
-import type { GeneratedImageAsset } from "../types.js";
+import type {
+  GeneratedImageAsset,
+  ImageGenerationProviderPlugin,
+} from "openclaw/plugin-sdk/image-generation-core";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/image-generation-core";
 
 const DEFAULT_FAL_BASE_URL = "https://fal.run";
 const DEFAULT_FAL_IMAGE_MODEL = "fal-ai/flux/dev";
