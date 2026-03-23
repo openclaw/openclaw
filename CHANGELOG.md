@@ -79,6 +79,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/usage: drop the empty session-detail placeholder card so the usage view stays single-column until a real session detail panel is selected. (#52013) Thanks @BunsDev.
 - Hooks/workspace: keep repo-local `<workspace>/hooks` disabled until explicitly enabled, block workspace hook name collisions from shadowing bundled/managed/plugin hooks, and treat `hooks.internal.load.extraDirs` as trusted managed hook sources.
 - CLI/hooks: route hook-pack install and update through `openclaw plugins`, keep `openclaw hooks` focused on hook visibility and per-hook controls, and show plugin-managed hook details in CLI output.
+- Channels/QQ Bot: add a bundled QQ Bot channel extension with WebSocket gateway, multi-account support, C2C/group/guild messaging, media handling (image/voice/video/file), SILK audio codec, image server, slash commands, message queuing, session persistence, credential backup, reference index store, typing keepalive, STT, TTS, proactive messaging, cron reminders, and known user tracking — available during `openclaw onboard` without requiring a separate plugin install.
 
 ### Fixes
 

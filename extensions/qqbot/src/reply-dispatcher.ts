@@ -1,0 +1,489 @@
+import path from "node:path";
+import {
+  getAccessToken,
+  sendC2CMessage,
+  sendChannelMessage,
+  sendGroupMessage,
+  clearTokenCache,
+  sendC2CImageMessage,
+  sendGroupImageMessage,
+  sendC2CVoiceMessage,
+  sendGroupVoiceMessage,
+  sendC2CVideoMessage,
+  sendGroupVideoMessage,
+  sendC2CFileMessage,
+  sendGroupFileMessage,
+} from "./api.js";
+import type { ResolvedQQBotAccount } from "./types.js";
+import { resolveTTSConfig, textToSilk, formatDuration } from "./utils/audio-convert.js";
+import {
+  checkFileSize,
+  readFileAsync,
+  fileExistsAsync,
+  formatFileSize,
+} from "./utils/file-utils.js";
+import {
+  parseQQBotPayload,
+  encodePayloadForCron,
+  isCronReminderPayload,
+  isMediaPayload,
+  type MediaPayload,
+} from "./utils/payload.js";
+import { getQQBotDataDir, normalizePath, sanitizeFileName } from "./utils/platform.js";
+
+export interface MessageTarget {
+  type: "c2c" | "guild" | "dm" | "group";
+  senderId: string;
+  messageId: string;
+  channelId?: string;
+  groupOpenid?: string;
+}
+
+export interface ReplyContext {
+  target: MessageTarget;
+  account: ResolvedQQBotAccount;
+  cfg: unknown;
+  log?: {
+    info: (msg: string) => void;
+    error: (msg: string) => void;
+    debug?: (msg: string) => void;
+  };
+}
+
+/**
+ * 带 token 过期重试的消息发送
+ */
+export async function sendWithTokenRetry<T>(
+  appId: string,
+  clientSecret: string,
+  sendFn: (token: string) => Promise<T>,
+  log?: ReplyContext["log"],
+  accountId?: string,
+): Promise<T> {
+  try {
+    const token = await getAccessToken(appId, clientSecret);
+    return await sendFn(token);
+  } catch (err) {
+    const errMsg = String(err);
+    if (errMsg.includes("401") || errMsg.includes("token") || errMsg.includes("access_token")) {
+      log?.info(`[qqbot:${accountId}] Token may be expired, refreshing...`);
+      clearTokenCache(appId);
+      const newToken = await getAccessToken(appId, clientSecret);
+      return await sendFn(newToken);
+    } else {
+      throw err;
+    }
+  }
+}
+
+/**
+ * 根据消息类型路由发送文本
+ */
+export async function sendTextToTarget(
+  ctx: ReplyContext,
+  text: string,
+  refIdx?: string,
+): Promise<void> {
+  const { target, account } = ctx;
+  await sendWithTokenRetry(
+    account.appId,
+    account.clientSecret,
+    async (token) => {
+      if (target.type === "c2c") {
+        await sendC2CMessage(token, target.senderId, text, target.messageId, refIdx);
+      } else if (target.type === "group" && target.groupOpenid) {
+        await sendGroupMessage(token, target.groupOpenid, text, target.messageId);
+      } else if (target.channelId) {
+        await sendChannelMessage(token, target.channelId, text, target.messageId);
+      } else if (target.type === "dm") {
+        await sendC2CMessage(token, target.senderId, text, target.messageId, refIdx);
+      }
+    },
+    ctx.log,
+    account.accountId,
+  );
+}
+
+/**
+ * 发送错误提示给用户
+ */
+export async function sendErrorToTarget(ctx: ReplyContext, errorText: string): Promise<void> {
+  try {
+    await sendTextToTarget(ctx, errorText);
+  } catch (sendErr) {
+    ctx.log?.error(`[qqbot:${ctx.account.accountId}] Failed to send error message: ${sendErr}`);
+  }
+}
+
+/**
+ * 处理结构化载荷（QQBOT_PAYLOAD: 前缀的 JSON）
+ * 返回 true 表示已处理，false 表示不是结构化载荷
+ */
+export async function handleStructuredPayload(
+  ctx: ReplyContext,
+  replyText: string,
+  recordActivity: () => void,
+): Promise<boolean> {
+  const { target, account, cfg, log } = ctx;
+  const payloadResult = parseQQBotPayload(replyText);
+
+  if (!payloadResult.isPayload) return false;
+
+  if (payloadResult.error) {
+    log?.error(`[qqbot:${account.accountId}] Payload parse error: ${payloadResult.error}`);
+    return true;
+  }
+
+  if (!payloadResult.payload) return true;
+
+  const parsedPayload = payloadResult.payload;
+  log?.info(
+    `[qqbot:${account.accountId}] Detected structured payload, type: ${parsedPayload.type}`,
+  );
+
+  if (isCronReminderPayload(parsedPayload)) {
+    log?.info(`[qqbot:${account.accountId}] Processing cron_reminder payload`);
+    const cronMessage = encodePayloadForCron(parsedPayload);
+    const confirmText = `⏰ 提醒已设置，将在指定时间发送: "${parsedPayload.content}"`;
+    try {
+      await sendTextToTarget(ctx, confirmText);
+      log?.info(
+        `[qqbot:${account.accountId}] Cron reminder confirmation sent, cronMessage: ${cronMessage}`,
+      );
+    } catch (err) {
+      log?.error(`[qqbot:${account.accountId}] Failed to send cron confirmation: ${err}`);
+    }
+    recordActivity();
+    return true;
+  }
+
+  if (isMediaPayload(parsedPayload)) {
+    log?.info(
+      `[qqbot:${account.accountId}] Processing media payload, mediaType: ${parsedPayload.mediaType}`,
+    );
+
+    if (parsedPayload.mediaType === "image") {
+      await handleImagePayload(ctx, parsedPayload);
+    } else if (parsedPayload.mediaType === "audio") {
+      await handleAudioPayload(ctx, parsedPayload);
+    } else if (parsedPayload.mediaType === "video") {
+      await handleVideoPayload(ctx, parsedPayload);
+    } else if (parsedPayload.mediaType === "file") {
+      await handleFilePayload(ctx, parsedPayload);
+    } else {
+      log?.error(
+        `[qqbot:${account.accountId}] Unknown media type: ${(parsedPayload as MediaPayload).mediaType}`,
+      );
+    }
+    recordActivity();
+    return true;
+  }
+
+  log?.error(`[qqbot:${account.accountId}] Unknown payload type: ${(parsedPayload as any).type}`);
+  return true;
+}
+
+// ============ 媒体载荷处理 ============
+
+async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Promise<void> {
+  const { target, account, log } = ctx;
+  let imageUrl = normalizePath(payload.path);
+  const originalImagePath = payload.source === "file" ? imageUrl : undefined;
+
+  if (payload.source === "file") {
+    try {
+      if (!(await fileExistsAsync(imageUrl))) {
+        log?.error(`[qqbot:${account.accountId}] Image not found: ${imageUrl}`);
+        return;
+      }
+      const imgSzCheck = checkFileSize(imageUrl);
+      if (!imgSzCheck.ok) {
+        log?.error(`[qqbot:${account.accountId}] Image size check failed: ${imgSzCheck.error}`);
+        return;
+      }
+      const fileBuffer = await readFileAsync(imageUrl);
+      const base64Data = fileBuffer.toString("base64");
+      const ext = path.extname(imageUrl).toLowerCase();
+      const mimeTypes: Record<string, string> = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+        ".bmp": "image/bmp",
+      };
+      const mimeType = mimeTypes[ext];
+      if (!mimeType) {
+        log?.error(`[qqbot:${account.accountId}] Unsupported image format: ${ext}`);
+        return;
+      }
+      imageUrl = `data:${mimeType};base64,${base64Data}`;
+      log?.info(
+        `[qqbot:${account.accountId}] Converted local image to Base64 (size: ${formatFileSize(fileBuffer.length)})`,
+      );
+    } catch (readErr) {
+      log?.error(`[qqbot:${account.accountId}] Failed to read local image: ${readErr}`);
+      return;
+    }
+  }
+
+  try {
+    await sendWithTokenRetry(
+      account.appId,
+      account.clientSecret,
+      async (token) => {
+        if (target.type === "c2c") {
+          await sendC2CImageMessage(
+            token,
+            target.senderId,
+            imageUrl,
+            target.messageId,
+            undefined,
+            originalImagePath,
+          );
+        } else if (target.type === "group" && target.groupOpenid) {
+          await sendGroupImageMessage(token, target.groupOpenid, imageUrl, target.messageId);
+        } else if (target.channelId) {
+          await sendChannelMessage(
+            token,
+            target.channelId,
+            `![](${payload.path})`,
+            target.messageId,
+          );
+        }
+      },
+      log,
+      account.accountId,
+    );
+    log?.info(`[qqbot:${account.accountId}] Sent image via media payload`);
+
+    if (payload.caption) {
+      await sendTextToTarget(ctx, payload.caption);
+    }
+  } catch (err) {
+    log?.error(`[qqbot:${account.accountId}] Failed to send image: ${err}`);
+  }
+}
+
+async function handleAudioPayload(ctx: ReplyContext, payload: MediaPayload): Promise<void> {
+  const { target, account, cfg, log } = ctx;
+  try {
+    const ttsText = payload.caption || payload.path;
+    if (!ttsText?.trim()) {
+      log?.error(`[qqbot:${account.accountId}] Voice missing text`);
+    } else {
+      const ttsCfg = resolveTTSConfig(cfg as Record<string, unknown>);
+      if (!ttsCfg) {
+        log?.error(
+          `[qqbot:${account.accountId}] TTS not configured (channels.qqbot.tts in openclaw.json)`,
+        );
+      } else {
+        log?.info(
+          `[qqbot:${account.accountId}] TTS: "${ttsText.slice(0, 50)}..." via ${ttsCfg.model}`,
+        );
+        const ttsDir = getQQBotDataDir("tts");
+        const { silkPath, silkBase64, duration } = await textToSilk(ttsText, ttsCfg, ttsDir);
+        log?.info(
+          `[qqbot:${account.accountId}] TTS done: ${formatDuration(duration)}, file saved: ${silkPath}`,
+        );
+
+        await sendWithTokenRetry(
+          account.appId,
+          account.clientSecret,
+          async (token) => {
+            if (target.type === "c2c") {
+              await sendC2CVoiceMessage(
+                token,
+                target.senderId,
+                silkBase64,
+                target.messageId,
+                ttsText,
+                silkPath,
+              );
+            } else if (target.type === "group" && target.groupOpenid) {
+              await sendGroupVoiceMessage(token, target.groupOpenid, silkBase64, target.messageId);
+            } else if (target.channelId) {
+              log?.error(
+                `[qqbot:${account.accountId}] Voice not supported in channel, sending text fallback`,
+              );
+              await sendChannelMessage(token, target.channelId, ttsText, target.messageId);
+            }
+          },
+          log,
+          account.accountId,
+        );
+        log?.info(`[qqbot:${account.accountId}] Voice message sent`);
+      }
+    }
+  } catch (err) {
+    log?.error(`[qqbot:${account.accountId}] TTS/voice send failed: ${err}`);
+  }
+}
+
+async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Promise<void> {
+  const { target, account, log } = ctx;
+  try {
+    const videoPath = normalizePath(payload.path ?? "");
+    if (!videoPath?.trim()) {
+      log?.error(`[qqbot:${account.accountId}] Video missing path`);
+    } else {
+      const isHttpUrl = videoPath.startsWith("http://") || videoPath.startsWith("https://");
+      log?.info(`[qqbot:${account.accountId}] Video send: "${videoPath.slice(0, 60)}..."`);
+
+      await sendWithTokenRetry(
+        account.appId,
+        account.clientSecret,
+        async (token) => {
+          if (isHttpUrl) {
+            if (target.type === "c2c") {
+              await sendC2CVideoMessage(
+                token,
+                target.senderId,
+                videoPath,
+                undefined,
+                target.messageId,
+              );
+            } else if (target.type === "group" && target.groupOpenid) {
+              await sendGroupVideoMessage(
+                token,
+                target.groupOpenid,
+                videoPath,
+                undefined,
+                target.messageId,
+              );
+            } else if (target.channelId) {
+              log?.error(`[qqbot:${account.accountId}] Video not supported in channel`);
+            }
+          } else {
+            if (!(await fileExistsAsync(videoPath))) {
+              throw new Error(`视频文件不存在: ${videoPath}`);
+            }
+            const vPaySzCheck = checkFileSize(videoPath);
+            if (!vPaySzCheck.ok) {
+              throw new Error(vPaySzCheck.error!);
+            }
+            const fileBuffer = await readFileAsync(videoPath);
+            const videoBase64 = fileBuffer.toString("base64");
+            log?.info(
+              `[qqbot:${account.accountId}] Read local video (${formatFileSize(fileBuffer.length)}): ${videoPath}`,
+            );
+
+            if (target.type === "c2c") {
+              await sendC2CVideoMessage(
+                token,
+                target.senderId,
+                undefined,
+                videoBase64,
+                target.messageId,
+                undefined,
+                videoPath,
+              );
+            } else if (target.type === "group" && target.groupOpenid) {
+              await sendGroupVideoMessage(
+                token,
+                target.groupOpenid,
+                undefined,
+                videoBase64,
+                target.messageId,
+              );
+            } else if (target.channelId) {
+              log?.error(`[qqbot:${account.accountId}] Video not supported in channel`);
+            }
+          }
+        },
+        log,
+        account.accountId,
+      );
+      log?.info(`[qqbot:${account.accountId}] Video message sent`);
+
+      if (payload.caption) {
+        await sendTextToTarget(ctx, payload.caption);
+      }
+    }
+  } catch (err) {
+    log?.error(`[qqbot:${account.accountId}] Video send failed: ${err}`);
+  }
+}
+
+async function handleFilePayload(ctx: ReplyContext, payload: MediaPayload): Promise<void> {
+  const { target, account, log } = ctx;
+  try {
+    const filePath = normalizePath(payload.path ?? "");
+    if (!filePath?.trim()) {
+      log?.error(`[qqbot:${account.accountId}] File missing path`);
+    } else {
+      const isHttpUrl = filePath.startsWith("http://") || filePath.startsWith("https://");
+      const fileName = sanitizeFileName(path.basename(filePath));
+      log?.info(
+        `[qqbot:${account.accountId}] File send: "${filePath.slice(0, 60)}..." (${isHttpUrl ? "URL" : "local"})`,
+      );
+
+      await sendWithTokenRetry(
+        account.appId,
+        account.clientSecret,
+        async (token) => {
+          if (isHttpUrl) {
+            if (target.type === "c2c") {
+              await sendC2CFileMessage(
+                token,
+                target.senderId,
+                undefined,
+                filePath,
+                target.messageId,
+                fileName,
+              );
+            } else if (target.type === "group" && target.groupOpenid) {
+              await sendGroupFileMessage(
+                token,
+                target.groupOpenid,
+                undefined,
+                filePath,
+                target.messageId,
+                fileName,
+              );
+            } else if (target.channelId) {
+              log?.error(`[qqbot:${account.accountId}] File not supported in channel`);
+            }
+          } else {
+            if (!(await fileExistsAsync(filePath))) {
+              throw new Error(`文件不存在: ${filePath}`);
+            }
+            const fPaySzCheck = checkFileSize(filePath);
+            if (!fPaySzCheck.ok) {
+              throw new Error(fPaySzCheck.error!);
+            }
+            const fileBuffer = await readFileAsync(filePath);
+            const fileBase64 = fileBuffer.toString("base64");
+            if (target.type === "c2c") {
+              await sendC2CFileMessage(
+                token,
+                target.senderId,
+                fileBase64,
+                undefined,
+                target.messageId,
+                fileName,
+                filePath,
+              );
+            } else if (target.type === "group" && target.groupOpenid) {
+              await sendGroupFileMessage(
+                token,
+                target.groupOpenid,
+                fileBase64,
+                undefined,
+                target.messageId,
+                fileName,
+              );
+            } else if (target.channelId) {
+              log?.error(`[qqbot:${account.accountId}] File not supported in channel`);
+            }
+          }
+        },
+        log,
+        account.accountId,
+      );
+      log?.info(`[qqbot:${account.accountId}] File message sent`);
+    }
+  } catch (err) {
+    log?.error(`[qqbot:${account.accountId}] File send failed: ${err}`);
+  }
+}
