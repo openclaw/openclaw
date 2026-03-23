@@ -33,19 +33,11 @@ const {
   throttlerSpy,
   useSpy,
 } = harness;
-import { resolveTelegramFetch } from "./fetch.js";
-
-type BotModule = typeof import("./bot.js");
-
-let createTelegramBotBase: BotModule["createTelegramBot"];
-let getTelegramSequentialKey: BotModule["getTelegramSequentialKey"];
-let setTelegramBotRuntimeForTest: BotModule["setTelegramBotRuntimeForTest"];
-
-const createTelegramBot = (opts: Parameters<BotModule["createTelegramBot"]>[0]) =>
-  createTelegramBotBase({
-    ...opts,
-    telegramDeps: telegramBotDepsForTest,
-  });
+let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
+let createTelegramBot: (
+  opts: Parameters<typeof import("./bot.js").createTelegramBot>[0],
+) => ReturnType<typeof import("./bot.js").createTelegramBot>;
+let getTelegramSequentialKey: typeof import("./bot.js").getTelegramSequentialKey;
 
 const loadConfig = getLoadConfigMock();
 const loadWebMedia = getLoadWebMediaMock();
@@ -89,19 +81,23 @@ describe("createTelegramBot", () => {
   afterAll(() => {
     process.env.TZ = ORIGINAL_TZ;
   });
-
   beforeEach(async () => {
     vi.resetModules();
-    ({
+    ({ resolveTelegramFetch } = await import("./fetch.js"));
+    const {
       createTelegramBot: createTelegramBotBase,
-      getTelegramSequentialKey,
+      getTelegramSequentialKey: importedGetTelegramSequentialKey,
       setTelegramBotRuntimeForTest,
-    } = await import("./bot.js"));
+    } = await import("./bot.js");
     setTelegramBotRuntimeForTest(
-      telegramBotRuntimeForTest as unknown as Parameters<
-        BotModule["setTelegramBotRuntimeForTest"]
-      >[0],
+      telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
     );
+    getTelegramSequentialKey = importedGetTelegramSequentialKey;
+    createTelegramBot = (opts) =>
+      createTelegramBotBase({
+        ...opts,
+        telegramDeps: telegramBotDepsForTest,
+      });
   });
 
   // groupPolicy tests

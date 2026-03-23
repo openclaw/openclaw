@@ -99,7 +99,8 @@ vi.mock("./session.js", () => {
   };
 });
 
-import { monitorWebInbox, resetWebInboundDedupe } from "./inbound.js";
+let monitorWebInbox: typeof import("./inbound.js").monitorWebInbox;
+let resetWebInboundDedupe: typeof import("./inbound.js").resetWebInboundDedupe;
 let createWaSocket: typeof import("./session.js").createWaSocket;
 
 async function waitForMessage(onMessage: ReturnType<typeof vi.fn>) {
@@ -118,12 +119,18 @@ describe("web inbound media saves with extension", () => {
   }
 
   beforeEach(() => {
+    vi.useRealTimers();
+    vi.resetModules();
     saveMediaBufferSpy.mockClear();
+  });
+
+  beforeEach(async () => {
+    ({ monitorWebInbox, resetWebInboundDedupe } = await import("./inbound.js"));
+    ({ createWaSocket } = await import("./session.js"));
     resetWebInboundDedupe();
   });
 
   beforeAll(async () => {
-    ({ createWaSocket } = await import("./session.js"));
     await fs.rm(HOME, { recursive: true, force: true });
   });
 

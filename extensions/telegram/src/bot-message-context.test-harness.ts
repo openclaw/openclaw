@@ -18,11 +18,11 @@ type BuildTelegramMessageContextForTestParams = {
   resolveTelegramGroupConfig?: BuildTelegramMessageContextParams["resolveTelegramGroupConfig"];
 };
 
-type BotMessageContextModule = typeof import("./bot-message-context.js");
-
 export async function buildTelegramMessageContextForTest(
   params: BuildTelegramMessageContextForTestParams,
-): Promise<Awaited<ReturnType<BotMessageContextModule["buildTelegramMessageContext"]>>> {
+): Promise<
+  Awaited<ReturnType<typeof import("./bot-message-context.js").buildTelegramMessageContext>>
+> {
   const { buildTelegramMessageContext } = await import("./bot-message-context.js");
   return await buildTelegramMessageContext({
     primaryCtx: {

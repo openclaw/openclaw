@@ -1,6 +1,6 @@
-import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
+import { STATE_DIR } from "../../../src/config/paths.js";
 import { TELEGRAM_COMMAND_NAME_PATTERN } from "../../../src/config/telegram-custom-commands.js";
 import type { TelegramAccountConfig } from "../../../src/config/types.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
@@ -12,6 +12,10 @@ import type { TelegramBotDeps } from "./bot-deps.js";
 const skillCommandMocks = vi.hoisted(() => ({
   listSkillCommandsForAgents: vi.fn(() => []),
 }));
+const deliveryMocks = vi.hoisted(() => ({
+  deliverReplies: vi.fn(async () => ({ delivered: true })),
+}));
+
 vi.mock("openclaw/plugin-sdk/command-auth", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/command-auth")>();
   return {
@@ -20,14 +24,18 @@ vi.mock("openclaw/plugin-sdk/command-auth", async (importOriginal) => {
   };
 });
 
-type NativeCommandsModule = typeof import("./bot-native-commands.js");
+vi.mock("./bot/delivery.js", () => ({
+  deliverReplies: deliveryMocks.deliverReplies,
+}));
+vi.mock("./bot/delivery.replies.js", () => ({
+  deliverReplies: deliveryMocks.deliverReplies,
+}));
 
-let registerTelegramNativeCommands: NativeCommandsModule["registerTelegramNativeCommands"];
+let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
 import {
-  createCommandBot,
   createNativeCommandTestParams as createNativeCommandTestParamsBase,
   createPrivateCommandContext,
-  deliverReplies,
+  deliverReplies as registeredDeliverReplies,
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
 
@@ -71,14 +79,22 @@ function createNativeCommandTestParams(
   });
 }
 
+function resolveDeliverRepliesCalls() {
+  return deliveryMocks.deliverReplies.mock.calls.length > 0
+    ? deliveryMocks.deliverReplies.mock.calls
+    : registeredDeliverReplies.mock.calls;
+}
+
 describe("registerTelegramNativeCommands", () => {
   beforeEach(async () => {
     vi.resetModules();
     ({ registerTelegramNativeCommands } = await import("./bot-native-commands.js"));
     skillCommandMocks.listSkillCommandsForAgents.mockClear();
     skillCommandMocks.listSkillCommandsForAgents.mockReturnValue([]);
-    deliverReplies.mockClear();
-    deliverReplies.mockResolvedValue({ delivered: true });
+    deliveryMocks.deliverReplies.mockClear();
+    deliveryMocks.deliverReplies.mockResolvedValue({ delivered: true });
+    registeredDeliverReplies.mockClear();
+    registeredDeliverReplies.mockResolvedValue({ delivered: true });
     resetPluginCommandMocks();
   });
 
@@ -259,18 +275,14 @@ describe("registerTelegramNativeCommands", () => {
     expect(handler).toBeTruthy();
     await handler?.(createPrivateCommandContext());
 
-    const firstDeliverArg = (deliverReplies.mock.calls.at(0)?.at(0) ?? undefined) as
-      | { mediaLocalRoots?: unknown }
-      | undefined;
-    const mediaLocalRoots = firstDeliverArg?.mediaLocalRoots;
-    expect(Array.isArray(mediaLocalRoots)).toBe(true);
-    expect(
-      (mediaLocalRoots as unknown[]).some(
-        (entry) =>
-          typeof entry === "string" &&
-          entry.endsWith(`${path.sep}.openclaw${path.sep}workspace-work`),
-      ),
-    ).toBe(true);
+    const firstDeliverRepliesCall = resolveDeliverRepliesCalls().at(0) as [unknown] | undefined;
+    expect(firstDeliverRepliesCall?.[0]).toEqual(
+      expect.objectContaining({
+        mediaLocalRoots: expect.arrayContaining([
+          expect.stringMatching(/[\\/]\.openclaw[\\/]workspace-work$/),
+        ]),
+      }),
+    );
     expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
   });
 
@@ -318,7 +330,8 @@ describe("registerTelegramNativeCommands", () => {
     expect(handler).toBeTruthy();
     await handler?.(createPrivateCommandContext());
 
-    expect(deliverReplies).toHaveBeenCalledWith(
+    const firstDeliverRepliesCall = resolveDeliverRepliesCalls().at(0) as [unknown] | undefined;
+    expect(firstDeliverRepliesCall?.[0]).toEqual(
       expect.objectContaining({
         silent: true,
         replies: [expect.objectContaining({ isError: true })],

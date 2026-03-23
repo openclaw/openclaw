@@ -27,23 +27,13 @@ const {
   wasSentByBot,
 } = await import("./bot.create-telegram-bot.test-harness.js");
 
-// Import after the harness registers `vi.mock(...)` for grammY and Telegram internals.
-const { listNativeCommandSpecs, listNativeCommandSpecsForConfig } =
-  await import("../../../src/auto-reply/commands-registry.js");
-const { loadSessionStore } = await import("../../../src/config/sessions.js");
-const { normalizeTelegramCommandName } =
-  await import("../../../src/config/telegram-custom-commands.js");
-
-type BotModule = typeof import("./bot.js");
-
-let createTelegramBotBase: BotModule["createTelegramBot"];
-let setTelegramBotRuntimeForTest: BotModule["setTelegramBotRuntimeForTest"];
-
-const createTelegramBot = (opts: Parameters<BotModule["createTelegramBot"]>[0]) =>
-  createTelegramBotBase({
-    ...opts,
-    telegramDeps: telegramBotDepsForTest,
-  });
+let listNativeCommandSpecs: typeof import("../../../src/auto-reply/commands-registry.js").listNativeCommandSpecs;
+let listNativeCommandSpecsForConfig: typeof import("../../../src/auto-reply/commands-registry.js").listNativeCommandSpecsForConfig;
+let loadSessionStore: typeof import("../../../src/config/sessions.js").loadSessionStore;
+let normalizeTelegramCommandName: typeof import("../../../src/config/telegram-custom-commands.js").normalizeTelegramCommandName;
+let createTelegramBot: (
+  opts: Parameters<typeof import("./bot.js").createTelegramBot>[0],
+) => ReturnType<typeof import("./bot.js").createTelegramBot>;
 
 const loadConfig = getLoadConfigMock();
 const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
@@ -64,15 +54,7 @@ describe("createTelegramBot", () => {
     process.env.TZ = ORIGINAL_TZ;
   });
 
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest } =
-      await import("./bot.js"));
-    setTelegramBotRuntimeForTest(
-      telegramBotRuntimeForTest as unknown as Parameters<
-        BotModule["setTelegramBotRuntimeForTest"]
-      >[0],
-    );
+  beforeEach(() => {
     setMyCommandsSpy.mockClear();
     clearPluginInteractiveHandlers();
     loadConfig.mockReturnValue({
@@ -85,6 +67,24 @@ describe("createTelegramBot", () => {
         telegram: { dmPolicy: "open", allowFrom: ["*"] },
       },
     });
+  });
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ listNativeCommandSpecs, listNativeCommandSpecsForConfig } =
+      await import("../../../src/auto-reply/commands-registry.js"));
+    ({ loadSessionStore } = await import("../../../src/config/sessions.js"));
+    ({ normalizeTelegramCommandName } =
+      await import("../../../src/config/telegram-custom-commands.js"));
+    const { createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest } =
+      await import("./bot.js");
+    setTelegramBotRuntimeForTest(
+      telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
+    );
+    createTelegramBot = (opts) =>
+      createTelegramBotBase({
+        ...opts,
+        telegramDeps: telegramBotDepsForTest,
+      });
   });
 
   it("merges custom commands with native commands", async () => {

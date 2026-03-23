@@ -1,27 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-type AuditModule = typeof import("./audit.js");
+let collectTelegramUnmentionedGroupIds: typeof import("./audit.js").collectTelegramUnmentionedGroupIds;
+let auditTelegramGroupMembership: typeof import("./audit.js").auditTelegramGroupMembership;
+const fetchWithTimeoutMock = vi.hoisted(() => vi.fn());
 
-let collectTelegramUnmentionedGroupIds: AuditModule["collectTelegramUnmentionedGroupIds"];
-let auditTelegramGroupMembership: AuditModule["auditTelegramGroupMembership"];
-const undiciFetch = vi.hoisted(() => vi.fn());
-
-vi.mock("undici", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("undici")>();
+vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-runtime")>();
   return {
     ...actual,
-    Agent:
-      actual.Agent ??
-      class Agent {
-        close() {}
-        destroy() {}
-      },
-    fetch: undiciFetch,
+    fetchWithTimeout: fetchWithTimeoutMock,
   };
 });
 
 function mockGetChatMemberStatus(status: string) {
-  undiciFetch.mockResolvedValueOnce(
+  fetchWithTimeoutMock.mockResolvedValueOnce(
     new Response(JSON.stringify({ ok: true, result: { status } }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
@@ -43,7 +35,7 @@ describe("telegram audit", () => {
     vi.resetModules();
     ({ collectTelegramUnmentionedGroupIds, auditTelegramGroupMembership } =
       await import("./audit.js"));
-    undiciFetch.mockReset();
+    fetchWithTimeoutMock.mockReset();
   });
 
   it("collects unmentioned numeric group ids and flags wildcard", async () => {
