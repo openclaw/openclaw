@@ -1,5 +1,3 @@
-import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
-import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CliDeps } from "../cli/deps.js";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
 import { isRestartEnabled } from "../config/commands.js";
@@ -14,12 +12,16 @@ import {
   emitGatewayRestart,
   setGatewaySigusr1RestartPolicy,
 } from "../infra/restart.js";
-import { setCommandLaneConcurrency, getTotalQueueSize } from "../process/command-queue.js";
+import { setCommandLaneConcurrency } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
 import { resolveHooksConfig } from "./hooks.js";
+import {
+  formatGatewayRestartDeferralDetails,
+  getGatewayRestartDeferralCounts,
+} from "./restart-deferral.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
 import type { HookClientIpConfig } from "./server-http.js";
@@ -177,30 +179,7 @@ export function createGatewayReloadHandlers(params: {
       return;
     }
 
-    const getActiveCounts = () => {
-      const queueSize = getTotalQueueSize();
-      const pendingReplies = getTotalPendingReplies();
-      const embeddedRuns = getActiveEmbeddedRunCount();
-      return {
-        queueSize,
-        pendingReplies,
-        embeddedRuns,
-        totalActive: queueSize + pendingReplies + embeddedRuns,
-      };
-    };
-    const formatActiveDetails = (counts: ReturnType<typeof getActiveCounts>) => {
-      const details = [];
-      if (counts.queueSize > 0) {
-        details.push(`${counts.queueSize} operation(s)`);
-      }
-      if (counts.pendingReplies > 0) {
-        details.push(`${counts.pendingReplies} reply(ies)`);
-      }
-      if (counts.embeddedRuns > 0) {
-        details.push(`${counts.embeddedRuns} embedded run(s)`);
-      }
-      return details;
-    };
+    const getActiveCounts = () => getGatewayRestartDeferralCounts(nextConfig);
     const active = getActiveCounts();
 
     if (active.totalActive > 0) {
@@ -212,7 +191,7 @@ export function createGatewayReloadHandlers(params: {
         return;
       }
       restartPending = true;
-      const initialDetails = formatActiveDetails(active);
+      const initialDetails = formatGatewayRestartDeferralDetails(active);
       params.logReload.warn(
         `config change requires gateway restart (${reasons}) — deferring until ${initialDetails.join(", ")} complete`,
       );
@@ -223,10 +202,10 @@ export function createGatewayReloadHandlers(params: {
         hooks: {
           onReady: () => {
             restartPending = false;
-            params.logReload.info("all operations and replies completed; restarting gateway now");
+            params.logReload.info("all active work completed; restarting gateway now");
           },
           onTimeout: (_pending, elapsedMs) => {
-            const remaining = formatActiveDetails(getActiveCounts());
+            const remaining = formatGatewayRestartDeferralDetails(getActiveCounts());
             restartPending = false;
             params.logReload.warn(
               `restart timeout after ${elapsedMs}ms with ${remaining.join(", ")} still active; restarting anyway`,

@@ -1,9 +1,7 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
-import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -55,7 +53,6 @@ import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
-import { getTotalQueueSize } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { CommandSecretAssignment } from "../secrets/command-config.js";
 import {
@@ -83,6 +80,7 @@ import {
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { startGatewayModelPricingRefresh } from "./model-pricing-cache.js";
 import { NodeRegistry } from "./node-registry.js";
+import { getGatewayRestartDeferralCounts } from "./restart-deferral.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
 import {
@@ -513,10 +511,9 @@ export async function startGatewayServer(
   if (diagnosticsEnabled) {
     startDiagnosticHeartbeat();
   }
+  let activeConfig = cfgAtStart;
   setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(cfgAtStart) });
-  setPreRestartDeferralCheck(
-    () => getTotalQueueSize() + getTotalPendingReplies() + getActiveEmbeddedRunCount(),
-  );
+  setPreRestartDeferralCheck(() => getGatewayRestartDeferralCounts(activeConfig).totalActive);
   // Unconditional startup migration: seed gateway.controlUi.allowedOrigins for existing
   // non-loopback installs that upgraded to v2026.2.26+ without required origins.
   cfgAtStart = await maybeSeedControlUiAllowedOriginsAtStartup({
@@ -1278,6 +1275,7 @@ export async function startGatewayServer(
             });
             try {
               await applyHotReload(plan, prepared.config);
+              activeConfig = prepared.config;
             } catch (err) {
               if (previousSnapshot) {
                 activateSecretsRuntimeSnapshot(previousSnapshot);
