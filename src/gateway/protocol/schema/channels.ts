@@ -137,6 +137,7 @@ export const ChannelAccountSnapshotSchema = Type.Object(
     reconnectAttempts: Type.Optional(Type.Integer({ minimum: 0 })),
     lastConnectedAt: Type.Optional(Type.Integer({ minimum: 0 })),
     lastError: Type.Optional(Type.String()),
+    healthState: Type.Optional(Type.String()),
     lastStartAt: Type.Optional(Type.Integer({ minimum: 0 })),
     lastStopAt: Type.Optional(Type.Integer({ minimum: 0 })),
     lastInboundAt: Type.Optional(Type.Integer({ minimum: 0 })),

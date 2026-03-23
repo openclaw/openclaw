@@ -1,16 +1,15 @@
 import fs from "node:fs";
-import { lookupContextTokens } from "../../agents/context.js";
+import { lookupCachedContextTokens } from "../../agents/context-cache.js";
+import { lookupContextTokens } from "../../agents/context-tokens.runtime.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptPath,
 } from "../../config/sessions/paths.js";
-import { updateSessionStore, updateSessionStoreEntry } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { TypingMode } from "../../config/types.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
@@ -19,7 +18,6 @@ import { generateSecureUuid } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import {
   buildFallbackClearedNotice,
   buildFallbackNotice,
@@ -28,7 +26,7 @@ import {
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
+import { runAgentTurnWithFallback } from "./agent-runner-execution.runtime.js";
 import {
   createShouldEmitToolOutput,
   createShouldEmitToolResult,
@@ -36,28 +34,51 @@ import {
   isAudioPayload,
   signalTypingIfNeeded,
 } from "./agent-runner-helpers.js";
-import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
+import { runMemoryFlushIfNeeded } from "./agent-runner-memory.runtime.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import {
   appendUnscheduledReminderNote,
   hasSessionRelatedCronJobs,
   hasUnbackedReminderCommitment,
 } from "./agent-runner-reminder-guard.js";
-import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.js";
+import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-usage-line.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
-import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
-import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
+import type { FollowupRun, QueueSettings } from "./queue.js";
+import { enqueueFollowupRun } from "./queue/enqueue.js";
+import { createReplyMediaPathNormalizer } from "./reply-media-paths.runtime.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+let piEmbeddedQueueRuntimePromise: Promise<
+  typeof import("../../agents/pi-embedded-queue.runtime.js")
+> | null = null;
+let usageCostRuntimePromise: Promise<typeof import("./usage-cost.runtime.js")> | null = null;
+let sessionStoreRuntimePromise: Promise<
+  typeof import("../../config/sessions/store.runtime.js")
+> | null = null;
+
+function loadPiEmbeddedQueueRuntime() {
+  piEmbeddedQueueRuntimePromise ??= import("../../agents/pi-embedded-queue.runtime.js");
+  return piEmbeddedQueueRuntimePromise;
+}
+
+function loadUsageCostRuntime() {
+  usageCostRuntimePromise ??= import("./usage-cost.runtime.js");
+  return usageCostRuntimePromise;
+}
+
+function loadSessionStoreRuntime() {
+  sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
+  return sessionStoreRuntimePromise;
+}
 
 export async function runReplyAgent(params: {
   commandBody: string;
@@ -185,6 +206,7 @@ export async function runReplyAgent(params: {
     activeSessionEntry.updatedAt = updatedAt;
     activeSessionStore[sessionKey] = activeSessionEntry;
     if (storePath) {
+      const { updateSessionStoreEntry } = await loadSessionStoreRuntime();
       await updateSessionStoreEntry({
         storePath,
         sessionKey,
@@ -194,6 +216,7 @@ export async function runReplyAgent(params: {
   };
 
   if (shouldSteer && isStreaming) {
+    const { queueEmbeddedPiMessage } = await loadPiEmbeddedQueueRuntime();
     const steered = queueEmbeddedPiMessage(followupRun.run.sessionId, followupRun.prompt);
     if (steered && !shouldFollowup) {
       await touchActiveSessionEntry();
@@ -302,6 +325,7 @@ export async function runReplyAgent(params: {
     nextEntry.sessionFile = nextSessionFile;
     activeSessionStore[sessionKey] = nextEntry;
     try {
+      const { updateSessionStore } = await loadSessionStoreRuntime();
       await updateSessionStore(storePath, (store) => {
         store[sessionKey] = nextEntry;
       });
@@ -401,6 +425,7 @@ export async function runReplyAgent(params: {
       activeSessionEntry.updatedAt = updatedAt;
       activeSessionStore[sessionKey] = activeSessionEntry;
       if (storePath) {
+        const { updateSessionStoreEntry } = await loadSessionStoreRuntime();
         await updateSessionStoreEntry({
           storePath,
           sessionKey,
@@ -457,6 +482,7 @@ export async function runReplyAgent(params: {
         activeSessionStore[sessionKey] = fallbackStateEntry;
       }
       if (sessionKey && storePath) {
+        const { updateSessionStoreEntry } = await loadSessionStoreRuntime();
         await updateSessionStoreEntry({
           storePath,
           sessionKey,
@@ -471,9 +497,11 @@ export async function runReplyAgent(params: {
     const cliSessionId = isCliProvider(providerUsed, cfg)
       ? runResult.meta?.agentMeta?.sessionId?.trim()
       : undefined;
+    const cachedContextTokens = lookupCachedContextTokens(modelUsed);
     const contextTokensUsed =
       agentCfgContextTokens ??
-      lookupContextTokens(modelUsed) ??
+      cachedContextTokens ??
+      lookupContextTokens(modelUsed, { allowAsyncLoad: false }) ??
       activeSessionEntry?.contextTokens ??
       DEFAULT_CONTEXT_TOKENS;
 
@@ -551,6 +579,7 @@ export async function runReplyAgent(params: {
     await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
 
     if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
+      const { estimateUsageCost, resolveModelCostConfig } = await loadUsageCostRuntime();
       const input = usage.input ?? 0;
       const output = usage.output ?? 0;
       const cacheRead = usage.cacheRead ?? 0;
@@ -593,6 +622,7 @@ export async function runReplyAgent(params: {
       (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
     const responseUsageMode = resolveResponseUsageMode(responseUsageRaw);
     if (responseUsageMode !== "off" && hasNonzeroUsage(usage)) {
+      const { resolveModelCostConfig } = await loadUsageCostRuntime();
       const authMode = resolveModelAuthMode(providerUsed, cfg);
       const showCost = authMode === "api-key";
       const costConfig = showCost

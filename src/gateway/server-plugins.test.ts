@@ -6,6 +6,7 @@ import type { PluginDiagnostic } from "../plugins/types.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
 
 const loadOpenClawPlugins = vi.hoisted(() => vi.fn());
+const resolveGatewayStartupPluginIds = vi.hoisted(() => vi.fn(() => ["discord", "telegram"]));
 const primeConfiguredBindingRegistry = vi.hoisted(() =>
   vi.fn(() => ({ bindingCount: 0, channelCount: 0 })),
 );
@@ -18,6 +19,10 @@ const handleGatewayRequest = vi.hoisted(() =>
 
 vi.mock("../plugins/loader.js", () => ({
   loadOpenClawPlugins,
+}));
+
+vi.mock("../plugins/channel-plugin-ids.js", () => ({
+  resolveGatewayStartupPluginIds,
 }));
 
 vi.mock("../channels/plugins/binding-registry.js", () => ({
@@ -138,6 +143,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   loadOpenClawPlugins.mockReset();
+  resolveGatewayStartupPluginIds.mockReset().mockReturnValue(["discord", "telegram"]);
   primeConfiguredBindingRegistry.mockClear().mockReturnValue({ bindingCount: 0, channelCount: 0 });
   handleGatewayRequest.mockReset();
   runtimeModule.clearGatewaySubagentRuntime();
@@ -197,6 +203,37 @@ describe("loadGatewayPlugins", () => {
       "[plugins] failed to load plugin: boom (plugin=telegram, source=/tmp/telegram/index.ts)",
     );
     expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  test("loads only gateway startup plugin ids", async () => {
+    const { loadGatewayPlugins } = serverPluginsModule;
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    const log = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
+
+    loadGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log,
+      coreGatewayHandlers: {},
+      baseMethods: [],
+    });
+
+    expect(resolveGatewayStartupPluginIds).toHaveBeenCalledWith({
+      config: {},
+      workspaceDir: "/tmp",
+      env: process.env,
+    });
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["discord", "telegram"],
+      }),
+    );
   });
 
   test("provides subagent runtime with sessions.get method aliases", async () => {
@@ -578,5 +615,32 @@ describe("loadGatewayPlugins", () => {
       | (GatewayRequestContext & { marker: string })
       | undefined;
     expect(dispatched?.marker).toBe("after-mutation");
+  });
+
+  test("resolves fallback context lazily when a resolver is registered", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    let currentContext = createTestContext("before-resolver-update");
+
+    serverPlugins.setFallbackGatewayContextResolver(() => currentContext);
+    await runtime.run({ sessionKey: "s-4", message: "before resolver update" });
+    expect(getLastDispatchedContext()).toBe(currentContext);
+
+    currentContext = createTestContext("after-resolver-update");
+    await runtime.run({ sessionKey: "s-4", message: "after resolver update" });
+    expect(getLastDispatchedContext()).toBe(currentContext);
+  });
+
+  test("prefers resolver output over an older fallback context snapshot", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    const staleContext = createTestContext("stale-snapshot");
+    const freshContext = createTestContext("fresh-resolver");
+
+    serverPlugins.setFallbackGatewayContext(staleContext);
+    serverPlugins.setFallbackGatewayContextResolver(() => freshContext);
+
+    await runtime.run({ sessionKey: "s-5", message: "prefer resolver" });
+    expect(getLastDispatchedContext()).toBe(freshContext);
   });
 });

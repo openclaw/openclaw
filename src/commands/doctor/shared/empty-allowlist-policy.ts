@@ -1,3 +1,4 @@
+import { getDoctorChannelCapabilities } from "../channel-capabilities.js";
 import type { DoctorAccountRecord, DoctorAllowFromList } from "../types.js";
 import { hasAllowFromEntries } from "./allowlist.js";
 
@@ -10,26 +11,11 @@ type CollectEmptyAllowlistPolicyWarningsParams = {
 };
 
 function usesSenderBasedGroupAllowlist(channelName?: string): boolean {
-  if (!channelName) {
-    return true;
-  }
-  // These channels enforce group access via channel/space config, not sender-based
-  // groupAllowFrom lists.
-  return !(channelName === "discord" || channelName === "slack" || channelName === "googlechat");
+  return getDoctorChannelCapabilities(channelName).warnOnEmptyGroupSenderAllowlist;
 }
 
 function allowsGroupAllowFromFallback(channelName?: string): boolean {
-  if (!channelName) {
-    return true;
-  }
-  // Keep doctor warnings aligned with runtime access semantics.
-  return !(
-    channelName === "googlechat" ||
-    channelName === "imessage" ||
-    channelName === "matrix" ||
-    channelName === "msteams" ||
-    channelName === "irc"
-  );
+  return getDoctorChannelCapabilities(channelName).groupAllowFromFallbackToAllowFrom;
 }
 
 export function collectEmptyAllowlistPolicyWarningsForAccount(

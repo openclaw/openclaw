@@ -18,8 +18,8 @@ vi.mock("./probe.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./monitor.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./monitor.js")>();
+vi.mock("./monitor/provider.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./monitor/provider.runtime.js")>();
   return {
     ...actual,
     monitorDiscordProvider: monitorDiscordProviderMock,
@@ -176,6 +176,37 @@ describe("discordPlugin outbound", () => {
     );
     expect(runtimeProbeDiscord).not.toHaveBeenCalled();
     expect(runtimeMonitorDiscordProvider).not.toHaveBeenCalled();
+  });
+});
+
+describe("discordPlugin security", () => {
+  it("normalizes dm allowlist entries with trimmed prefixes and mentions", () => {
+    const resolveDmPolicy = discordPlugin.security?.resolveDmPolicy;
+    if (!resolveDmPolicy) {
+      throw new Error("resolveDmPolicy unavailable");
+    }
+
+    const cfg = {
+      channels: {
+        discord: {
+          token: "discord-token",
+          dm: { policy: "allowlist", allowFrom: ["  discord:<@!123456789>  "] },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveDmPolicy({
+      cfg,
+      account: discordPlugin.config.resolveAccount(cfg, "default") as ResolvedDiscordAccount,
+    });
+    if (!result) {
+      throw new Error("discord resolveDmPolicy returned null");
+    }
+
+    expect(result.policy).toBe("allowlist");
+    expect(result.allowFrom).toEqual(["  discord:<@!123456789>  "]);
+    expect(result.normalizeEntry?.("  discord:<@!123456789>  ")).toBe("123456789");
+    expect(result.normalizeEntry?.("  user:987654321  ")).toBe("987654321");
   });
 });
 

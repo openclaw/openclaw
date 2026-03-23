@@ -1881,15 +1881,14 @@ async function expectWorkspaceSummaryEmptyForAgentsAlias(
   createAlias: (outsidePath: string, agentsPath: string) => void,
 ) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
-  const prevCwd = process.cwd();
+  const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
   try {
     const outside = path.join(root, "outside-secret.txt");
     fs.writeFileSync(outside, "secret");
     createAlias(outside, path.join(root, "AGENTS.md"));
-    process.chdir(root);
     await expect(readWorkspaceContextForSummary()).resolves.toBe("");
   } finally {
-    process.chdir(prevCwd);
+    cwdSpy.mockRestore();
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
