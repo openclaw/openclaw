@@ -1510,6 +1510,131 @@ const MIGRATIONS: Migration[] = [
       );
     },
   },
+
+  // ── v27: Execution Workspaces ──────────────────────────────────────────────
+  {
+    version: 27,
+    description: "Execution workspaces: op1_execution_workspaces + op1_workspace_operations",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_execution_workspaces (
+          id                TEXT PRIMARY KEY,
+          workspace_id      TEXT NOT NULL DEFAULT 'default',
+          project_id        TEXT,
+          task_id           TEXT,
+          agent_id          TEXT,
+          name              TEXT NOT NULL,
+          mode              TEXT NOT NULL DEFAULT 'local_fs',
+          status            TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived', 'cleanup_pending')),
+          workspace_path    TEXT,
+          base_ref          TEXT,
+          branch_name       TEXT,
+          opened_at         INTEGER NOT NULL DEFAULT (unixepoch()),
+          closed_at         INTEGER,
+          metadata_json     TEXT,
+          FOREIGN KEY (workspace_id) REFERENCES op1_workspaces(id) ON DELETE CASCADE
+        )
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_exec_ws_workspace ON op1_execution_workspaces(workspace_id)",
+      );
+      db.exec("CREATE INDEX IF NOT EXISTS idx_exec_ws_task ON op1_execution_workspaces(task_id)");
+      db.exec("CREATE INDEX IF NOT EXISTS idx_exec_ws_agent ON op1_execution_workspaces(agent_id)");
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_workspace_operations (
+          id                     TEXT PRIMARY KEY,
+          execution_workspace_id TEXT NOT NULL,
+          operation_type         TEXT NOT NULL,
+          status                 TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'completed', 'failed')),
+          details_json           TEXT,
+          started_at             INTEGER NOT NULL DEFAULT (unixepoch()),
+          completed_at           INTEGER,
+          FOREIGN KEY (execution_workspace_id) REFERENCES op1_execution_workspaces(id) ON DELETE CASCADE
+        )
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_ws_ops_exec_ws ON op1_workspace_operations(execution_workspace_id)",
+      );
+    },
+  },
+
+  // ── v28: Task documents + attachments ─────────────────────────────────────
+  {
+    version: 28,
+    description: "Task documents and attachments: op1_task_documents + op1_task_attachments",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_task_documents (
+          id            TEXT PRIMARY KEY,
+          task_id       TEXT NOT NULL,
+          title         TEXT,
+          format        TEXT NOT NULL DEFAULT 'markdown',
+          body          TEXT NOT NULL DEFAULT '',
+          created_by    TEXT,
+          updated_by    TEXT,
+          created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+          FOREIGN KEY (task_id) REFERENCES op1_tasks(id) ON DELETE CASCADE
+        )
+      `);
+      db.exec("CREATE INDEX IF NOT EXISTS idx_task_documents_task ON op1_task_documents(task_id)");
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_task_attachments (
+          id            TEXT PRIMARY KEY,
+          task_id       TEXT NOT NULL,
+          filename      TEXT NOT NULL,
+          mime_type     TEXT,
+          size_bytes    INTEGER,
+          storage_path  TEXT NOT NULL,
+          created_by    TEXT,
+          created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+          FOREIGN KEY (task_id) REFERENCES op1_tasks(id) ON DELETE CASCADE
+        )
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_task_attachments_task ON op1_task_attachments(task_id)",
+      );
+    },
+  },
+
+  // ── v29: Finance events ────────────────────────────────────────────────────
+  {
+    version: 29,
+    description: "Finance events: op1_finance_events",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_finance_events (
+          id                TEXT PRIMARY KEY,
+          workspace_id      TEXT NOT NULL,
+          agent_id          TEXT,
+          task_id           TEXT,
+          project_id        TEXT,
+          goal_id           TEXT,
+          cost_event_id     TEXT,
+          billing_code      TEXT,
+          description       TEXT,
+          event_kind        TEXT NOT NULL,
+          direction         TEXT NOT NULL DEFAULT 'debit',
+          provider          TEXT,
+          model             TEXT,
+          amount_microcents INTEGER NOT NULL DEFAULT 0,
+          created_at        INTEGER NOT NULL DEFAULT (unixepoch()),
+          FOREIGN KEY (workspace_id) REFERENCES op1_workspaces(id) ON DELETE CASCADE
+        )
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_finance_events_workspace ON op1_finance_events(workspace_id)",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_finance_events_agent ON op1_finance_events(agent_id)",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_finance_events_created ON op1_finance_events(created_at)",
+      );
+    },
+  },
 ];
 
 // ── Public API ──────────────────────────────────────────────────────────────

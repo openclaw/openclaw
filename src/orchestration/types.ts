@@ -188,6 +188,66 @@ export interface AgentApiKey {
   createdAt: number;
 }
 
+// ── Execution Workspaces (v27) ───────────────────────────────────────────────
+
+export type ExecutionWorkspaceStatus = "active" | "archived" | "cleanup_pending";
+
+export interface ExecutionWorkspace {
+  id: string;
+  workspaceId: string;
+  projectId: string | null;
+  taskId: string | null;
+  agentId: string | null;
+  name: string;
+  mode: string;
+  status: ExecutionWorkspaceStatus;
+  workspacePath: string | null;
+  baseRef: string | null;
+  branchName: string | null;
+  openedAt: number;
+  closedAt: number | null;
+  metadataJson: string | null;
+}
+
+export type WorkspaceOperationStatus = "pending" | "running" | "completed" | "failed";
+
+export interface WorkspaceOperation {
+  id: string;
+  executionWorkspaceId: string;
+  operationType: string;
+  status: WorkspaceOperationStatus;
+  detailsJson: string | null;
+  startedAt: number;
+  completedAt: number | null;
+}
+
+// ── Task Documents & Attachments (v28) ──────────────────────────────────────
+
+export type TaskDocumentFormat = "markdown" | "plain" | "html";
+
+export interface TaskDocument {
+  id: string;
+  taskId: string;
+  title: string | null;
+  format: TaskDocumentFormat;
+  body: string;
+  createdBy: string | null;
+  updatedBy: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface TaskAttachment {
+  id: string;
+  taskId: string;
+  filename: string;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  storagePath: string;
+  createdBy: string | null;
+  createdAt: number;
+}
+
 // ── Agent Config Revisions (v23) ────────────────────────────────────────────
 
 export interface AgentConfigRevision {
@@ -197,5 +257,36 @@ export interface AgentConfigRevision {
   configJson: string;
   changedBy: string | null;
   changeNote: string | null;
+  createdAt: number;
+}
+
+// ── Finance Events (v29) ─────────────────────────────────────────────────────
+
+export type FinanceEventKind =
+  | "llm_inference"
+  | "tool_call"
+  | "budget_adjustment"
+  | "manual_credit"
+  | "manual_debit"
+  | "refund"
+  | "other";
+
+export type FinanceEventDirection = "debit" | "credit";
+
+export interface FinanceEvent {
+  id: string;
+  workspaceId: string;
+  agentId: string | null;
+  taskId: string | null;
+  projectId: string | null;
+  goalId: string | null;
+  costEventId: string | null;
+  billingCode: string | null;
+  description: string | null;
+  eventKind: FinanceEventKind;
+  direction: FinanceEventDirection;
+  provider: string | null;
+  model: string | null;
+  amountMicrocents: number;
   createdAt: number;
 }
