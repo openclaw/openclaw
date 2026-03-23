@@ -3,10 +3,36 @@ import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
 import { TranscribeAudioSchema } from "./zod-schema.core.js";
 
+const AgentRoutingAliasSchema = z
+  .object({
+    agentId: z.string(),
+    aliases: z.array(z.string()).optional(),
+    description: z.string().optional(),
+    routingHints: z.array(z.string()).optional(),
+  })
+  .strict();
+
+const AgentOrchestrationPolicySchema = z
+  .object({
+    defaultBehavior: z.literal("orchestrate").optional(),
+    fallbackBehavior: z.literal("self-answer").optional(),
+    directRoutingMode: z.union([z.literal("hint"), z.literal("force")]).optional(),
+    allowMultiAgentDelegation: z.boolean().optional(),
+    preserveUserVisibleSingleChat: z.boolean().optional(),
+  })
+  .strict();
+
 export const AgentsSchema = z
   .object({
     defaults: z.lazy(() => AgentDefaultsSchema).optional(),
     list: z.array(AgentEntrySchema).optional(),
+    orchestration: z
+      .object({
+        routingAliases: z.array(AgentRoutingAliasSchema).optional(),
+        policy: AgentOrchestrationPolicySchema.optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

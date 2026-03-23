@@ -225,6 +225,61 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("direct routing keeps the main session state intact", async () => {
+    const tempDirs: string[] = [];
+    const { server, ws } = await startServerWithClient();
+    const spy = vi.mocked(getReplyFromConfig);
+
+    try {
+      await connectOk(ws);
+
+      const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+      tempDirs.push(sessionDir);
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "+1555",
+          },
+        },
+      });
+
+      spy.mockReset();
+      spy.mockResolvedValueOnce(undefined);
+
+      const sendRes = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "@legal review this NDA",
+        idempotencyKey: "idem-direct-routing",
+      });
+      expect(sendRes.ok).toBe(true);
+      await waitFor(() => spy.mock.calls.length > 0, 2_000);
+
+      const firstCall = spy.mock.calls[0];
+      const ctx = firstCall?.[0] as { Body?: string; BodyForAgent?: string; SessionKey?: string };
+      expect(ctx?.Body).toBe("review this NDA");
+      expect(ctx?.BodyForAgent).toContain("[Direct routing request]");
+      expect(ctx?.BodyForAgent).toContain("Target specialist: legal");
+      expect(ctx?.SessionKey).toBe("agent:main:main");
+
+      const stored = JSON.parse(await fs.readFile(testState.sessionStorePath, "utf-8")) as Record<
+        string,
+        { lastChannel?: string; lastTo?: string } | undefined
+      >;
+      expect(stored["agent:main:main"]?.lastChannel).toBe("whatsapp");
+      expect(stored["agent:main:main"]?.lastTo).toBe("+1555");
+    } finally {
+      testState.sessionStorePath = undefined;
+      ws.close();
+      await server.close();
+      await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+    }
+  });
+
   test("hard-limit preflight compacts once and preserves last user input", async () => {
     const tempDirs: string[] = [];
     const { server, ws } = await startServerWithClient();

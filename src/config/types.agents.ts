@@ -22,6 +22,10 @@ export type AgentConfig = {
   id: string;
   default?: boolean;
   name?: string;
+  /** Short agent-specific role prompt appended as a dedicated system section. */
+  systemPrompt?: string;
+  /** Legacy/custom params bag; `params.system` is supported as a compatibility alias. */
+  params?: Record<string, unknown> & { system?: string };
   workspace?: string;
   agentDir?: string;
   model?: AgentModelConfig;
@@ -65,9 +69,32 @@ export type AgentConfig = {
   tools?: AgentToolsConfig;
 };
 
+export type AgentRoutingAliasConfig = {
+  /** Canonical target agent id. */
+  agentId: string;
+  /** Accepted @alias values for direct routing. */
+  aliases?: string[];
+  /** Optional human-readable description. */
+  description?: string;
+  /** Optional routing hints / keywords for maintainers. */
+  routingHints?: string[];
+};
+
+export type AgentOrchestrationPolicyConfig = {
+  defaultBehavior?: "orchestrate";
+  fallbackBehavior?: "self-answer";
+  directRoutingMode?: "hint" | "force";
+  allowMultiAgentDelegation?: boolean;
+  preserveUserVisibleSingleChat?: boolean;
+};
+
 export type AgentsConfig = {
   defaults?: AgentDefaultsConfig;
   list?: AgentConfig[];
+  orchestration?: {
+    routingAliases?: AgentRoutingAliasConfig[];
+    policy?: AgentOrchestrationPolicyConfig;
+  };
 };
 
 export type AgentBinding = {

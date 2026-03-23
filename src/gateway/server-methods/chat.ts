@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveDefaultAgentId, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   buildContextUsageSnapshot,
   shouldRunHardLimitPreflightCompact,
@@ -33,6 +33,7 @@ import {
   persistChatSummary,
   resolveEffectiveHistoryMode,
 } from "../chat-context.js";
+import { buildDirectedAgentBodyForAgent, resolveDirectedAgentRequest } from "../chat-routing.js";
 import { stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
 import {
@@ -585,6 +586,13 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey,
       config: cfg,
     });
+    const defaultAgentId = resolveDefaultAgentId(cfg);
+    const directedAgentRequest = resolveDirectedAgentRequest({
+      message: preservedUserInput.parsedMessage,
+      currentAgentId: agentId,
+      defaultAgentId,
+      cfg,
+    });
     const effectiveHistoryMode = resolveEffectiveHistoryMode(p.historyMode, entry);
     if (entry && effectiveHistoryMode !== entry.historyLoadMode) {
       const { storePath } = loadSessionEntry(rawSessionKey);
@@ -677,24 +685,33 @@ export const chatHandlers: GatewayRequestHandlers = {
       };
       respond(true, ackPayload, undefined, { runId: clientRunId });
 
-      const trimmedMessage = preservedUserInput.parsedMessage.trim();
+      const effectiveParsedMessage =
+        directedAgentRequest?.strippedMessage ?? preservedUserInput.parsedMessage;
+      const trimmedMessage = effectiveParsedMessage.trim();
       const injectThinking = Boolean(
         p.thinking && trimmedMessage && !trimmedMessage.startsWith("/"),
       );
       const commandBody = injectThinking
-        ? `/think ${p.thinking} ${preservedUserInput.parsedMessage}`
-        : preservedUserInput.parsedMessage;
+        ? `/think ${p.thinking} ${effectiveParsedMessage}`
+        : effectiveParsedMessage;
       const clientInfo = client?.connect?.client;
       // Inject timestamp so agents know the current date/time.
       // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
       // See: https://github.com/moltbot/moltbot/issues/3658
       const stampedMessage = injectTimestamp(
-        preservedUserInput.parsedMessage,
+        directedAgentRequest
+          ? buildDirectedAgentBodyForAgent({
+              targetAgentId: directedAgentRequest.targetAgentId,
+              strippedMessage: directedAgentRequest.strippedMessage,
+              originalMessage: preservedUserInput.parsedMessage,
+              cfg,
+            })
+          : effectiveParsedMessage,
         timestampOptsFromConfig(cfg),
       );
 
       const ctx: MsgContext = {
-        Body: preservedUserInput.parsedMessage,
+        Body: effectiveParsedMessage,
         BodyForAgent: stampedMessage,
         BodyForCommands: commandBody,
         RawBody: preservedUserInput.inboundMessage,
