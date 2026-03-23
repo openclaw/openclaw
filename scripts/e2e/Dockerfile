@@ -18,7 +18,7 @@ ENV NODE_OPTIONS="--disable-warning=ExperimentalWarning"
 USER appuser
 WORKDIR /app
 
-COPY --chown=appuser:appuser package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY --chown=appuser:appuser package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY --chown=appuser:appuser ui/package.json ./ui/package.json
 COPY --chown=appuser:appuser extensions ./extensions
 COPY --chown=appuser:appuser patches ./patches
