@@ -436,9 +436,8 @@ function restoreSubagentRunsOnce() {
     }
     // Resume pending work.
     ensureListener();
-    if ([...subagentRuns.values()].some((entry) => entry.archiveAtMs)) {
-      startSweeper();
-    }
+    // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
+    startSweeper();
     for (const runId of subagentRuns.keys()) {
       resumeSubagentRun(runId);
     }
@@ -495,7 +494,9 @@ async function sweepSubagentRuns() {
         });
         subagentRuns.delete(runId);
         mutated = true;
-        await safeRemoveAttachmentsDir(entry);
+        if (!entry.retainAttachmentsOnKeep) {
+          await safeRemoveAttachmentsDir(entry);
+        }
       }
       continue;
     }
