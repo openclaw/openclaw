@@ -301,23 +301,25 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     expectThreadBindFailureCleanup(details, /unable to create or bind a thread/i);
   });
 
-  it("rejects mode=session when thread=true is not requested", async () => {
+  it("allows mode=session without thread=true (headless persistent session)", async () => {
     const tool = await getSessionsSpawnTool({
       agentSessionKey: "main",
       agentChannel: "discord",
       agentTo: "channel:123",
     });
 
-    const result = await tool.execute("call6", {
+    await tool.execute("call6", {
       task: "do thing",
       mode: "session",
     });
 
-    expectErrorResultMessage(result, /requires thread=true/i);
+    // mode="session" without thread=true should proceed (no early rejection).
+    // The spawn will continue through the normal flow — it won't try thread
+    // binding since thread was not requested.
     expect(hookRunnerMocks.runSubagentSpawning).not.toHaveBeenCalled();
-    expect(hookRunnerMocks.runSubagentSpawned).not.toHaveBeenCalled();
     const callGatewayMock = getCallGatewayMock();
-    expect(callGatewayMock).not.toHaveBeenCalled();
+    // sessions.patch for spawnDepth should be called
+    expect(callGatewayMock).toHaveBeenCalled();
   });
 
   it("rejects thread=true on channels without thread support", async () => {

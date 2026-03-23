@@ -100,6 +100,8 @@ export const ACP_SPAWN_ACCEPTED_NOTE =
   "initial ACP task queued in isolated session; follow-ups continue in the bound thread.";
 export const ACP_SPAWN_SESSION_ACCEPTED_NOTE =
   "thread-bound ACP session stays active after this task; continue in-thread for follow-ups.";
+export const ACP_SPAWN_HEADLESS_SESSION_ACCEPTED_NOTE =
+  "Headless session started — session will persist for orchestrator communication.";
 
 export function resolveAcpSpawnRuntimePolicyError(params: {
   cfg: OpenClawConfig;
@@ -730,12 +732,10 @@ export async function spawnAcpDirect(
     requestedMode: params.mode,
     threadRequested: requestThreadBinding,
   });
-  if (spawnMode === "session" && !requestThreadBinding) {
-    return {
-      status: "error",
-      error: 'mode="session" requires thread=true so the ACP session can stay bound to a thread.',
-    };
-  }
+  // mode="session" no longer requires thread=true. Headless persistent sessions
+  // (no platform thread binding) are valid for orchestrator patterns where the
+  // session stays alive to receive child announces and sessions_send messages.
+  // Thread binding is still attempted when thread=true, but is optional.
 
   const requesterState = resolveAcpSpawnRequesterState({
     cfg,
@@ -918,7 +918,12 @@ export async function spawnAcpDirect(
       runId: childRunId,
       mode: spawnMode,
       ...(streamLogPath ? { streamLogPath } : {}),
-      note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
+      note:
+        spawnMode === "session"
+          ? requestThreadBinding
+            ? ACP_SPAWN_SESSION_ACCEPTED_NOTE
+            : ACP_SPAWN_HEADLESS_SESSION_ACCEPTED_NOTE
+          : ACP_SPAWN_ACCEPTED_NOTE,
     };
   }
 
@@ -927,6 +932,11 @@ export async function spawnAcpDirect(
     childSessionKey: sessionKey,
     runId: childRunId,
     mode: spawnMode,
-    note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
+    note:
+      spawnMode === "session"
+        ? requestThreadBinding
+          ? ACP_SPAWN_SESSION_ACCEPTED_NOTE
+          : ACP_SPAWN_HEADLESS_SESSION_ACCEPTED_NOTE
+        : ACP_SPAWN_ACCEPTED_NOTE,
   };
 }
