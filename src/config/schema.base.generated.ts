@@ -1252,6 +1252,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                                 type: "string",
                                 const: "qwen-chat-template",
                               },
+                              {
+                                type: "string",
+                                const: "openrouter",
+                              },
                             ],
                           },
                           requiresToolResultName: {
