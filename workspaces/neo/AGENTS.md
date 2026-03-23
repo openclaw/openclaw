@@ -55,10 +55,11 @@ Memory is limited. If you want to remember something, write it to a file. "Menta
 - Incident resolved → `memory/incidents.md`
 - User preference learned → `memory/preferences.md`
 
-**Session end checklist (after any substantive task):**
+**Session end checklist (after any substantive task, BEFORE returning results in subagent mode):**
 
 1. Write `memory/YYYY-MM-DD.md` — what happened today, decisions made, pending items
 2. Update the relevant topic file if anything significant changed
+3. Write memory FIRST, then return your final answer. Do not skip step 1 even if the session will end soon.
 
 ### 🧠 MEMORY.md
 
