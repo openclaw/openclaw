@@ -30,11 +30,25 @@ function checkPNPM() {
   }
 }
 
+// 安装pnpm
+function installPNPM() {
+  console.log("pnpm未安装，正在安装...");
+  try {
+    execSync("npm install -g pnpm", { stdio: "inherit" });
+    console.log("pnpm安装成功！");
+    return true;
+  } catch (error) {
+    console.error("pnpm安装失败:", error.message);
+    return false;
+  }
+}
+
 // 确保pnpm安装
 if (!checkPNPM()) {
-  console.error("错误: pnpm 未安装！");
-  console.error("请先安装 pnpm: npm install -g pnpm");
-  process.exit(1);
+  if (!installPNPM()) {
+    console.error("无法安装pnpm，请手动安装: npm install -g pnpm");
+    process.exit(1);
+  }
 }
 
 // 确保输出目录存在
