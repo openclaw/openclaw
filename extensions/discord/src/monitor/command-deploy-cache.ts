@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { NativeCommandSpec } from "../../../../src/auto-reply/commands-registry.js";
+import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth";
 
 type CommandDeployCache = {
   hash: string;

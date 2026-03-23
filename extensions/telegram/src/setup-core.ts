@@ -9,7 +9,6 @@ import {
 } from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupAdapter, ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-import { createPatchedAccountSetupAdapter } from "../../../src/channels/plugins/setup-helpers.js";
 import type { TelegramNetworkConfig } from "../runtime-api.js";
 import { resolveDefaultTelegramAccountId, resolveTelegramAccount } from "./accounts.js";
 import { lookupTelegramChatId } from "./api-fetch.js";

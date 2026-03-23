@@ -23,6 +23,14 @@ import {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/config-runtime";
+import {
+  isNativeCommandsExplicitlyDisabled,
+  resolveNativeCommandsEnabled,
+  resolveNativeSkillsEnabled,
+} from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
 import { getPluginCommandSpecs } from "openclaw/plugin-sdk/plugin-runtime";
@@ -36,16 +44,8 @@ import {
 } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { summarizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
-import {
-  isNativeCommandsExplicitlyDisabled,
-  resolveNativeCommandsEnabled,
-  resolveNativeSkillsEnabled,
-} from "../../../../src/config/commands.js";
-import type { OpenClawConfig, ReplyToMode } from "../../../../src/config/config.js";
-import { loadConfig } from "../../../../src/config/config.js";
-import { isDangerousNameMatchingEnabled } from "../../../../src/config/dangerous-name-matching.js";
-import { resolveStateDir } from "../../../../src/config/paths.js";
 import { resolveDiscordAccount } from "../accounts.js";
 import { getDiscordGatewayEmitter } from "../monitor.gateway.js";
 import { fetchDiscordApplicationId } from "../probe.js";
