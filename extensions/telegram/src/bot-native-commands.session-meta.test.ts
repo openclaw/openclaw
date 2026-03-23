@@ -73,23 +73,6 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
     ...actual,
     resolveConfiguredBindingRoute: persistentBindingMocks.resolveConfiguredBindingRoute,
     ensureConfiguredBindingRouteReady: persistentBindingMocks.ensureConfiguredBindingRouteReady,
-    readChannelAllowFromStore: conversationStoreMocks.readChannelAllowFromStore,
-    upsertChannelPairingRequest: conversationStoreMocks.upsertChannelPairingRequest,
-    getSessionBindingService: () => ({
-      bind: vi.fn(),
-      getCapabilities: vi.fn(),
-      listBySession: vi.fn(),
-      resolveByConversation: (ref: unknown) => sessionBindingMocks.resolveByConversation(ref),
-      touch: (bindingId: string, at?: number) => sessionBindingMocks.touch(bindingId, at),
-      unbind: vi.fn(),
-    }),
-  };
-});
-vi.mock("openclaw/plugin-sdk/channel-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-runtime")>();
-  return {
-    ...actual,
-    createReplyPrefixOptions: vi.fn(() => ({ onModelSelected: () => {} })),
     recordInboundSessionMetaSafe: vi.fn(
       async (params: {
         cfg: OpenClawConfig;
@@ -112,6 +95,23 @@ vi.mock("openclaw/plugin-sdk/channel-runtime", async (importOriginal) => {
         }
       },
     ),
+    readChannelAllowFromStore: conversationStoreMocks.readChannelAllowFromStore,
+    upsertChannelPairingRequest: conversationStoreMocks.upsertChannelPairingRequest,
+    getSessionBindingService: () => ({
+      bind: vi.fn(),
+      getCapabilities: vi.fn(),
+      listBySession: vi.fn(),
+      resolveByConversation: (ref: unknown) => sessionBindingMocks.resolveByConversation(ref),
+      touch: (bindingId: string, at?: number) => sessionBindingMocks.touch(bindingId, at),
+      unbind: vi.fn(),
+    }),
+  };
+});
+vi.mock("openclaw/plugin-sdk/command-auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/command-auth")>();
+  return {
+    ...actual,
+    listSkillCommandsForAgents: vi.fn(() => []),
   };
 });
 vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
@@ -120,7 +120,6 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
     ...actual,
     finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
     dispatchReplyWithBufferedBlockDispatcher: replyMocks.dispatchReplyWithBufferedBlockDispatcher,
-    listSkillCommandsForAgents: vi.fn(() => []),
   };
 });
 vi.mock("../../../src/config/sessions.js", () => ({

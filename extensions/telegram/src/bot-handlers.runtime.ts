@@ -1,8 +1,18 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
 import { resolveAgentDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
-import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-runtime";
-import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-runtime";
+import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
+import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createInboundDebouncer,
+  resolveInboundDebounceMs,
+} from "openclaw/plugin-sdk/channel-inbound";
+import {
+  buildCommandsMessagePaginated,
+  buildCommandsPaginationKeyboard,
+  formatModelsAvailableHeader,
+  resolveStoredModelOverride,
+} from "openclaw/plugin-sdk/command-auth";
 import { writeConfigFile } from "openclaw/plugin-sdk/config-runtime";
 import {
   loadSessionStore,
@@ -22,14 +32,6 @@ import {
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { dispatchPluginInteractiveHandler } from "openclaw/plugin-sdk/plugin-runtime";
-import {
-  createInboundDebouncer,
-  resolveInboundDebounceMs,
-} from "openclaw/plugin-sdk/reply-runtime";
-import { buildCommandsPaginationKeyboard } from "openclaw/plugin-sdk/reply-runtime";
-import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/reply-runtime";
-import { resolveStoredModelOverride } from "openclaw/plugin-sdk/reply-runtime";
-import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
@@ -144,6 +146,7 @@ export const registerTelegramHandlers = ({
     msg: Message;
     allMedia: TelegramMediaRef[];
     storeAllowFrom: string[];
+    receivedAtMs: number;
     debounceKey: string | null;
     debounceLane: TelegramDebounceLane;
     botUsername?: string;
@@ -217,7 +220,16 @@ export const registerTelegramHandlers = ({
       }
       if (entries.length === 1) {
         const replyMedia = await resolveReplyMediaForMessage(last.ctx, last.msg);
-        await processMessage(last.ctx, last.allMedia, last.storeAllowFrom, undefined, replyMedia);
+        await processMessage(
+          last.ctx,
+          last.allMedia,
+          last.storeAllowFrom,
+          {
+            receivedAtMs: last.receivedAtMs,
+            ingressBuffer: "inbound-debounce",
+          },
+          replyMedia,
+        );
         return;
       }
       const combinedText = entries
@@ -242,7 +254,11 @@ export const registerTelegramHandlers = ({
         syntheticCtx,
         combinedMedia,
         first.storeAllowFrom,
-        messageIdOverride ? { messageIdOverride } : undefined,
+        {
+          ...(messageIdOverride ? { messageIdOverride } : {}),
+          receivedAtMs: first.receivedAtMs,
+          ingressBuffer: "inbound-debounce",
+        },
         replyMedia,
       );
     },
@@ -359,7 +375,13 @@ export const registerTelegramHandlers = ({
       for (const { ctx } of entry.messages) {
         let media;
         try {
-          media = await resolveMedia(ctx, mediaMaxBytes, opts.token, telegramTransport);
+          media = await resolveMedia(
+            ctx,
+            mediaMaxBytes,
+            opts.token,
+            telegramTransport,
+            telegramCfg.apiRoot,
+          );
         } catch (mediaErr) {
           if (!isRecoverableMediaGroupError(mediaErr)) {
             throw mediaErr;
@@ -412,6 +434,8 @@ export const registerTelegramHandlers = ({
 
       await processMessage(buildSyntheticContext(baseCtx, syntheticMessage), [], storeAllowFrom, {
         messageIdOverride: String(last.msg.message_id),
+        receivedAtMs: first.receivedAtMs,
+        ingressBuffer: "text-fragment",
       });
     } catch (err) {
       runtime.error?.(danger(`text fragment handler failed: ${String(err)}`));
@@ -464,6 +488,7 @@ export const registerTelegramHandlers = ({
         mediaMaxBytes,
         opts.token,
         telegramTransport,
+        telegramCfg.apiRoot,
       );
       if (!media) {
         return [];
@@ -975,7 +1000,13 @@ export const registerTelegramHandlers = ({
 
     let media: Awaited<ReturnType<typeof resolveMedia>> = null;
     try {
-      media = await resolveMedia(ctx, mediaMaxBytes, opts.token, telegramTransport);
+      media = await resolveMedia(
+        ctx,
+        mediaMaxBytes,
+        opts.token,
+        telegramTransport,
+        telegramCfg.apiRoot,
+      );
     } catch (mediaErr) {
       if (isMediaSizeLimitError(mediaErr)) {
         if (sendOversizeWarning) {
@@ -985,7 +1016,10 @@ export const registerTelegramHandlers = ({
             runtime,
             fn: () =>
               bot.api.sendMessage(chatId, `⚠️ File too large. Maximum size is ${limitMb}MB.`, {
-                reply_to_message_id: msg.message_id,
+                reply_parameters: {
+                  message_id: msg.message_id,
+                  allow_sending_without_reply: true,
+                },
               }),
           }).catch(() => {});
         }
@@ -998,7 +1032,10 @@ export const registerTelegramHandlers = ({
         runtime,
         fn: () =>
           bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
-            reply_to_message_id: msg.message_id,
+            reply_parameters: {
+              message_id: msg.message_id,
+              allow_sending_without_reply: true,
+            },
           }),
       }).catch(() => {});
       return;
@@ -1034,6 +1071,7 @@ export const registerTelegramHandlers = ({
       msg,
       allMedia,
       storeAllowFrom,
+      receivedAtMs: Date.now(),
       debounceKey,
       debounceLane,
       botUsername: ctx.me?.username,
