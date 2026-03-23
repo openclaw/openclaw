@@ -102,6 +102,8 @@ export function makeSecurityAccount(overrides: Record<string, unknown> = {}) {
     nasHost: "h",
     webhookPath: "/w",
     dangerouslyAllowNameMatching: false,
+    hasExplicitWebhookPath: true,
+    dangerouslyAllowInheritedWebhookPath: false,
     dmPolicy: "allowlist" as const,
     allowedUserIds: [],
     rateLimitPerMinute: 30,
