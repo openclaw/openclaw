@@ -394,6 +394,66 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(tui.requestRender).not.toHaveBeenCalled();
   });
 
+  it("clears orphaned streaming when final arrives inactive but no runs remain in flight", () => {
+    const { state, chatLog, setActivityStatus, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    handleChatEvent({
+      runId: "run-orphan",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "partial" },
+    });
+    expect(state.activeChatRunId).toBe("run-orphan");
+    setActivityStatus.mockClear();
+
+    // Simulate active pointer lost while the same run still completes (failover / gateway race).
+    state.activeChatRunId = null;
+
+    handleChatEvent({
+      runId: "run-orphan",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalled();
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+  });
+
+  it("does not clear activity on inactive final when another run is still in flight", () => {
+    const { state, chatLog, setActivityStatus, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    handleChatEvent({
+      runId: "run-a",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "a" },
+    });
+    handleChatEvent({
+      runId: "run-b",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "b" },
+    });
+    expect(state.activeChatRunId).toBe("run-a");
+    state.activeChatRunId = "run-b";
+    setActivityStatus.mockClear();
+
+    handleChatEvent({
+      runId: "run-a",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done a" }] },
+    });
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalled();
+    expect(setActivityStatus).not.toHaveBeenCalled();
+  });
+
   it("suppresses tool events when verbose is off", () => {
     const { chatLog, tui, handleAgentEvent } = createHandlersHarness({
       state: {
