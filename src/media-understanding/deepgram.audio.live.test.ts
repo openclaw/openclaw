@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { transcribeDeepgramAudio } from "../../extensions/deepgram/audio.js";
-import { isTruthyEnvValue } from "../infra/env.js";
+import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 
 const DEEPGRAM_KEY = process.env.DEEPGRAM_API_KEY ?? "";
 const DEEPGRAM_MODEL = process.env.DEEPGRAM_MODEL?.trim() || "nova-3";
@@ -8,10 +8,7 @@ const DEEPGRAM_BASE_URL = process.env.DEEPGRAM_BASE_URL?.trim();
 const SAMPLE_URL =
   process.env.DEEPGRAM_SAMPLE_URL?.trim() ||
   "https://static.deepgram.com/examples/Bueller-Life-moves-pretty-fast.wav";
-const LIVE =
-  isTruthyEnvValue(process.env.DEEPGRAM_LIVE_TEST) ||
-  isTruthyEnvValue(process.env.LIVE) ||
-  isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
+const LIVE = isLiveTestEnabled(["DEEPGRAM_LIVE_TEST"]);
 
 const describeLive = LIVE && DEEPGRAM_KEY ? describe : describe.skip;
 

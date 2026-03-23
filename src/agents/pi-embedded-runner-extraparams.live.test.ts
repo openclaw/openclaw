@@ -2,17 +2,15 @@ import type { Model } from "@mariozechner/pi-ai";
 import { getModel, streamSimple } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { isTruthyEnvValue } from "../infra/env.js";
+import { isLiveTestEnabled } from "./live-test-helpers.js";
 import { applyExtraParamsToAgent } from "./pi-embedded-runner.js";
 
 const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY ?? "";
 const GEMINI_KEY = process.env.GEMINI_API_KEY ?? "";
-const LIVE = isTruthyEnvValue(process.env.OPENAI_LIVE_TEST) || isTruthyEnvValue(process.env.LIVE);
-const ANTHROPIC_LIVE =
-  isTruthyEnvValue(process.env.ANTHROPIC_LIVE_TEST) || isTruthyEnvValue(process.env.LIVE);
-const GEMINI_LIVE =
-  isTruthyEnvValue(process.env.GEMINI_LIVE_TEST) || isTruthyEnvValue(process.env.LIVE);
+const LIVE = isLiveTestEnabled(["OPENAI_LIVE_TEST"]);
+const ANTHROPIC_LIVE = isLiveTestEnabled(["ANTHROPIC_LIVE_TEST"]);
+const GEMINI_LIVE = isLiveTestEnabled(["GEMINI_LIVE_TEST"]);
 
 const describeLive = LIVE && OPENAI_KEY ? describe : describe.skip;
 const describeAnthropicLive = ANTHROPIC_LIVE && ANTHROPIC_KEY ? describe : describe.skip;
