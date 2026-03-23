@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { resolveBrowserConfig } from "../../browser/config.js";
 import {
   createBrowserControlContext,
   startBrowserControlServiceFromConfig,
@@ -10,7 +11,6 @@ import {
   resolveRequestedBrowserProfile,
 } from "../../browser/request-policy.js";
 import { createBrowserRouteDispatcher } from "../../browser/routes/dispatcher.js";
-import { resolveBrowserConfig } from "../../browser/config.js";
 import { loadConfig } from "../../config/config.js";
 import { withTimeout } from "../../node-host/with-timeout.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
