@@ -1265,8 +1265,7 @@ export function createTopLevelChannelParsedAllowFromPrompt(params: {
     getExistingAllowFrom: ({ cfg }) =>
       params.getExistingAllowFrom?.(cfg) ??
       (((cfg.channels?.[params.channel] as { allowFrom?: Array<string | number> } | undefined)
-        ?.allowFrom ??
-        []) as Array<string | number>),
+        ?.allowFrom ?? []) as Array<string | number>),
     ...(params.mergeEntries ? { mergeEntries: params.mergeEntries } : {}),
     applyAllowFrom: ({ cfg, allowFrom }) => setAllowFrom(cfg, allowFrom),
   });
@@ -1299,10 +1298,12 @@ export function createNestedChannelParsedAllowFromPrompt(params: {
     parseEntries: params.parseEntries,
     getExistingAllowFrom: ({ cfg }) =>
       params.getExistingAllowFrom?.(cfg) ??
-      (((cfg.channels?.[params.channel] as Record<string, unknown> | undefined)?.[
-        params.section
-      ] as { allowFrom?: Array<string | number> } | undefined)?.allowFrom ??
-        []),
+      (
+        (cfg.channels?.[params.channel] as Record<string, unknown> | undefined)?.[params.section] as
+          | { allowFrom?: Array<string | number> }
+          | undefined
+      )?.allowFrom ??
+      [],
     ...(params.mergeEntries ? { mergeEntries: params.mergeEntries } : {}),
     applyAllowFrom: ({ cfg, allowFrom }) => setAllowFrom(cfg, allowFrom),
   });
