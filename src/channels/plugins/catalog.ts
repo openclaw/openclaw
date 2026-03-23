@@ -52,6 +52,9 @@ const ORIGIN_PRIORITY: Record<PluginOrigin, number> = {
   bundled: 3,
 };
 
+const EXTERNAL_CATALOG_PRIORITY = ORIGIN_PRIORITY.bundled + 1;
+const FALLBACK_CATALOG_PRIORITY = EXTERNAL_CATALOG_PRIORITY + 1;
+
 type ExternalCatalogEntry = {
   name?: string;
   version?: string;
@@ -149,12 +152,10 @@ function resolveOfficialCatalogPaths(options: CatalogOptions): string[] {
     path.join(packageRoot, OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH),
   );
 
-  try {
+  if (process.execPath) {
     const execDir = path.dirname(process.execPath);
     candidates.push(path.join(execDir, OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH));
     candidates.push(path.join(execDir, "channel-catalog.json"));
-  } catch {
-    // ignore
   }
 
   return candidates.filter((entry, index, all) => entry && all.indexOf(entry) === index);
@@ -393,7 +394,7 @@ export function listChannelPluginCatalogEntries(
   }
 
   for (const entry of loadBundledMetadataCatalogEntries(options)) {
-    const priority = ORIGIN_PRIORITY.bundled ?? 99;
+    const priority = FALLBACK_CATALOG_PRIORITY;
     const existing = resolved.get(entry.id);
     if (!existing || priority < existing.priority) {
       resolved.set(entry.id, { entry, priority });
@@ -401,7 +402,7 @@ export function listChannelPluginCatalogEntries(
   }
 
   for (const entry of loadOfficialCatalogEntries(options)) {
-    const priority = ORIGIN_PRIORITY.bundled ?? 99;
+    const priority = FALLBACK_CATALOG_PRIORITY;
     const existing = resolved.get(entry.id);
     if (!existing || priority < existing.priority) {
       resolved.set(entry.id, { entry, priority });
@@ -412,8 +413,12 @@ export function listChannelPluginCatalogEntries(
     .map((entry) => buildExternalCatalogEntry(entry))
     .filter((entry): entry is ChannelPluginCatalogEntry => Boolean(entry));
   for (const entry of externalEntries) {
-    if (!resolved.has(entry.id)) {
-      resolved.set(entry.id, { entry, priority: 99 });
+    // External catalogs are the supported override seam for shipped fallback
+    // metadata, but discovered plugins should still win when they are present.
+    const priority = EXTERNAL_CATALOG_PRIORITY;
+    const existing = resolved.get(entry.id);
+    if (!existing || priority < existing.priority) {
+      resolved.set(entry.id, { entry, priority });
     }
   }
 
