@@ -550,23 +550,45 @@ function resolveConfiguredModels(
 ): ConfiguredModelOption[] {
   const cfg = configForm as ConfigSnapshot | null;
   const models = cfg?.agents?.defaults?.models;
-  if (!models || typeof models !== "object") {
-    return [];
-  }
-  const options: ConfiguredModelOption[] = [];
-  for (const [modelId, modelRaw] of Object.entries(models)) {
-    const trimmed = modelId.trim();
-    if (!trimmed) {
-      continue;
+  const labels = new Map<string, string>();
+
+  if (models && typeof models === "object") {
+    for (const [modelId, modelRaw] of Object.entries(models)) {
+      const trimmed = modelId.trim();
+      if (!trimmed) {
+        continue;
+      }
+      const alias =
+        modelRaw && typeof modelRaw === "object" && "alias" in modelRaw
+          ? typeof (modelRaw as { alias?: unknown }).alias === "string"
+            ? (modelRaw as { alias?: string }).alias?.trim()
+            : undefined
+          : undefined;
+      const key = trimmed.toLowerCase();
+      labels.set(key, alias && alias !== trimmed ? `${alias} (${trimmed})` : trimmed);
     }
-    const alias =
-      modelRaw && typeof modelRaw === "object" && "alias" in modelRaw
-        ? typeof (modelRaw as { alias?: unknown }).alias === "string"
-          ? (modelRaw as { alias?: string }).alias?.trim()
-          : undefined
-        : undefined;
-    const label = alias && alias !== trimmed ? `${alias} (${trimmed})` : trimmed;
-    options.push({ value: trimmed, label });
+  }
+
+  const options: ConfiguredModelOption[] = [];
+  const seen = new Set<string>();
+  const addOption = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return;
+    }
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    options.push({ value: trimmed, label: labels.get(key) ?? trimmed });
+  };
+
+  // Reuse the broader configured-model collector so the overview picker keeps
+  // provider-qualified primary/fallback refs visible even when they are not in
+  // the alias map.
+  for (const modelId of resolveConfiguredCronModelSuggestions(configForm)) {
+    addOption(modelId);
   }
   return options;
 }
