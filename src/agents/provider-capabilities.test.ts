@@ -53,6 +53,7 @@ import {
   shouldDropThinkingBlocksForModel,
   shouldSanitizeGeminiThoughtSignaturesForModel,
   supportsOpenAiCompatTurnValidation,
+  usesMoonshotThinkingPayloadCompat,
 } from "./provider-capabilities.js";
 
 describe("resolveProviderCapabilities", () => {
@@ -60,6 +61,7 @@ describe("resolveProviderCapabilities", () => {
     expect(resolveProviderCapabilities("anthropic")).toEqual({
       anthropicToolSchemaMode: "native",
       anthropicToolChoiceMode: "native",
+      openAiPayloadNormalizationMode: "default",
       providerFamily: "anthropic",
       preserveAnthropicThinkingSignatures: true,
       openAiCompatTurnValidation: true,
@@ -72,6 +74,7 @@ describe("resolveProviderCapabilities", () => {
     expect(resolveProviderCapabilities("anthropic-vertex")).toEqual({
       anthropicToolSchemaMode: "native",
       anthropicToolChoiceMode: "native",
+      openAiPayloadNormalizationMode: "default",
       providerFamily: "anthropic",
       preserveAnthropicThinkingSignatures: true,
       openAiCompatTurnValidation: true,
@@ -84,6 +87,7 @@ describe("resolveProviderCapabilities", () => {
     expect(resolveProviderCapabilities("amazon-bedrock")).toEqual({
       anthropicToolSchemaMode: "native",
       anthropicToolChoiceMode: "native",
+      openAiPayloadNormalizationMode: "default",
       providerFamily: "anthropic",
       preserveAnthropicThinkingSignatures: true,
       openAiCompatTurnValidation: true,
@@ -100,6 +104,7 @@ describe("resolveProviderCapabilities", () => {
     expect(resolveProviderCapabilities("kimi-code")).toEqual({
       anthropicToolSchemaMode: "native",
       anthropicToolChoiceMode: "native",
+      openAiPayloadNormalizationMode: "default",
       providerFamily: "default",
       preserveAnthropicThinkingSignatures: false,
       openAiCompatTurnValidation: true,
@@ -116,6 +121,11 @@ describe("resolveProviderCapabilities", () => {
     expect(supportsOpenAiCompatTurnValidation("opencode")).toBe(false);
     expect(supportsOpenAiCompatTurnValidation("opencode-go")).toBe(false);
     expect(supportsOpenAiCompatTurnValidation("moonshot")).toBe(true);
+  });
+
+  it("routes moonshot payload compatibility through the capability registry", () => {
+    expect(usesMoonshotThinkingPayloadCompat("moonshot")).toBe(true);
+    expect(usesMoonshotThinkingPayloadCompat("openai")).toBe(false);
   });
 
   it("resolves transcript thought-signature and tool-call quirks through the registry", () => {
