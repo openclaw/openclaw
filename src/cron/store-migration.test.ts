@@ -148,6 +148,7 @@ describe("normalizeStoredCronJobs", () => {
     const result = normalizeStoredCronJobs(jobs);
 
     expect(result.mutated).toBe(true);
+    expect(result.issues.legacySystemEventMessage).toBe(1);
     expect(jobs[0]?.payload).toMatchObject({ kind: "systemEvent", text: "ping" });
     const payload = jobs[0]?.payload as Record<string, unknown> | undefined;
     expect(payload?.message).toBeUndefined();

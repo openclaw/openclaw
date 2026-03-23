@@ -10,6 +10,7 @@ type CronStoreIssueKey =
   | "legacyScheduleString"
   | "legacyScheduleCron"
   | "legacyPayloadKind"
+  | "legacySystemEventMessage"
   | "legacyPayloadProvider"
   | "legacyTopLevelPayloadFields"
   | "legacyTopLevelDeliveryFields"
@@ -308,6 +309,7 @@ export function normalizeStoredCronJobs(
         if (!text && legacyMessage) {
           payloadRecord.text = legacyMessage;
           mutated = true;
+          trackIssue("legacySystemEventMessage");
         }
         if ("message" in payloadRecord) {
           delete payloadRecord.message;
