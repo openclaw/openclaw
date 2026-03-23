@@ -266,7 +266,32 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       names.push(tool.name);
     }
 
-    const normalized = names.map((name) => name.trim()).filter(Boolean);
+    let normalized = names.map((name) => name.trim()).filter(Boolean);
+
+    // Deduplicate: skip if every resolved name from this plugin is already registered.
+    if (normalized.length > 0) {
+      const duplicateNames = normalized.filter((name) =>
+        registry.tools.some(
+          (existing) => existing.pluginId === record.id && existing.names.includes(name),
+        ),
+      );
+      if (duplicateNames.length > 0) {
+        // All names already registered by the same plugin — silently skip the duplicate.
+        if (duplicateNames.length === normalized.length) {
+          return;
+        }
+        // Partial overlap is unexpected; warn but still register the novel names.
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message: `tool names already registered by same plugin, skipping duplicates: ${duplicateNames.join(", ")}`,
+        });
+        // Remove already-registered names so only novel ones are pushed below.
+        normalized = normalized.filter((name) => !duplicateNames.includes(name));
+      }
+    }
+
     if (normalized.length > 0) {
       record.toolNames.push(...normalized);
     }
