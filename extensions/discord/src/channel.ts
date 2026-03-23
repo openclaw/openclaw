@@ -345,6 +345,39 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         resolveSessionTarget: ({ id }) => normalizeDiscordMessagingTarget(`channel:${id}`),
         parseExplicitTarget: ({ raw }) => parseDiscordExplicitTarget(raw),
         inferTargetChatType: ({ to }) => parseDiscordExplicitTarget(to)?.chatType,
+        resolveBoundDeliveryTarget: ({ binding }) => {
+          const conversationId = binding.conversation.conversationId.trim();
+          const parentConversationId = binding.conversation.parentConversationId?.trim();
+          const metadata =
+            binding.metadata && typeof binding.metadata === "object"
+              ? (binding.metadata as Record<string, unknown>)
+              : undefined;
+          const deliveryTo =
+            typeof metadata?.deliveryTo === "string"
+              ? metadata.deliveryTo.trim() || undefined
+              : undefined;
+          const deliveryThreadId =
+            typeof metadata?.deliveryThreadId === "string"
+              ? metadata.deliveryThreadId.trim() || undefined
+              : undefined;
+          if (parentConversationId && parentConversationId !== conversationId) {
+            // Discord threads are first-class channels — address the thread directly
+            // rather than sending to the parent with a threadId, because the Discord
+            // outbound adapter does not yet forward threadId to sendMessageDiscord.
+            const to =
+              normalizeDiscordMessagingTarget(`channel:${conversationId}`) ??
+              normalizeDiscordMessagingTarget(conversationId);
+            return to ? { to } : null;
+          }
+          if (deliveryTo) {
+            return {
+              to: deliveryTo,
+              ...(deliveryThreadId ? { threadId: deliveryThreadId } : {}),
+            };
+          }
+          const to = normalizeDiscordMessagingTarget(conversationId);
+          return to ? { to } : null;
+        },
         buildCrossContextComponents: buildDiscordCrossContextComponents,
         resolveOutboundSessionRoute: (params) => resolveDiscordOutboundSessionRoute(params),
         targetResolver: {

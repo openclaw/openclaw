@@ -15,6 +15,7 @@ import {
   resolveAcpSessionCwd,
   resolveAcpThreadSessionDetailLines,
 } from "../../../acp/runtime/session-identifiers.js";
+import { resolveAcpPlacement } from "../../../agents/acp-placement.js";
 import { resolveAcpSpawnRuntimePolicyError } from "../../../agents/acp-spawn.js";
 import {
   resolveThreadBindingIntroText,
@@ -37,8 +38,8 @@ import {
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import {
   resolveAcpCommandAccountId,
-  resolveAcpCommandBindingContext,
   resolveAcpCommandConversationId,
+  resolveAcpCommandSpawnOrigin,
 } from "./context.js";
 import {
   ACP_STEER_OUTPUT_LIMIT,
@@ -68,14 +69,15 @@ async function bindSpawnedAcpSessionToThread(params: {
     };
   }
 
-  const bindingContext = resolveAcpCommandBindingContext(commandParams);
-  const channel = bindingContext.channel;
-  if (!channel) {
+  const originResult = resolveAcpCommandSpawnOrigin(commandParams);
+  if (!originResult.ok) {
     return {
       ok: false,
-      error: "ACP thread binding requires a channel context.",
+      error: originResult.error,
     };
   }
+  const origin = originResult.origin;
+  const channel = origin.channel;
 
   const accountId = resolveAcpCommandAccountId(commandParams);
   const spawnPolicy = resolveThreadBindingSpawnPolicy({
@@ -123,51 +125,29 @@ async function bindSpawnedAcpSessionToThread(params: {
     };
   }
 
-  const currentThreadId = bindingContext.threadId ?? "";
-  const currentConversationId = bindingContext.conversationId?.trim() || "";
-  const requiresThreadIdForHere = channel !== "telegram" && channel !== "feishu";
-  if (
-    threadMode === "here" &&
-    ((requiresThreadIdForHere && !currentThreadId) ||
-      (!requiresThreadIdForHere && !currentConversationId))
-  ) {
+  if (threadMode === "here" && origin.originKind === "channel") {
     return {
       ok: false,
       error: `--thread here requires running /acp spawn inside an active ${channel} thread/conversation.`,
     };
   }
 
-  const placement =
-    channel === "telegram" || channel === "feishu"
-      ? "current"
-      : currentThreadId
-        ? "current"
-        : "child";
-  if (!capabilities.placements.includes(placement)) {
+  const placement = resolveAcpPlacement(origin, capabilities);
+  if (!placement.ok) {
     return {
       ok: false,
-      error: `Thread bindings do not support ${placement} placement for ${channel}.`,
-    };
-  }
-  if (!currentConversationId) {
-    return {
-      ok: false,
-      error: `Could not resolve a ${channel} conversation for ACP thread spawn.`,
+      error: placement.error,
     };
   }
 
   const senderId = commandParams.command.senderId?.trim() || "";
-  const parentConversationId = bindingContext.parentConversationId?.trim() || undefined;
-  const conversationRef = {
-    channel: spawnPolicy.channel,
-    accountId: spawnPolicy.accountId,
-    conversationId: currentConversationId,
-    ...(parentConversationId && parentConversationId !== currentConversationId
-      ? { parentConversationId }
-      : {}),
-  };
-  if (placement === "current") {
-    const existingBinding = bindingService.resolveByConversation(conversationRef);
+  if (placement.placement === "current") {
+    const existingBinding = bindingService.resolveByConversation({
+      channel: spawnPolicy.channel,
+      accountId: spawnPolicy.accountId,
+      conversationId: origin.conversationId,
+      ...(origin.parentConversationId ? { parentConversationId: origin.parentConversationId } : {}),
+    });
     const boundBy =
       typeof existingBinding?.metadata?.boundBy === "string"
         ? existingBinding.metadata.boundBy.trim()
@@ -186,8 +166,15 @@ async function bindSpawnedAcpSessionToThread(params: {
     const binding = await bindingService.bind({
       targetSessionKey: params.sessionKey,
       targetKind: "session",
-      conversation: conversationRef,
-      placement,
+      conversation: {
+        channel: spawnPolicy.channel,
+        accountId: spawnPolicy.accountId,
+        conversationId: origin.conversationId,
+        ...(origin.parentConversationId
+          ? { parentConversationId: origin.parentConversationId }
+          : {}),
+      },
+      placement: placement.placement,
       metadata: {
         threadName: resolveThreadBindingThreadName({
           agentId: params.agentId,
@@ -196,6 +183,8 @@ async function bindSpawnedAcpSessionToThread(params: {
         agentId: params.agentId,
         label,
         boundBy: senderId || "unknown",
+        ...(origin.deliveryTo ? { deliveryTo: origin.deliveryTo } : {}),
+        ...(origin.deliveryThreadId ? { deliveryThreadId: origin.deliveryThreadId } : {}),
         introText: resolveThreadBindingIntroText({
           agentId: params.agentId,
           label,

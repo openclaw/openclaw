@@ -10,10 +10,15 @@ import {
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { createBoundDeliveryRouter } from "../infra/outbound/bound-delivery-router.js";
+import { resolveBoundConversationTarget } from "../infra/outbound/conversation-delivery.js";
 import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { normalizeAccountId, normalizeMainKey } from "../routing/session-key.js";
+import {
+  isSubagentSessionKey,
+  normalizeAccountId,
+  normalizeMainKey,
+} from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
@@ -22,7 +27,6 @@ import {
   deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
-  resolveConversationDeliveryTarget,
 } from "../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -89,7 +93,13 @@ function resolveSubagentAnnounceTimeoutMs(cfg: ReturnType<typeof loadConfig>): n
 }
 
 function isInternalAnnounceRequesterSession(sessionKey: string | undefined): boolean {
-  return getSubagentDepthFromSessionStore(sessionKey) >= 1 || isCronSessionKey(sessionKey);
+  const normalized = sessionKey?.trim();
+  if (!normalized) {
+    return false;
+  }
+  // ACP sessions also have spawnedBy ancestry, but they still represent a real
+  // user-facing surface and must keep external completion delivery enabled.
+  return isCronSessionKey(normalized) || isSubagentSessionKey(normalized);
 }
 
 function summarizeDeliveryError(error: unknown): string {
@@ -635,11 +645,7 @@ async function resolveSubagentCompletionOrigin(params: {
     failClosed: false,
   });
   if (route.mode === "bound" && route.binding) {
-    const boundTarget = resolveConversationDeliveryTarget({
-      channel: route.binding.conversation.channel,
-      conversationId: route.binding.conversation.conversationId,
-      parentConversationId: route.binding.conversation.parentConversationId,
-    });
+    const boundTarget = resolveBoundConversationTarget(route.binding);
     return mergeDeliveryContext(
       {
         channel: route.binding.conversation.channel,

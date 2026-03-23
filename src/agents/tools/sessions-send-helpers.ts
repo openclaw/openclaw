@@ -23,25 +23,30 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
   if (parts.length < 3) {
     return null;
   }
-  const [channelRaw, kind, ...rest] = parts;
+  const channelRaw = parts[0];
+  const scopedKind = parts[2];
+  const unscopedKind = parts[1];
+  const hasScopedAccount = scopedKind === "group" || scopedKind === "channel";
+  const accountId = hasScopedAccount ? parts[1] : undefined;
+  const kind = hasScopedAccount ? scopedKind : unscopedKind;
+  const rest = hasScopedAccount ? parts.slice(3) : parts.slice(2);
   if (kind !== "group" && kind !== "channel") {
     return null;
   }
 
-  // Extract topic/thread ID from rest (supports both :topic: and :thread:)
-  // Telegram uses :topic:, other platforms use :thread:
-  let threadId: string | undefined;
   const restJoined = rest.join(":");
-  const topicMatch = restJoined.match(/:topic:(\d+)$/);
-  const threadMatch = restJoined.match(/:thread:(\d+)$/);
-  const match = topicMatch || threadMatch;
-
-  if (match) {
-    threadId = match[1]; // Keep as string to match AgentCommandOpts.threadId
+  if (!restJoined.trim()) {
+    return null;
   }
-
-  // Remove :topic:N or :thread:N suffix from ID for target
-  const id = match ? restJoined.replace(/:(topic|thread):\d+$/, "") : restJoined.trim();
+  // Some session keys carry topic/thread scopes plus sender scoping
+  // (for example Feishu `...:topic:om_topic_root:sender:ou_sender_1`).
+  // Announce delivery must route back to the base group/channel target while
+  // preserving the thread/topic id for reply placement.
+  const scopedThreadMatch = restJoined.match(/:(topic|thread):([^:]+)(?::sender:[^:]+)?$/i);
+  const threadId = scopedThreadMatch?.[2]?.trim() || undefined;
+  const id = scopedThreadMatch
+    ? restJoined.replace(/:(topic|thread):[^:]+(?::sender:[^:]+)?$/i, "").trim()
+    : restJoined.replace(/:sender:[^:]+$/i, "").trim();
 
   if (!id) {
     return null;
@@ -62,7 +67,8 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
   return {
     channel,
     to: normalized ?? (normalizedChannel ? genericTarget : id),
-    threadId,
+    ...(accountId ? { accountId } : {}),
+    ...(threadId ? { threadId } : {}),
   };
 }
 

@@ -3,6 +3,7 @@ import type { TSchema } from "@sinclair/typebox";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { PollInput } from "../../polls.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import type { ChatType } from "../chat-type.js";
@@ -404,6 +405,9 @@ export type ChannelMessagingAdapter = {
     threadId?: string | number;
     chatType?: ChatType;
   } | null;
+  resolveBoundDeliveryTarget?: (params: {
+    binding: SessionBindingRecord;
+  }) => { to?: string; threadId?: string | number } | null;
   /**
    * Lightweight chat-type inference used before directory lookup so plugins can
    * steer peer-vs-group resolution without reimplementing host search flow.

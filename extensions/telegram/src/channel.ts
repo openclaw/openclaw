@@ -343,6 +343,24 @@ export const telegramPlugin = createChatChannelPlugin({
       normalizeTarget: normalizeTelegramMessagingTarget,
       parseExplicitTarget: ({ raw }) => parseTelegramExplicitTarget(raw),
       inferTargetChatType: ({ to }) => parseTelegramExplicitTarget(to).chatType,
+      resolveBoundDeliveryTarget: ({ binding }) => {
+        const parsed = parseTelegramTopicConversation({
+          conversationId: binding.conversation.conversationId,
+          parentConversationId: binding.conversation.parentConversationId,
+        });
+        if (parsed) {
+          return {
+            to:
+              normalizeTelegramMessagingTarget(`telegram:${parsed.chatId}`) ??
+              `telegram:${parsed.chatId}`,
+            threadId: parsed.topicId,
+          };
+        }
+        const to =
+          normalizeTelegramMessagingTarget(`telegram:${binding.conversation.conversationId}`) ??
+          normalizeTelegramMessagingTarget(binding.conversation.conversationId);
+        return to ? { to } : null;
+      },
       formatTargetDisplay: ({ target, display, kind }) => {
         const formatted = display?.trim();
         if (formatted) {

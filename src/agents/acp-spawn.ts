@@ -29,7 +29,6 @@ import { loadSessionStore, resolveStorePath, type SessionEntry } from "../config
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
 import { callGateway } from "../gateway/call.js";
 import { areHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
-import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
 import {
   getSessionBindingService,
   isSessionBindingError,
@@ -47,6 +46,8 @@ import {
   normalizeDeliveryContext,
   resolveConversationDeliveryTarget,
 } from "../utils/delivery-context.js";
+import { resolveAcpPlacement } from "./acp-placement.js";
+import { resolveSpawnOrigin, type SpawnOrigin } from "./acp-spawn-origin.js";
 import {
   type AcpSpawnParentRelayHandle,
   resolveAcpSpawnStreamLogPath,
@@ -83,6 +84,7 @@ export type SpawnAcpContext = {
   agentAccountId?: string;
   agentTo?: string;
   agentThreadId?: string | number;
+  agentSenderId?: string;
   sandboxed?: boolean;
 };
 
@@ -123,9 +125,8 @@ export function resolveAcpSpawnRuntimePolicyError(params: {
 }
 
 type PreparedAcpThreadBinding = {
-  channel: string;
-  accountId: string;
-  conversationId: string;
+  origin: SpawnOrigin;
+  placement: "current" | "child";
 };
 
 type AcpSpawnInitializedSession = Awaited<
@@ -351,22 +352,14 @@ async function persistAcpSpawnSessionFileBestEffort(params: {
   }
 }
 
-function resolveConversationIdForThreadBinding(params: {
-  to?: string;
-  threadId?: string | number;
-}): string | undefined {
-  return resolveConversationIdFromTargets({
-    threadId: params.threadId,
-    targets: [params.to],
-  });
-}
-
 function prepareAcpThreadBinding(params: {
   cfg: OpenClawConfig;
   channel?: string;
   accountId?: string;
   to?: string;
   threadId?: string | number;
+  senderId?: string;
+  sessionKey?: string;
 }): { ok: true; binding: PreparedAcpThreadBinding } | { ok: false; error: string } {
   const channel = params.channel?.trim().toLowerCase();
   if (!channel) {
@@ -414,29 +407,41 @@ function prepareAcpThreadBinding(params: {
       error: `Thread bindings are unavailable for ${policy.channel}.`,
     };
   }
-  if (!capabilities.bindSupported || !capabilities.placements.includes("child")) {
+  if (!capabilities.bindSupported) {
     return {
       ok: false,
-      error: `Thread bindings do not support ACP thread spawn for ${policy.channel}.`,
+      error: `Thread bindings are unavailable for ${policy.channel}.`,
     };
   }
-  const conversationId = resolveConversationIdForThreadBinding({
-    to: params.to,
+  const origin = resolveSpawnOrigin({
+    channel: policy.channel,
+    accountId: policy.accountId,
     threadId: params.threadId,
+    deliveryTo: params.to,
+    deliveryThreadId: params.threadId,
+    targets: [params.to],
+    senderId: params.senderId,
+    sessionKey: params.sessionKey,
   });
-  if (!conversationId) {
+  if (!origin.ok) {
     return {
       ok: false,
-      error: `Could not resolve a ${policy.channel} conversation for ACP thread spawn.`,
+      error: origin.error,
+    };
+  }
+  const placement = resolveAcpPlacement(origin.origin, capabilities);
+  if (!placement.ok) {
+    return {
+      ok: false,
+      error: placement.error,
     };
   }
 
   return {
     ok: true,
     binding: {
-      channel: policy.channel,
-      accountId: policy.accountId,
-      conversationId,
+      origin: origin.origin,
+      placement: placement.placement,
     },
   };
 }
@@ -579,11 +584,11 @@ async function bindPreparedAcpThread(params: {
     targetSessionKey: params.sessionKey,
     targetKind: "session",
     conversation: {
-      channel: params.preparedBinding.channel,
-      accountId: params.preparedBinding.accountId,
-      conversationId: params.preparedBinding.conversationId,
+      channel: params.preparedBinding.origin.channel,
+      accountId: params.preparedBinding.origin.accountId,
+      conversationId: params.preparedBinding.origin.conversationId,
     },
-    placement: "child",
+    placement: params.preparedBinding.placement,
     metadata: {
       threadName: resolveThreadBindingThreadName({
         agentId: params.targetAgentId,
@@ -597,13 +602,13 @@ async function bindPreparedAcpThread(params: {
         label: params.label || undefined,
         idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel({
           cfg: params.cfg,
-          channel: params.preparedBinding.channel,
-          accountId: params.preparedBinding.accountId,
+          channel: params.preparedBinding.origin.channel,
+          accountId: params.preparedBinding.origin.accountId,
         }),
         maxAgeMs: resolveThreadBindingMaxAgeMsForChannel({
           cfg: params.cfg,
-          channel: params.preparedBinding.channel,
-          accountId: params.preparedBinding.accountId,
+          channel: params.preparedBinding.origin.channel,
+          accountId: params.preparedBinding.origin.accountId,
         }),
         sessionCwd: resolveAcpSessionCwd(params.initializedRuntime.initialized.meta),
         sessionDetails: resolveAcpThreadSessionDetailLines({
@@ -615,7 +620,7 @@ async function bindPreparedAcpThread(params: {
   });
   if (!binding.conversation.conversationId) {
     throw new Error(
-      `Failed to create and bind a ${params.preparedBinding.channel} thread for this ACP session.`,
+      `Failed to create and bind a ${params.preparedBinding.origin.channel} thread for this ACP session.`,
     );
   }
 
@@ -779,6 +784,8 @@ export async function spawnAcpDirect(
       accountId: ctx.agentAccountId,
       to: ctx.agentTo,
       threadId: ctx.agentThreadId,
+      senderId: ctx.agentSenderId,
+      sessionKey: ctx.agentSessionKey,
     });
     if (!prepared.ok) {
       return {
