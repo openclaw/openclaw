@@ -139,7 +139,6 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       commandPath,
       ...(jsonOutputMode ? { suppressDoctorStdout: true } : {}),
     });
-<<<<<<< HEAD
     // Load plugins for commands that need channel access.
     // When --json output is active, temporarily route logs to stderr so plugin
     // registration messages don't corrupt the JSON payload on stdout.
