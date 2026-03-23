@@ -7,6 +7,7 @@ export const ErrorCodes = {
   INVALID_REQUEST: "INVALID_REQUEST",
   APPROVAL_NOT_FOUND: "APPROVAL_NOT_FOUND",
   UNAVAILABLE: "UNAVAILABLE",
+  SESSION_NOT_FOUND: "SESSION_NOT_FOUND",
 } as const;
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];

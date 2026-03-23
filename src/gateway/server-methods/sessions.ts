@@ -397,7 +397,7 @@ async function handleSessionSend(params: {
     params.respond(
       false,
       undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${key}`),
+      errorShape(ErrorCodes.SESSION_NOT_FOUND, `session not found: ${key}`),
     );
     return;
   }

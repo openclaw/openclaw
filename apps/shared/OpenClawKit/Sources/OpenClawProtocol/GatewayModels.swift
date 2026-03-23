@@ -11,6 +11,7 @@ public enum ErrorCode: String, Codable, Sendable {
     case invalidRequest = "INVALID_REQUEST"
     case approvalNotFound = "APPROVAL_NOT_FOUND"
     case unavailable = "UNAVAILABLE"
+    case sessionNotFound = "SESSION_NOT_FOUND"
 }
 
 public struct ConnectParams: Codable, Sendable {
