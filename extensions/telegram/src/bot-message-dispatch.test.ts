@@ -1612,13 +1612,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(createTelegramDraftStream.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
         thread: { id: 777, scope: "dm" },
-        previewTransport: "message",
+        previewTransport: "auto",
       }),
     );
     expect(createTelegramDraftStream.mock.calls[1]?.[0]).toEqual(
       expect.objectContaining({
         thread: { id: 777, scope: "dm" },
-        previewTransport: "message",
+        previewTransport: "auto",
       }),
     );
   });
@@ -1643,7 +1643,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(createTelegramDraftStream.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
         thread: { id: 777, scope: "dm" },
-        previewTransport: "message",
+        previewTransport: "auto",
       }),
     );
     expect(answerDraftStream.materialize).not.toHaveBeenCalled();
