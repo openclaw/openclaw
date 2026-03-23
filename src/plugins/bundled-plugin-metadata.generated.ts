@@ -88,7 +88,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         },
         expectedVersion: {
           label: "Expected acpx Version",
-          help: 'Exact version to enforce (for example 0.1.16) or "any" to skip strict version matching.',
+          help: 'Exact version to enforce or "any" to skip strict version matching.',
         },
         cwd: {
           label: "Default Working Directory",
