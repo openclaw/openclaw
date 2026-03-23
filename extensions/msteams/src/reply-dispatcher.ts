@@ -16,6 +16,7 @@ import {
 import {
   buildConversationReference,
   type MSTeamsAdapter,
+  type MSTeamsRenderedMessage,
   renderReplyPayloadsToMessages,
   sendMSTeamsMessages,
 } from "./messenger.js";
