@@ -77,6 +77,9 @@ describe("googlechat message actions", () => {
       messageName: "spaces/AAA/messages/msg-1",
     });
 
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
     const result = await googlechatMessageActions.handleAction({
       action: "send",
       params: {
@@ -140,6 +143,9 @@ describe("googlechat message actions", () => {
       },
     ]);
 
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
     const result = await googlechatMessageActions.handleAction({
       action: "react",
       params: {
