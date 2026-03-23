@@ -5,7 +5,7 @@ import type {
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-models";
 
 export const PROVIDER_ID = "github-copilot";
-const CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
+const CODEX_GPT_54_MODEL_ID = "gpt-5.4";
 const CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
 
 const DEFAULT_CONTEXT_WINDOW = 128_000;
@@ -25,9 +25,9 @@ export function resolveCopilotForwardCompatModel(
     return undefined;
   }
 
-  // For gpt-5.3-codex specifically, clone from the gpt-5.2-codex template
+  // For gpt-5.4 specifically, clone from the gpt-5.2-codex template
   // to preserve any special settings the registry has for codex models.
-  if (trimmedModelId.toLowerCase() === CODEX_GPT_53_MODEL_ID) {
+  if (trimmedModelId.toLowerCase() === CODEX_GPT_54_MODEL_ID) {
     for (const templateId of CODEX_TEMPLATE_MODEL_IDS) {
       const template = ctx.modelRegistry.find(
         PROVIDER_ID,

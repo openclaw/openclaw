@@ -1,19 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@whiskeysockets/baileys", async () => {
-  const actual =
-    await vi.importActual<typeof import("@whiskeysockets/baileys")>("@whiskeysockets/baileys");
-  return {
-    ...actual,
-    DisconnectReason: actual.DisconnectReason ?? { loggedOut: 401 },
-    isJidGroup: actual.isJidGroup ?? ((jid: string) => jid.endsWith("@g.us")),
-    normalizeMessageContent: actual.normalizeMessageContent ?? ((message: unknown) => message),
-  };
-});
-
-import { extractLocationData, extractMediaPlaceholder, extractText } from "./inbound.js";
+let extractLocationData: typeof import("./inbound.js").extractLocationData;
+let extractMediaPlaceholder: typeof import("./inbound.js").extractMediaPlaceholder;
+let extractText: typeof import("./inbound.js").extractText;
 
 describe("web inbound helpers", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ extractLocationData, extractMediaPlaceholder, extractText } = await import("./inbound.js"));
+  });
+
   it("prefers the main conversation body", () => {
     const body = extractText({
       conversation: " hello ",

@@ -95,6 +95,7 @@ const deliveryMocks = vi.hoisted(() => ({
 }));
 export const deliverReplies = deliveryMocks.deliverReplies;
 vi.mock("./bot/delivery.js", () => ({ deliverReplies: deliveryMocks.deliverReplies }));
+vi.mock("./bot/delivery.replies.js", () => ({ deliverReplies: deliveryMocks.deliverReplies }));
 export { createNativeCommandTestParams };
 
 export async function createNativeCommandsHarness(params?: {

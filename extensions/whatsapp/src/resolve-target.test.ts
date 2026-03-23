@@ -1,5 +1,5 @@
 import { installCommonResolveTargetErrorCases } from "openclaw/plugin-sdk/testing";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./runtime-api.js", async () => {
   const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
@@ -12,13 +12,6 @@ vi.mock("./runtime-api.js", async () => {
 
   return {
     ...actual,
-    createWhatsAppOutboundBase: ({
-      resolveTarget,
-    }: {
-      resolveTarget: typeof actual.resolveWhatsAppOutboundTarget;
-    }) => ({
-      resolveTarget,
-    }),
     getChatChannelMeta: () => ({ id: "whatsapp", label: "WhatsApp" }),
     normalizeWhatsAppTarget,
     isWhatsAppGroupJid: (value: string) => value.endsWith("@g.us"),
@@ -67,29 +60,26 @@ vi.mock("./runtime.js", () => ({
       text: { chunkText: vi.fn() },
       whatsapp: {
         sendMessageWhatsApp: vi.fn(),
-        sendPollWhatsApp: vi.fn(),
         createLoginTool: vi.fn(),
-        webAuthExists: vi.fn(async () => true),
       },
-    },
-    logging: {
-      shouldLogVerbose: vi.fn(() => false),
     },
   })),
 }));
 
-vi.mock("./shared.js", () => ({
-  createWhatsAppPluginBase: vi.fn(() => ({})),
-  loadWhatsAppChannelRuntime: vi.fn(),
-  whatsappSetupWizardProxy: {},
-  WHATSAPP_CHANNEL: "whatsapp",
-}));
-
-import { whatsappPlugin } from "./channel.js";
-
-const resolveTarget = whatsappPlugin.outbound!.resolveTarget!;
+let resolveTarget: NonNullable<
+  NonNullable<NonNullable<typeof import("./channel.js").whatsappPlugin.outbound>["resolveTarget"]>
+>;
 
 describe("whatsapp resolveTarget", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    const outbound = (await import("./channel.js")).whatsappPlugin.outbound;
+    if (!outbound?.resolveTarget) {
+      throw new Error("expected whatsapp outbound resolveTarget");
+    }
+    resolveTarget = outbound.resolveTarget;
+  });
+
   it("should resolve valid target in explicit mode", () => {
     const result = resolveTarget({
       to: "5511999999999",
@@ -160,8 +150,10 @@ describe("whatsapp resolveTarget", () => {
     expect(result.error).toBeDefined();
   });
 
-  installCommonResolveTargetErrorCases({
-    resolveTarget,
-    implicitAllowFrom: ["5511999999999"],
+  describe("common error cases", () => {
+    installCommonResolveTargetErrorCases({
+      resolveTarget: (...args) => resolveTarget(...args),
+      implicitAllowFrom: ["5511999999999"],
+    });
   });
 });
