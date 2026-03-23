@@ -484,10 +484,10 @@ describe("plugin sdk alias helpers", () => {
 
     // The fallback to import.meta.url (this repo's sdk-alias.ts) should resolve the alias
     expect(aliases["openclaw/plugin-sdk"]).toBeDefined();
-    expect(fs.existsSync(aliases["openclaw/plugin-sdk"]!)).toBe(true);
+    expect(fs.existsSync(aliases["openclaw/plugin-sdk"])).toBe(true);
     // extension-api also uses resolveLoaderPackageRoot which needs the same fallback
     expect(aliases["openclaw/extension-api"]).toBeDefined();
-    expect(fs.existsSync(aliases["openclaw/extension-api"]!)).toBe(true);
+    expect(fs.existsSync(aliases["openclaw/extension-api"])).toBe(true);
   });
 
   it("does not resolve plugin-sdk alias files from cwd fallback when package root is not an OpenClaw root", () => {
