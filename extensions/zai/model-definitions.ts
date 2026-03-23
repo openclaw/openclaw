@@ -28,16 +28,16 @@ const ZAI_MODEL_CATALOG = {
     name: "GLM-5",
     reasoning: true,
     input: ["text"],
-    contextWindow: 204800,
-    maxTokens: 131072,
+    contextWindow: 202800,
+    maxTokens: 131100,
     cost: ZAI_DEFAULT_COST,
   },
   "glm-5-turbo": {
     name: "GLM-5 Turbo",
     reasoning: true,
     input: ["text"],
-    contextWindow: 200000,
-    maxTokens: 131072,
+    contextWindow: 202800,
+    maxTokens: 131100,
     cost: { input: 1.2, output: 4, cacheRead: 0.24, cacheWrite: 0 },
   },
   "glm-4.7": {
@@ -54,15 +54,15 @@ const ZAI_MODEL_CATALOG = {
     input: ["text"],
     contextWindow: 200000,
     maxTokens: 131072,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    cost: { input: 0.07, output: 0.4, cacheRead: 0, cacheWrite: 0 },
   },
   "glm-4.7-flashx": {
     name: "GLM-4.7 FlashX",
     reasoning: true,
     input: ["text"],
     contextWindow: 200000,
-    maxTokens: 131072,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    maxTokens: 128000,
+    cost: { input: 0.06, output: 0.4, cacheRead: 0.01, cacheWrite: 0 },
   },
   "glm-4.6": {
     name: "GLM-4.6",
@@ -148,7 +148,7 @@ export function buildZaiModelDefinition(params: {
     input:
       params.input ?? (catalog?.input ? ([...catalog.input] as ("text" | "image")[]) : ["text"]),
     cost: params.cost ?? catalog?.cost ?? ZAI_DEFAULT_COST,
-    contextWindow: params.contextWindow ?? catalog?.contextWindow ?? 204800,
-    maxTokens: params.maxTokens ?? catalog?.maxTokens ?? 131072,
+    contextWindow: params.contextWindow ?? catalog?.contextWindow ?? 202800,
+    maxTokens: params.maxTokens ?? catalog?.maxTokens ?? 131100,
   };
 }
