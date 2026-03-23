@@ -121,4 +121,19 @@ describe("resolveCurrentDirectiveLevels", () => {
 
     expect(result.currentReasoningLevel).toBe("off");
   });
+
+  it("respects agent reasoningDefault: off as explicit override", async () => {
+    const resolveDefaultThinkingLevel = vi.fn().mockResolvedValue("off");
+
+    const result = await resolveCurrentDirectiveLevels({
+      sessionEntry: {},
+      agentEntry: {
+        reasoningDefault: "off",
+      },
+      resolveDefaultThinkingLevel,
+    });
+
+    // Agent explicitly setting "off" should be respected, not overridden by model default
+    expect(result.currentReasoningLevel).toBe("off");
+  });
 });
