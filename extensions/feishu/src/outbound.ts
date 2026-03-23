@@ -1,11 +1,19 @@
 import fs from "fs";
 import path from "path";
-import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import {
+  attachChannelToResult,
+  createAttachedChannelResultAdapter,
+} from "openclaw/plugin-sdk/channel-send-result";
 import type { ChannelOutboundAdapter } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { sendMediaFeishu } from "./media.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { sendMarkdownCardFeishu, sendMessageFeishu, sendStructuredCardFeishu } from "./send.js";
+import {
+  sendCardFeishu,
+  sendMarkdownCardFeishu,
+  sendMessageFeishu,
+  sendStructuredCardFeishu,
+} from "./send.js";
 
 function normalizePossibleLocalImagePath(text: string | undefined): string | null {
   const raw = text?.trim();
@@ -82,6 +90,102 @@ export const feishuOutbound: ChannelOutboundAdapter = {
   chunker: (text, limit) => getFeishuRuntime().channel.text.chunkMarkdownText(text, limit),
   chunkerMode: "markdown",
   textChunkLimit: 4000,
+  sendPayload: async ({
+    cfg,
+    to,
+    text,
+    payload,
+    accountId,
+    replyToId,
+    threadId,
+    mediaLocalRoots,
+  }) => {
+    const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
+    const feishuData = payload.channelData?.feishu as
+      | { card?: Record<string, unknown> }
+      | undefined;
+
+    // When channelData.feishu.card is provided, send as an interactive card directly.
+    if (feishuData?.card && typeof feishuData.card === "object") {
+      return attachChannelToResult(
+        "feishu",
+        await sendCardFeishu({
+          cfg,
+          to,
+          card: feishuData.card,
+          accountId: accountId ?? undefined,
+          replyToMessageId,
+          replyInThread: threadId != null && !replyToId,
+        }),
+      );
+    }
+
+    // Fallback: send text + media via standard outbound paths.
+    // Collect all media URLs to handle multi-attachment payloads.
+    const mediaUrls: string[] = [];
+    if (payload.mediaUrl) {
+      mediaUrls.push(payload.mediaUrl);
+    }
+    if (payload.mediaUrls) {
+      for (const url of payload.mediaUrls) {
+        // Avoid duplicating the single mediaUrl if it also appears in mediaUrls
+        if (url && !mediaUrls.includes(url)) {
+          mediaUrls.push(url);
+        }
+      }
+    }
+
+    if (mediaUrls.length > 0) {
+      // Send text first (if any), then media.
+      if (text?.trim()) {
+        await sendOutboundText({
+          cfg,
+          to,
+          text,
+          accountId: accountId ?? undefined,
+          replyToMessageId,
+        });
+      }
+
+      // Send each media attachment; keep the last successful result for the return value.
+      let lastResult: { messageId: string; [k: string]: unknown } | undefined;
+      for (const mediaUrl of mediaUrls) {
+        try {
+          lastResult = await sendMediaFeishu({
+            cfg,
+            to,
+            mediaUrl,
+            accountId: accountId ?? undefined,
+            mediaLocalRoots,
+            replyToMessageId,
+          });
+        } catch (err) {
+          console.error(`[feishu] sendPayload media failed:`, err);
+          // On failure, send URL-only fallback (no text duplication — text was already sent above)
+          lastResult = await sendOutboundText({
+            cfg,
+            to,
+            text: `📎 ${mediaUrl}`,
+            accountId: accountId ?? undefined,
+            replyToMessageId,
+          });
+        }
+      }
+      return attachChannelToResult("feishu", lastResult!);
+    }
+
+    // Text-only payload.
+    return attachChannelToResult(
+      "feishu",
+      await sendOutboundText({
+        cfg,
+        to,
+        text: text || "",
+        accountId: accountId ?? undefined,
+        replyToMessageId,
+      }),
+    );
+  },
   ...createAttachedChannelResultAdapter({
     channel: "feishu",
     sendText: async ({

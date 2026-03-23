@@ -7,6 +7,7 @@ const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
 const sendMarkdownCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendStructuredCardFeishuMock = vi.hoisted(() => vi.fn());
+const sendCardFeishuMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./media.js", () => ({
   sendMediaFeishu: sendMediaFeishuMock,
@@ -16,6 +17,7 @@ vi.mock("./send.js", () => ({
   sendMessageFeishu: sendMessageFeishuMock,
   sendMarkdownCardFeishu: sendMarkdownCardFeishuMock,
   sendStructuredCardFeishu: sendStructuredCardFeishuMock,
+  sendCardFeishu: sendCardFeishuMock,
 }));
 
 vi.mock("./runtime.js", () => ({
@@ -37,6 +39,7 @@ function resetOutboundMocks() {
   sendMarkdownCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
   sendStructuredCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
   sendMediaFeishuMock.mockResolvedValue({ messageId: "media_msg" });
+  sendCardFeishuMock.mockResolvedValue({ messageId: "interactive_card_msg" });
 }
 
 describe("feishuOutbound.sendText local-image auto-convert", () => {
@@ -355,5 +358,180 @@ describe("feishuOutbound.sendMedia renderMode", () => {
         accountId: "main",
       }),
     );
+  });
+});
+
+describe("feishuOutbound.sendPayload", () => {
+  const sendPayload = feishuOutbound.sendPayload!;
+
+  beforeEach(() => {
+    resetOutboundMocks();
+  });
+
+  it("sends interactive card when channelData.feishu.card is present", async () => {
+    const card = { header: { title: "Test" }, elements: [{ tag: "div" }] };
+    const result = await sendPayload({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "ignored text",
+      accountId: "main",
+      payload: {
+        channelData: { feishu: { card } },
+      },
+    } as any);
+
+    expect(sendCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        card,
+        accountId: "main",
+      }),
+    );
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({ channel: "feishu", messageId: "interactive_card_msg" }),
+    );
+  });
+
+  it("sends text then media for mediaUrl payload", async () => {
+    const result = await sendPayload({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "caption",
+      accountId: "main",
+      mediaLocalRoots: ["/sandbox"],
+      payload: {
+        mediaUrl: "https://example.com/image.png",
+      },
+    } as any);
+
+    // Text sent first
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        text: "caption",
+        accountId: "main",
+      }),
+    );
+    // Then media with mediaLocalRoots passed through
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        mediaUrl: "https://example.com/image.png",
+        accountId: "main",
+        mediaLocalRoots: ["/sandbox"],
+      }),
+    );
+    expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "media_msg" }));
+  });
+
+  it("falls back to url-only text if media send fails (no text duplication)", async () => {
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+    await sendPayload({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "caption",
+      accountId: "main",
+      payload: {
+        mediaUrl: "https://example.com/image.png",
+      },
+    } as any);
+
+    // Text was sent once as caption
+    const textCalls = sendMessageFeishuMock.mock.calls;
+    // First call: caption text, second call: fallback URL only (no duplicated caption)
+    expect(textCalls).toHaveLength(2);
+    expect(textCalls[0][0].text).toBe("caption");
+    expect(textCalls[1][0].text).toBe("\u{1F4CE} https://example.com/image.png");
+  });
+
+  it("sends text-only payload when no media or card", async () => {
+    const result = await sendPayload({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "hello world",
+      accountId: "main",
+      payload: {},
+    } as any);
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        text: "hello world",
+        accountId: "main",
+      }),
+    );
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "text_msg" }));
+  });
+
+  it("passes replyInThread to sendCardFeishu when threadId is set without replyToId", async () => {
+    const card = { header: { title: "Thread Card" }, elements: [] };
+    await sendPayload({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "",
+      accountId: "main",
+      threadId: "om_thread_1",
+      payload: {
+        channelData: { feishu: { card } },
+      },
+    } as any);
+
+    expect(sendCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        card,
+        replyToMessageId: "om_thread_1",
+        replyInThread: true,
+      }),
+    );
+  });
+
+  it("does not set replyInThread when replyToId is present", async () => {
+    const card = { header: { title: "Reply Card" }, elements: [] };
+    await sendPayload({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "",
+      accountId: "main",
+      replyToId: "om_reply_1",
+      threadId: "om_thread_1",
+      payload: {
+        channelData: { feishu: { card } },
+      },
+    } as any);
+
+    expect(sendCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        card,
+        replyToMessageId: "om_reply_1",
+        replyInThread: false,
+      }),
+    );
+  });
+
+  it("handles multiple mediaUrls by sending each attachment", async () => {
+    const result = await sendPayload({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "",
+      accountId: "main",
+      payload: {
+        mediaUrls: ["https://example.com/image1.png", "https://example.com/image2.png"],
+      },
+    } as any);
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(2);
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ mediaUrl: "https://example.com/image1.png" }),
+    );
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ mediaUrl: "https://example.com/image2.png" }),
+    );
+    expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "media_msg" }));
   });
 });

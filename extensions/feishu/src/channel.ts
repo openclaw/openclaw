@@ -1027,5 +1027,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         sendText: { resolve: (runtime) => runtime.feishuOutbound.sendText },
         sendMedia: { resolve: (runtime) => runtime.feishuOutbound.sendMedia },
       }),
+      sendPayload: async (params) =>
+        (await loadFeishuChannelRuntime()).feishuOutbound.sendPayload!(params),
     },
   });
