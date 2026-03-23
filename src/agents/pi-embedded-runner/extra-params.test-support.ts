@@ -1,5 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
+import type { ThinkLevel } from "../../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { applyExtraParamsToAgent } from "./extra-params.js";
 
@@ -19,7 +20,7 @@ type RunExtraParamsCaseParams<
   model: Model<TApi>;
   options?: SimpleStreamOptions;
   payload: TPayload;
-  thinkingLevel?: "minimal" | "low" | "medium" | "high";
+  thinkingLevel?: ThinkLevel;
 };
 
 export function runExtraParamsCase<
