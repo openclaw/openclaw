@@ -51,26 +51,49 @@ export function createMSTeamsReplyDispatcher(params: {
    * First tries the live turn context (cheapest path).  When the context has
    * been revoked (debounced messages) we fall back to proactive messaging via
    * the stored conversation reference so the user still sees the "…" bubble.
+   *
+   * Throttled to at most once every 3 seconds and suppressed after a 429 for
+   * 30 seconds to avoid hitting Teams API rate limits during long agent runs.
    */
+  let lastTypingSentAt = 0;
+  let typingSuppressedUntil = 0;
+  let typingStopped = false;
+  const TYPING_MIN_INTERVAL_MS = 3_000;
+  const TYPING_BACKOFF_MS = 30_000;
+
   const sendTypingIndicator = async () => {
-    await withRevokedProxyFallback({
-      run: async () => {
-        await params.context.sendActivity({ type: "typing" });
-      },
-      onRevoked: async () => {
-        const baseRef = buildConversationReference(params.conversationRef);
-        await params.adapter.continueConversation(
-          params.appId,
-          { ...baseRef, activityId: undefined },
-          async (ctx) => {
-            await ctx.sendActivity({ type: "typing" });
-          },
-        );
-      },
-      onRevokedLog: () => {
-        params.log.debug?.("turn context revoked, sending typing via proactive messaging");
-      },
-    });
+    if (typingStopped) return;
+    const now = Date.now();
+    if (now < typingSuppressedUntil) return;
+    if (now - lastTypingSentAt < TYPING_MIN_INTERVAL_MS) return;
+    lastTypingSentAt = now;
+
+    try {
+      await withRevokedProxyFallback({
+        run: async () => {
+          await params.context.sendActivity({ type: "typing" });
+        },
+        onRevoked: async () => {
+          const baseRef = buildConversationReference(params.conversationRef);
+          await params.adapter.continueConversation(
+            params.appId,
+            { ...baseRef, activityId: undefined },
+            async (ctx) => {
+              await ctx.sendActivity({ type: "typing" });
+            },
+          );
+        },
+        onRevokedLog: () => {
+          params.log.debug?.("turn context revoked, sending typing via proactive messaging");
+        },
+      });
+    } catch (err: unknown) {
+      const errStr = String(err);
+      if (errStr.includes("429") || errStr.includes("quota exceeded")) {
+        typingSuppressedUntil = Date.now() + TYPING_BACKOFF_MS;
+        params.log.debug?.(`msteams typing suppressed for ${TYPING_BACKOFF_MS}ms after 429`);
+      }
+    }
   };
 
   const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
@@ -206,6 +229,7 @@ export function createMSTeamsReplyDispatcher(params: {
   // Wrap markDispatchIdle to flush all accumulated messages before signalling idle.
   // Returns a promise so callers (e.g. onSettled) can await completion.
   const markDispatchIdle = (): Promise<void> => {
+    typingStopped = true;
     return flushPendingMessages()
       .catch((err) => {
         const errMsg = formatUnknownError(err);
