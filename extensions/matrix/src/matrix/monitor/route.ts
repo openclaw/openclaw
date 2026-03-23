@@ -21,6 +21,7 @@ export function resolveMatrixInboundRoute(params: {
 }): {
   route: MatrixResolvedRoute;
   configuredBinding: ReturnType<typeof resolveConfiguredAcpBindingRecord>;
+  runtimeBindingId: string | null;
 } {
   const baseRoute = params.resolveAgentRoute({
     cfg: params.cfg,
@@ -54,9 +55,6 @@ export function resolveMatrixInboundRoute(params: {
   });
   const boundSessionKey = runtimeBinding?.targetSessionKey?.trim();
 
-  if (runtimeBinding) {
-    sessionBindingService.touch(runtimeBinding.bindingId, params.eventTs);
-  }
   if (runtimeBinding && boundSessionKey) {
     return {
       route: {
@@ -66,6 +64,7 @@ export function resolveMatrixInboundRoute(params: {
         matchedBy: "binding.channel",
       },
       configuredBinding: null,
+      runtimeBindingId: runtimeBinding.bindingId,
     };
   }
 
@@ -95,5 +94,6 @@ export function resolveMatrixInboundRoute(params: {
           }
         : baseRoute,
     configuredBinding,
+    runtimeBindingId: null,
   };
 }
