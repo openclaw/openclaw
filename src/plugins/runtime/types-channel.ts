@@ -178,9 +178,14 @@ export type PluginRuntimeChannel = {
       clearReplyMarkup: (
         chatIdInput: string | number,
         messageIdInput: string | number,
-        opts?: Parameters<
-          typeof import("../../plugin-sdk/telegram.js").editMessageReplyMarkupTelegram
-        >[3],
+        opts?: {
+          token?: string;
+          accountId?: string;
+          verbose?: boolean;
+          api?: Partial<import("grammy").Bot["api"]>;
+          retry?: import("../../infra/retry.js").RetryConfig;
+          cfg?: ReturnType<typeof import("../../config/config.js").loadConfig>;
+        },
       ) => Promise<{ ok: true; messageId: string; chatId: string }>;
       deleteMessage: typeof import("../../plugin-sdk/telegram.js").deleteMessageTelegram;
       renameTopic: typeof import("../../plugin-sdk/telegram.js").renameForumTopicTelegram;
@@ -222,20 +227,28 @@ export type PluginRuntimeChannel = {
     createLoginTool: typeof import("./runtime-whatsapp-login-tool.js").createRuntimeWhatsAppLoginTool;
   };
   line: {
-    listLineAccountIds: typeof import("../../line/accounts.js").listLineAccountIds;
-    resolveDefaultLineAccountId: typeof import("../../line/accounts.js").resolveDefaultLineAccountId;
-    resolveLineAccount: typeof import("../../line/accounts.js").resolveLineAccount;
-    normalizeAccountId: typeof import("../../line/accounts.js").normalizeAccountId;
-    probeLineBot: typeof import("../../line/probe.js").probeLineBot;
-    sendMessageLine: typeof import("../../line/send.js").sendMessageLine;
-    pushMessageLine: typeof import("../../line/send.js").pushMessageLine;
-    pushMessagesLine: typeof import("../../line/send.js").pushMessagesLine;
-    pushFlexMessage: typeof import("../../line/send.js").pushFlexMessage;
-    pushTemplateMessage: typeof import("../../line/send.js").pushTemplateMessage;
-    pushLocationMessage: typeof import("../../line/send.js").pushLocationMessage;
-    pushTextMessageWithQuickReplies: typeof import("../../line/send.js").pushTextMessageWithQuickReplies;
-    createQuickReplyItems: typeof import("../../line/send.js").createQuickReplyItems;
-    buildTemplateMessageFromPayload: typeof import("../../line/template-messages.js").buildTemplateMessageFromPayload;
-    monitorLineProvider: typeof import("../../line/monitor.js").monitorLineProvider;
+    listLineAccountIds: typeof import("../../../extensions/line/runtime-api.js").listLineAccountIds;
+    resolveDefaultLineAccountId: typeof import(
+      "../../../extensions/line/runtime-api.js"
+    ).resolveDefaultLineAccountId;
+    resolveLineAccount: typeof import("../../../extensions/line/runtime-api.js").resolveLineAccount;
+    normalizeAccountId: typeof import("../../../extensions/line/runtime-api.js").normalizeAccountId;
+    probeLineBot: typeof import("../../../extensions/line/runtime-api.js").probeLineBot;
+    sendMessageLine: typeof import("../../../extensions/line/runtime-api.js").sendMessageLine;
+    pushMessageLine: typeof import("../../../extensions/line/runtime-api.js").pushMessageLine;
+    pushMessagesLine: typeof import("../../../extensions/line/runtime-api.js").pushMessagesLine;
+    pushFlexMessage: typeof import("../../../extensions/line/runtime-api.js").pushFlexMessage;
+    pushTemplateMessage: typeof import("../../../extensions/line/runtime-api.js").pushTemplateMessage;
+    pushLocationMessage: typeof import("../../../extensions/line/runtime-api.js").pushLocationMessage;
+    pushTextMessageWithQuickReplies: typeof import(
+      "../../../extensions/line/runtime-api.js"
+    ).pushTextMessageWithQuickReplies;
+    createQuickReplyItems: typeof import(
+      "../../../extensions/line/runtime-api.js"
+    ).createQuickReplyItems;
+    buildTemplateMessageFromPayload: typeof import(
+      "../../../extensions/line/runtime-api.js"
+    ).buildTemplateMessageFromPayload;
+    monitorLineProvider: typeof import("../../../extensions/line/runtime-api.js").monitorLineProvider;
   };
 };
