@@ -13,8 +13,8 @@ OpenClaw supports DuckDuckGo as a **key-free** `web_search` provider. No API
 key or account is required.
 
 <Warning>
-  DuckDuckGo is an **experimental, unofficial** integration that scrapes
-  DuckDuckGo's non-JavaScript search pages — not an official API. Expect
+  DuckDuckGo is an **experimental, unofficial** integration that pulls results
+  from DuckDuckGo's non-JavaScript search pages — not an official API. Expect
   occasional breakage from bot-challenge pages or HTML changes.
 </Warning>
 
@@ -79,8 +79,8 @@ parameters override config values per-query.
 ## Notes
 
 - **No API key** — works out of the box, zero configuration
-- **Experimental** — scrapes DuckDuckGo's non-JavaScript HTML search pages,
-  not an official API or SDK
+- **Experimental** — gathers results from DuckDuckGo's non-JavaScript HTML
+  search pages, not an official API or SDK
 - **Bot-challenge risk** — DuckDuckGo may serve CAPTCHAs or block requests
   under heavy or automated use
 - **HTML parsing** — results depend on page structure, which can change without
