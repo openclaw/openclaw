@@ -207,6 +207,8 @@ type SessionLogEntry = {
   content: string;
   tokens?: number;
   cost?: number;
+  /** Tool name for tool/toolResult entries; shown as a badge in the log view. */
+  toolName?: string;
 };
 
 type SessionSort = "tokens" | "cost" | "recent" | "messages" | "errors";

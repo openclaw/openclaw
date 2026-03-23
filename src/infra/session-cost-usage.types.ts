@@ -155,4 +155,6 @@ export type SessionLogEntry = {
   content: string;
   tokens?: number;
   cost?: number;
+  /** Tool name for tool/toolResult messages; populated from message.toolName when present. */
+  toolName?: string;
 };

@@ -745,7 +745,13 @@ export function ChatMessageBubble({
     return (
       <div className="px-4 py-1 animate-fade-in ml-11">
         <ToolCallCard
-          cards={[{ kind: "result", name: "tool", text: resultText }]}
+          cards={[
+            {
+              kind: "result",
+              name: (msg as { toolName?: string }).toolName ?? "tool",
+              text: resultText,
+            },
+          ]}
           displayMode={toolDisplayMode}
           onViewOutput={onViewToolOutput}
           agentId={agentId}

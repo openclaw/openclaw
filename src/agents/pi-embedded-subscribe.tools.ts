@@ -83,14 +83,25 @@ function extractErrorField(value: unknown): string | undefined {
   return normalizeToolErrorText(status);
 }
 
+function resolveToolResultContent(result: unknown): unknown[] | null {
+  // Pi sometimes sends tool results as a direct array instead of {content: [...]}
+  if (Array.isArray(result)) {
+    return result;
+  }
+  if (!result || typeof result !== "object") {
+    return null;
+  }
+  const record = result as Record<string, unknown>;
+  return Array.isArray(record.content) ? record.content : null;
+}
+
 export function sanitizeToolResult(result: unknown): unknown {
   if (!result || typeof result !== "object") {
     return result;
   }
-  const record = result as Record<string, unknown>;
-  const content = Array.isArray(record.content) ? record.content : null;
+  const content = resolveToolResultContent(result);
   if (!content) {
-    return record;
+    return result;
   }
   const sanitized = content.map((item) => {
     if (!item || typeof item !== "object") {
@@ -110,15 +121,20 @@ export function sanitizeToolResult(result: unknown): unknown {
     }
     return entry;
   });
-  return { ...record, content: sanitized };
+  // Preserve the original shape: if result was a direct array, wrap into {content}
+  if (Array.isArray(result)) {
+    return { content: sanitized };
+  }
+  return { ...(result as Record<string, unknown>), content: sanitized };
 }
 
 export function extractToolResultText(result: unknown): string | undefined {
   if (!result || typeof result !== "object") {
     return undefined;
   }
-  const record = result as Record<string, unknown>;
-  const texts = collectTextContentBlocks(record.content)
+  // Handle both direct array format and {content: [...]} object format from Pi
+  const content = resolveToolResultContent(result);
+  const texts = collectTextContentBlocks(content)
     .map((item) => {
       const trimmed = item.trim();
       return trimmed ? trimmed : undefined;
@@ -197,11 +213,14 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
   if (!result || typeof result !== "object") {
     return [];
   }
-  const record = result as Record<string, unknown>;
-  const content = Array.isArray(record.content) ? record.content : null;
+  // Handle both direct array format and {content: [...]} object format from Pi
+  const content = resolveToolResultContent(result);
   if (!content) {
     return [];
   }
+  const record = Array.isArray(result)
+    ? ({} as Record<string, unknown>)
+    : (result as Record<string, unknown>);
 
   // Extract MEDIA: paths from text content blocks using the shared parser so
   // directive matching and validation stay in sync with outbound reply parsing.

@@ -122,14 +122,14 @@ Production crash guards and heartbeat reliability fixes. Zero new features -- pu
 
 ### Task 2: Phase 2 -- Pi Adapter Tool Result Fixes
 
-**Status:** To-do | **Priority:** Critical | **Assignee:** rohit sharma | **Est:** 3h
+**Status:** Done | **Priority:** Critical | **Assignee:** rohit sharma | **Est:** 3h
 
 4 commits fixing Pi protocol handling for tool results. These are runtime bugs affecting our primary adapter.
 
-- [ ] 2.1 Handle direct array format in tool results -- Pi adapter may return content as array instead of object; add normalization
-- [ ] 2.2 Extract text content from tool results -- ensure text is extracted from structured content blocks
-- [ ] 2.3 Include toolName in tool_result messages -- Pi adapter must include `toolName` field in tool result transcript entries
-- [ ] 2.4 Include toolName in transcript entries -- ensure transcript logging captures tool names for debugging
+- [x] 2.1 Handle direct array format in tool results -- `resolveToolResultContent()` helper normalizes array vs wrapped object
+- [x] 2.2 Extract text content from tool results -- resolved content fed to `collectTextContentBlocks` preventing `[object Object]`
+- [x] 2.3 Include toolName in tool_result messages -- `session-cost-usage.ts` passes `toolName` to `SessionLogEntry`; usage UI displays it
+- [x] 2.4 Include toolName in transcript entries -- `chat-messages.tsx` uses actual `toolName` instead of hardcoded `"tool"`
 
 ### Task 3: Phase 3 -- Security Hardening
 

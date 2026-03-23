@@ -998,6 +998,7 @@ export async function loadSessionLogs(params: {
         content,
         tokens,
         cost,
+        ...(toolName ? { toolName } : {}),
       });
     } catch {
       // Ignore malformed lines
