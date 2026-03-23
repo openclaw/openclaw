@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import {
   loadAuthProfileStoreForSecretsRuntime,
   type AuthProfileStore,
@@ -8,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
+import { resolveConfigDir } from "../utils.js";
 import {
   emitDaemonInstallRuntimeWarning,
   resolveDaemonInstallRuntimeInputs,
@@ -17,6 +20,55 @@ import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 export { resolveGatewayDevMode } from "./daemon-install-plan.shared.js";
+
+/**
+ * Load environment variables from ~/.openclaw/.env file.
+ * This is needed because launchd services do not inherit shell environment,
+ * so API keys stored in .env are not available to the Gateway LaunchAgent.
+ */
+function loadDotEnvFile(env: Record<string, string | undefined>): Record<string, string> {
+  const configDir = resolveConfigDir(env);
+  const envFilePath = path.join(configDir, ".env");
+
+  if (!fs.existsSync(envFilePath)) {
+    return {};
+  }
+
+  const content = fs.readFileSync(envFilePath, "utf8");
+  const envVars: Record<string, string> = {};
+
+  for (const line of content.split("\n")) {
+    const trimmed = line.trim();
+
+    // Skip empty lines and comments
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+
+    // Parse KEY=VALUE or KEY="value" or KEY='value'
+    const equalsIndex = trimmed.indexOf("=");
+    if (equalsIndex === -1) {
+      continue;
+    }
+
+    const key = trimmed.slice(0, equalsIndex).trim();
+    let value = trimmed.slice(equalsIndex + 1).trim();
+
+    // Remove surrounding quotes if present
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+
+    if (key) {
+      envVars[key] = value;
+    }
+  }
+
+  return envVars;
+}
 
 export type GatewayInstallPlan = {
   programArguments: string[];
@@ -57,7 +109,17 @@ function buildGatewayInstallEnvironment(params: {
   authStore?: AuthProfileStore;
   serviceEnvironment: Record<string, string | undefined>;
 }): Record<string, string | undefined> {
+  // Merge env sources into the service environment in ascending priority:
+  //   1. ~/.openclaw/.env file vars  (lowest — user secrets / fallback keys)
+  //   2. Config env vars              (openclaw.json env.vars + inline keys)
+  //   3. Auth-profile env refs        (credential store → env var lookups)
+  //   4. Service environment          (HOME, PATH, OPENCLAW_* — highest)
+
+  // Load .env file variables from ~/.openclaw/.env
+  const dotEnvVars = loadDotEnvFile(params.env);
+
   const environment: Record<string, string | undefined> = {
+    ...dotEnvVars,
     ...collectDurableServiceEnvVars({
       env: params.env,
       config: params.config,
@@ -113,11 +175,6 @@ export async function buildGatewayInstallPlan(params: {
     extraPathDirs: resolveDaemonNodeBinDir(nodePath),
   });
 
-  // Merge env sources into the service environment in ascending priority:
-  //   1. ~/.openclaw/.env file vars  (lowest — user secrets / fallback keys)
-  //   2. Config env vars              (openclaw.json env.vars + inline keys)
-  //   3. Auth-profile env refs        (credential store → env var lookups)
-  //   4. Service environment          (HOME, PATH, OPENCLAW_* — highest)
   return {
     programArguments,
     workingDirectory,
