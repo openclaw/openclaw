@@ -152,15 +152,44 @@ export interface ChatDelegationsProps {
   delegations: DelegationEntry[];
 }
 
+const COMPLETED_VISIBLE_MS = 2 * 60 * 1000; // Show completed delegations for 2 minutes
+
 export function ChatDelegations({ delegations }: ChatDelegationsProps) {
   const [collapsed, setCollapsed] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
 
-  // Only render when there are entries
-  if (delegations.length === 0) {
+  // Re-render every 10s so completed entries auto-hide after COMPLETED_VISIBLE_MS
+  useEffect(() => {
+    if (delegations.length === 0) {
+      return;
+    }
+    const id = setInterval(() => setNow(Date.now()), 10_000);
+    return () => clearInterval(id);
+  }, [delegations.length]);
+
+  // Filter: show active (spawned/running/stale/failed) always,
+  // show completed only if ended within the last 2 minutes
+  const visible = delegations.filter((d) => {
+    if (
+      d.status === "running" ||
+      d.status === "spawned" ||
+      d.status === "stale" ||
+      d.status === "failed"
+    ) {
+      return true;
+    }
+    // Completed — show briefly then hide
+    if (d.status === "completed" && d.endedAt != null) {
+      return now - d.endedAt < COMPLETED_VISIBLE_MS;
+    }
+    return false;
+  });
+
+  if (visible.length === 0) {
     return null;
   }
 
-  const activeCount = delegations.filter(
+  const activeCount = visible.filter(
     (d) => d.status === "running" || d.status === "spawned",
   ).length;
 
@@ -185,13 +214,13 @@ export function ChatDelegations({ delegations }: ChatDelegationsProps) {
               {activeCount} active
             </span>
           )}
-          <span className="ml-auto text-muted-foreground/60">{delegations.length} total</span>
+          <span className="ml-auto text-muted-foreground/60">{visible.length} total</span>
         </button>
 
         {/* Delegation cards */}
         {!collapsed && (
           <div className="flex flex-col gap-2 px-3 pb-3">
-            {delegations.map((entry) => (
+            {visible.map((entry) => (
               <DelegationCard key={entry.runId} entry={entry} />
             ))}
           </div>
