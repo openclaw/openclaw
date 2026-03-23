@@ -20,6 +20,7 @@ import { cronHandlers } from "./server-methods/cron.js";
 import { deviceHandlers } from "./server-methods/devices.js";
 import { doctorHandlers } from "./server-methods/doctor.js";
 import { execApprovalsHandlers } from "./server-methods/exec-approvals.js";
+import { executionWorkspacesHandlers } from "./server-methods/execution-workspaces.js";
 import { goalsHandlers } from "./server-methods/goals.js";
 import { healthHandlers } from "./server-methods/health.js";
 import { hubHandlers } from "./server-methods/hub.js";
@@ -37,11 +38,13 @@ import { projectsHandlers } from "./server-methods/projects.js";
 import { pushHandlers } from "./server-methods/push.js";
 import { sendHandlers } from "./server-methods/send.js";
 import { sessionsHandlers } from "./server-methods/sessions.js";
+import { sidebarBadgesHandlers } from "./server-methods/sidebar-badges.js";
 import { skillsHandlers } from "./server-methods/skills.js";
 import { stateHandlers } from "./server-methods/state.js";
 import { sttHandlers } from "./server-methods/stt.js";
 import { systemHandlers } from "./server-methods/system.js";
 import { talkHandlers } from "./server-methods/talk.js";
+import { taskDocumentsHandlers } from "./server-methods/task-documents.js";
 import { tasksHandlers } from "./server-methods/tasks.js";
 import { teamsHandlers } from "./server-methods/teams.js";
 import { toolsCatalogHandlers } from "./server-methods/tools-catalog.js";
@@ -122,6 +125,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...projectsHandlers,
   ...workspacesHandlers,
   ...tasksHandlers,
+  ...taskDocumentsHandlers,
   ...goalsHandlers,
   ...budgetsHandlers,
   ...approvalsHandlers,
@@ -133,6 +137,8 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...personasHandlers,
   ...onboardingHandlers,
   ...metricsHandlers,
+  ...executionWorkspacesHandlers,
+  ...sidebarBadgesHandlers,
 };
 
 export async function handleGatewayRequest(

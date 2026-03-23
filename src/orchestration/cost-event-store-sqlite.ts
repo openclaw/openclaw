@@ -128,6 +128,66 @@ export function listCostEvents(filters?: {
   return (rows as unknown as CostEventRow[]).map(rowToCostEvent);
 }
 
+export function getQuotaWindowSpend(params: {
+  workspaceId: string;
+  windowKind: "calendar_month_utc" | "lifetime";
+  scopeType?: "workspace" | "agent" | "project";
+  scopeId?: string;
+}): { spentMicrocents: number; windowStart: number; windowEnd: number } {
+  const db = getStateDb();
+
+  let windowStart: number;
+  let windowEnd: number;
+
+  if (params.windowKind === "calendar_month_utc") {
+    // Compute start/end of current UTC month as unix timestamps
+    const now = new Date();
+    const startOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0, 0));
+    const endOfMonth = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1, 0, 0, 0, 0) - 1,
+    );
+    windowStart = Math.floor(startOfMonth.getTime() / 1000);
+    windowEnd = Math.floor(endOfMonth.getTime() / 1000);
+  } else {
+    // lifetime: from epoch 0 to far future
+    windowStart = 0;
+    windowEnd = 2147483647; // max unix timestamp (year 2038)
+  }
+
+  let query = `
+    SELECT SUM(cost_microcents) as total
+    FROM op1_cost_events
+    WHERE workspace_id = ?
+      AND occurred_at BETWEEN ? AND ?
+  `;
+  const queryParams: Array<string | number | bigint | null> = [
+    params.workspaceId,
+    windowStart,
+    windowEnd,
+  ];
+
+  // Apply scope filter if provided
+  if (params.scopeType && params.scopeId) {
+    if (params.scopeType === "agent") {
+      query += " AND agent_id = ?";
+      queryParams.push(params.scopeId);
+    } else if (params.scopeType === "project") {
+      query += " AND project_id = ?";
+      queryParams.push(params.scopeId);
+    }
+    // scopeType === "workspace" applies no additional filter (workspace_id already filters)
+  }
+
+  const stmt = db.prepare(query);
+  const row = stmt.get(...queryParams) as unknown as { total: number | null } | undefined;
+
+  return {
+    spentMicrocents: row?.total ?? 0,
+    windowStart,
+    windowEnd,
+  };
+}
+
 export function getAggregateCost(filters: {
   workspaceId: string;
   agentId?: string;

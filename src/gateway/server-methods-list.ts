@@ -73,6 +73,14 @@ const BASE_METHODS = [
   "tasks.update",
   "tasks.listComments",
   "tasks.addComment",
+  "tasks.documents.list",
+  "tasks.documents.get",
+  "tasks.documents.create",
+  "tasks.documents.update",
+  "tasks.documents.delete",
+  "tasks.attachments.list",
+  "tasks.attachments.create",
+  "tasks.attachments.delete",
   "goals.list",
   "goals.get",
   "goals.tree",
@@ -266,6 +274,16 @@ const BASE_METHODS = [
   "state.settings.set",
   "state.audit",
   "state.export",
+  // Execution workspaces
+  "executionWorkspaces.create",
+  "executionWorkspaces.get",
+  "executionWorkspaces.list",
+  "executionWorkspaces.update",
+  "executionWorkspaces.archive",
+  "executionWorkspaces.operations.record",
+  "executionWorkspaces.operations.list",
+  // Sidebar badges
+  "sidebar.badges",
 ];
 
 export function listGatewayMethods(): string[] {
