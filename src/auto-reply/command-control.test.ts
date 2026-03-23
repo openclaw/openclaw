@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -536,6 +536,102 @@ describe("resolveCommandAuthorization", () => {
 
       expect(auth.providerId).toBe("telegram");
       expect(auth.isAuthorizedSender).toBe(false);
+    });
+
+    it("fails closed when provider inference gets an invalid allowFrom result", () => {
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "telegram",
+            plugin: {
+              ...createOutboundTestPlugin({
+                id: "telegram",
+                outbound: { deliveryMode: "direct" },
+              }),
+              config: {
+                listAccountIds: () => ["default"],
+                resolveAccount: () => ({}),
+                resolveAllowFrom: () => undefined,
+                formatAllowFrom: ({ allowFrom }: { allowFrom: Array<string | number> }) =>
+                  allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
+              },
+            },
+            source: "test",
+          },
+        ]),
+      );
+
+      const auth = resolveCommandAuthorization({
+        ctx: {
+          SenderId: "123",
+        } as MsgContext,
+        cfg: {
+          commands: {
+            allowFrom: {
+              telegram: ["123"],
+            },
+          },
+          channels: {
+            telegram: {
+              allowFrom: ["123"],
+            },
+          },
+        } as OpenClawConfig,
+        commandAuthorized: false,
+      });
+
+      expect(auth.providerId).toBe("telegram");
+      expect(auth.isAuthorizedSender).toBe(false);
+    });
+
+    it("does not log raw resolution messages from thrown allowFrom errors", () => {
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "telegram",
+            plugin: {
+              ...createOutboundTestPlugin({
+                id: "telegram",
+                outbound: { deliveryMode: "direct" },
+              }),
+              config: {
+                listAccountIds: () => ["default"],
+                resolveAccount: () => ({}),
+                resolveAllowFrom: () => {
+                  throw new Error("SECRET-TOKEN-123");
+                },
+                formatAllowFrom: ({ allowFrom }: { allowFrom: Array<string | number> }) =>
+                  allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
+              },
+            },
+            source: "test",
+          },
+        ]),
+      );
+
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        resolveCommandAuthorization({
+          ctx: {
+            Provider: "telegram",
+            Surface: "telegram",
+            SenderId: "123",
+          } as MsgContext,
+          cfg: {
+            channels: {
+              telegram: {
+                allowFrom: ["123"],
+              },
+            },
+          } as OpenClawConfig,
+          commandAuthorized: true,
+        });
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(String(warn.mock.calls[0]?.[0] ?? "")).toContain("Error");
+        expect(String(warn.mock.calls[0]?.[0] ?? "")).not.toContain("SECRET-TOKEN-123");
+      } finally {
+        warn.mockRestore();
+      }
     });
   });
 

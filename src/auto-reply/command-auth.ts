@@ -2,7 +2,6 @@ import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { describeUnknownError } from "../secrets/shared.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -136,19 +135,36 @@ function resolveProviderAllowFrom(params: {
 
   try {
     const allowFrom = plugin.config.resolveAllowFrom({ cfg, accountId });
+    if (!Array.isArray(allowFrom)) {
+      console.warn(
+        `[command-auth] resolveAllowFrom returned an invalid allowFrom for provider "${providerId}", falling back to config allowFrom: invalid_result`,
+      );
+      return {
+        allowFrom: resolveFallbackAllowFrom({ cfg, providerId, accountId }),
+        hadResolutionError: true,
+      };
+    }
     return {
-      allowFrom: Array.isArray(allowFrom) ? allowFrom : [],
+      allowFrom,
       hadResolutionError: false,
     };
   } catch (err) {
     console.warn(
-      `[command-auth] resolveAllowFrom threw for provider "${providerId}", falling back to config allowFrom: ${describeUnknownError(err)}`,
+      `[command-auth] resolveAllowFrom threw for provider "${providerId}", falling back to config allowFrom: ${describeAllowFromResolutionError(err)}`,
     );
     return {
       allowFrom: resolveFallbackAllowFrom({ cfg, providerId, accountId }),
       hadResolutionError: true,
     };
   }
+}
+
+function describeAllowFromResolutionError(err: unknown): string {
+  if (err instanceof Error) {
+    const name = err.name.trim();
+    return name || "Error";
+  }
+  return "unknown_error";
 }
 
 function resolveOwnerAllowFromList(params: {
