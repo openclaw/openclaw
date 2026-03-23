@@ -311,14 +311,21 @@ function buildDuplicatedSeamFamilies(inventory) {
         return [
           family,
           {
-            count: entries.length,
+            count: files.length,
+            importCount: entries.length,
             files,
             imports: entries,
           },
         ];
       })
       .filter(([, value]) => value.files.length > 1)
-      .toSorted((left, right) => right[1].count - left[1].count || left[0].localeCompare(right[0])),
+      .toSorted((left, right) => {
+        return (
+          right[1].count - left[1].count ||
+          right[1].importCount - left[1].importCount ||
+          left[0].localeCompare(right[0])
+        );
+      }),
   );
 
   return duplicated;
@@ -396,6 +403,13 @@ function packageClusterMeta(relativePackagePath) {
 }
 
 function classifyMissingPackageCluster(params) {
+  if (params.hasStaticLeak) {
+    return {
+      decision: "required",
+      reason:
+        "Cluster already appears in the static graph in this audit run, so treating it as optional would be misleading.",
+    };
+  }
   if (optionalBundledClusterSet.has(params.cluster)) {
     if (params.cluster === "ui") {
       return {
@@ -424,7 +438,7 @@ function classifyMissingPackageCluster(params) {
   };
 }
 
-async function buildMissingPackages() {
+async function buildMissingPackages(params = {}) {
   const rootPackage = JSON.parse(await fs.readFile(path.join(repoRoot, "package.json"), "utf8"));
   const rootDeps = new Set([
     ...Object.keys(rootPackage.dependencies ?? {}),
@@ -467,6 +481,7 @@ async function buildMissingPackages() {
     const classification = classifyMissingPackageCluster({
       cluster: meta.cluster,
       pluginSdkEntries,
+      hasStaticLeak: params.staticLeakClusters?.has(meta.cluster) === true,
     });
     output.push({
       cluster: meta.cluster,
@@ -539,13 +554,20 @@ function buildTestIndex(testFiles) {
   });
 }
 
+function splitNameTokens(name) {
+  return name
+    .split(/[^a-zA-Z0-9]+/)
+    .map((token) => token.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 function matchQualityRank(quality) {
   switch (quality) {
     case "exact-stem":
       return 0;
     case "path-nearby":
       return 1;
-    case "dir-basename":
+    case "dir-token":
       return 2;
     case "source-echo":
       return 3;
@@ -559,20 +581,29 @@ function findRelatedTests(relativePath, testIndex, source) {
   const baseName = path.basename(stem);
   const dirName = path.dirname(relativePath);
   const normalizedDir = dirName.split(path.sep).join("/");
-  const pathSuffix = `${normalizedDir}/${baseName}`;
+  const baseTokens = new Set(splitNameTokens(baseName).filter((token) => token.length >= 7));
 
   const matches = testIndex.flatMap((entry) => {
     if (entry.stem === stem) {
       return [{ file: entry.relativePath, matchQuality: "exact-stem" }];
     }
-    if (entry.relativePath.includes(pathSuffix)) {
+    if (entry.stem.startsWith(`${stem}.`)) {
       return [{ file: entry.relativePath, matchQuality: "path-nearby" }];
     }
     const entryDir = path.dirname(entry.relativePath).split(path.sep).join("/");
-    if (entryDir === normalizedDir && entry.baseName.includes(baseName)) {
-      return [{ file: entry.relativePath, matchQuality: "dir-basename" }];
+    if (entryDir === normalizedDir && baseTokens.size > 0) {
+      const entryTokens = splitNameTokens(entry.baseName);
+      const sharedToken = entryTokens.find((token) => baseTokens.has(token));
+      if (sharedToken) {
+        return [{ file: entry.relativePath, matchQuality: "dir-token" }];
+      }
     }
-    if (baseName.length >= 12 && source.includes(baseName) && entry.relativePath.includes(baseName)) {
+    if (
+      baseName.length >= 12 &&
+      source.includes(baseName) &&
+      entryDir === normalizedDir &&
+      (entry.baseName === baseName || entry.baseName.startsWith(`${baseName}.`))
+    ) {
       return [{ file: entry.relativePath, matchQuality: "source-echo" }];
     }
     return [];
@@ -673,11 +704,12 @@ if (args.has("--help") || args.has("-h")) {
 await collectWorkspacePackagePaths();
 const inventory = await collectCorePluginSdkImports();
 const optionalClusterStaticLeaks = await collectOptionalClusterStaticLeaks();
+const staticLeakClusters = new Set(optionalClusterStaticLeaks.map((entry) => entry.cluster));
 const result = {
   duplicatedSeamFamilies: buildDuplicatedSeamFamilies(inventory),
   overlapFiles: buildOverlapFiles(inventory),
   optionalClusterStaticLeaks: buildOptionalClusterStaticLeaks(optionalClusterStaticLeaks),
-  missingPackages: await buildMissingPackages(),
+  missingPackages: await buildMissingPackages({ staticLeakClusters }),
   seamTestInventory: await buildSeamTestInventory(),
 };
 
