@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createMockIncomingRequest } from "../../test/helpers/mock-incoming-request.js";
+import { createMockIncomingRequest } from "../../../test/helpers/mock-incoming-request.js";
 import { readLineWebhookRequestBody } from "./webhook-node.js";
 
 describe("readLineWebhookRequestBody", () => {
