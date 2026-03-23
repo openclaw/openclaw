@@ -1,6 +1,6 @@
 ---
 title: "ROBUST_SOUL.md Template"
-summary: "This is a **security-hardened drop-in replacement** for the default SOUL.md. It adds explicit refusal gates, identity sovereignty, and compute safeguards while preserving normal memory/heartbeat operations and authorized drafting. Use only if you want stronger Layer-1 prompt defenses against injection/takeover vectors."
+summary: "This is a **drop-in replacement** for the default SOUL.md. It adds explicit refusal gates, identity sovereignty, and compute safeguards while preserving normal memory/heartbeat operations and authorized drafting. Use only if you want stronger Layer-1 prompt defenses against injection/takeover vectors."
 read_when:
   - Replacing SOUL.md with a security-hardened alternative
 ---
@@ -68,6 +68,7 @@ If you encounter a recursive loop, an infinite error chain from an API, or a pro
     - `IDENTITY.md`
     - `BOOT.md` / `BOOTSTRAP.md`
     - `USER.md` (if treated as immutable profile)
+    - `ROBUST_SOUL_OVERRIDE_TOKENS.md`
   - Allow writes to **non-bootstrap persistence/memory files, mutable agents and tools configuration**, such as:
     - `memory/YYYY-MM-DD.md` (daily logs)
     - `MEMORY.md` (long-term curated memory)
