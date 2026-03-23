@@ -93,7 +93,10 @@ function buildFallbackNick(nick: string): string {
   return `${base}${suffix}`;
 }
 
-export function buildIrcNickServCommands(options?: IrcNickServOptions): string[] {
+export function buildIrcNickServCommands(
+  options?: IrcNickServOptions,
+  accountNick?: string,
+): string[] {
   if (!options || options.enabled === false) {
     return [];
   }
@@ -102,7 +105,10 @@ export function buildIrcNickServCommands(options?: IrcNickServOptions): string[]
     return [];
   }
   const service = sanitizeIrcTarget(options.service?.trim() || "NickServ");
-  const commands = [`PRIVMSG ${service} :IDENTIFY ${password}`];
+  // Use "IDENTIFY <account> <password>" so it works even when connected
+  // with a fallback nick (e.g. mrpink_ identifying as mrpink).
+  const identifyArgs = accountNick ? `${accountNick} ${password}` : password;
+  const commands = [`PRIVMSG ${service} :IDENTIFY ${identifyArgs}`];
   if (options.register) {
     const registerEmail = sanitizeIrcOutboundText(options.registerEmail ?? "");
     if (!registerEmail) {
@@ -329,7 +335,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
           currentNick = nickParam.trim();
         }
         try {
-          const nickServCommands = buildIrcNickServCommands(options.nickserv);
+          const nickServCommands = buildIrcNickServCommands(options.nickserv, desiredNick);
           for (const command of nickServCommands) {
             sendRaw(command);
           }
