@@ -575,7 +575,8 @@ async function maybeForwardTtsAudio(params: {
   try {
     await execFileAsync("sh", ["-c", cmd], { timeout: fwd.timeoutMs });
   } catch (err) {
-    logVerbose(`TTS: forward command failed: ${(err as Error).message}`);
+    const error = err instanceof Error ? err : new Error(String(err));
+    logVerbose(`TTS: forward command failed: ${error.message}`);
   }
 }
 
