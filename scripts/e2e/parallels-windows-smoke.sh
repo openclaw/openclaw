@@ -344,6 +344,8 @@ guest_run_openclaw() {
 if ('${env_name_q}' -ne '') {
   Set-Item -Path ('Env:' + '${env_name_q}') -Value '${env_value_q}'
 }
+# openclaw.cmd preserves multi-word --message args reliably here; Start-Process
+# against the shim can re-split argv and make Commander reject the turn.
 \$output = & \$openclaw @args 2>&1
 if (\$null -ne \$output) {
   \$output | ForEach-Object { \$_ }
@@ -752,6 +754,9 @@ install_main_tgz() {
   local temp_name="$2"
   local tgz_url
   tgz_url="http://$host_ip:$HOST_PORT/$(basename "$MAIN_TGZ_PATH")"
+  # Global npm installs on the Windows guest can stay silent for long stretches.
+  # Treat the phase log plus retry wrapper as the primary signal before assuming
+  # the guest hung.
   run_windows_retry "main tgz install" 2 \
     guest_exec cmd.exe /d /s /c "set \"PATH=%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\cmd;%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\mingw64\\bin;%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\usr\\bin;%PATH%\" && curl.exe -fsSL \"$tgz_url\" -o \"%TEMP%\\$temp_name\" && npm.cmd install -g \"%TEMP%\\$temp_name\" --no-fund --no-audit && \"%APPDATA%\\npm\\openclaw.cmd\" --version"
 }
