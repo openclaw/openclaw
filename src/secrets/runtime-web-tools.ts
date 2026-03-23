@@ -407,7 +407,6 @@ export async function resolveRuntimeWebTools(params: {
 
     let selectedProvider: WebSearchProvider | undefined;
     let selectedResolution: SecretResolutionResult | undefined;
-
     for (const provider of candidates) {
       const path =
         provider === "brave" ? "tools.web.search.apiKey" : `tools.web.search.${provider}.apiKey`;
@@ -471,6 +470,15 @@ export async function resolveRuntimeWebTools(params: {
       }
     }
 
+    if (!selectedProvider && keylessFallbackProvider) {
+      selectedProvider = keylessFallbackProvider.id;
+      selectedResolution = {
+        source: "missing",
+        secretRefConfigured: false,
+        fallbackUsedAfterRefFailure: false,
+      };
+    }
+
     const failUnresolvedSearchNoFallback = (unresolved: { path: string; reason: string }) => {
       const diagnostic: RuntimeWebDiagnostic = {
         code: "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
@@ -498,9 +506,14 @@ export async function resolveRuntimeWebTools(params: {
       }
 
       if (selectedProvider) {
+        const selectedProviderEntry = providers.find((entry) => entry.id === selectedProvider);
+        const selectedDetails =
+          selectedProviderEntry?.requiresCredential === false
+            ? `tools.web.search auto-detected keyless provider "${selectedProvider}" as the default fallback.`
+            : `tools.web.search auto-detected provider "${selectedProvider}" from available credentials.`;
         const diagnostic: RuntimeWebDiagnostic = {
           code: "WEB_SEARCH_AUTODETECT_SELECTED",
-          message: `tools.web.search auto-detected provider "${selectedProvider}" from available credentials.`,
+          message: selectedDetails,
           path: "tools.web.search.provider",
         };
         diagnostics.push(diagnostic);

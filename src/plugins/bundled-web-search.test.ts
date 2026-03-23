@@ -18,6 +18,7 @@ describe("bundled web search metadata", () => {
       signupUrl: string;
       docsUrl?: string;
       autoDetectOrder?: number;
+      requiresCredential?: boolean;
       credentialPath: string;
       inactiveSecretPaths?: string[];
       getConfiguredCredentialValue?: unknown;
@@ -36,6 +37,7 @@ describe("bundled web search metadata", () => {
       signupUrl: params.provider.signupUrl,
       docsUrl: params.provider.docsUrl,
       autoDetectOrder: params.provider.autoDetectOrder,
+      requiresCredential: params.provider.requiresCredential,
       credentialPath: params.provider.credentialPath,
       inactiveSecretPaths: params.provider.inactiveSecretPaths,
       hasConfiguredCredentialAccessors:
@@ -67,6 +69,7 @@ describe("bundled web search metadata", () => {
   it("keeps bundled web search compat ids aligned with bundled manifests", () => {
     expect(resolveBundledWebSearchPluginIds({})).toEqual([
       "brave",
+      "duckduckgo",
       "exa",
       "firecrawl",
       "google",

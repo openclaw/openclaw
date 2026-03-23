@@ -19,6 +19,7 @@ import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 import type {
   SpeechListVoicesRequest,
   SpeechProviderConfiguredContext,
@@ -246,6 +247,61 @@ export type ProviderPlugin = {
   formatApiKey?: (cred: AuthProfileCredential) => string;
   refreshOAuth?: (cred: OAuthCredential) => Promise<OAuthCredential>;
   onModelSelected?: (ctx: ProviderModelSelectedContext) => Promise<void>;
+};
+
+export type WebSearchProviderId = string;
+
+export type WebSearchProviderToolDefinition = {
+  description: string;
+  parameters: Record<string, unknown>;
+  execute: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+};
+
+export type WebSearchProviderContext = {
+  config?: OpenClawConfig;
+  searchConfig?: Record<string, unknown>;
+  runtimeMetadata?: RuntimeWebSearchMetadata;
+};
+
+export type WebSearchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
+
+export type WebSearchRuntimeMetadataContext = {
+  config?: OpenClawConfig;
+  searchConfig?: Record<string, unknown>;
+  runtimeMetadata?: RuntimeWebSearchMetadata;
+  resolvedCredential?: {
+    value?: string;
+    source: WebSearchCredentialResolutionSource;
+    fallbackEnvVar?: string;
+  };
+};
+
+export type WebSearchProviderPlugin = {
+  id: WebSearchProviderId;
+  label: string;
+  hint: string;
+  requiresCredential?: boolean;
+  credentialLabel?: string;
+  envVars: string[];
+  placeholder: string;
+  signupUrl: string;
+  docsUrl?: string;
+  autoDetectOrder?: number;
+  credentialPath: string;
+  inactiveSecretPaths?: string[];
+  getCredentialValue: (searchConfig?: Record<string, unknown>) => unknown;
+  setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) => void;
+  getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
+  setConfiguredCredentialValue?: (configTarget: OpenClawConfig, value: unknown) => void;
+  applySelectionConfig?: (config: OpenClawConfig) => OpenClawConfig;
+  resolveRuntimeMetadata?: (
+    ctx: WebSearchRuntimeMetadataContext,
+  ) => Partial<RuntimeWebSearchMetadata> | Promise<Partial<RuntimeWebSearchMetadata>>;
+  createTool: (ctx: WebSearchProviderContext) => WebSearchProviderToolDefinition | null;
+};
+
+export type PluginWebSearchProviderEntry = WebSearchProviderPlugin & {
+  pluginId: string;
 };
 
 export type OpenClawPluginGatewayMethod = {

@@ -193,7 +193,7 @@ async function promptWebToolsConfig(
   note(
     [
       "Web search lets your agent look things up online using the `web_search` tool.",
-      "Choose a provider and paste your API key.",
+      "Choose a provider. Some providers need an API key, and some work key-free.",
       "Docs: https://docs.openclaw.ai/tools/web",
     ].join("\n"),
     "Web search",

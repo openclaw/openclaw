@@ -68,6 +68,12 @@ export function hasKeyInEnv(entry: SearchProviderEntry): boolean {
   return entry.envKeys.some((k) => Boolean(process.env[k]?.trim()));
 }
 
+function providerNeedsCredential(
+  entry: Pick<PluginWebSearchProviderEntry, "requiresCredential">,
+): boolean {
+  return entry.requiresCredential !== false;
+}
+
 function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown {
   const search = config.tools?.web?.search;
   const entry = resolvePluginWebSearchProviders({
@@ -187,7 +193,7 @@ export async function setupSearch(
   await prompter.note(
     [
       "Web search lets your agent look things up online.",
-      "Choose a provider and paste your API key.",
+      "Choose a provider. Some providers need an API key, and some work key-free.",
       "Docs: https://docs.openclaw.ai/tools/web",
     ].join("\n"),
     "Web search",
@@ -236,12 +242,25 @@ export async function setupSearch(
   const existingKey = resolveExistingKey(config, choice);
   const keyConfigured = hasExistingKey(config, choice);
   const envAvailable = hasKeyInEnv(entry);
+  const needsCredential = providerNeedsCredential(entry);
 
   if (opts?.quickstartDefaults && (keyConfigured || envAvailable)) {
     const result = existingKey
       ? applySearchKey(config, choice, existingKey)
       : applyProviderOnly(config, choice);
     return preserveDisabledState(config, result);
+  }
+
+  if (!needsCredential) {
+    await prompter.note(
+      [
+        `${entry.label} works without an API key.`,
+        "OpenClaw will enable the plugin and use it as your web_search provider.",
+        `Docs: ${entry.docsUrl ?? "https://docs.openclaw.ai/tools/web"}`,
+      ].join("\n"),
+      "Web search",
+    );
+    return preserveDisabledState(config, applySearchProviderSelection(config, choice));
   }
 
   const useSecretRefMode = opts?.secretInputMode === "ref"; // pragma: allowlist secret
