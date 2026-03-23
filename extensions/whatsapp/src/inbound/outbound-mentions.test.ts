@@ -63,6 +63,30 @@ describe("extractOutboundMentions", () => {
     expect(extractOutboundMentions("user@+9876543210")).toEqual([]);
   });
 
+  it("ignores pasted JID-like tokens with trailing non-boundary chars", () => {
+    expect(extractOutboundMentions("@123456789012345:1@lid")).toEqual([]);
+    expect(extractOutboundMentions("@1234567890abc")).toEqual([]);
+  });
+
+  it("skips mentions inside backtick code spans", () => {
+    expect(extractOutboundMentions("see `@+1234567890` for details")).toEqual([]);
+    expect(
+      extractOutboundMentions("code `@+1234567890` but also @+9876543210 outside"),
+    ).toEqual(["9876543210@s.whatsapp.net"]);
+  });
+
+  it("matches mention followed by punctuation", () => {
+    expect(extractOutboundMentions("hey @+1234567890, what's up?")).toEqual([
+      "1234567890@s.whatsapp.net",
+    ]);
+    expect(extractOutboundMentions("ask @+1234567890.")).toEqual([
+      "1234567890@s.whatsapp.net",
+    ]);
+    expect(extractOutboundMentions("(@+1234567890)")).toEqual([
+      "1234567890@s.whatsapp.net",
+    ]);
+  });
+
   describe("with participantJidMap", () => {
     it("uses original JID from map for phone-based participants", () => {
       const jidMap = new Map([["+1234567890", "1234567890:0@s.whatsapp.net"]]);
