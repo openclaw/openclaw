@@ -81,6 +81,7 @@ Docs: https://docs.openclaw.ai
 - Web tools/Exa: add Exa as a bundled web-search plugin with Exa-native date filters, search-mode selection, and optional content extraction under `plugins.entries.exa.config.webSearch.*`. Thanks @V-Gutierrez and @vincentkoc.
 - CLI/hooks: route hook-pack install and update through `openclaw plugins`, keep `openclaw hooks` focused on hook visibility and per-hook controls, and show plugin-managed hook details in CLI output.
 - Channels/QQ Bot: add a bundled QQ Bot channel extension with WebSocket gateway, multi-account support, C2C/group/guild messaging, media handling (image/voice/video/file), SILK audio codec, image server, slash commands, message queuing, session persistence, credential backup, reference index store, typing keepalive, STT, TTS, proactive messaging, cron reminders, and known user tracking — available during `openclaw onboard` without requiring a separate plugin install.
+- Build/memory tools: emit `dist/cli/memory-cli.js` as a stable core entry so runtime `memory_search` loading no longer depends on hashed `memory-cli-*` bundle names. (#51759) Thanks @oliviareid-svg.
 
 ### Fixes
 
