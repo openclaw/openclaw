@@ -85,6 +85,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Security/pairing: bind iOS setup codes to the intended node profile and reject first-use bootstrap redemption that asks for broader roles or scopes. Thanks @tdjackey.
 - Web tools/Exa: align the bundled Exa plugin with the current Exa API by supporting newer search types and richer `contents` options, while fixing the result-count cap to honor Exa's higher limit. Thanks @vincentkoc.
 - Plugins/Matrix: move bundled plugin `KeyedAsyncQueue` imports onto the stable `plugin-sdk/core` surface so Matrix Docker/runtime builds do not depend on the brittle keyed-async-queue subpath. Thanks @ecohash-co and @vincentkoc.
 - Nostr/security: enforce inbound DM policy before decrypt, route Nostr DMs through the standard reply pipeline, and add pre-crypto rate and size guards so unknown senders cannot bypass pairing or force unbounded crypto work. Thanks @kuranikaran.

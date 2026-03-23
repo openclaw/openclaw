@@ -10,6 +10,7 @@ vi.mock("../infra/device-bootstrap.js", () => ({
 
 let encodePairingSetupCode: typeof import("./setup-code.js").encodePairingSetupCode;
 let resolvePairingSetupFromConfig: typeof import("./setup-code.js").resolvePairingSetupFromConfig;
+let issueDeviceBootstrapTokenMock: typeof import("../infra/device-bootstrap.js").issueDeviceBootstrapToken;
 
 describe("pairing setup code", () => {
   type ResolvedSetup = Awaited<ReturnType<typeof resolvePairingSetupFromConfig>>;
@@ -53,6 +54,12 @@ describe("pairing setup code", () => {
     }
     expect(resolved.authLabel).toBe(params.authLabel);
     expect(resolved.payload.bootstrapToken).toBe("bootstrap-123");
+    expect(issueDeviceBootstrapTokenMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        roles: ["node"],
+        scopes: [],
+      }),
+    );
     if (params.url) {
       expect(resolved.payload.url).toBe(params.url);
     }
@@ -78,6 +85,9 @@ describe("pairing setup code", () => {
 
   beforeEach(async () => {
     ({ encodePairingSetupCode, resolvePairingSetupFromConfig } = await import("./setup-code.js"));
+    ({ issueDeviceBootstrapToken: issueDeviceBootstrapTokenMock } =
+      await import("../infra/device-bootstrap.js"));
+    vi.mocked(issueDeviceBootstrapTokenMock).mockClear();
   });
 
   afterEach(() => {
