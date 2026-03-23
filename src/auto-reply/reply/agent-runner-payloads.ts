@@ -1,4 +1,5 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import type { MessagingToolSend } from "../../agents/pi-embedded-runner.js";
 import type { ReplyToMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
@@ -13,13 +14,16 @@ import {
   resolveOriginMessageTo,
 } from "./origin-routing.js";
 import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
-import {
-  applyReplyThreading,
-  filterMessagingToolDuplicates,
-  filterMessagingToolMediaDuplicates,
-  isRenderablePayload,
-  shouldSuppressMessagingToolReplies,
-} from "./reply-payloads.js";
+import { applyReplyThreading, isRenderablePayload } from "./reply-payloads-base.js";
+
+let replyPayloadsDedupeRuntimePromise: Promise<
+  typeof import("./reply-payloads-dedupe.runtime.js")
+> | null = null;
+
+function loadReplyPayloadsDedupeRuntime() {
+  replyPayloadsDedupeRuntimePromise ??= import("./reply-payloads-dedupe.runtime.js");
+  return replyPayloadsDedupeRuntimePromise;
+}
 
 async function normalizeReplyPayloadMedia(params: {
   payload: ReplyPayload;
@@ -97,9 +101,7 @@ export async function buildReplyPayloads(params: {
   messageProvider?: string;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
-  messagingToolSentTargets?: Parameters<
-    typeof shouldSuppressMessagingToolReplies
-  >[0]["messagingToolSentTargets"];
+  messagingToolSentTargets?: MessagingToolSend[];
   originatingChannel?: OriginatingChannelType;
   originatingTo?: string;
   accountId?: string;
@@ -160,19 +162,27 @@ export async function buildReplyPayloads(params: {
     !params.blockReplyPipeline?.isAborted();
   const messagingToolSentTexts = params.messagingToolSentTexts ?? [];
   const messagingToolSentTargets = params.messagingToolSentTargets ?? [];
-  const suppressMessagingToolReplies = shouldSuppressMessagingToolReplies({
-    messageProvider: resolveOriginMessageProvider({
-      originatingChannel: params.originatingChannel,
-      provider: params.messageProvider,
-    }),
-    messagingToolSentTargets,
-    originatingTo: resolveOriginMessageTo({
-      originatingTo: params.originatingTo,
-    }),
-    accountId: resolveOriginAccountId({
-      originatingAccountId: params.accountId,
-    }),
-  });
+  const shouldCheckMessagingToolDedupe =
+    messagingToolSentTexts.length > 0 ||
+    (params.messagingToolSentMediaUrls?.length ?? 0) > 0 ||
+    messagingToolSentTargets.length > 0;
+  const dedupeRuntime = shouldCheckMessagingToolDedupe
+    ? await loadReplyPayloadsDedupeRuntime()
+    : null;
+  const suppressMessagingToolReplies =
+    dedupeRuntime?.shouldSuppressMessagingToolReplies({
+      messageProvider: resolveOriginMessageProvider({
+        originatingChannel: params.originatingChannel,
+        provider: params.messageProvider,
+      }),
+      messagingToolSentTargets,
+      originatingTo: resolveOriginMessageTo({
+        originatingTo: params.originatingTo,
+      }),
+      accountId: resolveOriginAccountId({
+        originatingAccountId: params.accountId,
+      }),
+    }) ?? false;
   // Only dedupe against messaging tool sends for the same origin target.
   // Cross-target sends (for example posting to another channel) must not
   // suppress the current conversation's final reply.
@@ -186,13 +196,15 @@ export async function buildReplyPayloads(params: {
       })
     : (params.messagingToolSentMediaUrls ?? []);
   const dedupedPayloads = dedupeMessagingToolPayloads
-    ? filterMessagingToolDuplicates({
+    ? (dedupeRuntime ?? (await loadReplyPayloadsDedupeRuntime())).filterMessagingToolDuplicates({
         payloads: replyTaggedPayloads,
         sentTexts: messagingToolSentTexts,
       })
     : replyTaggedPayloads;
   const mediaFilteredPayloads = dedupeMessagingToolPayloads
-    ? filterMessagingToolMediaDuplicates({
+    ? (
+        dedupeRuntime ?? (await loadReplyPayloadsDedupeRuntime())
+      ).filterMessagingToolMediaDuplicates({
         payloads: dedupedPayloads,
         sentMediaUrls: messagingToolSentMediaUrls,
       })
