@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import channelsConfig from "../vitest.channels.config.ts";
-import extensionsConfig from "../vitest.extensions.config.ts";
-import gatewayConfig from "../vitest.gateway.config.ts";
+import { createExtensionsVitestConfig } from "../vitest.extensions.config.ts";
+import { createGatewayVitestConfig } from "../vitest.gateway.config.ts";
 import { createScopedVitestConfig, resolveVitestIsolation } from "../vitest.scoped-config.ts";
 
 describe("resolveVitestIsolation", () => {
@@ -42,21 +42,24 @@ describe("createScopedVitestConfig", () => {
 });
 
 describe("scoped vitest configs", () => {
+  const defaultExtensionsConfig = createExtensionsVitestConfig({});
+  const defaultGatewayConfig = createGatewayVitestConfig();
+
   it("defaults channel tests to non-isolated mode", () => {
     expect(channelsConfig.test?.isolate).toBe(false);
   });
 
   it("defaults extension tests to non-isolated mode", () => {
-    expect(extensionsConfig.test?.isolate).toBe(false);
+    expect(defaultExtensionsConfig.test?.isolate).toBe(false);
   });
 
   it("normalizes extension include patterns relative to the scoped dir", () => {
-    expect(extensionsConfig.test?.dir).toBe("extensions");
-    expect(extensionsConfig.test?.include).toEqual(["**/*.test.ts"]);
+    expect(defaultExtensionsConfig.test?.dir).toBe("extensions");
+    expect(defaultExtensionsConfig.test?.include).toEqual(["**/*.test.ts"]);
   });
 
   it("normalizes gateway include patterns relative to the scoped dir", () => {
-    expect(gatewayConfig.test?.dir).toBe("src/gateway");
-    expect(gatewayConfig.test?.include).toEqual(["**/*.test.ts"]);
+    expect(defaultGatewayConfig.test?.dir).toBe("src/gateway");
+    expect(defaultGatewayConfig.test?.include).toEqual(["**/*.test.ts"]);
   });
 });
