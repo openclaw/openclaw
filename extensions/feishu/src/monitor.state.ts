@@ -13,6 +13,21 @@ export const httpServers = new Map<string, http.Server>();
 export const botOpenIds = new Map<string, string>();
 export const botNames = new Map<string, string>();
 
+/** Shared webhook server pool — keyed by "host:port". */
+export type WebhookRoute = {
+  accountId: string;
+  appId: string;
+  token: string;
+  handler: (req: http.IncomingMessage, res: http.ServerResponse) => void;
+};
+export type WebhookServerEntry = {
+  server: http.Server;
+  routes: Map<string, WebhookRoute>; // accountId → route
+  /** Resolves once server.listen() succeeds; rejects on bind failure. */
+  ready: Promise<void>;
+};
+export const webhookServerPool = new Map<string, WebhookServerEntry>();
+
 export const FEISHU_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 export const FEISHU_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 
@@ -135,21 +150,44 @@ export function recordWebhookStatus(
 export function stopFeishuMonitorState(accountId?: string): void {
   if (accountId) {
     wsClients.delete(accountId);
-    const server = httpServers.get(accountId);
-    if (server) {
-      server.close();
-      httpServers.delete(accountId);
+    // Remove from shared pool; close the server only when no routes remain.
+    for (const [key, entry] of webhookServerPool) {
+      if (entry.routes.has(accountId)) {
+        entry.routes.delete(accountId);
+        if (entry.routes.size === 0) {
+          entry.server.close();
+          webhookServerPool.delete(key);
+        }
+        break;
+      }
     }
+    // For non-pooled servers (shouldn't happen, defensive).
+    const server = httpServers.get(accountId);
+    if (server && !isPooledServer(server)) {
+      server.close();
+    }
+    httpServers.delete(accountId);
     botOpenIds.delete(accountId);
     botNames.delete(accountId);
     return;
   }
 
   wsClients.clear();
+  for (const entry of webhookServerPool.values()) {
+    entry.server.close();
+  }
+  webhookServerPool.clear();
   for (const server of httpServers.values()) {
-    server.close();
+    if (!isPooledServer(server)) server.close();
   }
   httpServers.clear();
   botOpenIds.clear();
   botNames.clear();
+}
+
+function isPooledServer(server: http.Server): boolean {
+  for (const entry of webhookServerPool.values()) {
+    if (entry.server === server) return true;
+  }
+  return false;
 }
