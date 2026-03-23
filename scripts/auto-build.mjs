@@ -85,23 +85,23 @@ try {
   process.exit(1);
 }
 
-// 2. 打包UI
+// 2. 整体打包
 try {
-  console.log("[3/4] 正在打包UI...");
-  execSync("pnpm ui:build", { cwd: WORK_DIR, stdio: "inherit" });
-  console.log("UI打包成功");
-} catch (error) {
-  console.error("UI打包失败:", error.message);
-  process.exit(1);
-}
-
-// 3. 整体打包
-try {
-  console.log("[4/4] 正在整体打包...");
+  console.log("[3/4] 正在整体打包...");
   execSync("pnpm build", { cwd: WORK_DIR, stdio: "inherit" });
   console.log("整体打包成功");
 } catch (error) {
   console.error("整体打包失败:", error.message);
+  process.exit(1);
+}
+
+// 3. 打包UI
+try {
+  console.log("[4/4] 正在打包UI...");
+  execSync("pnpm ui:build", { cwd: WORK_DIR, stdio: "inherit" });
+  console.log("UI打包成功");
+} catch (error) {
+  console.error("UI打包失败:", error.message);
   process.exit(1);
 }
 
