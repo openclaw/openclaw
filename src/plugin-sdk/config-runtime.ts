@@ -95,4 +95,7 @@ export {
   resolveThreadFlag,
 } from "../config/sessions/reset.js";
 export { resolveSessionStoreEntry } from "../config/sessions/store.js";
-export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
+export {
+  isDangerousNameMatchingEnabled,
+  resolveDangerousNameMatchingEnabled,
+} from "../config/dangerous-name-matching.js";
