@@ -700,6 +700,12 @@ export function createAgentEventHandler({
     // Include sessionKey so Control UI can filter tool streams per session.
     const agentPayload = sessionKey ? { ...eventForClients, sessionKey } : eventForClients;
     const last = agentRunSeq.get(evt.runId) ?? 0;
+    const lifecyclePhase =
+      evt.stream === "lifecycle" && typeof evt.data?.phase === "string" ? evt.data.phase : null;
+    const isFreshRunStart = lifecyclePhase === "start" || evt.seq === 1;
+    if (last === 0 && chatRunState.finalizedRuns.has(evt.runId) && isFreshRunStart) {
+      chatRunState.finalizedRuns.delete(evt.runId);
+    }
     const isStalePostLifecycleEvent = last === 0 && chatRunState.finalizedRuns.has(evt.runId);
     if (isStalePostLifecycleEvent) {
       return;
@@ -718,7 +724,8 @@ export function createAgentEventHandler({
               : { ...eventForClients, data };
           })()
         : agentPayload;
-    if (last > 0 && evt.seq !== last + 1) {
+    const expectedSeq = last > 0 ? last + 1 : 1;
+    if (evt.seq !== expectedSeq) {
       broadcast("agent", {
         runId: eventRunId,
         stream: "error",
@@ -726,7 +733,7 @@ export function createAgentEventHandler({
         sessionKey,
         data: {
           reason: "seq gap",
-          expected: last + 1,
+          expected: expectedSeq,
           received: evt.seq,
         },
       });
@@ -761,9 +768,6 @@ export function createAgentEventHandler({
     } else {
       broadcast("agent", agentPayload);
     }
-
-    const lifecyclePhase =
-      evt.stream === "lifecycle" && typeof evt.data?.phase === "string" ? evt.data.phase : null;
 
     if (isControlUiVisible && sessionKey) {
       // Send tool events to node/channel subscribers only when verbose is enabled;

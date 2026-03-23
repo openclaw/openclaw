@@ -527,6 +527,53 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it("accepts a reused runId when a new run restarts at seq 1", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
+      now: 2_700,
+    });
+    chatRunState.registry.add("run-reused", {
+      sessionKey: "session-reused",
+      clientRunId: "client-reused",
+    });
+
+    handler({
+      runId: "run-reused",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "done" },
+    });
+    emitLifecycleEnd(handler, "run-reused");
+    expect(chatRunState.finalizedRuns.has("run-reused")).toBe(true);
+
+    chatRunState.registry.add("run-reused", {
+      sessionKey: "session-reused",
+      clientRunId: "client-reused-2",
+    });
+    handler({
+      runId: "run-reused",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "fresh retry" },
+    });
+
+    expect(chatRunState.finalizedRuns.has("run-reused")).toBe(false);
+    const retryAgentCalls = nodeSendToSession.mock.calls.filter(
+      ([sessionKey, event, payload]) =>
+        sessionKey === "session-reused" &&
+        event === "agent" &&
+        (payload as { data?: { text?: string } }).data?.text === "fresh retry",
+    );
+    expect(retryAgentCalls).toHaveLength(1);
+    const errorCalls = broadcast.mock.calls.filter(
+      ([event, payload]) =>
+        event === "agent" && (payload as { stream?: string }).stream === "error",
+    );
+    expect(errorCalls).toHaveLength(0);
+    nowSpy?.mockRestore();
+  });
+
   it("still emits a seq-gap error when the first observed event is not seq 1", () => {
     const { broadcast, handler, nowSpy } = createHarness({ now: 3_000 });
 
