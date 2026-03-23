@@ -11,6 +11,7 @@ vi.mock("@clack/prompts", () => ({
 
 describe("createDoctorPrompter", () => {
   const originalStdinIsTTY = process.stdin.isTTY;
+  const originalUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
 
   afterEach(() => {
     vi.resetAllMocks();
@@ -18,6 +19,11 @@ describe("createDoctorPrompter", () => {
       value: originalStdinIsTTY,
       configurable: true,
     });
+    if (originalUpdateInProgress === undefined) {
+      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+    } else {
+      process.env.OPENCLAW_UPDATE_IN_PROGRESS = originalUpdateInProgress;
+    }
   });
 
   it("auto-accepts repairs in non-interactive fix mode", async () => {
@@ -80,6 +86,40 @@ describe("createDoctorPrompter", () => {
     await expect(
       prompter.confirmAggressive({
         message: "Overwrite gateway service config?",
+        initialValue: true,
+      }),
+    ).resolves.toBe(false);
+    expect(confirmMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps skip-in-non-interactive prompts disabled during update-mode repairs", async () => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: false,
+      configurable: true,
+    });
+    process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+
+    const prompter = createDoctorPrompter({
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+      options: {
+        repair: true,
+        nonInteractive: true,
+      },
+    });
+
+    await expect(
+      prompter.confirmRepair({
+        message: "Repair gateway service config?",
+        initialValue: false,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      prompter.confirmSkipInNonInteractive({
+        message: "Restart gateway service now?",
         initialValue: true,
       }),
     ).resolves.toBe(false);
