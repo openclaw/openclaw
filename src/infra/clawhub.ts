@@ -234,21 +234,28 @@ function extractTokenFromClawHubConfig(value: unknown): string | undefined {
   );
 }
 
-function resolveClawHubConfigPath(): string {
+function resolveClawHubConfigPaths(): string[] {
   const explicit =
     process.env.OPENCLAW_CLAWHUB_CONFIG_PATH?.trim() ||
     process.env.CLAWHUB_CONFIG_PATH?.trim() ||
-    process.env.CLAWDHUB_CONFIG_PATH?.trim();
+    process.env.CLAWDHUB_CONFIG_PATH?.trim(); // legacy misspelling from older clawhub CLI builds; keep for back-compat
   if (explicit) {
-    return explicit;
+    return [explicit];
   }
-  if (process.platform === "darwin") {
-    return path.join(os.homedir(), "Library", "Application Support", "clawhub", "config.json");
-  }
+
   const xdgConfigHome = process.env.XDG_CONFIG_HOME?.trim();
   const configHome =
     xdgConfigHome && xdgConfigHome.length > 0 ? xdgConfigHome : path.join(os.homedir(), ".config");
-  return path.join(configHome, "clawhub", "config.json");
+  const xdgPath = path.join(configHome, "clawhub", "config.json");
+
+  if (process.platform === "darwin") {
+    return [
+      path.join(os.homedir(), "Library", "Application Support", "clawhub", "config.json"),
+      xdgPath,
+    ];
+  }
+
+  return [xdgPath];
 }
 
 export async function resolveClawHubAuthToken(): Promise<string | undefined> {
@@ -260,12 +267,18 @@ export async function resolveClawHubAuthToken(): Promise<string | undefined> {
     return envToken;
   }
 
-  try {
-    const raw = await fs.readFile(resolveClawHubConfigPath(), "utf8");
-    return extractTokenFromClawHubConfig(JSON.parse(raw));
-  } catch {
-    return undefined;
+  for (const configPath of resolveClawHubConfigPaths()) {
+    try {
+      const raw = await fs.readFile(configPath, "utf8");
+      const token = extractTokenFromClawHubConfig(JSON.parse(raw));
+      if (token) {
+        return token;
+      }
+    } catch {
+      // Try the next candidate path.
+    }
   }
+  return undefined;
 }
 
 function parseComparableSemver(version: string | null | undefined): ComparableSemver | null {
