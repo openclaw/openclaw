@@ -1,8 +1,18 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DisconnectReason } from "@whiskeysockets/baileys";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@whiskeysockets/baileys", async () => {
+  const actual =
+    await vi.importActual<typeof import("@whiskeysockets/baileys")>("@whiskeysockets/baileys");
+  return {
+    ...actual,
+    DisconnectReason: actual.DisconnectReason ?? { loggedOut: 401 },
+  };
+});
+
+import { DisconnectReason } from "@whiskeysockets/baileys";
 import { loginWeb } from "./login.js";
 import {
   createWaSocket,

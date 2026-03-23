@@ -7,6 +7,7 @@ type MakeCacheableSignalKeyStoreFn = BaileysExports["makeCacheableSignalKeyStore
 type MakeWASocketFn = BaileysExports["makeWASocket"];
 type UseMultiFileAuthStateFn = BaileysExports["useMultiFileAuthState"];
 type DownloadMediaMessageFn = BaileysExports["downloadMediaMessage"];
+type NormalizeMessageContentFn = BaileysExports["normalizeMessageContent"];
 
 export type MockBaileysSocket = {
   ev: EventEmitter;
@@ -19,12 +20,14 @@ export type MockBaileysSocket = {
 
 export type MockBaileysModule = {
   DisconnectReason: { loggedOut: number };
+  isJidGroup: (jid: string) => boolean;
   fetchLatestBaileysVersion: ReturnType<typeof vi.fn<FetchLatestBaileysVersionFn>>;
   makeCacheableSignalKeyStore: ReturnType<typeof vi.fn<MakeCacheableSignalKeyStoreFn>>;
   makeWASocket: ReturnType<typeof vi.fn<MakeWASocketFn>>;
   useMultiFileAuthState: ReturnType<typeof vi.fn<UseMultiFileAuthStateFn>>;
   jidToE164?: (jid: string) => string | null;
   proto?: unknown;
+  normalizeMessageContent?: ReturnType<typeof vi.fn<NormalizeMessageContentFn>>;
   downloadMediaMessage?: ReturnType<typeof vi.fn<DownloadMediaMessageFn>>;
 };
 
@@ -50,6 +53,7 @@ export function createMockBaileys(): {
 
   const mod: MockBaileysModule = {
     DisconnectReason: { loggedOut: 401 },
+    isJidGroup: (jid: string) => jid.endsWith("@g.us"),
     fetchLatestBaileysVersion: vi
       .fn<FetchLatestBaileysVersionFn>()
       .mockResolvedValue({ version: [1, 2, 3], isLatest: true }),
@@ -60,6 +64,9 @@ export function createMockBaileys(): {
       saveCreds: vi.fn(),
     })),
     jidToE164: (jid: string) => jid.replace(/@.*$/, "").replace(/^/, "+"),
+    normalizeMessageContent: vi.fn((message) => message) as unknown as ReturnType<
+      typeof vi.fn<NormalizeMessageContentFn>
+    >,
     downloadMediaMessage: vi.fn<DownloadMediaMessageFn>().mockResolvedValue(Buffer.from("img")),
   };
 

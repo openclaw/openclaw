@@ -10,6 +10,8 @@ vi.mock("@whiskeysockets/baileys", async () => {
     await vi.importActual<typeof import("@whiskeysockets/baileys")>("@whiskeysockets/baileys");
   return {
     ...actual,
+    DisconnectReason: actual.DisconnectReason ?? { loggedOut: 401 },
+    isJidGroup: actual.isJidGroup ?? ((jid: string) => jid.endsWith("@g.us")),
     normalizeMessageContent,
     downloadMediaMessage,
   };
