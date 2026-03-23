@@ -36,7 +36,7 @@ const DuckDuckGoSearchSchema = Type.Object(
 export function createDuckDuckGoWebSearchProvider(): WebSearchProviderPlugin {
   return {
     id: "duckduckgo",
-    label: "DuckDuckGo Search",
+    label: "DuckDuckGo Search (experimental)",
     hint: "Free web search fallback with no API key required",
     requiresCredential: false,
     envVars: [],

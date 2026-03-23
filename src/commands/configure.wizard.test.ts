@@ -507,7 +507,7 @@ describe("runConfigureWizard", () => {
     mocks.resolveSearchProviderOptions.mockReturnValue([
       {
         id: "duckduckgo",
-        label: "DuckDuckGo Search",
+        label: "DuckDuckGo Search (experimental)",
         hint: "Free fallback",
         requiresCredential: false,
         envVars: [],

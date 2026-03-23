@@ -129,7 +129,7 @@ describe("web search runtime", () => {
       pluginName: "DuckDuckGo",
       provider: {
         id: "duckduckgo",
-        label: "DuckDuckGo Search",
+        label: "DuckDuckGo Search (experimental)",
         hint: "Keyless fallback",
         requiresCredential: false,
         envVars: [],
