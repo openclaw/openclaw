@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-OPENCLAW_DOCKER_LIVE_AUTH_ALL=(.claude .codex .minimax .qwen)
+OPENCLAW_DOCKER_LIVE_AUTH_ALL=(.claude .codex .minimax)
 
 openclaw_live_trim() {
   local value="${1:-}"
