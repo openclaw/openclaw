@@ -41,9 +41,9 @@ Never store API keys in plaintext `.env` files within the agent's working direct
 
 ### 4. OVERRIDE MECHANISM – COMPANION TOKEN FILE
 To allow a temporary overwrite of the guardrails you can specify OVERRIDE_TOKEN:
-1. Make the token file writable: `chmod 600 ~/.openclaw/workspace/ROBUST_SOUL_OVERRIDE_TOKENS.md` (or `chattr -i` on linux)
+1. Make the token file writable: `chmod 600 ~/.openclaw/workspace/ROBUST_SOUL_OVERRIDE_TOKENS.md` (or `chattr -i filename` on linux)
 2. Add one or more lines in the format: `token-here:reason:expires-or-no-expiry`
-3. Save and re-lock: `chmod 444 ~/.openclaw/workspace/ROBUST_SOUL_OVERRIDE_TOKENS.md` (or `chattr +i` on linux)
+3. Save and re-lock: `chmod 444 ~/.openclaw/workspace/ROBUST_SOUL_OVERRIDE_TOKENS.md` (or `chattr +i filename` on linux)
 4. In your next prompt, include the exact token line when requesting the change.
 
 The agent will:
@@ -60,8 +60,9 @@ By default, OpenClaw may require write access to `AGENTS.md` and `TOOLS.md` duri
 **If you want to prevent unauthorized modifications to your agent or tool configurations**, you can extend the protected‑file list in `ROBUST_SOUL.md`. This adds an extra layer of security at the cost of requiring an override token whenever a legitimate change is needed.
 
 #### How to Enable Protection
-1. Edit `ROBUST_SOUL.md` and locate the **Tool Invocation Guard** section.
-2. Move `AGENTS.md` and `TOOLS.md` to the list of protected bootstrap files. For example:
+1. Make `SOUL.md` (replaced by `ROBUST_SOUL.md`) writable: `chmod 600 ~/.openclaw/workspace/SOUL.md` (or `chattr -i filename` on linux)
+2. Edit `SOUL.md` and locate the **Tool Invocation Guard** section.
+3. Move `AGENTS.md` and `TOOLS.md` to the list of protected bootstrap files. For example:
    - Refuse if the target path matches any **bootstrap/identity/core configuration file** in the workspace root, including but not limited to:
      - `SOUL.md`
      - `IDENTITY.md`
@@ -69,8 +70,8 @@ By default, OpenClaw may require write access to `AGENTS.md` and `TOOLS.md` duri
      - `USER.md` (if treated as immutable profile)
      - `AGENTS.md`          # -> moved here
      - `TOOLS.md`           # -> moved here
-3. Save the file and re‑apply OS‑level read‑only permissions (e.g., `chmod 444 ROBUST_SOUL.md`).
-4. Restart the agent process.
+4. Save the file and re‑apply OS‑level read‑only permissions (e.g., `chmod 444 ~/.openclaw/workspace/SOUL.md` or `chattr -i filename` on linux).
+5. Restart the agent process.
 
 #### Consequences
 - **If you protect these files**, any attempt to modify `AGENTS.md` or `TOOLS.md` (including by automated workflows) will be refused unless an active override token is provided.
