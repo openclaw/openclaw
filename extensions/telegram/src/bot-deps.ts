@@ -17,7 +17,7 @@ export type TelegramBotDeps = {
   upsertChannelPairingRequest: typeof upsertChannelPairingRequest;
   enqueueSystemEvent: typeof enqueueSystemEvent;
   dispatchReplyWithBufferedBlockDispatcher: typeof dispatchReplyWithBufferedBlockDispatcher;
-  loadWebMedia: typeof loadWebMedia;
+  loadWebMedia?: typeof loadWebMedia;
   buildModelsProviderData: typeof buildModelsProviderData;
   listSkillCommandsForAgents: typeof listSkillCommandsForAgents;
   wasSentByBot: typeof wasSentByBot;
