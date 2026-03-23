@@ -1,4 +1,8 @@
-import { createAllowFromSection, createTopLevelChannelDmPolicy } from "openclaw/plugin-sdk/setup";
+import {
+  createAllowFromSection,
+  createStandardChannelSetupStatus,
+  createTopLevelChannelDmPolicy,
+} from "openclaw/plugin-sdk/setup";
 import {
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
@@ -47,20 +51,19 @@ export { lineSetupAdapter } from "./setup-core.js";
 
 export const lineSetupWizard: ChannelSetupWizard = {
   channel,
-  status: {
+  status: createStandardChannelSetupStatus({
+    channelLabel: "LINE",
     configuredLabel: "configured",
     unconfiguredLabel: "needs token + secret",
     configuredHint: "configured",
     unconfiguredHint: "needs token + secret",
     configuredScore: 1,
     unconfiguredScore: 0,
+    includeStatusLine: true,
     resolveConfigured: ({ cfg }) =>
       listLineAccountIds(cfg).some((accountId) => isLineConfigured(cfg, accountId)),
-    resolveStatusLines: ({ cfg, configured }) => [
-      `LINE: ${configured ? "configured" : "needs token + secret"}`,
-      `Accounts: ${listLineAccountIds(cfg).length || 0}`,
-    ],
-  },
+    resolveExtraStatusLines: ({ cfg }) => [`Accounts: ${listLineAccountIds(cfg).length || 0}`],
+  }),
   introNote: {
     title: "LINE Messaging API",
     lines: LINE_SETUP_HELP_LINES,

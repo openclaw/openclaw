@@ -14,6 +14,7 @@ import {
   createLegacyCompatChannelDmPolicy,
   createNestedChannelParsedAllowFromPrompt,
   createPromptParsedAllowFromForAccount,
+  createStandardChannelSetupStatus,
   createNestedChannelAllowFromSetter,
   createNestedChannelDmPolicy,
   createNestedChannelDmPolicySetter,
@@ -1813,6 +1814,46 @@ describe("normalizeAllowFromEntries", () => {
 
   it("trims and de-duplicates without a normalizer", () => {
     expect(normalizeAllowFromEntries([" alice ", "bob", "alice"])).toEqual(["alice", "bob"]);
+  });
+});
+
+describe("createStandardChannelSetupStatus", () => {
+  it("returns the shared status fields without status lines by default", async () => {
+    const status = createStandardChannelSetupStatus({
+      channelLabel: "Demo",
+      configuredLabel: "configured",
+      unconfiguredLabel: "needs token",
+      configuredHint: "ready",
+      unconfiguredHint: "missing token",
+      configuredScore: 2,
+      unconfiguredScore: 0,
+      resolveConfigured: ({ cfg }) => Boolean(cfg.channels?.demo),
+    });
+
+    expect(status.configuredHint).toBe("ready");
+    expect(status.unconfiguredHint).toBe("missing token");
+    expect(status.configuredScore).toBe(2);
+    expect(status.unconfiguredScore).toBe(0);
+    expect(await status.resolveConfigured({ cfg: { channels: { demo: {} } } })).toBe(true);
+    expect(status.resolveStatusLines).toBeUndefined();
+  });
+
+  it("builds the default status line plus extra lines when requested", async () => {
+    const status = createStandardChannelSetupStatus({
+      channelLabel: "Demo",
+      configuredLabel: "configured",
+      unconfiguredLabel: "needs token",
+      includeStatusLine: true,
+      resolveConfigured: ({ cfg }) => Boolean(cfg.channels?.demo),
+      resolveExtraStatusLines: ({ configured }) => [`Configured: ${configured ? "yes" : "no"}`],
+    });
+
+    expect(
+      await status.resolveStatusLines?.({
+        cfg: { channels: { demo: {} } },
+        configured: true,
+      }),
+    ).toEqual(["Demo: configured", "Configured: yes"]);
   });
 });
 

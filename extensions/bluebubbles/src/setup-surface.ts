@@ -1,6 +1,7 @@
 import {
   createAllowFromSection,
   createPromptParsedAllowFromForAccount,
+  createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
   type ChannelSetupDmPolicy,
@@ -143,20 +144,21 @@ export const blueBubblesSetupWizard: ChannelSetupWizard = {
   channel,
   stepOrder: "text-first",
   status: {
-    configuredLabel: "configured",
-    unconfiguredLabel: "needs setup",
-    configuredHint: "configured",
-    unconfiguredHint: "iMessage via BlueBubbles app",
-    configuredScore: 1,
-    unconfiguredScore: 0,
-    resolveConfigured: ({ cfg }) =>
-      listBlueBubblesAccountIds(cfg).some((accountId) => {
-        const account = resolveBlueBubblesAccount({ cfg, accountId });
-        return account.configured;
-      }),
-    resolveStatusLines: ({ configured }) => [
-      `BlueBubbles: ${configured ? "configured" : "needs setup"}`,
-    ],
+    ...createStandardChannelSetupStatus({
+      channelLabel: "BlueBubbles",
+      configuredLabel: "configured",
+      unconfiguredLabel: "needs setup",
+      configuredHint: "configured",
+      unconfiguredHint: "iMessage via BlueBubbles app",
+      configuredScore: 1,
+      unconfiguredScore: 0,
+      includeStatusLine: true,
+      resolveConfigured: ({ cfg }) =>
+        listBlueBubblesAccountIds(cfg).some((accountId) => {
+          const account = resolveBlueBubblesAccount({ cfg, accountId });
+          return account.configured;
+        }),
+    }),
     resolveSelectionHint: ({ configured }) =>
       configured ? "configured" : "iMessage via BlueBubbles app",
   },

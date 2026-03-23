@@ -1,5 +1,6 @@
 import {
   createAllowFromSection,
+  createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   hasConfiguredSecretInput,
   type OpenClawConfig,
@@ -92,7 +93,8 @@ const dmPolicy: ChannelSetupDmPolicy = {
 
 export const telegramSetupWizard: ChannelSetupWizard = {
   channel,
-  status: {
+  status: createStandardChannelSetupStatus({
+    channelLabel: "Telegram",
     configuredLabel: "configured",
     unconfiguredLabel: "needs token",
     configuredHint: "recommended · configured",
@@ -104,7 +106,7 @@ export const telegramSetupWizard: ChannelSetupWizard = {
         const account = inspectTelegramAccount({ cfg, accountId });
         return account.configured;
       }),
-  },
+  }),
   prepare: async ({ cfg, accountId, credentialValues }) => ({
     cfg: ensureTelegramDefaultGroupMentionGate(cfg, accountId),
     credentialValues,
