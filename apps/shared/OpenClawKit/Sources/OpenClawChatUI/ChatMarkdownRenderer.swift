@@ -6,7 +6,7 @@ private struct ApricotStyle: StructuredText.Style {
     let inlineStyle: InlineStyle = InlineStyle()
         .code(.monospaced, .foregroundColor(Color(red: 1.0, green: 0.75, blue: 0.2)))
         .strong(.fontWeight(.semibold))
-        .link(.foregroundColor(.accentColor))
+        .link(.foregroundColor(Color(red: 0.6, green: 0.4, blue: 1.0)))
     let headingStyle: StructuredText.GitHubHeadingStyle = .gitHub
     let paragraphStyle: StructuredText.GitHubParagraphStyle = .gitHub
     let blockQuoteStyle: StructuredText.GitHubBlockQuoteStyle = .gitHub
@@ -74,7 +74,7 @@ private struct ChatMarkdownStyle: ViewModifier {
     }
 
     private var inlineStyle: InlineStyle {
-        let linkColor: Color = self.context == .user ? self.textColor : .accentColor
+        let linkColor: Color = self.context == .user ? self.textColor : Color(red: 0.6, green: 0.4, blue: 1.0)
         let codeScale: CGFloat = self.variant == .compact ? 0.85 : 0.9
         return InlineStyle()
             .code(.monospaced, .fontScale(codeScale))

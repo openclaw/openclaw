@@ -504,6 +504,19 @@ private struct AttachmentRow: View {
         panel.nameFieldStringValue = self.att.fileName ?? "generated_image.jpg"
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
+
+            // If saving as PNG and the raw data has OpenClaw metadata, write raw bytes
+            // to preserve the tEXt chunk (NSBitmapImageRep strips it during round-trip).
+            if url.pathExtension.lowercased() == "png",
+               let base64 = self.att.content?.value as? String,
+               let rawData = Data(base64Encoded: base64),
+               OpenClawImageMetadata.extractMetadata(from: rawData) != nil
+            {
+                try? rawData.write(to: url)
+                return
+            }
+
+            // Fallback: re-encode via NSBitmapImageRep (JPEG or PNG without metadata)
             if let tiff = image.tiffRepresentation,
                let rep = NSBitmapImageRep(data: tiff),
                let data = rep.representation(using: url.pathExtension == "png" ? .png : .jpeg, properties: [:])

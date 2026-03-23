@@ -52,6 +52,16 @@ public final class OpenClawChatViewModel {
     public private(set) var imageGenPhase: String?
     public var pendingLargeFile: PendingLargeFile?
 
+    /// Set when a dropped image contains OpenClaw generation metadata.
+    /// The UI shows a disambiguation dialog to let the user choose how to proceed.
+    public var pendingMetadataRestore: PendingMetadataRestore?
+
+    public struct PendingMetadataRestore {
+        public let params: OpenClawImageGenParams
+        public let imageData: Data
+        public let url: URL?
+    }
+
     public struct PendingLargeFile {
         public let data: Data
         public let fileName: String
@@ -330,6 +340,38 @@ public final class OpenClawChatViewModel {
 
     public func removeAttachment(_ id: OpenClawPendingAttachment.ID) {
         self.attachments.removeAll { $0.id == id }
+    }
+
+    // MARK: - Metadata Restore
+
+    /// Apply restored generation parameters from a dropped image's metadata.
+    public func applyRestoredGenParams() {
+        guard let pending = self.pendingMetadataRestore else { return }
+        let params = pending.params
+        self.pendingMetadataRestore = nil
+        self.input = params.prompt
+        self.modelSelectionID = params.model
+        self.imageResolution = params.resolution
+        self.imageAspectRatio = params.aspectRatio
+        self.imageVariations = params.variations
+        // Attach the dropped image as input, skip metadata re-detection
+        let fileName = pending.url?.lastPathComponent ?? "input.png"
+        self.skipMetadataCheck = true
+        self.addImageAttachment(data: pending.imageData, fileName: fileName, mimeType: "image/png")
+    }
+
+    /// Attach the dropped image as input only (ignore metadata).
+    public func useDroppedImageAsInput() {
+        guard let pending = self.pendingMetadataRestore else { return }
+        self.pendingMetadataRestore = nil
+        let fileName = pending.url?.lastPathComponent ?? "input.png"
+        self.skipMetadataCheck = true
+        self.addImageAttachment(data: pending.imageData, fileName: fileName, mimeType: "image/png")
+    }
+
+    /// Dismiss the metadata restore dialog without attaching.
+    public func dismissMetadataRestore() {
+        self.pendingMetadataRestore = nil
     }
 
     public var canSend: Bool {
@@ -670,6 +712,17 @@ public final class OpenClawChatViewModel {
         var successCount = 0
         var lastError: Error?
 
+        // Build metadata params for PNG embedding
+        let genParams = OpenClawImageGenParams(
+            prompt: messageText,
+            model: self.modelSelectionID,
+            resolution: resolution,
+            aspectRatio: aspectRatio,
+            variations: totalVariations,
+            inputImageThumbnail: inputImage.flatMap { OpenClawImageMetadata.createThumbnail(from: $0) },
+            inputImageMimeType: inputImage != nil ? inputMimeType : nil
+        )
+
         for i in 1...totalVariations {
             if totalVariations > 1 {
                 self.imageGenPhase = "Generating image \(i) of \(totalVariations)…"
@@ -713,13 +766,27 @@ public final class OpenClawChatViewModel {
                     imageFileName = Self.imageFileName(prompt: messageText, ext: ext)
                 }
 
-                let base64Str = result.imageData.base64EncodedString()
+                // Embed generation metadata into PNG
+                let metadataImage = OpenClawImageMetadata.embedMetadata(into: result.imageData, params: genParams)
+                let imageToStore = metadataImage ?? result.imageData
+                let storeMime = metadataImage != nil ? "image/png" : result.mimeType
+                let storeExt = metadataImage != nil ? "png" : ext
+
+                // Update filename extension if we converted to PNG
+                let finalFileName: String
+                if storeExt != ext {
+                    finalFileName = imageFileName.replacingOccurrences(of: ".\(ext)", with: ".\(storeExt)")
+                } else {
+                    finalFileName = imageFileName
+                }
+
+                let base64Str = imageToStore.base64EncodedString()
                 assistantContent.append(
                     OpenClawChatMessageContent(
                         type: "image", text: nil,
                         thinking: nil, thinkingSignature: nil,
-                        mimeType: result.mimeType,
-                        fileName: imageFileName,
+                        mimeType: storeMime,
+                        fileName: finalFileName,
                         content: AnyCodable(base64Str),
                         id: nil, name: nil, arguments: nil))
 
@@ -728,13 +795,13 @@ public final class OpenClawChatViewModel {
                         id: UUID(), role: "assistant", content: assistantContent,
                         timestamp: Date().timeIntervalSince1970 * 1000))
 
-                // Auto-save to configured folder
+                // Auto-save to configured folder (with metadata embedded)
                 if let saveFolder = UserDefaults.standard.string(forKey: "openclaw.imageGenSaveFolder"),
                    !saveFolder.isEmpty
                 {
-                    let url = URL(fileURLWithPath: saveFolder).appendingPathComponent(imageFileName)
+                    let url = URL(fileURLWithPath: saveFolder).appendingPathComponent(finalFileName)
                     do {
-                        try result.imageData.write(to: url)
+                        try imageToStore.write(to: url)
                         dbg("Auto-saved variation \(i) to \(url.path)")
                     } catch {
                         dbg("Auto-save failed for variation \(i): \(error.localizedDescription)")
@@ -1286,6 +1353,8 @@ public final class OpenClawChatViewModel {
         return (UTType(filenameExtension: ext) ?? .data).preferredMIMEType
     }
 
+    private var skipMetadataCheck = false
+
     private func addImageAttachment(url: URL?, data: Data, fileName: String, mimeType: String) async {
         if data.count > 20_000_000 {
             self.pendingLargeFile = PendingLargeFile(data: data, fileName: fileName, mimeType: mimeType, url: url)
@@ -1302,6 +1371,15 @@ public final class OpenClawChatViewModel {
             self.errorText = "Only image attachments are supported right now"
             return
         }
+
+        // Check for OpenClaw generation metadata → show disambiguation dialog
+        if !self.skipMetadataCheck,
+           let genParams = OpenClawImageMetadata.extractMetadata(from: data)
+        {
+            self.pendingMetadataRestore = PendingMetadataRestore(params: genParams, imageData: data, url: url)
+            return
+        }
+        self.skipMetadataCheck = false
 
         let preview = Self.previewImage(data: data)
         self.attachments.append(

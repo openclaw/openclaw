@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Foundation
 import ObjectiveC
 import OpenClawChatUI
@@ -483,8 +484,32 @@ private extension NSToolbarItem.Identifier {
     static let chatGearMenu = NSToolbarItem.Identifier("chatGearMenu")
 }
 
+// MARK: - Tags for gear menu items
+private enum GearMenuTag {
+    static let connection = 100
+    static let healthStatus = 101
+    static let pairingStatus = 102
+    static let heartbeats = 110
+    static let heartbeatStatus = 111
+    static let browserControl = 112
+    static let camera = 113
+    static let execApprovals = 114
+    static let canvasEnabled = 115
+    static let voiceWake = 116
+    static let micSubmenu = 117
+    static let openDashboard = 120
+    static let openChat = 121
+    static let openCloseCanvas = 122
+    static let talkMode = 123
+    static let debugSubmenu = 130
+    static let about = 131
+    static let update = 132
+}
+
 @MainActor
 final class ChatWindowToolbarDelegate: NSObject, NSToolbarDelegate {
+    private var browserControlEnabled = true
+
     func toolbar(
         _ toolbar: NSToolbar,
         itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
@@ -497,7 +522,7 @@ final class ChatWindowToolbarDelegate: NSObject, NSToolbarDelegate {
         item.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Settings")?
             .withSymbolConfiguration(config)
         item.label = "Settings"
-        item.toolTip = "App settings and Talk Mode"
+        item.toolTip = "App settings and controls"
         item.menu = self.buildGearMenu()
         item.showsIndicator = true
         return item
@@ -511,25 +536,176 @@ final class ChatWindowToolbarDelegate: NSObject, NSToolbarDelegate {
         [.flexibleSpace, .chatGearMenu]
     }
 
+    // MARK: - Build full gear menu (mirrors MenuContentView)
+
     private func buildGearMenu() -> NSMenu {
         let menu = NSMenu()
+        let state = AppStateStore.shared
 
-        // Talk Mode toggle
+        // ── Connection toggle ──
+        let connItem = NSMenuItem(
+            title: state.isPaused ? "OpenClaw Paused" : self.connectionLabel(state),
+            action: #selector(toggleConnection),
+            keyEquivalent: "")
+        connItem.target = self
+        connItem.tag = GearMenuTag.connection
+        connItem.state = state.isPaused ? .off : .on
+        connItem.image = NSImage(systemSymbolName: "antenna.radiowaves.left.and.right", accessibilityDescription: nil)
+        connItem.isEnabled = state.connectionMode != .unconfigured
+        menu.addItem(connItem)
+
+        // Health status (info-only)
+        let healthItem = NSMenuItem(title: "Health pending", action: nil, keyEquivalent: "")
+        healthItem.tag = GearMenuTag.healthStatus
+        healthItem.isEnabled = false
+        menu.addItem(healthItem)
+
+        // Pairing status (info-only, hidden by default)
+        let pairingItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        pairingItem.tag = GearMenuTag.pairingStatus
+        pairingItem.isEnabled = false
+        pairingItem.isHidden = true
+        menu.addItem(pairingItem)
+
+        menu.addItem(.separator())
+
+        // ── Heartbeats toggle ──
+        let hbItem = NSMenuItem(
+            title: "Send Heartbeats",
+            action: #selector(toggleHeartbeats),
+            keyEquivalent: "")
+        hbItem.target = self
+        hbItem.tag = GearMenuTag.heartbeats
+        hbItem.state = state.heartbeatsEnabled ? .on : .off
+        hbItem.image = NSImage(systemSymbolName: "waveform.path.ecg", accessibilityDescription: nil)
+        menu.addItem(hbItem)
+
+        // Heartbeat status (info-only)
+        let hbStatusItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        hbStatusItem.tag = GearMenuTag.heartbeatStatus
+        hbStatusItem.isEnabled = false
+        hbStatusItem.isHidden = true
+        menu.addItem(hbStatusItem)
+
+        // ── Browser Control toggle ──
+        let browserItem = NSMenuItem(
+            title: "Browser Control",
+            action: #selector(toggleBrowserControl),
+            keyEquivalent: "")
+        browserItem.target = self
+        browserItem.tag = GearMenuTag.browserControl
+        browserItem.state = self.browserControlEnabled ? .on : .off
+        browserItem.image = NSImage(systemSymbolName: "globe", accessibilityDescription: nil)
+        menu.addItem(browserItem)
+
+        // ── Allow Camera toggle ──
+        let cameraItem = NSMenuItem(
+            title: "Allow Camera",
+            action: #selector(toggleCamera),
+            keyEquivalent: "")
+        cameraItem.target = self
+        cameraItem.tag = GearMenuTag.camera
+        cameraItem.state = UserDefaults.standard.bool(forKey: cameraEnabledKey) ? .on : .off
+        cameraItem.image = NSImage(systemSymbolName: "camera", accessibilityDescription: nil)
+        menu.addItem(cameraItem)
+
+        // ── Exec Approvals submenu ──
+        let execItem = NSMenuItem(title: "Exec Approvals", action: nil, keyEquivalent: "")
+        execItem.tag = GearMenuTag.execApprovals
+        execItem.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: nil)
+        let execSub = NSMenu()
+        for mode in ExecApprovalQuickMode.allCases {
+            let modeItem = NSMenuItem(
+                title: mode.title,
+                action: #selector(selectExecApprovalMode(_:)),
+                keyEquivalent: "")
+            modeItem.target = self
+            modeItem.representedObject = mode.rawValue
+            modeItem.state = state.execApprovalMode == mode ? .on : .off
+            execSub.addItem(modeItem)
+        }
+        execItem.submenu = execSub
+        menu.addItem(execItem)
+
+        // ── Allow Canvas toggle ──
+        let canvasItem = NSMenuItem(
+            title: "Allow Canvas",
+            action: #selector(toggleCanvasEnabled),
+            keyEquivalent: "")
+        canvasItem.target = self
+        canvasItem.tag = GearMenuTag.canvasEnabled
+        canvasItem.state = state.canvasEnabled ? .on : .off
+        canvasItem.image = NSImage(systemSymbolName: "rectangle.and.pencil.and.ellipsis", accessibilityDescription: nil)
+        menu.addItem(canvasItem)
+
+        // ── Voice Wake toggle ──
+        let vwItem = NSMenuItem(
+            title: "Voice Wake",
+            action: #selector(toggleVoiceWake),
+            keyEquivalent: "")
+        vwItem.target = self
+        vwItem.tag = GearMenuTag.voiceWake
+        vwItem.state = state.swabbleEnabled ? .on : .off
+        vwItem.image = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: nil)
+        vwItem.isEnabled = voiceWakeSupported
+        menu.addItem(vwItem)
+
+        // ── Microphone submenu ──
+        let micItem = NSMenuItem(title: "Microphone", action: nil, keyEquivalent: "")
+        micItem.tag = GearMenuTag.micSubmenu
+        micItem.submenu = NSMenu() // populated dynamically
+        micItem.isHidden = !(voiceWakeSupported && state.swabbleEnabled)
+        menu.addItem(micItem)
+
+        menu.addItem(.separator())
+
+        // ── Open Dashboard ──
+        let dashItem = NSMenuItem(
+            title: "Open Dashboard",
+            action: #selector(openDashboard),
+            keyEquivalent: "")
+        dashItem.target = self
+        dashItem.tag = GearMenuTag.openDashboard
+        dashItem.image = NSImage(systemSymbolName: "gauge", accessibilityDescription: nil)
+        menu.addItem(dashItem)
+
+        // ── Open Chat ──
+        let chatItem = NSMenuItem(
+            title: "Open Chat",
+            action: #selector(openNewChat),
+            keyEquivalent: "")
+        chatItem.target = self
+        chatItem.tag = GearMenuTag.openChat
+        chatItem.image = NSImage(systemSymbolName: "bubble.left.and.bubble.right", accessibilityDescription: nil)
+        menu.addItem(chatItem)
+
+        // ── Open / Close Canvas ──
+        if state.canvasEnabled {
+            let canvasBtnItem = NSMenuItem(
+                title: state.canvasPanelVisible ? "Close Canvas" : "Open Canvas",
+                action: #selector(toggleCanvasPanel),
+                keyEquivalent: "")
+            canvasBtnItem.target = self
+            canvasBtnItem.tag = GearMenuTag.openCloseCanvas
+            canvasBtnItem.image = NSImage(systemSymbolName: "rectangle.inset.filled.on.rectangle", accessibilityDescription: nil)
+            menu.addItem(canvasBtnItem)
+        }
+
+        // ── Talk Mode toggle ──
         let talkItem = NSMenuItem(
-            title: AppStateStore.shared.talkEnabled ? "Stop Talk Mode" : "Talk Mode",
+            title: state.talkEnabled ? "Stop Talk Mode" : "Talk Mode",
             action: #selector(toggleTalkMode),
             keyEquivalent: "")
         talkItem.target = self
-        talkItem.state = AppStateStore.shared.talkEnabled ? .on : .off
+        talkItem.tag = GearMenuTag.talkMode
+        talkItem.state = state.talkEnabled ? .on : .off
         talkItem.image = NSImage(systemSymbolName: "waveform.circle.fill", accessibilityDescription: nil)
-        if !voiceWakeSupported {
-            talkItem.isEnabled = false
-        }
+        talkItem.isEnabled = voiceWakeSupported
         menu.addItem(talkItem)
 
         menu.addItem(.separator())
 
-        // Settings
+        // ── Settings ──
         let settingsItem = NSMenuItem(
             title: "Settings…",
             action: #selector(openSettings),
@@ -539,9 +715,39 @@ final class ChatWindowToolbarDelegate: NSObject, NSToolbarDelegate {
         settingsItem.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
         menu.addItem(settingsItem)
 
+        // ── Debug submenu (conditional) ──
+        if state.debugPaneEnabled {
+            let debugItem = NSMenuItem(title: "Debug", action: nil, keyEquivalent: "")
+            debugItem.tag = GearMenuTag.debugSubmenu
+            debugItem.submenu = self.buildDebugSubmenu()
+            menu.addItem(debugItem)
+        }
+
+        // ── About ──
+        let aboutItem = NSMenuItem(
+            title: "About OpenClaw",
+            action: #selector(openAbout),
+            keyEquivalent: "")
+        aboutItem.target = self
+        aboutItem.tag = GearMenuTag.about
+        menu.addItem(aboutItem)
+
+        // ── Update ready (conditional) ──
+        if let updater = (NSApp.delegate as? AppDelegate)?.updaterController,
+           updater.isAvailable, updater.updateStatus.isUpdateReady
+        {
+            let updateItem = NSMenuItem(
+                title: "Update ready, restart now?",
+                action: #selector(checkForUpdate),
+                keyEquivalent: "")
+            updateItem.target = self
+            updateItem.tag = GearMenuTag.update
+            menu.addItem(updateItem)
+        }
+
         menu.addItem(.separator())
 
-        // Quit
+        // ── Quit ──
         let quitItem = NSMenuItem(
             title: "Quit OpenClaw",
             action: #selector(quitApp),
@@ -550,18 +756,264 @@ final class ChatWindowToolbarDelegate: NSObject, NSToolbarDelegate {
         quitItem.target = self
         menu.addItem(quitItem)
 
-        // Refresh menu items each time it opens
         menu.delegate = self
-
         return menu
     }
 
-    @objc private func toggleTalkMode() {
-        Task { await AppStateStore.shared.setTalkEnabled(!AppStateStore.shared.talkEnabled) }
+    // MARK: - Debug submenu
+
+    private func buildDebugSubmenu() -> NSMenu {
+        let sub = NSMenu()
+        let state = AppStateStore.shared
+
+        sub.addItem(self.debugMenuItem("Open Config Folder", icon: "folder", action: #selector(debugOpenConfigFolder)))
+        sub.addItem(self.debugMenuItem("Run Health Check Now", icon: "stethoscope", action: #selector(debugRunHealthCheck)))
+        sub.addItem(self.debugMenuItem("Send Test Heartbeat", icon: "waveform.path.ecg", action: #selector(debugSendTestHeartbeat)))
+
+        if state.connectionMode == .remote {
+            sub.addItem(self.debugMenuItem("Reset Remote Tunnel", icon: "arrow.triangle.2.circlepath", action: #selector(debugResetTunnel)))
+        }
+
+        // Verbose Logging (Main)
+        let verboseItem = NSMenuItem(
+            title: DebugActions.verboseLoggingEnabledMain
+                ? "Verbose Logging (Main): On"
+                : "Verbose Logging (Main): Off",
+            action: #selector(debugToggleVerboseMain),
+            keyEquivalent: "")
+        verboseItem.target = self
+        verboseItem.image = NSImage(systemSymbolName: "text.alignleft", accessibilityDescription: nil)
+        sub.addItem(verboseItem)
+
+        // App Logging submenu
+        let logItem = NSMenuItem(title: "App Logging", action: nil, keyEquivalent: "")
+        logItem.image = NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil)
+        let logSub = NSMenu()
+        let currentLevel = UserDefaults.standard.string(forKey: appLogLevelKey) ?? AppLogLevel.default.rawValue
+        for level in AppLogLevel.allCases {
+            let li = NSMenuItem(
+                title: level.title,
+                action: #selector(selectAppLogLevel(_:)),
+                keyEquivalent: "")
+            li.target = self
+            li.representedObject = level.rawValue
+            li.state = level.rawValue == currentLevel ? .on : .off
+            logSub.addItem(li)
+        }
+        logSub.addItem(.separator())
+        let fileLogItem = NSMenuItem(
+            title: UserDefaults.standard.bool(forKey: debugFileLogEnabledKey)
+                ? "File Logging: On" : "File Logging: Off",
+            action: #selector(debugToggleFileLogging),
+            keyEquivalent: "")
+        fileLogItem.target = self
+        fileLogItem.image = NSImage(systemSymbolName: "doc.text.magnifyingglass", accessibilityDescription: nil)
+        fileLogItem.state = UserDefaults.standard.bool(forKey: debugFileLogEnabledKey) ? .on : .off
+        logSub.addItem(fileLogItem)
+        logItem.submenu = logSub
+        sub.addItem(logItem)
+
+        sub.addItem(self.debugMenuItem("Open Session Store", icon: "externaldrive", action: #selector(debugOpenSessionStore)))
+
+        sub.addItem(.separator())
+
+        sub.addItem(self.debugMenuItem("Open Agent Events…", icon: "bolt.horizontal.circle", action: #selector(debugOpenAgentEvents)))
+        sub.addItem(self.debugMenuItem("Open Log", icon: "doc.text.magnifyingglass", action: #selector(debugOpenLog)))
+        sub.addItem(self.debugMenuItem("Send Debug Voice Text", icon: "waveform.circle", action: #selector(debugSendVoice)))
+        sub.addItem(self.debugMenuItem("Send Test Notification", icon: "bell", action: #selector(debugSendNotification)))
+
+        sub.addItem(.separator())
+
+        if state.connectionMode == .local {
+            sub.addItem(self.debugMenuItem("Restart Gateway", icon: "arrow.clockwise", action: #selector(debugRestartGateway)))
+        }
+        sub.addItem(self.debugMenuItem("Restart Onboarding", icon: "arrow.counterclockwise", action: #selector(debugRestartOnboarding)))
+        sub.addItem(self.debugMenuItem("Restart App", icon: "arrow.triangle.2.circlepath", action: #selector(debugRestartApp)))
+
+        return sub
     }
 
-    @objc private func toggleCanvas() {
+    private func debugMenuItem(_ title: String, icon: String, action: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.image = NSImage(systemSymbolName: icon, accessibilityDescription: nil)
+        return item
+    }
+
+    // MARK: - Connection helpers
+
+    private func connectionLabel(_ state: AppState) -> String {
+        switch state.connectionMode {
+        case .unconfigured: "OpenClaw Not Configured"
+        case .remote: "Remote OpenClaw Active"
+        case .local: "OpenClaw Active"
+        }
+    }
+
+    private func healthStatusText() -> (String, Bool) {
+        let store = HealthStore.shared
+        let activity = WorkActivityStore.shared.current
+        if let activity {
+            let roleLabel = activity.role == .main ? "Main" : "Other"
+            return ("    \(roleLabel) · \(activity.label)", false)
+        }
+        switch store.state {
+        case .ok:
+            return ("    ● Health ok", false)
+        case .linkingNeeded:
+            return ("    ● Login required", true)
+        case let .degraded(reason):
+            let detail = store.degradedSummary ?? reason
+            return ("    ● \(detail)", true)
+        case .unknown:
+            return ("    ● Health pending", false)
+        }
+    }
+
+    private func heartbeatStatusText() -> String? {
+        if case .degraded = ControlChannel.shared.state {
+            return "    ● Control channel disconnected"
+        }
+        if let evt = HeartbeatStore.shared.lastEvent {
+            switch evt.status {
+            case "ok-empty", "ok-token": return "    ● Heartbeat ok"
+            case "sent": return "    ● Heartbeat sent"
+            case "skipped": return "    ● Heartbeat skipped"
+            case "failed": return "    ● Heartbeat failed"
+            default: return nil
+            }
+        }
+        return nil
+    }
+
+    // MARK: - Microphone helpers
+
+    private func populateMicSubmenu(_ submenu: NSMenu) {
+        submenu.removeAllItems()
+        let state = AppStateStore.shared
+
+        // System default option
+        let defaultLabel: String
+        if let host = Host.current().localizedName, !host.isEmpty {
+            defaultLabel = "Auto-detect (\(host))"
+        } else {
+            defaultLabel = "System default"
+        }
+        let defaultItem = NSMenuItem(
+            title: defaultLabel,
+            action: #selector(selectMicrophone(_:)),
+            keyEquivalent: "")
+        defaultItem.target = self
+        defaultItem.representedObject = "" as String
+        defaultItem.state = state.voiceWakeMicID.isEmpty ? .on : .off
+        submenu.addItem(defaultItem)
+
+        submenu.addItem(.separator())
+
+        // Discovered mics
+        let discovery = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.external, .microphone],
+            mediaType: .audio,
+            position: .unspecified)
+        let mics = discovery.devices
+            .filter(\.isConnected)
+            .sorted { $0.localizedName.localizedCaseInsensitiveCompare($1.localizedName) == .orderedAscending }
+
+        for mic in mics {
+            let micItem = NSMenuItem(
+                title: mic.localizedName,
+                action: #selector(selectMicrophone(_:)),
+                keyEquivalent: "")
+            micItem.target = self
+            micItem.representedObject = mic.uniqueID
+            micItem.state = state.voiceWakeMicID == mic.uniqueID ? .on : .off
+            submenu.addItem(micItem)
+        }
+    }
+
+    // MARK: - Actions: Connection & Toggles
+
+    @objc private func toggleConnection() {
+        AppStateStore.shared.isPaused.toggle()
+    }
+
+    @objc private func toggleHeartbeats() {
+        AppStateStore.shared.heartbeatsEnabled.toggle()
+    }
+
+    @objc private func toggleBrowserControl() {
+        self.browserControlEnabled.toggle()
+        let enabled = self.browserControlEnabled
         Task {
+            var root = await ConfigStore.load()
+            var browser = root["browser"] as? [String: Any] ?? [:]
+            browser["enabled"] = enabled
+            root["browser"] = browser
+            try? await ConfigStore.save(root)
+        }
+    }
+
+    @objc private func toggleCamera() {
+        let current = UserDefaults.standard.bool(forKey: cameraEnabledKey)
+        UserDefaults.standard.set(!current, forKey: cameraEnabledKey)
+    }
+
+    @objc private func selectExecApprovalMode(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let mode = ExecApprovalQuickMode(rawValue: raw)
+        else { return }
+        AppStateStore.shared.execApprovalMode = mode
+    }
+
+    @objc private func toggleCanvasEnabled() {
+        let state = AppStateStore.shared
+        state.canvasEnabled.toggle()
+        if !state.canvasEnabled {
+            CanvasManager.shared.hideAll()
+        }
+    }
+
+    @objc private func toggleVoiceWake() {
+        AppStateStore.shared.swabbleEnabled.toggle()
+    }
+
+    @objc private func selectMicrophone(_ sender: NSMenuItem) {
+        guard let uid = sender.representedObject as? String else { return }
+        let state = AppStateStore.shared
+        state.voiceWakeMicID = uid
+        if uid.isEmpty {
+            state.voiceWakeMicName = ""
+        } else {
+            state.voiceWakeMicName = sender.title
+        }
+    }
+
+    // MARK: - Actions: Navigation
+
+    @objc private func openDashboard() {
+        Task { @MainActor in
+            do {
+                let config = try await GatewayEndpointStore.shared.requireConfig()
+                let url = try GatewayEndpointStore.dashboardURL(for: config, mode: AppStateStore.shared.connectionMode)
+                NSWorkspace.shared.open(url)
+            } catch {
+                let alert = NSAlert()
+                alert.messageText = "Dashboard unavailable"
+                alert.informativeText = error.localizedDescription
+                alert.runModal()
+            }
+        }
+    }
+
+    @objc private func openNewChat() {
+        Task { @MainActor in
+            let sessionKey = await WebChatManager.shared.preferredSessionKey()
+            WebChatManager.shared.show(sessionKey: sessionKey)
+        }
+    }
+
+    @objc private func toggleCanvasPanel() {
+        Task { @MainActor in
             if AppStateStore.shared.canvasPanelVisible {
                 CanvasManager.shared.hideAll()
             } else {
@@ -571,24 +1023,213 @@ final class ChatWindowToolbarDelegate: NSObject, NSToolbarDelegate {
         }
     }
 
+    @objc private func toggleTalkMode() {
+        Task { await AppStateStore.shared.setTalkEnabled(!AppStateStore.shared.talkEnabled) }
+    }
+
+    // MARK: - Actions: Settings / About / Update / Quit
+
     @objc private func openSettings() {
         SettingsWindowOpener.shared.open()
+    }
+
+    @objc private func openAbout() {
+        SettingsTabRouter.request(.about)
+        NSApp.activate(ignoringOtherApps: true)
+        SettingsWindowOpener.shared.open()
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .openclawSelectSettingsTab, object: SettingsTab.about)
+        }
+    }
+
+    @objc private func checkForUpdate() {
+        (NSApp.delegate as? AppDelegate)?.updaterController.checkForUpdates(nil)
     }
 
     @objc private func quitApp() {
         NSApp.terminate(nil)
     }
+
+    // MARK: - Actions: Debug
+
+    @objc private func debugOpenConfigFolder() { DebugActions.openConfigFolder() }
+    @objc private func debugRunHealthCheck() { Task { await DebugActions.runHealthCheckNow() } }
+    @objc private func debugSendTestHeartbeat() { Task { _ = await DebugActions.sendTestHeartbeat() } }
+    @objc private func debugResetTunnel() {
+        Task { @MainActor in
+            let result = await DebugActions.resetGatewayTunnel()
+            let alert = NSAlert()
+            alert.messageText = "Remote Tunnel"
+            switch result {
+            case let .success(msg): alert.informativeText = msg; alert.alertStyle = .informational
+            case let .failure(err): alert.informativeText = err.localizedDescription; alert.alertStyle = .warning
+            }
+            alert.runModal()
+        }
+    }
+    @objc private func debugToggleVerboseMain() { Task { _ = await DebugActions.toggleVerboseLoggingMain() } }
+    @objc private func selectAppLogLevel(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String else { return }
+        UserDefaults.standard.set(raw, forKey: appLogLevelKey)
+    }
+    @objc private func debugToggleFileLogging() {
+        let current = UserDefaults.standard.bool(forKey: debugFileLogEnabledKey)
+        UserDefaults.standard.set(!current, forKey: debugFileLogEnabledKey)
+    }
+    @objc private func debugOpenSessionStore() { DebugActions.openSessionStore() }
+    @objc private func debugOpenAgentEvents() { DebugActions.openAgentEventsWindow() }
+    @objc private func debugOpenLog() { DebugActions.openLog() }
+    @objc private func debugSendVoice() { Task { _ = await DebugActions.sendDebugVoice() } }
+    @objc private func debugSendNotification() { Task { await DebugActions.sendTestNotification() } }
+    @objc private func debugRestartGateway() { DebugActions.restartGateway() }
+    @objc private func debugRestartOnboarding() { DebugActions.restartOnboarding() }
+    @objc private func debugRestartApp() { DebugActions.restartApp() }
 }
+
+// MARK: - NSMenuDelegate: refresh all states on open
 
 extension ChatWindowToolbarDelegate: NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
-        // Update Talk Mode item state
-        if let talkItem = menu.items.first(where: { $0.action == #selector(toggleTalkMode) }) {
-            let enabled = AppStateStore.shared.talkEnabled
-            talkItem.title = enabled ? "Stop Talk Mode" : "Talk Mode"
-            talkItem.state = enabled ? .on : .off
+        let state = AppStateStore.shared
+
+        // Connection toggle
+        if let item = menu.item(withTag: GearMenuTag.connection) {
+            item.title = state.isPaused ? "OpenClaw Paused" : self.connectionLabel(state)
+            item.state = state.isPaused ? .off : .on
+            item.isEnabled = state.connectionMode != .unconfigured
         }
 
+        // Health status
+        if let item = menu.item(withTag: GearMenuTag.healthStatus) {
+            let (text, _) = self.healthStatusText()
+            item.title = text
+        }
+
+        // Pairing status
+        if let item = menu.item(withTag: GearMenuTag.pairingStatus) {
+            let nodePending = NodePairingApprovalPrompter.shared.pendingCount
+            let devicePending = DevicePairingApprovalPrompter.shared.pendingCount
+            let total = nodePending + devicePending
+            if total > 0 {
+                item.title = "    ⚠ Pairing approval pending (\(total))"
+                item.isHidden = false
+            } else {
+                item.isHidden = true
+            }
+        }
+
+        // Heartbeats
+        if let item = menu.item(withTag: GearMenuTag.heartbeats) {
+            item.state = state.heartbeatsEnabled ? .on : .off
+        }
+        if let item = menu.item(withTag: GearMenuTag.heartbeatStatus) {
+            if let text = self.heartbeatStatusText() {
+                item.title = text
+                item.isHidden = false
+            } else {
+                item.isHidden = true
+            }
+        }
+
+        // Browser Control
+        Task {
+            let root = await ConfigStore.load()
+            let browser = root["browser"] as? [String: Any]
+            let enabled = browser?["enabled"] as? Bool ?? true
+            await MainActor.run { self.browserControlEnabled = enabled }
+        }
+        if let item = menu.item(withTag: GearMenuTag.browserControl) {
+            item.state = self.browserControlEnabled ? .on : .off
+        }
+
+        // Camera
+        if let item = menu.item(withTag: GearMenuTag.camera) {
+            item.state = UserDefaults.standard.bool(forKey: cameraEnabledKey) ? .on : .off
+        }
+
+        // Exec Approvals
+        if let item = menu.item(withTag: GearMenuTag.execApprovals),
+           let sub = item.submenu
+        {
+            for mi in sub.items {
+                if let raw = mi.representedObject as? String,
+                   let mode = ExecApprovalQuickMode(rawValue: raw)
+                {
+                    mi.state = state.execApprovalMode == mode ? .on : .off
+                }
+            }
+        }
+
+        // Canvas enabled
+        if let item = menu.item(withTag: GearMenuTag.canvasEnabled) {
+            item.state = state.canvasEnabled ? .on : .off
+        }
+
+        // Voice Wake
+        if let item = menu.item(withTag: GearMenuTag.voiceWake) {
+            item.state = state.swabbleEnabled ? .on : .off
+        }
+
+        // Microphone submenu visibility and content
+        if let item = menu.item(withTag: GearMenuTag.micSubmenu) {
+            let shouldShow = voiceWakeSupported && state.swabbleEnabled
+            item.isHidden = !shouldShow
+            if shouldShow, let sub = item.submenu {
+                self.populateMicSubmenu(sub)
+            }
+        }
+
+        // Open / Close Canvas — add or remove dynamically
+        let existingCanvasBtn = menu.item(withTag: GearMenuTag.openCloseCanvas)
+        if state.canvasEnabled {
+            if let item = existingCanvasBtn {
+                item.title = state.canvasPanelVisible ? "Close Canvas" : "Open Canvas"
+            } else {
+                // Insert before Talk Mode
+                if let talkIdx = menu.items.firstIndex(where: { $0.tag == GearMenuTag.talkMode }) {
+                    let canvasBtnItem = NSMenuItem(
+                        title: state.canvasPanelVisible ? "Close Canvas" : "Open Canvas",
+                        action: #selector(toggleCanvasPanel),
+                        keyEquivalent: "")
+                    canvasBtnItem.target = self
+                    canvasBtnItem.tag = GearMenuTag.openCloseCanvas
+                    canvasBtnItem.image = NSImage(systemSymbolName: "rectangle.inset.filled.on.rectangle", accessibilityDescription: nil)
+                    menu.insertItem(canvasBtnItem, at: talkIdx)
+                }
+            }
+        } else {
+            if let item = existingCanvasBtn, let idx = menu.items.firstIndex(of: item) {
+                menu.removeItem(at: idx)
+            }
+        }
+
+        // Talk Mode
+        if let item = menu.item(withTag: GearMenuTag.talkMode) {
+            let enabled = state.talkEnabled
+            item.title = enabled ? "Stop Talk Mode" : "Talk Mode"
+            item.state = enabled ? .on : .off
+        }
+
+        // Update item — show/hide dynamically
+        let existingUpdate = menu.item(withTag: GearMenuTag.update)
+        if let updater = (NSApp.delegate as? AppDelegate)?.updaterController,
+           updater.isAvailable, updater.updateStatus.isUpdateReady
+        {
+            if existingUpdate == nil {
+                // Insert before quit
+                let updateItem = NSMenuItem(
+                    title: "Update ready, restart now?",
+                    action: #selector(checkForUpdate),
+                    keyEquivalent: "")
+                updateItem.target = self
+                updateItem.tag = GearMenuTag.update
+                if let quitIdx = menu.items.lastIndex(where: { $0.title == "Quit OpenClaw" }) {
+                    menu.insertItem(updateItem, at: quitIdx)
+                }
+            }
+        } else if let item = existingUpdate, let idx = menu.items.firstIndex(of: item) {
+            menu.removeItem(at: idx)
+        }
     }
 }
 

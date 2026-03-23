@@ -112,6 +112,7 @@ struct OpenClawChatComposer: View {
                 Text("\(file.fileName) is \(file.sizeMB) MB — exceeds the 20 MB inline limit.\nUpload via Google File API?")
             }
         }
+        .modifier(MetadataRestoreAlert(viewModel: self.viewModel))
         #endif
     }
 
@@ -595,10 +596,12 @@ private struct ChatComposerTextView: NSViewRepresentable {
 
         let isEditing = scrollView.window?.firstResponder == textView
 
-        // Always allow clearing the text (e.g. after send), even while editing.
+        // Always allow clearing the text (e.g. after send) or filling empty field
+        // (e.g. metadata restore), even while editing.
         // Only skip other updates while editing to avoid cursor jumps.
         let shouldClear = self.text.isEmpty && !textView.string.isEmpty
-        if isEditing, !shouldClear { return }
+        let shouldFill = !self.text.isEmpty && textView.string.isEmpty
+        if isEditing, !shouldClear, !shouldFill { return }
 
         if textView.string != self.text {
             context.coordinator.isProgrammaticUpdate = true
@@ -882,6 +885,57 @@ enum ChatComposerPasteSupport {
 
     private static func defaultFileName(index: Int, ext: String) -> String {
         "pasted-image-\(index + 1).\(ext)"
+    }
+}
+#endif
+
+// MARK: - Metadata Restore Alert (extracted to help Swift type-checker)
+
+#if os(macOS)
+private struct MetadataRestoreAlert: ViewModifier {
+    @Bindable var viewModel: OpenClawChatViewModel
+
+    func body(content: Content) -> some View {
+        content
+            .alert(
+                "Generation Settings Detected",
+                isPresented: Binding(
+                    get: { self.viewModel.pendingMetadataRestore != nil },
+                    set: { if !$0 { self.viewModel.dismissMetadataRestore() } }
+                )
+            ) {
+                Button("Restore Settings") {
+                    self.viewModel.applyRestoredGenParams()
+                }
+                Button("Use as Input Only") {
+                    self.viewModel.useDroppedImageAsInput()
+                }
+                Button("Cancel", role: .cancel) {
+                    self.viewModel.dismissMetadataRestore()
+                }
+            } message: {
+                Text(self.metadataAlertMessage)
+            }
+    }
+
+    private var metadataAlertMessage: String {
+        guard let pending = self.viewModel.pendingMetadataRestore else {
+            return ""
+        }
+        let p = pending.params
+        let promptExcerpt = p.prompt.count > 60
+            ? String(p.prompt.prefix(57)) + "…"
+            : p.prompt
+        return """
+        This image was generated with OpenClaw.
+
+        Model: \(p.model)
+        Resolution: \(p.resolution) · \(p.aspectRatio)
+        Variations: \(p.variations)
+        Prompt: "\(promptExcerpt)"
+
+        Restore all settings, or use as input for a new generation?
+        """
     }
 }
 #endif
