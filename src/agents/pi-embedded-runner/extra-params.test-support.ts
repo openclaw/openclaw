@@ -9,7 +9,7 @@ export type ExtraParamsCapture<TPayload extends Record<string, unknown>> = {
 };
 
 type RunExtraParamsCaseParams<
-  TApi extends "openai-completions" | "openai-responses",
+  TApi extends "openai-completions" | "openai-responses" | "openai-codex-responses",
   TPayload extends Record<string, unknown>,
 > = {
   applyModelId?: string;
@@ -23,7 +23,7 @@ type RunExtraParamsCaseParams<
 };
 
 export function runExtraParamsCase<
-  TApi extends "openai-completions" | "openai-responses",
+  TApi extends "openai-completions" | "openai-responses" | "openai-codex-responses",
   TPayload extends Record<string, unknown>,
 >(params: RunExtraParamsCaseParams<TApi, TPayload>): ExtraParamsCapture<TPayload> {
   const captured: ExtraParamsCapture<TPayload> = {

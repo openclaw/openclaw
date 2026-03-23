@@ -33,6 +33,7 @@ import {
   createOpenAIFastModeWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIServiceTierWrapper,
+  createOpenAIStrictToolWrapper,
   resolveOpenAIFastMode,
   resolveOpenAIServiceTier,
 } from "./openai-stream-wrappers.js";
@@ -352,6 +353,7 @@ export function applyExtraParamsToAgent(
     agent.streamFn,
     effectiveExtraParams,
   );
+  agent.streamFn = createOpenAIStrictToolWrapper(agent.streamFn, effectiveExtraParams);
 
   const rawParallelToolCalls = resolveAliasedParamValue(
     [resolvedExtraParams, override],

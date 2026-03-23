@@ -1,5 +1,9 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelCompatConfig } from "../config/types.models.js";
+import {
+  hasOpenRouterStrictToolSupportRoute,
+  isOpenRouterBaseUrl,
+} from "./openai-strict-tool-support.js";
 
 export const XAI_TOOL_SCHEMA_PROFILE = "xai";
 export const HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING = "html-entities";
@@ -129,7 +133,11 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   }
   const forcedDeveloperRole = compat?.supportsDeveloperRole === true;
   const hasStreamingUsageOverride = compat?.supportsUsageInStreaming !== undefined;
-  const targetStrictMode = compat?.supportsStrictMode ?? false;
+  const targetStrictMode =
+    compat?.supportsStrictMode ??
+    (hasOpenRouterStrictToolSupportRoute(model) || isOpenRouterBaseUrl(baseUrl)
+      ? undefined
+      : false);
   if (
     compat?.supportsDeveloperRole !== undefined &&
     hasStreamingUsageOverride &&
@@ -146,12 +154,12 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
           ...compat,
           supportsDeveloperRole: forcedDeveloperRole || false,
           ...(hasStreamingUsageOverride ? {} : { supportsUsageInStreaming: false }),
-          supportsStrictMode: targetStrictMode,
+          ...(targetStrictMode === undefined ? {} : { supportsStrictMode: targetStrictMode }),
         }
       : {
           supportsDeveloperRole: false,
           supportsUsageInStreaming: false,
-          supportsStrictMode: false,
+          ...(targetStrictMode === undefined ? {} : { supportsStrictMode: targetStrictMode }),
         },
   } as typeof model;
 }

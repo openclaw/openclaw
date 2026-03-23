@@ -281,6 +281,70 @@ describe("normalizeModelCompat", () => {
     expect(supportsStrictMode(normalized)).toBe(true);
   });
 
+  it("leaves strict mode available for OpenRouter OpenAI-backed routes", () => {
+    const model = {
+      ...baseModel(),
+      provider: "openrouter",
+      id: "openai/gpt-4o",
+      baseUrl: "https://openrouter.ai/api/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(false);
+    expect(supportsStrictMode(normalized)).toBeUndefined();
+  });
+
+  it("preserves explicit strict-mode opt-out for OpenRouter OpenAI-backed routes", () => {
+    const model = {
+      ...baseModel(),
+      provider: "openrouter",
+      id: "openai/gpt-4o",
+      baseUrl: "https://openrouter.ai/api/v1",
+      compat: { supportsStrictMode: false },
+    };
+    const normalized = normalizeModelCompat(model);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(false);
+    expect(supportsStrictMode(normalized)).toBe(false);
+  });
+
+  it("forces strict mode off when provider is openrouter but baseUrl is not an OpenRouter route", () => {
+    const model = {
+      ...baseModel(),
+      provider: "openrouter",
+      id: "openai/gpt-4o",
+      baseUrl: "https://proxy.example.com/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsStrictMode(normalized)).toBe(false);
+  });
+
+  it("leaves strict mode available for custom providers routed to OpenRouter", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-router",
+      id: "openai/gpt-4o",
+      baseUrl: "https://openrouter.ai/api/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsStrictMode(normalized)).toBeUndefined();
+  });
+
+  it("defers strict-mode forcing for openrouter auto routes until runtime routing is known", () => {
+    const model = {
+      ...baseModel(),
+      provider: "openrouter",
+      id: "auto",
+      baseUrl: "https://openrouter.ai/api/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsStrictMode(normalized)).toBeUndefined();
+  });
+
   it("does not mutate caller model when forcing supportsDeveloperRole off", () => {
     const model = {
       ...baseModel(),

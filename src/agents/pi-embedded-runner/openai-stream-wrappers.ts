@@ -1,6 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
+import { hasOpenRouterStrictToolSupportRoute } from "../openai-strict-tool-support.js";
 import { resolveProviderAttributionHeaders } from "../provider-attribution.js";
 import { log } from "./logger.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
@@ -166,6 +167,75 @@ function shouldStripResponsesPromptCache(model: { api?: unknown; baseUrl?: unkno
   return !isDirectOpenAIBaseUrl(model.baseUrl);
 }
 
+function stripUnsupportedStrictFlag(tool: unknown): unknown {
+  if (!tool || typeof tool !== "object") {
+    return tool;
+  }
+  const toolObj = tool as Record<string, unknown>;
+  const fn = toolObj.function;
+  if (!fn || typeof fn !== "object") {
+    return tool;
+  }
+  const fnObj = fn as Record<string, unknown>;
+  if (typeof fnObj.strict !== "boolean") {
+    return tool;
+  }
+  const nextFunction = { ...fnObj };
+  delete nextFunction.strict;
+  return { ...toolObj, function: nextFunction };
+}
+
+function shouldStripOpenAIStrictFlag(model: {
+  api?: unknown;
+  baseUrl?: unknown;
+  headers?: unknown;
+  id?: unknown;
+  provider?: unknown;
+  compat?: { supportsStrictMode?: boolean };
+}): boolean {
+  if (model.compat?.supportsStrictMode === true) {
+    return false;
+  }
+  if (
+    model.api !== "openai-completions" &&
+    model.api !== "openai-responses" &&
+    model.api !== "openai-codex-responses"
+  ) {
+    return false;
+  }
+  if (model.compat?.supportsStrictMode === false) {
+    return true;
+  }
+  if (hasOpenRouterStrictToolSupportRoute(model)) {
+    return false;
+  }
+  // Missing baseUrl means pi-ai will use the default OpenAI endpoint, so keep
+  // strict mode for that direct path.
+  if (typeof model.baseUrl !== "string" || !model.baseUrl.trim()) {
+    return false;
+  }
+  return !isDirectOpenAIBaseUrl(model.baseUrl);
+}
+
+function applyOpenAIStrictFlagPayloadOverrides(params: {
+  payloadObj: Record<string, unknown>;
+  model: {
+    api?: unknown;
+    baseUrl?: unknown;
+    headers?: unknown;
+    id?: unknown;
+    provider?: unknown;
+    compat?: { supportsStrictMode?: boolean };
+  };
+}): void {
+  if (!shouldStripOpenAIStrictFlag(params.model)) {
+    return;
+  }
+  if (!Array.isArray(params.payloadObj.tools)) {
+    return;
+  }
+  params.payloadObj.tools = params.payloadObj.tools.map(stripUnsupportedStrictFlag);
+}
 function applyOpenAIResponsesPayloadOverrides(params: {
   payloadObj: Record<string, unknown>;
   forceStore: boolean;
@@ -338,6 +408,31 @@ export function createOpenAIResponsesContextManagementWrapper(
         }
         return originalOnPayload?.(payload, model);
       },
+    });
+  };
+}
+
+export function createOpenAIStrictToolWrapper(
+  baseStreamFn: StreamFn | undefined,
+  extraParams?: Record<string, unknown>,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const providerRouting =
+      extraParams?.provider != null && typeof extraParams.provider === "object"
+        ? (extraParams.provider as Record<string, unknown>)
+        : undefined;
+    const effectiveModel = providerRouting
+      ? ({
+          ...model,
+          compat: { ...model.compat, openRouterRouting: providerRouting },
+        } as typeof model)
+      : model;
+    if (!shouldStripOpenAIStrictFlag(effectiveModel)) {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      applyOpenAIStrictFlagPayloadOverrides({ payloadObj, model: effectiveModel });
     });
   };
 }
