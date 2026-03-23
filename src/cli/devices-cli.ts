@@ -132,6 +132,14 @@ async function resolveMutatingPairingFallbackAuth(
     return { suppressNormalClosureFallback: true };
   }
 
+  const connection = buildGatewayConnectionDetails({ url: opts.url });
+  const urlOverrideSource =
+    connection.urlSource === "env OPENCLAW_GATEWAY_URL"
+      ? "env"
+      : connection.urlSource === "cli --url"
+        ? "cli"
+        : undefined;
+
   try {
     const sharedAuth = await resolveGatewayCredentialsWithSecretInputs({
       config: loadConfig(),
@@ -139,6 +147,8 @@ async function resolveMutatingPairingFallbackAuth(
         token: opts.token,
         password: opts.password,
       },
+      urlOverride: urlOverrideSource ? connection.url : undefined,
+      urlOverrideSource,
     });
     if (sharedAuth.token || sharedAuth.password) {
       return { suppressNormalClosureFallback: true };
@@ -203,7 +213,10 @@ async function shouldUseLocalPairingFallback(
     return false;
   }
   const connection = buildGatewayConnectionDetails();
-  if (connection.urlSource !== "local loopback") {
+  if (
+    connection.urlSource !== "local loopback" &&
+    connection.urlSource !== "env OPENCLAW_GATEWAY_URL"
+  ) {
     return false;
   }
   try {
