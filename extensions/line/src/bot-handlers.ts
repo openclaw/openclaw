@@ -7,7 +7,11 @@ import type {
   UnfollowEvent,
   WebhookEvent,
 } from "@line/bot-sdk";
-import { buildMentionRegexes, matchesMentionPatterns, resolveMentionGatingWithBypass } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  buildMentionRegexes,
+  matchesMentionPatterns,
+  resolveMentionGatingWithBypass,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { hasControlCommand, resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";

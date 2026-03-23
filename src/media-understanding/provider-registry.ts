@@ -1,11 +1,11 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadOpenClawPlugins } from "../plugins/loader.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
 import {
   deepgramMediaUnderstandingProvider,
   groqMediaUnderstandingProvider,
 } from "../plugin-sdk/media-understanding.js";
+import { loadOpenClawPlugins } from "../plugins/loader.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
 const PROVIDERS: MediaUnderstandingProvider[] = [

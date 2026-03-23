@@ -1,5 +1,4 @@
 import type { messagingApi } from "@line/bot-sdk";
-import type { LineTemplateMessagePayload } from "./types.js";
 import {
   datetimePickerAction,
   messageAction,
@@ -7,6 +6,7 @@ import {
   uriAction,
   type Action,
 } from "./actions.js";
+import type { LineTemplateMessagePayload } from "./types.js";
 
 export { datetimePickerAction, messageAction, postbackAction, uriAction };
 

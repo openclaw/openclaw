@@ -8,4 +8,4 @@ export {
   pushTemplateMessage,
   pushTextMessageWithQuickReplies,
   sendMessageLine,
-} from "../../../extensions/line/runtime-api.js";
+} from "../../plugin-sdk/line-runtime.js";

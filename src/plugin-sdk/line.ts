@@ -33,7 +33,11 @@ export {
   resolveLineAccount,
 } from "../../extensions/line/api.js";
 export { LineConfigSchema } from "../../extensions/line/api.js";
-export type { LineChannelData, LineConfig, ResolvedLineAccount } from "../../extensions/line/api.js";
+export type {
+  LineChannelData,
+  LineConfig,
+  ResolvedLineAccount,
+} from "../../extensions/line/api.js";
 export type { LineProbeResult } from "../../extensions/line/api.js";
 export {
   createActionCard,

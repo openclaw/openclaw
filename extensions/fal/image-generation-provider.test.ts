@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildFalImageGenerationProvider } from "./image-generation-provider.js";
 
 function expectFalJsonPost(

@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { describe, expect, it } from "vitest";
 import { monitorLineProvider } from "./monitor.js";
 
 describe("monitorLineProvider fail-closed webhook auth", () => {

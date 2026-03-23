@@ -227,28 +227,20 @@ export type PluginRuntimeChannel = {
     createLoginTool: typeof import("./runtime-whatsapp-login-tool.js").createRuntimeWhatsAppLoginTool;
   };
   line: {
-    listLineAccountIds: typeof import("../../../extensions/line/runtime-api.js").listLineAccountIds;
-    resolveDefaultLineAccountId: typeof import(
-      "../../../extensions/line/runtime-api.js"
-    ).resolveDefaultLineAccountId;
-    resolveLineAccount: typeof import("../../../extensions/line/runtime-api.js").resolveLineAccount;
-    normalizeAccountId: typeof import("../../../extensions/line/runtime-api.js").normalizeAccountId;
-    probeLineBot: typeof import("../../../extensions/line/runtime-api.js").probeLineBot;
-    sendMessageLine: typeof import("../../../extensions/line/runtime-api.js").sendMessageLine;
-    pushMessageLine: typeof import("../../../extensions/line/runtime-api.js").pushMessageLine;
-    pushMessagesLine: typeof import("../../../extensions/line/runtime-api.js").pushMessagesLine;
-    pushFlexMessage: typeof import("../../../extensions/line/runtime-api.js").pushFlexMessage;
-    pushTemplateMessage: typeof import("../../../extensions/line/runtime-api.js").pushTemplateMessage;
-    pushLocationMessage: typeof import("../../../extensions/line/runtime-api.js").pushLocationMessage;
-    pushTextMessageWithQuickReplies: typeof import(
-      "../../../extensions/line/runtime-api.js"
-    ).pushTextMessageWithQuickReplies;
-    createQuickReplyItems: typeof import(
-      "../../../extensions/line/runtime-api.js"
-    ).createQuickReplyItems;
-    buildTemplateMessageFromPayload: typeof import(
-      "../../../extensions/line/runtime-api.js"
-    ).buildTemplateMessageFromPayload;
-    monitorLineProvider: typeof import("../../../extensions/line/runtime-api.js").monitorLineProvider;
+    listLineAccountIds: typeof import("../../plugin-sdk/line.js").listLineAccountIds;
+    resolveDefaultLineAccountId: typeof import("../../plugin-sdk/line.js").resolveDefaultLineAccountId;
+    resolveLineAccount: typeof import("../../plugin-sdk/line.js").resolveLineAccount;
+    normalizeAccountId: typeof import("../../plugin-sdk/line.js").normalizeAccountId;
+    probeLineBot: typeof import("../../plugin-sdk/line-runtime.js").probeLineBot;
+    sendMessageLine: typeof import("../../plugin-sdk/line-runtime.js").sendMessageLine;
+    pushMessageLine: typeof import("../../plugin-sdk/line-runtime.js").pushMessageLine;
+    pushMessagesLine: typeof import("../../plugin-sdk/line-runtime.js").pushMessagesLine;
+    pushFlexMessage: typeof import("../../plugin-sdk/line-runtime.js").pushFlexMessage;
+    pushTemplateMessage: typeof import("../../plugin-sdk/line-runtime.js").pushTemplateMessage;
+    pushLocationMessage: typeof import("../../plugin-sdk/line-runtime.js").pushLocationMessage;
+    pushTextMessageWithQuickReplies: typeof import("../../plugin-sdk/line-runtime.js").pushTextMessageWithQuickReplies;
+    createQuickReplyItems: typeof import("../../plugin-sdk/line-runtime.js").createQuickReplyItems;
+    buildTemplateMessageFromPayload: typeof import("../../plugin-sdk/line-runtime.js").buildTemplateMessageFromPayload;
+    monitorLineProvider: typeof import("../../plugin-sdk/line-runtime.js").monitorLineProvider;
   };
 };

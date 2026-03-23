@@ -2,11 +2,12 @@ import type { WebhookRequestBody } from "@line/bot-sdk";
 import type { NextFunction, Request, Response } from "express";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import {
-  DEFAULT_GROUP_HISTORY_LIMIT,
-  type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-history";
-import { createNonExitingRuntime, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+  createNonExitingRuntime,
+  logVerbose,
+  type RuntimeEnv,
+} from "openclaw/plugin-sdk/runtime-env";
 import { resolveLineAccount } from "./accounts.js";
 import { createLineWebhookReplayCache, handleLineWebhookEvents } from "./bot-handlers.js";
 import type { LineInboundContext } from "./bot-message-context.js";
