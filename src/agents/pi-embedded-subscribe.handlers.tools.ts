@@ -38,6 +38,17 @@ function buildToolStartKey(runId: string, toolCallId: string): string {
   return `${runId}:${toolCallId}`;
 }
 
+function summarizeValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value.slice(0, 500);
+  }
+  try {
+    return JSON.stringify(value).slice(0, 500);
+  } catch {
+    return String(value).slice(0, 500);
+  }
+}
+
 function isCronAddAction(args: unknown): boolean {
   if (!args || typeof args !== "object") {
     return false;
@@ -379,6 +390,12 @@ export async function handleToolExecutionStart(
       args: args as Record<string, unknown>,
     },
   });
+  void ctx.params.onResearchEvent?.({
+    kind: "tool.start",
+    toolName,
+    toolCallId,
+    argsSummary: summarizeValue(args),
+  });
   // Best-effort typing signal; do not block tool summaries on slow emitters.
   void ctx.params.onAgentEvent?.({
     stream: "tool",
@@ -560,6 +577,13 @@ export async function handleToolExecutionEnd(
       isError: isToolError,
       result: sanitizedResult,
     },
+  });
+  void ctx.params.onResearchEvent?.({
+    kind: "tool.end",
+    toolName,
+    toolCallId,
+    ok: !isToolError,
+    resultSummary: summarizeValue(sanitizedResult),
   });
   void ctx.params.onAgentEvent?.({
     stream: "tool",

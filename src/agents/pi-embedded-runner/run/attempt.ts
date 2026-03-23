@@ -2583,6 +2583,7 @@ export async function runEmbeddedAttempt(
         shouldEmitToolResult: params.shouldEmitToolResult,
         shouldEmitToolOutput: params.shouldEmitToolOutput,
         onToolResult: params.onToolResult,
+        onResearchEvent: params.onResearchEvent,
         onReasoningStream: params.onReasoningStream,
         onReasoningEnd: params.onReasoningEnd,
         onBlockReply: params.onBlockReply,

@@ -1,13 +1,16 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveMemorySearchConfig } from "../../agents/memory-search.js";
 import {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
   waitForEmbeddedPiRunEnd,
 } from "../../agents/pi-embedded-runner/runs.js";
+import { resolveVisibleSessionKeys } from "../../agents/tools/sessions-visible-keys.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -18,6 +21,9 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { redactSensitiveText } from "../../logging/redact.js";
+import { bm25RankToScore, buildFtsQuery } from "../../memory/hybrid.js";
+import { searchKeyword } from "../../memory/manager-search.js";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -37,7 +43,9 @@ import {
   validateSessionsPatchParams,
   validateSessionsPreviewParams,
   validateSessionsResetParams,
+  validateSessionsRecallParams,
   validateSessionsResolveParams,
+  validateSessionsSearchParams,
   validateSessionsSendParams,
 } from "../protocol/index.js";
 import {
@@ -74,6 +82,260 @@ import type {
   RespondFn,
 } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+const SESSION_SEARCH_FTS_TABLE = "chunks_fts";
+const SESSIONS_RECALL_MAX_EVIDENCE_CHARS_PER_HIT = 700;
+const SESSIONS_RECALL_MAX_EVIDENCE_CHARS_TOTAL = 4_000;
+
+type SessionSearchResultRow = {
+  sessionKey: string;
+  sessionId: string;
+  snippet: string;
+  score: number;
+  startLine: number;
+  endLine: number;
+};
+
+type SessionRecallCitation = {
+  sessionKey: string;
+  sessionId: string;
+  lineRange: [number, number];
+  source: string;
+  evidenceId?: string;
+};
+
+type SessionRecallEvidence = {
+  text: string;
+  citation: SessionRecallCitation;
+};
+
+async function searchSessionsViaFts(params: {
+  query: string;
+  limit: number;
+  cfg: ReturnType<typeof loadConfig>;
+  requesterSessionKey?: string;
+  sandboxed?: boolean;
+  activeMinutes?: number;
+  kinds?: string[];
+  requestedKeys?: string[];
+}): Promise<{ count: number; results: SessionSearchResultRow[] }> {
+  const searchCfg = resolveMemorySearchConfig(params.cfg, resolveDefaultAgentId(params.cfg));
+  if (!searchCfg) {
+    return { count: 0, results: [] };
+  }
+
+  const visibleKeys = await resolveVisibleSessionKeys({
+    cfg: params.cfg,
+    agentSessionKey: params.requesterSessionKey,
+    sandboxed: params.sandboxed,
+  });
+
+  const { storePath, store } = loadCombinedSessionStoreForGateway(params.cfg);
+  const listed = listSessionsFromStore({
+    cfg: params.cfg,
+    storePath,
+    store,
+    opts: {
+      includeGlobal: false,
+      includeUnknown: false,
+      ...(typeof params.activeMinutes === "number" ? { activeMinutes: params.activeMinutes } : {}),
+    },
+  });
+  const allowedKinds = params.kinds?.length ? new Set(params.kinds) : undefined;
+  const requestedKeys = params.requestedKeys?.length ? new Set(params.requestedKeys) : undefined;
+  const sessionIdToKey = new Map<string, string>();
+  const allowedPaths = new Set<string>();
+  for (const row of listed.sessions) {
+    const key = typeof row.key === "string" ? row.key : "";
+    const sessionId = typeof row.sessionId === "string" ? row.sessionId : "";
+    if (!key || !sessionId) {
+      continue;
+    }
+    if (visibleKeys && !visibleKeys.has(key)) {
+      continue;
+    }
+    if (allowedKinds && typeof row.kind === "string" && !allowedKinds.has(row.kind)) {
+      continue;
+    }
+    if (requestedKeys && !requestedKeys.has(key)) {
+      continue;
+    }
+    sessionIdToKey.set(sessionId, key);
+    allowedPaths.add(`sessions/${sessionId}.jsonl`);
+  }
+  if (allowedPaths.size === 0 && visibleKeys !== null) {
+    return { count: 0, results: [] };
+  }
+
+  const db = new DatabaseSync(searchCfg.store.path);
+  try {
+    const hits = await searchKeyword({
+      db,
+      ftsTable: SESSION_SEARCH_FTS_TABLE,
+      providerModel: undefined,
+      query: params.query,
+      limit: Math.max(1, params.limit * 3),
+      snippetMaxChars: 500,
+      sourceFilter: { sql: " AND source = ?", params: ["sessions"] },
+      buildFtsQuery,
+      bm25RankToScore,
+    });
+    const rows: SessionSearchResultRow[] = [];
+    for (const hit of hits) {
+      const relPath = hit.path.replace(/\\/g, "/");
+      if (allowedPaths.size > 0 && !allowedPaths.has(relPath)) {
+        continue;
+      }
+      const base = path.basename(relPath);
+      const sessionId = base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : "";
+      if (!sessionId) {
+        continue;
+      }
+      const sessionKey = sessionIdToKey.get(sessionId);
+      if (!sessionKey) {
+        continue;
+      }
+      rows.push({
+        sessionKey,
+        sessionId,
+        snippet: hit.snippet,
+        score: hit.score,
+        startLine: hit.startLine,
+        endLine: hit.endLine,
+      });
+      if (rows.length >= params.limit) {
+        break;
+      }
+    }
+    return { count: rows.length, results: rows };
+  } catch {
+    return { count: 0, results: [] };
+  } finally {
+    db.close();
+  }
+}
+
+function extractSessionMessageText(message: unknown): string {
+  if (!message || typeof message !== "object") {
+    return "";
+  }
+  const entry = message as Record<string, unknown>;
+  const content = entry.content;
+  if (typeof content === "string") {
+    return content.trim();
+  }
+  if (Array.isArray(content)) {
+    return content
+      .map((block) => {
+        if (!block || typeof block !== "object") {
+          return "";
+        }
+        const blockText = (block as { text?: unknown }).text;
+        return typeof blockText === "string" ? blockText.trim() : "";
+      })
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+  const text = entry.text;
+  return typeof text === "string" ? text.trim() : "";
+}
+
+function buildSessionRecallEvidence(params: {
+  sessionKey: string;
+  sessionId: string;
+  storePath: string;
+  sessionFile?: string;
+  startLine: number;
+  endLine: number;
+}): SessionRecallEvidence | null {
+  const transcriptPath = resolveSessionTranscriptCandidates(
+    params.sessionId,
+    params.storePath,
+    params.sessionFile,
+  ).find((candidate) => fs.existsSync(candidate));
+  if (!transcriptPath) {
+    return null;
+  }
+  const lines = fs.readFileSync(transcriptPath, "utf-8").split(/\r?\n/);
+  const blocks: string[] = [];
+  let hasStableId = false;
+  let stableId: string | undefined;
+  const fromLine = Math.max(1, params.startLine);
+  const toLine = Math.max(fromLine, params.endLine);
+  for (let index = fromLine - 1; index < lines.length && index <= toLine - 1; index += 1) {
+    const line = lines[index];
+    if (!line?.trim()) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(line) as { id?: unknown; message?: unknown };
+      const text = extractSessionMessageText(parsed?.message);
+      if (!text) {
+        continue;
+      }
+      const redacted = redactSensitiveText(text);
+      if (!redacted.trim()) {
+        continue;
+      }
+      blocks.push(redacted.trim());
+      if (!hasStableId && typeof parsed.id === "string" && parsed.id.trim().length > 0) {
+        hasStableId = true;
+        stableId = parsed.id;
+      }
+    } catch {
+      continue;
+    }
+  }
+  if (blocks.length === 0) {
+    return null;
+  }
+  const joined = blocks.join("\n");
+  const text =
+    joined.length > SESSIONS_RECALL_MAX_EVIDENCE_CHARS_PER_HIT
+      ? `${joined.slice(0, SESSIONS_RECALL_MAX_EVIDENCE_CHARS_PER_HIT)}\n…(truncated)…`
+      : joined;
+  const source = `session:${params.sessionKey}#L${fromLine}-L${toLine}`;
+  return {
+    text,
+    citation: {
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      lineRange: [fromLine, toLine],
+      source,
+      ...(stableId ? { evidenceId: stableId } : {}),
+    },
+  };
+}
+
+function buildSessionRecallSummary(params: {
+  query: string;
+  evidences: SessionRecallEvidence[];
+  maxTokens: number;
+}): string {
+  if (params.evidences.length === 0) {
+    return "No relevant prior sessions found.";
+  }
+  const approxCharBudget = Math.max(800, params.maxTokens * 4);
+  const bullets: string[] = [];
+  let used = 0;
+  for (const evidence of params.evidences) {
+    const head = evidence.text.replace(/\s+/g, " ").trim();
+    const fragment = `- ${head} (Source: ${evidence.citation.source})`;
+    if (used + fragment.length > approxCharBudget) {
+      break;
+    }
+    bullets.push(fragment);
+    used += fragment.length;
+    if (bullets.length >= 4) {
+      break;
+    }
+  }
+  if (bullets.length === 0) {
+    return "No relevant prior sessions found.";
+  }
+  return [`Recall for: ${params.query}`, ...bullets].join("\n");
+}
 
 function requireSessionKey(key: unknown, respond: RespondFn): string | null {
   const raw =
@@ -485,6 +747,127 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       opts: p,
     });
     respond(true, result, undefined);
+  },
+  "sessions.search": async ({ params, respond }) => {
+    if (!assertValidParams(params, validateSessionsSearchParams, "sessions.search", respond)) {
+      return;
+    }
+    const p = params;
+    const query = typeof p.query === "string" ? p.query.trim() : "";
+    if (!query) {
+      respond(true, { count: 0, results: [] }, undefined);
+      return;
+    }
+    const limit =
+      typeof p.limit === "number" && Number.isFinite(p.limit)
+        ? Math.min(50, Math.max(1, Math.floor(p.limit)))
+        : 10;
+    const activeMinutes =
+      typeof p.activeMinutes === "number" && Number.isFinite(p.activeMinutes)
+        ? Math.max(1, Math.floor(p.activeMinutes))
+        : undefined;
+    const kinds = Array.isArray(p.kinds)
+      ? p.kinds.filter(
+          (value): value is string => typeof value === "string" && value.trim().length > 0,
+        )
+      : undefined;
+    const requestedKeys = Array.isArray(p.keys)
+      ? p.keys.filter(
+          (value): value is string => typeof value === "string" && value.trim().length > 0,
+        )
+      : undefined;
+    const cfg = loadConfig();
+    const searchResult = await searchSessionsViaFts({
+      cfg,
+      query,
+      limit,
+      requesterSessionKey: undefined,
+      sandboxed: false,
+      activeMinutes,
+      kinds,
+      requestedKeys,
+    });
+    respond(true, searchResult, undefined);
+  },
+  "sessions.recall": async ({ params, respond }) => {
+    if (!assertValidParams(params, validateSessionsRecallParams, "sessions.recall", respond)) {
+      return;
+    }
+    const p = params;
+    const query = typeof p.query === "string" ? p.query.trim() : "";
+    if (!query) {
+      respond(
+        true,
+        { summary: "No relevant prior sessions found.", citations: [], cached: false },
+        undefined,
+      );
+      return;
+    }
+    const limit =
+      typeof p.limit === "number" && Number.isFinite(p.limit)
+        ? Math.min(20, Math.max(1, Math.floor(p.limit)))
+        : 8;
+    const maxTokens =
+      typeof p.maxTokens === "number" && Number.isFinite(p.maxTokens)
+        ? Math.min(4000, Math.max(256, Math.floor(p.maxTokens)))
+        : 2000;
+    const activeMinutes = p.scope === "recent" ? 60 * 24 * 14 : undefined;
+    const cfg = loadConfig();
+    const searchResult = await searchSessionsViaFts({
+      cfg,
+      query,
+      limit,
+      requesterSessionKey: undefined,
+      sandboxed: false,
+      activeMinutes,
+    });
+    if (!Array.isArray(searchResult.results) || searchResult.results.length === 0) {
+      respond(
+        true,
+        { summary: "No relevant prior sessions found.", citations: [], cached: false },
+        undefined,
+      );
+      return;
+    }
+    const recalls: SessionRecallEvidence[] = [];
+    let totalChars = 0;
+    for (const hit of searchResult.results) {
+      const session = loadSessionEntry(hit.sessionKey);
+      const evidence = session.entry?.sessionId
+        ? buildSessionRecallEvidence({
+            sessionKey: hit.sessionKey,
+            sessionId: hit.sessionId,
+            storePath: session.storePath,
+            sessionFile: session.entry.sessionFile,
+            startLine: hit.startLine,
+            endLine: hit.endLine,
+          })
+        : null;
+      if (!evidence) {
+        continue;
+      }
+      const cost = evidence.text.length;
+      if (totalChars + cost > SESSIONS_RECALL_MAX_EVIDENCE_CHARS_TOTAL) {
+        break;
+      }
+      recalls.push(evidence);
+      totalChars += cost;
+    }
+    const citations = recalls.map((entry) => entry.citation);
+    const summary = buildSessionRecallSummary({
+      query,
+      evidences: recalls,
+      maxTokens,
+    });
+    respond(
+      true,
+      {
+        summary,
+        citations,
+        cached: false,
+      },
+      undefined,
+    );
   },
   "sessions.subscribe": ({ client, context, respond }) => {
     const connId = client?.connId?.trim();

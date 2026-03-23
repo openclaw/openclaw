@@ -1,0 +1,8 @@
+{
+  "trajectoryPath": "/tmp/trajectory.v1.json",
+  "mode": "recorded",
+  "maxSteps": 20,
+  "maxToolCalls": 50,
+  "timeoutMs": 60000,
+  "toolAllowlist": ["memory_search", "web_search"]
+}

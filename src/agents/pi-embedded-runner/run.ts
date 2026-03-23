@@ -11,6 +11,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.js";
 import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { createResearchRunContext } from "../../research/events/runtime-hooks.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { hasConfiguredModelFallbacks } from "../agent-scope.js";
@@ -230,6 +231,15 @@ export async function runEmbeddedPiAgent(
   return enqueueSession(() =>
     enqueueGlobal(async () => {
       const started = Date.now();
+      const research = createResearchRunContext({
+        cfg: params.config,
+        runId: params.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId ?? "default",
+      });
+      let endUsage: { input?: number; output?: number; total?: number } | undefined;
+      let endTimedOut = false;
       const workspaceResolution = resolveRunWorkspaceDir({
         workspaceDir: params.workspaceDir,
         sessionKey: params.sessionKey,
@@ -237,6 +247,9 @@ export async function runEmbeddedPiAgent(
         config: params.config,
       });
       const resolvedWorkspace = workspaceResolution.workspaceDir;
+      if (workspaceResolution.agentId && workspaceResolution.agentId !== research.agentId) {
+        // no-op: keep emitted agent id stable for a run.
+      }
       const redactedSessionId = redactRunIdentifier(params.sessionId);
       const redactedSessionKey = redactRunIdentifier(params.sessionKey);
       const redactedWorkspace = redactRunIdentifier(resolvedWorkspace);
@@ -330,6 +343,14 @@ export async function runEmbeddedPiAgent(
         });
       }
       let runtimeModel = model;
+      await research.emit({
+        kind: "run.start",
+        payload: {
+          provider,
+          model: modelId,
+          trigger: params.trigger,
+        },
+      });
 
       const ctxInfo = resolveContextWindowInfo({
         cfg: params.config,
@@ -933,6 +954,28 @@ export async function runEmbeddedPiAgent(
             onReasoningStream: params.onReasoningStream,
             onReasoningEnd: params.onReasoningEnd,
             onToolResult: params.onToolResult,
+            onResearchEvent: async (payload) => {
+              if (payload.kind === "tool.start") {
+                await research.emit({
+                  kind: "tool.start",
+                  payload: {
+                    toolName: payload.toolName,
+                    toolCallId: payload.toolCallId,
+                    argsSummary: payload.argsSummary,
+                  },
+                });
+              } else {
+                await research.emit({
+                  kind: "tool.end",
+                  payload: {
+                    toolName: payload.toolName,
+                    toolCallId: payload.toolCallId,
+                    ok: payload.ok !== false,
+                    resultSummary: payload.resultSummary,
+                  },
+                });
+              }
+            },
             onAgentEvent: params.onAgentEvent,
             extraSystemPrompt: params.extraSystemPrompt,
             inputProvenance: params.inputProvenance,
@@ -952,6 +995,16 @@ export async function runEmbeddedPiAgent(
             sessionIdUsed,
             lastAssistant,
           } = attempt;
+          endTimedOut = timedOut;
+          await research.emit({
+            kind: "llm.request",
+            payload: {
+              provider,
+              model: modelId,
+              promptChars: params.prompt.length,
+              imageCount: params.images?.length ?? 0,
+            },
+          });
           bootstrapPromptWarningSignaturesSeen =
             attempt.bootstrapPromptWarningSignaturesSeen ??
             (attempt.bootstrapPromptWarningSignature
@@ -963,6 +1016,19 @@ export async function runEmbeddedPiAgent(
                 )
               : bootstrapPromptWarningSignaturesSeen);
           const lastAssistantUsage = normalizeUsage(lastAssistant?.usage as UsageLike);
+          await research.emit({
+            kind: "llm.response",
+            payload: {
+              provider: lastAssistant?.provider ?? provider,
+              model: lastAssistant?.model ?? modelId,
+              stopReason: lastAssistant?.stopReason,
+              usage: {
+                input: lastAssistantUsage?.input,
+                output: lastAssistantUsage?.output,
+                total: lastAssistantUsage?.total,
+              },
+            },
+          });
           const attemptUsage = attempt.attemptUsage ?? lastAssistantUsage;
           mergeUsageIntoAccumulator(usageAccumulator, attemptUsage);
           // Keep prompt size from the latest model call so session totalTokens
@@ -1540,6 +1606,13 @@ export async function runEmbeddedPiAgent(
             lastRunPromptUsage,
             lastTurnTotal,
           });
+          endUsage = usageMeta.usage
+            ? {
+                input: usageMeta.usage.input,
+                output: usageMeta.usage.output,
+                total: usageMeta.usage.total,
+              }
+            : undefined;
           const agentMeta: EmbeddedPiAgentMeta = {
             sessionId: sessionIdUsed,
             provider: lastAssistant?.provider ?? provider,
@@ -1648,6 +1721,16 @@ export async function runEmbeddedPiAgent(
       } finally {
         await contextEngine.dispose?.();
         stopRuntimeAuthRefreshTimer();
+        await research.emit({
+          kind: "run.end",
+          payload: {
+            durationMs: Date.now() - started,
+            aborted: params.abortSignal?.aborted === true,
+            timedOut: endTimedOut,
+            usage: endUsage,
+          },
+        });
+        await research.close();
       }
     }),
   );

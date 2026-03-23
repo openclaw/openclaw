@@ -856,6 +856,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Controls how fast older memory loses rank when temporal decay is enabled (half-life in days, default: 30). Lower values prioritize recent context more aggressively.",
   "agents.defaults.memorySearch.cache.enabled":
     "Caches computed chunk embeddings in SQLite so reindexing and incremental updates run faster (default: true). Keep this enabled unless investigating cache correctness or minimizing disk usage.",
+  research:
+    "Research feature gate for experimental telemetry/export/replay surfaces. Keep this disabled in normal product use so no research artifacts or listeners are activated unless explicitly requested.",
+  "research.enabled":
+    "Master toggle for research primitives such as event emission, trajectory export, and replay/control endpoints (default: false). Keep off unless you intentionally run research workflows.",
   memory: "Memory backend configuration (global).",
   "memory.backend":
     'Selects the global memory engine: "builtin" uses OpenClaw memory internals, while "qmd" uses the QMD sidecar pipeline. Keep "builtin" unless you intentionally operate QMD.',

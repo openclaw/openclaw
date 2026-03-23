@@ -1,4 +1,6 @@
+import { loadConfig } from "../config/config.js";
 import type { ExecAsk, ExecSecurity, SystemRunApprovalPlan } from "../infra/exec-approvals.js";
+import { emitStandaloneResearchEvent } from "../research/events/runtime-hooks.js";
 import {
   DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
   DEFAULT_APPROVAL_TIMEOUT_MS,
@@ -104,6 +106,26 @@ export async function registerExecApprovalRequest(
   const id = parseString(registrationResult?.id) ?? params.id;
   const expiresAtMs =
     parseExpiresAtMs(registrationResult?.expiresAtMs) ?? Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
+  try {
+    const cfg = loadConfig();
+    await emitStandaloneResearchEvent({
+      cfg,
+      runId: id,
+      sessionId: id,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId ?? "default",
+      event: {
+        kind: "approval.request",
+        payload: {
+          approvalId: id,
+          host: params.host,
+          commandSummary: params.command?.slice(0, 200),
+        },
+      },
+    });
+  } catch {
+    // Best-effort telemetry only.
+  }
   if (decision.present) {
     return { id, expiresAtMs, finalDecision: decision.value };
   }
@@ -117,11 +139,48 @@ export async function waitForExecApprovalDecision(id: string): Promise<string | 
       { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
       { id },
     );
-    return parseDecision(decisionResult).value;
+    const value = parseDecision(decisionResult).value;
+    try {
+      const cfg = loadConfig();
+      await emitStandaloneResearchEvent({
+        cfg,
+        runId: id,
+        sessionId: id,
+        agentId: "default",
+        event: {
+          kind: value && value.startsWith("allow") ? "approval.allow" : "approval.deny",
+          payload: {
+            approvalId: id,
+            decision: value ?? undefined,
+            ...(value && value.startsWith("allow")
+              ? {}
+              : { reason: "approval wait resolved deny" }),
+          },
+        },
+      });
+    } catch {
+      // Best-effort telemetry only.
+    }
+    return value;
   } catch (err) {
     // Timeout/cleanup path: treat missing/expired as no decision so askFallback applies.
     const message = String(err).toLowerCase();
     if (message.includes("approval expired or not found")) {
+      try {
+        const cfg = loadConfig();
+        await emitStandaloneResearchEvent({
+          cfg,
+          runId: id,
+          sessionId: id,
+          agentId: "default",
+          event: {
+            kind: "approval.deny",
+            payload: { approvalId: id, reason: "approval expired or not found" },
+          },
+        });
+      } catch {
+        // Best-effort telemetry only.
+      }
       return null;
     }
     throw err;

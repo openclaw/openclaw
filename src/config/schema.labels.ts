@@ -366,6 +366,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.cache.enabled": "Memory Search Embedding Cache",
   "agents.defaults.memorySearch.cache.maxEntries": "Memory Search Embedding Cache Max Entries",
   memory: "Memory",
+  research: "Research",
+  "research.enabled": "Research Enabled",
   "memory.backend": "Memory Backend",
   "memory.citations": "Memory Citations Mode",
   "memory.qmd.command": "QMD Binary",

@@ -1,0 +1,10 @@
+{
+  "runId": "run-123",
+  "status": "running",
+  "mode": "recorded",
+  "stepIdx": 1,
+  "totalSteps": 4,
+  "toolCallCount": 2,
+  "createdAtMs": 1735689600000,
+  "updatedAtMs": 1735689605000
+}

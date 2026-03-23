@@ -1,0 +1,130 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { validateJsonSchemaValue } from "../../plugins/schema-validator.js";
+import { TrajectoryV1Schema } from "../contracts/index.js";
+import { exportTrajectoryV1 } from "./export.js";
+
+let tmpRoot = "";
+
+describe("trajectory export", () => {
+  beforeEach(async () => {
+    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trajectory-export-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("exports deterministic bytes with trailing newline", async () => {
+    const transcriptPath = path.join(tmpRoot, "session.jsonl");
+    const eventsPath = path.join(tmpRoot, "session.events.jsonl");
+    const outputPath = path.join(tmpRoot, "trajectory.v1.json");
+    await fs.writeFile(
+      transcriptPath,
+      [
+        JSON.stringify({
+          type: "message",
+          message: { role: "user", content: [{ type: "text", text: "hello" }] },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: { role: "assistant", content: [{ type: "text", text: "world" }] },
+        }),
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      eventsPath,
+      [
+        JSON.stringify({
+          v: 1,
+          ts: 1700000000000,
+          runId: "run-1",
+          sessionId: "session-1",
+          sessionKey: "main",
+          agentId: "default",
+          kind: "tool.start",
+          payload: { toolName: "exec", toolCallId: "call-1", argsSummary: "echo hello" },
+        }),
+        JSON.stringify({
+          v: 1,
+          ts: 1700000001000,
+          runId: "run-1",
+          sessionId: "session-1",
+          sessionKey: "main",
+          agentId: "default",
+          kind: "tool.end",
+          payload: { toolName: "exec", toolCallId: "call-1", ok: true, resultSummary: "ok" },
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+
+    const first = await exportTrajectoryV1({
+      agentId: "default",
+      sessionId: "session-1",
+      sessionKey: "main",
+      transcriptPath,
+      eventsPath,
+      outputPath,
+    });
+    const second = await exportTrajectoryV1({
+      agentId: "default",
+      sessionId: "session-1",
+      sessionKey: "main",
+      transcriptPath,
+      eventsPath,
+      outputPath,
+    });
+
+    expect(first.bytes).toBe(second.bytes);
+    expect(first.bytes.endsWith("\n")).toBe(true);
+    const parsed = JSON.parse(first.bytes) as unknown;
+    const schema = validateJsonSchemaValue({
+      schema: TrajectoryV1Schema,
+      cacheKey: "research.trajectory.export.test",
+      value: parsed,
+    });
+    expect(schema.ok).toBe(true);
+  });
+
+  it("does not reintroduce unredacted sensitive event text", async () => {
+    const transcriptPath = path.join(tmpRoot, "session-redact.jsonl");
+    const eventsPath = path.join(tmpRoot, "session-redact.events.jsonl");
+    await fs.writeFile(
+      transcriptPath,
+      `${JSON.stringify({ type: "message", message: { role: "user", content: "run command" } })}\n`,
+      "utf8",
+    );
+    await fs.writeFile(
+      eventsPath,
+      `${JSON.stringify({
+        v: 1,
+        ts: 1700000000000,
+        runId: "run-1",
+        sessionId: "session-redact",
+        agentId: "default",
+        kind: "tool.end",
+        payload: {
+          toolName: "web_fetch",
+          toolCallId: "call-2",
+          ok: false,
+          resultSummary: "Authorization: Bearer sk-raw-secret-value",
+        },
+      })}\n`,
+      "utf8",
+    );
+
+    const result = await exportTrajectoryV1({
+      agentId: "default",
+      sessionId: "session-redact",
+      transcriptPath,
+      eventsPath,
+      outputPath: path.join(tmpRoot, "session-redact.trajectory.v1.json"),
+    });
+    expect(result.bytes).not.toContain("sk-raw-secret-value");
+  });
+});

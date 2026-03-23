@@ -4,6 +4,7 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveSessionFilePath } from "../../config/sessions/paths.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 
 export function forkSessionFromParentRuntime(params: {
   parentEntry: SessionEntry;
@@ -25,6 +26,7 @@ export function forkSessionFromParentRuntime(params: {
       const sessionFile = manager.createBranchedSession(leafId) ?? manager.getSessionFile();
       const sessionId = manager.getSessionId();
       if (sessionFile && sessionId) {
+        emitSessionTranscriptUpdate(sessionFile);
         return { sessionId, sessionFile };
       }
     }
@@ -45,6 +47,7 @@ export function forkSessionFromParentRuntime(params: {
       mode: 0o600,
       flag: "wx",
     });
+    emitSessionTranscriptUpdate(sessionFile);
     return { sessionId, sessionFile };
   } catch {
     return null;

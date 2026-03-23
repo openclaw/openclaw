@@ -113,6 +113,14 @@ export type RunEmbeddedPiAgentParams = {
   onReasoningStream?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   onReasoningEnd?: () => void | Promise<void>;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
+  onResearchEvent?: (payload: {
+    kind: "tool.start" | "tool.end";
+    toolName: string;
+    toolCallId: string;
+    ok?: boolean;
+    argsSummary?: string;
+    resultSummary?: string;
+  }) => void | Promise<void>;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
   lane?: string;
   enqueue?: typeof enqueueCommand;

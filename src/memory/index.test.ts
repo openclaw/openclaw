@@ -15,6 +15,7 @@ let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManager
 let embedBatchCalls = 0;
 let embedBatchInputCalls = 0;
 let providerCalls: Array<{ provider?: string; model?: string; outputDimensionality?: number }> = [];
+const providerMockControl = vi.hoisted(() => ({ forceUnavailable: false }));
 
 vi.mock("./embeddings.js", () => {
   const embedText = (text: string) => {
@@ -36,6 +37,13 @@ vi.mock("./embeddings.js", () => {
         model: options.model,
         outputDimensionality: options.outputDimensionality,
       });
+      if (providerMockControl.forceUnavailable) {
+        return {
+          requestedProvider: options.provider ?? "openai",
+          provider: null,
+          providerUnavailableReason: "test unavailable",
+        };
+      }
       const providerId = options.provider === "gemini" ? "gemini" : "mock";
       const model = options.model ?? "mock-embed";
       return {
@@ -169,6 +177,7 @@ describe("memory index", () => {
     embedBatchCalls = 0;
     embedBatchInputCalls = 0;
     providerCalls = [];
+    providerMockControl.forceUnavailable = false;
 
     mkdirSync(memoryDir, { recursive: true });
 
@@ -502,6 +511,76 @@ describe("memory index", () => {
       ).toBeGreaterThan(0);
       await secondManager.close?.();
     } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("indexes session transcripts in FTS-only mode when provider is unavailable", async () => {
+    const stateDir = path.join(fixtureRoot, `state-fts-only-${randomUUID()}`);
+    const sessionDir = path.join(stateDir, "agents", "main", "sessions");
+    await fs.mkdir(sessionDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sessionDir, "session-fts-only.jsonl"),
+      `${JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "fts only transcript line" }],
+        },
+      })}\n`,
+    );
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    providerMockControl.forceUnavailable = true;
+
+    try {
+      const result = await getMemorySearchManager({
+        cfg: createCfg({
+          storePath: path.join(workspaceDir, `index-fts-only-${randomUUID()}.sqlite`),
+          sources: ["sessions"],
+          sessionMemory: true,
+          hybrid: { enabled: true },
+        }),
+        agentId: "main",
+      });
+      const manager = requireManager(result);
+      await manager.sync?.({ reason: "test" });
+      const status = manager.status();
+      expect(status.provider).toBe("none");
+      expect(
+        status.sourceCounts?.find((entry) => entry.source === "sessions")?.chunks ?? 0,
+      ).toBeGreaterThan(0);
+
+      const db = (
+        manager as unknown as {
+          db: {
+            prepare: (sql: string) => {
+              get: (...params: string[]) => { c: number; name?: string } | undefined;
+            };
+          };
+        }
+      ).db;
+      const chunkRows = db
+        .prepare(`SELECT COUNT(*) as c FROM chunks WHERE source = ? AND model = ?`)
+        .get("sessions", "fts-only");
+      expect(chunkRows?.c ?? 0).toBeGreaterThan(0);
+      const ftsTable = db
+        .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`)
+        .get("chunks_fts");
+      if (ftsTable?.name === "chunks_fts") {
+        const ftsRows = db
+          .prepare(`SELECT COUNT(*) as c FROM chunks_fts WHERE source = ? AND model = ?`)
+          .get("sessions", "fts-only");
+        expect(ftsRows?.c ?? 0).toBeGreaterThan(0);
+      }
+      await manager.close?.();
+    } finally {
+      providerMockControl.forceUnavailable = false;
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;
       } else {

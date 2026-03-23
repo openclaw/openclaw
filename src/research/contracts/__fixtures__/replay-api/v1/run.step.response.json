@@ -1,0 +1,15 @@
+{
+  "runId": "run-123",
+  "status": "running",
+  "stepIdx": 0,
+  "done": false,
+  "assistantText": "Sure, I can help with that.",
+  "replayedToolCalls": [
+    {
+      "toolCallId": "call-1",
+      "toolName": "memory_search",
+      "ok": true,
+      "resultSummary": "Found two notes."
+    }
+  ]
+}

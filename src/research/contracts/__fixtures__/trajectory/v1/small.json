@@ -1,0 +1,70 @@
+{
+  "v": 1,
+  "session": {
+    "agentId": "default",
+    "sessionId": "session-1",
+    "sessionKey": "main"
+  },
+  "messages": [
+    {
+      "idx": 0,
+      "jsonlLine": 1,
+      "role": "user",
+      "text": "Plan deploy strategy."
+    },
+    {
+      "idx": 1,
+      "jsonlLine": 2,
+      "role": "assistant",
+      "text": "I will use the exec tool."
+    }
+  ],
+  "events": [
+    {
+      "v": 1,
+      "ts": 1700000000000,
+      "runId": "run-1",
+      "sessionId": "session-1",
+      "sessionKey": "main",
+      "agentId": "default",
+      "kind": "tool.start",
+      "payload": {
+        "toolName": "exec",
+        "toolCallId": "call-1",
+        "argsSummary": "ls -la"
+      }
+    },
+    {
+      "v": 1,
+      "ts": 1700000000100,
+      "runId": "run-1",
+      "sessionId": "session-1",
+      "sessionKey": "main",
+      "agentId": "default",
+      "kind": "tool.end",
+      "payload": {
+        "toolName": "exec",
+        "toolCallId": "call-1",
+        "ok": true,
+        "resultSummary": "command completed"
+      }
+    }
+  ],
+  "toolCalls": [
+    {
+      "stepIdx": 0,
+      "toolCallId": "call-1",
+      "toolName": "exec",
+      "startTs": 1700000000000,
+      "endTs": 1700000000100,
+      "ok": true,
+      "argsSummary": "ls -la",
+      "resultSummary": "command completed"
+    }
+  ],
+  "summary": {
+    "messageCount": 2,
+    "eventCount": 2,
+    "toolCallCount": 1
+  }
+}

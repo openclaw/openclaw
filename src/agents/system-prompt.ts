@@ -50,6 +50,17 @@ function buildMemorySection(params: {
   });
 }
 
+function buildSessionRecallSection(params: { isMinimal: boolean; availableTools: Set<string> }) {
+  if (params.isMinimal || !params.availableTools.has("sessions_recall")) {
+    return [];
+  }
+  return [
+    "## Session Recall",
+    "For cross-session questions, prefer sessions_recall to retrieve and summarize relevant prior context with citations.",
+    "",
+  ];
+}
+
 function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: boolean) {
   if (!ownerLine || isMinimal) {
     return [];
@@ -247,6 +258,8 @@ export function buildAgentSystemPrompt(params: {
       : "List OpenClaw agent ids allowed for sessions_spawn",
     sessions_list: "List other sessions (incl. sub-agents) with filters/last",
     sessions_history: "Fetch history for another session/sub-agent",
+    sessions_recall:
+      "Summarize relevant prior sessions with citations for cross-session recall questions",
     sessions_send: "Send a message to another session/sub-agent",
     sessions_spawn: acpSpawnRuntimeEnabled
       ? 'Spawn an isolated sub-agent or ACP coding session (runtime="acp" requires `agentId` unless `acp.defaultAgent` is configured; ACP harness ids follow acp.allowedAgents, not agents_list)'
@@ -279,6 +292,7 @@ export function buildAgentSystemPrompt(params: {
     "agents_list",
     "sessions_list",
     "sessions_history",
+    "sessions_recall",
     "sessions_send",
     "subagents",
     "session_status",
@@ -392,6 +406,7 @@ export function buildAgentSystemPrompt(params: {
     availableTools,
     citationsMode: params.memoryCitationsMode,
   });
+  const sessionRecallSection = buildSessionRecallSection({ isMinimal, availableTools });
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,
     isMinimal,
@@ -465,6 +480,7 @@ export function buildAgentSystemPrompt(params: {
     "",
     ...skillsSection,
     ...memorySection,
+    ...sessionRecallSection,
     // Skip self-update for subagent/none modes
     hasGateway && !isMinimal ? "## OpenClaw Self-Update" : "",
     hasGateway && !isMinimal

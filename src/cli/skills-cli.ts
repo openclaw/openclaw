@@ -11,6 +11,7 @@ import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
+import { registerManagedSkillsCli } from "./skills-cli.managed.js";
 
 export type {
   SkillInfoOptions,
@@ -194,6 +195,8 @@ export function registerSkillsCli(program: Command) {
     .action(async (opts) => {
       await runSkillsAction((report) => formatSkillsCheck(report, opts));
     });
+
+  registerManagedSkillsCli(skills);
 
   // Default action (no subcommand) - show list
   skills.action(async () => {

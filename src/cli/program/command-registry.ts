@@ -55,6 +55,19 @@ const coreEntries: CoreCliEntry[] = [
   {
     commands: [
       {
+        name: "research",
+        description: "Inspect research telemetry policy and artifacts",
+        hasSubcommands: true,
+      },
+    ],
+    register: async ({ program }) => {
+      const mod = await import("../research-cli.js");
+      mod.registerResearchCli(program);
+    },
+  },
+  {
+    commands: [
+      {
         name: "onboard",
         description: "Interactive onboarding for gateway, workspace, and skills",
         hasSubcommands: false,

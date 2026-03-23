@@ -1,0 +1,71 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { ReplayControlError } from "./errors.js";
+import { createReplayRun, stepReplayRun, toReplayRunStateResponse } from "./runner.js";
+
+const cleanupDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    cleanupDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+  );
+});
+
+async function writeTrajectoryFixture(): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-replay-runner-"));
+  cleanupDirs.push(dir);
+  const fixturePath = path.join(
+    process.cwd(),
+    "src",
+    "research",
+    "contracts",
+    "__fixtures__",
+    "trajectory",
+    "v1",
+    "small.json",
+  );
+  const raw = await fs.readFile(fixturePath, "utf8");
+  const outPath = path.join(dir, "trajectory.v1.json");
+  await fs.writeFile(outPath, raw, "utf8");
+  return outPath;
+}
+
+describe("replay runner", () => {
+  it("replays deterministic step sequence from trajectory", async () => {
+    const trajectoryPath = await writeTrajectoryFixture();
+    const run = await createReplayRun({
+      runId: "run-1",
+      request: { trajectoryPath, mode: "recorded" },
+      nowMs: 1700000000000,
+    });
+
+    const step = stepReplayRun({ run, nowMs: 1700000000100 });
+    expect(step.runId).toBe("run-1");
+    expect(step.stepIdx).toBe(0);
+    expect(step.done).toBe(true);
+    expect(step.status).toBe("completed");
+    expect(step.replayedToolCalls).toHaveLength(1);
+    expect(step.replayedToolCalls[0]).toMatchObject({
+      toolCallId: "call-1",
+      toolName: "exec",
+      ok: true,
+    });
+
+    const state = toReplayRunStateResponse(run);
+    expect(state.status).toBe("completed");
+    expect(state.stepIdx).toBe(1);
+    expect(state.totalSteps).toBe(1);
+  });
+
+  it("fails when allowlist excludes replayed tool", async () => {
+    const trajectoryPath = await writeTrajectoryFixture();
+    const run = await createReplayRun({
+      runId: "run-2",
+      request: { trajectoryPath, mode: "recorded", toolAllowlist: ["memory_search"] },
+    });
+    expect(() => stepReplayRun({ run })).toThrowError(ReplayControlError);
+    expect(() => stepReplayRun({ run })).toThrow(/allowlisted/);
+  });
+});

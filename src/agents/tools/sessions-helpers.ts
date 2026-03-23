@@ -28,6 +28,7 @@ export {
   shouldResolveSessionIdInput,
   shouldVerifyRequesterSpawnedSessionVisibility,
 } from "./sessions-resolution.js";
+export { resolveVisibleSessionKeys } from "./sessions-visible-keys.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { sanitizeUserFacingText } from "../pi-embedded-helpers.js";

@@ -25,6 +25,27 @@ export const SessionsListParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SessionsSearchParamsSchema = Type.Object(
+  {
+    query: Type.String({ minLength: 1 }),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
+    activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
+    kinds: Type.Optional(Type.Array(NonEmptyString)),
+    keys: Type.Optional(Type.Array(NonEmptyString)),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsRecallParamsSchema = Type.Object(
+  {
+    query: Type.String({ minLength: 1 }),
+    maxTokens: Type.Optional(Type.Integer({ minimum: 256, maximum: 4000 })),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
+    scope: Type.Optional(Type.Union([Type.Literal("recent"), Type.Literal("all")])),
+  },
+  { additionalProperties: false },
+);
+
 export const SessionsPreviewParamsSchema = Type.Object(
   {
     keys: Type.Array(NonEmptyString, { minItems: 1 }),

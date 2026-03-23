@@ -9,6 +9,9 @@ const searchSkillsFromClawHubMock = vi.fn();
 const installSkillFromClawHubMock = vi.fn();
 const updateSkillsFromClawHubMock = vi.fn();
 const readTrackedClawHubSkillSlugsMock = vi.fn();
+const listManagedSkillsMock = vi.fn();
+const auditManagedSkillsMock = vi.fn();
+const updateManagedSkillsMock = vi.fn();
 
 const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } =
   createCliRuntimeCapture();
@@ -33,6 +36,12 @@ vi.mock("../agents/skills-clawhub.js", () => ({
   readTrackedClawHubSkillSlugs: (...args: unknown[]) => readTrackedClawHubSkillSlugsMock(...args),
 }));
 
+vi.mock("../agents/skills-hub/managed.js", () => ({
+  listManagedSkills: (...args: unknown[]) => listManagedSkillsMock(...args),
+  auditManagedSkills: (...args: unknown[]) => auditManagedSkillsMock(...args),
+  updateManagedSkills: (...args: unknown[]) => updateManagedSkillsMock(...args),
+}));
+
 const { registerSkillsCli } = await import("./skills-cli.js");
 
 describe("skills cli commands", () => {
@@ -54,6 +63,9 @@ describe("skills cli commands", () => {
     installSkillFromClawHubMock.mockReset();
     updateSkillsFromClawHubMock.mockReset();
     readTrackedClawHubSkillSlugsMock.mockReset();
+    listManagedSkillsMock.mockReset();
+    auditManagedSkillsMock.mockReset();
+    updateManagedSkillsMock.mockReset();
 
     loadConfigMock.mockReturnValue({});
     resolveDefaultAgentIdMock.mockReturnValue("main");
@@ -65,6 +77,9 @@ describe("skills cli commands", () => {
     });
     updateSkillsFromClawHubMock.mockResolvedValue([]);
     readTrackedClawHubSkillSlugsMock.mockResolvedValue([]);
+    listManagedSkillsMock.mockResolvedValue([]);
+    auditManagedSkillsMock.mockResolvedValue({ rows: [], summaries: {} });
+    updateManagedSkillsMock.mockResolvedValue([]);
   });
 
   it("searches ClawHub skills from the native CLI", async () => {
@@ -135,5 +150,26 @@ describe("skills cli commands", () => {
       true,
     );
     expect(runtimeErrors).toEqual([]);
+  });
+
+  it("lists managed skills", async () => {
+    listManagedSkillsMock.mockResolvedValue([
+      {
+        name: "calendar",
+        exists: true,
+        lock: { source: "clawhub", ref: "1.2.3" },
+      },
+    ]);
+    await runCommand(["skills", "managed", "list"]);
+    expect(runtimeLogs.some((line) => line.includes("calendar  clawhub@1.2.3  present"))).toBe(
+      true,
+    );
+  });
+
+  it("updates managed skills with --force", async () => {
+    updateManagedSkillsMock.mockResolvedValue([{ name: "calendar", ok: true, message: "updated" }]);
+    await runCommand(["skills", "managed", "update", "--force"]);
+    expect(updateManagedSkillsMock).toHaveBeenCalledWith({ force: true });
+    expect(runtimeLogs.some((line) => line.includes("calendar  updated"))).toBe(true);
   });
 });

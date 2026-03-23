@@ -792,12 +792,6 @@ export abstract class MemoryManagerSyncOps {
     targetSessionFiles?: string[];
     progress?: MemorySyncProgressState;
   }) {
-    // FTS-only mode: skip embedding sync (no provider)
-    if (!this.provider) {
-      log.debug("Skipping session file sync in FTS-only mode (no embedding provider)");
-      return;
-    }
-
     const targetSessionFiles = params.needsFullReindex
       ? null
       : this.normalizeTargetSessionFiles(params.targetSessionFiles);
@@ -809,6 +803,7 @@ export abstract class MemoryManagerSyncOps {
       : new Set(files.map((file) => sessionPathForFile(file)));
     const indexAll =
       params.needsFullReindex || Boolean(targetSessionFiles) || this.sessionsDirtyFiles.size === 0;
+    const ftsModel = this.provider?.model ?? "fts-only";
     log.debug("memory sync: indexing session files", {
       files: files.length,
       indexAll,
@@ -904,7 +899,7 @@ export abstract class MemoryManagerSyncOps {
         try {
           this.db
             .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
-            .run(stale.path, "sessions", this.provider.model);
+            .run(stale.path, "sessions", ftsModel);
         } catch {}
       }
     }

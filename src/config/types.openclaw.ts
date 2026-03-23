@@ -120,6 +120,10 @@ export type OpenClawConfig = {
   canvasHost?: CanvasHostConfig;
   talk?: TalkConfig;
   gateway?: GatewayConfig;
+  research?: {
+    /** Master gate for research surfaces (events/export/replay). */
+    enabled?: boolean;
+  };
   memory?: MemoryConfig;
   mcp?: McpConfig;
 };

@@ -21,9 +21,12 @@ import { createPdfTool } from "./tools/pdf-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
+import { createSessionsRecallTool } from "./tools/sessions-recall-tool.js";
+import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
+import { createSkillsManageTool } from "./tools/skills-manage-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
@@ -205,6 +208,13 @@ export function createOpenClawTools(
       sandboxed: options?.sandboxed,
       config: resolvedConfig,
       callGateway: openClawToolsDeps.callGateway,
+    }),
+    createSessionsSearchTool(),
+    createSessionsRecallTool(),
+    createSkillsManageTool({
+      workspaceDir,
+      agentSessionKey: options?.agentSessionKey,
+      config: options?.config,
     }),
     createSessionsSendTool({
       agentSessionKey: options?.agentSessionKey,

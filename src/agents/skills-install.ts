@@ -5,6 +5,7 @@ import { resolveBrewExecutable } from "../infra/brew.js";
 import { runCommandWithTimeout, type CommandOptions } from "../process/exec.js";
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
 import { resolveUserPath } from "../utils.js";
+import { enforceManagedScanPolicy } from "./skills-hub/managed.js";
 import { installDownloadSpec } from "./skills-install-download.js";
 import { formatInstallFailureMessage } from "./skills-install-output.js";
 import {
@@ -22,6 +23,7 @@ export type SkillInstallRequest = {
   installId: string;
   timeoutMs?: number;
   config?: OpenClawConfig;
+  force?: boolean;
 };
 
 export type SkillInstallResult = {
@@ -55,13 +57,26 @@ function formatScanFindingDetail(
   return `${finding.message} (${filePath}:${finding.line})`;
 }
 
-async function collectSkillInstallScanWarnings(entry: SkillEntry): Promise<string[]> {
+async function collectSkillInstallScanWarnings(params: {
+  entry: SkillEntry;
+  force?: boolean;
+}): Promise<{ warnings: string[]; blockedMessage?: string }> {
   const warnings: string[] = [];
-  const skillName = entry.skill.name;
-  const skillDir = path.resolve(entry.skill.baseDir);
+  const skillName = params.entry.skill.name;
+  const skillDir = path.resolve(params.entry.skill.baseDir);
 
   try {
     const summary = await scanDirectoryWithSummary(skillDir);
+    if (params.entry.skill.source === "openclaw-managed") {
+      const policy = enforceManagedScanPolicy({
+        summary,
+        skillName,
+        force: Boolean(params.force),
+      });
+      if (!policy.ok) {
+        return { warnings, blockedMessage: policy.message };
+      }
+    }
     if (summary.critical > 0) {
       const criticalDetails = summary.findings
         .filter((finding) => finding.severity === "critical")
@@ -81,7 +96,7 @@ async function collectSkillInstallScanWarnings(entry: SkillEntry): Promise<strin
     );
   }
 
-  return warnings;
+  return { warnings };
 }
 
 function resolveInstallId(spec: SkillInstallSpec, index: number): string {
@@ -439,7 +454,18 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   }
 
   const spec = findInstallSpec(entry, params.installId);
-  const warnings = await collectSkillInstallScanWarnings(entry);
+  const scan = await collectSkillInstallScanWarnings({ entry, force: params.force });
+  const warnings = scan.warnings;
+  if (scan.blockedMessage) {
+    return {
+      ok: false,
+      message: scan.blockedMessage,
+      stdout: "",
+      stderr: "",
+      code: null,
+      warnings,
+    };
+  }
 
   // Warn when install is triggered from a non-bundled source.
   // Workspace/project/personal agent skills can contain attacker-controlled metadata.

@@ -18,6 +18,14 @@ export type SubscribeEmbeddedPiSessionParams = {
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
+  onResearchEvent?: (payload: {
+    kind: "tool.start" | "tool.end";
+    toolName: string;
+    toolCallId: string;
+    ok?: boolean;
+    argsSummary?: string;
+    resultSummary?: string;
+  }) => void | Promise<void>;
   onReasoningStream?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   /** Called when a thinking/reasoning block ends (</think> tag processed). */
   onReasoningEnd?: () => void | Promise<void>;

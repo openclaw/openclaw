@@ -1,0 +1,112 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { getDeterministicFreePortBlock } from "../../test-utils/ports.js";
+import { startReplayControlServer } from "./server.js";
+
+const cleanupDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    cleanupDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+  );
+});
+
+async function writeTrajectoryFixture(): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-replay-server-"));
+  cleanupDirs.push(dir);
+  const fixturePath = path.join(
+    process.cwd(),
+    "src",
+    "research",
+    "contracts",
+    "__fixtures__",
+    "trajectory",
+    "v1",
+    "small.json",
+  );
+  const raw = await fs.readFile(fixturePath, "utf8");
+  const outPath = path.join(dir, "trajectory.v1.json");
+  await fs.writeFile(outPath, raw, "utf8");
+  return outPath;
+}
+
+describe("replay control server", () => {
+  it("fails closed when research is disabled", async () => {
+    await expect(startReplayControlServer({ enabled: false })).rejects.toThrow(
+      /Replay control is disabled/,
+    );
+  });
+
+  it("requires bearer token and supports lifecycle endpoints", async () => {
+    const trajectoryPath = await writeTrajectoryFixture();
+    const port = await getDeterministicFreePortBlock({ offsets: [0] });
+    const server = await startReplayControlServer({
+      enabled: true,
+      port,
+      token: "test-token",
+    });
+    try {
+      const unauth = await fetch(`http://127.0.0.1:${server.port}/api/replay/v1/runs.create`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trajectoryPath, mode: "recorded" }),
+      });
+      expect(unauth.status).toBe(401);
+
+      const createRes = await fetch(`http://127.0.0.1:${server.port}/api/replay/v1/runs.create`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ trajectoryPath, mode: "recorded" }),
+      });
+      expect(createRes.status).toBe(200);
+      const created = (await createRes.json()) as { runId: string };
+      expect(created.runId).toBeTruthy();
+
+      const stepRes = await fetch(`http://127.0.0.1:${server.port}/api/replay/v1/runs.step`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ runId: created.runId }),
+      });
+      expect(stepRes.status).toBe(200);
+      const stepBody = (await stepRes.json()) as { done: boolean; replayedToolCalls?: unknown[] };
+      expect(stepBody.done).toBe(true);
+      expect(stepBody.replayedToolCalls).toHaveLength(1);
+
+      const stateRes = await fetch(
+        `http://127.0.0.1:${server.port}/api/replay/v1/runs.getState?runId=${encodeURIComponent(created.runId)}`,
+        {
+          headers: { Authorization: "Bearer test-token" },
+        },
+      );
+      expect(stateRes.status).toBe(200);
+
+      const closeRes = await fetch(`http://127.0.0.1:${server.port}/api/replay/v1/runs.close`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ runId: created.runId }),
+      });
+      expect(closeRes.status).toBe(200);
+
+      const stateAfterClose = await fetch(
+        `http://127.0.0.1:${server.port}/api/replay/v1/runs.getState?runId=${encodeURIComponent(created.runId)}`,
+        {
+          headers: { Authorization: "Bearer test-token" },
+        },
+      );
+      expect(stateAfterClose.status).toBe(404);
+    } finally {
+      await server.close();
+    }
+  });
+});

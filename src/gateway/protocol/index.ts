@@ -200,6 +200,10 @@ import {
   SessionsDeleteParamsSchema,
   type SessionsListParams,
   SessionsListParamsSchema,
+  type SessionsSearchParams,
+  type SessionsRecallParams,
+  SessionsSearchParamsSchema,
+  SessionsRecallParamsSchema,
   type SessionsMessagesSubscribeParams,
   SessionsMessagesSubscribeParamsSchema,
   type SessionsMessagesUnsubscribeParams,
@@ -332,6 +336,12 @@ export const validateSecretsResolveResult = ajv.compile<SecretsResolveResult>(
   SecretsResolveResultSchema,
 );
 export const validateSessionsListParams = ajv.compile<SessionsListParams>(SessionsListParamsSchema);
+export const validateSessionsSearchParams = ajv.compile<SessionsSearchParams>(
+  SessionsSearchParamsSchema,
+);
+export const validateSessionsRecallParams = ajv.compile<SessionsRecallParams>(
+  SessionsRecallParamsSchema,
+);
 export const validateSessionsPreviewParams = ajv.compile<SessionsPreviewParams>(
   SessionsPreviewParamsSchema,
 );
@@ -518,6 +528,8 @@ export {
   NodePendingEnqueueParamsSchema,
   NodePendingEnqueueResultSchema,
   SessionsListParamsSchema,
+  SessionsSearchParamsSchema,
+  SessionsRecallParamsSchema,
   SessionsPreviewParamsSchema,
   SessionsResolveParamsSchema,
   SessionsCreateParamsSchema,
@@ -679,6 +691,8 @@ export type {
   NodePendingEnqueueParams,
   NodePendingEnqueueResult,
   SessionsListParams,
+  SessionsSearchParams,
+  SessionsRecallParams,
   SessionsPreviewParams,
   SessionsResolveParams,
   SessionsPatchParams,
