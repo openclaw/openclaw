@@ -144,6 +144,14 @@ describe("exec-command-resolution", () => {
     ]);
     expect(niceResolution?.rawExecutable).toBe("bash");
     expect(niceResolution?.executableName.toLowerCase()).toContain("bash");
+
+    const timeResolution = resolveCommandResolutionFromArgv(
+      ["/usr/bin/time", "-p", "rg", "-n", "needle"],
+      undefined,
+      makePathEnv(fixture.binDir),
+    );
+    expect(timeResolution?.resolvedPath).toBe(fixture.exePath);
+    expect(timeResolution?.executableName).toBe(fixture.exeName);
   });
 
   it("blocks semantic env wrappers, env -S, and deep transparent-wrapper chains", () => {
