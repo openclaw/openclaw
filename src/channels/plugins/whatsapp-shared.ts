@@ -1,6 +1,5 @@
 import { resolveOutboundSendDep } from "../../infra/outbound/send-deps.js";
 import { createAttachedChannelResultAdapter } from "../../plugin-sdk/channel-send-result.js";
-import { resolveWhatsAppOutboundTarget } from "../../plugin-sdk/whatsapp-core.js";
 import type { PluginRuntimeChannel } from "../../plugins/runtime/types-channel.js";
 import { escapeRegExp } from "../../utils.js";
 import type { ChannelOutboundAdapter } from "./types.js";
@@ -30,7 +29,7 @@ type CreateWhatsAppOutboundBaseParams = {
   sendMessageWhatsApp: WhatsAppSendMessage;
   sendPollWhatsApp: WhatsAppSendPoll;
   shouldLogVerbose: () => boolean;
-  resolveTarget?: ChannelOutboundAdapter["resolveTarget"];
+  resolveTarget: ChannelOutboundAdapter["resolveTarget"];
   normalizeText?: (text: string | undefined) => string;
   skipEmptyText?: boolean;
 };
@@ -40,8 +39,7 @@ export function createWhatsAppOutboundBase({
   sendMessageWhatsApp,
   sendPollWhatsApp,
   shouldLogVerbose,
-  resolveTarget = ({ to, allowFrom, mode }) =>
-    resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
+  resolveTarget,
   normalizeText = (text) => text ?? "",
   skipEmptyText = false,
 }: CreateWhatsAppOutboundBaseParams): Pick<
