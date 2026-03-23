@@ -25,7 +25,7 @@ RUN --mount=type=cache,id=openclaw-sandbox-common-apt-cache,target=/var/cache/ap
   --mount=type=cache,id=openclaw-sandbox-common-apt-lists,target=/var/lib/apt,sharing=locked \
   apt-get update \
   && apt-get -o Acquire::Retries=5 upgrade -y --no-install-recommends \
-  && apt-get -o Acquire::Retries=5 install -y --no-install-recommends --fix-missing ${PACKAGES}
+  && apt-get -o Acquire::Retries=5 install -y --no-install-recommends ${PACKAGES}
 
 RUN if [ "${INSTALL_PNPM}" = "1" ]; then npm install -g pnpm; fi
 
