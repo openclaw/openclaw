@@ -790,6 +790,7 @@
     "tslog": "^4.10.2",
     "undici": "^7.24.5",
     "uuid": "^13.0.0",
+    "venice-e2ee": "github:elkimek/venice-e2ee",
     "ws": "^8.20.0",
     "yaml": "^2.8.3",
     "zod": "^4.3.6"
