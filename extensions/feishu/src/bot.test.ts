@@ -2094,6 +2094,11 @@ describe("handleFeishuMessage command authorization", () => {
         ThreadLabel: expect.stringContaining("Role-Task-Routing"),
       }),
     );
+    const lastContext = mockFinalizeInboundContext.mock.calls.at(-1)?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(lastContext?.ThreadLabel).toBe("oc-group / Role-Task-Routing");
+    expect(lastContext?.ThreadLabel).not.toContain("?");
   });
 
   it("keeps root_id as topic key when root_id and thread_id both exist", async () => {

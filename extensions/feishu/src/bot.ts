@@ -90,7 +90,7 @@ function truncateFeishuTopicLabel(raw: string): string {
   const normalized = raw.replace(/\s+/g, " ").trim();
   if (!normalized) return "";
   if (normalized.length <= TOPIC_LABEL_MAX_CHARS) return normalized;
-  return `${normalized.slice(0, TOPIC_LABEL_MAX_CHARS - 1).trimEnd()}?`;
+  return `${normalized.slice(0, TOPIC_LABEL_MAX_CHARS - 3).trimEnd()}...`;
 }
 
 async function resolveFeishuTopicLabel(params: {
@@ -131,7 +131,7 @@ async function resolveFeishuTopicLabel(params: {
 function shortFeishuTopicId(raw: string): string {
   const normalized = raw.trim();
   if (normalized.length <= 16) return normalized;
-  return `${normalized.slice(0, 8)}?${normalized.slice(-6)}`;
+  return `${normalized.slice(0, 8)}...${normalized.slice(-6)}`;
 }
 
 function buildFeishuTopicThreadLabel(params: {
@@ -144,9 +144,9 @@ function buildFeishuTopicThreadLabel(params: {
     params.groupDisplayName?.trim() || buildFeishuGroupDisplayName({ chatId: params.chatId });
   const topic = params.topicLabel?.trim();
   if (topic) {
-    return `${groupLabel} ? ${topic}`;
+    return `${groupLabel} / ${topic}`;
   }
-  return `${groupLabel} ? topic:${shortFeishuTopicId(params.topicThreadId)}`;
+  return `${groupLabel} / topic:${shortFeishuTopicId(params.topicThreadId)}`;
 }
 
 export type FeishuMessageEvent = {
