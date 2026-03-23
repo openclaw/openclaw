@@ -95,4 +95,23 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     expect(updateLastRoute?.to).toBe("telegram:-1001234567890");
     expect(updateLastRoute?.threadId).toBe("99");
   });
+
+  it("passes threadId to updateLastRoute for the forum General topic", async () => {
+    const ctx = await buildCtx({
+      message: {
+        chat: { id: -1001234567890, type: "supergroup", title: "Test Group", is_forum: true },
+        text: "@bot hello",
+      },
+      options: { forceWasMentioned: true },
+      resolveGroupActivation: () => true,
+    });
+
+    expect(ctx).not.toBeNull();
+    expect(recordInboundSessionMock).toHaveBeenCalled();
+
+    const updateLastRoute = getUpdateLastRoute() as { threadId?: string; to?: string } | undefined;
+    expect(updateLastRoute).toBeDefined();
+    expect(updateLastRoute?.to).toBe("telegram:-1001234567890");
+    expect(updateLastRoute?.threadId).toBe("1");
+  });
 });
