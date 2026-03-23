@@ -10,6 +10,9 @@ const requestHeartbeatNowMock = vi.fn();
 const readAcpSessionEntryMock = vi.fn();
 const resolveSessionFilePathMock = vi.fn();
 const resolveSessionFilePathOptionsMock = vi.fn();
+const routeReplyMock = vi.fn();
+const loadSessionEntryMock = vi.fn();
+const deliveryContextFromSessionMock = vi.fn();
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
@@ -23,9 +26,21 @@ vi.mock("../acp/runtime/session-meta.js", () => ({
   readAcpSessionEntry: (...args: unknown[]) => readAcpSessionEntryMock(...args),
 }));
 
+vi.mock("../auto-reply/reply/route-reply.js", () => ({
+  routeReply: (...args: unknown[]) => routeReplyMock(...args),
+}));
+
 vi.mock("../config/sessions/paths.js", () => ({
   resolveSessionFilePath: (...args: unknown[]) => resolveSessionFilePathMock(...args),
   resolveSessionFilePathOptions: (...args: unknown[]) => resolveSessionFilePathOptionsMock(...args),
+}));
+
+vi.mock("../gateway/session-utils.js", () => ({
+  loadSessionEntry: (...args: unknown[]) => loadSessionEntryMock(...args),
+}));
+
+vi.mock("../utils/delivery-context.js", () => ({
+  deliveryContextFromSession: (...args: unknown[]) => deliveryContextFromSessionMock(...args),
 }));
 
 function collectedTexts() {
@@ -39,7 +54,20 @@ describe("startAcpSpawnParentStreamRelay", () => {
     readAcpSessionEntryMock.mockReset();
     resolveSessionFilePathMock.mockReset();
     resolveSessionFilePathOptionsMock.mockReset();
+    routeReplyMock.mockReset();
+    loadSessionEntryMock.mockReset();
+    deliveryContextFromSessionMock.mockReset();
     resolveSessionFilePathOptionsMock.mockImplementation((value: unknown) => value);
+    routeReplyMock.mockResolvedValue(undefined);
+    loadSessionEntryMock.mockReturnValue({
+      cfg: {
+        channels: {},
+      },
+      entry: {
+        sessionKey: "agent:main:main",
+      },
+    });
+    deliveryContextFromSessionMock.mockReturnValue(undefined);
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-04T01:00:00.000Z"));
   });
@@ -178,6 +206,127 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
+  it("delivers the final child output back to non-threaded direct chats", async () => {
+    deliveryContextFromSessionMock.mockReturnValue({
+      channel: "whatsapp",
+      to: "+15551234567",
+      accountId: "default",
+    });
+
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-4b",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-4b",
+      agentId: "codex",
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+    });
+
+    emitAgentEvent({
+      runId: "run-4b",
+      stream: "assistant",
+      data: {
+        delta: "hello",
+      },
+    });
+    emitAgentEvent({
+      runId: "run-4b",
+      stream: "assistant",
+      data: {
+        delta: " world",
+      },
+    });
+    vi.advanceTimersByTime(15);
+
+    emitAgentEvent({
+      runId: "run-4b",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+      },
+    });
+    await Promise.resolve();
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "whatsapp",
+        to: "+15551234567",
+        accountId: "default",
+        sessionKey: "agent:main:main",
+        payload: { text: "hello world" },
+      }),
+    );
+    relay.dispose();
+  });
+
+  it("does not direct-reply for threaded delivery contexts", async () => {
+    deliveryContextFromSessionMock.mockReturnValue({
+      channel: "slack",
+      to: "C123",
+      threadId: "thread-1",
+    });
+
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-4c",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-4c",
+      agentId: "codex",
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+    });
+
+    emitAgentEvent({
+      runId: "run-4c",
+      stream: "assistant",
+      data: {
+        delta: "thread reply should stay internal",
+      },
+    });
+    vi.advanceTimersByTime(15);
+
+    emitAgentEvent({
+      runId: "run-4c",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+      },
+    });
+    await Promise.resolve();
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    relay.dispose();
+  });
+
+  it("keeps the relay alive when parent session delivery context lookup fails", () => {
+    loadSessionEntryMock.mockImplementation(() => {
+      throw new Error("bad config");
+    });
+
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-4d",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-4d",
+      agentId: "codex",
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+    });
+
+    emitAgentEvent({
+      runId: "run-4d",
+      stream: "assistant",
+      data: {
+        delta: "still relays progress",
+      },
+    });
+    vi.advanceTimersByTime(15);
+
+    const texts = collectedTexts();
+    expect(texts.some((text) => text.includes("Started codex session"))).toBe(true);
+    expect(texts.some((text) => text.includes("codex: still relays progress"))).toBe(true);
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    relay.dispose();
+  });
+
   it("preserves delta whitespace boundaries in progress relays", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-5",
@@ -206,6 +355,42 @@ describe("startAcpSpawnParentStreamRelay", () => {
 
     const texts = collectedTexts();
     expect(texts.some((text) => text.includes("codex: hello world"))).toBe(true);
+    relay.dispose();
+  });
+
+  it("delivers direct-chat child failures back to the parent channel", async () => {
+    deliveryContextFromSessionMock.mockReturnValue({
+      channel: "telegram",
+      to: "123456",
+    });
+
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-5b",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-5b",
+      agentId: "codex",
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+    });
+
+    emitAgentEvent({
+      runId: "run-5b",
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        error: "boom",
+      },
+    });
+    await Promise.resolve();
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "123456",
+        sessionKey: "agent:main:main",
+        payload: { text: "boom" },
+      }),
+    );
     relay.dispose();
   });
 
