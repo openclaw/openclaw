@@ -11,6 +11,9 @@ const pluginSdkInternalInventoryPromise =
 const relativeOutsidePackageInventoryPromise = collectExtensionPluginSdkBoundaryInventory(
   "relative-outside-package",
 );
+const srcOutsideJsonOutputPromise = getJsonOutput("src-outside-plugin-sdk");
+const pluginSdkInternalJsonOutputPromise = getJsonOutput("plugin-sdk-internal");
+const relativeOutsidePackageJsonOutputPromise = getJsonOutput("relative-outside-package");
 
 async function getJsonOutput(
   mode: Parameters<typeof collectExtensionPluginSdkBoundaryInventory>[0],
@@ -46,19 +49,13 @@ function createCapturedIo() {
 }
 
 describe("extension src outside plugin-sdk boundary inventory", () => {
-  it("is currently empty", async () => {
+  it("stays empty and sorted", async () => {
     const inventory = await srcOutsideInventoryPromise;
+    const jsonResult = await srcOutsideJsonOutputPromise;
 
     expect(inventory).toEqual([]);
-  });
-
-  it("produces stable sorted output", async () => {
-    const first = await srcOutsideInventoryPromise;
-    const second = await srcOutsideInventoryPromise;
-
-    expect(second).toEqual(first);
     expect(
-      [...first].toSorted(
+      [...inventory].toSorted(
         (left, right) =>
           left.file.localeCompare(right.file) ||
           left.line - right.line ||
@@ -67,46 +64,33 @@ describe("extension src outside plugin-sdk boundary inventory", () => {
           left.resolvedPath.localeCompare(right.resolvedPath) ||
           left.reason.localeCompare(right.reason),
       ),
-    ).toEqual(first);
-  });
-
-  it("script json output is empty", async () => {
-    const result = await getJsonOutput("src-outside-plugin-sdk");
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe("");
-    expect(result.json).toEqual([]);
+    ).toEqual(inventory);
+    expect(jsonResult.exitCode).toBe(0);
+    expect(jsonResult.stderr).toBe("");
+    expect(jsonResult.json).toEqual([]);
   });
 });
 
 describe("extension plugin-sdk-internal boundary inventory", () => {
-  it("is currently empty", async () => {
+  it("stays empty", async () => {
     const inventory = await pluginSdkInternalInventoryPromise;
+    const jsonResult = await pluginSdkInternalJsonOutputPromise;
 
     expect(inventory).toEqual([]);
-  });
-
-  it("script json output is empty", async () => {
-    const result = await getJsonOutput("plugin-sdk-internal");
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe("");
-    expect(result.json).toEqual([]);
+    expect(jsonResult.exitCode).toBe(0);
+    expect(jsonResult.stderr).toBe("");
+    expect(jsonResult.json).toEqual([]);
   });
 });
 
 describe("extension relative-outside-package boundary inventory", () => {
-  it("is currently empty", async () => {
+  it("stays empty", async () => {
     const inventory = await relativeOutsidePackageInventoryPromise;
+    const jsonResult = await relativeOutsidePackageJsonOutputPromise;
 
     expect(inventory).toEqual([]);
-  });
-
-  it("script json output is empty", async () => {
-    const result = await getJsonOutput("relative-outside-package");
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe("");
-    expect(result.json).toEqual([]);
+    expect(jsonResult.exitCode).toBe(0);
+    expect(jsonResult.stderr).toBe("");
+    expect(jsonResult.json).toEqual([]);
   });
 });

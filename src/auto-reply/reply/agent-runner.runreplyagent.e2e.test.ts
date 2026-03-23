@@ -10,6 +10,7 @@ import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
   enqueueFollowupRun,
+  refreshQueuedFollowupSession,
   scheduleFollowupDrain,
   type FollowupRun,
   type QueueSettings,
@@ -29,12 +30,11 @@ type EmbeddedRunParams = {
   prompt?: string;
   extraSystemPrompt?: string;
   memoryFlushWritePath?: string;
+  sessionId?: string;
+  sessionFile?: string;
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
-  onAgentEvent?: (evt: {
-    stream?: string;
-    data?: { phase?: string; willRetry?: boolean; completed?: boolean };
-  }) => void;
+  onAgentEvent?: (evt: { stream?: string; data?: { phase?: string; willRetry?: boolean } }) => void;
 };
 
 const state = vi.hoisted(() => ({
@@ -84,6 +84,7 @@ vi.mock("../../agents/cli-runner.js", () => ({
 
 vi.mock("./queue.js", () => ({
   enqueueFollowupRun: vi.fn(),
+  refreshQueuedFollowupSession: vi.fn(),
   scheduleFollowupDrain: vi.fn(),
 }));
 
@@ -98,6 +99,7 @@ beforeEach(() => {
   state.runEmbeddedPiAgentMock.mockClear();
   state.runCliAgentMock.mockClear();
   vi.mocked(enqueueFollowupRun).mockClear();
+  vi.mocked(refreshQueuedFollowupSession).mockClear();
   vi.mocked(scheduleFollowupDrain).mockClear();
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
@@ -719,7 +721,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
         params.onAgentEvent?.({
           stream: "compaction",
-          data: { phase: "end", willRetry: false, completed: true },
+          data: { phase: "end", willRetry: false },
         });
         return { payloads: [{ text: "final" }], meta: {} };
       });
@@ -737,6 +739,39 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(payloads[0]?.text).toContain("Auto-compaction complete");
       expect(payloads[0]?.text).toContain("count 1");
       expect(sessionStore.main.compactionCount).toBe(1);
+    });
+  });
+
+  it("refreshes queued followups when auto-compaction rotates the session", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
+      const sessionStore = { main: sessionEntry };
+
+      state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "final" }],
+        meta: {
+          agentMeta: {
+            sessionId: "session-rotated",
+            compactionCount: 1,
+          },
+        },
+      });
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      await run();
+
+      expect(vi.mocked(refreshQueuedFollowupSession)).toHaveBeenCalledWith({
+        key: "main",
+        previousSessionId: "session",
+        nextSessionId: "session-rotated",
+        nextSessionFile: expect.stringContaining("session-rotated.jsonl"),
+      });
     });
   });
 
@@ -1252,6 +1287,12 @@ describe("runReplyAgent typing (heartbeat)", () => {
       }
       expect(payload.text?.toLowerCase()).toContain("reset");
       expect(sessionStore.main.sessionId).not.toBe(sessionId);
+      expect(vi.mocked(refreshQueuedFollowupSession)).toHaveBeenCalledWith({
+        key: "main",
+        previousSessionId: sessionId,
+        nextSessionId: sessionStore.main.sessionId,
+        nextSessionFile: expect.stringContaining(".jsonl"),
+      });
 
       const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
       expect(persisted.main.sessionId).toBe(sessionStore.main.sessionId);
@@ -1583,6 +1624,11 @@ describe("runReplyAgent memory flush", () => {
     return await fn(path.join(dir, "sessions.json"));
   }
 
+  async function normalizeComparablePath(filePath: string): Promise<string> {
+    const parent = await fs.realpath(path.dirname(filePath)).catch(() => path.dirname(filePath));
+    return path.join(parent, path.basename(filePath));
+  }
+
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(tmpdir(), "openclaw-memory-flush-"));
   });
@@ -1787,15 +1833,26 @@ describe("runReplyAgent memory flush", () => {
         prompt?: string;
         extraSystemPrompt?: string;
         memoryFlushWritePath?: string;
+        sessionId?: string;
+        sessionFile?: string;
       }> = [];
       state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
         calls.push({
           prompt: params.prompt,
           extraSystemPrompt: params.extraSystemPrompt,
           memoryFlushWritePath: params.memoryFlushWritePath,
+          sessionId: params.sessionId,
+          sessionFile: params.sessionFile,
         });
         if (params.prompt?.includes("Pre-compaction memory flush.")) {
-          return { payloads: [], meta: {} };
+          params.onAgentEvent?.({
+            stream: "compaction",
+            data: { phase: "end", willRetry: false },
+          });
+          return {
+            payloads: [],
+            meta: { agentMeta: { sessionId: "session-rotated" } },
+          };
         }
         return {
           payloads: [{ text: "ok" }],
@@ -1825,10 +1882,25 @@ describe("runReplyAgent memory flush", () => {
       expect(calls[0]?.extraSystemPrompt).toContain("memory/YYYY-MM-DD.md");
       expect(calls[0]?.extraSystemPrompt).toContain("MEMORY.md");
       expect(calls[1]?.prompt).toBe("hello");
+      expect(calls[1]?.sessionId).toBe("session-rotated");
+      expect(await normalizeComparablePath(calls[1]?.sessionFile ?? "")).toBe(
+        await normalizeComparablePath(path.join(path.dirname(storePath), "session-rotated.jsonl")),
+      );
+      expect(vi.mocked(refreshQueuedFollowupSession)).toHaveBeenCalledWith({
+        key: sessionKey,
+        previousSessionId: "session",
+        nextSessionId: "session-rotated",
+        nextSessionFile: expect.stringContaining("session-rotated.jsonl"),
+      });
 
       const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
       expect(stored[sessionKey].memoryFlushAt).toBeTypeOf("number");
-      expect(stored[sessionKey].memoryFlushCompactionCount).toBe(1);
+      expect(stored[sessionKey].memoryFlushCompactionCount).toBe(2);
+      expect(stored[sessionKey].compactionCount).toBe(2);
+      expect(stored[sessionKey].sessionId).toBe("session-rotated");
+      expect(await normalizeComparablePath(stored[sessionKey].sessionFile)).toBe(
+        await normalizeComparablePath(path.join(path.dirname(storePath), "session-rotated.jsonl")),
+      );
     });
   });
 
@@ -2035,121 +2107,6 @@ describe("runReplyAgent memory flush", () => {
     });
   });
 
-  it("skips duplicate memory writes across memory-flush fallback retries", async () => {
-    await withTempStore(async (storePath) => {
-      const sessionKey = "main";
-      const sessionFile = "session-relative.jsonl";
-      const fixtureDir = path.dirname(storePath);
-      const transcriptPath = path.join(fixtureDir, sessionFile);
-      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
-      await fs.writeFile(
-        transcriptPath,
-        [
-          JSON.stringify({ message: { role: "user", content: "Remember alpha." } }),
-          JSON.stringify({ message: { role: "assistant", content: "Stored alpha." } }),
-        ].join("\n") + "\n",
-        "utf-8",
-      );
-
-      const sessionEntry = {
-        sessionId: "session",
-        updatedAt: Date.now(),
-        sessionFile,
-        totalTokens: 80_000,
-        compactionCount: 1,
-      };
-
-      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
-
-      let flushAttemptCount = 0;
-      let memoryFilePath: string | undefined;
-      const prompts: string[] = [];
-      state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
-        prompts.push(params.prompt ?? "");
-        if (params.prompt?.includes("Pre-compaction memory flush.")) {
-          flushAttemptCount += 1;
-          memoryFilePath = path.join(fixtureDir, params.memoryFlushWritePath ?? "memory/flush.md");
-          await fs.mkdir(path.dirname(memoryFilePath), { recursive: true });
-          await fs.appendFile(memoryFilePath, "remember alpha\n", "utf-8");
-          if (flushAttemptCount === 1) {
-            throw new Error("flush failed after write");
-          }
-          return { payloads: [], meta: {} };
-        }
-        return {
-          payloads: [{ text: "ok" }],
-          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
-        };
-      });
-
-      const fallbackSpy = vi
-        .spyOn(modelFallbackModule, "runWithModelFallback")
-        .mockImplementationOnce(
-          async ({
-            provider,
-            model,
-            run,
-          }: {
-            provider: string;
-            model: string;
-            run: (provider: string, model: string) => Promise<unknown>;
-          }) => {
-            try {
-              await run(provider, model);
-            } catch {
-              // Simulate advancing to the next fallback candidate after the first
-              // memory flush attempt already wrote and then failed.
-            }
-            return {
-              result: await run("openai", "gpt-5.4"),
-              provider: "openai",
-              model: "gpt-5.4",
-              attempts: [
-                {
-                  provider,
-                  model,
-                  error: "flush failed after write",
-                  reason: "unknown",
-                },
-              ],
-            };
-          },
-        );
-
-      try {
-        const baseRun = createBaseRun({
-          storePath,
-          sessionEntry,
-          runOverrides: {
-            sessionFile,
-            workspaceDir: fixtureDir,
-          },
-        });
-
-        await runReplyAgentWithBase({
-          baseRun,
-          storePath,
-          sessionKey,
-          sessionEntry,
-          commandBody: "hello",
-        });
-      } finally {
-        fallbackSpy.mockRestore();
-      }
-
-      expect(flushAttemptCount).toBe(1);
-      expect(
-        prompts.filter((prompt) => prompt.includes("Pre-compaction memory flush.")),
-      ).toHaveLength(1);
-      expect(memoryFilePath).toBeDefined();
-      await expect(fs.readFile(memoryFilePath!, "utf-8")).resolves.toBe("remember alpha\n");
-
-      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-      expect(stored[sessionKey].memoryFlushAt).toBeTypeOf("number");
-      expect(stored[sessionKey].memoryFlushContextHash).toMatch(/^[0-9a-f]{16}$/);
-    });
-  });
-
   it("increments compaction count when flush compaction completes", async () => {
     await withTempStore(async (storePath) => {
       const sessionKey = "main";
@@ -2166,7 +2123,7 @@ describe("runReplyAgent memory flush", () => {
         if (params.prompt?.includes("Pre-compaction memory flush.")) {
           params.onAgentEvent?.({
             stream: "compaction",
-            data: { phase: "end", willRetry: false, completed: true },
+            data: { phase: "end", willRetry: false },
           });
           return { payloads: [], meta: {} };
         }

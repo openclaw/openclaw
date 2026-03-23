@@ -97,7 +97,6 @@ async function expectActiveInProcessLockIsNotReclaimed(params?: {
 describe("acquireSessionWriteLock", () => {
   it("reuses locks across symlinked session paths", async () => {
     if (process.platform === "win32") {
-      expect(true).toBe(true);
       return;
     }
 
@@ -110,12 +109,24 @@ describe("acquireSessionWriteLock", () => {
 
       const sessionReal = path.join(realDir, "sessions.json");
       const sessionLink = path.join(linkDir, "sessions.json");
+      const realLockPath = `${sessionReal}.lock`;
+      const linkLockPath = `${sessionLink}.lock`;
 
       const lockA = await acquireSessionWriteLock({ sessionFile: sessionReal, timeoutMs: 500 });
       const lockB = await acquireSessionWriteLock({ sessionFile: sessionLink, timeoutMs: 500 });
 
-      await lockB.release();
-      await lockA.release();
+      await expect(fs.access(realLockPath)).resolves.toBeUndefined();
+      await expect(fs.access(linkLockPath)).resolves.toBeUndefined();
+      const [realCanonicalLockPath, linkCanonicalLockPath] = await Promise.all([
+        fs.realpath(realLockPath),
+        fs.realpath(linkLockPath),
+      ]);
+      expect(linkCanonicalLockPath).toBe(realCanonicalLockPath);
+      await expectLockRemovedOnlyAfterFinalRelease({
+        lockPath: realLockPath,
+        firstLock: lockA,
+        secondLock: lockB,
+      });
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

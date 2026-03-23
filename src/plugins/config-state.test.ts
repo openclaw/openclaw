@@ -84,7 +84,7 @@ describe("normalizePluginsConfig", () => {
         "voice-call": {
           subagent: {
             allowModelOverride: true,
-            allowedModels: [" anthropic/claude-haiku-4-5 ", "", "openai/gpt-4.1-mini"],
+            allowedModels: [" anthropic/claude-sonnet-4-6 ", "", "openai/gpt-5.4"],
           },
         },
       },
@@ -92,7 +92,7 @@ describe("normalizePluginsConfig", () => {
     expect(result.entries["voice-call"]?.subagent).toEqual({
       allowModelOverride: true,
       hasAllowedModelsConfig: true,
-      allowedModels: ["anthropic/claude-haiku-4-5", "openai/gpt-4.1-mini"],
+      allowedModels: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4"],
     });
   });
 

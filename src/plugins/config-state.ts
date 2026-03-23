@@ -34,6 +34,7 @@ export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
   "brave",
   "byteplus",
   "cloudflare-ai-gateway",
+  "deepseek",
   "device-pair",
   "github-copilot",
   "google",

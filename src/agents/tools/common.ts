@@ -214,16 +214,46 @@ export function readReactionParams(
   return { emoji, remove, isEmpty: !emoji };
 }
 
-export function jsonResult(payload: unknown): AgentToolResult<unknown> {
+export function stringifyToolPayload(payload: unknown): string {
+  if (typeof payload === "string") {
+    return payload;
+  }
+  try {
+    const encoded = JSON.stringify(payload, null, 2);
+    if (typeof encoded === "string") {
+      return encoded;
+    }
+  } catch {
+    // Fall through to String(payload) for non-serializable values.
+  }
+  return String(payload);
+}
+
+export function textResult<TDetails>(text: string, details: TDetails): AgentToolResult<TDetails> {
   return {
     content: [
       {
         type: "text",
-        text: JSON.stringify(payload, null, 2),
+        text,
       },
     ],
-    details: payload,
+    details,
   };
+}
+
+export function failedTextResult<TDetails extends { status: "failed" }>(
+  text: string,
+  details: TDetails,
+): AgentToolResult<TDetails> {
+  return textResult(text, details);
+}
+
+export function payloadTextResult<TDetails>(payload: TDetails): AgentToolResult<TDetails> {
+  return textResult(stringifyToolPayload(payload), payload);
+}
+
+export function jsonResult(payload: unknown): AgentToolResult<unknown> {
+  return textResult(JSON.stringify(payload, null, 2), payload);
 }
 
 export function wrapOwnerOnlyToolExecution(
