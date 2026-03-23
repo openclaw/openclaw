@@ -85,8 +85,9 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
   - `pnpm release:check`
   - `OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke`
 - Check all release-related build surfaces touched by the release, not only the npm package.
-- Include mac release readiness in preflight by running or inspecting the mac
-  packaging, notarization, and appcast flow for every release.
+- Include mac release readiness in preflight by running the public validation
+  workflow in `openclaw/openclaw` and the real mac preflight in
+  `openclaw/releases-private` for every release.
 - Treat the `appcast.xml` update on `main` as part of mac release readiness, not an optional follow-up.
 - The workflows remain tag-based. The agent is responsible for making sure
   preflight runs complete successfully before any publish run starts.
@@ -104,34 +105,42 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
 
 - OpenClaw publish uses GitHub trusted publishing.
 - The publish run must be started manually with `workflow_dispatch`.
-- Both release workflows accept `preflight_only=true` to run CI
-  validation/build steps without entering the gated publish job.
+- The npm workflow and the private mac publish workflow accept
+  `preflight_only=true` to run validation/build/package steps without uploading
+  public release assets.
 - `preflight_only=true` on the npm workflow is also the right way to validate an
   existing tag after publish; it should keep running the build checks even when
   the npm version is already published.
 - Validation-only runs may be dispatched from a branch when you are testing a
   workflow change before merge.
-- macOS release workflows run on GitHub's xlarge macOS runner and use a
+- `.github/workflows/macos-release.yml` in `openclaw/openclaw` is now a
+  public validation-only handoff. It validates the tag/release state and points
+  operators to the private repo; it does not build or publish macOS artifacts.
+- Real mac preflight and real mac publish both use
+  `openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml`.
+- The private mac workflow runs on GitHub's xlarge macOS runner and uses a
   SwiftPM cache because the Swift build/test/package path is CPU-heavy.
-- macOS preflight uploads the ad-hoc `.zip` output as a workflow artifact so
-  maintainers can download and inspect the built package before any real
-  publish run.
-- npm preflight and macOS preflight must both pass before any publish run
-  starts.
+- Private mac preflight uploads notarized build artifacts as workflow artifacts
+  instead of uploading public GitHub release assets.
+- npm preflight, public mac validation, and private mac preflight must all pass
+  before any real publish run starts.
 - Real publish runs must be dispatched from `main`; branch-dispatched publish
   attempts should fail before the protected environment is reached.
 - The release workflows stay tag-based; rely on the documented release sequence
   rather than workflow-level SHA pinning.
 - The `npm-release` environment must be approved by `@openclaw/openclaw-release-managers` before publish continues.
-- Mac publish uses `.github/workflows/macos-release.yml` for build, signing,
-  notarization, stable-feed `appcast.xml` artifact generation, and release-asset
-  upload.
+- Mac publish uses
+  `openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml` for
+  build, signing, notarization, stable-feed `appcast.xml` artifact generation,
+  and release-asset upload.
 - The agent must download the signed `appcast.xml` artifact from a successful
-  stable mac workflow and then update `appcast.xml` on `main`.
+  stable private mac workflow and then update `appcast.xml` on `main`.
 - For beta mac releases, do not update the shared production `appcast.xml`
   unless a separate beta Sparkle feed exists.
-- `.github/workflows/macos-release.yml` still requires the `mac-release`
-  environment approval.
+- The private repo targets a dedicated `mac-release` environment. If the GitHub
+  plan does not yet support required reviewers there, do not assume the
+  environment alone is the approval boundary; rely on private repo access and
+  CODEOWNERS until those settings can be enabled.
 - Do not use `NPM_TOKEN` or the plugin OTP flow for OpenClaw releases.
 - `@openclaw/*` plugin publishes use a separate maintainer-only flow.
 - Only publish plugins that already exist on npm; bundled disk-tree-only plugins stay unpublished.
@@ -165,25 +174,27 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
 8. Create or refresh the matching GitHub release.
 9. Start `.github/workflows/openclaw-npm-release.yml` with `preflight_only=true`
    and wait for it to pass.
-10. Start `.github/workflows/macos-release.yml` with `preflight_only=true` and
-    wait for it to pass.
-11. If either preflight fails, fix the issue on a new commit, delete the tag
-    and matching GitHub release, recreate them from the fixed commit, and rerun
-    both preflights from scratch before continuing. Never reuse old preflight
-    results after the commit changes.
-12. Start `.github/workflows/openclaw-npm-release.yml` with the same tag for
+10. Start `.github/workflows/macos-release.yml` in `openclaw/openclaw` and wait
+    for the public validation-only run to pass.
+11. Start
+    `openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml`
+    with `preflight_only=true` and wait for it to pass.
+12. If any preflight or validation run fails, fix the issue on a new commit,
+    delete the tag and matching GitHub release, recreate them from the fixed
+    commit, and rerun all relevant preflights from scratch before continuing.
+    Never reuse old preflight results after the commit changes.
+13. Start `.github/workflows/openclaw-npm-release.yml` with the same tag for
     the real publish.
-13. Wait for `npm-release` approval from `@openclaw/openclaw-release-managers`.
-14. Start `.github/workflows/macos-release.yml` for the real publish and wait
-    for `mac-release` approval and success.
-15. For stable releases, let the mac workflow generate the signed
-    `appcast.xml` artifact before it uploads the public mac assets, then
-    download that artifact from the successful run, update `appcast.xml` on
-    `main`, and verify the feed.
-16. For beta releases, publish the mac assets but expect no shared production
+14. Wait for `npm-release` approval from `@openclaw/openclaw-release-managers`.
+15. Start
+    `openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml`
+    for the real publish and wait for success.
+16. For stable releases, download `macos-appcast-<tag>` from the successful
+    private mac run, update `appcast.xml` on `main`, and verify the feed.
+17. For beta releases, publish the mac assets but expect no shared production
     `appcast.xml` artifact and do not update the shared production feed unless a
     separate beta feed exists.
-17. After publish, verify npm and any attached release artifacts.
+18. After publish, verify npm and any attached release artifacts.
 
 ## GHSA advisory work
 
