@@ -39,6 +39,7 @@ returns results. Results are cached by query for 15 minutes (configurable).
     ```javascript
     await web_search({ query: "OpenClaw plugin SDK" });
     ```
+
   </Step>
 </Steps>
 
@@ -214,6 +215,7 @@ Provider-specific config lives under
       },
     }
     ```
+
   </Tab>
   <Tab title="Environment variable">
     Set the provider env var in the Gateway process environment:
@@ -221,5 +223,6 @@ Provider-specific config lives under
     ```bash
     export BRAVE_API_KEY="YOUR_KEY"
     ```
+
   </Tab>
 </Tabs>
