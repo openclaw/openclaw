@@ -76,6 +76,20 @@ function getPackageRoot() {
   return path.resolve(__dirname, "..", "..");
 }
 
+function findDistChunkByPrefix(prefix) {
+  const distRoot = path.join(getPackageRoot(), "dist");
+  try {
+    const entries = fs.readdirSync(distRoot, { withFileTypes: true });
+    const match = entries.find(
+      (entry) =>
+        entry.isFile() && entry.name.startsWith(`${prefix}-`) && entry.name.endsWith(".js"),
+    );
+    return match ? path.join(distRoot, match.name) : null;
+  } catch {
+    return null;
+  }
+}
+
 function listPluginSdkExportedSubpaths() {
   const packageRoot = getPackageRoot();
   if (pluginSdkSubpathsCache.has(packageRoot)) {
@@ -157,7 +171,7 @@ function loadDiagnosticEventsModule() {
     return diagnosticEventsModule;
   }
 
-  const distCandidate = path.resolve(
+  const directDistCandidate = path.resolve(
     __dirname,
     "..",
     "..",
@@ -165,12 +179,17 @@ function loadDiagnosticEventsModule() {
     "infra",
     "diagnostic-events.js",
   );
-  if (!shouldPreferSourceInTests && fs.existsSync(distCandidate)) {
-    try {
-      diagnosticEventsModule = getJiti(true)(distCandidate);
-      return diagnosticEventsModule;
-    } catch {
-      // Fall through to source path if dist is unavailable or stale.
+  if (!shouldPreferSourceInTests) {
+    const distCandidate =
+      (fs.existsSync(directDistCandidate) && directDistCandidate) ||
+      findDistChunkByPrefix("diagnostic-events");
+    if (distCandidate) {
+      try {
+        diagnosticEventsModule = getJiti(true)(distCandidate);
+        return diagnosticEventsModule;
+      } catch {
+        // Fall through to source path if dist is unavailable or stale.
+      }
     }
   }
 

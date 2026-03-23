@@ -22,6 +22,7 @@ type EmptySchema = {
 
 function loadRootAliasWithStubs(options?: {
   distExists?: boolean;
+  distEntries?: string[];
   env?: Record<string, string | undefined>;
   monolithicExports?: Record<string | symbol, unknown>;
   aliasPath?: string;
@@ -62,7 +63,18 @@ function loadRootAliasWithStubs(options?: {
               "./plugin-sdk/group-access": { default: "./dist/plugin-sdk/group-access.js" },
             },
           }),
-        existsSync: () => options?.distExists ?? false,
+        existsSync: (targetPath: string) => {
+          if (targetPath.endsWith(path.join("dist", "infra", "diagnostic-events.js"))) {
+            return options?.distExists ?? false;
+          }
+          return options?.distExists ?? false;
+        },
+        readdirSync: () =>
+          (options?.distEntries ?? []).map((name) => ({
+            name,
+            isFile: () => true,
+            isDirectory: () => false,
+          })),
       };
     }
     if (id === "jiti") {
@@ -199,6 +211,32 @@ describe("plugin-sdk root alias", () => {
       ),
     ).toBe("function");
     expect(lazyModule.loadedSpecifiers).toContain(
+      path.join(packageRoot, "src", "infra", "diagnostic-events.ts"),
+    );
+  });
+
+  it("prefers hashed dist diagnostic events chunks before falling back to src", () => {
+    const packageRoot = path.dirname(path.dirname(rootAliasPath));
+    const distAliasPath = path.join(packageRoot, "dist", "plugin-sdk", "root-alias.cjs");
+    const lazyModule = loadRootAliasWithStubs({
+      aliasPath: distAliasPath,
+      distExists: false,
+      distEntries: ["diagnostic-events-W3Hz61fI.js"],
+      monolithicExports: {
+        onDiagnosticEvent: () => () => undefined,
+        slowHelper: () => "loaded",
+      },
+    });
+
+    expect(
+      typeof (lazyModule.moduleExports.onDiagnosticEvent as (listener: () => void) => () => void)(
+        () => undefined,
+      ),
+    ).toBe("function");
+    expect(lazyModule.loadedSpecifiers).toContain(
+      path.join(packageRoot, "dist", "diagnostic-events-W3Hz61fI.js"),
+    );
+    expect(lazyModule.loadedSpecifiers).not.toContain(
       path.join(packageRoot, "src", "infra", "diagnostic-events.ts"),
     );
   });
