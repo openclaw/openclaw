@@ -2061,7 +2061,7 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
-  it("prefers explicit quoted replies over topic-root replies in topic-sender groups", async () => {
+  it("keeps topic-root replies in topic-sender groups even when parent_id is present", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
     const cfg: ClawdbotConfig = {
@@ -2095,8 +2095,8 @@ describe("handleFeishuMessage command authorization", () => {
 
     expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
-        replyToMessageId: "om_topic_explicit_reply",
-        replyInThread: false,
+        replyToMessageId: "om_topic_sender_root",
+        replyInThread: true,
         rootId: "om_topic_sender_root",
       }),
     );

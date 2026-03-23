@@ -106,6 +106,11 @@ function resolveRequesterSessionThreadId(
   sessionKey: string | undefined,
   explicitThreadId: string | number | undefined,
 ): string | number | undefined {
+  // Unlike subagent spawns, ACP thread bindings intentionally preserve
+  // sender-scoped Feishu topic roots recovered from the requester session key.
+  // ACP delivery is mediated by conversation bindings, so retaining the topic
+  // thread id keeps the binding attached to the current Feishu topic instead of
+  // degrading to the parent group conversation.
   return explicitThreadId ?? resolveSessionThreadIdForRouting(sessionKey);
 }
 
