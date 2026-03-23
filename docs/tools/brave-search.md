@@ -90,4 +90,8 @@ await web_search({
 - The Search plan includes the LLM Context endpoint and AI inference rights. Storing results to train or tune models requires a plan with explicit storage rights. See the Brave [Terms of Service](https://api-dashboard.search.brave.com/terms-of-service).
 - Results are cached for 15 minutes by default (configurable via `cacheTtlMinutes`).
 
-See [Web tools](/tools/web) for the full web_search configuration.
+## Related
+
+- [Web Search overview](/tools/web) -- all providers and auto-detection
+- [Perplexity Search](/tools/perplexity-search) -- structured results with domain filtering
+- [Exa Search](/tools/exa-search) -- neural search with content extraction

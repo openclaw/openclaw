@@ -52,6 +52,9 @@ returns results. Results are cached by query for 15 minutes (configurable).
   <Card title="DuckDuckGo" icon="bird" href="/tools/duckduckgo-search">
     Key-free fallback. No API key needed. Unofficial HTML-based integration.
   </Card>
+  <Card title="Exa" icon="brain" href="/tools/exa-search">
+    Neural + keyword search with content extraction (highlights, text, summaries).
+  </Card>
   <Card title="Firecrawl" icon="flame" href="/tools/firecrawl">
     Structured results. Best paired with `firecrawl_search` and `firecrawl_scrape` for deep extraction.
   </Card>
@@ -78,6 +81,7 @@ returns results. Results are cached by query for 15 minutes (configurable).
 | -------------------------------------- | -------------------------- | ------------------------------------------------ | ------------------------------------------- |
 | [Brave](/tools/brave-search)           | Structured snippets        | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                             |
 | [DuckDuckGo](/tools/duckduckgo-search) | Structured snippets        | --                                               | None (key-free)                             |
+| [Exa](/tools/exa-search)               | Structured + extracted     | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                               |
 | [Firecrawl](/tools/firecrawl)          | Structured snippets        | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                         |
 | [Gemini](/tools/gemini-search)         | AI-synthesized + citations | --                                               | `GEMINI_API_KEY`                            |
 | [Grok](/tools/grok-search)             | AI-synthesized + citations | --                                               | `XAI_API_KEY`                               |
