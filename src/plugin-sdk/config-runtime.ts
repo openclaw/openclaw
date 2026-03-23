@@ -7,6 +7,8 @@ export {
   readConfigFileSnapshotForWrite,
   writeConfigFile,
 } from "../config/io.js";
+export { logConfigUpdated } from "../config/logging.js";
+export { updateConfig } from "../commands/models/shared.js";
 export { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 export {
   resolveChannelGroupPolicy,

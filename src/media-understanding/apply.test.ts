@@ -246,20 +246,22 @@ describe("applyMediaUnderstanding", () => {
     vi.doMock("../process/exec.js", () => ({
       runExec: runExecMock,
     }));
-    vi.doMock("./providers/index.js", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("./providers/index.js")>();
-      const { deepgramProvider } =
-        await import("../../extensions/deepgram/media-understanding-provider.js");
-      const { groqProvider } =
-        await import("../../extensions/groq/media-understanding-provider.js");
+    vi.doMock("./provider-registry.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./provider-registry.js")>();
+      const { deepgramMediaUnderstandingProvider } = await import(
+        "../../extensions/deepgram/media-understanding-provider.js"
+      );
+      const { groqMediaUnderstandingProvider } = await import(
+        "../../extensions/groq/media-understanding-provider.js"
+      );
       return {
         ...actual,
         buildMediaUnderstandingRegistry: (
           overrides?: Record<string, MediaUnderstandingProvider>,
         ) => {
           const registry = new Map<string, MediaUnderstandingProvider>([
-            ["groq", groqProvider],
-            ["deepgram", deepgramProvider],
+            ["groq", groqMediaUnderstandingProvider],
+            ["deepgram", deepgramMediaUnderstandingProvider],
           ]);
           for (const [key, provider] of Object.entries(overrides ?? {})) {
             const normalizedKey = actual.normalizeMediaProviderId(key);

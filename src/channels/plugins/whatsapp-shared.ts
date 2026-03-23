@@ -1,8 +1,8 @@
 import { resolveOutboundSendDep } from "../../infra/outbound/send-deps.js";
 import { createAttachedChannelResultAdapter } from "../../plugin-sdk/channel-send-result.js";
+import { resolveWhatsAppOutboundTarget } from "../../plugin-sdk/whatsapp-core.js";
 import type { PluginRuntimeChannel } from "../../plugins/runtime/types-channel.js";
 import { escapeRegExp } from "../../utils.js";
-import { resolveWhatsAppOutboundTarget } from "../../whatsapp/resolve-outbound-target.js";
 import type { ChannelOutboundAdapter } from "./types.js";
 
 export const WHATSAPP_GROUP_INTRO_HINT =

@@ -1,42 +1,63 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { listMicrosoftVoices } from "./speech-provider.js";
 
-const fetchMock = vi.fn<typeof fetch>();
-
 describe("listMicrosoftVoices", () => {
+  const originalFetch = globalThis.fetch;
+
   afterEach(() => {
-    fetchMock.mockReset();
-    vi.unstubAllGlobals();
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
   });
 
-  it("maps Microsoft voices to the shared speech voice shape", async () => {
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: async () => [
-        {
-          ShortName: "en-US-AvaMultilingualNeural",
-          FriendlyName: "Microsoft Ava",
-          Locale: "en-US",
-          Gender: "Female",
-          VoiceTag: {
-            ContentCategories: ["General"],
-            VoicePersonalities: ["Friendly", "Warm"],
+  it("maps Microsoft voice metadata into speech voice options", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            ShortName: "en-US-AvaNeural",
+            FriendlyName: "Microsoft Ava Online (Natural) - English (United States)",
+            Locale: "en-US",
+            Gender: "Female",
+            VoiceTag: {
+              ContentCategories: ["General"],
+              VoicePersonalities: ["Friendly", "Positive"],
+            },
           },
-        },
-      ],
-    } as Response);
-    vi.stubGlobal("fetch", fetchMock);
+        ]),
+        { status: 200 },
+      ),
+    ) as typeof globalThis.fetch;
 
-    await expect(listMicrosoftVoices()).resolves.toEqual([
+    const voices = await listMicrosoftVoices();
+
+    expect(voices).toEqual([
       {
-        id: "en-US-AvaMultilingualNeural",
-        name: "Microsoft Ava",
+        id: "en-US-AvaNeural",
+        name: "Microsoft Ava Online (Natural) - English (United States)",
         category: "General",
-        description: "Friendly, Warm",
+        description: "Friendly, Positive",
         locale: "en-US",
         gender: "Female",
-        personalities: ["Friendly", "Warm"],
+        personalities: ["Friendly", "Positive"],
       },
     ]);
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/voices/list?trustedclienttoken="),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Origin: "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold",
+          "Sec-MS-GEC": expect.any(String),
+          "Sec-MS-GEC-Version": expect.stringContaining("1-"),
+        }),
+      }),
+    );
+  });
+
+  it("throws on Microsoft voice list failures", async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue(new Response("nope", { status: 503 })) as typeof globalThis.fetch;
+
+    await expect(listMicrosoftVoices()).rejects.toThrow("Microsoft voices API error (503)");
   });
 });
