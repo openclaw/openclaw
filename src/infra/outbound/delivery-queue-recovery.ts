@@ -161,6 +161,8 @@ export async function recoverPendingDeliveries(opts: {
   isChannelConnected?: (channel: string, accountId?: string) => boolean;
   /** Abort signal — checked between entries so an in-flight sweep can be cancelled on shutdown. */
   abortSignal?: AbortSignal;
+  /** When true, remaining entries after time budget are left for the next sweep without burning retries. */
+  periodicTimer?: boolean;
 }): Promise<RecoverySummary> {
   const pending = await loadPendingDeliveries(opts.stateDir);
   if (pending.length === 0) {
@@ -183,7 +185,13 @@ export async function recoverPendingDeliveries(opts: {
     const now = Date.now();
     if (now >= deadline) {
       opts.log.warn(`Recovery time budget exceeded — remaining entries deferred to next sweep`);
-      await deferRemainingEntriesForBudget(pending.slice(i), opts.stateDir);
+      // When called from a periodic timer, remaining entries will be retried on
+      // the next sweep — don't bump retryCount or they'll burn through MAX_RETRIES
+      // in minutes. Only bump for one-shot startup recovery where there's no timer
+      // to pick them up later.
+      if (!opts.periodicTimer) {
+        await deferRemainingEntriesForBudget(pending.slice(i), opts.stateDir);
+      }
       break;
     }
 
@@ -295,6 +303,7 @@ export function startDeliveryRecoveryTimer(opts: {
         stateDir: opts.stateDir,
         isChannelConnected: opts.isChannelConnected,
         abortSignal: sweepAbort.signal,
+        periodicTimer: true,
       });
     } catch (err) {
       opts.log.error(`Delivery recovery sweep failed: ${String(err)}`);
