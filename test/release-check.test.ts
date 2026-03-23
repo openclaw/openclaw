@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { listPluginSdkDistArtifacts } from "../scripts/lib/plugin-sdk-entries.mjs";
 import {
   collectAppcastSparkleVersionErrors,
   collectBundledExtensionManifestErrors,
@@ -14,6 +15,8 @@ function makeItem(shortVersion: string, sparkleVersion: string): string {
 function makePackResult(filename: string, unpackedSize: number) {
   return { filename, unpackedSize };
 }
+
+const requiredPluginSdkPackPaths = [...listPluginSdkDistArtifacts(), "dist/plugin-sdk/compat.js"];
 
 describe("collectAppcastSparkleVersionErrors", () => {
   it("accepts legacy 9-digit calver builds before lane-floor cutover", () => {
@@ -117,17 +120,65 @@ describe("collectForbiddenPackPaths", () => {
 });
 
 describe("collectMissingPackPaths", () => {
-  it("requires the shipped channel catalog in npm pack output", () => {
+  it("requires the shipped channel catalog, control ui, and optional bundled metadata", () => {
+    const missing = collectMissingPackPaths([
+      "dist/index.js",
+      "dist/entry.js",
+      "dist/plugin-sdk/compat.js",
+      "dist/plugin-sdk/index.js",
+      "dist/plugin-sdk/index.d.ts",
+      "dist/plugin-sdk/root-alias.cjs",
+      "dist/build-info.json",
+    ]);
+
+    expect(missing).toEqual(
+      expect.arrayContaining([
+        "dist/channel-catalog.json",
+        "dist/control-ui/index.html",
+        "dist/extensions/matrix/openclaw.plugin.json",
+        "dist/extensions/matrix/package.json",
+        "dist/extensions/whatsapp/openclaw.plugin.json",
+        "dist/extensions/whatsapp/package.json",
+      ]),
+    );
+  });
+
+  it("accepts the shipped upgrade surface when optional bundled metadata is present", () => {
     expect(
       collectMissingPackPaths([
         "dist/index.js",
         "dist/entry.js",
-        "dist/plugin-sdk/index.js",
-        "dist/plugin-sdk/index.d.ts",
+        "dist/control-ui/index.html",
+        "dist/extensions/acpx/openclaw.plugin.json",
+        "dist/extensions/acpx/package.json",
+        "dist/extensions/diagnostics-otel/openclaw.plugin.json",
+        "dist/extensions/diagnostics-otel/package.json",
+        "dist/extensions/diffs/openclaw.plugin.json",
+        "dist/extensions/diffs/package.json",
+        "dist/extensions/googlechat/openclaw.plugin.json",
+        "dist/extensions/googlechat/package.json",
+        "dist/extensions/matrix/openclaw.plugin.json",
+        "dist/extensions/matrix/package.json",
+        "dist/extensions/memory-lancedb/openclaw.plugin.json",
+        "dist/extensions/memory-lancedb/package.json",
+        "dist/extensions/msteams/openclaw.plugin.json",
+        "dist/extensions/msteams/package.json",
+        "dist/extensions/nostr/openclaw.plugin.json",
+        "dist/extensions/nostr/package.json",
+        "dist/extensions/tlon/openclaw.plugin.json",
+        "dist/extensions/tlon/package.json",
+        "dist/extensions/twitch/openclaw.plugin.json",
+        "dist/extensions/twitch/package.json",
+        "dist/extensions/whatsapp/openclaw.plugin.json",
+        "dist/extensions/whatsapp/package.json",
+        "dist/extensions/zalouser/openclaw.plugin.json",
+        "dist/extensions/zalouser/package.json",
+        ...requiredPluginSdkPackPaths,
         "dist/plugin-sdk/root-alias.cjs",
         "dist/build-info.json",
+        "dist/channel-catalog.json",
       ]),
-    ).toContain("dist/channel-catalog.json");
+    ).toEqual([]);
   });
 });
 
@@ -142,7 +193,7 @@ describe("collectPackUnpackedSizeErrors", () => {
     expect(
       collectPackUnpackedSizeErrors([makePackResult("openclaw-2026.3.12.tgz", 224_002_564)]),
     ).toEqual([
-      "openclaw-2026.3.12.tgz unpackedSize 224002564 bytes (213.6 MiB) exceeds budget 167772160 bytes (160.0 MiB). Investigate duplicate channel shims, copied extension trees, or other accidental pack bloat before release.",
+      "openclaw-2026.3.12.tgz unpackedSize 224002564 bytes (213.6 MiB) exceeds budget 184549376 bytes (176.0 MiB). Investigate duplicate channel shims, copied extension trees, or other accidental pack bloat before release.",
     ]);
   });
 

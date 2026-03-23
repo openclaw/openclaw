@@ -31,9 +31,9 @@ const requiredPathGroups = [
 ];
 const forbiddenPrefixes = ["dist-runtime/", "dist/OpenClaw.app/"];
 // 2026.3.12 ballooned to ~213.6 MiB unpacked and correlated with low-memory
-// startup/doctor OOM reports. Keep enough headroom for the current pack while
-// failing fast if duplicate/shim content sneaks back into the release artifact.
-const npmPackUnpackedSizeBudgetBytes = 160 * 1024 * 1024;
+// startup/doctor OOM reports. Keep enough headroom for the current pack with
+// restored bundled upgrade surfaces while still catching regressions quickly.
+const npmPackUnpackedSizeBudgetBytes = 176 * 1024 * 1024;
 const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
