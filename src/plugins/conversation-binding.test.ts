@@ -111,18 +111,16 @@ vi.mock("./runtime.js", () => ({
   },
 }));
 
-const {
-  __testing,
-  buildPluginBindingApprovalCustomId,
-  detachPluginConversationBinding,
-  getCurrentPluginConversationBinding,
-  parsePluginBindingApprovalCustomId,
-  requestPluginConversationBinding,
-  resolvePluginConversationBindingApproval,
-} = await import("./conversation-binding.js");
-const { registerSessionBindingAdapter, unregisterSessionBindingAdapter } =
-  await import("../infra/outbound/session-binding-service.js");
-const { setActivePluginRegistry } = await import("./runtime.js");
+let __testing: typeof import("./conversation-binding.js").__testing;
+let buildPluginBindingApprovalCustomId: typeof import("./conversation-binding.js").buildPluginBindingApprovalCustomId;
+let detachPluginConversationBinding: typeof import("./conversation-binding.js").detachPluginConversationBinding;
+let getCurrentPluginConversationBinding: typeof import("./conversation-binding.js").getCurrentPluginConversationBinding;
+let parsePluginBindingApprovalCustomId: typeof import("./conversation-binding.js").parsePluginBindingApprovalCustomId;
+let requestPluginConversationBinding: typeof import("./conversation-binding.js").requestPluginConversationBinding;
+let resolvePluginConversationBindingApproval: typeof import("./conversation-binding.js").resolvePluginConversationBindingApproval;
+let registerSessionBindingAdapter: typeof import("../infra/outbound/session-binding-service.js").registerSessionBindingAdapter;
+let unregisterSessionBindingAdapter: typeof import("../infra/outbound/session-binding-service.js").unregisterSessionBindingAdapter;
+let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
 
 type PluginBindingRequest = Awaited<ReturnType<typeof requestPluginConversationBinding>>;
 type ConversationBindingModule = typeof import("./conversation-binding.js");
@@ -187,7 +185,38 @@ function createDeferredVoid(): { promise: Promise<void>; resolve: () => void } {
 }
 
 describe("plugin conversation binding approvals", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.doMock("../infra/home-dir.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../infra/home-dir.js")>();
+      return {
+        ...actual,
+        expandHomePrefix: (value: string) => {
+          if (value === "~/.openclaw/plugin-binding-approvals.json") {
+            return approvalsPath;
+          }
+          return actual.expandHomePrefix(value);
+        },
+      };
+    });
+    vi.doMock("./runtime.js", () => ({
+      getActivePluginRegistry: () => pluginRuntimeState.registry,
+      setActivePluginRegistry: (registry: PluginRegistry) => {
+        pluginRuntimeState.registry = registry;
+      },
+    }));
+    ({
+      __testing,
+      buildPluginBindingApprovalCustomId,
+      detachPluginConversationBinding,
+      getCurrentPluginConversationBinding,
+      parsePluginBindingApprovalCustomId,
+      requestPluginConversationBinding,
+      resolvePluginConversationBindingApproval,
+    } = await import("./conversation-binding.js"));
+    ({ registerSessionBindingAdapter, unregisterSessionBindingAdapter } =
+      await import("../infra/outbound/session-binding-service.js"));
+    ({ setActivePluginRegistry } = await import("./runtime.js"));
     sessionBindingState.reset();
     __testing.reset();
     setActivePluginRegistry(createEmptyPluginRegistry());

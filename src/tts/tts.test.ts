@@ -1,5 +1,5 @@
 import { completeSimple, type AssistantMessage } from "@mariozechner/pi-ai";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildElevenLabsSpeechProvider } from "../../extensions/elevenlabs/speech-provider.ts";
 import { buildMicrosoftSpeechProvider } from "../../extensions/microsoft/speech-provider.ts";
 import { buildOpenAISpeechProvider } from "../../extensions/openai/speech-provider.ts";
@@ -401,7 +401,44 @@ describe("tts", () => {
       messages: { tts: {} },
     };
 
-    beforeAll(async () => {
+    beforeEach(async () => {
+      vi.resetModules();
+      vi.doMock("@mariozechner/pi-ai", async (importOriginal) => {
+        const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+        return {
+          ...original,
+          completeSimple: vi.fn(),
+        };
+      });
+      vi.doMock("@mariozechner/pi-ai/oauth", async () => {
+        const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
+          "@mariozechner/pi-ai/oauth",
+        );
+        return {
+          ...actual,
+          getOAuthProviders: () => [],
+          getOAuthApiKey: vi.fn(async () => null),
+        };
+      });
+      vi.doMock("../agents/pi-embedded-runner/model.js", () => ({
+        resolveModel: vi.fn((provider: string, modelId: string) =>
+          createResolvedModel(provider, modelId),
+        ),
+        resolveModelAsync: vi.fn(async (provider: string, modelId: string) =>
+          createResolvedModel(provider, modelId),
+        ),
+      }));
+      vi.doMock("../agents/model-auth.js", () => ({
+        getApiKeyForModel: vi.fn(async () => ({
+          apiKey: "test-api-key",
+          source: "test",
+          mode: "api-key",
+        })),
+        requireApiKey: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? ""),
+      }));
+      vi.doMock("../agents/custom-api-registry.js", () => ({
+        ensureCustomApiRegistered: vi.fn(),
+      }));
       ({ completeSimple: completeSimpleForTest } = await import("@mariozechner/pi-ai"));
       ({ getApiKeyForModel: getApiKeyForModelForTest } = await import("../agents/model-auth.js"));
       ({ resolveModelAsync: resolveModelAsyncForTest } =
@@ -411,9 +448,6 @@ describe("tts", () => {
       const ttsModule = await import("./tts.js");
       summarizeTextForTest = ttsModule._test.summarizeText;
       resolveTtsConfigForTest = ttsModule.resolveTtsConfig;
-    });
-
-    beforeEach(() => {
       vi.mocked(completeSimpleForTest).mockResolvedValue(
         mockAssistantMessage([{ type: "text", text: "Summary" }]),
       );
