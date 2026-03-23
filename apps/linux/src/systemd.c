@@ -64,6 +64,41 @@ static gint sort_marked_units(gconstpointer a, gconstpointer b) {
     return g_strcmp0(*(const gchar **)a, *(const gchar **)b);
 }
 
+static void get_unit_preference_score(const gchar *candidate, gboolean *out_active, gboolean *out_enabled) {
+    gboolean active = FALSE, enabled = FALSE;
+    if (manager_proxy) {
+        g_autoptr(GError) err1 = NULL;
+        g_autoptr(GVariant) fs_res = g_dbus_proxy_call_sync(manager_proxy, "GetUnitFileState", 
+                                                            g_variant_new("(s)", candidate), 
+                                                            G_DBUS_CALL_FLAGS_NONE, -1, NULL, &err1);
+        if (fs_res) {
+            const gchar *state_str = NULL;
+            g_variant_get(fs_res, "(&s)", &state_str);
+            if (g_strcmp0(state_str, "enabled") == 0) enabled = TRUE;
+        }
+        
+        g_autoptr(GError) err2 = NULL;
+        g_autoptr(GVariant) u_res = g_dbus_proxy_call_sync(manager_proxy, "GetUnit",
+                                                           g_variant_new("(s)", candidate),
+                                                           G_DBUS_CALL_FLAGS_NONE, -1, NULL, &err2);
+        if (u_res) {
+            const gchar *path = NULL;
+            g_variant_get(u_res, "(&o)", &path);
+            if (path) {
+                g_autoptr(GDBusProxy) uproxy = g_dbus_proxy_new_sync(g_dbus_proxy_get_connection(manager_proxy), G_DBUS_PROXY_FLAGS_NONE, NULL, "org.freedesktop.systemd1", path, "org.freedesktop.systemd1.Unit", NULL, NULL);
+                if (uproxy) {
+                    g_autoptr(GVariant) as_var = g_dbus_proxy_get_cached_property(uproxy, "ActiveState");
+                    if (as_var) {
+                        if (g_strcmp0(g_variant_get_string(as_var, NULL), "active") == 0) active = TRUE;
+                    }
+                }
+            }
+        }
+    }
+    if (out_active) *out_active = active;
+    if (out_enabled) *out_enabled = enabled;
+}
+
 const gchar* systemd_get_canonical_unit_name(void) {
     if (cached_unit_name) return cached_unit_name;
 
@@ -144,36 +179,7 @@ const gchar* systemd_get_canonical_unit_name(void) {
             const gchar *candidate = g_ptr_array_index(marked_units, i);
             gboolean active = FALSE, enabled = FALSE;
             
-            // Inline get_unit_preference_score
-            if (manager_proxy) {
-                g_autoptr(GError) err1 = NULL;
-                g_autoptr(GVariant) fs_res = g_dbus_proxy_call_sync(manager_proxy, "GetUnitFileState", 
-                                                                    g_variant_new("(s)", candidate), 
-                                                                    G_DBUS_CALL_FLAGS_NONE, -1, NULL, &err1);
-                if (fs_res) {
-                    const gchar *state_str = NULL;
-                    g_variant_get(fs_res, "(&s)", &state_str);
-                    if (g_strcmp0(state_str, "enabled") == 0) enabled = TRUE;
-                }
-                
-                g_autoptr(GError) err2 = NULL;
-                g_autoptr(GVariant) u_res = g_dbus_proxy_call_sync(manager_proxy, "GetUnit",
-                                                                   g_variant_new("(s)", candidate),
-                                                                   G_DBUS_CALL_FLAGS_NONE, -1, NULL, &err2);
-                if (u_res) {
-                    const gchar *path = NULL;
-                    g_variant_get(u_res, "(&o)", &path);
-                    if (path) {
-                        g_autoptr(GDBusProxy) uproxy = g_dbus_proxy_new_sync(g_dbus_proxy_get_connection(manager_proxy), G_DBUS_PROXY_FLAGS_NONE, NULL, "org.freedesktop.systemd1", path, "org.freedesktop.systemd1.Unit", NULL, NULL);
-                        if (uproxy) {
-                            g_autoptr(GVariant) as_var = g_dbus_proxy_get_cached_property(uproxy, "ActiveState");
-                            if (as_var) {
-                                if (g_strcmp0(g_variant_get_string(as_var, NULL), "active") == 0) active = TRUE;
-                            }
-                        }
-                    }
-                }
-            }
+            get_unit_preference_score(candidate, &active, &enabled);
             
             if (!best_candidate) {
                 best_candidate = candidate;

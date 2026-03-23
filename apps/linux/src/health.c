@@ -38,6 +38,22 @@ static gboolean gateway_arg_should_be_forwarded(const gchar *arg) {
             g_strcmp0(arg, "--password") == 0);
 }
 
+static gchar** build_standard_argv(const gchar **prefix, const gchar *subcommand) {
+    GPtrArray *arr = g_ptr_array_new();
+    for (gint i = 0; prefix[i] != NULL; i++) {
+        g_ptr_array_add(arr, g_strdup(prefix[i]));
+    }
+    g_ptr_array_add(arr, g_strdup("gateway"));
+    if (subcommand) {
+        g_ptr_array_add(arr, g_strdup(subcommand));
+        if (g_strcmp0(subcommand, "status") == 0) {
+            g_ptr_array_add(arr, g_strdup("--json"));
+        }
+    }
+    g_ptr_array_add(arr, NULL);
+    return (gchar **)g_ptr_array_free(arr, FALSE);
+}
+
 static gchar** resolve_openclaw_argv(const gchar *subcommand) {
     // Deterministic 4-tier executable resolution strategy:
     // Priority 1: Use systemd's ExecStart parsing if available (most reliable, matches what daemon runs)
@@ -118,16 +134,8 @@ static gchar** resolve_openclaw_argv(const gchar *subcommand) {
         g_free(current_dir);
         
         if (found_local && local_js) {
-            gchar **new_argv = g_new0(gchar*, subcommand && g_strcmp0(subcommand, "status") == 0 ? 6 : 5);
-            new_argv[0] = g_strdup("node"); 
-            new_argv[1] = g_strdup(local_js);
-            new_argv[2] = g_strdup("gateway");
-            if (subcommand) {
-                new_argv[3] = g_strdup(subcommand);
-                if (g_strcmp0(subcommand, "status") == 0) {
-                    new_argv[4] = g_strdup("--json");
-                }
-            }
+            const gchar *prefix[] = {"node", local_js, NULL};
+            gchar **new_argv = build_standard_argv(prefix, subcommand);
             g_free(local_js);
             return new_argv;
         }
@@ -137,16 +145,8 @@ static gchar** resolve_openclaw_argv(const gchar *subcommand) {
     // Priority 3: PATH
     g_autofree gchar *path_bin = g_find_program_in_path("openclaw");
     if (path_bin) {
-        gchar **new_argv = g_new0(gchar*, subcommand && g_strcmp0(subcommand, "status") == 0 ? 5 : 4);
-        new_argv[0] = g_strdup(path_bin);
-        new_argv[1] = g_strdup("gateway");
-        if (subcommand) {
-            new_argv[2] = g_strdup(subcommand);
-            if (g_strcmp0(subcommand, "status") == 0) {
-                new_argv[3] = g_strdup("--json");
-            }
-        }
-        return new_argv;
+        const gchar *prefix[] = {path_bin, NULL};
+        return build_standard_argv(prefix, subcommand);
     }
 
     // Priority 4: Hardcoded
@@ -154,30 +154,14 @@ static gchar** resolve_openclaw_argv(const gchar *subcommand) {
     if (home_dir) {
         g_autofree gchar *npm_path = g_build_filename(home_dir, ".npm-global", "bin", "openclaw", NULL);
         if (g_file_test(npm_path, G_FILE_TEST_IS_EXECUTABLE)) {
-            gchar **new_argv = g_new0(gchar*, subcommand && g_strcmp0(subcommand, "status") == 0 ? 5 : 4);
-            new_argv[0] = g_strdup(npm_path);
-            new_argv[1] = g_strdup("gateway");
-            if (subcommand) {
-                new_argv[2] = g_strdup(subcommand);
-                if (g_strcmp0(subcommand, "status") == 0) {
-                    new_argv[3] = g_strdup("--json");
-                }
-            }
-            return new_argv;
+            const gchar *prefix[] = {npm_path, NULL};
+            return build_standard_argv(prefix, subcommand);
         }
     }
 
     // Fallback
-    gchar **new_argv = g_new0(gchar*, subcommand && g_strcmp0(subcommand, "status") == 0 ? 5 : 4);
-    new_argv[0] = g_strdup("openclaw");
-    new_argv[1] = g_strdup("gateway");
-    if (subcommand) {
-        new_argv[2] = g_strdup(subcommand);
-        if (g_strcmp0(subcommand, "status") == 0) {
-            new_argv[3] = g_strdup("--json");
-        }
-    }
-    return new_argv;
+    const gchar *prefix[] = {"openclaw", NULL};
+    return build_standard_argv(prefix, subcommand);
 }
 
 static GSubprocess *spawn_gateway_subprocess(const gchar *subcommand, GError **error) {
