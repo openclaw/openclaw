@@ -288,7 +288,7 @@ describe("resolveAllowAlwaysPatterns", () => {
     const marker = path.join(dir, "marker");
 
     const { persisted } = resolvePersistedPatterns({
-      command: `sh -lc "'$0' \"$1\"" touch ${marker}`,
+      command: `sh -lc "'$0' "$1"" touch ${marker}`,
       dir,
       env,
       safeBins,
@@ -296,7 +296,7 @@ describe("resolveAllowAlwaysPatterns", () => {
     expect(persisted).not.toContain(touch);
 
     const second = evaluateShellAllowlist({
-      command: `sh -lc "'$0' \"$1\"" touch ${marker}`,
+      command: `sh -lc "'$0' "$1"" touch ${marker}`,
       allowlist: [{ pattern: touch }],
       safeBins,
       cwd: dir,
