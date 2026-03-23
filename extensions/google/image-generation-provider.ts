@@ -1,14 +1,11 @@
-import type { ImageGenerationProviderPlugin } from "openclaw/plugin-sdk/image-generation-core";
-import {
-  normalizeGoogleModelId,
-  parseGeminiAuth,
-  resolveApiKeyForProvider,
-} from "openclaw/plugin-sdk/image-generation-core";
+import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import {
   assertOkOrThrowHttpError,
   normalizeBaseUrl,
   postJsonRequest,
 } from "openclaw/plugin-sdk/media-understanding";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth";
+import { normalizeGoogleModelId, parseGeminiAuth } from "openclaw/plugin-sdk/provider-google";
 
 const DEFAULT_GOOGLE_IMAGE_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_GOOGLE_IMAGE_MODEL = "gemini-3.1-flash-image-preview";
@@ -95,7 +92,7 @@ function mapSizeToImageConfig(
   };
 }
 
-export function buildGoogleImageGenerationProvider(): ImageGenerationProviderPlugin {
+export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
   return {
     id: "google",
     label: "Google",
