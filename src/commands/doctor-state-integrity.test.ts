@@ -185,6 +185,11 @@ describe("doctor state integrity oauth dir checks", () => {
     await noteStateIntegrity(cfg, { confirmSkipInNonInteractive });
     const filesAfter = fs.readdirSync(sessionsDir);
     expect(filesBefore.toSorted()).toEqual(filesAfter.toSorted());
+    expect(confirmSkipInNonInteractive).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("orphan transcript file"),
+      }),
+    );
   });
 
   it("prints openclaw-only verification hints when recent sessions are missing transcripts", async () => {

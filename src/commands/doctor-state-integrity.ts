@@ -16,7 +16,7 @@ import {
   resolveStorePath,
 } from "../config/sessions.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
-import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { isCronRunSessionKey, parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -40,6 +40,15 @@ function existsFile(filePath: string): boolean {
     return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
   } catch {
     return false;
+  }
+}
+
+function canonicalizePath(filePath: string): string {
+  const resolved = path.resolve(filePath);
+  try {
+    return fs.realpathSync(resolved);
+  } catch {
+    return resolved;
   }
 }
 
@@ -780,25 +789,29 @@ export async function noteStateIntegrity(
 
   if (existsDir(sessionsDirForChecks)) {
     const referencedTranscriptPaths = new Set<string>();
-    for (const [, entry] of entries) {
+    for (const [key, entry] of entries) {
       if (!entry?.sessionId) {
         continue;
       }
       try {
         let transcriptPath: string;
-        if (entry.sessionFile) {
-          const sessionFilePath = path.resolve(
+        if (isCronRunSessionKey(key)) {
+          transcriptPath = canonicalizePath(
+            resolveSessionTranscriptPathInDir(entry.sessionId, sessionsDirForChecks),
+          );
+        } else if (entry.sessionFile) {
+          const sessionFilePath = canonicalizePath(
             resolveSessionFilePath(entry.sessionId, entry, { sessionsDir: sessionsDirForChecks }),
           );
           if (existsFile(sessionFilePath)) {
             transcriptPath = sessionFilePath;
           } else {
-            transcriptPath = path.resolve(
+            transcriptPath = canonicalizePath(
               resolveSessionTranscriptPathInDir(entry.sessionId, sessionsDirForChecks),
             );
           }
         } else {
-          transcriptPath = path.resolve(
+          transcriptPath = canonicalizePath(
             resolveSessionTranscriptPathInDir(entry.sessionId, sessionsDirForChecks),
           );
         }
@@ -810,7 +823,7 @@ export async function noteStateIntegrity(
     const sessionDirEntries = fs.readdirSync(sessionsDirForChecks, { withFileTypes: true });
     const orphanTranscriptPaths = sessionDirEntries
       .filter((entry) => entry.isFile() && isPrimarySessionTranscriptFileName(entry.name))
-      .map((entry) => path.resolve(path.join(sessionsDirForChecks, entry.name)))
+      .map((entry) => canonicalizePath(path.join(sessionsDirForChecks, entry.name)))
       .filter((filePath) => !referencedTranscriptPaths.has(filePath));
     if (orphanTranscriptPaths.length > 0) {
       const orphanBasenames = orphanTranscriptPaths.slice(0, 3).map((p) => path.basename(p));
@@ -841,7 +854,9 @@ export async function noteStateIntegrity(
           }
         }
         if (archived > 0) {
-          changes.push(`- Archived ${archived} orphan transcript file(s) in ${displaySessionsDir}`);
+          changes.push(
+            `- Archived ${archived} orphan transcript file(s) in ${displaySessionsDirForChecks}`,
+          );
         }
       }
     }
