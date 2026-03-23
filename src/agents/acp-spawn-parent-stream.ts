@@ -4,14 +4,15 @@ import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
-import {
-  completeSubagentRun,
-  SUBAGENT_ENDED_REASON_COMPLETE,
-  SUBAGENT_ENDED_REASON_ERROR,
-} from "./subagent-registry.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
+import { readSubagentOutput } from "./subagent-announce.js";
+import {
+  SUBAGENT_ENDED_REASON_COMPLETE,
+  SUBAGENT_ENDED_REASON_ERROR,
+} from "./subagent-lifecycle-events.js";
+import { completeSubagentRun } from "./subagent-registry.js";
 
 const DEFAULT_STREAM_FLUSH_MS = 2_500;
 const DEFAULT_NO_OUTPUT_NOTICE_MS = 60_000;
@@ -279,8 +280,7 @@ export function startAcpSpawnParentStreamRelay(params: {
       dispose();
       return true;
     }
-    const durationMs =
-      startedAt != null && endedAt >= startedAt ? endedAt - startedAt : undefined;
+    const durationMs = startedAt != null && endedAt >= startedAt ? endedAt - startedAt : undefined;
     if (durationMs != null) {
       emit(
         `${relayLabel} run completed in ${Math.max(1, Math.round(durationMs / 1000))}s.`,
@@ -333,8 +333,18 @@ export function startAcpSpawnParentStreamRelay(params: {
     if (Date.now() - lastProgressAt < noOutputNoticeMs) {
       return;
     }
-    void probeForCompletedRelay().then((completed) => {
+    void probeForCompletedRelay().then(async (completed) => {
       if (disposed || completed || stallNotified) {
+        return;
+      }
+      try {
+        const childOutput = await readSubagentOutput(params.childSessionKey);
+        if (childOutput?.trim()) {
+          await finalizeCompletedRelay({ status: "ok" });
+          return;
+        }
+      } catch {}
+      if (disposed) {
         return;
       }
       stallNotified = true;
@@ -350,8 +360,18 @@ export function startAcpSpawnParentStreamRelay(params: {
     if (disposed) {
       return;
     }
-    void probeForCompletedRelay(250).then((completed) => {
+    void probeForCompletedRelay(250).then(async (completed) => {
       if (disposed || completed) {
+        return;
+      }
+      try {
+        const childOutput = await readSubagentOutput(params.childSessionKey);
+        if (childOutput?.trim()) {
+          await finalizeCompletedRelay({ status: "ok" });
+          return;
+        }
+      } catch {}
+      if (disposed) {
         return;
       }
       emit(

@@ -394,7 +394,7 @@ function readSubagentOutputFromTranscript(
     if (!sessionId) {
       return undefined;
     }
-    const messages = readSessionMessages(sessionId, storePath, entry.sessionFile);
+    const messages = readSessionMessages(sessionId, storePath, entry?.sessionFile);
     const selected = selectSubagentOutputText(summarizeSubagentOutputHistory(messages), outcome);
     return selected?.trim() ? selected : undefined;
   } catch {
@@ -402,7 +402,7 @@ function readSubagentOutputFromTranscript(
   }
 }
 
-async function readSubagentOutput(
+export async function readSubagentOutput(
   sessionKey: string,
   outcome?: SubagentRunOutcome,
 ): Promise<string | undefined> {

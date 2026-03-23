@@ -1,18 +1,14 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as gatewayCall from "../gateway/call.js";
+import * as sessionUtils from "../gateway/session-utils.js";
 
 const chatHistoryMock = vi.fn<(sessionKey: string) => Promise<{ messages?: Array<unknown> }>>(
   async (_sessionKey: string) => ({ messages: [] }),
 );
 
-vi.mock("../gateway/call.js", () => ({
-  callGateway: vi.fn(async (request: unknown) => {
-    const typed = request as { method?: string; params?: { sessionKey?: string } };
-    if (typed.method === "chat.history") {
-      return await chatHistoryMock(typed.params?.sessionKey ?? "");
-    }
-    return {};
-  }),
-}));
+const callGatewayMock = vi.spyOn(gatewayCall, "callGateway");
+const loadSessionEntryMock = vi.spyOn(sessionUtils, "loadSessionEntry");
+const readSessionMessagesMock = vi.spyOn(sessionUtils, "readSessionMessages");
 
 describe("captureSubagentCompletionReply", () => {
   let previousFastTestEnv: string | undefined;
@@ -34,6 +30,17 @@ describe("captureSubagentCompletionReply", () => {
 
   beforeEach(() => {
     chatHistoryMock.mockReset().mockResolvedValue({ messages: [] });
+    callGatewayMock.mockReset().mockImplementation(async (request: unknown) => {
+      const typed = request as { method?: string; params?: { sessionKey?: string } };
+      if (typed.method === "chat.history") {
+        return await chatHistoryMock(typed.params?.sessionKey ?? "");
+      }
+      return {};
+    });
+    loadSessionEntryMock.mockReset().mockImplementation(() => {
+      throw new Error("no session entry");
+    });
+    readSessionMessagesMock.mockReset().mockReturnValue([]);
   });
 
   it("returns immediate assistant output from history without polling", async () => {

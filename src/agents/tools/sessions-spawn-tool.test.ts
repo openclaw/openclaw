@@ -1,39 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as acpSpawn from "../acp-spawn.js";
+import * as subagentSpawn from "../subagent-spawn.js";
+import { createSessionsSpawnTool } from "./sessions-spawn-tool.js";
 
-const hoisted = vi.hoisted(() => {
-  const spawnSubagentDirectMock = vi.fn();
-  const spawnAcpDirectMock = vi.fn();
-  return {
-    spawnSubagentDirectMock,
-    spawnAcpDirectMock,
-  };
-});
-
-vi.mock("../subagent-spawn.js", () => ({
-  SUBAGENT_SPAWN_MODES: ["run", "session"],
-  spawnSubagentDirect: (...args: unknown[]) => hoisted.spawnSubagentDirectMock(...args),
-}));
-
-vi.mock("../acp-spawn.js", () => ({
-  ACP_SPAWN_MODES: ["run", "session"],
-  ACP_SPAWN_STREAM_TARGETS: ["parent"],
-  spawnAcpDirect: (...args: unknown[]) => hoisted.spawnAcpDirectMock(...args),
-}));
-
-const { createSessionsSpawnTool } = await import("./sessions-spawn-tool.js");
+const spawnSubagentDirectMock = vi.spyOn(subagentSpawn, "spawnSubagentDirect");
+const spawnAcpDirectMock = vi.spyOn(acpSpawn, "spawnAcpDirect");
 
 describe("sessions_spawn tool", () => {
   beforeEach(() => {
-    hoisted.spawnSubagentDirectMock.mockReset().mockResolvedValue({
+    spawnSubagentDirectMock.mockReset().mockResolvedValue({
       status: "accepted",
       childSessionKey: "agent:main:subagent:1",
       runId: "run-subagent",
-    });
-    hoisted.spawnAcpDirectMock.mockReset().mockResolvedValue({
+    } as never);
+    spawnAcpDirectMock.mockReset().mockResolvedValue({
       status: "accepted",
       childSessionKey: "agent:codex:acp:1",
       runId: "run-acp",
-    });
+    } as never);
   });
 
   it("uses subagent runtime by default", async () => {
@@ -61,7 +45,7 @@ describe("sessions_spawn tool", () => {
       childSessionKey: "agent:main:subagent:1",
       runId: "run-subagent",
     });
-    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+    expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
       expect.objectContaining({
         task: "build feature",
         agentId: "main",
@@ -76,7 +60,7 @@ describe("sessions_spawn tool", () => {
         agentSessionKey: "agent:main:main",
       }),
     );
-    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+    expect(spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
   it("passes inherited workspaceDir from tool context, not from tool args", async () => {
@@ -90,7 +74,7 @@ describe("sessions_spawn tool", () => {
       workspaceDir: "/tmp/attempted-override",
     });
 
-    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+    expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
       expect.any(Object),
       expect.objectContaining({
         workspaceDir: "/parent/workspace",
@@ -122,7 +106,7 @@ describe("sessions_spawn tool", () => {
       childSessionKey: "agent:codex:acp:1",
       runId: "run-acp",
     });
-    expect(hoisted.spawnAcpDirectMock).toHaveBeenCalledWith(
+    expect(spawnAcpDirectMock).toHaveBeenCalledWith(
       expect.objectContaining({
         task: "investigate the failing CI run",
         agentId: "codex",
@@ -135,7 +119,7 @@ describe("sessions_spawn tool", () => {
         agentSessionKey: "agent:main:main",
       }),
     );
-    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
   it("forwards ACP sandbox options and requester sandbox context", async () => {
@@ -151,7 +135,7 @@ describe("sessions_spawn tool", () => {
       sandbox: "require",
     });
 
-    expect(hoisted.spawnAcpDirectMock).toHaveBeenCalledWith(
+    expect(spawnAcpDirectMock).toHaveBeenCalledWith(
       expect.objectContaining({
         task: "investigate",
         sandbox: "require",
@@ -175,7 +159,7 @@ describe("sessions_spawn tool", () => {
       resumeSessionId: "7f4a78e0-f6be-43fe-855c-c1c4fd229bc4",
     });
 
-    expect(hoisted.spawnAcpDirectMock).toHaveBeenCalledWith(
+    expect(spawnAcpDirectMock).toHaveBeenCalledWith(
       expect.objectContaining({
         task: "resume prior work",
         agentId: "codex",
@@ -196,8 +180,8 @@ describe("sessions_spawn tool", () => {
     });
 
     expect(JSON.stringify(result)).toContain("resumeSessionId is only supported for runtime=acp");
-    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
-    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
   it("rejects attachments for ACP runtime", async () => {
@@ -220,8 +204,8 @@ describe("sessions_spawn tool", () => {
     });
     const details = result.details as { error?: string };
     expect(details.error).toContain("attachments are currently unsupported for runtime=acp");
-    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
-    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(spawnAcpDirectMock).not.toHaveBeenCalled();
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
   it('rejects streamTo when runtime is not "acp"', async () => {
@@ -240,8 +224,8 @@ describe("sessions_spawn tool", () => {
     });
     const details = result.details as { error?: string };
     expect(details.error).toContain("streamTo is only supported for runtime=acp");
-    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
-    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(spawnAcpDirectMock).not.toHaveBeenCalled();
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
   it("keeps attachment content schema unconstrained for llama.cpp grammar safety", () => {
