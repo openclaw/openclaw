@@ -174,6 +174,59 @@ export function applyProviderConfigWithDefaultModelPreset(
     : next;
 }
 
+export type ProviderOnboardPresetAppliers<TArgs extends unknown[]> = {
+  applyProviderConfig: (cfg: OpenClawConfig, ...args: TArgs) => OpenClawConfig;
+  applyConfig: (cfg: OpenClawConfig, ...args: TArgs) => OpenClawConfig;
+};
+
+function createProviderPresetAppliers<
+  TArgs extends unknown[],
+  TParams extends {
+    primaryModelRef?: string;
+  },
+>(params: {
+  resolveParams: (
+    cfg: OpenClawConfig,
+    ...args: TArgs
+  ) => Omit<TParams, "primaryModelRef"> | null | undefined;
+  applyPreset: (cfg: OpenClawConfig, preset: TParams) => OpenClawConfig;
+  primaryModelRef: string;
+}): ProviderOnboardPresetAppliers<TArgs> {
+  return {
+    applyProviderConfig(cfg, ...args) {
+      const resolved = params.resolveParams(cfg, ...args);
+      return resolved ? params.applyPreset(cfg, resolved as TParams) : cfg;
+    },
+    applyConfig(cfg, ...args) {
+      const resolved = params.resolveParams(cfg, ...args);
+      if (!resolved) {
+        return cfg;
+      }
+      return params.applyPreset(cfg, {
+        ...(resolved as TParams),
+        primaryModelRef: params.primaryModelRef,
+      });
+    },
+  };
+}
+
+export function createDefaultModelPresetAppliers<TArgs extends unknown[]>(params: {
+  resolveParams: (
+    cfg: OpenClawConfig,
+    ...args: TArgs
+  ) =>
+    | Omit<Parameters<typeof applyProviderConfigWithDefaultModelPreset>[1], "primaryModelRef">
+    | null
+    | undefined;
+  primaryModelRef: string;
+}): ProviderOnboardPresetAppliers<TArgs> {
+  return createProviderPresetAppliers({
+    resolveParams: params.resolveParams,
+    applyPreset: applyProviderConfigWithDefaultModelPreset,
+    primaryModelRef: params.primaryModelRef,
+  });
+}
+
 export function applyProviderConfigWithDefaultModelsPreset(
   cfg: OpenClawConfig,
   params: {
@@ -197,6 +250,23 @@ export function applyProviderConfigWithDefaultModelsPreset(
   return params.primaryModelRef
     ? applyAgentDefaultModelPrimary(next, params.primaryModelRef)
     : next;
+}
+
+export function createDefaultModelsPresetAppliers<TArgs extends unknown[]>(params: {
+  resolveParams: (
+    cfg: OpenClawConfig,
+    ...args: TArgs
+  ) =>
+    | Omit<Parameters<typeof applyProviderConfigWithDefaultModelsPreset>[1], "primaryModelRef">
+    | null
+    | undefined;
+  primaryModelRef: string;
+}): ProviderOnboardPresetAppliers<TArgs> {
+  return createProviderPresetAppliers({
+    resolveParams: params.resolveParams,
+    applyPreset: applyProviderConfigWithDefaultModelsPreset,
+    primaryModelRef: params.primaryModelRef,
+  });
 }
 
 export function applyProviderConfigWithModelCatalog(
@@ -252,6 +322,23 @@ export function applyProviderConfigWithModelCatalogPreset(
   return params.primaryModelRef
     ? applyAgentDefaultModelPrimary(next, params.primaryModelRef)
     : next;
+}
+
+export function createModelCatalogPresetAppliers<TArgs extends unknown[]>(params: {
+  resolveParams: (
+    cfg: OpenClawConfig,
+    ...args: TArgs
+  ) =>
+    | Omit<Parameters<typeof applyProviderConfigWithModelCatalogPreset>[1], "primaryModelRef">
+    | null
+    | undefined;
+  primaryModelRef: string;
+}): ProviderOnboardPresetAppliers<TArgs> {
+  return createProviderPresetAppliers({
+    resolveParams: params.resolveParams,
+    applyPreset: applyProviderConfigWithModelCatalogPreset,
+    primaryModelRef: params.primaryModelRef,
+  });
 }
 
 type ProviderModelMergeState = {

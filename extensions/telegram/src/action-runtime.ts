@@ -1,6 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
-import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-runtime";
+import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
 import { resolveTelegramPollVisibility } from "../runtime-api.js";
 import {
   jsonResult,

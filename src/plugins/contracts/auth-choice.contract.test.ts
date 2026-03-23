@@ -32,7 +32,7 @@ import qwenPortalPlugin from "../../../extensions/qwen-portal-auth/index.js";
 vi.mock("../../../extensions/qwen-portal-auth/oauth.js", () => ({
   loginQwenPortalOAuth: loginQwenPortalOAuthMock,
 }));
-vi.mock("../../providers/github-copilot-auth.js", () => ({
+vi.mock("../../../extensions/github-copilot/login.js", () => ({
   githubCopilotLoginCommand: githubCopilotLoginCommandMock,
 }));
 vi.mock("../../plugins/provider-auth-choice.runtime.js", () => ({

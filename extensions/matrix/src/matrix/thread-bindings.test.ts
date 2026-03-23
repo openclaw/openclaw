@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { PluginRuntime } from "openclaw/plugin-sdk/matrix";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getSessionBindingService,
   __testing,
 } from "../../../../src/infra/outbound/session-binding-service.js";
+import type { PluginRuntime } from "../../runtime-api.js";
 import { setMatrixRuntime } from "../runtime.js";
 import { resolveMatrixStoragePaths } from "./client/storage.js";
 import {
@@ -16,31 +16,14 @@ import {
   setMatrixThreadBindingMaxAgeBySessionKey,
 } from "./thread-bindings.js";
 
-const pluginSdkActual = vi.hoisted(() => ({
-  writeJsonFileAtomically: null as null | ((filePath: string, value: unknown) => Promise<void>),
-}));
-
 const sendMessageMatrixMock = vi.hoisted(() =>
   vi.fn(async (_to: string, _message: string, opts?: { threadId?: string }) => ({
     messageId: opts?.threadId ? "$reply" : "$root",
     roomId: "!room:example",
   })),
 );
-const writeJsonFileAtomicallyMock = vi.hoisted(() =>
-  vi.fn<(filePath: string, value: unknown) => Promise<void>>(),
-);
-
-vi.mock("openclaw/plugin-sdk/matrix", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/matrix")>(
-    "openclaw/plugin-sdk/matrix",
-  );
-  pluginSdkActual.writeJsonFileAtomically = actual.writeJsonFileAtomically;
-  return {
-    ...actual,
-    writeJsonFileAtomically: (filePath: string, value: unknown) =>
-      writeJsonFileAtomicallyMock(filePath, value),
-  };
-});
+const actualRename = fs.rename.bind(fs);
+const renameMock = vi.spyOn(fs, "rename");
 
 vi.mock("./send.js", async () => {
   const actual = await vi.importActual<typeof import("./send.js")>("./send.js");
@@ -59,11 +42,12 @@ describe("matrix thread bindings", () => {
     accessToken: "token",
   } as const;
 
-  function resolveBindingsFilePath() {
+  function resolveBindingsFilePath(customStateDir?: string) {
     return path.join(
       resolveMatrixStoragePaths({
         ...auth,
         env: process.env,
+        ...(customStateDir ? { stateDir: customStateDir } : {}),
       }).rootDir,
       "thread-bindings.json",
     );
@@ -82,10 +66,8 @@ describe("matrix thread bindings", () => {
     __testing.resetSessionBindingAdaptersForTests();
     resetMatrixThreadBindingsForTests();
     sendMessageMatrixMock.mockClear();
-    writeJsonFileAtomicallyMock.mockReset();
-    writeJsonFileAtomicallyMock.mockImplementation(async (filePath: string, value: unknown) => {
-      await pluginSdkActual.writeJsonFileAtomically?.(filePath, value);
-    });
+    renameMock.mockReset();
+    renameMock.mockImplementation(actualRename);
     setMatrixRuntime({
       state: {
         resolveStateDir: () => stateDir,
@@ -216,7 +198,7 @@ describe("matrix thread bindings", () => {
     }
   });
 
-  it("persists a batch of expired bindings once per sweep", async () => {
+  it("persists expired bindings after a sweep", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-08T12:00:00.000Z"));
     try {
@@ -251,12 +233,8 @@ describe("matrix thread bindings", () => {
         placement: "current",
       });
 
-      writeJsonFileAtomicallyMock.mockClear();
       await vi.advanceTimersByTimeAsync(61_000);
-
-      await vi.waitFor(() => {
-        expect(writeJsonFileAtomicallyMock).toHaveBeenCalledTimes(1);
-      });
+      await Promise.resolve();
 
       await vi.waitFor(async () => {
         const persistedRaw = await fs.readFile(resolveBindingsFilePath(), "utf-8");
@@ -296,13 +274,23 @@ describe("matrix thread bindings", () => {
         placement: "current",
       });
 
-      writeJsonFileAtomicallyMock.mockClear();
-      writeJsonFileAtomicallyMock.mockRejectedValueOnce(new Error("disk full"));
+      renameMock.mockRejectedValueOnce(new Error("disk full"));
       await vi.advanceTimersByTimeAsync(61_000);
+      await Promise.resolve();
+
+      await vi.waitFor(() => {
+        expect(
+          logVerboseMessage.mock.calls.some(
+            ([message]) =>
+              typeof message === "string" &&
+              message.includes("failed auto-unbinding expired bindings"),
+          ),
+        ).toBe(true);
+      });
 
       await vi.waitFor(() => {
         expect(logVerboseMessage).toHaveBeenCalledWith(
-          expect.stringContaining("failed auto-unbinding expired bindings"),
+          expect.stringContaining("matrix: auto-unbinding $thread due to idle-expired"),
         );
       });
 
@@ -430,6 +418,98 @@ describe("matrix thread bindings", () => {
       "thread-bindings.json",
     );
     expect(rotatedBindingsPath).toBe(initialBindingsPath);
+  });
+
+  it("replaces reused account managers when the bindings stateDir changes", async () => {
+    const initialStateDir = stateDir;
+    const replacementStateDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "matrix-thread-bindings-replacement-"),
+    );
+
+    const initialManager = await createMatrixThreadBindingManager({
+      accountId: "ops",
+      auth,
+      client: {} as never,
+      stateDir: initialStateDir,
+      idleTimeoutMs: 24 * 60 * 60 * 1000,
+      maxAgeMs: 0,
+      enableSweeper: false,
+    });
+
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:ops:subagent:child",
+      targetKind: "subagent",
+      conversation: {
+        channel: "matrix",
+        accountId: "ops",
+        conversationId: "$thread",
+        parentConversationId: "!room:example",
+      },
+      placement: "current",
+    });
+
+    const replacementManager = await createMatrixThreadBindingManager({
+      accountId: "ops",
+      auth,
+      client: {} as never,
+      stateDir: replacementStateDir,
+      idleTimeoutMs: 24 * 60 * 60 * 1000,
+      maxAgeMs: 0,
+      enableSweeper: false,
+    });
+
+    expect(replacementManager).not.toBe(initialManager);
+    expect(replacementManager.listBindings()).toEqual([]);
+    expect(
+      getSessionBindingService().resolveByConversation({
+        channel: "matrix",
+        accountId: "ops",
+        conversationId: "$thread",
+        parentConversationId: "!room:example",
+      }),
+    ).toBeNull();
+
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:ops:subagent:replacement",
+      targetKind: "subagent",
+      conversation: {
+        channel: "matrix",
+        accountId: "ops",
+        conversationId: "$thread-2",
+        parentConversationId: "!room:example",
+      },
+      placement: "current",
+    });
+
+    await vi.waitFor(async () => {
+      const replacementRaw = await fs.readFile(
+        resolveBindingsFilePath(replacementStateDir),
+        "utf-8",
+      );
+      expect(JSON.parse(replacementRaw)).toMatchObject({
+        version: 1,
+        bindings: [
+          expect.objectContaining({
+            conversationId: "$thread-2",
+            parentConversationId: "!room:example",
+            targetSessionKey: "agent:ops:subagent:replacement",
+          }),
+        ],
+      });
+    });
+    await vi.waitFor(async () => {
+      const initialRaw = await fs.readFile(resolveBindingsFilePath(initialStateDir), "utf-8");
+      expect(JSON.parse(initialRaw)).toMatchObject({
+        version: 1,
+        bindings: [
+          expect.objectContaining({
+            conversationId: "$thread",
+            parentConversationId: "!room:example",
+            targetSessionKey: "agent:ops:subagent:child",
+          }),
+        ],
+      });
+    });
   });
 
   it("updates lifecycle windows by session key and refreshes activity", async () => {

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { markdownToSignalTextChunks } from "../../../extensions/signal/src/format.js";
 import {
   signalOutbound,
@@ -201,9 +201,11 @@ function expectSuccessfulWhatsAppInternalHookPayload(
 }
 
 describe("deliverOutboundPayloads", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ deliverOutboundPayloads, normalizeOutboundPayloads } = await import("./deliver.js"));
+  });
+
+  beforeEach(() => {
     setActivePluginRegistry(defaultRegistry);
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
     hookMocks.runner.hasHooks.mockClear();
@@ -495,6 +497,49 @@ describe("deliverOutboundPayloads", () => {
       "hi",
       expect.objectContaining({
         mediaLocalRoots: expect.arrayContaining([resolvePreferredOpenClawTmpDir()]),
+      }),
+    );
+  });
+
+  it("forwards audioAsVoice through generic plugin media delivery", async () => {
+    const sendMedia = vi.fn(async () => ({
+      channel: "matrix" as const,
+      messageId: "mx-1",
+      roomId: "!room:example",
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: async ({ to, text }) => ({
+                channel: "matrix",
+                messageId: `${to}:${text}`,
+              }),
+              sendMedia,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: { channels: { matrix: {} } } as OpenClawConfig,
+      channel: "matrix",
+      to: "room:!room:example",
+      payloads: [{ text: "voice caption", mediaUrl: "file:///tmp/clip.mp3", audioAsVoice: true }],
+    });
+
+    expect(sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "room:!room:example",
+        text: "voice caption",
+        mediaUrl: "file:///tmp/clip.mp3",
+        audioAsVoice: true,
       }),
     );
   });

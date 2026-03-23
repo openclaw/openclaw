@@ -589,3 +589,12 @@ export function resolveTelegramFetch(
 ): typeof fetch {
   return resolveTelegramTransport(proxyFetch, options).fetch;
 }
+
+/**
+ * Resolve the Telegram Bot API base URL from an optional `apiRoot` config value.
+ * Returns a trimmed URL without trailing slash, or the standard default.
+ */
+export function resolveTelegramApiBase(apiRoot?: string): string {
+  const trimmed = apiRoot?.trim();
+  return trimmed ? trimmed.replace(/\/+$/, "") : `https://${TELEGRAM_API_HOSTNAME}`;
+}
