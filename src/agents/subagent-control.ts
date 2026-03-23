@@ -53,6 +53,16 @@ export const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
 
 const steerRateLimit = new Map<string, number>();
 
+type GatewayCaller = typeof callGateway;
+
+const defaultSubagentControlDeps = {
+  callGateway,
+};
+
+let subagentControlDeps: {
+  callGateway: GatewayCaller;
+} = defaultSubagentControlDeps;
+
 export type SessionEntryResolution = {
   storePath: string;
   entry: SessionEntry | undefined;
@@ -666,7 +676,7 @@ export async function steerControlledSubagentRun(params: {
   }
 
   try {
-    await callGateway({
+    await subagentControlDeps.callGateway({
       method: "agent.wait",
       params: {
         runId: params.entry.runId,
@@ -681,7 +691,7 @@ export async function steerControlledSubagentRun(params: {
   const idempotencyKey = crypto.randomUUID();
   let runId: string = idempotencyKey;
   try {
-    const response = await callGateway<{ runId: string }>({
+    const response = await subagentControlDeps.callGateway<{ runId: string }>({
       method: "agent",
       params: {
         message: params.message,
@@ -760,7 +770,7 @@ export async function sendControlledSubagentMessage(params: {
 
   const idempotencyKey = crypto.randomUUID();
   let runId: string = idempotencyKey;
-  const response = await callGateway<{ runId: string }>({
+  const response = await subagentControlDeps.callGateway<{ runId: string }>({
     method: "agent",
     params: {
       message: params.message,
@@ -780,7 +790,7 @@ export async function sendControlledSubagentMessage(params: {
   }
 
   const waitMs = 30_000;
-  const wait = await callGateway<{ status?: string; error?: string }>({
+  const wait = await subagentControlDeps.callGateway<{ status?: string; error?: string }>({
     method: "agent.wait",
     params: { runId, timeoutMs: waitMs },
     timeoutMs: waitMs + 2_000,
@@ -793,7 +803,7 @@ export async function sendControlledSubagentMessage(params: {
     return { status: "error" as const, runId, error: waitError };
   }
 
-  const history = await callGateway<{ messages: Array<unknown> }>({
+  const history = await subagentControlDeps.callGateway<{ messages: Array<unknown> }>({
     method: "chat.history",
     params: { sessionKey: targetSessionKey, limit: 50 },
   });
@@ -825,3 +835,14 @@ export function resolveControlledSubagentTarget(
     },
   });
 }
+
+export const __testing = {
+  setDepsForTest(overrides?: Partial<{ callGateway: GatewayCaller }>) {
+    subagentControlDeps = overrides
+      ? {
+          ...defaultSubagentControlDeps,
+          ...overrides,
+        }
+      : defaultSubagentControlDeps;
+  },
+};
