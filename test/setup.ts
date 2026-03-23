@@ -22,6 +22,7 @@ if (process.getMaxListeners() > 0 && process.getMaxListeners() < TEST_PROCESS_MA
   process.setMaxListeners(TEST_PROCESS_MAX_LISTENERS);
 }
 
+import { createTopLevelChannelReplyToModeResolver } from "../src/channels/plugins/threading-helpers.js";
 import type {
   ChannelId,
   ChannelOutboundAdapter,
@@ -74,6 +75,41 @@ const globalRegistryState = (() => {
 const pickSendFn = (id: ChannelId, deps?: OutboundSendDeps) => {
   return deps?.[id] as ((...args: unknown[]) => Promise<unknown>) | undefined;
 };
+
+function resolveSlackStubReplyToMode(params: {
+  cfg: OpenClawConfig;
+  chatType?: string | null;
+}): "off" | "first" | "all" {
+  const entry = (
+    params.cfg.channels as
+      | Record<
+          string,
+          {
+            replyToMode?: "off" | "first" | "all";
+            replyToModeByChatType?: Partial<
+              Record<"direct" | "group" | "channel", "off" | "first" | "all">
+            >;
+            dm?: { replyToMode?: "off" | "first" | "all" };
+          }
+        >
+      | undefined
+  )?.slack;
+  const normalizedChatType = params.chatType?.trim().toLowerCase();
+  if (
+    normalizedChatType === "direct" ||
+    normalizedChatType === "group" ||
+    normalizedChatType === "channel"
+  ) {
+    const byChatType = entry?.replyToModeByChatType?.[normalizedChatType];
+    if (byChatType) {
+      return byChatType;
+    }
+    if (normalizedChatType === "direct" && entry?.dm?.replyToMode) {
+      return entry.dm.replyToMode;
+    }
+  }
+  return entry?.replyToMode ?? "off";
+}
 
 type VitestEvaluatedModuleNode = {
   promise?: unknown;
@@ -164,6 +200,11 @@ const createStubPlugin = (params: {
   aliases?: string[];
   deliveryMode?: ChannelOutboundAdapter["deliveryMode"];
   preferSessionLookupForAnnounceTarget?: boolean;
+  resolveReplyToMode?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    chatType?: string | null;
+  }) => "off" | "first" | "all";
 }): ChannelPlugin => ({
   id: params.id,
   meta: {
@@ -176,6 +217,11 @@ const createStubPlugin = (params: {
     preferSessionLookupForAnnounceTarget: params.preferSessionLookupForAnnounceTarget,
   },
   capabilities: { chatTypes: ["direct", "group"] },
+  threading: params.resolveReplyToMode
+    ? {
+        resolveReplyToMode: params.resolveReplyToMode,
+      }
+    : undefined,
   config: {
     listAccountIds: (cfg: OpenClawConfig) => {
       const channels = cfg.channels as Record<string, unknown> | undefined;
@@ -235,18 +281,30 @@ const createDefaultRegistry = () =>
   createTestRegistry([
     {
       pluginId: "discord",
-      plugin: createStubPlugin({ id: "discord", label: "Discord" }),
+      plugin: createStubPlugin({
+        id: "discord",
+        label: "Discord",
+        resolveReplyToMode: createTopLevelChannelReplyToModeResolver("discord"),
+      }),
       source: "test",
     },
     {
       pluginId: "slack",
-      plugin: createStubPlugin({ id: "slack", label: "Slack" }),
+      plugin: createStubPlugin({
+        id: "slack",
+        label: "Slack",
+        resolveReplyToMode: ({ cfg, chatType }) => resolveSlackStubReplyToMode({ cfg, chatType }),
+      }),
       source: "test",
     },
     {
       pluginId: "telegram",
       plugin: {
-        ...createStubPlugin({ id: "telegram", label: "Telegram" }),
+        ...createStubPlugin({
+          id: "telegram",
+          label: "Telegram",
+          resolveReplyToMode: createTopLevelChannelReplyToModeResolver("telegram"),
+        }),
         status: {
           buildChannelSummary: async () => ({
             configured: false,

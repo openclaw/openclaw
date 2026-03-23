@@ -574,6 +574,7 @@ describe("plugin-sdk subpath exports", () => {
   it("keeps runtime entry subpaths importable", async () => {
     const [
       coreSdk,
+      textRuntimeSdk,
       pluginEntrySdk,
       channelLifecycleSdk,
       channelPairingSdk,
@@ -581,6 +582,7 @@ describe("plugin-sdk subpath exports", () => {
       ...representativeModules
     ] = await Promise.all([
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/core"),
+      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/text-runtime"),
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/plugin-entry"),
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-lifecycle"),
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-pairing"),
@@ -591,6 +593,10 @@ describe("plugin-sdk subpath exports", () => {
     ]);
 
     expect(coreSdk.definePluginEntry).toBe(pluginEntrySdk.definePluginEntry);
+    expect(typeof coreSdk.optionalStringEnum).toBe("function");
+    expect(typeof textRuntimeSdk.createScopedExpiringIdCache).toBe("function");
+    expect(typeof textRuntimeSdk.resolveGlobalMap).toBe("function");
+    expect(typeof textRuntimeSdk.resolveGlobalSingleton).toBe("function");
 
     expectSourceMentions("infra-runtime", ["createRuntimeOutboundDelegates"]);
     expectSourceContains("infra-runtime", "../infra/outbound/send-deps.js");

@@ -133,7 +133,12 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await fs.rm(testWorkspaceDir, { recursive: true, force: true });
+  await fs.rm(testWorkspaceDir, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 50,
+  });
 });
 
 beforeEach(() => {
@@ -179,7 +184,12 @@ async function withTempConfigPath<T>(
     } else {
       process.env.OPENCLAW_CONFIG_PATH = previous;
     }
-    await fs.rm(dir, { recursive: true, force: true });
+    await fs.rm(dir, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    });
   }
 }
 
