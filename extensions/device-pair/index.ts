@@ -43,6 +43,8 @@ function formatDurationMinutes(expiresAtMs: number): string {
 }
 
 const DEFAULT_GATEWAY_PORT = 18789;
+const SETUP_CODE_ROLES = ["node"] as const;
+const SETUP_CODE_SCOPES: string[] = [];
 
 type DevicePairPluginConfig = {
   publicUrl?: string;
@@ -515,7 +517,10 @@ function resolveQrReplyTarget(ctx: QrCommandContext): string {
 }
 
 async function issueSetupPayload(url: string): Promise<SetupPayload> {
-  const issuedBootstrap = await issueDeviceBootstrapToken();
+  const issuedBootstrap = await issueDeviceBootstrapToken({
+    roles: SETUP_CODE_ROLES,
+    scopes: SETUP_CODE_SCOPES,
+  });
   return {
     url,
     bootstrapToken: issuedBootstrap.token,
