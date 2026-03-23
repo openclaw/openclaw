@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setTimeout as sleep } from "node:timers/promises";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
@@ -18,7 +19,7 @@ vi.mock("./embeddings.js", () => ({
   createEmbeddingProvider: async () => {
     hoisted.providerCreateCalls += 1;
     if (hoisted.providerDelayMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, hoisted.providerDelayMs));
+      await sleep(hoisted.providerDelayMs);
     }
     return {
       requestedProvider: "openai",
@@ -41,13 +42,11 @@ let RawMemoryIndexManager: ManagerModule["MemoryIndexManager"];
 describe("memory manager cache hydration", () => {
   let workspaceDir = "";
 
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
     ({ closeAllMemoryIndexManagers, MemoryIndexManager: RawMemoryIndexManager } =
       await import("./manager.js"));
-  });
-
-  beforeEach(async () => {
     vi.clearAllMocks();
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-concurrent-"));
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
@@ -119,7 +118,7 @@ describe("memory manager cache hydration", () => {
     await secondManager?.close?.();
   });
 
-  it("does not cache status-only managers when no full manager exists", async () => {
+  it("caches status-only managers separately from full managers", async () => {
     const indexPath = path.join(workspaceDir, "index.sqlite");
     const cfg = createMemoryConcurrencyConfig(indexPath);
 
@@ -128,10 +127,9 @@ describe("memory manager cache hydration", () => {
 
     expect(first).toBeTruthy();
     expect(second).toBeTruthy();
-    expect(Object.is(second, first)).toBe(false);
+    expect(Object.is(second, first)).toBe(true);
     expect(hoisted.providerCreateCalls).toBe(0);
 
     await first?.close?.();
-    await second?.close?.();
   });
 });

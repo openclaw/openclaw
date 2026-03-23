@@ -1,15 +1,15 @@
-import {
-  inspectTelegramAccount,
-  isNumericTelegramUserId,
-  listTelegramAccountIds,
-  lookupTelegramChatId,
-  normalizeTelegramAllowFromEntry,
-} from "../../../../extensions/telegram/api.js";
 import { resolveCommandSecretRefsViaGateway } from "../../../cli/command-secret-gateway.js";
 import { getChannelsCommandSecretTargetIds } from "../../../cli/command-secret-targets.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { TelegramNetworkConfig } from "../../../config/types.telegram.js";
 import { resolveTelegramAccount } from "../../../plugin-sdk/account-resolution.js";
+import {
+  isNumericTelegramUserId,
+  normalizeTelegramAllowFromEntry,
+  inspectTelegramAccount,
+  listTelegramAccountIds,
+  lookupTelegramChatId,
+} from "../../../plugin-sdk/telegram.js";
 import { describeUnknownError } from "../../../secrets/shared.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { hasAllowFromEntries } from "../shared/allowlist.js";
@@ -125,6 +125,20 @@ export function scanTelegramAllowFromUsernameEntries(
   }
 
   return hits;
+}
+
+export function collectTelegramAllowFromUsernameWarnings(params: {
+  hits: TelegramAllowFromUsernameHit[];
+  doctorFixCommand: string;
+}): string[] {
+  if (params.hits.length === 0) {
+    return [];
+  }
+  const sampleEntry = sanitizeForLog(params.hits[0]?.entry ?? "@");
+  return [
+    `- Telegram allowFrom contains ${params.hits.length} non-numeric entries (e.g. ${sampleEntry}); Telegram authorization requires numeric sender IDs.`,
+    `- Run "${params.doctorFixCommand}" to auto-resolve @username entries to numeric IDs (requires a Telegram bot token).`,
+  ];
 }
 
 export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promise<{

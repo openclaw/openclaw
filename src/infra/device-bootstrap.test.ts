@@ -26,8 +26,8 @@ async function verifyBootstrapToken(
     token,
     deviceId: "device-123",
     publicKey: "public-key-123",
-    role: "operator.admin",
-    scopes: ["operator.admin"],
+    role: "node",
+    scopes: [],
     baseDir,
     ...overrides,
   });
@@ -52,12 +52,21 @@ describe("device bootstrap tokens", () => {
     const raw = await fs.readFile(resolveBootstrapPath(baseDir), "utf8");
     const parsed = JSON.parse(raw) as Record<
       string,
-      { token: string; ts: number; issuedAtMs: number }
+      {
+        token: string;
+        ts: number;
+        issuedAtMs: number;
+        profile: { roles: string[]; scopes: string[] };
+      }
     >;
     expect(parsed[issued.token]).toMatchObject({
       token: issued.token,
       ts: Date.now(),
       issuedAtMs: Date.now(),
+      profile: {
+        roles: ["node"],
+        scopes: [],
+      },
     });
   });
 
@@ -124,6 +133,10 @@ describe("device bootstrap tokens", () => {
             token: issued.token,
             ts: issuedAtMs,
             issuedAtMs,
+            profile: {
+              roles: ["node"],
+              scopes: [],
+            },
           },
         },
         null,
@@ -151,6 +164,49 @@ describe("device bootstrap tokens", () => {
     expect(raw).toContain(issued.token);
   });
 
+  it("rejects bootstrap verification when role or scopes exceed the issued profile", async () => {
+    const baseDir = await createTempDir();
+    const issued = await issueDeviceBootstrapToken({ baseDir });
+
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        role: "operator",
+        scopes: ["operator.admin"],
+      }),
+    ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
+
+    const raw = await fs.readFile(resolveBootstrapPath(baseDir), "utf8");
+    expect(raw).toContain(issued.token);
+  });
+
+  it("supports explicitly bound bootstrap profiles", async () => {
+    const baseDir = await createTempDir();
+    const issued = await issueDeviceBootstrapToken({
+      baseDir,
+      profile: {
+        roles: [" operator ", "operator"],
+        scopes: ["operator.read", " operator.read "],
+      },
+    });
+
+    const raw = await fs.readFile(resolveBootstrapPath(baseDir), "utf8");
+    const parsed = JSON.parse(raw) as Record<
+      string,
+      { profile: { roles: string[]; scopes: string[] } }
+    >;
+    expect(parsed[issued.token]?.profile).toEqual({
+      roles: ["operator"],
+      scopes: ["operator.read"],
+    });
+
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        role: "operator",
+        scopes: ["operator.read"],
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+
   it("accepts trimmed bootstrap tokens and still consumes them once", async () => {
     const baseDir = await createTempDir();
     const issued = await issueDeviceBootstrapToken({ baseDir });
@@ -176,8 +232,8 @@ describe("device bootstrap tokens", () => {
         token: "missing-token",
         deviceId: "device-123",
         publicKey: "public-key-123",
-        role: "operator.admin",
-        scopes: ["operator.admin"],
+        role: "node",
+        scopes: [],
         baseDir,
       }),
     ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
@@ -200,7 +256,7 @@ describe("device bootstrap tokens", () => {
     expect(parsed[issued.token]?.token).toBe(issued.token);
   });
 
-  it("accepts legacy records that only stored issuedAtMs and prunes expired tokens", async () => {
+  it("fails closed for unbound legacy records and prunes expired tokens", async () => {
     vi.useFakeTimers();
     const baseDir = await createTempDir();
     const bootstrapPath = resolveBootstrapPath(baseDir);
@@ -226,7 +282,10 @@ describe("device bootstrap tokens", () => {
       "utf8",
     );
 
-    await expect(verifyBootstrapToken(baseDir, "legacyToken")).resolves.toEqual({ ok: true });
+    await expect(verifyBootstrapToken(baseDir, "legacyToken")).resolves.toEqual({
+      ok: false,
+      reason: "bootstrap_token_invalid",
+    });
 
     await expect(verifyBootstrapToken(baseDir, "expiredToken")).resolves.toEqual({
       ok: false,

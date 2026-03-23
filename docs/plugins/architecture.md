@@ -12,9 +12,12 @@ sidebarTitle: "Internals"
 # Plugin Internals
 
 <Info>
-  This page is for **plugin developers and contributors**. If you just want to
-  install and use plugins, see [Plugins](/tools/plugin). If you want to build
-  a plugin, see [Building Plugins](/plugins/building-plugins).
+  This is the **deep architecture reference**. For practical guides, see:
+  - [Install and use plugins](/tools/plugin) — user guide
+  - [Getting Started](/plugins/building-plugins) — first plugin tutorial
+  - [Channel Plugins](/plugins/sdk-channel-plugins) — build a messaging channel
+  - [Provider Plugins](/plugins/sdk-provider-plugins) — build a model provider
+  - [SDK Overview](/plugins/sdk-overview) — import map and registration API
 </Info>
 
 This page covers the internal architecture of the OpenClaw plugin system.
@@ -431,6 +434,11 @@ skills.
 
 Use allowlists and explicit install/load paths for non-bundled plugins. Treat
 workspace plugins as development-time code, not production defaults.
+
+For bundled workspace package names, keep the plugin id anchored in the npm
+name: `@openclaw/<id>` by default, or an approved typed suffix such as
+`-provider`, `-plugin`, `-speech`, `-sandbox`, or `-media-understanding` when
+the package intentionally exposes a narrower plugin role.
 
 Important trust note:
 

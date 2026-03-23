@@ -9,6 +9,7 @@ import {
   isSlackMutableAllowEntry,
   isZalouserMutableGroupEntry,
 } from "../../../security/mutable-allowlist-detectors.js";
+import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { asObjectRecord } from "./object.js";
 
 export type MutableAllowlistHit = {
@@ -302,4 +303,28 @@ export function scanMutableAllowlistEntries(cfg: OpenClawConfig): MutableAllowli
   }
 
   return hits;
+}
+
+export function collectMutableAllowlistWarnings(hits: MutableAllowlistHit[]): string[] {
+  if (hits.length === 0) {
+    return [];
+  }
+  const channels = Array.from(new Set(hits.map((hit) => hit.channel))).toSorted();
+  const exampleLines = hits
+    .slice(0, 8)
+    .map((hit) => `- ${sanitizeForLog(hit.path)}: ${sanitizeForLog(hit.entry)}`);
+  const remaining =
+    hits.length > 8 ? `- +${hits.length - 8} more mutable allowlist entries.` : null;
+  const flagPaths = Array.from(new Set(hits.map((hit) => hit.dangerousFlagPath)));
+  const flagHint =
+    flagPaths.length === 1
+      ? sanitizeForLog(flagPaths[0] ?? "")
+      : `${sanitizeForLog(flagPaths[0] ?? "")} (and ${flagPaths.length - 1} other scope flags)`;
+  return [
+    `- Found ${hits.length} mutable allowlist ${hits.length === 1 ? "entry" : "entries"} across ${channels.join(", ")} while name matching is disabled by default.`,
+    ...exampleLines,
+    ...(remaining ? [remaining] : []),
+    `- Option A (break-glass): enable ${flagHint}=true to keep name/email/nick matching.`,
+    "- Option B (recommended): resolve names/emails/nicks to stable sender IDs and rewrite the allowlist entries.",
+  ];
 }

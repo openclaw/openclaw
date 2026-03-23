@@ -4,6 +4,8 @@ import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
+  collectExecSafeBinCoverageWarnings,
+  collectExecSafeBinTrustedDirHintWarnings,
   maybeRepairExecSafeBinProfiles,
   scanExecSafeBinCoverage,
   scanExecSafeBinTrustedDirHints,
@@ -26,7 +28,38 @@ describe("doctor exec safe bin helpers", () => {
       },
     } as OpenClawConfig);
 
-    expect(hits).toEqual([{ scopePath: "tools.exec", bin: "node", isInterpreter: true }]);
+    expect(hits).toEqual([
+      { scopePath: "tools.exec", bin: "node", kind: "missingProfile", isInterpreter: true },
+      {
+        scopePath: "tools.exec",
+        bin: "jq",
+        kind: "riskySemantics",
+        warning:
+          "jq supports broad jq programs and builtins (for example `env`), so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
+      },
+    ]);
+  });
+
+  it("formats coverage warnings", () => {
+    const warnings = collectExecSafeBinCoverageWarnings({
+      hits: [
+        { scopePath: "tools.exec", bin: "node", kind: "missingProfile", isInterpreter: true },
+        {
+          scopePath: "agents.list.runner.tools.exec",
+          bin: "jq",
+          kind: "riskySemantics",
+          warning:
+            "jq supports broad jq programs and builtins (for example `env`), so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
+        },
+      ],
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining("tools.exec.safeBins includes interpreter/runtime 'node'"),
+      expect.stringContaining("agents.list.runner.tools.exec.safeBins includes 'jq'"),
+      expect.stringContaining('Run "openclaw doctor --fix"'),
+    ]);
   });
 
   it("scaffolds custom safeBin profiles but warns on interpreters", () => {
@@ -42,6 +75,7 @@ describe("doctor exec safe bin helpers", () => {
       "- tools.exec.safeBinProfiles.jq: added scaffold profile {} (review and tighten flags/positionals).",
     ]);
     expect(result.warnings).toEqual([
+      "- tools.exec.safeBins includes 'jq': jq supports broad jq programs and builtins (for example `env`), so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
       "- tools.exec.safeBins includes interpreter/runtime 'node' without profile; remove it from safeBins or use explicit allowlist entries.",
     ]);
     expect(result.config.tools?.exec?.safeBinProfiles).toEqual({ jq: {} });
@@ -69,6 +103,13 @@ describe("doctor exec safe bin helpers", () => {
       bin: "custom-safe-bin",
       resolvedPath: binPath,
     });
+
+    expect(collectExecSafeBinTrustedDirHintWarnings(hits)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("tools.exec.safeBins entry 'custom-safe-bin'"),
+        expect.stringContaining("tools.exec.safeBinTrustedDirs"),
+      ]),
+    );
 
     rmSync(tempDir, { recursive: true, force: true });
   });

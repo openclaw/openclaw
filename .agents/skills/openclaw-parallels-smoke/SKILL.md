@@ -16,11 +16,20 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 - Pass `--json` for machine-readable summaries.
 - Per-phase logs land under `/tmp/openclaw-parallels-*`.
 - Do not run local and gateway agent turns in parallel on the same fresh workspace or session.
+- For `prlctl exec`, pass the VM name before `--current-user` (`prlctl exec "$VM" --current-user ...`), not the other way around.
+
+## npm install then update
+
+- Preferred entrypoint: `pnpm test:parallels:npm-update`
+- Flow: fresh snapshot -> install npm package baseline -> smoke -> install current main tgz on the same guest -> smoke again.
+- Same-guest update verification should set the default model explicitly to `openai/gpt-5.4` before the agent turn and use a fresh explicit `--session-id` so old session model state does not leak into the check.
+- Linux same-guest update verification should also export `HOME=/root`, pass `OPENAI_API_KEY` via `prlctl exec ... /usr/bin/env`, and use `openclaw agent --local`; the fresh Linux baseline does not rely on persisted gateway credentials.
 
 ## macOS flow
 
 - Preferred entrypoint: `pnpm test:parallels:macos`
-- Target the snapshot closest to `macOS 26.3.1 fresh`.
+- Default to the snapshot closest to `macOS 26.3.1 latest`.
+- On Peter's Tahoe VM, `fresh-latest-march-2026` can hang in `prlctl snapshot-switch`; if restore times out there, rerun with `--snapshot-hint 'macOS 26.3.1 latest'` before blaming auth or the harness.
 - `prlctl exec` is fine for deterministic repo commands, but use the guest Terminal or `prlctl enter` when installer parity or shell-sensitive behavior matters.
 - On the fresh Tahoe snapshot, `brew` exists but `node` may be missing from PATH in noninteractive exec. Use `/opt/homebrew/bin/node` when needed.
 - Fresh host-served tgz installs should install as guest root with `HOME=/var/root`, then run onboarding as the desktop user via `prlctl exec --current-user`.
@@ -33,17 +42,21 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 - Always use `prlctl exec --current-user`; plain `prlctl exec` lands in `NT AUTHORITY\\SYSTEM`.
 - Prefer explicit `npm.cmd` and `openclaw.cmd`.
 - Use PowerShell only as the transport with `-ExecutionPolicy Bypass`, then call the `.cmd` shims from inside it.
+- Windows installer/tgz phases now retry once after guest-ready recheck; keep new Windows smoke steps idempotent so a transport-flake retry is safe.
 - Keep onboarding and status output ASCII-clean in logs; fancy punctuation becomes mojibake in current capture paths.
+- If you hit an older run with `rc=255` plus an empty `fresh.install-main.log` or `upgrade.install-main.log`, treat it as a likely `prlctl exec` transport drop after guest start-up, not immediate proof of an npm/package failure.
 
 ## Linux flow
 
 - Preferred entrypoint: `pnpm test:parallels:linux`
 - Use the snapshot closest to fresh `Ubuntu 24.04.3 ARM64`.
+- If that exact VM is missing on the host, fall back to the closest Ubuntu guest with a fresh poweroff snapshot. On Peter's host today, that is `Ubuntu 25.10`.
 - Use plain `prlctl exec`; `--current-user` is not the right transport on this snapshot.
 - Fresh snapshots may be missing `curl`, and `apt-get update` can fail on clock skew. Bootstrap with `apt-get -o Acquire::Check-Date=false update` and install `curl ca-certificates`.
 - Fresh `main` tgz smoke still needs the latest-release installer first because the snapshot has no Node or npm before bootstrap.
 - This snapshot does not have a usable `systemd --user` session; managed daemon install is unsupported.
 - `prlctl exec` reaps detached Linux child processes on this snapshot, so detached background gateway runs are not trustworthy smoke signals.
+- Treat `gateway=skipped-no-detached-linux-gateway` plus `daemon=systemd-user-unavailable` as baseline on that Linux lane, not a regression.
 
 ## Discord roundtrip
 
