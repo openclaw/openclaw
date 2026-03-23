@@ -8,7 +8,7 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const WORK_DIR = resolve(__dirname, '..');
+const WORK_DIR = __dirname;
 
 console.log('=== 自动部署脚本 ===\n');
 
