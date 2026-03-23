@@ -16,6 +16,7 @@ import {
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   stripSessionsYieldArtifacts,
+  shouldInjectHeartbeatPrompt,
   shouldInjectOllamaCompatNumCtx,
   decodeHtmlEntitiesInObject,
   wrapOllamaCompatNumCtx,
@@ -313,6 +314,21 @@ describe("resolvePromptModeForSession", () => {
     expect(resolvePromptModeForSession(undefined)).toBe("full");
     expect(resolvePromptModeForSession("agent:main")).toBe("full");
     expect(resolvePromptModeForSession("agent:main:thread:abc")).toBe("full");
+  });
+});
+
+describe("shouldInjectHeartbeatPrompt", () => {
+  it("injects the heartbeat prompt for default-agent non-cron runs", () => {
+    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "user" })).toBe(true);
+    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "heartbeat" })).toBe(true);
+  });
+
+  it("suppresses the heartbeat prompt for cron-triggered runs", () => {
+    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "cron" })).toBe(false);
+  });
+
+  it("suppresses the heartbeat prompt for non-default agents", () => {
+    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: false, trigger: "user" })).toBe(false);
   });
 });
 
