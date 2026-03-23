@@ -1,5 +1,6 @@
 import fs from "node:fs";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createBrowserRouteContext } from "./server-context.js";
 import type { BrowserServerState } from "./server-context.js";
 
 vi.mock("./chrome-mcp.js", () => ({
@@ -19,8 +20,7 @@ vi.mock("./chrome-mcp.js", () => ({
   getChromeMcpPid: vi.fn(() => 4321),
 }));
 
-let createBrowserRouteContext: typeof import("./server-context.js").createBrowserRouteContext;
-let chromeMcp: typeof import("./chrome-mcp.js");
+import * as chromeMcp from "./chrome-mcp.js";
 
 function makeState(): BrowserServerState {
   return {
@@ -60,12 +60,6 @@ function makeState(): BrowserServerState {
 
 afterEach(() => {
   vi.clearAllMocks();
-});
-
-beforeEach(async () => {
-  vi.resetModules();
-  ({ createBrowserRouteContext } = await import("./server-context.js"));
-  chromeMcp = await import("./chrome-mcp.js");
 });
 
 describe("browser server-context existing-session profile", () => {

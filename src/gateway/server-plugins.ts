@@ -6,7 +6,7 @@ import { resolveGatewayStartupPluginIds } from "../plugins/channel-plugin-ids.js
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { setGatewaySubagentRuntime } from "../plugins/runtime/index.js";
+import { setGatewayAgentAbort, setGatewaySubagentRuntime } from "../plugins/runtime/index.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
@@ -32,28 +32,16 @@ const FALLBACK_GATEWAY_CONTEXT_STATE_KEY: unique symbol = Symbol.for(
 
 type FallbackGatewayContextState = {
   context: GatewayRequestContext | undefined;
-  resolveContext: (() => GatewayRequestContext | undefined) | undefined;
 };
 
 const fallbackGatewayContextState = resolveGlobalSingleton<FallbackGatewayContextState>(
   FALLBACK_GATEWAY_CONTEXT_STATE_KEY,
-  () => ({ context: undefined, resolveContext: undefined }),
+  () => ({ context: undefined }),
 );
 
 export function setFallbackGatewayContext(ctx: GatewayRequestContext): void {
+  // TODO: This startup snapshot can become stale if runtime config/context changes.
   fallbackGatewayContextState.context = ctx;
-  fallbackGatewayContextState.resolveContext = undefined;
-}
-
-export function setFallbackGatewayContextResolver(
-  resolveContext: () => GatewayRequestContext | undefined,
-): void {
-  fallbackGatewayContextState.resolveContext = resolveContext;
-}
-
-function getFallbackGatewayContext(): GatewayRequestContext | undefined {
-  const resolved = fallbackGatewayContextState.resolveContext?.();
-  return resolved ?? fallbackGatewayContextState.context;
 }
 
 type PluginSubagentOverridePolicy = {
@@ -250,7 +238,7 @@ async function dispatchGatewayMethod<T>(
   },
 ): Promise<T> {
   const scope = getPluginRuntimeGatewayRequestScope();
-  const context = scope?.context ?? getFallbackGatewayContext();
+  const context = scope?.context ?? fallbackGatewayContextState.context;
   const isWebchatConnect = scope?.isWebchatConnect ?? (() => false);
   if (!context) {
     throw new Error(
@@ -288,6 +276,25 @@ async function dispatchGatewayMethod<T>(
     throw new Error(result.error?.message ?? `Gateway method "${method}" failed.`);
   }
   return result.payload as T;
+}
+
+function createGatewayAgentAbort(): PluginRuntime["agent"]["abort"] {
+  return async (params) => {
+    const ctx = fallbackGatewayContextState.context;
+    if (!ctx) {
+      return { aborted: false };
+    }
+    const active = ctx.chatAbortControllers.get(params.runId);
+    if (!active) {
+      return { aborted: false };
+    }
+    const { abortChatRunById } = await import("./chat-abort.js");
+    return abortChatRunById(ctx, {
+      runId: params.runId,
+      sessionKey: active.sessionKey,
+      stopReason: "plugin",
+    });
+  };
 }
 
 function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
@@ -396,12 +403,13 @@ export function loadGatewayPlugins(params: {
   logDiagnostics?: boolean;
 }) {
   setPluginSubagentOverridePolicies(params.cfg);
-  // Set the process-global gateway subagent runtime BEFORE loading plugins.
+  // Set the process-global gateway runtimes BEFORE loading plugins.
   // Gateway-owned registries may already exist from schema loads, so the
   // gateway path opts those runtimes into late binding rather than changing
   // the default subagent behavior for every plugin runtime in the process.
   const gatewaySubagent = createGatewaySubagentRuntime();
   setGatewaySubagentRuntime(gatewaySubagent);
+  setGatewayAgentAbort(createGatewayAgentAbort());
 
   const pluginRegistry = loadOpenClawPlugins({
     config: params.cfg,

@@ -46,14 +46,14 @@ describe("updateSessionStoreAfterAgentRun", () => {
       storePath,
       sessionStore: staleInMemory,
       defaultProvider: "openai",
-      defaultModel: "gpt-5.4",
+      defaultModel: "gpt-5.3-codex",
       result: {
         payloads: [],
         meta: {
           aborted: false,
           agentMeta: {
             provider: "openai",
-            model: "gpt-5.4",
+            model: "gpt-5.3-codex",
           },
         },
       } as never,
@@ -102,13 +102,13 @@ describe("updateSessionStoreAfterAgentRun", () => {
       storePath,
       sessionStore,
       defaultProvider: "openai",
-      defaultModel: "gpt-5.4",
+      defaultModel: "gpt-5.3-codex",
       result: {
         payloads: [],
         meta: {
           agentMeta: {
             provider: "openai",
-            model: "gpt-5.4",
+            model: "gpt-5.3-codex",
           },
           systemPromptReport: report,
         },

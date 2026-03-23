@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveMatrixAccountStorageRoot } from "../../extensions/matrix/runtime-api.js";
 import { withTempHome } from "../../test/helpers/temp-home.js";
+import * as commandSecretGatewayModule from "../cli/command-secret-gateway.js";
 import * as noteModule from "../terminal/note.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import { runDoctorConfigWithInput } from "./doctor-config-flow.test-utils.js";
@@ -33,22 +34,6 @@ async function collectDoctorWarnings(config: Record<string, unknown>): Promise<s
   } finally {
     noteSpy.mockRestore();
   }
-}
-
-async function loadFreshDoctorFlowDeps() {
-  vi.resetModules();
-  const telegramFetchModule = await import("../../extensions/telegram/src/fetch.js");
-  const telegramProxyModule = await import("../../extensions/telegram/src/proxy.js");
-  const freshCommandSecretGatewayModule = await import("../cli/command-secret-gateway.js");
-  const freshNoteModule = await import("../terminal/note.js");
-  const doctorFlowModule = await import("./doctor-config-flow.js");
-  return {
-    telegramFetchModule,
-    telegramProxyModule,
-    commandSecretGatewayModule: freshCommandSecretGatewayModule,
-    noteModule: freshNoteModule,
-    loadAndMaybeMigrateDoctorConfig: doctorFlowModule.loadAndMaybeMigrateDoctorConfig,
-  };
 }
 
 type DiscordGuildRule = {
@@ -614,11 +599,8 @@ describe("doctor config flow", () => {
       } as unknown as Response;
     });
     vi.stubGlobal("fetch", globalFetch);
-    const {
-      telegramFetchModule,
-      telegramProxyModule,
-      loadAndMaybeMigrateDoctorConfig: loadDoctorFlowFresh,
-    } = await loadFreshDoctorFlowDeps();
+    const telegramFetchModule = await import("../../extensions/telegram/src/fetch.js");
+    const telegramProxyModule = await import("../../extensions/telegram/src/proxy.js");
     const resolveTelegramFetch = vi.spyOn(telegramFetchModule, "resolveTelegramFetch");
     const makeProxyFetch = vi.spyOn(telegramProxyModule, "makeProxyFetch");
     resolveTelegramFetch.mockReturnValue(fetchSpy as unknown as typeof fetch);
@@ -643,7 +625,7 @@ describe("doctor config flow", () => {
             },
           },
         },
-        run: loadDoctorFlowFresh,
+        run: loadAndMaybeMigrateDoctorConfig,
       });
 
       const cfg = result.cfg as unknown as {
@@ -674,9 +656,7 @@ describe("doctor config flow", () => {
   });
 
   it("does not crash when Telegram allowFrom repair sees unavailable SecretRef-backed credentials", async () => {
-    const { noteModule: freshNoteModule, loadAndMaybeMigrateDoctorConfig: loadDoctorFlowFresh } =
-      await loadFreshDoctorFlowDeps();
-    const noteSpy = vi.spyOn(freshNoteModule, "note").mockImplementation(() => {});
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
     try {
@@ -695,7 +675,7 @@ describe("doctor config flow", () => {
             },
           },
         },
-        run: loadDoctorFlowFresh,
+        run: loadAndMaybeMigrateDoctorConfig,
       });
 
       const cfg = result.cfg as {
@@ -737,18 +717,14 @@ describe("doctor config flow", () => {
     });
     vi.stubGlobal("fetch", globalFetch);
     const proxyFetch = vi.fn();
-    const {
-      telegramFetchModule,
-      telegramProxyModule,
-      commandSecretGatewayModule: freshCommandSecretGatewayModule,
-      loadAndMaybeMigrateDoctorConfig: loadDoctorFlowFresh,
-    } = await loadFreshDoctorFlowDeps();
+    const telegramFetchModule = await import("../../extensions/telegram/src/fetch.js");
+    const telegramProxyModule = await import("../../extensions/telegram/src/proxy.js");
     const resolveTelegramFetch = vi.spyOn(telegramFetchModule, "resolveTelegramFetch");
     const makeProxyFetch = vi.spyOn(telegramProxyModule, "makeProxyFetch");
     makeProxyFetch.mockReturnValue(proxyFetch as unknown as typeof fetch);
     resolveTelegramFetch.mockReturnValue(fetchSpy as unknown as typeof fetch);
     const resolveSecretsSpy = vi
-      .spyOn(freshCommandSecretGatewayModule, "resolveCommandSecretRefsViaGateway")
+      .spyOn(commandSecretGatewayModule, "resolveCommandSecretRefsViaGateway")
       .mockResolvedValue({
         diagnostics: [],
         targetStatesByPath: {},
@@ -785,7 +761,7 @@ describe("doctor config flow", () => {
             },
           },
         },
-        run: loadDoctorFlowFresh,
+        run: loadAndMaybeMigrateDoctorConfig,
       });
 
       const cfg = result.cfg as {
@@ -810,12 +786,7 @@ describe("doctor config flow", () => {
   });
 
   it("sanitizes config-derived doctor warnings and changes before logging", async () => {
-    const {
-      telegramFetchModule,
-      noteModule: freshNoteModule,
-      loadAndMaybeMigrateDoctorConfig: loadDoctorFlowFresh,
-    } = await loadFreshDoctorFlowDeps();
-    const noteSpy = vi.spyOn(freshNoteModule, "note").mockImplementation(() => {});
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
     const globalFetch = vi.fn(async () => {
       throw new Error("global fetch should not be called");
     });
@@ -824,6 +795,7 @@ describe("doctor config flow", () => {
       json: async () => ({ ok: true, result: { id: 12345 } }),
     }));
     vi.stubGlobal("fetch", globalFetch);
+    const telegramFetchModule = await import("../../extensions/telegram/src/fetch.js");
     const resolveTelegramFetch = vi.spyOn(telegramFetchModule, "resolveTelegramFetch");
     resolveTelegramFetch.mockReturnValue(fetchSpy as unknown as typeof fetch);
     try {
@@ -858,7 +830,7 @@ describe("doctor config flow", () => {
             },
           },
         },
-        run: loadDoctorFlowFresh,
+        run: loadAndMaybeMigrateDoctorConfig,
       });
 
       const outputs = noteSpy.mock.calls
@@ -896,9 +868,7 @@ describe("doctor config flow", () => {
   });
 
   it("warns and continues when Telegram account inspection hits inactive SecretRef surfaces", async () => {
-    const { noteModule: freshNoteModule, loadAndMaybeMigrateDoctorConfig: loadDoctorFlowFresh } =
-      await loadFreshDoctorFlowDeps();
-    const noteSpy = vi.spyOn(freshNoteModule, "note").mockImplementation(() => {});
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
     try {
@@ -922,7 +892,7 @@ describe("doctor config flow", () => {
             },
           },
         },
-        run: loadDoctorFlowFresh,
+        run: loadAndMaybeMigrateDoctorConfig,
       });
 
       const cfg = result.cfg as {

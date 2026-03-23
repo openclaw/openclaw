@@ -1,12 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { listNativeCommandSpecs } from "../../../../src/auto-reply/commands-registry.js";
 import type { OpenClawConfig, loadConfig } from "../../../../src/config/config.js";
-let listNativeCommandSpecs: typeof import("../../../../src/auto-reply/commands-registry.js").listNativeCommandSpecs;
-let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
-let createNoopThreadBindingManager: typeof import("./thread-bindings.js").createNoopThreadBindingManager;
+import { createDiscordNativeCommand } from "./native-command.js";
+import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
-function createNativeCommand(
-  name: string,
-): ReturnType<typeof import("./native-command.js").createDiscordNativeCommand> {
+function createNativeCommand(name: string): ReturnType<typeof createDiscordNativeCommand> {
   const command = listNativeCommandSpecs({ provider: "discord" }).find(
     (entry) => entry.name === name,
   );
@@ -26,19 +24,17 @@ function createNativeCommand(
   });
 }
 
-type CommandOption = NonNullable<
-  ReturnType<typeof import("./native-command.js").createDiscordNativeCommand>["options"]
->[number];
+type CommandOption = NonNullable<ReturnType<typeof createDiscordNativeCommand>["options"]>[number];
 
 function findOption(
-  command: ReturnType<typeof import("./native-command.js").createDiscordNativeCommand>,
+  command: ReturnType<typeof createDiscordNativeCommand>,
   name: string,
 ): CommandOption | undefined {
   return command.options?.find((entry) => entry.name === name);
 }
 
 function requireOption(
-  command: ReturnType<typeof import("./native-command.js").createDiscordNativeCommand>,
+  command: ReturnType<typeof createDiscordNativeCommand>,
   name: string,
 ): CommandOption {
   const option = findOption(command, name);
@@ -64,13 +60,6 @@ function readChoices(option: CommandOption | undefined): unknown[] | undefined {
 }
 
 describe("createDiscordNativeCommand option wiring", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ listNativeCommandSpecs } = await import("../../../../src/auto-reply/commands-registry.js"));
-    ({ createDiscordNativeCommand } = await import("./native-command.js"));
-    ({ createNoopThreadBindingManager } = await import("./thread-bindings.js"));
-  });
-
   it("uses autocomplete for /acp action so inline action values are accepted", async () => {
     const command = createNativeCommand("acp");
     const action = requireOption(command, "action");

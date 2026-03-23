@@ -1,10 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
-
-vi.hoisted(() => {
-  vi.resetModules();
-});
-
 import "./server-context.chrome-test-harness.js";
 import * as cdpModule from "./cdp.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";

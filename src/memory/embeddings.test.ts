@@ -1,7 +1,17 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
+
+vi.mock("../agents/model-auth.js", async () => {
+  const { createModelAuthMockModule } = await import("../test-utils/model-auth-mock.js");
+  return createModelAuthMockModule();
+});
+
+const importNodeLlamaCppMock = vi.fn();
+vi.mock("./node-llama.js", () => ({
+  importNodeLlamaCpp: (...args: unknown[]) => importNodeLlamaCppMock(...args),
+}));
 
 const createFetchMock = () =>
   vi.fn(async (_input?: unknown, _init?: unknown) => ({
@@ -27,16 +37,11 @@ type AuthModule = typeof import("../agents/model-auth.js");
 type ResolvedProviderAuth = Awaited<ReturnType<AuthModule["resolveApiKeyForProvider"]>>;
 
 let authModule: AuthModule;
-let nodeLlamaModule: typeof import("./node-llama.js");
 let createEmbeddingProvider: EmbeddingsModule["createEmbeddingProvider"];
 let DEFAULT_LOCAL_MODEL: EmbeddingsModule["DEFAULT_LOCAL_MODEL"];
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   authModule = await import("../agents/model-auth.js");
-  nodeLlamaModule = await import("./node-llama.js");
-  vi.spyOn(authModule, "resolveApiKeyForProvider");
-  vi.spyOn(nodeLlamaModule, "importNodeLlamaCpp");
   ({ createEmbeddingProvider, DEFAULT_LOCAL_MODEL } = await import("./embeddings.js"));
 });
 
@@ -61,7 +66,7 @@ function mockResolvedProviderKey(apiKey = "provider-key") {
 }
 
 function mockMissingLocalEmbeddingDependency() {
-  vi.mocked(nodeLlamaModule.importNodeLlamaCpp).mockRejectedValue(
+  importNodeLlamaCppMock.mockRejectedValue(
     Object.assign(new Error("Cannot find package 'node-llama-cpp'"), {
       code: "ERR_MODULE_NOT_FOUND",
     }),
@@ -451,7 +456,7 @@ describe("local embedding normalization", () => {
     resolveModelFile: (modelPath: string, modelDirectory?: string) => Promise<string> = async () =>
       "/fake/model.gguf",
   ): void {
-    vi.mocked(nodeLlamaModule.importNodeLlamaCpp).mockResolvedValue({
+    importNodeLlamaCppMock.mockResolvedValue({
       getLlama: async () => ({
         loadModel: vi.fn().mockResolvedValue({
           createEmbeddingContext: vi.fn().mockResolvedValue({
@@ -463,7 +468,7 @@ describe("local embedding normalization", () => {
       }),
       resolveModelFile,
       LlamaLogLevel: { error: 0 },
-    } as never);
+    });
   }
 
   it("normalizes local embeddings to magnitude ~1.0", async () => {
@@ -518,7 +523,7 @@ describe("local embedding normalization", () => {
       [1.0, 1.0, 1.0, 1.0],
     ];
 
-    vi.mocked(nodeLlamaModule.importNodeLlamaCpp).mockResolvedValue({
+    importNodeLlamaCppMock.mockResolvedValue({
       getLlama: async () => ({
         loadModel: vi.fn().mockResolvedValue({
           createEmbeddingContext: vi.fn().mockResolvedValue({
@@ -532,7 +537,7 @@ describe("local embedding normalization", () => {
       }),
       resolveModelFile: async () => "/fake/model.gguf",
       LlamaLogLevel: { error: 0 },
-    } as never);
+    });
 
     const result = await createLocalProviderForTest();
 

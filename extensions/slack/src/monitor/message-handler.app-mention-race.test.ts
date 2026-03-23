@@ -50,7 +50,7 @@ vi.mock("./message-handler/dispatch.js", () => ({
     dispatchPreparedSlackMessageMock(prepared),
 }));
 
-let createSlackMessageHandler: typeof import("./message-handler.js").createSlackMessageHandler;
+import { createSlackMessageHandler } from "./message-handler.js";
 
 function createMarkMessageSeen() {
   const seen = new Set<string>();
@@ -117,9 +117,7 @@ async function createInFlightMessageScenario(ts: string) {
 }
 
 describe("createSlackMessageHandler app_mention race handling", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ createSlackMessageHandler } = await import("./message-handler.js"));
+  beforeEach(() => {
     prepareSlackMessageMock.mockReset();
     dispatchPreparedSlackMessageMock.mockReset();
   });

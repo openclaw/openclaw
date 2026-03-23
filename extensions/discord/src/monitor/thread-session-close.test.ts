@@ -15,7 +15,7 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   };
 });
 
-let closeDiscordThreadSessions: typeof import("./thread-session-close.js").closeDiscordThreadSessions;
+const { closeDiscordThreadSessions } = await import("./thread-session-close.js");
 
 function setupStore(store: Record<string, { updatedAt: number }>) {
   hoisted.updateSessionStore.mockImplementation(
@@ -30,9 +30,7 @@ const MATCHED_KEY = `agent:main:discord:channel:${THREAD_ID}`;
 const UNMATCHED_KEY = `agent:main:discord:channel:${OTHER_ID}`;
 
 describe("closeDiscordThreadSessions", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ closeDiscordThreadSessions } = await import("./thread-session-close.js"));
+  beforeEach(() => {
     hoisted.updateSessionStore.mockClear();
     hoisted.resolveStorePath.mockClear();
     hoisted.resolveStorePath.mockReturnValue("/tmp/openclaw-sessions.json");

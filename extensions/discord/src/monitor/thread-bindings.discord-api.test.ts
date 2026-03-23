@@ -34,14 +34,11 @@ vi.mock("../send.js", async (importOriginal) => {
   };
 });
 
-let maybeSendBindingMessage: typeof import("./thread-bindings.discord-api.js").maybeSendBindingMessage;
-let resolveChannelIdForBinding: typeof import("./thread-bindings.discord-api.js").resolveChannelIdForBinding;
+const { maybeSendBindingMessage, resolveChannelIdForBinding } =
+  await import("./thread-bindings.discord-api.js");
 
 describe("resolveChannelIdForBinding", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ maybeSendBindingMessage, resolveChannelIdForBinding } =
-      await import("./thread-bindings.discord-api.js"));
+  beforeEach(() => {
     hoisted.restGet.mockClear();
     hoisted.createDiscordRestClient.mockClear();
     hoisted.sendMessageDiscord.mockClear().mockResolvedValue({});
@@ -127,10 +124,7 @@ describe("resolveChannelIdForBinding", () => {
 });
 
 describe("maybeSendBindingMessage", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ maybeSendBindingMessage, resolveChannelIdForBinding } =
-      await import("./thread-bindings.discord-api.js"));
+  beforeEach(() => {
     hoisted.sendMessageDiscord.mockClear().mockResolvedValue({});
     hoisted.sendWebhookMessageDiscord.mockClear().mockResolvedValue({});
   });

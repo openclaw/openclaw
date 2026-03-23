@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { validateConfigObjectWithPlugins } from "./config.js";
 import { buildWebSearchProviderConfig } from "./test-helpers.js";
 
 vi.mock("../runtime.js", () => ({
@@ -120,16 +121,8 @@ vi.mock("../plugins/web-search-providers.js", () => {
   };
 });
 
-let validateConfigObjectWithPlugins: typeof import("./config.js").validateConfigObjectWithPlugins;
-let resolveSearchProvider: typeof import("../agents/tools/web-search.js").__testing.resolveSearchProvider;
-
-beforeEach(async () => {
-  vi.resetModules();
-  ({ validateConfigObjectWithPlugins } = await import("./config.js"));
-  ({
-    __testing: { resolveSearchProvider },
-  } = await import("../agents/tools/web-search.js"));
-});
+const { __testing } = await import("../agents/tools/web-search.js");
+const { resolveSearchProvider } = __testing;
 
 function pluginWebSearchApiKey(
   config: Record<string, unknown> | undefined,

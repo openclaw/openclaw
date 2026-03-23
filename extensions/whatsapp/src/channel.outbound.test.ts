@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createWhatsAppPollFixture,
   expectWhatsAppPollSent,
@@ -21,14 +21,9 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
-let whatsappPlugin: typeof import("./channel.js").whatsappPlugin;
+import { whatsappPlugin } from "./channel.js";
 
 describe("whatsappPlugin outbound sendPoll", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ whatsappPlugin } = await import("./channel.js"));
-  });
-
   it("threads cfg into runtime sendPollWhatsApp call", async () => {
     const { cfg, poll, to, accountId } = createWhatsAppPollFixture();
 

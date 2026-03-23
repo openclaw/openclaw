@@ -21,24 +21,14 @@ vi.mock("../../../../src/globals.js", () => ({
   logVerbose: () => {},
 }));
 
-let __resetDiscordChannelInfoCacheForTest: typeof import("./message-utils.js").__resetDiscordChannelInfoCacheForTest;
-let resolveDiscordChannelInfo: typeof import("./message-utils.js").resolveDiscordChannelInfo;
-let resolveDiscordMessageChannelId: typeof import("./message-utils.js").resolveDiscordMessageChannelId;
-let resolveDiscordMessageText: typeof import("./message-utils.js").resolveDiscordMessageText;
-let resolveForwardedMediaList: typeof import("./message-utils.js").resolveForwardedMediaList;
-let resolveMediaList: typeof import("./message-utils.js").resolveMediaList;
-
-beforeEach(async () => {
-  vi.resetModules();
-  ({
-    __resetDiscordChannelInfoCacheForTest,
-    resolveDiscordChannelInfo,
-    resolveDiscordMessageChannelId,
-    resolveDiscordMessageText,
-    resolveForwardedMediaList,
-    resolveMediaList,
-  } = await import("./message-utils.js"));
-});
+const {
+  __resetDiscordChannelInfoCacheForTest,
+  resolveDiscordChannelInfo,
+  resolveDiscordMessageChannelId,
+  resolveDiscordMessageText,
+  resolveForwardedMediaList,
+  resolveMediaList,
+} = await import("./message-utils.js");
 
 function asMessage(payload: Record<string, unknown>): Message {
   return payload as unknown as Message;

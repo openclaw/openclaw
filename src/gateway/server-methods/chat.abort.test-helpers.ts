@@ -25,7 +25,6 @@ export type ChatAbortTestContext = Record<string, unknown> & {
   chatAbortControllers: Map<string, ReturnType<typeof createActiveRun>>;
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
-  chatDeltaLastBroadcastLen: Map<string, number>;
   chatAbortedRuns: Map<string, number>;
   removeChatRun: (...args: unknown[]) => { sessionKey: string; clientRunId: string } | undefined;
   agentRunSeq: Map<string, number>;
@@ -43,7 +42,6 @@ export function createChatAbortContext(
     chatAbortControllers: new Map(),
     chatRunBuffers: new Map(),
     chatDeltaSentAt: new Map(),
-    chatDeltaLastBroadcastLen: new Map(),
     chatAbortedRuns: new Map<string, number>(),
     removeChatRun: vi
       .fn()

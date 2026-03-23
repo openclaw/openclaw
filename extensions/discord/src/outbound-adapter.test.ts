@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeDiscordOutboundTarget } from "./normalize.js";
 
 const hoisted = vi.hoisted(() => {
   const sendMessageDiscordMock = vi.fn();
@@ -36,14 +37,7 @@ vi.mock("./monitor/thread-bindings.js", async (importOriginal) => {
   };
 });
 
-let normalizeDiscordOutboundTarget: typeof import("./normalize.js").normalizeDiscordOutboundTarget;
-let discordOutbound: typeof import("./outbound-adapter.js").discordOutbound;
-
-beforeEach(async () => {
-  vi.resetModules();
-  ({ normalizeDiscordOutboundTarget } = await import("./normalize.js"));
-  ({ discordOutbound } = await import("./outbound-adapter.js"));
-});
+const { discordOutbound } = await import("./outbound-adapter.js");
 
 const DEFAULT_DISCORD_SEND_RESULT = {
   channel: "discord",

@@ -208,7 +208,7 @@ describe("provider runtime contract", () => {
       const provider = requireProviderContractProvider("github-copilot");
       const model = provider.resolveDynamicModel?.({
         provider: "github-copilot",
-        modelId: "gpt-5.4",
+        modelId: "gpt-5.3-codex",
         modelRegistry: {
           find: (_provider: string, id: string) =>
             id === "gpt-5.2-codex"
@@ -223,7 +223,7 @@ describe("provider runtime contract", () => {
       });
 
       expect(model).toMatchObject({
-        id: "gpt-5.4",
+        id: "gpt-5.3-codex",
         provider: "github-copilot",
         api: "openai-codex-responses",
       });

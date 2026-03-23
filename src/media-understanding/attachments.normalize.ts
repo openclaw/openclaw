@@ -1,5 +1,5 @@
+import { fileURLToPath } from "node:url";
 import type { MsgContext } from "../auto-reply/templating.js";
-import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
 import { getFileExtension, isAudioFileName, kindFromMime } from "../media/mime.js";
 import type { MediaAttachment } from "./types.js";
 
@@ -10,15 +10,10 @@ export function normalizeAttachmentPath(raw?: string | null): string | undefined
   }
   if (value.startsWith("file://")) {
     try {
-      return safeFileURLToPath(value);
+      return fileURLToPath(value);
     } catch {
       return undefined;
     }
-  }
-  try {
-    assertNoWindowsNetworkPath(value, "Attachment path");
-  } catch {
-    return undefined;
   }
   return value;
 }

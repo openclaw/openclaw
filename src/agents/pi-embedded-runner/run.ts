@@ -35,7 +35,6 @@ import {
   FailoverError,
   resolveFailoverStatus,
 } from "../failover-error.js";
-import { shouldAllowCooldownProbeForReason } from "../failover-policy.js";
 import {
   applyLocalNoAuthHeaderOverride,
   ensureAuthProfileStore,
@@ -307,6 +306,7 @@ export async function runEmbeddedPiAgent(
         workspaceDir: resolvedWorkspace,
         allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
       });
+      const prevCwd = process.cwd();
 
       let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
@@ -754,7 +754,10 @@ export async function runEmbeddedPiAgent(
         const allowTransientCooldownProbe =
           params.allowTransientCooldownProbe === true &&
           allAutoProfilesInCooldown &&
-          shouldAllowCooldownProbeForReason(unavailableReason);
+          (unavailableReason === "rate_limit" ||
+            unavailableReason === "overloaded" ||
+            unavailableReason === "billing" ||
+            unavailableReason === "unknown");
         let didTransientCooldownProbe = false;
 
         while (profileIndex < profileCandidates.length) {
@@ -1710,6 +1713,7 @@ export async function runEmbeddedPiAgent(
       } finally {
         await contextEngine.dispose?.();
         stopRuntimeAuthRefreshTimer();
+        process.chdir(prevCwd);
       }
     }),
   );

@@ -105,7 +105,7 @@ describe("Synology channel wiring integration", () => {
         },
       },
       session: {
-        dmScope: "main" as const,
+        dmScope: "main",
       },
     };
 
