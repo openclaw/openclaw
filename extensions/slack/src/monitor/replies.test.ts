@@ -5,7 +5,7 @@ vi.mock("../send.js", () => ({
   sendMessageSlack: (...args: unknown[]) => sendMock(...args),
 }));
 
-import { deliverReplies } from "./replies.js";
+let deliverReplies: typeof import("./replies.js").deliverReplies;
 
 function baseParams(overrides?: Record<string, unknown>) {
   return {
@@ -20,7 +20,9 @@ function baseParams(overrides?: Record<string, unknown>) {
 }
 
 describe("deliverReplies identity passthrough", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ deliverReplies } = await import("./replies.js"));
     sendMock.mockReset();
   });
   it("passes identity to sendMessageSlack for text replies", async () => {

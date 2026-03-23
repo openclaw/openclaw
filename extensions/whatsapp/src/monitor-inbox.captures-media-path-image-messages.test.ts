@@ -1,11 +1,5 @@
-import crypto from "node:crypto";
-import fsSync from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import "./monitor-inbox.test-harness.js";
-import { describe, expect, it, vi } from "vitest";
-import { setLoggerOverride } from "../../../src/logging.js";
-import { monitorWebInbox } from "./inbound.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_ACCOUNT_ID,
   getAuthDir,
@@ -13,9 +7,30 @@ import {
   installWebMonitorInboxUnitTestHooks,
   mockLoadConfig,
 } from "./monitor-inbox.test-harness.js";
+let monitorWebInbox: typeof import("./inbound.js").monitorWebInbox;
+const inboundLoggerInfoMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-runtime")>();
+  return {
+    ...actual,
+    getChildLogger: () => ({
+      info: inboundLoggerInfoMock,
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    }),
+  };
+});
 
 describe("web monitor inbox", () => {
   installWebMonitorInboxUnitTestHooks();
+
+  beforeEach(async () => {
+    vi.resetModules();
+    inboundLoggerInfoMock.mockReset();
+    ({ monitorWebInbox } = await import("./inbound.js"));
+  });
 
   async function openMonitor(onMessage = vi.fn()) {
     return await monitorWebInbox({
@@ -120,10 +135,7 @@ describe("web monitor inbox", () => {
     expect(sock.ws.close).toHaveBeenCalledTimes(1);
   });
 
-  it("logs inbound bodies to file", async () => {
-    const logPath = path.join(os.tmpdir(), `openclaw-log-test-${crypto.randomUUID()}.log`);
-    setLoggerOverride({ level: "trace", file: logPath });
-
+  it("logs inbound bodies through the inbound child logger", async () => {
     const { listener } = await runSingleUpsertAndCapture({
       type: "notify",
       messages: [
@@ -136,15 +148,13 @@ describe("web monitor inbox", () => {
       ],
     });
 
-    await vi.waitFor(
-      () => {
-        expect(fsSync.existsSync(logPath)).toBe(true);
-      },
-      { timeout: 2_000, interval: 5 },
+    expect(inboundLoggerInfoMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: "ping",
+        from: "+999",
+      }),
+      "inbound message",
     );
-    const content = fsSync.readFileSync(logPath, "utf-8");
-    expect(content).toMatch(/web-inbound/);
-    expect(content).toMatch(/ping/);
     await listener.close();
   });
 

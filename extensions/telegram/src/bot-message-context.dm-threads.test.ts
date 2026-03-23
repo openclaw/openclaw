@@ -1,9 +1,20 @@
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../../src/config/config.js";
-import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
+let clearRuntimeConfigSnapshot: typeof import("../../../src/config/config.js").clearRuntimeConfigSnapshot;
+let setRuntimeConfigSnapshot: typeof import("../../../src/config/config.js").setRuntimeConfigSnapshot;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ buildTelegramMessageContextForTest } = await import("./bot-message-context.test-harness.js"));
+  ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
+    await import("../../../src/config/config.js"));
+  clearRuntimeConfigSnapshot();
+});
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
 
 describe("buildTelegramMessageContext dm thread sessions", () => {
   const buildContext = async (message: Record<string, unknown>) =>
@@ -110,10 +121,6 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
 });
 
 describe("buildTelegramMessageContext direct peer routing", () => {
-  afterEach(() => {
-    clearRuntimeConfigSnapshot();
-  });
-
   it("isolates dm sessions by sender id when chat id differs", async () => {
     const runtimeCfg = {
       agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },

@@ -10,7 +10,7 @@ import {
   stopSlackMonitor,
 } from "./monitor.test-helpers.js";
 
-const { monitorSlackProvider } = await import("./monitor.js");
+let monitorSlackProvider: typeof import("./monitor.js").monitorSlackProvider;
 
 const slackTestState = getSlackTestState();
 
@@ -68,6 +68,12 @@ async function runMissingThreadScenario(params: {
 }
 
 beforeEach(() => {
+  resetInboundDedupe();
+});
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ monitorSlackProvider } = await import("./monitor.js"));
   resetInboundDedupe();
   resetSlackTestState({
     messages: { responsePrefix: "PFX" },

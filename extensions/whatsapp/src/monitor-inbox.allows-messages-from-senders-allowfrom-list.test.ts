@@ -158,7 +158,7 @@ describe("web monitor inbox", () => {
       () => {
         expect(sock.sendMessage).toHaveBeenCalledTimes(1);
       },
-      { timeout: 2_000, interval: 5 },
+      { timeout: 5_000, interval: 5 },
     );
     expect(onMessage).not.toHaveBeenCalled();
     expectPairingPromptSent(sock, "999@s.whatsapp.net", "+999");
@@ -246,7 +246,7 @@ describe("web monitor inbox", () => {
           },
         ]);
       },
-      { timeout: 2_000, interval: 5 },
+      { timeout: 5_000, interval: 5 },
     );
 
     // Verify it WAS NOT passed to onMessage

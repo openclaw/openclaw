@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import {
   decorateOpenClawProfile,
@@ -112,6 +112,10 @@ describe("browser chrome profile decoration", () => {
     fixtureRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "openclaw-chrome-suite-"));
   });
 
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   afterAll(async () => {
     if (fixtureRoot) {
       await fsp.rm(fixtureRoot, { recursive: true, force: true });
@@ -205,6 +209,10 @@ describe("browser chrome helpers", () => {
   function mockExistsSync(match: (pathValue: string) => boolean) {
     return vi.spyOn(fs, "existsSync").mockImplementation((p) => match(String(p)));
   }
+
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
 
   afterEach(() => {
     vi.unstubAllEnvs();

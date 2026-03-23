@@ -149,7 +149,8 @@ export async function waitForMessageCalls(onMessage: ReturnType<typeof vi.fn>, c
     () => {
       expect(onMessage).toHaveBeenCalledTimes(count);
     },
-    { timeout: 2_000, interval: 5 },
+    // Channel-suite workers can be saturated under no-isolate CI runs.
+    { timeout: 5_000, interval: 5 },
   );
 }
 
@@ -215,6 +216,7 @@ export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }
   const createAuthDir = opts?.authDir ?? true;
 
   beforeEach(async () => {
+    vi.useRealTimers();
     vi.resetModules();
     vi.clearAllMocks();
     sessionState.sock = createMockSock();
