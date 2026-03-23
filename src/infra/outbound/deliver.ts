@@ -273,6 +273,8 @@ type DeliverOutboundPayloadsCoreParams = {
   bestEffort?: boolean;
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
   onPayload?: (payload: NormalizedOutboundPayload) => void;
+  /** Invoked when a `message_sending` plugin hook cancels a payload before send. */
+  onHookCancelled?: (payload: NormalizedOutboundPayload) => void;
   /** Session/agent context used for hooks and media local-root scoping. */
   session?: OutboundSessionContext;
   mirror?: DeliveryMirror;
@@ -674,6 +676,7 @@ async function deliverOutboundPayloadsCore(
         accountId,
       });
       if (hookResult.cancelled) {
+        params.onHookCancelled?.(payloadSummary);
         continue;
       }
       const effectivePayload = hookResult.payload;

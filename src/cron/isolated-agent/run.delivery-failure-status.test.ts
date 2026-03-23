@@ -179,6 +179,34 @@ describe("runCronIsolatedAgentTurn — delivery failure does not mark job as err
     expect(result.status).toBe("error");
   });
 
+  it("returns status ok when message_sending hook cancelled all payloads (not a failure)", async () => {
+    mockRunCronFallbackPassthrough();
+    setupDeliveryRequested();
+
+    // Simulate what happens when a message_sending hook cancels every payload:
+    // deliverOutboundPayloads returns an empty array (no sends) and calls
+    // the onHookCancelled callback for each cancelled payload.
+    deliverOutboundPayloads.mockImplementationOnce(
+      async (params: { onHookCancelled?: (p: unknown) => void }) => {
+        params.onHookCancelled?.({ text: "cancelled payload" });
+        return [];
+      },
+    );
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentTurnParams({
+        job: makeIsolatedAgentTurnJob({
+          delivery: { mode: "announce", channel: "feishu", to: "group-123" },
+        }),
+      }),
+    );
+
+    // The hook intentionally cancelled the delivery — this is NOT a failure.
+    // The run should be marked as "ok" (not "error").
+    // Fixes: skip synthetic failures for intentionally cancelled deliveries.
+    expect(result.status).toBe("ok");
+  });
+
   it("returns status ok and delivered=true when delivery succeeds", async () => {
     mockRunCronFallbackPassthrough();
     setupDeliveryRequested();

@@ -858,7 +858,12 @@ export async function runCronIsolatedAgentTurn(params: {
   // (strict delivery failures normally return an enriched result), but guard
   // it defensively: if delivery was attempted and not best-effort, surface
   // the failure.
-  if (deliveryAttempted && !deliveryBestEffort && !delivered) {
+  //
+  // Exception: when a `message_sending` plugin hook intentionally cancelled
+  // all payloads, deliverOutboundPayloads legitimately returns no results
+  // without any delivery error.  This is not a failure — the hook decided
+  // the message should not be sent.  Fixes review thread on #49880.
+  if (deliveryAttempted && !deliveryBestEffort && !delivered && !deliveryResult.hookCancelled) {
     return withRunSession({
       status: "error",
       error: "delivery failed without enriched result",

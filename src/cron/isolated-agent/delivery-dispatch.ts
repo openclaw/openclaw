@@ -108,6 +108,8 @@ export type DispatchCronDeliveryState = {
   result?: RunCronAgentTurnResult;
   delivered: boolean;
   deliveryAttempted: boolean;
+  /** True when all payloads were intentionally cancelled by a `message_sending` hook. */
+  hookCancelled?: boolean;
   summary?: string;
   outputText?: string;
   synthesizedText?: string;
@@ -356,6 +358,7 @@ export async function dispatchCronDelivery(
   // remains the only source of delivered state.
   let delivered = skipMessagingToolDelivery;
   let deliveryAttempted = skipMessagingToolDelivery;
+  let hookCancelled = false;
   const failDeliveryTarget = (error: string) =>
     params.withRunSession({
       status: "error",
@@ -462,6 +465,9 @@ export async function dispatchCronDelivery(
           deps: createOutboundSendDeps(params.deps),
           abortSignal: params.abortSignal,
           onError,
+          onHookCancelled: () => {
+            hookCancelled = true;
+          },
           // Isolated cron direct delivery uses its own transient retry loop.
           // Keep all attempts out of the write-ahead delivery queue so a
           // late-successful first send cannot leave behind a failed queue
@@ -650,6 +656,7 @@ export async function dispatchCronDelivery(
           outputText,
           synthesizedText,
           deliveryPayloads,
+          hookCancelled,
         };
       }
       logWarn(`[cron:${params.job.id}] ${params.resolvedDelivery.error.message}`);
@@ -663,6 +670,7 @@ export async function dispatchCronDelivery(
         }),
         delivered,
         deliveryAttempted,
+        hookCancelled,
         summary,
         outputText,
         synthesizedText,
@@ -686,6 +694,7 @@ export async function dispatchCronDelivery(
           outputText,
           synthesizedText,
           deliveryPayloads,
+          hookCancelled,
         };
       }
     } else {
@@ -699,6 +708,7 @@ export async function dispatchCronDelivery(
           outputText,
           synthesizedText,
           deliveryPayloads,
+          hookCancelled,
         };
       }
     }
@@ -707,6 +717,7 @@ export async function dispatchCronDelivery(
   return {
     delivered,
     deliveryAttempted,
+    hookCancelled,
     summary,
     outputText,
     synthesizedText,
