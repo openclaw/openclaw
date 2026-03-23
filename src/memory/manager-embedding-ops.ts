@@ -611,7 +611,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     
     // For batch embeddings, use configured timeout if available
     if (this.batch.timeoutMs > 0) {
-      return this.batch.timeoutMs;
+      // Security: cap at 30 minutes to prevent unbounded resource exhaustion (CWE-400)
+      const MAX_BATCH_TIMEOUT_MS = 30 * 60_000;
+      return Math.min(this.batch.timeoutMs, MAX_BATCH_TIMEOUT_MS);
     }
     
     // Fallback to conservative defaults when not configured
