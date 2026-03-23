@@ -99,6 +99,18 @@ export async function checkInboundAccessControl(params: {
     accountId: account.accountId,
     log: (message) => logVerbose(message),
   });
+  // Monitor-only groups bypass all sender-level filtering.
+  // Read raw config value directly since "monitor" is a custom string value.
+  const rawRequireMention = cfg.channels?.whatsapp?.groups?.[params.remoteJid]?.requireMention;
+  if (params.group && rawRequireMention === ("monitor" as any)) {
+    return {
+      allowed: true,
+      shouldMarkRead: true,
+      isSelfChat,
+      resolvedAccountId: account.accountId,
+    };
+  }
+
   const normalizedDmSender = normalizeE164(params.from);
   const normalizedGroupSender =
     typeof params.senderE164 === "string" ? normalizeE164(params.senderE164) : null;

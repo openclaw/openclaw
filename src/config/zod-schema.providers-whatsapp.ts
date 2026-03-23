@@ -16,7 +16,7 @@ const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional
 
 const WhatsAppGroupEntrySchema = z
   .object({
-    requireMention: z.boolean().optional(),
+    requireMention: z.union([z.boolean(), z.literal("monitor")]).optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
   })

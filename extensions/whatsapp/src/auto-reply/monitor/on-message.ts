@@ -124,6 +124,47 @@ export function createWebOnMessageHandler(params: {
         warn: params.replyLogger.warn.bind(params.replyLogger),
       });
 
+      // Fire internal hooks for ALL group messages (including monitor/non-mentioned)
+      // BEFORE gating, so passive logging hooks always receive messages.
+      {
+        const { getGlobalHookRunner } = await import("openclaw/plugin-sdk/plugin-runtime");
+        const { fireAndForgetHook } = await import("openclaw/plugin-sdk/hook-runtime");
+        const { createInternalHookEvent, triggerInternalHook } =
+          await import("openclaw/plugin-sdk/hook-runtime");
+        const {
+          deriveInboundMessageHookContext,
+          toPluginMessageReceivedEvent,
+          toPluginMessageContext,
+          toInternalMessageReceivedContext,
+        } = await import("openclaw/plugin-sdk/hook-runtime");
+
+        const hookCtx = deriveInboundMessageHookContext(
+          { ...metaCtx, CommandAuthorized: false, Body: msg.body ?? "" } as any,
+          { messageId: msg.id },
+        );
+        const hookRunner = getGlobalHookRunner();
+        if (hookRunner?.hasHooks("message_received")) {
+          fireAndForgetHook(
+            hookRunner.runMessageReceived(
+              toPluginMessageReceivedEvent(hookCtx),
+              toPluginMessageContext(hookCtx),
+            ),
+            "on-message: pre-gating message_received plugin hook failed",
+          );
+        }
+        if (route.sessionKey) {
+          fireAndForgetHook(
+            triggerInternalHook(
+              createInternalHookEvent("message", "received", route.sessionKey, {
+                ...toInternalMessageReceivedContext(hookCtx),
+                timestamp: msg.timestamp,
+              }),
+            ),
+            "on-message: pre-gating message_received internal hook failed",
+          );
+        }
+      }
+
       const gating = applyGroupGating({
         cfg: params.cfg,
         msg,

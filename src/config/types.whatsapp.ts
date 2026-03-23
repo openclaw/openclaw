@@ -18,7 +18,7 @@ export type WhatsAppActionConfig = {
 };
 
 export type WhatsAppGroupConfig = {
-  requireMention?: boolean;
+  requireMention?: boolean | "monitor";
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
 };

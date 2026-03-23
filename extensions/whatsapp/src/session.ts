@@ -124,6 +124,7 @@ export async function createWaSocket(
     printQRInTerminal: false,
     browser: ["openclaw", "cli", VERSION],
     syncFullHistory: false,
+    shouldSyncHistoryMessage: () => true,
     markOnlineOnConnect: false,
   });
 
@@ -152,6 +153,23 @@ export async function createWaSocket(
         }
         if (connection === "open" && verbose) {
           console.log(success("WhatsApp Web connected."));
+        }
+        if (connection === "open") {
+          try {
+            if (typeof (sock as any).communityFetchAllParticipating === "function") {
+              (sock as any)
+                .communityFetchAllParticipating()
+                .then(() => {
+                  sessionLogger.info("Community participation synced");
+                })
+                .catch((err: unknown) => {
+                  sessionLogger.warn(
+                    { error: String(err) },
+                    "Failed to sync community participation",
+                  );
+                });
+            }
+          } catch {}
         }
       } catch (err) {
         sessionLogger.error({ error: String(err) }, "connection.update handler error");
