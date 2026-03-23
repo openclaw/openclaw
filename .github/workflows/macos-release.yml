@@ -84,6 +84,8 @@ jobs:
         run: node scripts/ui.js build
 
       - name: Verify release contents
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
         run: pnpm release:check
 
       - name: Swift build
