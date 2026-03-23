@@ -7,6 +7,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveAgentWorkspace } from "../orchestration/workspace-store-sqlite.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
@@ -296,6 +297,26 @@ export async function runCliAgent(params: {
           // paths like HEARTBEAT.md relative to their workspace.
           if (params.agentDir) {
             next.AGENT_HOME = params.agentDir;
+          }
+          // Inject gateway URL so subprocess agents can connect back without
+          // hardcoding the port.  OPENCLAW_GATEWAY_PORT is set by the gateway
+          // server at startup; fall back to the default port 18789.
+          const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT ?? "18789";
+          next.OPENCLAW_GATEWAY_URL = `http://localhost:${gatewayPort}`;
+          // Inject the resolved agent ID for self-identification in sub-processes.
+          if (sessionAgentId) {
+            next.OPENCLAW_AGENT_ID = sessionAgentId;
+          }
+          // Inject the workspace ID (if resolvable) for orchestration context.
+          try {
+            const agentWorkspace = sessionAgentId
+              ? resolveAgentWorkspace(sessionAgentId)
+              : undefined;
+            if (agentWorkspace?.id) {
+              next.OPENCLAW_WORKSPACE_ID = agentWorkspace.id;
+            }
+          } catch {
+            // Non-critical: workspace lookup may fail if DB is unavailable.
           }
           return next;
         })();

@@ -166,15 +166,15 @@ Major feature ports: execution workspaces, issue documents, budget upgrades, tok
 
 ### Task 5: Phase 5 -- Adapter Improvements
 
-**Status:** To-do | **Priority:** Medium | **Assignee:** rohit sharma | **Est:** 6h
+**Status:** Done | **Priority:** Medium | **Assignee:** rohit sharma | **Est:** 6h
 
 Incremental adapter and infrastructure improvements.
 
-- [ ] 5.1 Pi adapter diagnostics -- port Paperclip's Pi diagnostic improvements to surface failures faster during heartbeat runs
-- [ ] 5.2 Claude adapter shared utils -- review Paperclip's claude-local adapter for token-counting helpers applicable to our model usage
-- [ ] 5.3 OPENCLAW\_\* env var injection -- add `OPENCLAW_GATEWAY_URL`, `OPENCLAW_AGENT_ID` etc. to subprocess env in heartbeat runner
-- [ ] 5.4 Skill sync review -- understand Paperclip's adapter skill sync pattern; evaluate if applicable to clawhub skill distribution
-- [ ] 5.5 realpathSync for .env -- add `realpathSync` to `.env` path resolution to handle symlinks
+- [x] 5.1 Pi adapter diagnostics -- `classifyPiModelDiscoveryError()` for structured error messages; FailoverError on heartbeat discovery failures
+- [x] 5.2 Claude adapter shared utils -- ALREADY HANDLED: Paperclip has no token-estimation utils; Operator1 has `estimateTokens` from pi-coding-agent
+- [x] 5.3 OPENCLAW\_\* env var injection -- added OPENCLAW_GATEWAY_URL, OPENCLAW_AGENT_ID, OPENCLAW_WORKSPACE_ID to subprocess env in cli-runner.ts
+- [x] 5.4 Skill sync review -- NOT APPLICABLE: Paperclip's company-skills is a server-side DB-backed registry; Operator1 uses Clawhub per-workspace flat files
+- [x] 5.5 realpathSync for .env -- NOT APPLICABLE: no symlinks involved; CWD .env doesn't exist, global .env is a regular file
 
 ### Task 6: Phase 6 -- Review Items (Decisions Required)
 

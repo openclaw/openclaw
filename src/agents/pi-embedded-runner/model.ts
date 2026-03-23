@@ -254,6 +254,41 @@ export function resolveModelWithRegistry(params: {
   return undefined;
 }
 
+/**
+ * Detects stale `npm:pi-driver` package references that cause Pi startup to hang
+ * on npm install, producing a confusing failure instead of a clear model-not-found error.
+ */
+const PI_STALE_PACKAGE_RE = /pi-driver|npm:\s*pi-driver/i;
+
+/**
+ * Detects provider authentication errors from Pi model discovery output,
+ * so callers can surface a more actionable message than a generic "unknown model".
+ */
+const PI_AUTH_REQUIRED_RE =
+  /(?:auth(?:entication)?\s+required|api\s*key|invalid\s*api\s*key|not\s+logged\s+in|free\s+usage\s+exceeded)/i;
+
+/**
+ * Classify a Pi model-discovery error message into a structured, user-actionable
+ * string.  Returns undefined when no specific classification applies (fall through
+ * to the generic unknown-model error).
+ */
+export function classifyPiModelDiscoveryError(message: string): string | undefined {
+  if (PI_STALE_PACKAGE_RE.test(message)) {
+    return (
+      "Pi startup failed while installing configured package `npm:pi-driver`. " +
+      "Remove `npm:pi-driver` from ~/.pi/agent/settings.json (or set adapter env HOME to a " +
+      "clean Pi profile), then retry."
+    );
+  }
+  if (PI_AUTH_REQUIRED_RE.test(message)) {
+    return (
+      "Pi model discovery failed: provider authentication is not ready. " +
+      "Set the provider API key environment variable (e.g. ANTHROPIC_API_KEY, XAI_API_KEY) and retry."
+    );
+  }
+  return undefined;
+}
+
 export function resolveModel(
   provider: string,
   modelId: string,
@@ -266,8 +301,21 @@ export function resolveModel(
   modelRegistry: ModelRegistry;
 } {
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
-  const authStorage = discoverAuthStorage(resolvedAgentDir);
-  const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
+  let authStorage: AuthStorage;
+  let modelRegistry: ModelRegistry;
+  try {
+    authStorage = discoverAuthStorage(resolvedAgentDir);
+    modelRegistry = discoverModels(authStorage, resolvedAgentDir);
+  } catch (err) {
+    // Surface structured diagnostics when Pi's auth/model discovery fails
+    // (e.g. stale npm:pi-driver package, missing API key) instead of a generic
+    // unhandled exception that collapses into a confusing FailoverError.
+    const raw = err instanceof Error ? err.message : String(err);
+    const classified = classifyPiModelDiscoveryError(raw);
+    const error = classified ?? `Pi model discovery failed: ${raw.slice(0, 300)}`;
+    // Re-throw as a structured error so callers (run.ts) can wrap it in FailoverError.
+    throw new Error(error, { cause: err });
+  }
   const model = resolveModelWithRegistry({ provider, modelId, modelRegistry, cfg });
   if (model) {
     return { model, authStorage, modelRegistry };

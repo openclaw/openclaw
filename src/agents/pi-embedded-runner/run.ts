@@ -310,12 +310,23 @@ export async function runEmbeddedPiAgent(
         log.info(`[hooks] model overridden to ${modelId}`);
       }
 
-      const { model, error, authStorage, modelRegistry } = resolveModel(
-        provider,
-        modelId,
-        agentDir,
-        params.config,
-      );
+      let resolvedModelResult: ReturnType<typeof resolveModel>;
+      try {
+        resolvedModelResult = resolveModel(provider, modelId, agentDir, params.config);
+      } catch (err) {
+        // resolveModel throws when Pi auth/model-discovery itself fails (e.g. stale
+        // npm:pi-driver package, missing auth).  Surface as a FailoverError with the
+        // classified message so heartbeat runs fail fast and visibly.
+        const msg = err instanceof Error ? err.message : String(err);
+        log.error(`[model-discovery] provider=${provider} model=${modelId} error=${msg}`);
+        throw new FailoverError(msg, {
+          reason: "model_not_found",
+          provider,
+          model: modelId,
+          status: resolveFailoverStatus("model_not_found"),
+        });
+      }
+      const { model, error, authStorage, modelRegistry } = resolvedModelResult;
       if (!model) {
         throw new FailoverError(error ?? `Unknown model: ${provider}/${modelId}`, {
           reason: "model_not_found",
