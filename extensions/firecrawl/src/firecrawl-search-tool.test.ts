@@ -1,8 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const runFirecrawlSearch = vi.fn(async (params: Record<string, unknown>) => ({
-  ok: true,
-  params,
+const { runFirecrawlSearch } = vi.hoisted(() => ({
+  runFirecrawlSearch: vi.fn(async (params: Record<string, unknown>) => ({
+    ok: true,
+    params,
+  })),
 }));
 
 vi.mock("./firecrawl-client.js", () => ({
@@ -10,6 +12,15 @@ vi.mock("./firecrawl-client.js", () => ({
 }));
 
 describe("firecrawl search tool", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    runFirecrawlSearch.mockReset();
+    runFirecrawlSearch.mockImplementation(async (params: Record<string, unknown>) => ({
+      ok: true,
+      params,
+    }));
+  });
+
   it("normalizes optional search parameters before invoking Firecrawl", async () => {
     const { createFirecrawlSearchTool } = await import("./firecrawl-search-tool.js");
     const tool = createFirecrawlSearchTool({

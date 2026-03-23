@@ -280,6 +280,7 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../../process/command-queue.js", () => ({
     enqueueCommandInLane: vi.fn((_lane: unknown, task: () => unknown) => task()),
+    clearCommandLane: vi.fn(() => 0),
   }));
 
   vi.doMock("./lanes.js", () => ({

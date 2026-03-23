@@ -58,7 +58,7 @@ const installRunEmbeddedMocks = () => {
   vi.doMock("./pi-embedded-runner/run/attempt.js", () => ({
     runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
   }));
-  vi.doMock("../plugins/provider-runtime.runtime.js", () => ({
+  vi.doMock("../plugins/provider-runtime.js", () => ({
     prepareProviderRuntimeAuth: async (params: {
       provider: string;
       context: { apiKey: string };

@@ -15,6 +15,75 @@
       }
     ]
   },
+  "channels": {
+    "isolatedPrefixes": ["extensions/discord/src/monitor/"],
+    "isolated": [
+      {
+        "file": "extensions/discord/src/monitor/message-handler.preflight.acp-bindings.test.ts",
+        "reason": "This Discord preflight suite hoists conversation-runtime ACP binding mocks; keep it in its own forked channel lane so shared workers do not reuse monitor modules with incompatible runtime stubs."
+      },
+      {
+        "file": "extensions/discord/src/monitor/monitor.threading-utils.test.ts",
+        "reason": "This Discord threading utility suite exercises gateway and presence caches plus auto-thread helpers; keep it in its own forked channel lane so shared workers cannot inherit mutated monitor module state."
+      },
+      {
+        "file": "extensions/discord/src/monitor/monitor.agent-components.test.ts",
+        "reason": "This Discord agent-components suite hoists security and conversation runtime mocks for DM component authorization; keep it in its own forked channel lane so shared workers do not inherit incompatible Discord runtime stubs."
+      },
+      {
+        "file": "extensions/discord/src/monitor/native-command.model-picker.test.ts",
+        "reason": "This Discord model-picker interaction suite relies on isolated native-command fallback state and DM channel enums; keep it in its own forked channel lane so shared workers do not reuse polluted command runtime modules."
+      },
+      {
+        "file": "extensions/discord/src/monitor/native-command.plugin-dispatch.test.ts",
+        "reason": "This Discord native plugin-dispatch suite hoists conversation and reply runtime mocks for slash-command routing; keep it in its own forked channel lane so shared workers do not reuse mismatched native-command modules."
+      },
+      {
+        "file": "extensions/discord/src/monitor/agent-components.wildcard.test.ts",
+        "reason": "This Discord wildcard component suite is green alone but can inherit polluted component-registration parser state from the shared channel lane; keep it in its own forked lane for deterministic CI."
+      },
+      {
+        "file": "extensions/discord/src/send.creates-thread.test.ts",
+        "reason": "This Discord send/create-thread suite hoists web-media mocks and retries against rate-limit seams; keep it isolated so shared channel workers do not leak send-module state into its retry assertions."
+      },
+      {
+        "file": "extensions/discord/src/components.test.ts",
+        "reason": "This Discord component builder suite is green alone but can inherit polluted component constructor state from the shared channel lane; keep it in its own forked lane for deterministic CI."
+      },
+      {
+        "file": "extensions/discord/src/api.test.ts",
+        "reason": "This Discord API retry suite is green alone but can inherit timer or fetch retry contamination from the shared channel lane; keep it in its own forked lane for deterministic CI."
+      },
+      {
+        "file": "extensions/discord/src/monitor/provider.skill-dedupe.test.ts",
+        "reason": "This Discord provider skill-dedupe suite depends on agent-component classes during provider import; keep it isolated so shared channel workers do not reuse partially mocked component modules."
+      },
+      {
+        "file": "extensions/discord/src/monitor/monitor.test.ts",
+        "reason": "This Discord monitor interaction suite imports agent-component classes directly and is green alone but can inherit partially mocked Discord component constructors from the shared channel lane."
+      },
+      {
+        "file": "extensions/whatsapp/src/inbound.test.ts",
+        "reason": "This WhatsApp inbound helper suite is green alone but can inherit polluted web-message parsing state from the shared channel lane; keep it in its own forked lane for deterministic CI."
+      },
+      {
+        "file": "extensions/whatsapp/src/inbound.media.test.ts",
+        "reason": "This WhatsApp inbound media suite is green alone but can inherit polluted media and inbound parsing state from the shared channel lane; keep it in its own forked lane for deterministic CI."
+      },
+      {
+        "file": "src/browser/chrome.test.ts",
+        "reason": "This Chrome helper suite is green alone but can inherit stale fetch, websocket, or timer state from the shared channel lane; keep it isolated so its CDP timeout assertions stay deterministic."
+      },
+      {
+        "file": "extensions/telegram/src/bot.create-telegram-bot.test.ts",
+        "reason": "This Telegram bot bootstrap suite is green alone but can inherit stale command-registration spies and bot runtime state from the shared channel lane; keep it isolated for deterministic command assertions."
+      },
+      {
+        "file": "extensions/telegram/src/webhook.test.ts",
+        "reason": "This Telegram webhook suite hoists grammY bot and InputFile mocks; keep it in its own forked channel lane so shared workers do not reuse telegram runtime modules with mismatched constructors."
+      }
+    ]
+  },
   "extensions": {
     "isolated": [
       {
@@ -28,6 +97,50 @@
       {
         "file": "extensions/nextcloud-talk/src/monitor.replay.test.ts",
         "reason": "The replay-handling regression is green alone but can inherit disturbed global stream/Response state from the shared extensions lane, so keep it in its own forked lane for deterministic CI."
+      },
+      {
+        "file": "extensions/duckduckgo/src/ddg-search-provider.test.ts",
+        "reason": "This provider test hoists a client mock and imports the provider lazily; keep it in its own forked lane so shared extension workers do not reuse a previously cached module under test."
+      },
+      {
+        "file": "extensions/firecrawl/src/firecrawl-scrape-tool.test.ts",
+        "reason": "This scrape-tool suite hoists client mocks and imports the tool lazily; keep it in its own forked lane so shared extension workers cannot bypass the mocked client via cached modules."
+      },
+      {
+        "file": "extensions/firecrawl/src/firecrawl-search-provider.test.ts",
+        "reason": "This provider suite hoists the Firecrawl client mock and imports lazily; keep it isolated so shared extension workers do not reuse stale provider modules."
+      },
+      {
+        "file": "extensions/firecrawl/src/firecrawl-search-tool.test.ts",
+        "reason": "This tool suite hoists the Firecrawl client mock and imports lazily; keep it isolated so shared extension workers cannot leak cached implementations across files."
+      },
+      {
+        "file": "extensions/line/src/download.test.ts",
+        "reason": "This LINE media-download suite depends on hoisted SDK mocks; run it in its own forked lane so shared extension workers do not fall back to the real SDK client."
+      },
+      {
+        "file": "extensions/line/src/monitor.lifecycle.test.ts",
+        "reason": "This LINE lifecycle suite hoists runtime and route-registration mocks; keep it isolated so shared extension workers do not reuse cached monitor modules with real dependencies."
+      },
+      {
+        "file": "extensions/line/src/probe.test.ts",
+        "reason": "This LINE probe suite depends on hoisted SDK mocks; keep it isolated so shared extension workers do not reuse cached probe modules with the real SDK client."
+      },
+      {
+        "file": "extensions/line/src/send.test.ts",
+        "reason": "This LINE send suite hoists SDK and account/token mocks; keep it isolated so shared extension workers do not reuse cached send modules that bypass those mocks."
+      },
+      {
+        "file": "extensions/tavily/src/tavily-extract-tool.test.ts",
+        "reason": "This extract-tool suite hoists the Tavily client mock and imports lazily; keep it isolated so shared extension workers do not reuse cached tool modules and hit real API-key resolution."
+      },
+      {
+        "file": "extensions/tavily/src/tavily-search-provider.test.ts",
+        "reason": "This provider suite hoists the Tavily client mock and imports lazily; keep it isolated so shared extension workers do not reuse stale provider modules."
+      },
+      {
+        "file": "extensions/tavily/src/tavily-search-tool.test.ts",
+        "reason": "This search-tool suite hoists the Tavily client mock and imports lazily; keep it isolated so shared extension workers do not bypass the mocked client via cached modules."
       }
     ]
   },
