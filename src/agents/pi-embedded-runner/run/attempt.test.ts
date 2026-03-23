@@ -118,6 +118,34 @@ describe("resolvePromptBuildHookResult", () => {
     expect(result.prependContext).toBe("from-hook");
   });
 
+  it("includes legacy hook agent context fields only when present", async () => {
+    const hookRunner = createLegacyOnlyHookRunner();
+    const messages = [{ role: "user", content: "ctx" }];
+
+    await resolvePromptBuildHookResult({
+      prompt: "hello",
+      messages,
+      hookCtx: {
+        sessionKey: "agent:assistant-beta:main",
+        agentId: "assistant-beta",
+      },
+      hookRunner,
+    });
+
+    expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledWith(
+      {
+        prompt: "hello",
+        messages,
+        sessionKey: "agent:assistant-beta:main",
+        agentId: "assistant-beta",
+      },
+      {
+        sessionKey: "agent:assistant-beta:main",
+        agentId: "assistant-beta",
+      },
+    );
+  });
+
   it("merges prompt-build and legacy context fields in deterministic order", async () => {
     const hookRunner = {
       hasHooks: vi.fn(() => true),

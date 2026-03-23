@@ -98,6 +98,30 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     );
   });
 
+  it("omits missing sessionKey from the legacy before_agent_start event", async () => {
+    mockedGlobalHookRunner.hasHooks.mockImplementation(
+      (hookName) => hookName === "before_agent_start",
+    );
+    mockedGlobalHookRunner.runBeforeAgentStart.mockResolvedValueOnce({});
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedPiAgent({
+      sessionId: "test-session",
+      sessionFile: "/tmp/session.json",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      timeoutMs: 30000,
+      runId: "run-legacy-omit-session-key",
+    });
+
+    const event = mockedGlobalHookRunner.runBeforeAgentStart.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(event).toBeDefined();
+    expect(event).toMatchObject({ prompt: "hello" });
+    expect(event).not.toHaveProperty("sessionKey");
+  });
+
   it("passes resolved auth profile into run attempts for context-engine afterTurn propagation", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
