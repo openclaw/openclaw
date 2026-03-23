@@ -247,11 +247,10 @@ export async function runCronIsolatedAgentTurn(params: {
     // Isolated cron runs must not carry prior turn context across executions.
     forceNew: params.job.sessionTarget === "isolated",
   });
-  // For isolated sessions, generate a unique run session ID to ensure complete
-  // isolation between executions. This creates a new run session each time.
-  const runSessionId = params.job.sessionTarget === "isolated"
-    ? crypto.randomUUID()
-    : cronSession.sessionEntry.sessionId;
+  // Use the base session's sessionId for the run session.
+  // For isolated mode, forceNew:true ensures a new sessionId is generated,
+  // providing complete isolation while maintaining ID consistency.
+  const runSessionId = cronSession.sessionEntry.sessionId;
   const runSessionKey = baseSessionKey.startsWith("cron:")
     ? `${agentSessionKey}:run:${runSessionId}`
     : agentSessionKey;
