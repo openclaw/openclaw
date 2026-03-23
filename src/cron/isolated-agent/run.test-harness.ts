@@ -316,7 +316,7 @@ vi.mock("../../agents/defaults.js", async (importOriginal) => {
 
 export function makeCronSessionEntry(overrides?: Record<string, unknown>): CronSessionEntry {
   return {
-    sessionId: "test-session-id",
+    sessionId: `test-session-id-${Math.random().toString(36).slice(2)}`,
     updatedAt: 0,
     systemSent: false,
     skillsSnapshot: undefined,
