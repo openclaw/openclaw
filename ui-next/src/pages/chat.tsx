@@ -363,6 +363,28 @@ export function ChatPage() {
     void sendMessage(lastUserText);
   }, [messages, isStreaming, sendMessage]);
 
+  // Retry a specific user message: truncate from that message index and re-send.
+  // This removes the chosen message and everything that followed (assistant replies, tool results)
+  // then re-submits the text so the agent processes it fresh without duplicate entries.
+  const handleRetry = useCallback(
+    (msg: ChatMessage) => {
+      if (isStreaming) {
+        return;
+      }
+      const msgText = getMessageText(msg);
+      if (!msgText.trim()) {
+        return;
+      }
+      const msgIndex = messages.indexOf(msg);
+      if (msgIndex === -1) {
+        return;
+      }
+      useChatStore.getState().truncateMessagesFrom(msgIndex);
+      void sendMessage(msgText);
+    },
+    [messages, isStreaming, sendMessage],
+  );
+
   // Session actions
   const handleDeleteSession = useCallback(
     async (key: string) => {
@@ -864,6 +886,7 @@ export function ChatPage() {
                           onReply={handleReply}
                           onCopyId={handleCopyId}
                           onDelete={handleDeleteMessage}
+                          onRetry={handleRetry}
                           showPlanCard={i === lastPlanMessageIndex}
                           sessionComplete={
                             i === lastPlanMessageIndex && !isStreaming && !isSendPending

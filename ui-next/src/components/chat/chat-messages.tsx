@@ -561,6 +561,7 @@ export function ChatMessageBubble({
   onReply,
   onCopyId,
   onDelete,
+  onRetry,
   showPlanCard = true,
   sessionComplete = false,
   agentId,
@@ -584,6 +585,7 @@ export function ChatMessageBubble({
   onReply?: (msg: ChatMessage) => void;
   onCopyId?: (msg: ChatMessage) => void;
   onDelete?: (msg: ChatMessage) => void;
+  onRetry?: (msg: ChatMessage) => void;
   /** Only render the PlanCard on this message (avoids duplicate cards across intermediate messages). */
   showPlanCard?: boolean;
   /** Session is complete (not streaming) — auto-complete remaining plan steps. */
@@ -671,6 +673,18 @@ export function ChatMessageBubble({
             <span className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all duration-200">
               {msg.seq > 0 && (
                 <span className="text-[10px] text-primary/40 font-mono mr-1">#{msg.seq}</span>
+              )}
+              {onRetry && (
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  className="h-6 w-6 text-muted-foreground hover:text-foreground hover:bg-primary/10 rounded-md transition-colors"
+                  onClick={() => onRetry(msg)}
+                  title="Retry — re-send this message to the agent"
+                  aria-label="Retry message"
+                >
+                  <RefreshCw className="h-3 w-3" />
+                </Button>
               )}
               <Button
                 variant="ghost"
