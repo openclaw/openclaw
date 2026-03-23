@@ -323,13 +323,13 @@ async function writeTempFileForAtomicReplace(params: {
     } else {
       await tempHandle.writeFile(params.data);
     }
+    // Stat via open file descriptor before closing to avoid TOCTOU race.
+    // This eliminates the window where an attacker could replace the temp file
+    // between close() and stat() (CWE-367).
+    return await tempHandle.stat();
   } finally {
     await tempHandle.close().catch(() => {});
   }
-  // Use path-based stat after closing the file handle.
-  // Closing the handle flushes metadata, so stat will return correct size without needing sync().
-  // This avoids the I/O performance penalty of fsync() while still ensuring correct metadata.
-  return await fs.stat(params.tempPath);
 }
 
 async function verifyAtomicWriteResult(params: {
