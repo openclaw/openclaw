@@ -14,7 +14,12 @@
  * Skipped in CI — no API key available and we avoid billable external calls.
  */
 
-import type { AssistantMessage, Context } from "@mariozechner/pi-ai";
+import type {
+  AssistantMessage,
+  AssistantMessageEvent,
+  AssistantMessageEventStream,
+  Context,
+} from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const API_KEY = process.env.OPENAI_API_KEY;
@@ -23,6 +28,7 @@ const testFn = LIVE ? it : it.skip;
 
 type OpenAIWsStreamModule = typeof import("./openai-ws-stream.js");
 type StreamFactory = OpenAIWsStreamModule["createOpenAIWebSocketStreamFn"];
+type StreamReturn = ReturnType<ReturnType<StreamFactory>>;
 let openAIWsStreamModule: OpenAIWsStreamModule;
 
 const model = {
@@ -78,17 +84,16 @@ function makeToolResultMessage(
   } as unknown as StreamFnParams[1]["messages"][number];
 }
 
-async function collectEvents(
-  stream: ReturnType<ReturnType<typeof createOpenAIWebSocketStreamFn>>,
-): Promise<Array<{ type: string; message?: AssistantMessage }>> {
-  const events: Array<{ type: string; message?: AssistantMessage }> = [];
-  for await (const event of stream as AsyncIterable<{ type: string; message?: AssistantMessage }>) {
+async function collectEvents(stream: StreamReturn): Promise<AssistantMessageEvent[]> {
+  const events: AssistantMessageEvent[] = [];
+  const resolvedStream: AssistantMessageEventStream = await stream;
+  for await (const event of resolvedStream) {
     events.push(event);
   }
   return events;
 }
 
-function expectDone(events: Array<{ type: string; message?: AssistantMessage }>): AssistantMessage {
+function expectDone(events: AssistantMessageEvent[]): AssistantMessage {
   const done = events.find((event) => event.type === "done")?.message;
   expect(done).toBeDefined();
   return done!;
