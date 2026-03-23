@@ -753,6 +753,52 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "duckduckgo",
+    idHint: "duckduckgo-plugin",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/duckduckgo-plugin",
+    packageVersion: "2026.3.22",
+    packageDescription: "OpenClaw DuckDuckGo plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "duckduckgo",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          webSearch: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              region: {
+                type: "string",
+              },
+              safeSearch: {
+                type: "string",
+                enum: ["strict", "moderate", "off"],
+              },
+            },
+          },
+        },
+      },
+      uiHints: {
+        "webSearch.region": {
+          label: "DuckDuckGo Region",
+          help: "Optional DuckDuckGo region code such as us-en, uk-en, or de-de.",
+        },
+        "webSearch.safeSearch": {
+          label: "DuckDuckGo SafeSearch",
+          help: "SafeSearch level for DuckDuckGo results.",
+        },
+      },
+    },
+  },
+  {
     dirName: "elevenlabs",
     idHint: "elevenlabs",
     source: {
