@@ -1,22 +1,13 @@
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
+import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 const updateCommand = vi.fn(async (_opts: unknown) => {});
 const updateStatusCommand = vi.fn(async (_opts: unknown) => {});
 const updateWizardCommand = vi.fn(async (_opts: unknown) => {});
 
-const defaultRuntime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  writeStdout: vi.fn((value: string) => {
-    defaultRuntime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
-  }),
-  writeJson: vi.fn((value: unknown, space = 2) => {
-    defaultRuntime.log(JSON.stringify(value, null, space));
-  }),
-  exit: vi.fn(),
-};
+const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 vi.mock("./update-cli/update-command.js", () => ({
   updateCommand: (opts: unknown) => updateCommand(opts),
@@ -45,6 +36,7 @@ describe("update cli option collisions", () => {
     updateCommand.mockClear();
     updateStatusCommand.mockClear();
     updateWizardCommand.mockClear();
+    resetRuntimeCapture();
     defaultRuntime.log.mockClear();
     defaultRuntime.error.mockClear();
     defaultRuntime.writeStdout.mockClear();
