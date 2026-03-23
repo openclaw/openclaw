@@ -5,13 +5,17 @@ import { resolveOllamaBaseUrlForRun } from "../../ollama-stream.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import {
   buildAfterTurnRuntimeContext,
+  buildSessionsYieldContextMessage,
   composeSystemPromptWithHookContext,
+  persistSessionsYieldContextMessage,
   isOllamaCompatProvider,
   prependSystemPromptAddition,
+  queueSessionsYieldInterruptMessage,
   resolveAttemptFsWorkspaceOnly,
   resolveOllamaCompatNumCtxEnabled,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
+  stripSessionsYieldArtifacts,
   shouldInjectOllamaCompatNumCtx,
   decodeHtmlEntitiesInObject,
   wrapOllamaCompatNumCtx,
@@ -139,6 +143,98 @@ describe("resolvePromptBuildHookResult", () => {
     expect(result.prependContext).toBe("prompt context\n\nlegacy context");
     expect(result.prependSystemContext).toBe("prompt prepend\n\nlegacy prepend");
     expect(result.appendSystemContext).toBe("prompt append\n\nlegacy append");
+  });
+});
+
+describe("sessions_yield helpers", () => {
+  it("builds a hidden follow-up context note", () => {
+    expect(buildSessionsYieldContextMessage("Waiting for subagent")).toContain(
+      "Waiting for subagent",
+    );
+    expect(buildSessionsYieldContextMessage("Waiting for subagent")).toContain(
+      "ended intentionally via sessions_yield",
+    );
+  });
+
+  it("queues a hidden interrupt steering message", () => {
+    const steer = vi.fn();
+    queueSessionsYieldInterruptMessage({ agent: { steer } });
+    expect(steer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        role: "custom",
+        customType: "openclaw.sessions_yield_interrupt",
+        display: false,
+        details: { source: "sessions_yield" },
+      }),
+    );
+  });
+
+  it("persists a hidden yield context message without triggering a turn", async () => {
+    const sendCustomMessage = vi.fn(async () => {});
+    await persistSessionsYieldContextMessage(
+      {
+        sendCustomMessage,
+      },
+      "Waiting for subagent",
+    );
+    expect(sendCustomMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customType: "openclaw.sessions_yield",
+        display: false,
+        details: { source: "sessions_yield", message: "Waiting for subagent" },
+        content: expect.stringContaining("Waiting for subagent"),
+      }),
+      { triggerTurn: false },
+    );
+  });
+
+  it("strips trailing yield interrupt artifacts from memory and transcript state", () => {
+    const replaceMessages = vi.fn();
+    const rewriteFile = vi.fn();
+    const activeSession = {
+      messages: [
+        { role: "user", content: [{ type: "text", text: "hi" }] },
+        { role: "custom", customType: "openclaw.sessions_yield_interrupt" },
+        { role: "assistant", stopReason: "aborted" },
+      ],
+      agent: { replaceMessages },
+      sessionManager: {
+        fileEntries: [
+          { type: "session", id: "session-root" },
+          {
+            type: "custom_message",
+            id: "interrupt",
+            parentId: "session-root",
+            customType: "openclaw.sessions_yield_interrupt",
+          },
+          {
+            type: "message",
+            id: "aborted",
+            parentId: "interrupt",
+            message: { role: "assistant", stopReason: "aborted" },
+          },
+        ],
+        byId: new Map([
+          ["interrupt", { id: "interrupt" }],
+          ["aborted", { id: "aborted" }],
+        ]),
+        leafId: "aborted",
+        _rewriteFile: rewriteFile,
+      },
+    };
+
+    stripSessionsYieldArtifacts(activeSession as never);
+
+    expect(replaceMessages).toHaveBeenCalledWith([
+      { role: "user", content: [{ type: "text", text: "hi" }] },
+    ]);
+    expect(activeSession.sessionManager.fileEntries).toEqual([
+      { type: "session", id: "session-root" },
+    ]);
+    expect(activeSession.sessionManager.byId.has("interrupt")).toBe(false);
+    expect(activeSession.sessionManager.byId.has("aborted")).toBe(false);
+    expect(activeSession.sessionManager.leafId).toBe("session-root");
+    expect(rewriteFile).toHaveBeenCalledTimes(1);
   });
 });
 

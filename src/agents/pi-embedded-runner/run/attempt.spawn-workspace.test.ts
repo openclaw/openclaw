@@ -63,18 +63,21 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@mariozechner/pi-coding-agent")>();
+vi.mock("@mariozechner/pi-coding-agent", () => {
+  class AuthStorage {}
+  class DefaultResourceLoader {
+    async reload() {}
+  }
+  class ModelRegistry {}
 
   return {
-    ...actual,
+    AuthStorage,
     createAgentSession: (...args: unknown[]) => hoisted.createAgentSessionMock(...args),
-    DefaultResourceLoader: class {
-      async reload() {}
-    },
+    DefaultResourceLoader,
+    ModelRegistry,
     SessionManager: {
       open: (...args: unknown[]) => hoisted.sessionManagerOpenMock(...args),
-    } as unknown as typeof actual.SessionManager,
+    },
   };
 });
 
@@ -183,6 +186,7 @@ vi.mock("../wait-for-idle-before-flush.js", () => ({
 vi.mock("../runs.js", () => ({
   setActiveEmbeddedRun: () => {},
   clearActiveEmbeddedRun: () => {},
+  updateActiveEmbeddedRunSnapshot: () => {},
 }));
 
 vi.mock("./images.js", () => ({
@@ -226,8 +230,35 @@ vi.mock("../../cache-trace.js", () => ({
 }));
 
 vi.mock("../../pi-tools.js", () => ({
-  createOpenClawCodingTools: () => [],
+  createOpenClawCodingTools: (options?: { workspaceDir?: string; spawnWorkspaceDir?: string }) => [
+    {
+      name: "sessions_spawn",
+      execute: async (
+        _callId: string,
+        input: { task?: string },
+        _session?: unknown,
+        _abortSignal?: unknown,
+        _ctx?: unknown,
+      ) =>
+        await hoisted.spawnSubagentDirectMock(
+          {
+            task: input.task ?? "",
+          },
+          {
+            workspaceDir: options?.spawnWorkspaceDir ?? options?.workspaceDir,
+          },
+        ),
+    },
+  ],
   resolveToolLoopDetectionConfig: () => undefined,
+}));
+
+vi.mock("../../pi-bundle-mcp-tools.js", () => ({
+  createBundleMcpToolRuntime: async () => undefined,
+}));
+
+vi.mock("../../pi-bundle-lsp-runtime.js", () => ({
+  createBundleLspToolRuntime: async () => undefined,
 }));
 
 vi.mock("../../../image-generation/runtime.js", () => ({
@@ -235,17 +266,173 @@ vi.mock("../../../image-generation/runtime.js", () => ({
   listRuntimeImageGenerationProviders: () => [],
 }));
 
-vi.mock("../../model-selection.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../model-selection.js")>();
+vi.mock("../../model-selection.js", () => ({
+  normalizeProviderId: (providerId?: string) => providerId?.trim().toLowerCase() ?? "",
+  resolveDefaultModelForAgent: () => ({ provider: "openai", model: "gpt-test" }),
+}));
 
-  return {
-    ...actual,
-    normalizeProviderId: (providerId?: string) => providerId?.trim().toLowerCase() ?? "",
-    resolveDefaultModelForAgent: () => ({ provider: "openai", model: "gpt-test" }),
-  };
-});
+vi.mock("../../anthropic-vertex-stream.js", () => ({
+  createAnthropicVertexStreamFnForModel: vi.fn(),
+}));
 
-const { runEmbeddedAttempt } = await import("./attempt.js");
+vi.mock("../../custom-api-registry.js", () => ({
+  ensureCustomApiRegistered: () => {},
+}));
+
+vi.mock("../../model-auth.js", () => ({
+  resolveModelAuthMode: () => undefined,
+}));
+
+vi.mock("../../model-tool-support.js", () => ({
+  supportsModelTools: () => true,
+}));
+
+vi.mock("../../ollama-stream.js", () => ({
+  createConfiguredOllamaStreamFn: vi.fn(),
+}));
+
+vi.mock("../../owner-display.js", () => ({
+  resolveOwnerDisplaySetting: () => ({
+    ownerDisplay: undefined,
+    ownerDisplaySecret: undefined,
+  }),
+}));
+
+vi.mock("../../sandbox/runtime-status.js", () => ({
+  resolveSandboxRuntimeStatus: () => ({
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    mainSessionKey: "agent:main:main",
+    mode: "off",
+    sandboxed: false,
+    toolPolicy: { allow: [], deny: [], sources: { allow: { key: "" }, deny: { key: "" } } },
+  }),
+}));
+
+vi.mock("../../tool-call-id.js", () => ({
+  sanitizeToolCallIdsForCloudCodeAssist: <T>(messages: T) => messages,
+}));
+
+vi.mock("../../tool-fs-policy.js", () => ({
+  resolveEffectiveToolFsWorkspaceOnly: () => false,
+}));
+
+vi.mock("../../tool-policy.js", () => ({
+  normalizeToolName: (name: string) => name,
+}));
+
+vi.mock("../../transcript-policy.js", () => ({
+  resolveTranscriptPolicy: () => ({
+    allowSyntheticToolResults: false,
+  }),
+}));
+
+vi.mock("../cache-ttl.js", () => ({
+  appendCacheTtlTimestamp: (
+    sessionManager: { appendCustomEntry?: (customType: string, data: unknown) => void },
+    data: unknown,
+  ) => sessionManager.appendCustomEntry?.("openclaw.cache-ttl", data),
+  isCacheTtlEligibleProvider: (provider?: string) => provider === "anthropic",
+}));
+
+vi.mock("../compaction-runtime-context.js", () => ({
+  buildEmbeddedCompactionRuntimeContext: () => ({}),
+}));
+
+vi.mock("../compaction-safety-timeout.js", () => ({
+  resolveCompactionTimeoutMs: () => undefined,
+}));
+
+vi.mock("../history.js", () => ({
+  getDmHistoryLimitFromSessionKey: () => undefined,
+  limitHistoryTurns: <T>(messages: T) => messages,
+}));
+
+vi.mock("../logger.js", () => ({
+  log: {
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+    isEnabled: () => false,
+  },
+}));
+
+vi.mock("../message-action-discovery-input.js", () => ({
+  buildEmbeddedMessageActionDiscoveryInput: () => undefined,
+}));
+
+vi.mock("../model.js", () => ({
+  buildModelAliasLines: () => [],
+}));
+
+vi.mock("../sandbox-info.js", () => ({
+  buildEmbeddedSandboxInfo: () => undefined,
+}));
+
+vi.mock("../thinking.js", () => ({
+  dropThinkingBlocks: <T>(messages: T) => messages,
+}));
+
+vi.mock("../tool-name-allowlist.js", () => ({
+  collectAllowedToolNames: () => undefined,
+}));
+
+vi.mock("../tool-split.js", () => ({
+  splitSdkTools: ({ tools }: { tools: unknown[] }) => ({
+    builtInTools: [],
+    customTools: tools,
+  }),
+}));
+
+vi.mock("../utils.js", () => ({
+  describeUnknownError: (error: unknown) =>
+    error instanceof Error ? error.message : String(error),
+  mapThinkingLevel: () => undefined,
+}));
+
+vi.mock("./compaction-retry-aggregate-timeout.js", () => ({
+  waitForCompactionRetryWithAggregateTimeout: async () => ({
+    timedOut: false,
+    aborted: false,
+  }),
+}));
+
+vi.mock("./compaction-timeout.js", () => ({
+  resolveRunTimeoutDuringCompaction: () => "abort",
+  resolveRunTimeoutWithCompactionGraceMs: ({
+    runTimeoutMs,
+    compactionTimeoutMs,
+  }: {
+    runTimeoutMs: number;
+    compactionTimeoutMs: number;
+  }) => runTimeoutMs + compactionTimeoutMs,
+  selectCompactionTimeoutSnapshot: ({
+    currentSnapshot,
+    currentSessionId,
+  }: {
+    currentSnapshot: unknown[];
+    currentSessionId: string;
+  }) => ({
+    messagesSnapshot: currentSnapshot,
+    sessionIdUsed: currentSessionId,
+    source: "current",
+  }),
+  shouldFlagCompactionTimeout: () => false,
+}));
+
+vi.mock("./history-image-prune.js", () => ({
+  pruneProcessedHistoryImages: <T>(messages: T) => messages,
+}));
+
+let runEmbeddedAttemptPromise:
+  | Promise<typeof import("./attempt.js").runEmbeddedAttempt>
+  | undefined;
+
+async function loadRunEmbeddedAttempt() {
+  runEmbeddedAttemptPromise ??= import("./attempt.js").then((mod) => mod.runEmbeddedAttempt);
+  return await runEmbeddedAttemptPromise;
+}
 
 type MutableSession = {
   sessionId: string;
@@ -455,6 +642,7 @@ describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
       },
     );
 
+    const runEmbeddedAttempt = await loadRunEmbeddedAttempt();
     const result = await runEmbeddedAttempt({
       sessionId: "embedded-session",
       sessionKey: "agent:main:main",
@@ -543,6 +731,7 @@ describe("runEmbeddedAttempt bootstrap warning prompt assembly", () => {
       }),
     }));
 
+    const runEmbeddedAttempt = await loadRunEmbeddedAttempt();
     const result = await runEmbeddedAttempt({
       sessionId: "embedded-session",
       sessionKey: "agent:main:main",
@@ -605,6 +794,7 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
       session: createDefaultEmbeddedSession(),
     }));
 
+    const runEmbeddedAttempt = await loadRunEmbeddedAttempt();
     return await runEmbeddedAttempt({
       sessionId: "embedded-session",
       sessionKey: "agent:main:test-cache-ttl",
@@ -668,6 +858,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     hoisted.sessionManagerOpenMock.mockReset().mockReturnValue(hoisted.sessionManager);
     hoisted.resolveSandboxContextMock.mockReset();
     hoisted.subscribeEmbeddedPiSessionMock.mockReset().mockImplementation(createSubscriptionMock);
+    hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
     hoisted.acquireSessionWriteLockMock.mockReset().mockResolvedValue({
       release: async () => {},
     });
@@ -694,6 +885,19 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       sessionKey?: string;
       sessionFile: string;
     }) => Promise<BootstrapResult>;
+    maintain?:
+      | boolean
+      | ((params: {
+          sessionId: string;
+          sessionKey?: string;
+          sessionFile: string;
+          runtimeContext?: Record<string, unknown>;
+        }) => Promise<{
+          changed: boolean;
+          bytesFreed: number;
+          rewrittenEntries: number;
+          reason?: string;
+        }>);
     assemble: (params: {
       sessionId: string;
       sessionKey?: string;
@@ -728,6 +932,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     }) => Promise<CompactResult>;
     info?: Partial<ContextEngineInfo>;
   }) {
+    const { maintain: rawMaintain, ...contextEngineRest } = contextEngine;
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ctx-engine-workspace-"));
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ctx-engine-agent-"));
     const sessionFile = path.join(workspaceDir, "session.jsonl");
@@ -739,6 +944,17 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const infoId = contextEngine.info?.id ?? "test-context-engine";
     const infoName = contextEngine.info?.name ?? "Test Context Engine";
     const infoVersion = contextEngine.info?.version ?? "0.0.1";
+    const maintain =
+      typeof rawMaintain === "function"
+        ? rawMaintain
+        : rawMaintain
+          ? async () => ({
+              changed: false,
+              bytesFreed: 0,
+              rewrittenEntries: 0,
+              reason: "test maintenance",
+            })
+          : undefined;
 
     hoisted.sessionManager.buildSessionContext
       .mockReset()
@@ -748,6 +964,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       session: createDefaultEmbeddedSession(),
     }));
 
+    const runEmbeddedAttempt = await loadRunEmbeddedAttempt();
     return await runEmbeddedAttempt({
       sessionId: "embedded-session",
       sessionKey,
@@ -768,7 +985,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       disableMessageTool: true,
       contextTokenBudget: 2048,
       contextEngine: {
-        ...contextEngine,
+        ...contextEngineRest,
         ingest:
           contextEngine.ingest ??
           (async () => ({
@@ -781,6 +998,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
             compacted: false,
             reason: "not used in this test",
           })),
+        ...(maintain ? { maintain } : {}),
         info: {
           id: infoId,
           name: infoName,
@@ -884,6 +1102,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
     const result = await runAttemptWithContextEngine({
       assemble,
+      maintain: true,
     });
 
     expect(result.promptError).toBeNull();

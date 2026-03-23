@@ -201,7 +201,7 @@ describe("model-selection", () => {
           "grok-4.20-experimental-beta-0304-reasoning",
         ],
         defaultProvider: "xai",
-        expected: { provider: "xai", model: "grok-4.20-reasoning" },
+        expected: { provider: "xai", model: "grok-4.20-beta-latest-reasoning" },
       },
       {
         name: "keeps OpenAI codex refs on the openai provider",
