@@ -323,13 +323,13 @@ async function writeTempFileForAtomicReplace(params: {
     } else {
       await tempHandle.writeFile(params.data);
     }
-    // Sync to disk before stat to ensure all data is flushed and stat returns correct size
-    // Without this, stat may return 0 bytes if the kernel hasn't flushed the write buffer yet
-    await tempHandle.sync();
-    return await tempHandle.stat();
   } finally {
     await tempHandle.close().catch(() => {});
   }
+  // Use path-based stat after closing the file handle.
+  // Closing the handle flushes metadata, so stat will return correct size without needing sync().
+  // This avoids the I/O performance penalty of fsync() while still ensuring correct metadata.
+  return await fs.stat(params.tempPath);
 }
 
 async function verifyAtomicWriteResult(params: {
