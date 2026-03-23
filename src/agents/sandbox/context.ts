@@ -110,6 +110,8 @@ export async function resolveSandboxContext(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   workspaceDir?: string;
+  /** Skill-declared env var names that should bypass the default block list during container creation. */
+  allowedSensitiveKeys?: ReadonlySet<string>;
 }): Promise<SandboxContext | null> {
   const resolved = resolveSandboxSession(params);
   if (!resolved) {
@@ -139,6 +141,7 @@ export async function resolveSandboxContext(params: {
     workspaceDir,
     agentWorkspaceDir,
     cfg: resolvedCfg,
+    allowedSensitiveKeys: params.allowedSensitiveKeys,
   });
   await updateRegistry({
     containerName: backend.runtimeId,

@@ -78,6 +78,8 @@ export type CreateSandboxBackendParams = {
   workspaceDir: string;
   agentWorkspaceDir: string;
   cfg: SandboxConfig;
+  /** Skill-declared env var names that should bypass the default block list during container creation. */
+  allowedSensitiveKeys?: ReadonlySet<string>;
 };
 
 export type SandboxBackendFactory = (

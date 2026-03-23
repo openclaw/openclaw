@@ -263,3 +263,56 @@ export function applySkillEnvOverridesFromSnapshot(params: {
 
   return createEnvReverter(updates);
 }
+
+/**
+ * Collect the set of env var names that skills declare as required (via primaryEnv
+ * and requires.env metadata).  Used by the sandbox creation path to rescue these
+ * keys from the default env-var block list so that skill API keys reach the container.
+ */
+export function collectAllowedSensitiveKeysFromSkillSnapshot(
+  snapshot?: SkillSnapshot,
+): ReadonlySet<string> | undefined {
+  if (!snapshot?.skills?.length) {
+    return undefined;
+  }
+  const keys = new Set<string>();
+  for (const skill of snapshot.skills) {
+    const primary = skill.primaryEnv?.trim();
+    if (primary) {
+      keys.add(primary);
+    }
+    for (const env of skill.requiredEnv ?? []) {
+      const trimmed = env.trim();
+      if (trimmed) {
+        keys.add(trimmed);
+      }
+    }
+  }
+  return keys.size > 0 ? keys : undefined;
+}
+
+/**
+ * Same as collectAllowedSensitiveKeysFromSkillSnapshot but works with
+ * workspace-loaded SkillEntry[] (the non-snapshot fallback path).
+ */
+export function collectAllowedSensitiveKeysFromSkillEntries(
+  entries?: SkillEntry[],
+): ReadonlySet<string> | undefined {
+  if (!entries?.length) {
+    return undefined;
+  }
+  const keys = new Set<string>();
+  for (const entry of entries) {
+    const primary = entry.metadata?.primaryEnv?.trim();
+    if (primary) {
+      keys.add(primary);
+    }
+    for (const env of entry.metadata?.requires?.env ?? []) {
+      const trimmed = env.trim();
+      if (trimmed) {
+        keys.add(trimmed);
+      }
+    }
+  }
+  return keys.size > 0 ? keys : undefined;
+}

@@ -1,3 +1,21 @@
+import { isDangerousHostEnvVarName } from "../../infra/host-env-security.js";
+
+/**
+ * Env var names/patterns that must never be rescued via allowedSensitiveKeys,
+ * even if skill metadata declares them.  Mirrors the always-blocked guard in
+ * env-overrides.ts (SKILL_ALWAYS_BLOCKED_ENV_PATTERNS + isDangerousHostEnvVarName).
+ */
+const ALWAYS_BLOCKED_SANDBOX_ENV_PATTERNS: ReadonlyArray<RegExp> = [
+  /^OPENSSL_CONF$/i,
+  /^OPENCLAW_GATEWAY_(TOKEN|PASSWORD)$/i,
+];
+
+function isAlwaysBlockedSandboxEnvKey(key: string): boolean {
+  return (
+    isDangerousHostEnvVarName(key) || matchesAnyPattern(key, ALWAYS_BLOCKED_SANDBOX_ENV_PATTERNS)
+  );
+}
+
 const BLOCKED_ENV_VAR_PATTERNS: ReadonlyArray<RegExp> = [
   /^ANTHROPIC_API_KEY$/i,
   /^OPENAI_API_KEY$/i,
@@ -40,6 +58,13 @@ export type EnvSanitizationOptions = {
   strictMode?: boolean;
   customBlockedPatterns?: ReadonlyArray<RegExp>;
   customAllowedPatterns?: ReadonlyArray<RegExp>;
+  /**
+   * Exact env var names that bypass the default block list.
+   * Mirrors the skill env override rescue mechanism in env-overrides.ts:
+   * if a key matches a blocked pattern but is in this set, it is allowed
+   * through (value validation still applies).
+   */
+  allowedSensitiveKeys?: ReadonlySet<string>;
 };
 
 export function validateEnvVarValue(value: string): string | undefined {
@@ -77,6 +102,21 @@ export function sanitizeEnvVars(
     }
 
     if (matchesAnyPattern(key, blockedPatterns)) {
+      // Rescue: if the caller explicitly declared this key as allowed-sensitive,
+      // let it through (same pattern as skill env override rescue in env-overrides.ts).
+      // Never rescue runtime-dangerous keys (NODE_OPTIONS, LD_*, OPENCLAW_GATEWAY_*, etc.).
+      if (options.allowedSensitiveKeys?.has(key) && !isAlwaysBlockedSandboxEnvKey(key)) {
+        const warning = validateEnvVarValue(value);
+        if (warning) {
+          if (warning === "Contains null bytes") {
+            blocked.push(key);
+            continue;
+          }
+          warnings.push(`${key}: ${warning}`);
+        }
+        allowed[key] = value;
+        continue;
+      }
       blocked.push(key);
       continue;
     }

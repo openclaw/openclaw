@@ -79,6 +79,8 @@ import { detectRuntimeShell } from "../shell-utils.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
+  collectAllowedSensitiveKeysFromSkillEntries,
+  collectAllowedSensitiveKeysFromSkillSnapshot,
   resolveSkillsPromptForRun,
   type SkillSnapshot,
 } from "../skills.js";
@@ -722,11 +724,22 @@ export async function compactEmbeddedPiSessionDirect(
   }
 
   await fs.mkdir(resolvedWorkspace, { recursive: true });
+
+  const allowedSensitiveKeys = params.skillsSnapshot
+    ? collectAllowedSensitiveKeysFromSkillSnapshot(params.skillsSnapshot)
+    : collectAllowedSensitiveKeysFromSkillEntries(
+        resolveEmbeddedRunSkillEntries({
+          workspaceDir: resolvedWorkspace,
+          config: params.config,
+        }).skillEntries,
+      );
+
   const sandboxSessionKey = params.sessionKey?.trim() || params.sessionId;
   const sandbox = await resolveSandboxContext({
     config: params.config,
     sessionKey: sandboxSessionKey,
     workspaceDir: resolvedWorkspace,
+    allowedSensitiveKeys,
   });
   const effectiveWorkspace = sandbox?.enabled
     ? sandbox.workspaceAccess === "rw"

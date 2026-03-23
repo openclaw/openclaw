@@ -443,9 +443,14 @@ async function createSandboxContainer(params: {
   agentWorkspaceDir: string;
   scopeKey: string;
   configHash?: string;
+  allowedSensitiveKeys?: ReadonlySet<string>;
 }) {
   const { name, cfg, workspaceDir, scopeKey } = params;
   await ensureDockerImage(cfg.image);
+
+  const envSanitizationOptions = params.allowedSensitiveKeys
+    ? { allowedSensitiveKeys: params.allowedSensitiveKeys }
+    : undefined;
 
   const args = buildSandboxCreateArgs({
     name,
@@ -454,6 +459,7 @@ async function createSandboxContainer(params: {
     configHash: params.configHash,
     includeBinds: false,
     bindSourceRoots: [workspaceDir, params.agentWorkspaceDir],
+    envSanitizationOptions,
   });
   args.push("--workdir", cfg.workdir);
   appendWorkspaceMountArgs({
@@ -494,11 +500,16 @@ export async function ensureSandboxContainer(params: {
   workspaceDir: string;
   agentWorkspaceDir: string;
   cfg: SandboxConfig;
+  allowedSensitiveKeys?: ReadonlySet<string>;
 }) {
   const scopeKey = resolveSandboxScopeKey(params.cfg.scope, params.sessionKey);
   const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(scopeKey);
   const name = `${params.cfg.docker.containerPrefix}${slug}`;
   const containerName = name.slice(0, 63);
+  // Note: allowedSensitiveKeys (skill-derived env rescue set) is intentionally
+  // excluded from the config hash.  It only affects which env vars pass the block
+  // list at creation time and does not change the container image, mounts, or
+  // network config.  If the skill set changes the operator can `sandbox recreate`.
   const expectedHash = computeSandboxConfigHash({
     docker: params.cfg.docker,
     workspaceAccess: params.cfg.workspaceAccess,
@@ -551,6 +562,7 @@ export async function ensureSandboxContainer(params: {
       agentWorkspaceDir: params.agentWorkspaceDir,
       scopeKey,
       configHash: expectedHash,
+      allowedSensitiveKeys: params.allowedSensitiveKeys,
     });
   } else if (!running) {
     await execDocker(["start", containerName]);

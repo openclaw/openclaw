@@ -91,6 +91,8 @@ import { detectRuntimeShell } from "../../shell-utils.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
+  collectAllowedSensitiveKeysFromSkillEntries,
+  collectAllowedSensitiveKeysFromSkillSnapshot,
   resolveSkillsPromptForRun,
 } from "../../skills.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
@@ -1675,11 +1677,25 @@ export async function runEmbeddedAttempt(
 
   await fs.mkdir(resolvedWorkspace, { recursive: true });
 
+  // Collect skill-declared env var names before sandbox creation so they can
+  // bypass the default block list during container creation.  For the snapshot
+  // path we read metadata directly; for the non-snapshot fallback we resolve
+  // skill entries early from the host workspace (lightweight sync call).
+  const allowedSensitiveKeys = params.skillsSnapshot
+    ? collectAllowedSensitiveKeysFromSkillSnapshot(params.skillsSnapshot)
+    : collectAllowedSensitiveKeysFromSkillEntries(
+        resolveEmbeddedRunSkillEntries({
+          workspaceDir: resolvedWorkspace,
+          config: params.config,
+        }).skillEntries,
+      );
+
   const sandboxSessionKey = params.sessionKey?.trim() || params.sessionId;
   const sandbox = await resolveSandboxContext({
     config: params.config,
     sessionKey: sandboxSessionKey,
     workspaceDir: resolvedWorkspace,
+    allowedSensitiveKeys,
   });
   const effectiveWorkspace = sandbox?.enabled
     ? sandbox.workspaceAccess === "rw"

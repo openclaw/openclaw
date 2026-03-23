@@ -313,6 +313,42 @@ describe("buildSandboxCreateArgs", () => {
     expect(args).toEqual(expect.arrayContaining(["-v", "/tmp/override:/workspace:rw"]));
   });
 
+  it("rescues skill-declared env keys via allowedSensitiveKeys in envSanitizationOptions", () => {
+    const cfg = createSandboxConfig({
+      env: {
+        NODE_ENV: "test",
+        OPENAI_API_KEY: "sk-live-xxx", // pragma: allowlist secret
+        MY_TOKEN: "tok-yyy",
+        GITHUB_TOKEN: "gh-token", // pragma: allowlist secret
+      },
+    });
+
+    const args = buildSandboxCreateArgs({
+      name: "openclaw-sbx-skill-keys",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+      envSanitizationOptions: {
+        allowedSensitiveKeys: new Set(["OPENAI_API_KEY", "MY_TOKEN"]),
+      },
+    });
+
+    // Rescued keys should be in --env flags
+    expect(args).toEqual(
+      expect.arrayContaining([
+        "--env",
+        "NODE_ENV=test",
+        "--env",
+        "OPENAI_API_KEY=sk-live-xxx",
+        "--env",
+        "MY_TOKEN=tok-yyy",
+      ]),
+    );
+    // GITHUB_TOKEN should NOT appear (not in allowedSensitiveKeys)
+    const envFlags = args.filter((_, i) => args[i - 1] === "--env");
+    expect(envFlags.some((f) => f.startsWith("GITHUB_TOKEN="))).toBe(false);
+  });
+
   it("allows container namespace join with explicit dangerous override", () => {
     const cfg = createSandboxConfig({
       network: "container:peer",
