@@ -38,7 +38,7 @@ import xiaomiPlugin from "../../../extensions/xiaomi/index.js";
 import zaiPlugin from "../../../extensions/zai/index.js";
 import { bundledWebSearchPluginRegistrations } from "../../bundled-web-search-registry.js";
 import { createCapturedPluginRegistration } from "../captured-registration.js";
-import { resolvePluginProviders } from "../providers.js";
+import { resolvePluginProviders } from "../provider-auth-choice.runtime.js";
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
@@ -139,10 +139,10 @@ function loadBundledProviderRegistry(): ProviderContractEntry[] {
       cache: false,
       activate: false,
     })
-      .filter((provider): provider is ProviderPlugin & { pluginId: string } =>
+      .filter((provider: ProviderPlugin): provider is ProviderPlugin & { pluginId: string } =>
         Boolean(provider.pluginId),
       )
-      .map((provider) => ({
+      .map((provider: ProviderPlugin & { pluginId: string }) => ({
         pluginId: provider.pluginId,
         provider,
       }));

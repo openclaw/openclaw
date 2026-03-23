@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { CallManagerContext } from "./context.js";
 
 const {
   addTranscriptEntryMock,
@@ -58,7 +59,10 @@ describe("voice-call outbound helpers", () => {
   });
 
   it("guards initiateCall when provider, webhook, capacity, or fromNumber are missing", async () => {
-    const base = {
+    const base: Pick<
+      CallManagerContext,
+      "activeCalls" | "providerCallIdMap" | "config" | "storePath" | "webhookUrl"
+    > = {
       activeCalls: new Map(),
       providerCallIdMap: new Map(),
       config: {
@@ -70,7 +74,7 @@ describe("voice-call outbound helpers", () => {
     };
 
     await expect(
-      initiateCall({ ...(base as never), provider: undefined }, "+14155550123"),
+      initiateCall({ ...base, provider: undefined } as never, "+14155550123"),
     ).resolves.toEqual({
       callId: "",
       success: false,
@@ -79,7 +83,7 @@ describe("voice-call outbound helpers", () => {
 
     await expect(
       initiateCall(
-        { ...(base as never), provider: { name: "twilio" }, webhookUrl: undefined },
+        { ...base, provider: { name: "twilio" }, webhookUrl: undefined } as never,
         "+14155550123",
       ),
     ).resolves.toEqual({
@@ -102,10 +106,10 @@ describe("voice-call outbound helpers", () => {
     await expect(
       initiateCall(
         {
-          ...(base as never),
+          ...base,
           provider: { name: "twilio" },
           config: { ...base.config, fromNumber: "" },
-        },
+        } as never,
         "+14155550123",
       ),
     ).resolves.toEqual({
