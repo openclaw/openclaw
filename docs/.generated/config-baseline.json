@@ -47319,8 +47319,8 @@
       "tags": [
         "advanced"
       ],
-      "label": "@openclaw/deepgram-provider",
-      "help": "OpenClaw Deepgram media-understanding provider (plugin: deepgram)",
+      "label": "@openclaw/deepgram-media-understanding",
+      "help": "OpenClaw Deepgram media-understanding plugin (plugin: deepgram)",
       "hasChildren": true
     },
     {
@@ -47333,7 +47333,7 @@
       "tags": [
         "advanced"
       ],
-      "label": "@openclaw/deepgram-provider Config",
+      "label": "@openclaw/deepgram-media-understanding Config",
       "help": "Plugin-defined config payload for deepgram.",
       "hasChildren": false
     },
@@ -47347,7 +47347,7 @@
       "tags": [
         "advanced"
       ],
-      "label": "Enable @openclaw/deepgram-provider",
+      "label": "Enable @openclaw/deepgram-media-understanding",
       "hasChildren": false
     },
     {
@@ -48387,155 +48387,6 @@
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.exa",
-      "kind": "plugin",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "@openclaw/exa-plugin",
-      "help": "OpenClaw Exa plugin (plugin: exa)",
-      "hasChildren": true
-    },
-    {
-      "path": "plugins.entries.exa.config",
-      "kind": "plugin",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "@openclaw/exa-plugin Config",
-      "help": "Plugin-defined config payload for exa.",
-      "hasChildren": true
-    },
-    {
-      "path": "plugins.entries.exa.config.webSearch",
-      "kind": "plugin",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "plugins.entries.exa.config.webSearch.apiKey",
-      "kind": "plugin",
-      "type": [
-        "object",
-        "string"
-      ],
-      "required": false,
-      "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "security"
-      ],
-      "label": "Exa API Key",
-      "help": "Exa Search API key (fallback: EXA_API_KEY env var).",
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.exa.enabled",
-      "kind": "plugin",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "Enable @openclaw/exa-plugin",
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.exa.hooks",
-      "kind": "plugin",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "Plugin Hook Policy",
-      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
-      "hasChildren": true
-    },
-    {
-      "path": "plugins.entries.exa.hooks.allowPromptInjection",
-      "kind": "plugin",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "access"
-      ],
-      "label": "Allow Prompt Injection Hooks",
-      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.exa.subagent",
-      "kind": "plugin",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "Plugin Subagent Policy",
-      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
-      "hasChildren": true
-    },
-    {
-      "path": "plugins.entries.exa.subagent.allowedModels",
-      "kind": "plugin",
-      "type": "array",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "access"
-      ],
-      "label": "Plugin Subagent Allowed Models",
-      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
-      "hasChildren": true
-    },
-    {
-      "path": "plugins.entries.exa.subagent.allowedModels.*",
-      "kind": "plugin",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.exa.subagent.allowModelOverride",
-      "kind": "plugin",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "access"
-      ],
-      "label": "Allow Plugin Subagent Model Override",
-      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
-      "hasChildren": false
-    },
-    {
       "path": "plugins.entries.fal",
       "kind": "plugin",
       "type": "object",
@@ -48765,6 +48616,166 @@
     },
     {
       "path": "plugins.entries.feishu.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.duckduckgo",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/duckduckgo-plugin",
+      "help": "OpenClaw DuckDuckGo plugin (plugin: duckduckgo)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.duckduckgo.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/duckduckgo-plugin Config",
+      "help": "Plugin-defined config payload for duckduckgo.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.duckduckgo.config.webSearch",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.duckduckgo.config.webSearch.region",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "label": "DuckDuckGo Region",
+      "help": "Optional DuckDuckGo region code such as us-en, uk-en, or de-de.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.duckduckgo.config.webSearch.safeSearch",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "enumValues": [
+        "strict",
+        "moderate",
+        "off"
+      ],
+      "label": "DuckDuckGo SafeSearch",
+      "help": "SafeSearch level for DuckDuckGo results.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.duckduckgo.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/duckduckgo-plugin",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.duckduckgo.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.duckduckgo.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.duckduckgo.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.duckduckgo.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.duckduckgo.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.duckduckgo.subagent.allowModelOverride",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -49355,8 +49366,8 @@
       "tags": [
         "advanced"
       ],
-      "label": "@openclaw/groq-provider",
-      "help": "OpenClaw Groq media-understanding provider (plugin: groq)",
+      "label": "@openclaw/groq-media-understanding",
+      "help": "OpenClaw Groq media-understanding plugin (plugin: groq)",
       "hasChildren": true
     },
     {
@@ -49369,7 +49380,7 @@
       "tags": [
         "advanced"
       ],
-      "label": "@openclaw/groq-provider Config",
+      "label": "@openclaw/groq-media-understanding Config",
       "help": "Plugin-defined config payload for groq.",
       "hasChildren": false
     },
@@ -49383,7 +49394,7 @@
       "tags": [
         "advanced"
       ],
-      "label": "Enable @openclaw/groq-provider",
+      "label": "Enable @openclaw/groq-media-understanding",
       "hasChildren": false
     },
     {
