@@ -32,6 +32,13 @@ Scope intent:
 - `messages.tts.elevenlabs.apiKey`
 - `messages.tts.openai.apiKey`
 - `tools.web.fetch.firecrawl.apiKey`
+- `plugins.entries.brave.config.webSearch.apiKey`
+- `plugins.entries.google.config.webSearch.apiKey`
+- `plugins.entries.xai.config.webSearch.apiKey`
+- `plugins.entries.moonshot.config.webSearch.apiKey`
+- `plugins.entries.perplexity.config.webSearch.apiKey`
+- `plugins.entries.firecrawl.config.webSearch.apiKey`
+- `plugins.entries.tavily.config.webSearch.apiKey`
 - `tools.web.search.apiKey`
 - `tools.web.search.gemini.apiKey`
 - `tools.web.search.grok.apiKey`
@@ -108,6 +115,7 @@ Notes:
   - In explicit provider mode (`tools.web.search.provider` set), only the selected provider key is active.
   - In auto mode (`tools.web.search.provider` unset), only the first provider key that resolves by precedence is active.
   - In auto mode, non-selected provider refs are treated as inactive until selected.
+  - Legacy `tools.web.search.*` provider paths still resolve during the compatibility window, but the canonical SecretRef surface is `plugins.entries.<plugin>.config.webSearch.*`.
 
 ## Unsupported credentials
 

@@ -17,6 +17,7 @@ import { resolveGatewayService } from "../daemon/service.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
+import { runStartupMatrixMigration } from "../gateway/server-startup-matrix-migration.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -29,6 +30,7 @@ import {
   noteAuthProfileHealth,
 } from "./doctor-auth.js";
 import { noteBootstrapFileSize } from "./doctor-bootstrap-size.js";
+import { noteChromeMcpBrowserReadiness } from "./doctor-browser.js";
 import { doctorShellCompletion } from "./doctor-completion.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import { maybeRepairLegacyCronStore } from "./doctor-cron.js";
@@ -43,7 +45,6 @@ import { noteMemorySearchHealth } from "./doctor-memory-search.js";
 import {
   noteMacLaunchAgentOverrides,
   noteMacLaunchctlGatewayEnvOverrides,
-  noteDeprecatedLegacyEnvVars,
   noteStartupOptimizationHints,
 } from "./doctor-platform-notes.js";
 import { createDoctorPrompter, type DoctorOptions } from "./doctor-prompter.js";
@@ -97,7 +98,6 @@ export async function doctorCommand(
 
   await maybeRepairUiProtocolFreshness(runtime, prompter);
   noteSourceInstallIssues(root);
-  noteDeprecatedLegacyEnvVars();
   noteStartupOptimizationHints();
 
   const configResult = await loadAndMaybeMigrateDoctorConfig({
@@ -235,7 +235,21 @@ export async function doctorCommand(
   await noteMacLaunchAgentOverrides();
   await noteMacLaunchctlGatewayEnvOverrides(cfg);
 
+  if (prompter.shouldRepair) {
+    await runStartupMatrixMigration({
+      cfg,
+      env: process.env,
+      log: {
+        info: (message) => runtime.log(message),
+        warn: (message) => runtime.error(message),
+      },
+      trigger: "doctor-fix",
+      logPrefix: "doctor",
+    });
+  }
+
   await noteSecurityWarnings(cfg);
+  await noteChromeMcpBrowserReadiness(cfg);
   await noteOpenAIOAuthTlsPrerequisites({
     cfg,
     deep: options.deep === true,

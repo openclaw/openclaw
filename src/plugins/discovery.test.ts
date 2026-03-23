@@ -1,24 +1,42 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { clearPluginDiscoveryCache, discoverOpenClawPlugins } from "./discovery.js";
+import {
+  cleanupTrackedTempDirs,
+  makeTrackedTempDir,
+  mkdirSafeDir,
+} from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
 
 function makeTempDir() {
-  const dir = path.join(os.tmpdir(), `openclaw-plugins-${randomUUID()}`);
-  fs.mkdirSync(dir, { recursive: true });
-  tempDirs.push(dir);
-  return dir;
+  return makeTrackedTempDir("openclaw-plugins", tempDirs);
+}
+
+const mkdirSafe = mkdirSafeDir;
+
+function normalizePathForAssertion(value: string | undefined): string | undefined {
+  if (!value) {
+    return value;
+  }
+  return value.replace(/\\/g, "/");
+}
+
+function hasDiagnosticSourceSuffix(
+  diagnostics: Array<{ source?: string }>,
+  suffix: string,
+): boolean {
+  const normalizedSuffix = normalizePathForAssertion(suffix);
+  return diagnostics.some((entry) =>
+    normalizePathForAssertion(entry.source)?.endsWith(normalizedSuffix ?? suffix),
+  );
 }
 
 function buildDiscoveryEnv(stateDir: string): NodeJS.ProcessEnv {
   return {
-    ...process.env,
     OPENCLAW_STATE_DIR: stateDir,
-    CLAWDBOT_STATE_DIR: undefined,
+    OPENCLAW_HOME: undefined,
     OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
   };
 }
@@ -53,13 +71,7 @@ function expectEscapesPackageDiagnostic(diagnostics: Array<{ message: string }>)
 
 afterEach(() => {
   clearPluginDiscoveryCache();
-  for (const dir of tempDirs.splice(0)) {
-    try {
-      fs.rmSync(dir, { recursive: true, force: true });
-    } catch {
-      // ignore cleanup failures
-    }
-  }
+  cleanupTrackedTempDirs(tempDirs);
 });
 
 describe("discoverOpenClawPlugins", () => {
@@ -68,11 +80,11 @@ describe("discoverOpenClawPlugins", () => {
     const workspaceDir = path.join(stateDir, "workspace");
 
     const globalExt = path.join(stateDir, "extensions");
-    fs.mkdirSync(globalExt, { recursive: true });
+    mkdirSafe(globalExt);
     fs.writeFileSync(path.join(globalExt, "alpha.ts"), "export default function () {}", "utf-8");
 
     const workspaceExt = path.join(workspaceDir, ".openclaw", "extensions");
-    fs.mkdirSync(workspaceExt, { recursive: true });
+    mkdirSafe(workspaceExt);
     fs.writeFileSync(path.join(workspaceExt, "beta.ts"), "export default function () {}", "utf-8");
 
     const { candidates } = await discoverWithStateDir(stateDir, { workspaceDir });
@@ -87,7 +99,7 @@ describe("discoverOpenClawPlugins", () => {
     const homeDir = makeTempDir();
     const workspaceRoot = path.join(homeDir, "workspace");
     const workspaceExt = path.join(workspaceRoot, ".openclaw", "extensions");
-    fs.mkdirSync(workspaceExt, { recursive: true });
+    mkdirSafe(workspaceExt);
     fs.writeFileSync(path.join(workspaceExt, "tilde-workspace.ts"), "export default {}", "utf-8");
 
     const result = discoverOpenClawPlugins({
@@ -106,22 +118,22 @@ describe("discoverOpenClawPlugins", () => {
   it("ignores backup and disabled plugin directories in scanned roots", async () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions");
-    fs.mkdirSync(globalExt, { recursive: true });
+    mkdirSafe(globalExt);
 
     const backupDir = path.join(globalExt, "feishu.backup-20260222");
-    fs.mkdirSync(backupDir, { recursive: true });
+    mkdirSafe(backupDir);
     fs.writeFileSync(path.join(backupDir, "index.ts"), "export default function () {}", "utf-8");
 
     const disabledDir = path.join(globalExt, "telegram.disabled.20260222");
-    fs.mkdirSync(disabledDir, { recursive: true });
+    mkdirSafe(disabledDir);
     fs.writeFileSync(path.join(disabledDir, "index.ts"), "export default function () {}", "utf-8");
 
     const bakDir = path.join(globalExt, "discord.bak");
-    fs.mkdirSync(bakDir, { recursive: true });
+    mkdirSafe(bakDir);
     fs.writeFileSync(path.join(bakDir, "index.ts"), "export default function () {}", "utf-8");
 
     const liveDir = path.join(globalExt, "live");
-    fs.mkdirSync(liveDir, { recursive: true });
+    mkdirSafe(liveDir);
     fs.writeFileSync(path.join(liveDir, "index.ts"), "export default function () {}", "utf-8");
 
     const { candidates } = await discoverWithStateDir(stateDir, {});
@@ -136,7 +148,7 @@ describe("discoverOpenClawPlugins", () => {
   it("loads package extension packs", async () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions", "pack");
-    fs.mkdirSync(path.join(globalExt, "src"), { recursive: true });
+    mkdirSafe(path.join(globalExt, "src"));
 
     writePluginPackageManifest({
       packageDir: globalExt,
@@ -164,7 +176,7 @@ describe("discoverOpenClawPlugins", () => {
   it("derives unscoped ids for scoped packages", async () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions", "voice-call-pack");
-    fs.mkdirSync(path.join(globalExt, "src"), { recursive: true });
+    mkdirSafe(path.join(globalExt, "src"));
 
     writePluginPackageManifest({
       packageDir: globalExt,
@@ -183,10 +195,73 @@ describe("discoverOpenClawPlugins", () => {
     expect(ids).toContain("voice-call");
   });
 
+  it("strips provider suffixes from package-derived ids", async () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions", "ollama-provider-pack");
+    mkdirSafe(path.join(globalExt, "src"));
+
+    writePluginPackageManifest({
+      packageDir: globalExt,
+      packageName: "@openclaw/ollama-provider",
+      extensions: ["./src/index.ts"],
+    });
+    fs.writeFileSync(
+      path.join(globalExt, "src", "index.ts"),
+      "export default function () {}",
+      "utf-8",
+    );
+
+    const { candidates } = await discoverWithStateDir(stateDir, {});
+
+    const ids = candidates.map((c) => c.idHint);
+    expect(ids).toContain("ollama");
+    expect(ids).not.toContain("ollama-provider");
+  });
+
+  it("normalizes bundled speech package ids to canonical plugin ids", async () => {
+    const stateDir = makeTempDir();
+    const extensionsDir = path.join(stateDir, "extensions");
+    const elevenlabsDir = path.join(extensionsDir, "elevenlabs-speech-pack");
+    const microsoftDir = path.join(extensionsDir, "microsoft-speech-pack");
+
+    mkdirSafe(path.join(elevenlabsDir, "src"));
+    mkdirSafe(path.join(microsoftDir, "src"));
+
+    writePluginPackageManifest({
+      packageDir: elevenlabsDir,
+      packageName: "@openclaw/elevenlabs-speech",
+      extensions: ["./src/index.ts"],
+    });
+    writePluginPackageManifest({
+      packageDir: microsoftDir,
+      packageName: "@openclaw/microsoft-speech",
+      extensions: ["./src/index.ts"],
+    });
+
+    fs.writeFileSync(
+      path.join(elevenlabsDir, "src", "index.ts"),
+      "export default function () {}",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(microsoftDir, "src", "index.ts"),
+      "export default function () {}",
+      "utf-8",
+    );
+
+    const { candidates } = await discoverWithStateDir(stateDir, {});
+
+    const ids = candidates.map((c) => c.idHint);
+    expect(ids).toContain("elevenlabs");
+    expect(ids).toContain("microsoft");
+    expect(ids).not.toContain("elevenlabs-speech");
+    expect(ids).not.toContain("microsoft-speech");
+  });
+
   it("treats configured directory paths as plugin packages", async () => {
     const stateDir = makeTempDir();
     const packDir = path.join(stateDir, "packs", "demo-plugin-dir");
-    fs.mkdirSync(packDir, { recursive: true });
+    mkdirSafe(packDir);
 
     writePluginPackageManifest({
       packageDir: packDir,
@@ -200,11 +275,112 @@ describe("discoverOpenClawPlugins", () => {
     const ids = candidates.map((c) => c.idHint);
     expect(ids).toContain("demo-plugin-dir");
   });
+
+  it("auto-detects Codex bundles as bundle candidates", async () => {
+    const stateDir = makeTempDir();
+    const bundleDir = path.join(stateDir, "extensions", "sample-bundle");
+    mkdirSafe(path.join(bundleDir, ".codex-plugin"));
+    mkdirSafe(path.join(bundleDir, "skills"));
+    fs.writeFileSync(
+      path.join(bundleDir, ".codex-plugin", "plugin.json"),
+      JSON.stringify({
+        name: "Sample Bundle",
+        skills: "skills",
+      }),
+      "utf-8",
+    );
+
+    const { candidates } = await discoverWithStateDir(stateDir, {});
+    const bundle = candidates.find((candidate) => candidate.idHint === "sample-bundle");
+
+    expect(bundle).toBeDefined();
+    expect(bundle?.idHint).toBe("sample-bundle");
+    expect(bundle?.format).toBe("bundle");
+    expect(bundle?.bundleFormat).toBe("codex");
+    expect(bundle?.source).toBe(bundleDir);
+    expect(normalizePathForAssertion(bundle?.rootDir)).toBe(
+      normalizePathForAssertion(fs.realpathSync(bundleDir)),
+    );
+  });
+
+  it("auto-detects manifestless Claude bundles from the default layout", async () => {
+    const stateDir = makeTempDir();
+    const bundleDir = path.join(stateDir, "extensions", "claude-bundle");
+    mkdirSafe(path.join(bundleDir, "commands"));
+    fs.writeFileSync(path.join(bundleDir, "settings.json"), '{"hideThinkingBlock":true}', "utf-8");
+
+    const { candidates } = await discoverWithStateDir(stateDir, {});
+    const bundle = candidates.find((candidate) => candidate.idHint === "claude-bundle");
+
+    expect(bundle).toBeDefined();
+    expect(bundle?.format).toBe("bundle");
+    expect(bundle?.bundleFormat).toBe("claude");
+    expect(bundle?.source).toBe(bundleDir);
+  });
+
+  it("auto-detects Cursor bundles as bundle candidates", async () => {
+    const stateDir = makeTempDir();
+    const bundleDir = path.join(stateDir, "extensions", "cursor-bundle");
+    mkdirSafe(path.join(bundleDir, ".cursor-plugin"));
+    mkdirSafe(path.join(bundleDir, ".cursor", "commands"));
+    fs.writeFileSync(
+      path.join(bundleDir, ".cursor-plugin", "plugin.json"),
+      JSON.stringify({
+        name: "Cursor Bundle",
+      }),
+      "utf-8",
+    );
+
+    const { candidates } = await discoverWithStateDir(stateDir, {});
+    const bundle = candidates.find((candidate) => candidate.idHint === "cursor-bundle");
+
+    expect(bundle).toBeDefined();
+    expect(bundle?.format).toBe("bundle");
+    expect(bundle?.bundleFormat).toBe("cursor");
+    expect(bundle?.source).toBe(bundleDir);
+  });
+
+  it("falls back to legacy index discovery when a scanned bundle sidecar is malformed", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "legacy-with-bad-bundle");
+    mkdirSafe(path.join(pluginDir, ".claude-plugin"));
+    fs.writeFileSync(path.join(pluginDir, "index.ts"), "export default {}", "utf-8");
+    fs.writeFileSync(path.join(pluginDir, ".claude-plugin", "plugin.json"), "{", "utf-8");
+
+    const result = await discoverWithStateDir(stateDir, {});
+    const legacy = result.candidates.find(
+      (candidate) => candidate.idHint === "legacy-with-bad-bundle",
+    );
+
+    expect(legacy).toBeDefined();
+    expect(legacy?.format).toBe("openclaw");
+    expect(hasDiagnosticSourceSuffix(result.diagnostics, ".claude-plugin/plugin.json")).toBe(true);
+  });
+
+  it("falls back to legacy index discovery for configured paths with malformed bundle sidecars", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "plugins", "legacy-with-bad-bundle");
+    mkdirSafe(path.join(pluginDir, ".codex-plugin"));
+    fs.writeFileSync(path.join(pluginDir, "index.ts"), "export default {}", "utf-8");
+    fs.writeFileSync(path.join(pluginDir, ".codex-plugin", "plugin.json"), "{", "utf-8");
+
+    const result = await discoverWithStateDir(stateDir, {
+      extraPaths: [pluginDir],
+    });
+    const legacy = result.candidates.find(
+      (candidate) => candidate.idHint === "legacy-with-bad-bundle",
+    );
+
+    expect(legacy).toBeDefined();
+    expect(legacy?.format).toBe("openclaw");
+    expect(hasDiagnosticSourceSuffix(result.diagnostics, ".codex-plugin/plugin.json")).toBe(true);
+  });
+
   it("blocks extension entries that escape package directory", async () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions", "escape-pack");
     const outside = path.join(stateDir, "outside.js");
-    fs.mkdirSync(globalExt, { recursive: true });
+    mkdirSafe(globalExt);
 
     writePluginPackageManifest({
       packageDir: globalExt,
@@ -219,13 +395,30 @@ describe("discoverOpenClawPlugins", () => {
     expectEscapesPackageDiagnostic(result.diagnostics);
   });
 
+  it("skips missing package extension entries without escape diagnostics", async () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions", "missing-entry-pack");
+    mkdirSafe(globalExt);
+
+    writePluginPackageManifest({
+      packageDir: globalExt,
+      packageName: "@openclaw/missing-entry-pack",
+      extensions: ["./missing.ts"],
+    });
+
+    const result = await discoverWithStateDir(stateDir, {});
+
+    expect(result.candidates).toHaveLength(0);
+    expect(result.diagnostics).toEqual([]);
+  });
+
   it("rejects package extension entries that escape via symlink", async () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions", "pack");
     const outsideDir = path.join(stateDir, "outside");
     const linkedDir = path.join(globalExt, "linked");
-    fs.mkdirSync(globalExt, { recursive: true });
-    fs.mkdirSync(outsideDir, { recursive: true });
+    mkdirSafe(globalExt);
+    mkdirSafe(outsideDir);
     fs.writeFileSync(path.join(outsideDir, "escape.ts"), "export default {}", "utf-8");
     try {
       fs.symlinkSync(outsideDir, linkedDir, process.platform === "win32" ? "junction" : "dir");
@@ -254,8 +447,8 @@ describe("discoverOpenClawPlugins", () => {
     const outsideDir = path.join(stateDir, "outside");
     const outsideFile = path.join(outsideDir, "escape.ts");
     const linkedFile = path.join(globalExt, "escape.ts");
-    fs.mkdirSync(globalExt, { recursive: true });
-    fs.mkdirSync(outsideDir, { recursive: true });
+    mkdirSafe(globalExt);
+    mkdirSafe(outsideDir);
     fs.writeFileSync(outsideFile, "export default {}", "utf-8");
     try {
       fs.linkSync(outsideFile, linkedFile);
@@ -287,8 +480,8 @@ describe("discoverOpenClawPlugins", () => {
     const outsideDir = path.join(stateDir, "outside");
     const outsideManifest = path.join(outsideDir, "package.json");
     const linkedManifest = path.join(globalExt, "package.json");
-    fs.mkdirSync(globalExt, { recursive: true });
-    fs.mkdirSync(outsideDir, { recursive: true });
+    mkdirSafe(globalExt);
+    mkdirSafe(outsideDir);
     fs.writeFileSync(path.join(globalExt, "entry.ts"), "export default {}", "utf-8");
     fs.writeFileSync(
       outsideManifest,
@@ -315,7 +508,7 @@ describe("discoverOpenClawPlugins", () => {
   it.runIf(process.platform !== "win32")("blocks world-writable plugin paths", async () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions");
-    fs.mkdirSync(globalExt, { recursive: true });
+    mkdirSafe(globalExt);
     const pluginPath = path.join(globalExt, "world-open.ts");
     fs.writeFileSync(pluginPath, "export default function () {}", "utf-8");
     fs.chmodSync(pluginPath, 0o777);
@@ -334,7 +527,7 @@ describe("discoverOpenClawPlugins", () => {
       const stateDir = makeTempDir();
       const bundledDir = path.join(stateDir, "bundled");
       const packDir = path.join(bundledDir, "demo-pack");
-      fs.mkdirSync(packDir, { recursive: true });
+      mkdirSafe(packDir);
       fs.writeFileSync(path.join(packDir, "index.ts"), "export default function () {}", "utf-8");
       fs.chmodSync(packDir, 0o777);
 
@@ -342,7 +535,6 @@ describe("discoverOpenClawPlugins", () => {
         env: {
           ...process.env,
           OPENCLAW_STATE_DIR: stateDir,
-          CLAWDBOT_STATE_DIR: undefined,
           OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
         },
       });
@@ -362,7 +554,7 @@ describe("discoverOpenClawPlugins", () => {
     async () => {
       const stateDir = makeTempDir();
       const globalExt = path.join(stateDir, "extensions");
-      fs.mkdirSync(globalExt, { recursive: true });
+      mkdirSafe(globalExt);
       fs.writeFileSync(
         path.join(globalExt, "owner-mismatch.ts"),
         "export default function () {}",
@@ -382,7 +574,7 @@ describe("discoverOpenClawPlugins", () => {
   it("reuses discovery results from cache until cleared", async () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions");
-    fs.mkdirSync(globalExt, { recursive: true });
+    mkdirSafe(globalExt);
     const pluginPath = path.join(globalExt, "cached.ts");
     fs.writeFileSync(pluginPath, "export default function () {}", "utf-8");
 
@@ -420,8 +612,8 @@ describe("discoverOpenClawPlugins", () => {
     const stateDirB = makeTempDir();
     const globalExtA = path.join(stateDirA, "extensions");
     const globalExtB = path.join(stateDirB, "extensions");
-    fs.mkdirSync(globalExtA, { recursive: true });
-    fs.mkdirSync(globalExtB, { recursive: true });
+    mkdirSafe(globalExtA);
+    mkdirSafe(globalExtB);
     fs.writeFileSync(path.join(globalExtA, "alpha.ts"), "export default function () {}", "utf-8");
     fs.writeFileSync(path.join(globalExtB, "beta.ts"), "export default function () {}", "utf-8");
 
@@ -450,8 +642,8 @@ describe("discoverOpenClawPlugins", () => {
     const homeB = makeTempDir();
     const pluginA = path.join(homeA, "plugins", "demo.ts");
     const pluginB = path.join(homeB, "plugins", "demo.ts");
-    fs.mkdirSync(path.dirname(pluginA), { recursive: true });
-    fs.mkdirSync(path.dirname(pluginB), { recursive: true });
+    mkdirSafe(path.dirname(pluginA));
+    mkdirSafe(path.dirname(pluginB));
     fs.writeFileSync(pluginA, "export default {}", "utf-8");
     fs.writeFileSync(pluginB, "export default {}", "utf-8");
 
@@ -482,7 +674,7 @@ describe("discoverOpenClawPlugins", () => {
     const stateDir = makeTempDir();
     const pluginA = path.join(stateDir, "plugins", "alpha.ts");
     const pluginB = path.join(stateDir, "plugins", "beta.ts");
-    fs.mkdirSync(path.dirname(pluginA), { recursive: true });
+    mkdirSafe(path.dirname(pluginA));
     fs.writeFileSync(pluginA, "export default {}", "utf-8");
     fs.writeFileSync(pluginB, "export default {}", "utf-8");
 

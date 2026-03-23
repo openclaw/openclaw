@@ -1,11 +1,15 @@
 import { completeSimple, type Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { isTruthyEnvValue } from "../infra/env.js";
+import {
+  createSingleUserPromptMessage,
+  extractNonEmptyAssistantText,
+  isLiveTestEnabled,
+} from "./live-test-helpers.js";
 
 const MINIMAX_KEY = process.env.MINIMAX_API_KEY ?? "";
 const MINIMAX_BASE_URL = process.env.MINIMAX_BASE_URL?.trim() || "https://api.minimax.io/anthropic";
-const MINIMAX_MODEL = process.env.MINIMAX_MODEL?.trim() || "MiniMax-M2.5";
-const LIVE = isTruthyEnvValue(process.env.MINIMAX_LIVE_TEST) || isTruthyEnvValue(process.env.LIVE);
+const MINIMAX_MODEL = process.env.MINIMAX_MODEL?.trim() || "MiniMax-M2.7";
+const LIVE = isLiveTestEnabled(["MINIMAX_LIVE_TEST"]);
 
 const describeLive = LIVE && MINIMAX_KEY ? describe : describe.skip;
 
@@ -27,20 +31,11 @@ describeLive("minimax live", () => {
     const res = await completeSimple(
       model,
       {
-        messages: [
-          {
-            role: "user",
-            content: "Reply with the word ok.",
-            timestamp: Date.now(),
-          },
-        ],
+        messages: createSingleUserPromptMessage(),
       },
       { apiKey: MINIMAX_KEY, maxTokens: 64 },
     );
-    const text = res.content
-      .filter((block) => block.type === "text")
-      .map((block) => block.text.trim())
-      .join(" ");
+    const text = extractNonEmptyAssistantText(res.content);
     expect(text.length).toBeGreaterThan(0);
   }, 20000);
 });

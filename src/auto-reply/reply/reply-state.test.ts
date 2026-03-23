@@ -445,6 +445,159 @@ describe("incrementCompactionCount", () => {
     expect(stored[sessionKey].outputTokens).toBeUndefined();
   });
 
+  it("updates sessionId and sessionFile when compaction rotated transcripts", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-rotate-"));
+    tempDirs.push(tmp);
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const entry = {
+      sessionId: "s1",
+      sessionFile: path.join(tmp, "s1-topic-456.jsonl"),
+      updatedAt: Date.now(),
+      compactionCount: 0,
+    } as SessionEntry;
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
+    await seedSessionStore({ storePath, sessionKey, entry });
+
+    await incrementCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      newSessionId: "s2",
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    const expectedDir = await fs.realpath(tmp);
+    expect(stored[sessionKey].sessionId).toBe("s2");
+    expect(stored[sessionKey].sessionFile).toBe(path.join(expectedDir, "s2-topic-456.jsonl"));
+  });
+
+  it("preserves fork transcript filenames when compaction rotates transcripts", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-fork-"));
+    tempDirs.push(tmp);
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const entry = {
+      sessionId: "s1",
+      sessionFile: path.join(tmp, "2026-03-23T12-34-56-789Z_s1.jsonl"),
+      updatedAt: Date.now(),
+      compactionCount: 0,
+    } as SessionEntry;
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
+    await seedSessionStore({ storePath, sessionKey, entry });
+
+    await incrementCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      newSessionId: "s2",
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    const expectedDir = await fs.realpath(tmp);
+    expect(stored[sessionKey].sessionId).toBe("s2");
+    expect(stored[sessionKey].sessionFile).toBe(
+      path.join(expectedDir, "2026-03-23T12-34-56-789Z_s2.jsonl"),
+    );
+  });
+
+  it("falls back to the derived transcript path when rewritten absolute sessionFile is unsafe", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-unsafe-"));
+    tempDirs.push(tmp);
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const unsafePath = path.join(tmp, "outside", "s1.jsonl");
+    const entry = {
+      sessionId: "s1",
+      sessionFile: unsafePath,
+      updatedAt: Date.now(),
+      compactionCount: 0,
+    } as SessionEntry;
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
+    await seedSessionStore({ storePath, sessionKey, entry });
+
+    await incrementCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      newSessionId: "s2",
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    const expectedDir = await fs.realpath(tmp);
+    expect(stored[sessionKey].sessionId).toBe("s2");
+    expect(stored[sessionKey].sessionFile).toBe(path.join(expectedDir, "s2.jsonl"));
+  });
+
+  it("increments compaction count by an explicit amount", async () => {
+    const entry = { sessionId: "s1", updatedAt: Date.now(), compactionCount: 2 } as SessionEntry;
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+
+    const count = await incrementCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      amount: 2,
+    });
+    expect(count).toBe(4);
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].compactionCount).toBe(4);
+  });
+
+  it("updates sessionId and sessionFile when newSessionId is provided", async () => {
+    const entry = {
+      sessionId: "old-session-id",
+      sessionFile: "old-session-id.jsonl",
+      updatedAt: Date.now(),
+      compactionCount: 1,
+    } as SessionEntry;
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+
+    await incrementCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      newSessionId: "new-session-id",
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    const expectedSessionDir = await fs.realpath(path.dirname(storePath));
+    expect(stored[sessionKey].sessionId).toBe("new-session-id");
+    expect(stored[sessionKey].sessionFile).toBe(
+      path.join(expectedSessionDir, "new-session-id.jsonl"),
+    );
+    expect(stored[sessionKey].compactionCount).toBe(2);
+  });
+
+  it("does not update sessionFile when newSessionId matches current sessionId", async () => {
+    const entry = {
+      sessionId: "same-id",
+      sessionFile: "same-id.jsonl",
+      updatedAt: Date.now(),
+      compactionCount: 0,
+    } as SessionEntry;
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+
+    await incrementCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      newSessionId: "same-id",
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].sessionId).toBe("same-id");
+    expect(stored[sessionKey].sessionFile).toBe("same-id.jsonl");
+    expect(stored[sessionKey].compactionCount).toBe(1);
+  });
+
   it("does not update totalTokens when tokensAfter is not provided", async () => {
     const entry = {
       sessionId: "s1",

@@ -40,7 +40,14 @@ export type ResolvedGatewayAuth = {
 
 export type GatewayAuthResult = {
   ok: boolean;
-  method?: "none" | "token" | "password" | "tailscale" | "device-token" | "trusted-proxy";
+  method?:
+    | "none"
+    | "token"
+    | "password"
+    | "tailscale"
+    | "device-token"
+    | "bootstrap-token"
+    | "trusted-proxy";
   user?: string;
   reason?: string;
   /** Present when the request was blocked by the rate limiter. */
@@ -234,7 +241,6 @@ export function resolveGatewayAuth(params: {
     configToken: tokenRef ? undefined : authConfig.token,
     configPassword: passwordRef ? undefined : authConfig.password,
     env,
-    includeLegacyEnv: false,
     tokenPrecedence: "config-first",
     passwordPrecedence: "config-first", // pragma: allowlist secret
   });
