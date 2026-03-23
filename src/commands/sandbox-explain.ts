@@ -1,6 +1,7 @@
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import {
   resolveSandboxConfigForAgent,
+  resolveSandboxRuntimeStatus,
   resolveSandboxToolPolicyForAgent,
 } from "../agents/sandbox.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
@@ -149,16 +150,12 @@ export async function sandboxExplainCommand(
 
   const sandboxCfg = resolveSandboxConfigForAgent(cfg, resolvedAgentId);
   const toolPolicy = resolveSandboxToolPolicyForAgent(cfg, resolvedAgentId);
-  const mainSessionKey = resolveAgentMainSessionKey({
+  const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg,
-    agentId: resolvedAgentId,
+    sessionKey,
   });
-  const sessionIsSandboxed =
-    sandboxCfg.mode === "all"
-      ? true
-      : sandboxCfg.mode === "off"
-        ? false
-        : sessionKey.trim() !== mainSessionKey.trim();
+  const mainSessionKey = sandboxRuntime.mainSessionKey;
+  const sessionIsSandboxed = sandboxRuntime.sandboxed;
 
   const channel = resolveActiveChannel({
     cfg,
@@ -216,7 +213,10 @@ export async function sandboxExplainCommand(
   }
 
   const fixIt: string[] = [];
-  if (sandboxCfg.mode !== "off") {
+  if (sandboxRuntime.forcedByPrivateMode) {
+    fixIt.push("privateMode.execution.sandboxMode");
+    fixIt.push("privateMode.execution.blockHostExec");
+  } else if (sandboxCfg.mode !== "off") {
     fixIt.push("agents.defaults.sandbox.mode=off");
     fixIt.push("agents.list[].sandbox.mode=off");
   }
@@ -235,9 +235,10 @@ export async function sandboxExplainCommand(
     sessionKey,
     mainSessionKey,
     sandbox: {
-      mode: sandboxCfg.mode,
+      mode: sandboxRuntime.mode,
       scope: sandboxCfg.scope,
       perSession: sandboxCfg.scope === "session",
+      forcedByPrivateMode: sandboxRuntime.forcedByPrivateMode,
       workspaceAccess: sandboxCfg.workspaceAccess,
       workspaceRoot: sandboxCfg.workspaceRoot,
       sessionIsSandboxed,
@@ -288,6 +289,9 @@ export async function sandboxExplainCommand(
       payload.sandbox.scope,
     )} ${key("perSession:")} ${bool(payload.sandbox.perSession)}`,
   );
+  if (payload.sandbox.forcedByPrivateMode) {
+    lines.push(`  ${key("forcedByPrivateMode:")} ${bool(true)}`);
+  }
   lines.push(
     `  ${key("workspaceAccess:")} ${value(
       payload.sandbox.workspaceAccess,
@@ -317,7 +321,11 @@ export async function sandboxExplainCommand(
       )}`,
     );
   }
-  if (payload.sandbox.mode === "non-main" && payload.sandbox.sessionIsSandboxed) {
+  if (
+    payload.sandbox.mode === "non-main" &&
+    payload.sandbox.sessionIsSandboxed &&
+    !payload.sandbox.forcedByPrivateMode
+  ) {
     lines.push("");
     lines.push(
       `${warn("Hint:")} sandbox mode is non-main; use main session key to run direct: ${value(

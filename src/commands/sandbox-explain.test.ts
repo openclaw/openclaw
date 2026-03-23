@@ -45,4 +45,83 @@ describe("sandbox explain command", () => {
     expect(parsed.fixIt).toContain("agents.defaults.sandbox.mode=off");
     expect(parsed.fixIt).toContain("tools.sandbox.tools.deny");
   });
+
+  it(
+    "reports private-mode-forced sandboxing in JSON output when sandboxMode is all",
+    { timeout: SANDBOX_EXPLAIN_TEST_TIMEOUT_MS },
+    async () => {
+      mockCfg = {
+        privateMode: {
+          enabled: true,
+          execution: {
+            sandboxMode: "all",
+            blockHostExec: true,
+          },
+        },
+        agents: {
+          defaults: {
+            sandbox: { mode: "off", scope: "session", workspaceAccess: "none" },
+          },
+          list: [{ id: "main" }],
+        },
+        tools: {
+          sandbox: { tools: { deny: ["browser"] } },
+          elevated: { enabled: true, allowFrom: { whatsapp: ["*"] } },
+        },
+        session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
+      };
+
+      const logs: string[] = [];
+      await sandboxExplainCommand({ json: true, session: "agent:main:main" }, {
+        log: (msg: string) => logs.push(msg),
+        error: (msg: string) => logs.push(msg),
+        exit: (_code: number) => {},
+      } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
+
+      const parsed = JSON.parse(logs.join(""));
+      expect(parsed.sandbox.mode).toBe("all");
+      expect(parsed.sandbox.sessionIsSandboxed).toBe(true);
+      expect(parsed.sandbox.forcedByPrivateMode).toBe(true);
+      expect(parsed.fixIt).toContain("privateMode.execution.sandboxMode");
+      expect(parsed.fixIt).toContain("privateMode.execution.blockHostExec");
+      expect(parsed.fixIt).not.toContain("agents.defaults.sandbox.mode=off");
+    },
+  );
+
+  it(
+    "reports private-mode-forced sandboxing when blockHostExec alone is enabled",
+    { timeout: SANDBOX_EXPLAIN_TEST_TIMEOUT_MS },
+    async () => {
+      mockCfg = {
+        privateMode: {
+          enabled: true,
+          execution: {
+            blockHostExec: true,
+          },
+        },
+        agents: {
+          defaults: {
+            sandbox: { mode: "off", scope: "session", workspaceAccess: "none" },
+          },
+          list: [{ id: "main" }],
+        },
+        tools: {
+          sandbox: { tools: { deny: ["browser"] } },
+        },
+        session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
+      };
+
+      const logs: string[] = [];
+      await sandboxExplainCommand({ json: true, session: "agent:main:main" }, {
+        log: (msg: string) => logs.push(msg),
+        error: (msg: string) => logs.push(msg),
+        exit: (_code: number) => {},
+      } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
+
+      const parsed = JSON.parse(logs.join(""));
+      expect(parsed.sandbox.mode).toBe("all");
+      expect(parsed.sandbox.sessionIsSandboxed).toBe(true);
+      expect(parsed.sandbox.forcedByPrivateMode).toBe(true);
+    },
+  );
 });
