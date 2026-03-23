@@ -2,6 +2,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 import { buildSingleProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog";
 import { PROVIDER_LABELS } from "openclaw/plugin-sdk/provider-usage";
+import { xiaomiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyXiaomiConfig, XIAOMI_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildXiaomiProvider } from "./provider-catalog.js";
 
@@ -60,5 +61,6 @@ export default definePluginEntry({
         windows: [],
       }),
     });
+    api.registerMediaUnderstandingProvider(xiaomiMediaUnderstandingProvider);
   },
 });
