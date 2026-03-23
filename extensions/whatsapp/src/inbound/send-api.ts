@@ -18,6 +18,10 @@ function resolveOutboundMessageId(result: unknown): string {
     : "unknown";
 }
 
+// Known limitation: this helper has no access to the per-group participantJidMap
+// that monitor.ts builds for auto-reply closures. Mentions through this path
+// (CLI `message send`, message tool, sendApi IPC) default to @s.whatsapp.net,
+// which is incorrect for LID-based participants. The auto-reply path is unaffected.
 function mentionsSpread(text: string | undefined): { mentions: string[] } | Record<string, never> {
   if (!text) return {};
   const mentions = extractOutboundMentions(text);
