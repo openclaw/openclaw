@@ -154,6 +154,7 @@ jobs:
           pre-commit run zizmor --files "${workflow_files[@]}"
 
       - name: Audit production dependencies
+        if: steps.docs_scope.outputs.docs_only != 'true'
         run: pre-commit run --all-files pnpm-audit-prod
 
   # Fanout: downstream lanes branch from preflight outputs instead of waiting
