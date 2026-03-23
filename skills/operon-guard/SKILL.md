@@ -57,14 +57,16 @@ pip install operon-guard
 operon-guard test path/to/skill/
 ```
 
-> **Note:** When pointing at a skill directory, `operon-guard` picks the **first
-> `.py` file in `scripts/` sorted alphabetically** and passes it to the loader. If
-> that file does not export a recognized entry-point callable (`agent`, `run`, `main`,
-> `execute`, `process`, `handle`), the command fails — it does **not** fall back to
-> other files in the directory. To target a specific file, pass the path explicitly:
-> `operon-guard test path/to/skill/my_agent.py:run`
+> **Note:** When pointing at a skill directory, `operon-guard` searches for Python files
+> in this order: (1) `.py` files in `scripts/` sorted alphabetically, skipping
+> `__init__`, `conftest`, `setup`, `utils`, `helpers`, and `constants`; then (2)
+> `main.py`, `run.py`, `agent.py`, `skill.py` in the skill root. It loads the first
+> file found. Within that file it looks for an entry-point callable in order: `run`,
+> `main`, `execute`, `process`, `agent`, `handle`. If none match, the command fails —
+> it does **not** fall back to other files. To target a specific file, pass the path
+> explicitly: `operon-guard test path/to/skill/my_agent.py:run`
 
-### Quick safety scan (injection + PII only)
+### Quick safety scan
 
 > **Warning:** `scan` always exits 0 regardless of what it finds. Do not use it as a
 > gate in scripts or CI (`operon-guard scan && install` will always continue, even when
@@ -142,14 +144,10 @@ if start is None:
 print("\n".join(proc.stdout.splitlines()[start:]))
 ```
 
-> **Warning: `--json` always exits 0.** `operon-guard test --json` exits 0 even when
-> the report contains `passed: false`. The non-zero exit code only fires in the non-JSON
-> branch. **Do not gate CI or permission workflows on the exit code when using `--json`**
-> — a failing agent will silently pass the gate.
->
-> For CI, either:
->
-> **Option A — parse `passed` from the JSON output (bash):**
+> **Note:** `--json` uses the same exit code as plain output — exits 0 when the agent
+> passes, 1 when it fails. The JSON body also includes a `passed` field you can parse
+> directly. For CI, reading `passed` from the JSON is more explicit and portable than
+> relying solely on the exit code:
 >
 > ```bash
 > result=$(operon-guard test path/to/agent.py --json | grep -A9999 '^{')
@@ -158,20 +156,15 @@ print("\n".join(proc.stdout.splitlines()[start:]))
 >    print(d.get('passed', d.get('trust_score',{}).get('passed',False)))")
 > [ "$passed" = "True" ] || { echo "Agent failed trust check"; exit 1; }
 > ```
->
-> **Option B — run without `--json` and rely on the exit code:**
->
-> ```bash
-> operon-guard test path/to/agent.py   # exits 1 on failure, 0 on pass
-> ```
 
 ## Specifying the Entry Point
 
 When your module exports **more than one callable** (helpers, utilities, classes, and
 the agent itself), always specify which callable is the agent using `file.py:callable`
-syntax — otherwise `operon-guard` scores the first matching name it finds (`agent`,
-`run`, `main`, `execute` ... in that order) and falls back to the first callable in the
-file, which may be a helper, not your agent:
+syntax — otherwise `operon-guard` scores the first matching name it finds in this order:
+`agent`, `run`, `main`, `execute`, `process`, `invoke`, `generate`, `predict`, `call`,
+`query`, `search` — then falls back to the first callable in the file that isn't a
+built-in or import. That fallback may be a helper, not your agent:
 
 ```bash
 # Ambiguous — may score a helper if the module has multiple callables
@@ -189,14 +182,14 @@ operon-guard test path/to/agent.py:MyAgentClass
 
 ## Nested Packages
 
-`operon-guard` adds the agent file's **parent** and **grandparent** directories to
-`sys.path` before importing the module. Nothing above the grandparent is added,
-regardless of where you run the command from.
+When running `operon-guard test` directly on a `.py` file, `operon-guard` adds the
+agent file's **parent** directory to `sys.path`, and the **grandparent** directory if
+it falls within the current working directory. Nothing above the grandparent is added.
 
 For `src/mypackage/agents/my_agent.py` the entries added are:
 
 - `.../src/mypackage/agents/` (parent)
-- `.../src/mypackage/` (grandparent)
+- `.../src/mypackage/` (grandparent, only if inside cwd)
 
 `src/` and the project root are **not** added, so `import mypackage` still raises
 `ModuleNotFoundError`. Fix this with `PYTHONPATH` — it adds `src/` to the import
