@@ -8,10 +8,7 @@ const GENERATED_BY = "scripts/generate-bundled-plugin-metadata.mjs";
 const DEFAULT_OUTPUT_PATH = "src/plugins/bundled-plugin-metadata.generated.ts";
 const MANIFEST_KEY = "openclaw";
 const FORMATTER_CWD = path.resolve(import.meta.dirname, "..");
-<<<<<<< HEAD
 const OXFMT_BIN = path.join(FORMATTER_CWD, "node_modules", ".bin", "oxfmt");
-=======
->>>>>>> 521b33dd85 (fix(plugins): make metadata generator formatter portable)
 const CANONICAL_PACKAGE_ID_ALIASES = {
   "elevenlabs-speech": "elevenlabs",
   "microsoft-speech": "microsoft",
