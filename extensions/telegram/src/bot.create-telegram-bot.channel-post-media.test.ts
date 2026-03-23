@@ -54,7 +54,7 @@ function getChannelPostHandler() {
 
 function resolveFlushTimer(setTimeoutSpy: ReturnType<typeof vi.spyOn>) {
   const flushTimerCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
-    (call) => call[1] === TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs,
+    (call: Parameters<typeof setTimeout>) => call[1] === TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs,
   );
   const flushTimer =
     flushTimerCallIndex >= 0
