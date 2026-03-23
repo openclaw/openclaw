@@ -1,7 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { URL } from "node:url";
-import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
+import { fileURLToPath, URL } from "node:url";
 import { assertNoPathAliasEscape, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -107,11 +106,9 @@ export async function resolveSandboxedMediaSource(params: {
       candidate = workspaceMappedFromUrl;
     } else {
       try {
-        candidate = safeFileURLToPath(candidate);
-      } catch (err) {
-        throw new Error(`Invalid file:// URL for sandboxed media: ${(err as Error).message}`, {
-          cause: err,
-        });
+        candidate = fileURLToPath(candidate);
+      } catch {
+        throw new Error(`Invalid file:// URL for sandboxed media: ${raw}`);
       }
     }
   }
@@ -122,7 +119,6 @@ export async function resolveSandboxedMediaSource(params: {
   if (containerWorkspaceMapped) {
     candidate = containerWorkspaceMapped;
   }
-  assertNoWindowsNetworkPath(candidate, "Sandbox media path");
   const tmpMediaPath = await resolveAllowedTmpMediaPath({
     candidate,
     sandboxRoot: params.sandboxRoot,

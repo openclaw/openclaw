@@ -1,8 +1,11 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { buildChannelSummary } from "./channel-summary.js";
+
+vi.mock("../channels/plugins/index.js", () => ({
+  listChannelPlugins: vi.fn(),
+}));
 
 function makeSlackHttpSummaryPlugin(): ChannelPlugin {
   return {
@@ -204,16 +207,8 @@ function makeFallbackSummaryPlugin(params: {
 }
 
 describe("buildChannelSummary", () => {
-  afterEach(() => {
-    setActivePluginRegistry(createTestRegistry([]));
-  });
-
   it("preserves Slack HTTP signing-secret unavailable state from source config", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        { pluginId: "slack", plugin: makeSlackHttpSummaryPlugin(), source: "test" },
-      ]),
-    );
+    vi.mocked(listChannelPlugins).mockReturnValue([makeSlackHttpSummaryPlugin()]);
 
     const lines = await buildChannelSummary({ marker: "resolved", channels: {} } as never, {
       colorize: false,
@@ -228,15 +223,9 @@ describe("buildChannelSummary", () => {
   });
 
   it("shows disabled status without configured account detail lines", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "telegram",
-          plugin: makeTelegramSummaryPlugin({ enabled: false, configured: false }),
-          source: "test",
-        },
-      ]),
-    );
+    vi.mocked(listChannelPlugins).mockReturnValue([
+      makeTelegramSummaryPlugin({ enabled: false, configured: false }),
+    ]);
 
     const lines = await buildChannelSummary({ channels: {} } as never, {
       colorize: false,
@@ -247,21 +236,15 @@ describe("buildChannelSummary", () => {
   });
 
   it("includes linked summary metadata and truncates allow-from details", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "telegram",
-          plugin: makeTelegramSummaryPlugin({
-            enabled: true,
-            configured: true,
-            linked: true,
-            authAgeMs: 300_000,
-            allowFrom: ["alice", "bob", "carol"],
-          }),
-          source: "test",
-        },
-      ]),
-    );
+    vi.mocked(listChannelPlugins).mockReturnValue([
+      makeTelegramSummaryPlugin({
+        enabled: true,
+        configured: true,
+        linked: true,
+        authAgeMs: 300_000,
+        allowFrom: ["alice", "bob", "carol"],
+      }),
+    ]);
 
     const lines = await buildChannelSummary({ channels: {} } as never, {
       colorize: false,
@@ -273,19 +256,13 @@ describe("buildChannelSummary", () => {
   });
 
   it("shows not-linked status when linked metadata is explicitly false", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "telegram",
-          plugin: makeTelegramSummaryPlugin({
-            enabled: true,
-            configured: true,
-            linked: false,
-          }),
-          source: "test",
-        },
-      ]),
-    );
+    vi.mocked(listChannelPlugins).mockReturnValue([
+      makeTelegramSummaryPlugin({
+        enabled: true,
+        configured: true,
+        linked: false,
+      }),
+    ]);
 
     const lines = await buildChannelSummary({ channels: {} } as never, {
       colorize: false,
@@ -297,15 +274,9 @@ describe("buildChannelSummary", () => {
   });
 
   it("renders non-slack account detail fields for configured accounts", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "signal",
-          plugin: makeSignalSummaryPlugin({ enabled: false, configured: true }),
-          source: "test",
-        },
-      ]),
-    );
+    vi.mocked(listChannelPlugins).mockReturnValue([
+      makeSignalSummaryPlugin({ enabled: false, configured: true }),
+    ]);
 
     const lines = await buildChannelSummary({ channels: {} } as never, {
       colorize: false,
@@ -319,20 +290,14 @@ describe("buildChannelSummary", () => {
   });
 
   it("uses the channel label and default account id when no accounts exist", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "fallback-plugin",
-          plugin: makeFallbackSummaryPlugin({
-            enabled: true,
-            configured: true,
-            accountIds: [],
-            defaultAccountId: "fallback-account",
-          }),
-          source: "test",
-        },
-      ]),
-    );
+    vi.mocked(listChannelPlugins).mockReturnValue([
+      makeFallbackSummaryPlugin({
+        enabled: true,
+        configured: true,
+        accountIds: [],
+        defaultAccountId: "fallback-account",
+      }),
+    ]);
 
     const lines = await buildChannelSummary({ channels: {} } as never, {
       colorize: false,
@@ -343,19 +308,13 @@ describe("buildChannelSummary", () => {
   });
 
   it("shows not-configured status when enabled accounts exist without configured ones", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "fallback-plugin",
-          plugin: makeFallbackSummaryPlugin({
-            enabled: true,
-            configured: false,
-            accountIds: ["fallback-account"],
-          }),
-          source: "test",
-        },
-      ]),
-    );
+    vi.mocked(listChannelPlugins).mockReturnValue([
+      makeFallbackSummaryPlugin({
+        enabled: true,
+        configured: false,
+        accountIds: ["fallback-account"],
+      }),
+    ]);
 
     const lines = await buildChannelSummary({ channels: {} } as never, {
       colorize: false,

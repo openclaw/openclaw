@@ -66,16 +66,8 @@ describe("memory search async sync", () => {
     const cfg = buildConfig();
     manager = await createMemoryManagerOrThrow(cfg);
 
-    let releaseSync = () => {};
-    const pending = new Promise<void>((resolve) => {
-      releaseSync = () => resolve();
-    }).finally(() => {
-      (manager as unknown as { syncing: Promise<void> | null }).syncing = null;
-    });
-    const syncMock = vi.fn(async () => {
-      (manager as unknown as { syncing: Promise<void> | null }).syncing = pending;
-      return pending;
-    });
+    const pending = new Promise<void>(() => {});
+    const syncMock = vi.fn(async () => pending);
     (manager as unknown as { sync: () => Promise<void> }).sync = syncMock;
 
     const activeManager = manager;
@@ -84,11 +76,7 @@ describe("memory search async sync", () => {
     }
     await activeManager.search("hello");
     expect(syncMock).toHaveBeenCalledTimes(1);
-    releaseSync();
-    await vi.waitFor(() => {
-      expect((manager as unknown as { syncing: Promise<void> | null }).syncing).toBeNull();
-    });
-  }, 300_000);
+  });
 
   it("waits for in-flight search sync during close", async () => {
     const cfg = buildConfig();

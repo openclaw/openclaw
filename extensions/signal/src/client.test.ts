@@ -3,16 +3,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const fetchWithTimeoutMock = vi.fn();
 const resolveFetchMock = vi.fn();
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
+vi.mock("../../../src/infra/fetch.js", () => ({
   resolveFetch: (...args: unknown[]) => resolveFetchMock(...args),
+}));
+
+vi.mock("../../../src/infra/secure-random.js", () => ({
   generateSecureUuid: () => "test-id",
 }));
 
-vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
+vi.mock("../../../src/utils/fetch-timeout.js", () => ({
   fetchWithTimeout: (...args: unknown[]) => fetchWithTimeoutMock(...args),
 }));
 
-let signalRpcRequest: typeof import("./client.js").signalRpcRequest;
+import { signalRpcRequest } from "./client.js";
 
 function rpcResponse(body: unknown, status = 200): Response {
   if (typeof body === "string") {
@@ -22,11 +25,9 @@ function rpcResponse(body: unknown, status = 200): Response {
 }
 
 describe("signalRpcRequest", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     vi.clearAllMocks();
     resolveFetchMock.mockReturnValue(vi.fn());
-    ({ signalRpcRequest } = await import("./client.js"));
   });
 
   it("returns parsed RPC result", async () => {

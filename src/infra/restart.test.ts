@@ -16,25 +16,15 @@ vi.mock("../config/paths.js", () => ({
   resolveGatewayPort: (...args: unknown[]) => resolveGatewayPortMock(...args),
 }));
 
-let __testing: typeof import("./restart-stale-pids.js").__testing;
-let cleanStaleGatewayProcessesSync: typeof import("./restart-stale-pids.js").cleanStaleGatewayProcessesSync;
-let findGatewayPidsOnPortSync: typeof import("./restart-stale-pids.js").findGatewayPidsOnPortSync;
+import {
+  __testing,
+  cleanStaleGatewayProcessesSync,
+  findGatewayPidsOnPortSync,
+} from "./restart-stale-pids.js";
 
 let currentTimeMs = 0;
 
-beforeEach(async () => {
-  vi.resetModules();
-  vi.doMock("node:child_process", () => ({
-    spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
-  }));
-  vi.doMock("./ports-lsof.js", () => ({
-    resolveLsofCommandSync: (...args: unknown[]) => resolveLsofCommandSyncMock(...args),
-  }));
-  vi.doMock("../config/paths.js", () => ({
-    resolveGatewayPort: (...args: unknown[]) => resolveGatewayPortMock(...args),
-  }));
-  ({ __testing, cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
-    await import("./restart-stale-pids.js"));
+beforeEach(() => {
   spawnSyncMock.mockReset();
   resolveLsofCommandSyncMock.mockReset();
   resolveGatewayPortMock.mockReset();

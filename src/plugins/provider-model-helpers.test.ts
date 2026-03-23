@@ -1,6 +1,6 @@
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import { cloneFirstTemplateModel, matchesExactOrPrefix } from "./provider-model-helpers.js";
+import { cloneFirstTemplateModel } from "./provider-model-helpers.js";
 import type { ProviderResolveDynamicModelContext, ProviderRuntimeModel } from "./types.js";
 
 function createContext(models: ProviderRuntimeModel[]): ProviderResolveDynamicModelContext {
@@ -52,13 +52,5 @@ describe("cloneFirstTemplateModel", () => {
     });
 
     expect(model).toBeUndefined();
-  });
-});
-
-describe("matchesExactOrPrefix", () => {
-  it("matches exact ids and prefixed variants case-insensitively", () => {
-    expect(matchesExactOrPrefix("MiniMax-M2.7", ["minimax-m2.7"])).toBe(true);
-    expect(matchesExactOrPrefix("minimax-m2.7-highspeed", ["MiniMax-M2.7"])).toBe(true);
-    expect(matchesExactOrPrefix("glm-5", ["minimax-m2.7"])).toBe(false);
   });
 });

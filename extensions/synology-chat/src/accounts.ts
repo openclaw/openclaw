@@ -10,19 +10,11 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import { resolveDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
-import type {
-  SynologyChatChannelConfig,
-  ResolvedSynologyChatAccount,
-  SynologyWebhookPathSource,
-} from "./types.js";
+import type { SynologyChatChannelConfig, ResolvedSynologyChatAccount } from "./types.js";
 
 /** Extract the channel config from the full OpenClaw config object. */
 function getChannelConfig(cfg: OpenClawConfig): SynologyChatChannelConfig | undefined {
   return cfg?.channels?.["synology-chat"];
-}
-
-function resolveImplicitAccountId(channelCfg: SynologyChatChannelConfig): string | undefined {
-  return channelCfg.token || process.env.SYNOLOGY_CHAT_TOKEN ? DEFAULT_ACCOUNT_ID : undefined;
 }
 
 function getRawAccountConfig(
@@ -37,20 +29,6 @@ function getRawAccountConfig(
 
 function hasExplicitWebhookPath(rawAccount: SynologyChatChannelConfig | undefined): boolean {
   return typeof rawAccount?.webhookPath === "string" && rawAccount.webhookPath.trim().length > 0;
-}
-
-function resolveWebhookPathSource(params: {
-  accountId: string;
-  channelCfg: SynologyChatChannelConfig;
-  rawAccount: SynologyChatChannelConfig;
-}): SynologyWebhookPathSource {
-  if (hasExplicitWebhookPath(params.rawAccount)) {
-    return "explicit";
-  }
-  if (params.accountId !== DEFAULT_ACCOUNT_ID && hasExplicitWebhookPath(params.channelCfg)) {
-    return "inherited-base";
-  }
-  return "default";
 }
 
 /** Parse allowedUserIds from string or array to string[]. */
@@ -84,9 +62,11 @@ export function listAccountIds(cfg: OpenClawConfig): string[] {
     return [];
   }
 
+  // If base config has a token, there's a "default" account
+  const hasBaseToken = channelCfg.token || process.env.SYNOLOGY_CHAT_TOKEN;
   return listCombinedAccountIds({
     configuredAccountIds: Object.keys(channelCfg.accounts ?? {}),
-    implicitAccountId: resolveImplicitAccountId(channelCfg),
+    implicitAccountId: hasBaseToken ? DEFAULT_ACCOUNT_ID : undefined,
   });
 }
 
@@ -118,8 +98,8 @@ export function resolveAccount(
   const envAllowedUserIds = process.env.SYNOLOGY_ALLOWED_USER_IDS ?? "";
   const envRateLimitValue = parseRateLimitPerMinute(process.env.SYNOLOGY_RATE_LIMIT);
   const envBotName = process.env.OPENCLAW_BOT_NAME ?? "OpenClaw";
-  const webhookPathSource = resolveWebhookPathSource({ accountId: id, channelCfg, rawAccount });
-  const dangerouslyAllowInheritedWebhookPath =
+  const explicitWebhookPath = hasExplicitWebhookPath(rawAccount);
+  const allowInheritedWebhookPath =
     rawAccount.dangerouslyAllowInheritedWebhookPath ??
     channelCfg.dangerouslyAllowInheritedWebhookPath ??
     false;
@@ -132,12 +112,12 @@ export function resolveAccount(
     incomingUrl: merged.incomingUrl ?? envIncomingUrl,
     nasHost: merged.nasHost ?? envNasHost,
     webhookPath: merged.webhookPath ?? "/webhook/synology",
-    webhookPathSource,
     dangerouslyAllowNameMatching: resolveDangerousNameMatchingEnabled({
       providerConfig: channelCfg,
       accountConfig: accountOverrides,
     }),
-    dangerouslyAllowInheritedWebhookPath,
+    hasExplicitWebhookPath: explicitWebhookPath,
+    dangerouslyAllowInheritedWebhookPath: allowInheritedWebhookPath,
     dmPolicy: merged.dmPolicy ?? "allowlist",
     allowedUserIds: parseAllowedUserIds(merged.allowedUserIds ?? envAllowedUserIds),
     rateLimitPerMinute: merged.rateLimitPerMinute ?? envRateLimitValue,

@@ -66,9 +66,6 @@ const STRICT_EXACT_IDENTIFIERS_INSTRUCTION =
   "For ## Exact identifiers, preserve literal values exactly as seen (IDs, URLs, file paths, ports, hashes, dates, times).";
 const POLICY_OFF_EXACT_IDENTIFIERS_INSTRUCTION =
   "For ## Exact identifiers, include identifiers only when needed for continuity; do not enforce literal-preservation rules.";
-const compactionSafeguardDeps = {
-  summarizeInStages,
-};
 
 type ToolFailure = {
   toolCallId: string;
@@ -909,7 +906,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   Math.floor(contextWindowTokens * droppedChunkRatio) -
                     SUMMARIZATION_OVERHEAD_TOKENS,
                 );
-                droppedSummary = await compactionSafeguardDeps.summarizeInStages({
+                droppedSummary = await summarizeInStages({
                   messages: pruned.droppedMessagesList,
                   model,
                   apiKey,
@@ -980,7 +977,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         try {
           historySummary =
             messagesToSummarize.length > 0
-              ? await compactionSafeguardDeps.summarizeInStages({
+              ? await summarizeInStages({
                   messages: messagesToSummarize,
                   model,
                   apiKey,
@@ -996,7 +993,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
           summaryWithoutPreservedTurns = historySummary;
           if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
-            const prefixSummary = await compactionSafeguardDeps.summarizeInStages({
+            const prefixSummary = await summarizeInStages({
               messages: turnPrefixMessages,
               model,
               apiKey,
@@ -1114,9 +1111,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 }
 
 export const __testing = {
-  setSummarizeInStagesForTest(next?: typeof summarizeInStages) {
-    compactionSafeguardDeps.summarizeInStages = next ?? summarizeInStages;
-  },
   collectToolFailures,
   formatToolFailuresSection,
   splitPreservedRecentTurns,

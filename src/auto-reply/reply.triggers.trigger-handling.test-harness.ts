@@ -1,12 +1,8 @@
-import { rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, expect, vi } from "vitest";
-import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles.js";
-import { resetCliCredentialCachesForTest } from "../agents/cli-credentials.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtime.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
 // oxlint-disable-next-line typescript/no-explicit-any
@@ -14,16 +10,7 @@ type AnyMock = any;
 // oxlint-disable-next-line typescript/no-explicit-any
 type AnyMocks = Record<string, any>;
 
-function getSharedMocks<T>(key: string, create: () => T): T {
-  const symbol = Symbol.for(key);
-  const store = globalThis as Record<symbol, T | undefined>;
-  if (!store[symbol]) {
-    store[symbol] = create();
-  }
-  return store[symbol];
-}
-
-const piEmbeddedMocks = getSharedMocks("openclaw.trigger-handling.pi-embedded-mocks", () => ({
+const piEmbeddedMocks = vi.hoisted(() => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
   compactEmbeddedPiSession: vi.fn(),
   runEmbeddedPiAgent: vi.fn(),
@@ -48,20 +35,17 @@ export function getQueueEmbeddedPiMessageMock(): AnyMock {
   return piEmbeddedMocks.queueEmbeddedPiMessage;
 }
 
-const installPiEmbeddedMock = () =>
-  vi.doMock("../agents/pi-embedded.js", () => ({
-    abortEmbeddedPiRun: (...args: unknown[]) => piEmbeddedMocks.abortEmbeddedPiRun(...args),
-    compactEmbeddedPiSession: (...args: unknown[]) =>
-      piEmbeddedMocks.compactEmbeddedPiSession(...args),
-    runEmbeddedPiAgent: (...args: unknown[]) => piEmbeddedMocks.runEmbeddedPiAgent(...args),
-    queueEmbeddedPiMessage: (...args: unknown[]) => piEmbeddedMocks.queueEmbeddedPiMessage(...args),
-    resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-    isEmbeddedPiRunActive: (...args: unknown[]) => piEmbeddedMocks.isEmbeddedPiRunActive(...args),
-    isEmbeddedPiRunStreaming: (...args: unknown[]) =>
-      piEmbeddedMocks.isEmbeddedPiRunStreaming(...args),
-  }));
-
-installPiEmbeddedMock();
+vi.mock("../agents/pi-embedded.js", () => ({
+  abortEmbeddedPiRun: (...args: unknown[]) => piEmbeddedMocks.abortEmbeddedPiRun(...args),
+  compactEmbeddedPiSession: (...args: unknown[]) =>
+    piEmbeddedMocks.compactEmbeddedPiSession(...args),
+  runEmbeddedPiAgent: (...args: unknown[]) => piEmbeddedMocks.runEmbeddedPiAgent(...args),
+  queueEmbeddedPiMessage: (...args: unknown[]) => piEmbeddedMocks.queueEmbeddedPiMessage(...args),
+  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+  isEmbeddedPiRunActive: (...args: unknown[]) => piEmbeddedMocks.isEmbeddedPiRunActive(...args),
+  isEmbeddedPiRunStreaming: (...args: unknown[]) =>
+    piEmbeddedMocks.isEmbeddedPiRunStreaming(...args),
+}));
 
 const providerUsageMocks = vi.hoisted(() => ({
   loadProviderUsageSummary: vi.fn().mockResolvedValue({
@@ -79,7 +63,7 @@ export function getProviderUsageMocks(): AnyMocks {
 
 vi.mock("../infra/provider-usage.js", () => providerUsageMocks);
 
-const modelCatalogMocks = getSharedMocks("openclaw.trigger-handling.model-catalog-mocks", () => ({
+const modelCatalogMocks = vi.hoisted(() => ({
   loadModelCatalog: vi.fn().mockResolvedValue([
     {
       provider: "anthropic",
@@ -105,54 +89,9 @@ export function getModelCatalogMocks(): AnyMocks {
   return modelCatalogMocks;
 }
 
-const installModelCatalogMock = () =>
-  vi.doMock("../agents/model-catalog.js", () => modelCatalogMocks);
+vi.mock("../agents/model-catalog.js", () => modelCatalogMocks);
 
-installModelCatalogMock();
-
-vi.doMock("../agents/model-catalog.runtime.js", () => ({
-  loadModelCatalog: (...args: unknown[]) => modelCatalogMocks.loadModelCatalog(...args),
-}));
-
-vi.doMock("../plugins/provider-runtime.runtime.js", () => ({
-  augmentModelCatalogWithProviderPlugins: async (params: { catalog?: unknown[] }) =>
-    params.catalog ?? [],
-  buildProviderAuthDoctorHintWithPlugin: () => undefined,
-  buildProviderMissingAuthMessageWithPlugin: () => undefined,
-  formatProviderAuthProfileApiKeyWithPlugin: (params: { apiKey?: string }) => params.apiKey,
-  prepareProviderRuntimeAuth: async () => undefined,
-  refreshProviderOAuthCredentialWithPlugin: async () => undefined,
-}));
-
-const modelFallbackMocks = getSharedMocks("openclaw.trigger-handling.model-fallback-mocks", () => ({
-  runWithModelFallback: vi.fn(
-    async (params: {
-      provider: string;
-      model: string;
-      run: (provider: string, model: string, runOptions?: unknown) => Promise<unknown>;
-    }) => ({
-      result: await params.run(params.provider, params.model),
-      provider: params.provider,
-      model: params.model,
-      attempts: [],
-    }),
-  ),
-}));
-
-export function getModelFallbackMocks(): AnyMocks {
-  return modelFallbackMocks;
-}
-
-const installModelFallbackMock = () =>
-  vi.doMock("../agents/model-fallback.js", () => modelFallbackMocks);
-
-installModelFallbackMock();
-
-vi.doMock("../infra/git-commit.js", () => ({
-  resolveCommitHash: vi.fn(() => "abcdef0"),
-}));
-
-const webSessionMocks = getSharedMocks("openclaw.trigger-handling.web-session-mocks", () => ({
+const webSessionMocks = vi.hoisted(() => ({
   webAuthExists: vi.fn().mockResolvedValue(true),
   getWebAuthAgeMs: vi.fn().mockReturnValue(120_000),
   readWebSelfId: vi.fn().mockReturnValue({ e164: "+1999" }),
@@ -162,10 +101,7 @@ export function getWebSessionMocks(): AnyMocks {
   return webSessionMocks;
 }
 
-const installWebSessionMock = () =>
-  vi.doMock("../../extensions/whatsapp/runtime-api.js", () => webSessionMocks);
-
-installWebSessionMock();
+vi.mock("../../extensions/whatsapp/runtime-api.js", () => webSessionMocks);
 
 export const MAIN_SESSION_KEY = "agent:main:main";
 
@@ -234,11 +170,7 @@ afterAll(async () => {
   if (!suiteTempHomeRoot) {
     return;
   }
-  try {
-    rmSync(suiteTempHomeRoot, { recursive: true, force: true });
-  } catch {
-    // Best-effort temp cleanup only.
-  }
+  await fs.rm(suiteTempHomeRoot, { recursive: true, force: true }).catch(() => undefined);
   suiteTempHomeRoot = "";
   suiteTempHomeId = 0;
 });
@@ -250,14 +182,10 @@ export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise
   setTempHomeEnv(home);
 
   try {
-    // Hard reset shared mocks so non-isolated runs don't inherit prior behavior.
-    piEmbeddedMocks.runEmbeddedPiAgent.mockReset();
-    piEmbeddedMocks.abortEmbeddedPiRun.mockReset().mockReturnValue(false);
-    piEmbeddedMocks.compactEmbeddedPiSession.mockReset();
-    piEmbeddedMocks.queueEmbeddedPiMessage.mockReset().mockReturnValue(false);
-    piEmbeddedMocks.isEmbeddedPiRunActive.mockReset().mockReturnValue(false);
-    piEmbeddedMocks.isEmbeddedPiRunStreaming.mockReset().mockReturnValue(false);
-    modelFallbackMocks.runWithModelFallback.mockClear();
+    // Avoid cross-test leakage if a test doesn't touch these mocks.
+    piEmbeddedMocks.runEmbeddedPiAgent.mockClear();
+    piEmbeddedMocks.abortEmbeddedPiRun.mockClear();
+    piEmbeddedMocks.compactEmbeddedPiSession.mockClear();
     return await fn(home);
   } finally {
     restoreTempHomeEnv(snapshot);
@@ -440,10 +368,7 @@ export async function runGreetingPromptForBareNewOrReset(params: {
 
 export function installTriggerHandlingE2eTestHooks() {
   afterEach(() => {
-    clearRuntimeAuthProfileStoreSnapshots();
-    resetCliCredentialCachesForTest();
-    resetProviderRuntimeHookCacheForTest();
-    vi.clearAllMocks();
+    vi.restoreAllMocks();
   });
 }
 

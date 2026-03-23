@@ -14,7 +14,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   };
 });
 
-let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
+import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 
 function createConfiguredTelegramBinding() {
   return {
@@ -128,14 +128,11 @@ function createConfiguredTelegramRoute() {
 }
 
 describe("buildTelegramMessageContext ACP configured bindings", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     ensureConfiguredBindingRouteReadyMock.mockReset();
     resolveConfiguredBindingRouteMock.mockReset();
     resolveConfiguredBindingRouteMock.mockReturnValue(createConfiguredTelegramRoute());
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({ ok: true });
-    ({ buildTelegramMessageContextForTest } =
-      await import("./bot-message-context.test-harness.js"));
   });
 
   it("treats configured topic bindings as explicit route matches on non-default accounts", async () => {

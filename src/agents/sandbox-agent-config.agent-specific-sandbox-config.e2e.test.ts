@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import path from "node:path";
 import { Readable } from "node:stream";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createRestrictedAgentSandboxConfig } from "./test-helpers/sandbox-agent-config-fixtures.js";
 
@@ -119,8 +119,7 @@ function createWorkSetupCommandConfig(scope: "agent" | "shared"): OpenClawConfig
 }
 
 describe("Agent-specific sandbox config", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     const [configModule, contextModule, runtimeModule] = await Promise.all([
       import("./sandbox/config.js"),
       import("./sandbox/context.js"),
@@ -129,6 +128,9 @@ describe("Agent-specific sandbox config", () => {
     ({ resolveSandboxConfigForAgent } = configModule);
     ({ resolveSandboxContext } = contextModule);
     ({ resolveSandboxRuntimeStatus } = runtimeModule);
+  });
+
+  beforeEach(() => {
     spawnCalls.length = 0;
   });
 

@@ -151,7 +151,6 @@ async function executeSend(params: {
 }) {
   const tool = createMessageTool({
     config: {} as never,
-    runMessageAction: mocks.runMessageAction as never,
     ...params.toolOptions,
   });
   await tool.execute("1", {
@@ -188,9 +187,6 @@ describe("message tool secret scoping", () => {
     const tool = createMessageTool({
       currentChannelProvider: "discord",
       agentAccountId: "ops",
-      loadConfig: mocks.loadConfig as never,
-      resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway as never,
-      runMessageAction: mocks.runMessageAction as never,
     });
 
     await tool.execute("1", {
@@ -220,7 +216,6 @@ describe("message tool agent routing", () => {
     const tool = createMessageTool({
       agentSessionKey: "agent:alpha:main",
       config: {} as never,
-      runMessageAction: mocks.runMessageAction as never,
     });
 
     await tool.execute("1", {
