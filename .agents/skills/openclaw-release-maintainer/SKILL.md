@@ -124,6 +124,23 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
 - `@openclaw/*` plugin publishes use a separate maintainer-only flow.
 - Only publish plugins that already exist on npm; bundled disk-tree-only plugins stay unpublished.
 
+## Fallback local mac publish
+
+- Keep the original local macOS publish workflow available as a fallback in case
+  CI/CD mac publishing is unavailable or broken.
+- Preserve the existing maintainer workflow Peter uses: run it on a real Mac
+  with local signing, notary, and Sparkle credentials already configured.
+- Follow the private maintainer macOS runbook for the local steps:
+  `scripts/package-mac-dist.sh` to build, sign, notarize, and package the app;
+  manual GitHub release asset upload; then `scripts/make_appcast.sh` plus the
+  `appcast.xml` commit to `main`.
+- For stable tags, the local fallback may update the shared production
+  `appcast.xml`.
+- For beta tags, the local fallback still publishes the mac assets but must not
+  update the shared production `appcast.xml` unless a separate beta feed exists.
+- Treat the local workflow as fallback only. Prefer the CI/CD publish workflow
+  when it is working.
+
 ## Run the release sequence
 
 1. Confirm the operator explicitly wants to cut a release.
