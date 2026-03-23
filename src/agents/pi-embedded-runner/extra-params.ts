@@ -122,6 +122,35 @@ function resolveOpenAIBuiltInTools(
   return deduped;
 }
 
+function filterConflictingOpenClawTools(
+  existingTools: Array<Record<string, unknown>>,
+  builtInTools: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  const builtInTypes = new Set(
+    builtInTools
+      .map((tool) => (typeof tool.type === "string" ? tool.type : ""))
+      .filter((type) => type.length > 0),
+  );
+
+  if (builtInTypes.size === 0) {
+    return existingTools;
+  }
+
+  return existingTools.filter((tool) => {
+    const toolType = typeof tool.type === "string" ? tool.type : "";
+    if (toolType && builtInTypes.has(toolType)) {
+      return false;
+    }
+
+    const toolName = typeof tool.name === "string" ? tool.name : "";
+    if (toolName && builtInTypes.has(toolName)) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
 function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
@@ -186,7 +215,11 @@ function createStreamFnWithExtraParams(
           const existingTools = Array.isArray(payloadRecord.tools)
             ? (payloadRecord.tools as Array<Record<string, unknown>>)
             : [];
-          payloadRecord.tools = [...existingTools, ...openaiBuiltInTools];
+          const filteredExistingTools = filterConflictingOpenClawTools(
+            existingTools,
+            openaiBuiltInTools,
+          );
+          payloadRecord.tools = [...filteredExistingTools, ...openaiBuiltInTools];
           if (openaiWebSearchRequired) {
             payloadRecord.tool_choice = "required";
           }
