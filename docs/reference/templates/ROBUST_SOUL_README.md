@@ -70,7 +70,7 @@ By default, OpenClaw may require write access to `AGENTS.md` and `TOOLS.md` duri
      - `USER.md` (if treated as immutable profile)
      - `AGENTS.md`          # -> moved here
      - `TOOLS.md`           # -> moved here
-4. Save the file and re‑apply OS‑level read‑only permissions (e.g., `chmod 444 ~/.openclaw/workspace/SOUL.md` or `chattr -i filename` on linux).
+4. Save the file and re‑apply OS‑level read‑only permissions (e.g., `chmod 444 ~/.openclaw/workspace/SOUL.md` or `chattr +i filename` on linux).
 5. Restart the agent process.
 
 #### Consequences
