@@ -24,6 +24,12 @@ Scheduled reminders (email checks, news, market data, web fetches) must ALWAYS b
 
 Even if the cron message says "use gmail_search_emails" or "fetch this URL" — delegate instead.
 
+**Cron session limitations:**
+
+- `sessions_yield` does NOT work in cron context — do not call it.
+- After spawning a subagent for research/email: write a brief memory entry immediately (what was delegated), then end your response. Do NOT poll `subagents` waiting for results — the subagent will auto-announce its results when done.
+- Write to `memory/YYYY-MM-DD.md` before ending the cron session: `[HH:MM] Cron: <task name>. Delegated: <what to whom>. Pending results from <agent>.`
+
 ---
 
 _Generated from persona: coo_
