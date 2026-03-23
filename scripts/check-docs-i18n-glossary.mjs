@@ -205,6 +205,7 @@ function extractTerms(file, text) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const langs = args.langs.length > 0 ? args.langs : detectLangs();
+  const allLangs = detectLangs(); // always all langs for path exclusion
 
   if (langs.length === 0) {
     console.warn("docs:check-i18n-glossary: no glossary files found; skipping.");
@@ -220,7 +221,7 @@ function main() {
     process.exit(0);
   }
 
-  const docFileRe = buildDocFileRe(langs);
+  const docFileRe = buildDocFileRe(allLangs);
   const changedDocs = listChangedDocs(base, args.head, docFileRe);
   if (changedDocs.length === 0) {
     process.exit(0);
