@@ -3,11 +3,12 @@ import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { runMessageAction } from "./message-action-runner.js";
 
 const mocks = vi.hoisted(() => ({
   executePollAction: vi.fn(),
 }));
+
+let runMessageAction: typeof import("./message-action-runner.js").runMessageAction;
 
 vi.mock("./outbound-send-service.js", async () => {
   const actual = await vi.importActual<typeof import("./outbound-send-service.js")>(
@@ -96,7 +97,9 @@ async function runPollAction(params: {
 }
 
 describe("runMessageAction poll handling", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ runMessageAction } = await import("./message-action-runner.js"));
     setActivePluginRegistry(
       createTestRegistry([
         {
