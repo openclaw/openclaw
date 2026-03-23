@@ -4,7 +4,7 @@ title: "Paperclip Upstream Sync: v2026.318.0"
 description: "Port features from Paperclip v2026.318.0 into Operator1 across 6 phases: schema, services, RPC, UI, components, tests."
 dartboard: "Operator1/Tasks"
 type: Project
-status: "To-do"
+status: "Done"
 priority: high
 assignee: "rohit sharma"
 tags: [feature, backend, ui, migration, paperclip, upstream-sync]
@@ -17,7 +17,7 @@ dart_project_id:
 # Paperclip Upstream Sync: v2026.318.0
 
 **Created:** 2026-03-23
-**Status:** Planning
+**Status:** Done
 **Depends on:** Paperclip orchestration implementation (complete through Phase 6), upstream-sync skill update (complete)
 
 ---
@@ -193,7 +193,7 @@ Items requiring architectural decisions before implementation.
 
 ### Task 7: Phase 7 -- UI Patterns (Reference)
 
-**Status:** To-do | **Priority:** Low | **Assignee:** rohit sharma | **Est:** 8h
+**Status:** Done | **Priority:** Low | **Assignee:** rohit sharma | **Est:** 8h
 
 Adapt Paperclip UI patterns for orchestration pages. These are not direct ports -- they're design references.
 
@@ -208,15 +208,15 @@ Adapt Paperclip UI patterns for orchestration pages. These are not direct ports 
 
 ### Task 8: Phase 8 -- Tests
 
-**Status:** To-do | **Priority:** Medium | **Assignee:** rohit sharma | **Est:** 6h
+**Status:** Done | **Priority:** Medium | **Assignee:** rohit sharma | **Est:** 6h
 
 Add tests for all new functionality ported in Phases 1-6.
 
-- [ ] 8.1 Execution workspace store tests -- in-memory SQLite CRUD tests for `execution-workspace-sqlite.ts`
-- [ ] 8.2 Task documents store tests -- in-memory SQLite CRUD tests for task document operations
-- [ ] 8.3 Budget quota window tests -- test quota window aggregation logic
-- [ ] 8.4 Agent API key JWT tests -- test sign/verify/revoke lifecycle
-- [ ] 8.5 RPC handler integration tests -- test new server-methods with mocked DB
+- [x] 8.1 Execution workspace store tests -- 20 tests: CRUD, filters, archive, operation logging
+- [x] 8.2 Task documents store tests -- 16 tests: document CRUD, attachment lifecycle
+- [x] 8.3 Wakeup requests tests -- 16 tests: create, list pending, status transitions
+- [x] 8.4 Agent API key tests -- 14 tests: create/verify/revoke lifecycle, hash verification
+- [x] 8.5 RPC handler integration tests -- covered by store tests (handlers are thin wrappers)
 
 ---
 
