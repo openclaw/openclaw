@@ -56,6 +56,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - `pnpm test` now keeps a small checked-in behavioral manifest for true pool/isolation overrides and a separate timing snapshot for the slowest unit files.
   - Shared unit coverage now defaults to `threads`, while the manifest keeps the measured fork-only exceptions and heavy singleton lanes explicit.
   - The extension suite (`vitest.extensions.config.ts`) also now defaults to `threads`; the March 22, 2026 direct full-suite control run passed clean without extension-specific fork exceptions.
+  - The channel suite (`vitest.channels.config.ts`) now also defaults to `threads`; the March 22, 2026 direct full-suite control run passed clean without channel-specific fork exceptions.
   - The wrapper peels the heaviest measured files into dedicated lanes instead of relying on a growing hand-maintained exclusion list.
   - Refresh the timing snapshot with `pnpm test:perf:update-timings` after major suite shape changes.
 - Embedded runner note:
@@ -73,6 +74,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Base Vitest config still defaults to `forks`.
   - Unit wrapper lanes default to `threads`, with explicit manifest fork-only exceptions.
   - Extension scoped config defaults to `threads`.
+  - Channel scoped config defaults to `threads`.
   - Unit, channel, and extension configs default to `isolate: false` for faster file startup.
   - `pnpm test` also passes `--isolate=false` at the wrapper level.
   - Opt back into Vitest file isolation with `OPENCLAW_TEST_ISOLATE=1 pnpm test`.
