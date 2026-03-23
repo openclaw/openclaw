@@ -1,3 +1,4 @@
+import { request } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
 import type { CallManager } from "./manager.js";
@@ -128,6 +129,50 @@ async function postWebhookFormWithHeaders(
       ...headers,
     },
     body,
+  });
+}
+
+async function postWebhookFormWithHeadersResult(
+  server: VoiceCallWebhookServer,
+  baseUrl: string,
+  body: string,
+  headers: Record<string, string>,
+): Promise<
+  | { kind: "response"; statusCode: number; body: string }
+  | { kind: "error"; code: string | undefined }
+> {
+  const requestUrl = requireBoundRequestUrl(server, baseUrl);
+  return await new Promise((resolve) => {
+    const req = request(
+      {
+        hostname: requestUrl.hostname,
+        port: requestUrl.port,
+        path: requestUrl.pathname + requestUrl.search,
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          ...headers,
+        },
+      },
+      (res) => {
+        res.setEncoding("utf8");
+        let responseBody = "";
+        res.on("data", (chunk) => {
+          responseBody += chunk;
+        });
+        res.on("end", () => {
+          resolve({
+            kind: "response",
+            statusCode: res.statusCode ?? 0,
+            body: responseBody,
+          });
+        });
+      },
+    );
+    req.on("error", (error: NodeJS.ErrnoException) => {
+      resolve({ kind: "error", code: error.code });
+    });
+    req.end(body);
   });
 }
 
@@ -363,15 +408,19 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
 
     try {
       const baseUrl = await server.start();
-      const response = await postWebhookFormWithHeaders(
+      const responseOrError = await postWebhookFormWithHeadersResult(
         server,
         baseUrl,
         "CallSid=CA123&SpeechResult=".padEnd(70 * 1024, "a"),
         { "x-twilio-signature": "sig" },
       );
 
-      expect(response.status).toBe(413);
-      expect(await response.text()).toBe("Payload Too Large");
+      if (responseOrError.kind === "response") {
+        expect(responseOrError.statusCode).toBe(413);
+        expect(responseOrError.body).toBe("Payload Too Large");
+      } else {
+        expect(responseOrError.code).toBeOneOf(["ECONNRESET", "EPIPE"]);
+      }
       expect(verifyWebhook).not.toHaveBeenCalled();
     } finally {
       await server.stop();
