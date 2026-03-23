@@ -221,5 +221,19 @@ export function resolveTranscriptToolCallIdMode(
   if (modelIncludesAnyHint(modelId, capabilities.transcriptToolCallIdModelHints)) {
     return "strict9";
   }
+  // For proxy providers (openrouter, together, etc.) that don't declare
+  // strict9 themselves, check if the model matches hints from any provider
+  // that requires strict9 — e.g. Mistral models routed through OpenRouter.
+  if (modelId) {
+    for (const caps of Object.values(PLUGIN_CAPABILITIES_FALLBACKS)) {
+      if (
+        caps.transcriptToolCallIdMode === "strict9" &&
+        caps.transcriptToolCallIdModelHints &&
+        modelIncludesAnyHint(modelId, caps.transcriptToolCallIdModelHints)
+      ) {
+        return "strict9";
+      }
+    }
+  }
   return undefined;
 }

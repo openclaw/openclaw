@@ -150,6 +150,22 @@ describe("resolveProviderCapabilities", () => {
     expect(resolveTranscriptToolCallIdMode("mistral", "mistral-large-latest")).toBe("strict9");
   });
 
+  it("resolves strict9 for Mistral models routed through proxy providers (#52548)", () => {
+    // OpenRouter proxying Mistral models should still get strict9 sanitization.
+    expect(resolveTranscriptToolCallIdMode("openrouter", "mistralai/mistral-large-2512")).toBe(
+      "strict9",
+    );
+    expect(resolveTranscriptToolCallIdMode("openrouter", "mistralai/codestral-latest")).toBe(
+      "strict9",
+    );
+    // Non-Mistral models through OpenRouter should not get strict9.
+    expect(
+      resolveTranscriptToolCallIdMode("openrouter", "anthropic/claude-opus-4-6"),
+    ).toBeUndefined();
+    // Unknown providers proxying Mistral should also resolve strict9.
+    expect(resolveTranscriptToolCallIdMode("together", "mistralai/mixtral-8x22b")).toBe("strict9");
+  });
+
   it("treats kimi aliases as native anthropic tool payload providers", () => {
     expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi")).toBe(false);
     expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-code")).toBe(false);
