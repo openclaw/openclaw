@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { lookupContextTokens } from "../../agents/context.js";
+import { lookupCachedContextTokens } from "../../agents/context-cache.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
@@ -64,6 +64,8 @@ let agentRunnerMemoryRuntimePromise: Promise<
   typeof import("./agent-runner-memory.runtime.js")
 > | null = null;
 let usageCostRuntimePromise: Promise<typeof import("./usage-cost.runtime.js")> | null = null;
+let contextTokensRuntimePromise: Promise<typeof import("../../agents/context-tokens.runtime.js")> | null =
+  null;
 
 function loadPiEmbeddedQueueRuntime() {
   piEmbeddedQueueRuntimePromise ??= import("../../agents/pi-embedded-queue.runtime.js");
@@ -83,6 +85,11 @@ function loadAgentRunnerMemoryRuntime() {
 function loadUsageCostRuntime() {
   usageCostRuntimePromise ??= import("./usage-cost.runtime.js");
   return usageCostRuntimePromise;
+}
+
+function loadContextTokensRuntime() {
+  contextTokensRuntimePromise ??= import("../../agents/context-tokens.runtime.js");
+  return contextTokensRuntimePromise;
 }
 
 export async function runReplyAgent(params: {
@@ -500,9 +507,11 @@ export async function runReplyAgent(params: {
     const cliSessionId = isCliProvider(providerUsed, cfg)
       ? runResult.meta?.agentMeta?.sessionId?.trim()
       : undefined;
+    const cachedContextTokens = lookupCachedContextTokens(modelUsed);
     const contextTokensUsed =
       agentCfgContextTokens ??
-      lookupContextTokens(modelUsed) ??
+      cachedContextTokens ??
+      (await loadContextTokensRuntime()).lookupContextTokens(modelUsed) ??
       activeSessionEntry?.contextTokens ??
       DEFAULT_CONTEXT_TOKENS;
 
