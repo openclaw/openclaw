@@ -827,6 +827,14 @@ export async function runCronIsolatedAgentTurn(params: {
   // Skip delivery for heartbeat-only responses (HEARTBEAT_OK with no real content).
   const ackMaxChars = resolveHeartbeatAckMaxChars(agentCfg);
   const skipHeartbeatDelivery = deliveryRequested && isHeartbeatOnlyResponse(payloads, ackMaxChars);
+
+  // Token optimization: when the agent produced a noop heartbeat ack (no real content),
+  // strip usage from the run-log telemetry. The session entry already captures the raw
+  // token counts for budget/analytics; recording them again in the run log would inflate
+  // per-cycle cost summaries for what is effectively a "no-op" heartbeat tick.
+  if (skipHeartbeatDelivery && telemetry) {
+    telemetry = { model: telemetry.model, provider: telemetry.provider };
+  }
   const skipMessagingToolDelivery =
     deliveryContract === "shared" &&
     deliveryRequested &&
