@@ -249,6 +249,31 @@ describe("handleMatrixAction pollVote", () => {
     });
   });
 
+  it("accepts shared media aliases and voice-send flags", async () => {
+    const cfg = { channels: { matrix: { actions: { messages: true } } } } as CoreConfig;
+    await handleMatrixAction(
+      {
+        action: "sendMessage",
+        accountId: "ops",
+        to: "room:!room:example",
+        path: "/tmp/clip.mp3",
+        asVoice: true,
+      },
+      cfg,
+      { mediaLocalRoots: ["/tmp/openclaw-matrix-test"] },
+    );
+
+    expect(mocks.sendMatrixMessage).toHaveBeenCalledWith("room:!room:example", undefined, {
+      cfg,
+      accountId: "ops",
+      mediaUrl: "/tmp/clip.mp3",
+      mediaLocalRoots: ["/tmp/openclaw-matrix-test"],
+      replyToId: undefined,
+      threadId: undefined,
+      audioAsVoice: true,
+    });
+  });
+
   it("passes mediaLocalRoots to profile updates", async () => {
     const cfg = { channels: { matrix: { actions: { profile: true } } } } as CoreConfig;
     await handleMatrixAction(
