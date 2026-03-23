@@ -1,8 +1,8 @@
 import { createDraftStreamLoop } from "openclaw/plugin-sdk/channel-lifecycle";
 import { deleteSlackMessage, editSlackMessage } from "./actions.js";
+import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { sendMessageSlack } from "./send.js";
 
-const SLACK_STREAM_MAX_CHARS = 4000;
 const DEFAULT_THROTTLE_MS = 1000;
 
 export type SlackDraftStream = {
@@ -29,7 +29,7 @@ export function createSlackDraftStream(params: {
   edit?: typeof editSlackMessage;
   remove?: typeof deleteSlackMessage;
 }): SlackDraftStream {
-  const maxChars = Math.min(params.maxChars ?? SLACK_STREAM_MAX_CHARS, SLACK_STREAM_MAX_CHARS);
+  const maxChars = Math.min(params.maxChars ?? SLACK_TEXT_LIMIT, SLACK_TEXT_LIMIT);
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const send = params.send ?? sendMessageSlack;
   const edit = params.edit ?? editSlackMessage;
