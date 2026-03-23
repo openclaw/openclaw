@@ -60,26 +60,21 @@ function resolveProviderFromContext(
   let hadResolutionError = false;
   const configured = listChannelPlugins()
     .map((plugin) => {
-      if (!plugin.config?.resolveAllowFrom) {
-        return null;
-      }
-      let allowFrom: ReturnType<typeof plugin.config.resolveAllowFrom> | null;
-      try {
-        allowFrom = plugin.config.resolveAllowFrom({
-          cfg,
-          accountId: ctx.AccountId,
-        });
-      } catch (err) {
-        // resolveAllowFrom may throw when secrets (e.g. bot tokens) are not yet resolved.
-        // Still count the plugin as a candidate to preserve provider inference for
-        // downstream provider-scoped command auth (commands.allowFrom[provider]).
-        console.warn(
-          `[command-auth] resolveAllowFrom threw for plugin "${plugin.id}", assuming configured: ${describeUnknownError(err)}`,
-        );
+      const resolvedAllowFrom = resolveProviderAllowFrom({
+        plugin,
+        cfg,
+        accountId: ctx.AccountId,
+      });
+      if (resolvedAllowFrom.hadResolutionError) {
         hadResolutionError = true;
-        return plugin.id;
       }
-      if (!Array.isArray(allowFrom) || allowFrom.length === 0) {
+      const allowFrom = formatAllowFromList({
+        plugin,
+        cfg,
+        accountId: ctx.AccountId,
+        allowFrom: resolvedAllowFrom.allowFrom,
+      });
+      if (allowFrom.length === 0) {
         return null;
       }
       return plugin.id;
@@ -120,6 +115,40 @@ function normalizeAllowFromEntry(params: {
     allowFrom: [params.value],
   });
   return normalized.filter((entry) => entry.trim().length > 0);
+}
+
+function resolveProviderAllowFrom(params: {
+  plugin?: ChannelPlugin;
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): {
+  allowFrom: Array<string | number>;
+  hadResolutionError: boolean;
+} {
+  const { plugin, cfg, accountId } = params;
+  const providerId = plugin?.id;
+  if (!plugin?.config?.resolveAllowFrom) {
+    return {
+      allowFrom: resolveFallbackAllowFrom({ cfg, providerId, accountId }),
+      hadResolutionError: false,
+    };
+  }
+
+  try {
+    const allowFrom = plugin.config.resolveAllowFrom({ cfg, accountId });
+    return {
+      allowFrom: Array.isArray(allowFrom) ? allowFrom : [],
+      hadResolutionError: false,
+    };
+  } catch (err) {
+    console.warn(
+      `[command-auth] resolveAllowFrom threw for provider "${providerId}", falling back to config allowFrom: ${describeUnknownError(err)}`,
+    );
+    return {
+      allowFrom: resolveFallbackAllowFrom({ cfg, providerId, accountId }),
+      hadResolutionError: true,
+    };
+  }
 }
 
 function resolveOwnerAllowFromList(params: {
@@ -339,32 +368,17 @@ export function resolveCommandAuthorization(params: {
     providerId,
   });
 
-  let allowFromRaw: Array<string | number> | undefined;
-  // Fail closed: if any resolution error occurred (either in provider inference
-  // or in resolveAllowFrom below), prevent allowAll from being true.
-  let allowFromResolutionFailed = providerResolutionError;
-  if (plugin?.config?.resolveAllowFrom) {
-    try {
-      allowFromRaw = plugin.config.resolveAllowFrom({ cfg, accountId: ctx.AccountId });
-    } catch (err) {
-      // resolveAllowFrom may call resolveAccount which requires fully resolved secrets
-      // (e.g. SecretRef bot tokens). In the command-authorization code path secrets may
-      // not be resolved yet. Fail closed to prevent authorization bypass when the
-      // fallback allowlist is empty (which would be interpreted as allow-all).
-      console.warn(
-        `[command-auth] resolveAllowFrom threw for provider "${providerId}", denying: ${describeUnknownError(err)}`,
-      );
-      allowFromResolutionFailed = true;
-      allowFromRaw = [];
-    }
-  } else {
-    allowFromRaw = resolveFallbackAllowFrom({ cfg, providerId, accountId: ctx.AccountId });
-  }
+  const { allowFrom: allowFromRaw, hadResolutionError: allowFromResolutionFailed } =
+    resolveProviderAllowFrom({
+      plugin,
+      cfg,
+      accountId: ctx.AccountId,
+    });
   const allowFromList = formatAllowFromList({
     plugin,
     cfg,
     accountId: ctx.AccountId,
-    allowFrom: Array.isArray(allowFromRaw) ? allowFromRaw : [],
+    allowFrom: allowFromRaw,
   });
   const configOwnerAllowFromList = resolveOwnerAllowFromList({
     plugin,
@@ -458,7 +472,8 @@ export function resolveCommandAuthorization(params: {
     const matchedCommandsAllowFrom = commandsAllowFromList.length
       ? senderCandidates.find((candidate) => commandsAllowFromList.includes(candidate))
       : undefined;
-    isAuthorizedSender = commandsAllowAll || Boolean(matchedCommandsAllowFrom);
+    isAuthorizedSender =
+      !providerResolutionError && (commandsAllowAll || Boolean(matchedCommandsAllowFrom));
   } else {
     // Fall back to existing behavior
     isAuthorizedSender = commandAuthorized && isOwnerForCommands;

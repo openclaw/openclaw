@@ -181,6 +181,50 @@ describe("resolveCommandAuthorization", () => {
     expect(auth.isAuthorizedSender).toBe(true);
   });
 
+  it("falls back to channel allowFrom when provider allowlist resolution throws", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: {
+            ...createOutboundTestPlugin({
+              id: "telegram",
+              outbound: { deliveryMode: "direct" },
+            }),
+            config: {
+              listAccountIds: () => ["default"],
+              resolveAccount: () => ({}),
+              resolveAllowFrom: () => {
+                throw new Error("channels.telegram.botToken: unresolved SecretRef");
+              },
+              formatAllowFrom: ({ allowFrom }: { allowFrom: Array<string | number> }) =>
+                allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    const cfg = {
+      channels: { telegram: { allowFrom: ["123"] } },
+    } as OpenClawConfig;
+
+    const auth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "telegram",
+        Surface: "telegram",
+        From: "telegram:123",
+        SenderId: "123",
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.ownerList).toEqual(["123"]);
+    expect(auth.senderIsOwner).toBe(true);
+    expect(auth.isAuthorizedSender).toBe(true);
+  });
+
   describe("commands.allowFrom", () => {
     const commandsAllowFromConfig = {
       commands: {
@@ -442,6 +486,56 @@ describe("resolveCommandAuthorization", () => {
       });
 
       expect(deniedAuth.isAuthorizedSender).toBe(false);
+    });
+
+    it("fails closed when provider inference hits unresolved SecretRef allowlists", () => {
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "telegram",
+            plugin: {
+              ...createOutboundTestPlugin({
+                id: "telegram",
+                outbound: { deliveryMode: "direct" },
+              }),
+              config: {
+                listAccountIds: () => ["default"],
+                resolveAccount: () => ({}),
+                resolveAllowFrom: () => {
+                  throw new Error("channels.telegram.botToken: unresolved SecretRef");
+                },
+                formatAllowFrom: ({ allowFrom }: { allowFrom: Array<string | number> }) =>
+                  allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
+              },
+            },
+            source: "test",
+          },
+        ]),
+      );
+
+      const cfg = {
+        commands: {
+          allowFrom: {
+            telegram: ["123"],
+          },
+        },
+        channels: {
+          telegram: {
+            allowFrom: ["123"],
+          },
+        },
+      } as OpenClawConfig;
+
+      const auth = resolveCommandAuthorization({
+        ctx: {
+          SenderId: "123",
+        } as MsgContext,
+        cfg,
+        commandAuthorized: false,
+      });
+
+      expect(auth.providerId).toBe("telegram");
+      expect(auth.isAuthorizedSender).toBe(false);
     });
   });
 
