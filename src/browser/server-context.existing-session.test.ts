@@ -1,5 +1,10 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.hoisted(() => {
+  vi.resetModules();
+});
+
 import { createBrowserRouteContext } from "./server-context.js";
 import type { BrowserServerState } from "./server-context.js";
 
