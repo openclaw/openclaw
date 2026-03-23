@@ -78,8 +78,6 @@ Scope intent:
 - `channels.feishu.appSecret`
 - `channels.feishu.encryptKey`
 - `channels.feishu.verificationToken`
-- `channels.feishu.tts.elevenlabs.apiKey`
-- `channels.feishu.tts.openai.apiKey`
 - `channels.feishu.accounts.*.appSecret`
 - `channels.feishu.accounts.*.encryptKey`
 - `channels.feishu.accounts.*.verificationToken`

@@ -1,7 +1,7 @@
-import { TtsConfigSchema } from "openclaw/plugin-sdk";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { z } from "zod";
 export { z };
+import { TtsConfigSchema } from "./api.js";
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
 
 const ChannelActionsSchema = z

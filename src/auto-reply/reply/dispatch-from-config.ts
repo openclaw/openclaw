@@ -39,11 +39,7 @@ import {
 import { getGlobalHookRunner, getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeTtsAutoMode } from "../../tts/tts-config.js";
-import {
-  maybeApplyTtsToPayload,
-  resolveTtsConfig,
-  resolveTtsConfigForAccount,
-} from "../../tts/tts.js";
+import { resolveTtsConfig, resolveTtsConfigForAccount } from "../../tts/tts.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { BlockReplyContext, GetReplyOptions, ReplyPayload } from "../types.js";
