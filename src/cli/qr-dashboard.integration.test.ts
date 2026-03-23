@@ -12,9 +12,7 @@ const runtimeErrors: string[] = [];
 const runtime = vi.hoisted(() => ({
   log: (message: string) => runtimeLogs.push(message),
   error: (message: string) => runtimeErrors.push(message),
-  exit: (code: number) => {
-    throw new Error(`__exit__:${code}`);
-  },
+  exit: vi.fn<(code: number) => void>(),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -187,9 +185,8 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
       config: fixture,
     });
 
-    await expect(runCli(["qr", "--setup-code-only"])).rejects.toThrow(
-      /(__exit__:1|process\.exit unexpectedly called with "?1"?)/,
-    );
+    await runCli(["qr", "--setup-code-only"]);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(runtimeErrors.join("\n")).toMatch(/SHARED_GATEWAY_TOKEN/);
 
     runtimeLogs.length = 0;
