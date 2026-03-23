@@ -1,5 +1,5 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/core";
-import { createBaiduWebSearchProvider } from "./src/baidu-web-search-provider.ts";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { createBaiduWebSearchProvider } from "./src/baidu-web-search-provider.js";
 
 export default definePluginEntry({
   id: "baidu",
