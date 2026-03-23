@@ -1321,6 +1321,10 @@
   margin-top: 0.75em;
 }
 
+.code-block-wrapper.half-block-art {
+  overflow-x: auto;
+}
+
 .code-block-wrapper pre {
   margin: 0;
   border-radius: 0 0 6px 6px;
