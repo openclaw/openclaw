@@ -5,6 +5,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { sanitizeEnvVars, validateEnvVarValue } from "../sandbox/sanitize-env-vars.js";
 import { resolveSkillConfig } from "./config.js";
 import { resolveSkillKey } from "./frontmatter.js";
+import { resolveSkillRuntimeConfig } from "./runtime-config.js";
 import type { SkillEntry, SkillSnapshot } from "./types.js";
 
 const log = createSubsystemLogger("env-overrides");
@@ -211,7 +212,8 @@ function createEnvReverter(updates: EnvUpdate[]) {
 }
 
 export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: OpenClawConfig }) {
-  const { skills, config } = params;
+  const { skills } = params;
+  const config = resolveSkillRuntimeConfig(params.config);
   const updates: EnvUpdate[] = [];
 
   for (const entry of skills) {
@@ -237,7 +239,8 @@ export function applySkillEnvOverridesFromSnapshot(params: {
   snapshot?: SkillSnapshot;
   config?: OpenClawConfig;
 }) {
-  const { snapshot, config } = params;
+  const { snapshot } = params;
+  const config = resolveSkillRuntimeConfig(params.config);
   if (!snapshot) {
     return () => {};
   }
