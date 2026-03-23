@@ -429,6 +429,10 @@
       "types": "./dist/plugin-sdk/provider-catalog.d.ts",
       "default": "./dist/plugin-sdk/provider-catalog.js"
     },
+    "./plugin-sdk/provider-entry": {
+      "types": "./dist/plugin-sdk/provider-entry.d.ts",
+      "default": "./dist/plugin-sdk/provider-entry.js"
+    },
     "./plugin-sdk/provider-env-vars": {
       "types": "./dist/plugin-sdk/provider-env-vars.d.ts",
       "default": "./dist/plugin-sdk/provider-env-vars.js"
