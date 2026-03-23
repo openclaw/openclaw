@@ -7,6 +7,7 @@ const registerFeishuWikiToolsMock = vi.hoisted(() => vi.fn());
 const registerFeishuDriveToolsMock = vi.hoisted(() => vi.fn());
 const registerFeishuPermToolsMock = vi.hoisted(() => vi.fn());
 const registerFeishuBitableToolsMock = vi.hoisted(() => vi.fn());
+const registerFeishuMessageToolsMock = vi.hoisted(() => vi.fn());
 const setFeishuRuntimeMock = vi.hoisted(() => vi.fn());
 const registerFeishuSubagentHooksMock = vi.hoisted(() => vi.fn());
 
@@ -32,6 +33,10 @@ vi.mock("./src/perm.js", () => ({
 
 vi.mock("./src/bitable.js", () => ({
   registerFeishuBitableTools: registerFeishuBitableToolsMock,
+}));
+
+vi.mock("./src/message.js", () => ({
+  registerFeishuMessageTools: registerFeishuMessageToolsMock,
 }));
 
 vi.mock("./src/runtime.js", () => ({
@@ -64,5 +69,6 @@ describe("feishu plugin register", () => {
     expect(registerFeishuDriveToolsMock).toHaveBeenCalledWith(api);
     expect(registerFeishuPermToolsMock).toHaveBeenCalledWith(api);
     expect(registerFeishuBitableToolsMock).toHaveBeenCalledWith(api);
+    expect(registerFeishuMessageToolsMock).toHaveBeenCalledWith(api);
   });
 });
