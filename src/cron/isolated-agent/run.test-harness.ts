@@ -433,7 +433,7 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
   resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
 
   deliverOutboundPayloadsMock.mockReset();
-  deliverOutboundPayloadsMock.mockResolvedValue(undefined);
+  deliverOutboundPayloadsMock.mockResolvedValue([]);
 
   logWarnMock.mockReset();
 }

@@ -45,7 +45,7 @@ describe("runCronIsolatedAgentTurn — delivery failure does not mark job as err
   it("returns status ok when agent task succeeded but best-effort delivery threw", async () => {
     mockRunCronFallbackPassthrough();
     setupDeliveryRequested();
-    deliverOutboundPayloadsMock.mockRejectedValue(new Error("network timeout"));
+    deliverOutboundPayloadsMock.mockRejectedValue(new Error("permanent delivery failure"));
 
     const result = await runCronIsolatedAgentTurn(
       makeIsolatedAgentTurnParams({
@@ -69,7 +69,7 @@ describe("runCronIsolatedAgentTurn — delivery failure does not mark job as err
   it("returns status error when agent task succeeded but strict delivery threw", async () => {
     mockRunCronFallbackPassthrough();
     setupDeliveryRequested();
-    deliverOutboundPayloadsMock.mockRejectedValue(new Error("network timeout"));
+    deliverOutboundPayloadsMock.mockRejectedValue(new Error("permanent delivery failure"));
 
     const result = await runCronIsolatedAgentTurn(
       makeIsolatedAgentTurnParams({
@@ -99,7 +99,7 @@ describe("runCronIsolatedAgentTurn — delivery failure does not mark job as err
       provider: "openai",
       model: "gpt-4",
     });
-    deliverOutboundPayloadsMock.mockRejectedValue(new Error("network timeout"));
+    deliverOutboundPayloadsMock.mockRejectedValue(new Error("permanent delivery failure"));
 
     const result = await runCronIsolatedAgentTurn(
       makeIsolatedAgentTurnParams({
