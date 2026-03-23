@@ -92,7 +92,9 @@ export const zh_TW: TranslationMap = {
       sessions: "會話",
       sessionsHint: "網關跟蹤的最近會話密鑰。",
       cron: "定時任務",
+      cronCount: "共 {count} 個",
       cronNext: "下次喚醒 {time}",
+      cronFailed: "錯誤：{count}",
     },
     notes: {
       title: "備註",
@@ -107,6 +109,8 @@ export const zh_TW: TranslationMap = {
     auth: {
       required: "此網關需要身份驗證。添加令牌或密碼，然後點擊連接。",
       failed: "身份驗證失敗。請使用 {command} 重新複製令牌化 URL，或更新令牌，然後點擊連接。",
+      tokenizedUrl: "帶令牌的 URL",
+      setToken: "設定令牌",
     },
     pairing: {
       hint: "此裝置需要閘道主機的配對批准。",
@@ -116,6 +120,25 @@ export const zh_TW: TranslationMap = {
     insecure: {
       hint: "此頁面為 HTTP，因此瀏覽器阻止設備標識。請使用 HTTPS (Tailscale Serve) 或在網關主機上打開 {url}。",
       stayHttp: "如果您必須保持 HTTP，請設置 {config} (僅限令牌)。",
+    },
+    docs: {
+      devicePairing: "文件：裝置配對",
+      controlUiAuth: "文件：Control UI 身份驗證",
+      tailscaleServe: "文件：Tailscale Serve",
+      insecureHttp: "文件：不安全 HTTP",
+    },
+    placeholders: {
+      password: "系統或共享密碼",
+      wsUrl: "ws://100.x.y.z:18789",
+      token: "OPENCLAW_GATEWAY_TOKEN",
+    },
+    accessibility: {
+      hideToken: "隱藏令牌",
+      showToken: "顯示令牌",
+      toggleToken: "切換令牌可見性",
+      hidePassword: "隱藏密碼",
+      showPassword: "顯示密碼",
+      togglePassword: "切換密碼可見性",
     },
     connection: {
       title: "如何連接",
@@ -128,7 +151,10 @@ export const zh_TW: TranslationMap = {
     },
     cards: {
       cost: "費用",
+      costHint: "令牌：{tokens} · 訊息：{messages}",
       skills: "技能",
+      skillsBlocked: "已封鎖：{count}",
+      skillsActive: "可用：{count}",
       recentSessions: "最近會話",
     },
     attention: {
