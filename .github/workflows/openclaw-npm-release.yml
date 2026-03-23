@@ -92,9 +92,25 @@ jobs:
       - name: Verify release contents
         run: pnpm release:check
 
+  validate_publish_dispatch_ref:
+    if: ${{ !inputs.preflight_only }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require main workflow ref for publish
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]]; then
+            echo "Real publish runs must be dispatched from main. Use preflight_only=true for branch validation."
+            exit 1
+          fi
+
   publish_openclaw_npm:
     # npm trusted publishing + provenance requires a GitHub-hosted runner.
-    needs: [preflight_openclaw_npm]
+    needs: [preflight_openclaw_npm, validate_publish_dispatch_ref]
     if: ${{ !inputs.preflight_only }}
     runs-on: ubuntu-latest
     environment: npm-release

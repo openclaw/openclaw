@@ -108,8 +108,24 @@ jobs:
           SPARKLE_FEED_URL: ${{ env.SPARKLE_FEED_URL }}
         run: scripts/package-mac-dist.sh
 
+  validate_publish_dispatch_ref:
+    if: ${{ !inputs.preflight_only }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require main workflow ref for publish
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]]; then
+            echo "Real publish runs must be dispatched from main. Use preflight_only=true for branch validation."
+            exit 1
+          fi
+
   publish_macos_release:
-    needs: [preflight_macos_release]
+    needs: [preflight_macos_release, validate_publish_dispatch_ref]
     if: ${{ !inputs.preflight_only }}
     runs-on: macos-latest
     environment: mac-release
