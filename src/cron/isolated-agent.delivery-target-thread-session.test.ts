@@ -42,10 +42,12 @@ const mockedModuleIds = [
   "../infra/outbound/channel-selection.js",
 ];
 
-const { resolveDeliveryTarget } = await import("./isolated-agent/delivery-target.js");
+let resolveDeliveryTarget: typeof import("./isolated-agent/delivery-target.js").resolveDeliveryTarget;
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
+  vi.resetModules();
+  ({ resolveDeliveryTarget } = await import("./isolated-agent/delivery-target.js"));
   for (const key of Object.keys(mockStore)) {
     delete mockStore[key];
   }
