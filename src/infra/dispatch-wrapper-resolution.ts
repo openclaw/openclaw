@@ -279,23 +279,27 @@ function unwrapTimeoutInvocation(argv: string[]): string[] | null {
 
 type DispatchWrapperSpec = {
   name: string;
-  transparent: boolean;
   unwrap?: (argv: string[]) => string[] | null;
+  transparentUsage?: boolean | ((argv: string[]) => boolean);
 };
 
 const DISPATCH_WRAPPER_SPECS: readonly DispatchWrapperSpec[] = [
-  { name: "chrt", transparent: false },
-  { name: "doas", transparent: false },
-  { name: "env", transparent: false, unwrap: unwrapEnvInvocation },
-  { name: "ionice", transparent: false },
-  { name: "nice", transparent: true, unwrap: unwrapNiceInvocation },
-  { name: "nohup", transparent: true, unwrap: unwrapNohupInvocation },
-  { name: "setsid", transparent: false },
-  { name: "stdbuf", transparent: true, unwrap: unwrapStdbufInvocation },
-  { name: "sudo", transparent: false },
-  { name: "taskset", transparent: false },
-  { name: "time", transparent: true, unwrap: unwrapTimeInvocation },
-  { name: "timeout", transparent: true, unwrap: unwrapTimeoutInvocation },
+  { name: "chrt" },
+  { name: "doas" },
+  {
+    name: "env",
+    unwrap: unwrapEnvInvocation,
+    transparentUsage: (argv) => !envInvocationUsesModifiers(argv),
+  },
+  { name: "ionice" },
+  { name: "nice", unwrap: unwrapNiceInvocation, transparentUsage: true },
+  { name: "nohup", unwrap: unwrapNohupInvocation, transparentUsage: true },
+  { name: "setsid" },
+  { name: "stdbuf", unwrap: unwrapStdbufInvocation, transparentUsage: true },
+  { name: "sudo" },
+  { name: "taskset" },
+  { name: "time", unwrap: unwrapTimeInvocation, transparentUsage: true },
+  { name: "timeout", unwrap: unwrapTimeoutInvocation, transparentUsage: true },
 ];
 
 const DISPATCH_WRAPPER_SPEC_BY_NAME = new Map(
@@ -359,10 +363,15 @@ export function unwrapDispatchWrappersForResolution(
 }
 
 function isSemanticDispatchWrapperUsage(wrapper: string, argv: string[]): boolean {
-  if (wrapper === "env") {
-    return envInvocationUsesModifiers(argv);
+  const spec = DISPATCH_WRAPPER_SPEC_BY_NAME.get(wrapper);
+  if (!spec?.unwrap) {
+    return true;
   }
-  return !DISPATCH_WRAPPER_SPEC_BY_NAME.get(wrapper)?.transparent;
+  const transparentUsage = spec.transparentUsage;
+  if (typeof transparentUsage === "function") {
+    return !transparentUsage(argv);
+  }
+  return transparentUsage !== true;
 }
 
 function blockedDispatchWrapperPlan(params: {

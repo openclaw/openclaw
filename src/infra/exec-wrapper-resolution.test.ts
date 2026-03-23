@@ -108,6 +108,10 @@ describe("unwrapEnvInvocation", () => {
 describe("unwrapKnownDispatchWrapperInvocation", () => {
   test.each([
     {
+      argv: ["env", "--", "bash", "-lc", "echo hi"],
+      expected: { kind: "unwrapped", wrapper: "env", argv: ["bash", "-lc", "echo hi"] },
+    },
+    {
       argv: ["nice", "-n", "5", "bash", "-lc", "echo hi"],
       expected: { kind: "unwrapped", wrapper: "nice", argv: ["bash", "-lc", "echo hi"] },
     },
@@ -138,9 +142,27 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
   ])("unwraps known dispatch wrappers for %j", ({ argv, expected }) => {
     expect(unwrapKnownDispatchWrapperInvocation(argv)).toEqual(expected);
   });
+
+  test.each(["chrt", "doas", "ionice", "setsid", "sudo", "taskset"])(
+    "fails closed for blocked dispatch wrapper %s",
+    (wrapper) => {
+      expect(unwrapKnownDispatchWrapperInvocation([wrapper, "bash", "-lc", "echo hi"])).toEqual({
+        kind: "blocked",
+        wrapper,
+      });
+    },
+  );
 });
 
 describe("resolveDispatchWrapperExecutionPlan", () => {
+  test("allows non-semantic env passthrough", () => {
+    expect(resolveDispatchWrapperExecutionPlan(["env", "--", "bash", "-lc", "echo hi"])).toEqual({
+      argv: ["bash", "-lc", "echo hi"],
+      wrappers: ["env"],
+      policyBlocked: false,
+    });
+  });
+
   test.each([
     {
       argv: ["nice", "-n", "5", "bash", "-lc", "echo hi"],
