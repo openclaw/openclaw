@@ -1,9 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveDiscordGroupRequireMention } from "../../extensions/discord/src/group-policy.js";
+import { resolveSlackGroupRequireMention } from "../../extensions/slack/src/group-policy.js";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GroupKeyResolution } from "../config/sessions.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createInboundDebouncer } from "./inbound-debounce.js";
 import { resolveGroupRequireMention } from "./reply/groups.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
@@ -21,6 +26,39 @@ import {
 } from "./reply/mentions.js";
 import { initSessionState } from "./reply/session.js";
 import { applyTemplate, type MsgContext, type TemplateContext } from "./templating.js";
+
+const emptyRegistry = createTestRegistry([]);
+
+const discordGroupPolicyPlugin: ChannelPlugin = {
+  ...createChannelTestPluginBase({
+    id: "discord",
+    capabilities: { chatTypes: ["direct", "channel"] },
+  }),
+  groups: {
+    resolveRequireMention: resolveDiscordGroupRequireMention,
+  },
+  mentions: {
+    stripPatterns: () => ["<@!?\\d+>"],
+  },
+};
+
+const slackGroupPolicyPlugin: ChannelPlugin = {
+  ...createChannelTestPluginBase({
+    id: "slack",
+    capabilities: { chatTypes: ["direct", "channel"] },
+  }),
+  groups: {
+    resolveRequireMention: resolveSlackGroupRequireMention,
+  },
+};
+
+beforeEach(() => {
+  setActivePluginRegistry(emptyRegistry);
+});
+
+afterEach(() => {
+  setActivePluginRegistry(emptyRegistry);
+});
 
 describe("applyTemplate", () => {
   it("renders primitive values", () => {
@@ -412,7 +450,28 @@ describe("mention helpers", () => {
         groupChat: { mentionPatterns },
       },
     } as OpenClawConfig);
+    expect(regexes).toHaveLength(1);
     expect(regexes.some((re) => re.test("openclaw"))).toBe(true);
+  });
+
+  it("fails closed when an explicit mention override has no usable patterns", () => {
+    const mentionPatterns = [undefined, null, 42] as unknown as string[];
+    const regexes = buildMentionRegexes({
+      messages: {
+        groupChat: { mentionPatterns },
+      },
+    } as OpenClawConfig);
+    expect(regexes).toHaveLength(1);
+    expect(matchesMentionPatterns("openclaw", regexes)).toBe(false);
+  });
+
+  it("keeps explicit empty mention pattern overrides empty", () => {
+    const regexes = buildMentionRegexes({
+      messages: {
+        groupChat: { mentionPatterns: [] },
+      },
+    });
+    expect(regexes).toHaveLength(0);
   });
 
   it("normalizes zero-width characters", () => {
@@ -457,6 +516,11 @@ describe("mention helpers", () => {
   });
 
   it("strips provider mention regexes without config compilation", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "discord", plugin: discordGroupPolicyPlugin, source: "test" },
+      ]),
+    );
     const stripped = stripMentions("<@12345> hello", { Provider: "discord" } as MsgContext, {});
     expect(stripped).toBe("hello");
   });
@@ -464,6 +528,11 @@ describe("mention helpers", () => {
 
 describe("resolveGroupRequireMention", () => {
   it("respects Discord guild/channel requireMention settings", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "discord", plugin: discordGroupPolicyPlugin, source: "test" },
+      ]),
+    );
     const cfg: OpenClawConfig = {
       channels: {
         discord: {
@@ -494,6 +563,9 @@ describe("resolveGroupRequireMention", () => {
   });
 
   it("respects Slack channel requireMention settings", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "slack", plugin: slackGroupPolicyPlugin, source: "test" }]),
+    );
     const cfg: OpenClawConfig = {
       channels: {
         slack: {
