@@ -137,6 +137,30 @@ describe("live tool probe utils", () => {
         expected: true,
       },
       {
+        name: "retries conversational try-again output",
+        params: {
+          text: "Let me try reading the file again:",
+          nonceA: "nonce-a",
+          nonceB: "nonce-b",
+          provider: "zai",
+          attempt: 0,
+          maxAttempts: 3,
+        },
+        expected: true,
+      },
+      {
+        name: "does not retry generic conversational text without tool-retry context",
+        params: {
+          text: "Let me try a different approach.",
+          nonceA: "nonce-a",
+          nonceB: "nonce-b",
+          provider: "zai",
+          attempt: 0,
+          maxAttempts: 3,
+        },
+        expected: false,
+      },
+      {
         name: "retries mistral nonce marker echoes without parsed values",
         params: {
           text: "nonceA= nonceB=",
@@ -233,6 +257,28 @@ describe("live tool probe utils", () => {
           maxAttempts: 3,
         },
         expected: true,
+      },
+      {
+        name: "retries conversational try-again exec output",
+        params: {
+          text: "Let me try reading the file again:",
+          nonce: "nonce-c",
+          provider: "zai",
+          attempt: 0,
+          maxAttempts: 3,
+        },
+        expected: true,
+      },
+      {
+        name: "does not retry generic exec conversational text without tool-retry context",
+        params: {
+          text: "Let me try a different approach.",
+          nonce: "nonce-c",
+          provider: "zai",
+          attempt: 0,
+          maxAttempts: 3,
+        },
+        expected: false,
       },
       {
         name: "does not special-case anthropic refusals for other providers",

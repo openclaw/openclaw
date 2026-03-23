@@ -53,6 +53,13 @@ function hasMalformedToolOutput(text: string): boolean {
   if (trimmed.includes("[object Object]")) {
     return true;
   }
+  if (
+    lower.includes("try reading the file again") ||
+    lower.includes("trying to read the file again") ||
+    lower.includes("try the read tool again")
+  ) {
+    return true;
+  }
   if (/\bread\s*\[/.test(lower) || /\btool\b/.test(lower) || /\bfunction\b/.test(lower)) {
     return true;
   }
