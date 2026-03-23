@@ -35,6 +35,7 @@ describe("tsdown config", () => {
     expect(entryKeys(distGraphs[0])).toEqual(
       expect.arrayContaining([
         "index",
+        "cli/memory-cli",
         "plugins/runtime/index",
         "plugin-sdk/compat",
         "plugin-sdk/index",
