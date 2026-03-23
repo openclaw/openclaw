@@ -1,0 +1,4471 @@
+From 6fb891c059b327bef0b53047ca29b78814a07c91 Mon Sep 17 00:00:00 2001
+From: Alexander Kondrashov <justdoit150@gmail.com>
+Date: Mon, 23 Mar 2026 13:23:31 +0300
+Subject: [PATCH] feat: harden multi-agent context lifecycle and compact flow
+
+---
+ Dockerfile.2026.2.19-ffmpeg                   |   9 +
+ PR_SUMMARY.md                                 | 107 ++++
+ SMOKE_CHECKLIST.md                            |  33 ++
+ docker-compose.yml                            |  42 +-
+ scripts/start_with_keychain.sh                |  29 +
+ src/agents/chat-context-store.test.ts         | 108 ++++
+ src/agents/chat-context-store.ts              | 537 ++++++++++++++++++
+ src/agents/context-policy.ts                  | 101 ++++
+ .../run/attempt.session-identity.test.ts      |  39 ++
+ src/agents/pi-embedded-runner/run/attempt.ts  |  67 ++-
+ src/agents/system-prompt.ts                   |   8 +-
+ src/auto-reply/reply/commands-compact.ts      |  23 +
+ src/auto-reply/reply/session.test.ts          |  26 +
+ src/auto-reply/reply/session.ts               |  25 +-
+ src/channels/dock.ts                          |   9 +
+ src/channels/plugins/actions/telegram.test.ts |  53 ++
+ src/channels/plugins/actions/telegram.ts      |  18 +-
+ src/config/sessions.test.ts                   |  18 +
+ src/config/sessions/session-key.ts            |  70 ++-
+ src/config/sessions/types.ts                  |   6 +
+ src/gateway/chat-context.test.ts              |  59 ++
+ src/gateway/chat-context.ts                   | 297 ++++++++++
+ src/gateway/protocol/index.ts                 |   5 +
+ src/gateway/protocol/schema/logs-chat.ts      |   3 +
+ .../protocol/schema/protocol-schemas.ts       |   2 +
+ src/gateway/protocol/schema/sessions.ts       |   8 +
+ src/gateway/protocol/schema/types.ts          |   2 +
+ .../server-methods/chat.preflight.test.ts     | 148 +++++
+ src/gateway/server-methods/chat.ts            | 273 +++++++--
+ src/gateway/server-methods/sessions.ts        | 176 +++++-
+ .../server-startup-agent-context.test.ts      |  87 +++
+ src/gateway/server-startup-agent-context.ts   | 183 ++++++
+ src/gateway/server-startup-memory.ts          |  29 +-
+ src/gateway/server-startup.ts                 |   4 +
+ ...ver.chat.gateway-server-chat-b.e2e.test.ts | 156 +++++
+ src/gateway/session-utils.ts                  |   9 +-
+ src/gateway/session-utils.types.ts            |   3 +
+ src/infra/outbound/message-action-params.ts   |   4 +
+ .../message-action-runner.threading.test.ts   |  37 +-
+ src/telegram/bot-message-context.ts           |  11 +
+ ui/src/ui/app-chat.test.ts                    | 123 ++++
+ ui/src/ui/app-chat.ts                         | 122 ++++
+ ui/src/ui/app-gateway.node.test.ts            |   1 +
+ ui/src/ui/app-render.ts                       |  33 +-
+ ui/src/ui/app-settings.test.ts                |   1 +
+ ui/src/ui/app-view-state.ts                   |  19 +
+ ui/src/ui/app.ts                              |  35 ++
+ ui/src/ui/controllers/chat.ts                 |  31 +-
+ ui/src/ui/storage.ts                          |   3 +
+ ui/src/ui/views/chat.ts                       |  83 +++
+ 50 files changed, 3157 insertions(+), 118 deletions(-)
+ create mode 100644 Dockerfile.2026.2.19-ffmpeg
+ create mode 100644 PR_SUMMARY.md
+ create mode 100644 SMOKE_CHECKLIST.md
+ create mode 100755 scripts/start_with_keychain.sh
+ create mode 100644 src/agents/chat-context-store.test.ts
+ create mode 100644 src/agents/chat-context-store.ts
+ create mode 100644 src/agents/context-policy.ts
+ create mode 100644 src/agents/pi-embedded-runner/run/attempt.session-identity.test.ts
+ create mode 100644 src/gateway/chat-context.test.ts
+ create mode 100644 src/gateway/chat-context.ts
+ create mode 100644 src/gateway/server-methods/chat.preflight.test.ts
+ create mode 100644 src/gateway/server-startup-agent-context.test.ts
+ create mode 100644 src/gateway/server-startup-agent-context.ts
+ create mode 100644 ui/src/ui/app-chat.test.ts
+
+diff --git a/Dockerfile.2026.2.19-ffmpeg b/Dockerfile.2026.2.19-ffmpeg
+new file mode 100644
+index 000000000..4015c967e
+--- /dev/null
++++ b/Dockerfile.2026.2.19-ffmpeg
+@@ -0,0 +1,9 @@
++FROM ghcr.io/openclaw/openclaw:2026.2.19
++
++USER root
++RUN apt-get update \
++  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg \
++  && apt-get clean \
++  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
++
++USER node
+diff --git a/PR_SUMMARY.md b/PR_SUMMARY.md
+new file mode 100644
+index 000000000..e0f98cc5a
+--- /dev/null
++++ b/PR_SUMMARY.md
+@@ -0,0 +1,107 @@
++# Multi-Agent Context Hardening
++
++## Problems addressed
++
++- Context leakage risk between agents due to non-canonical session lookup paths.
++- Session history growth and recursive summary degradation during repeated compaction.
++- Missing hard-limit preflight compaction on the server side.
++- Runtime state reuse across agent switch, archive, reset, and new chat flows.
++- Startup migration safety and recoverability for long-lived session stores.
++- Limited observability into context assembly and token budgeting.
++
++## Fixes implemented
++
++- Added agent-aware canonical session key resolution and runner-safe session identity lookup.
++- Isolated synthetic summaries from source history and enforced single-summary context assembly.
++- Preserved technical facts in summaries: commit hashes, env names, file paths, IDs, and error snippets.
++- Added summary lineage metadata and repeated-compact safeguards.
++- Added server-side hard-limit preflight compact while preserving the last user input.
++- Unified runtime reset behavior for agent switch, archive, reset, and new chat flows.
++- Prevented late assistant transcript writes into archived chats.
++- Added idempotent startup migration with a barrier to avoid duplicate archive/summary writes.
++- Added context budget breakdown and debug tracing for summary/recent/memory token visibility.
++
++## Files changed
++
++- Modified tracked files:
++  - `docker-compose.yml`
++  - `src/agents/pi-embedded-runner/run/attempt.ts`
++  - `src/agents/system-prompt.ts`
++  - `src/auto-reply/reply/commands-compact.ts`
++  - `src/auto-reply/reply/session.test.ts`
++  - `src/auto-reply/reply/session.ts`
++  - `src/channels/dock.ts`
++  - `src/channels/plugins/actions/telegram.test.ts`
++  - `src/channels/plugins/actions/telegram.ts`
++  - `src/config/sessions.test.ts`
++  - `src/config/sessions/session-key.ts`
++  - `src/config/sessions/types.ts`
++  - `src/gateway/protocol/index.ts`
++  - `src/gateway/protocol/schema/logs-chat.ts`
++  - `src/gateway/protocol/schema/protocol-schemas.ts`
++  - `src/gateway/protocol/schema/sessions.ts`
++  - `src/gateway/protocol/schema/types.ts`
++  - `src/gateway/server-methods/chat.ts`
++  - `src/gateway/server-methods/sessions.ts`
++  - `src/gateway/server-startup-memory.ts`
++  - `src/gateway/server-startup.ts`
++  - `src/gateway/server.chat.gateway-server-chat-b.e2e.test.ts`
++  - `src/gateway/session-utils.ts`
++  - `src/gateway/session-utils.types.ts`
++  - `src/infra/outbound/message-action-params.ts`
++  - `src/infra/outbound/message-action-runner.threading.test.ts`
++  - `src/telegram/bot-message-context.ts`
++  - `ui/src/ui/app-chat.ts`
++  - `ui/src/ui/app-gateway.node.test.ts`
++  - `ui/src/ui/app-render.ts`
++  - `ui/src/ui/app-settings.test.ts`
++  - `ui/src/ui/app-view-state.ts`
++  - `ui/src/ui/app.ts`
++  - `ui/src/ui/controllers/chat.ts`
++  - `ui/src/ui/storage.ts`
++  - `ui/src/ui/views/chat.ts`
++- Added new files:
++  - `Dockerfile.2026.2.19-ffmpeg`
++  - `scripts/start_with_keychain.sh`
++  - `src/agents/chat-context-store.test.ts`
++  - `src/agents/chat-context-store.ts`
++  - `src/agents/context-policy.ts`
++  - `src/agents/pi-embedded-runner/run/attempt.session-identity.test.ts`
++  - `src/gateway/chat-context.test.ts`
++  - `src/gateway/chat-context.ts`
++  - `src/gateway/server-methods/chat.preflight.test.ts`
++  - `src/gateway/server-startup-agent-context.test.ts`
++  - `src/gateway/server-startup-agent-context.ts`
++  - `ui/src/ui/app-chat.test.ts`
++
++## Tests added
++
++- `src/agents/chat-context-store.test.ts`
++- `src/agents/pi-embedded-runner/run/attempt.session-identity.test.ts`
++- `src/gateway/chat-context.test.ts`
++- `src/gateway/server-methods/chat.preflight.test.ts`
++- `src/gateway/server-startup-agent-context.test.ts`
++- `ui/src/ui/app-chat.test.ts`
++- Extended `src/gateway/server.chat.gateway-server-chat-b.e2e.test.ts`
++- Extended `src/config/sessions.test.ts`
++- Extended `src/auto-reply/reply/session.test.ts`
++- Extended `ui/src/ui/app-gateway.node.test.ts`
++- Extended `ui/src/ui/app-settings.test.ts`
++
++## Guarantees now provided
++
++- Session resolution is agent-aware for direct/default and runner lookup paths.
++- Synthetic summary messages never become the source of truth for future summaries.
++- Context assembly contains at most one summary, and it always precedes the recent tail.
++- Hard-limit compaction runs once per request flow and preserves the last user input.
++- Agent switch, archive, reset, and new chat clear the same critical runtime state.
++- Archived chats reject late assistant transcript writes.
++- Startup migration is barrier-protected and repeatable without duplicate archive creation.
++- Context budgeting is visible via structured debug breakdowns.
++
++## Before merge, still verify
++
++- Run a full repository test sweep if desired beyond the targeted suites already run.
++- Manually inspect remaining raw session store callers outside the hardened gateway/runner paths.
++- Optionally unify duplicate canonicalization helpers in `src/gateway/session-utils.ts`.
++- Optionally type the migration marker fields directly in `src/config/sessions/types.ts`.
+diff --git a/SMOKE_CHECKLIST.md b/SMOKE_CHECKLIST.md
+new file mode 100644
+index 000000000..04d29691e
+--- /dev/null
++++ b/SMOKE_CHECKLIST.md
+@@ -0,0 +1,33 @@
++# Smoke Checklist
++
++- Agent switch
++  - Start a run, switch to another agent, confirm run state, queue, stream, and busy indicators reset.
++  - Switch back and confirm no prior chat runtime state is reused.
++
++- Compact
++  - Trigger manual compact and confirm summary is present, recent tail remains, and technical facts survive.
++  - Repeat compact multiple times and confirm hashes, env names, paths, IDs, and errors remain preserved.
++
++- Archive
++  - Archive an active chat mid-run and confirm no late assistant message lands in the archived transcript.
++  - Confirm archived chat no longer receives summary or transcript updates.
++
++- New chat
++  - Create a new chat from an active/busy chat and confirm clean runtime state, empty queue, empty stream, and new session key.
++
++- Hard-limit preflight
++  - Force a session above hard limit and send a message.
++  - Confirm compact runs exactly once and the last user input is still processed.
++
++- Restart server
++  - Restart once after migration and confirm active chats still load.
++  - Restart again and confirm no duplicate archived main sessions or duplicate summary artifacts appear.
++
++- Agent isolation
++  - Use `agent:a:*` and `agent:b:*` with similar session keys and confirm no cross-loading of session entries or summaries.
++
++- Repeated compact
++  - Compact the same chat several times and confirm single-summary invariant and stable technical fact retention.
++
++- Migration rerun
++  - Re-run startup migration on partially migrated state and confirm idempotent behavior.
+diff --git a/docker-compose.yml b/docker-compose.yml
+index 614a1f8d5..4ce5165fc 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -5,12 +5,16 @@ services:
+       HOME: /home/node
+       TERM: xterm-256color
+       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+-      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
+-      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
+-      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
++      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
++      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
++      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
++      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
++      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
++      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
++      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+     volumes:
+-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
+-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
++      - openclaw_config:/home/node/.openclaw
++      - openclaw_workspace:/home/node/.openclaw/workspace
+     ports:
+       - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+       - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+@@ -33,14 +37,32 @@ services:
+       HOME: /home/node
+       TERM: xterm-256color
+       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
++      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
++      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
++      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
++      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+       BROWSER: echo
+-      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
+-      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
+-      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
++      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
++      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
++      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+     volumes:
+-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
+-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
++      - openclaw_config:/home/node/.openclaw
++      - openclaw_workspace:/home/node/.openclaw/workspace
+     stdin_open: true
+     tty: true
+     init: true
+     entrypoint: ["node", "dist/index.js"]
++
++volumes:
++  openclaw_config:
++    driver: local
++    driver_opts:
++      type: none
++      o: bind
++      device: ${OPENCLAW_CONFIG_DIR}
++  openclaw_workspace:
++    driver: local
++    driver_opts:
++      type: none
++      o: bind
++      device: ${OPENCLAW_WORKSPACE_DIR}
+diff --git a/scripts/start_with_keychain.sh b/scripts/start_with_keychain.sh
+new file mode 100755
+index 000000000..c0a142cf9
+--- /dev/null
++++ b/scripts/start_with_keychain.sh
+@@ -0,0 +1,29 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++get_secret() {
++  local name="$1"
++  security find-generic-password -a "alexanderkondrashov" -s "openclaw/${name}" -w 2>/dev/null || true
++}
++
++export OPENAI_API_KEY="$(get_secret OPENAI_API_KEY)"
++export OPENROUTER_API_KEY="$(get_secret OPENROUTER_API_KEY)"
++export GEMINI_API_KEY="$(get_secret GEMINI_API_KEY)"
++export OPENCLAW_GATEWAY_TOKEN="$(get_secret OPENCLAW_GATEWAY_TOKEN)"
++export TELEGRAM_BOT_TOKEN="$(get_secret TELEGRAM_BOT_TOKEN)"
++
++if [ -n "$TELEGRAM_BOT_TOKEN" ]; then
++  python3 - <<'PY'
++import json
++from pathlib import Path
++import os
++
++cfg_path = Path('/Users/alexanderkondrashov/.openclaw/openclaw.json')
++cfg = json.loads(cfg_path.read_text(encoding='utf-8'))
++cfg.setdefault('channels', {}).setdefault('telegram', {})['botToken'] = os.environ['TELEGRAM_BOT_TOKEN']
++cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
++PY
++fi
++
++cd "/Users/alexanderkondrashov/openclaw"
++docker compose up -d
+diff --git a/src/agents/chat-context-store.test.ts b/src/agents/chat-context-store.test.ts
+new file mode 100644
+index 000000000..0b6db8c25
+--- /dev/null
++++ b/src/agents/chat-context-store.test.ts
+@@ -0,0 +1,108 @@
++import { describe, expect, it } from "vitest";
++import {
++  buildChatSummaryRecord,
++  buildSummaryContextMessages,
++  type ChatSummaryRecord,
++} from "./chat-context-store.js";
++
++function textMessage(role: string, text: string, timestamp = Date.now()) {
++  return {
++    role,
++    content: [{ type: "text", text }],
++    timestamp,
++  };
++}
++
++function syntheticSummary(text = "[Context summary]") {
++  return {
++    role: "assistant" as const,
++    content: [{ type: "text" as const, text }],
++    timestamp: Date.now(),
++    synthetic: true as const,
++    summary: true as const,
++  };
++}
++
++describe("chat context summary store", () => {
++  it("extracts env/path/id/hash/error into technical buckets", () => {
++    const summary = buildChatSummaryRecord({
++      agentId: "main",
++      sessionKey: "agent:main:main",
++      messages: [
++        textMessage(
++          "user",
++          "Deploy commit 0123abcd on branch. Use OPENAI_API_KEY from .env and inspect src/server.ts:42. Request id 123e4567-e89b-12d3-a456-426614174000.",
++        ),
++        textMessage(
++          "assistant",
++          "Current goal: fix ENOENT: no such file or directory at src/server.ts:42",
++        ),
++      ],
++    });
++
++    expect(summary.technicalFacts.commitHashes).toContain("0123abcd");
++    expect(summary.technicalFacts.envNames).toContain("OPENAI_API_KEY");
++    expect(summary.technicalFacts.filePaths).toContain(".env");
++    expect(summary.technicalFacts.filePaths).toContain("src/server.ts:42");
++    expect(summary.technicalFacts.ids).toContain("123e4567-e89b-12d3-a456-426614174000");
++    expect(summary.technicalFacts.errorSnippets.some((line) => line.includes("ENOENT"))).toBe(true);
++  });
++
++  it("ignores synthetic summary when building new summary", () => {
++    const summary = buildChatSummaryRecord({
++      agentId: "main",
++      sessionKey: "agent:main:main",
++      messages: [syntheticSummary(), textMessage("user", "Use API_TOKEN in app/config.ts")],
++    });
++
++    expect(summary.sourceMessageCount).toBe(1);
++    expect(summary.importantFacts.join(" ")).toContain("API_TOKEN");
++  });
++
++  it("repeated compact does not reduce source facts count unexpectedly", () => {
++    const first = buildChatSummaryRecord({
++      agentId: "main",
++      sessionKey: "agent:main:main",
++      messages: [textMessage("user", "Use DATABASE_URL in src/db.ts and commit deadbeef")],
++    });
++    const second = buildChatSummaryRecord({
++      agentId: "main",
++      sessionKey: "agent:main:main",
++      previous: first,
++      messages: [
++        syntheticSummary(),
++        textMessage("assistant", "Status: still investigating ENOENT in src/db.ts"),
++      ],
++    });
++
++    expect(second.summaryGeneration).toBe(2);
++    expect(second.technicalFacts.envNames).toContain("DATABASE_URL");
++    expect(second.technicalFacts.filePaths).toContain("src/db.ts");
++    expect(second.technicalFacts.commitHashes).toContain("deadbeef");
++  });
++
++  it("summary mode injects exactly one summary and filters transcript summary line from tail", () => {
++    const summary: ChatSummaryRecord = buildChatSummaryRecord({
++      agentId: "main",
++      sessionKey: "agent:main:main",
++      messages: [textMessage("user", "Goal: ship release")],
++    });
++    const messages = buildSummaryContextMessages({
++      messages: [
++        syntheticSummary("old transcript summary"),
++        textMessage("user", "recent 1", 1),
++        textMessage("assistant", "recent 2", 2),
++      ],
++      summary,
++      tailCount: 5,
++      mode: "summary",
++    });
++
++    const summaryCount = messages.filter(
++      (message) => (message as { summary?: boolean }).summary === true,
++    ).length;
++    expect(summaryCount).toBe(1);
++    expect((messages[0] as { summary?: boolean }).summary).toBe(true);
++    expect(JSON.stringify(messages)).not.toContain("old transcript summary");
++  });
++});
+diff --git a/src/agents/chat-context-store.ts b/src/agents/chat-context-store.ts
+new file mode 100644
+index 000000000..d84663ed8
+--- /dev/null
++++ b/src/agents/chat-context-store.ts
+@@ -0,0 +1,537 @@
++import fs from "node:fs";
++import path from "node:path";
++import type { OpenClawConfig } from "../config/config.js";
++import type { SessionEntry } from "../config/sessions/types.js";
++import type { ChatHistoryMode } from "./context-policy.js";
++import { resolveStateDir } from "../config/paths.js";
++import { normalizeAgentId } from "../routing/session-key.js";
++
++export type AgentContextLayout = {
++  rootDir: string;
++  chatsDir: string;
++  chatIndexFile: string;
++  memoryDir: string;
++  shortTermDir: string;
++  midTermDir: string;
++  longTermFile: string;
++};
++
++export type ChatSummaryRecord = {
++  agentId: string;
++  chatId: string;
++  sessionKey: string;
++  sessionId?: string;
++  createdAt: number;
++  updatedAt: number;
++  summaryGeneration: number;
++  basedOnPreviousSummary: boolean;
++  sourceMessageCount: number;
++  currentGoal: string[];
++  keyDecisions: string[];
++  importantFacts: string[];
++  currentStatus: string[];
++  nextActions: string[];
++  technicalFacts: {
++    commitHashes: string[];
++    envNames: string[];
++    filePaths: string[];
++    ids: string[];
++    errorSnippets: string[];
++  };
++};
++
++export type SyntheticSummaryMessage = {
++  role: "assistant";
++  content: Array<{ type: "text"; text: string }>;
++  timestamp: number;
++  synthetic: true;
++  summary: true;
++};
++
++export type ChatIndexEntry = {
++  agentId: string;
++  chatId: string;
++  sessionKey: string;
++  sessionId?: string;
++  historyMode: ChatHistoryMode;
++  summaryUpdatedAt?: number;
++  archivedAt?: number;
++  createdAt: number;
++  updatedAt: number;
++};
++
++type MessageTextSnapshot = {
++  role: string;
++  text: string;
++};
++
++type TechnicalFactsBucket = ChatSummaryRecord["technicalFacts"];
++
++function sanitizeFileToken(value: string): string {
++  return value.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "chat";
++}
++
++function toChatId(sessionKey: string): string {
++  return sanitizeFileToken(Buffer.from(sessionKey).toString("base64url").slice(0, 48));
++}
++
++function ensureDir(dirPath: string) {
++  fs.mkdirSync(dirPath, { recursive: true });
++}
++
++function readJsonFile<T>(filePath: string, fallback: T): T {
++  try {
++    if (!fs.existsSync(filePath)) {
++      return fallback;
++    }
++    return JSON.parse(fs.readFileSync(filePath, "utf-8")) as T;
++  } catch {
++    return fallback;
++  }
++}
++
++function writeJsonFile(filePath: string, value: unknown) {
++  ensureDir(path.dirname(filePath));
++  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
++}
++
++function extractMessageText(message: unknown): string {
++  if (!message || typeof message !== "object") {
++    return "";
++  }
++  const content = (message as { content?: unknown }).content;
++  if (typeof content === "string") {
++    return content.trim();
++  }
++  if (!Array.isArray(content)) {
++    return "";
++  }
++  return content
++    .map((block) => {
++      if (!block || typeof block !== "object") {
++        return "";
++      }
++      const text = (block as { text?: unknown }).text;
++      return typeof text === "string" ? text.trim() : "";
++    })
++    .filter(Boolean)
++    .join("\n")
++    .trim();
++}
++
++export function isSyntheticSummaryMessage(message: unknown): message is SyntheticSummaryMessage {
++  if (!message || typeof message !== "object") {
++    return false;
++  }
++  const raw = message as Record<string, unknown>;
++  return raw.synthetic === true && raw.summary === true && raw.role === "assistant";
++}
++
++export function filterSyntheticSummaryMessages(messages: unknown[]): unknown[] {
++  const syntheticIndexes = messages
++    .map((message, index) => (isSyntheticSummaryMessage(message) ? index : -1))
++    .filter((index) => index >= 0);
++  if (syntheticIndexes.length <= 1) {
++    return messages;
++  }
++  const keepIndex = syntheticIndexes[syntheticIndexes.length - 1];
++  return messages.filter(
++    (message, index) => !isSyntheticSummaryMessage(message) || index === keepIndex,
++  );
++}
++
++function collectMessageSnapshots(messages: unknown[]): MessageTextSnapshot[] {
++  return messages
++    .map((message) => {
++      const role =
++        typeof (message as { role?: unknown })?.role === "string"
++          ? String((message as { role?: unknown }).role)
++          : "unknown";
++      return {
++        role,
++        text: extractMessageText(message),
++      };
++    })
++    .filter((entry) => entry.text.length > 0);
++}
++
++function dedupeLines(lines: string[], maxItems: number): string[] {
++  const out: string[] = [];
++  const seen = new Set<string>();
++  for (const line of lines) {
++    const normalized = line.replace(/\s+/g, " ").trim();
++    if (!normalized || seen.has(normalized)) {
++      continue;
++    }
++    seen.add(normalized);
++    out.push(normalized);
++    if (out.length >= maxItems) {
++      break;
++    }
++  }
++  return out;
++}
++
++function dedupeExact(lines: string[], maxItems: number): string[] {
++  const out: string[] = [];
++  const seen = new Set<string>();
++  for (const line of lines) {
++    const value = line.trim();
++    if (!value || seen.has(value)) {
++      continue;
++    }
++    seen.add(value);
++    out.push(value);
++    if (out.length >= maxItems) {
++      break;
++    }
++  }
++  return out;
++}
++
++function pickImportantLines(
++  messages: MessageTextSnapshot[],
++  role: string,
++  maxItems: number,
++): string[] {
++  return dedupeLines(
++    messages
++      .filter((entry) => entry.role === role)
++      .flatMap((entry) => entry.text.split(/\n+/))
++      .map((line) => line.replace(/^[-*\d.\s]+/, "").trim())
++      .filter((line) => line.length > 0),
++    maxItems,
++  );
++}
++
++function pickActionLines(messages: MessageTextSnapshot[], maxItems: number): string[] {
++  const candidates = messages.flatMap((entry) =>
++    entry.text
++      .split(/\n+/)
++      .map((line) => line.trim())
++      .filter((line) => /^(?:[-*]|\d+\.|todo\b|next\b|action\b)/i.test(line)),
++  );
++  return dedupeLines(
++    candidates.map((line) => line.replace(/^[-*\d.\s]+/, "").trim()),
++    maxItems,
++  );
++}
++
++function buildFallbackStatus(messages: MessageTextSnapshot[]): string[] {
++  const last = messages.at(-1)?.text;
++  if (!last) {
++    return [];
++  }
++  return [last.replace(/\s+/g, " ").trim()];
++}
++
++function extractCurrentGoal(
++  messages: MessageTextSnapshot[],
++  previous?: ChatSummaryRecord | null,
++): string[] {
++  const userLines = dedupeLines(
++    messages
++      .filter((entry) => entry.role === "user")
++      .flatMap((entry) => entry.text.split(/\n+/))
++      .map((line) => line.replace(/^[-*\d.\s]+/, "").trim())
++      .filter(Boolean),
++    3,
++  );
++  if (userLines.length > 0) {
++    return userLines.slice(-2);
++  }
++  return previous?.currentGoal ?? [];
++}
++
++function extractTechnicalFacts(messages: MessageTextSnapshot[]): TechnicalFactsBucket {
++  const lines = messages.flatMap((entry) => entry.text.split(/\n+/).map((line) => line.trim()));
++  const joined = lines.join("\n");
++  return {
++    commitHashes: dedupeExact(
++      Array.from(joined.matchAll(/\b[a-f0-9]{7,40}\b/gi), (match) => match[0]),
++      20,
++    ),
++    envNames: dedupeExact(
++      Array.from(joined.matchAll(/\b[A-Z][A-Z0-9_]{2,}\b/g), (match) => match[0]),
++      20,
++    ),
++    filePaths: dedupeExact(
++      Array.from(
++        joined.matchAll(
++          /(?:[A-Za-z]:\\[^\s]+|(?:\.{0,2}\/|\/)[^\s:]+(?::\d+)?|\.[A-Za-z0-9_.-]+|\b[\w.-]+\/[\w./-]+(?::\d+)?|\b[\w.-]+\.(?:ts|tsx|js|jsx|json|md|py|rs|yaml|yml|sh)(?::\d+)?)\b/g,
++        ),
++        (match) => match[0],
++      ),
++      20,
++    ),
++    ids: dedupeExact(
++      Array.from(
++        joined.matchAll(
++          /\b(?:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|[A-Z]{2,}-\d+|agent:[a-z0-9._-]+:[^\s]+)\b/gi,
++        ),
++        (match) => match[0],
++      ),
++      20,
++    ),
++    errorSnippets: dedupeLines(
++      lines.filter((line) =>
++        /(?:error|exception|failed|failure|enoent|eacces|traceback)/i.test(line),
++      ),
++      12,
++    ),
++  };
++}
++
++function mergeTechnicalFacts(
++  previous: TechnicalFactsBucket | undefined,
++  current: TechnicalFactsBucket,
++): TechnicalFactsBucket {
++  return {
++    commitHashes: dedupeExact([...(previous?.commitHashes ?? []), ...current.commitHashes], 20),
++    envNames: dedupeExact([...(previous?.envNames ?? []), ...current.envNames], 20),
++    filePaths: dedupeExact([...(previous?.filePaths ?? []), ...current.filePaths], 20),
++    ids: dedupeExact([...(previous?.ids ?? []), ...current.ids], 20),
++    errorSnippets: dedupeLines([...(previous?.errorSnippets ?? []), ...current.errorSnippets], 12),
++  };
++}
++
++export function resolveAgentContextLayout(agentId: string): AgentContextLayout {
++  const normalized = normalizeAgentId(agentId);
++  const rootDir = path.join(resolveStateDir(), "agents", normalized);
++  const chatsDir = path.join(rootDir, "chats");
++  const memoryDir = path.join(rootDir, "memory");
++  return {
++    rootDir,
++    chatsDir,
++    chatIndexFile: path.join(chatsDir, "index.json"),
++    memoryDir,
++    shortTermDir: path.join(memoryDir, "short_term_chat"),
++    midTermDir: path.join(memoryDir, "mid_term_summaries"),
++    longTermFile: path.join(memoryDir, "long_term_facts.json"),
++  };
++}
++
++export function ensureAgentContextLayout(agentId: string): AgentContextLayout {
++  const layout = resolveAgentContextLayout(agentId);
++  ensureDir(layout.chatsDir);
++  ensureDir(layout.shortTermDir);
++  ensureDir(layout.midTermDir);
++  if (!fs.existsSync(layout.chatIndexFile)) {
++    writeJsonFile(layout.chatIndexFile, []);
++  }
++  if (!fs.existsSync(layout.longTermFile)) {
++    writeJsonFile(layout.longTermFile, []);
++  }
++  return layout;
++}
++
++export function ensureConfiguredAgentContextLayouts(cfg: OpenClawConfig) {
++  const agentIds = new Set<string>();
++  for (const entry of cfg.agents?.list ?? []) {
++    if (entry?.id) {
++      agentIds.add(normalizeAgentId(entry.id));
++    }
++  }
++  agentIds.add("main");
++  for (const agentId of agentIds) {
++    ensureAgentContextLayout(agentId);
++  }
++}
++
++export function buildChatSummaryRecord(params: {
++  agentId: string;
++  sessionKey: string;
++  sessionId?: string;
++  messages: unknown[];
++  previous?: ChatSummaryRecord | null;
++}): ChatSummaryRecord {
++  const agentId = normalizeAgentId(params.agentId);
++  const chatId = params.previous?.chatId ?? toChatId(params.sessionKey);
++  const sourceMessages = params.messages.filter((message) => !isSyntheticSummaryMessage(message));
++  const snapshots = collectMessageSnapshots(sourceMessages);
++  const technicalFacts = mergeTechnicalFacts(
++    params.previous?.technicalFacts,
++    extractTechnicalFacts(snapshots),
++  );
++  const now = Date.now();
++  return {
++    agentId,
++    chatId,
++    sessionKey: params.sessionKey,
++    sessionId: params.sessionId,
++    createdAt: params.previous?.createdAt ?? now,
++    updatedAt: now,
++    summaryGeneration: (params.previous?.summaryGeneration ?? 0) + 1,
++    basedOnPreviousSummary: Boolean(params.previous),
++    sourceMessageCount: sourceMessages.length,
++    currentGoal: extractCurrentGoal(snapshots, params.previous),
++    keyDecisions: pickImportantLines(snapshots.slice(-20), "assistant", 5),
++    importantFacts: dedupeLines(
++      [
++        ...pickImportantLines(snapshots.slice(-20), "user", 5),
++        ...pickImportantLines(snapshots.slice(-20), "assistant", 5),
++      ],
++      6,
++    ),
++    currentStatus: dedupeLines(
++      [
++        ...pickImportantLines(snapshots.slice(-8), "assistant", 3),
++        ...buildFallbackStatus(snapshots),
++      ],
++      3,
++    ),
++    nextActions: pickActionLines(snapshots.slice(-20), 5),
++    technicalFacts,
++  };
++}
++
++export function formatChatSummary(summary: ChatSummaryRecord): string {
++  const blocks = [
++    ["Current goal", summary.currentGoal],
++    ["Key decisions", summary.keyDecisions],
++    ["Important facts", summary.importantFacts],
++    ["Current status", summary.currentStatus],
++    [
++      "Important technical facts",
++      [
++        ...summary.technicalFacts.commitHashes.map((item) => `commit/hash: ${item}`),
++        ...summary.technicalFacts.envNames.map((item) => `env: ${item}`),
++        ...summary.technicalFacts.filePaths.map((item) => `path: ${item}`),
++        ...summary.technicalFacts.ids.map((item) => `id: ${item}`),
++        ...summary.technicalFacts.errorSnippets.map((item) => `error: ${item}`),
++      ],
++    ],
++    ["Next actions", summary.nextActions],
++  ] as const;
++  const lines = ["[Context summary]"];
++  for (const [label, items] of blocks) {
++    if (!items.length) {
++      continue;
++    }
++    lines.push(`${label}:`);
++    for (const item of items) {
++      lines.push(`- ${item}`);
++    }
++  }
++  return lines.join("\n");
++}
++
++export function readChatSummary(params: {
++  agentId: string;
++  sessionKey: string;
++}): ChatSummaryRecord | null {
++  const layout = ensureAgentContextLayout(params.agentId);
++  const summaryPath = path.join(layout.midTermDir, `${toChatId(params.sessionKey)}.json`);
++  return readJsonFile<ChatSummaryRecord | null>(summaryPath, null);
++}
++
++export function writeChatSummary(summary: ChatSummaryRecord) {
++  const layout = ensureAgentContextLayout(summary.agentId);
++  writeJsonFile(path.join(layout.midTermDir, `${summary.chatId}.json`), summary);
++  writeJsonFile(path.join(layout.shortTermDir, `${summary.chatId}.json`), {
++    sessionKey: summary.sessionKey,
++    sessionId: summary.sessionId,
++    updatedAt: summary.updatedAt,
++    summary: formatChatSummary(summary),
++  });
++}
++
++export function readChatIndex(agentId: string): ChatIndexEntry[] {
++  const layout = ensureAgentContextLayout(agentId);
++  return readJsonFile<ChatIndexEntry[]>(layout.chatIndexFile, []);
++}
++
++export function upsertChatIndex(params: {
++  agentId: string;
++  sessionKey: string;
++  sessionId?: string;
++  historyMode?: ChatHistoryMode;
++  archivedAt?: number;
++  summaryUpdatedAt?: number;
++}) {
++  const agentId = normalizeAgentId(params.agentId);
++  const layout = ensureAgentContextLayout(agentId);
++  const chatId = toChatId(params.sessionKey);
++  const items = readChatIndex(agentId);
++  const now = Date.now();
++  const next: ChatIndexEntry[] = [];
++  let found = false;
++  for (const item of items) {
++    if (item.chatId !== chatId) {
++      next.push(item);
++      continue;
++    }
++    found = true;
++    next.push({
++      ...item,
++      sessionKey: params.sessionKey,
++      sessionId: params.sessionId ?? item.sessionId,
++      historyMode: params.historyMode ?? item.historyMode,
++      archivedAt: params.archivedAt ?? item.archivedAt,
++      summaryUpdatedAt: params.summaryUpdatedAt ?? item.summaryUpdatedAt,
++      updatedAt: now,
++    });
++  }
++  if (!found) {
++    next.push({
++      agentId,
++      chatId,
++      sessionKey: params.sessionKey,
++      sessionId: params.sessionId,
++      historyMode: params.historyMode ?? "summary",
++      archivedAt: params.archivedAt,
++      summaryUpdatedAt: params.summaryUpdatedAt,
++      createdAt: now,
++      updatedAt: now,
++    });
++  }
++  writeJsonFile(
++    layout.chatIndexFile,
++    next.toSorted((a, b) => b.updatedAt - a.updatedAt),
++  );
++}
++
++export function archiveChatIndexEntry(
++  agentId: string,
++  sessionKey: string,
++  archivedAt = Date.now(),
++) {
++  upsertChatIndex({ agentId, sessionKey, archivedAt });
++}
++
++export function syncSessionEntryContextMetadata(params: {
++  entry: SessionEntry;
++  agentId: string;
++  sessionKey: string;
++}) {
++  params.entry.agentId = normalizeAgentId(params.agentId);
++  params.entry.chatId = params.entry.chatId?.trim() || toChatId(params.sessionKey);
++  params.entry.historyLoadMode = params.entry.historyLoadMode === "full" ? "full" : "summary";
++}
++
++export function buildSummaryContextMessages(params: {
++  messages: unknown[];
++  summary: ChatSummaryRecord | null;
++  tailCount: number;
++  mode: ChatHistoryMode;
++}): unknown[] {
++  const normalizedMessages = filterSyntheticSummaryMessages(params.messages);
++  if (params.mode === "full") {
++    return normalizedMessages;
++  }
++  const tailSource = normalizedMessages.filter((message) => !isSyntheticSummaryMessage(message));
++  const tail = params.tailCount > 0 ? tailSource.slice(-params.tailCount) : [];
++  if (!params.summary) {
++    return tail;
++  }
++  return [
++    {
++      role: "assistant",
++      content: [{ type: "text", text: formatChatSummary(params.summary) }],
++      timestamp: params.summary.updatedAt,
++      synthetic: true,
++      summary: true,
++    },
++    ...tail,
++  ];
++}
+diff --git a/src/agents/context-policy.ts b/src/agents/context-policy.ts
+new file mode 100644
+index 000000000..ccf9084c8
+--- /dev/null
++++ b/src/agents/context-policy.ts
+@@ -0,0 +1,101 @@
++export const CONTEXT_WARNING_THRESHOLD = 80_000;
++export const CONTEXT_COMPACT_THRESHOLD = 120_000;
++export const CONTEXT_HARD_LIMIT = 180_000;
++
++export const DEFAULT_SUMMARY_HISTORY_TAIL = 20;
++export const MIN_SUMMARY_HISTORY_TAIL = 10;
++export const MAX_SUMMARY_HISTORY_TAIL = 20;
++
++export type ChatHistoryMode = "summary" | "full";
++
++export type ContextPressureState = "ok" | "warning" | "compact" | "hard_limit";
++
++export type ContextThresholdSnapshot = {
++  warningThreshold: number;
++  compactThreshold: number;
++  hardLimit: number;
++};
++
++export type ContextUsageSnapshot = ContextThresholdSnapshot & {
++  totalTokens: number | null;
++  contextWindow: number | null;
++  utilization: number | null;
++  state: ContextPressureState;
++  shouldWarn: boolean;
++  shouldSuggestCompact: boolean;
++  shouldAutoCompact: boolean;
++};
++
++export function getContextThresholds(): ContextThresholdSnapshot {
++  return {
++    warningThreshold: CONTEXT_WARNING_THRESHOLD,
++    compactThreshold: CONTEXT_COMPACT_THRESHOLD,
++    hardLimit: CONTEXT_HARD_LIMIT,
++  };
++}
++
++export function normalizeChatHistoryMode(value: unknown): ChatHistoryMode {
++  return value === "full" ? "full" : "summary";
++}
++
++export function normalizeSummaryHistoryTail(value: unknown): number {
++  if (typeof value !== "number" || !Number.isFinite(value)) {
++    return DEFAULT_SUMMARY_HISTORY_TAIL;
++  }
++  return Math.max(MIN_SUMMARY_HISTORY_TAIL, Math.min(MAX_SUMMARY_HISTORY_TAIL, Math.floor(value)));
++}
++
++export function resolveContextPressureState(totalTokens?: number | null): ContextPressureState {
++  if (typeof totalTokens !== "number" || !Number.isFinite(totalTokens) || totalTokens < 0) {
++    return "ok";
++  }
++  if (totalTokens >= CONTEXT_HARD_LIMIT) {
++    return "hard_limit";
++  }
++  if (totalTokens >= CONTEXT_COMPACT_THRESHOLD) {
++    return "compact";
++  }
++  if (totalTokens >= CONTEXT_WARNING_THRESHOLD) {
++    return "warning";
++  }
++  return "ok";
++}
++
++export function buildContextUsageSnapshot(params: {
++  totalTokens?: number | null;
++  contextWindow?: number | null;
++}): ContextUsageSnapshot {
++  const totalTokens =
++    typeof params.totalTokens === "number" &&
++    Number.isFinite(params.totalTokens) &&
++    params.totalTokens >= 0
++      ? params.totalTokens
++      : null;
++  const contextWindow =
++    typeof params.contextWindow === "number" &&
++    Number.isFinite(params.contextWindow) &&
++    params.contextWindow > 0
++      ? params.contextWindow
++      : null;
++  const state = resolveContextPressureState(totalTokens);
++  return {
++    ...getContextThresholds(),
++    totalTokens,
++    contextWindow,
++    utilization:
++      totalTokens != null && contextWindow != null && contextWindow > 0
++        ? Math.min(1, totalTokens / contextWindow)
++        : null,
++    state,
++    shouldWarn: state === "warning" || state === "compact" || state === "hard_limit",
++    shouldSuggestCompact: state === "compact" || state === "hard_limit",
++    shouldAutoCompact: state === "hard_limit",
++  };
++}
++
++export function shouldRunHardLimitPreflightCompact(params: {
++  totalTokens?: number | null;
++  contextWindow?: number | null;
++}): boolean {
++  return buildContextUsageSnapshot(params).shouldAutoCompact;
++}
+diff --git a/src/agents/pi-embedded-runner/run/attempt.session-identity.test.ts b/src/agents/pi-embedded-runner/run/attempt.session-identity.test.ts
+new file mode 100644
+index 000000000..bf0ee5826
+--- /dev/null
++++ b/src/agents/pi-embedded-runner/run/attempt.session-identity.test.ts
+@@ -0,0 +1,39 @@
++import { describe, expect, it } from "vitest";
++import { resolveCanonicalRunnerSessionIdentity } from "./attempt.js";
++
++describe("resolveCanonicalRunnerSessionIdentity", () => {
++  it("does not let runner resolve default session into another agent namespace", () => {
++    expect(
++      resolveCanonicalRunnerSessionIdentity({
++        sessionKey: "main",
++        sessionAgentId: "legal",
++        mainKey: "main",
++      }).canonicalSessionKey,
++    ).toBe("agent:legal:main");
++
++    expect(
++      resolveCanonicalRunnerSessionIdentity({
++        sessionKey: "main",
++        sessionAgentId: "design",
++        mainKey: "main",
++      }).canonicalSessionKey,
++    ).toBe("agent:design:main");
++  });
++
++  it("keeps agent a and agent b isolated for lookup", () => {
++    const a = resolveCanonicalRunnerSessionIdentity({
++      sessionKey: "chat:123",
++      sessionAgentId: "a",
++      mainKey: "main",
++    }).canonicalSessionKey;
++    const b = resolveCanonicalRunnerSessionIdentity({
++      sessionKey: "chat:123",
++      sessionAgentId: "b",
++      mainKey: "main",
++    }).canonicalSessionKey;
++
++    expect(a).toBe("agent:a:chat:123");
++    expect(b).toBe("agent:b:chat:123");
++    expect(a).not.toBe(b);
++  });
++});
+diff --git a/src/agents/pi-embedded-runner/run/attempt.ts b/src/agents/pi-embedded-runner/run/attempt.ts
+index 9fafd965c..710fc89b6 100644
+--- a/src/agents/pi-embedded-runner/run/attempt.ts
++++ b/src/agents/pi-embedded-runner/run/attempt.ts
+@@ -7,6 +7,9 @@ import os from "node:os";
+ import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+ import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
+ import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
++import { loadSessionStore, resolveStorePath } from "../../../config/sessions.js";
++import { canonicalizeSessionKeyForAgent } from "../../../config/sessions/session-key.js";
++import { buildContextBudgetBreakdown } from "../../../gateway/chat-context.js";
+ import { getMachineDisplayName } from "../../../infra/machine-name.js";
+ import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
+ import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+@@ -31,6 +34,12 @@ import {
+   listChannelSupportedActions,
+   resolveChannelMessageToolHints,
+ } from "../../channel-tools.js";
++import {
++  readChatSummary,
++  buildSummaryContextMessages,
++  formatChatSummary,
++} from "../../chat-context-store.js";
++import { normalizeSummaryHistoryTail, normalizeChatHistoryMode } from "../../context-policy.js";
+ import { resolveOpenClawDocsPath } from "../../docs-path.js";
+ import { isTimeoutError } from "../../failover-error.js";
+ import { resolveModelAuthMode } from "../../model-auth.js";
+@@ -661,9 +670,47 @@ export async function runEmbeddedAttempt(
+         const limited = transcriptPolicy.repairToolUseResultPairing
+           ? sanitizeToolUseResultPairing(truncated)
+           : truncated;
++        const runnerSession = resolveCanonicalRunnerSessionIdentity({
++          sessionKey: params.sessionKey,
++          sessionAgentId,
++          mainKey: params.config?.session?.mainKey,
++        });
++        const sessionStore = runnerSession.canonicalSessionKey
++          ? loadSessionStore(
++              resolveStorePath(params.config?.session?.store, { agentId: sessionAgentId }),
++            )
++          : undefined;
++        const sessionEntry = runnerSession.canonicalSessionKey
++          ? sessionStore?.[runnerSession.canonicalSessionKey]
++          : undefined;
++        const sessionSummary = runnerSession.canonicalSessionKey
++          ? readChatSummary({
++              agentId: sessionAgentId,
++              sessionKey: runnerSession.canonicalSessionKey,
++            })
++          : null;
++        const historyMode = normalizeChatHistoryMode(sessionEntry?.historyLoadMode);
++        const summaryTail = normalizeSummaryHistoryTail(undefined);
++        const isolatedHistory = buildSummaryContextMessages({
++          messages: limited,
++          summary: sessionSummary,
++          tailCount: summaryTail,
++          mode: historyMode,
++        }) as AgentMessage[];
++        const contextTrace = buildContextBudgetBreakdown({
++          sessionKey: runnerSession.canonicalSessionKey ?? params.sessionKey ?? params.sessionId,
++          agentId: sessionAgentId,
++          historyMode,
++          summaryText: sessionSummary ? formatChatSummary(sessionSummary) : null,
++          recentTailMessages: isolatedHistory.filter(
++            (message) => !(message as { synthetic?: boolean; summary?: boolean }).synthetic,
++          ),
++          memoryText: null,
++        });
+         cacheTrace?.recordStage("session:limited", { messages: limited });
+-        if (limited.length > 0) {
+-          activeSession.agent.replaceMessages(limited);
++        log.debug("embedded run context trace", contextTrace);
++        if (isolatedHistory.length > 0) {
++          activeSession.agent.replaceMessages(isolatedHistory);
+         }
+       } catch (err) {
+         await flushPendingToolResultsAfterIdle({
+@@ -1147,3 +1194,19 @@ export async function runEmbeddedAttempt(
+     process.chdir(prevCwd);
+   }
+ }
++export function resolveCanonicalRunnerSessionIdentity(params: {
++  sessionKey?: string;
++  sessionAgentId: string;
++  mainKey?: string;
++}) {
++  const canonicalSessionKey = params.sessionKey?.trim()
++    ? canonicalizeSessionKeyForAgent({
++        sessionKey: params.sessionKey,
++        agentId: params.sessionAgentId,
++        mainKey: params.mainKey,
++      })
++    : undefined;
++  return {
++    canonicalSessionKey,
++  };
++}
+diff --git a/src/agents/system-prompt.ts b/src/agents/system-prompt.ts
+index 21a176ac8..bb0245215 100644
+--- a/src/agents/system-prompt.ts
++++ b/src/agents/system-prompt.ts
+@@ -119,8 +119,9 @@ function buildMessagingSection(params: {
+           "### message tool",
+           "- Use `message` for proactive sends + channel actions (polls, reactions, etc.).",
+           "- For `action=send`, include `to` and `message`.",
++          "- For real file/media delivery, use `action=sendAttachment` or `action=send` with `media`/`path`/`filePath` instead of describing the file in plain text.",
+           `- If multiple channels are configured, pass \`channel\` (${params.messageChannelOptions}).`,
+-          `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
++          `- If you use \`message\` (\`action=send\` or \`action=sendAttachment\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
+           params.inlineButtonsEnabled
+             ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data}]]` (callback_data routes back as a user message)."
+             : params.runtimeChannel
+@@ -425,6 +426,11 @@ export function buildAgentSystemPrompt(params: {
+     "",
+     "## Tool Call Style",
+     "Default: do not narrate routine, low-risk tool calls (just call the tool).",
++    "If the user asks you to do work in the workspace, actually do it with tools before replying.",
++    "Never say you are sending, creating, checking, or preparing something unless the relevant tool call already happened successfully.",
++    "Do not stall with progress promises like 'сейчас отправлю', 'добиваю', or 'проверяю' when you can act now.",
++    `For file delivery in chat: locate or create the file, call the message tool to send the attachment, then reply with ONLY ${SILENT_REPLY_TOKEN}.`,
++    "If the user asks for an existing file or database, search the workspace/tools first; ask only after you fail to find it.",
+     "Narrate only when it helps: multi-step work, complex/challenging problems, sensitive actions (e.g., deletions), or when the user explicitly asks.",
+     "Keep narration brief and value-dense; avoid repeating obvious steps.",
+     "Use plain human language for narration unless in a technical context.",
+diff --git a/src/auto-reply/reply/commands-compact.ts b/src/auto-reply/reply/commands-compact.ts
+index 336295087..6a70f21d6 100644
+--- a/src/auto-reply/reply/commands-compact.ts
++++ b/src/auto-reply/reply/commands-compact.ts
+@@ -1,5 +1,9 @@
+ import type { OpenClawConfig } from "../../config/config.js";
+ import type { CommandHandler } from "./commands-types.js";
++import {
++  filterSyntheticSummaryMessages,
++  isSyntheticSummaryMessage,
++} from "../../agents/chat-context-store.js";
+ import {
+   abortEmbeddedPiRun,
+   compactEmbeddedPiSession,
+@@ -11,6 +15,8 @@ import {
+   resolveSessionFilePath,
+   resolveSessionFilePathOptions,
+ } from "../../config/sessions.js";
++import { persistChatSummary } from "../../gateway/chat-context.js";
++import { readSessionMessages } from "../../gateway/session-utils.js";
+ import { logVerbose } from "../../globals.js";
+ import { enqueueSystemEvent } from "../../infra/system-events.js";
+ import { formatContextUsageShort, formatTokenCount } from "../status.js";
+@@ -126,6 +132,23 @@ export const handleCompactCommand: CommandHandler = async (params) => {
+       // Update token counts after compaction
+       tokensAfter: result.result?.tokensAfter,
+     });
++    try {
++      const messages = filterSyntheticSummaryMessages(
++        readSessionMessages(sessionId, params.storePath, params.sessionEntry.sessionFile),
++      ).filter((message) => !isSyntheticSummaryMessage(message));
++      const summary = persistChatSummary({
++        agentId: params.agentId ?? "main",
++        sessionKey: params.sessionKey,
++        sessionId,
++        entry: params.sessionEntry,
++        messages,
++      });
++      params.sessionEntry.historyLoadMode = "summary";
++      params.sessionEntry.summaryUpdatedAt = summary.updatedAt;
++      params.sessionEntry.lastCompactedAt = Date.now();
++    } catch {
++      // Best-effort summary persistence after semantic compaction.
++    }
+   }
+   // Use the post-compaction token count for context summary if available
+   const tokensAfterCompaction = result.result?.tokensAfter;
+diff --git a/src/auto-reply/reply/session.test.ts b/src/auto-reply/reply/session.test.ts
+index b12156037..f037d2b63 100644
+--- a/src/auto-reply/reply/session.test.ts
++++ b/src/auto-reply/reply/session.test.ts
+@@ -257,6 +257,32 @@ describe("initSessionState RawBody", () => {
+   });
+ });
+ 
++describe("initSessionState canonical agent metadata", () => {
++  it("writes agent-aware metadata for direct explicit session keys", async () => {
++    const root = await makeCaseDir("openclaw-agent-aware-session-");
++    const storePath = path.join(root, "sessions.json");
++    const cfg = {
++      agents: {
++        list: [{ id: "legal" }],
++      },
++      session: { store: storePath, mainKey: "main" },
++    } as OpenClawConfig;
++
++    const result = await initSessionState({
++      ctx: {
++        Body: "hello",
++        SessionKey: "main",
++      },
++      cfg,
++      commandAuthorized: true,
++    });
++
++    expect(result.sessionKey).toBe("agent:legal:main");
++    expect(result.sessionEntry.agentId).toBe("legal");
++    expect(result.sessionEntry.chatId).toBeTruthy();
++  });
++});
++
+ describe("initSessionState reset policy", () => {
+   beforeEach(() => {
+     vi.useFakeTimers();
+diff --git a/src/auto-reply/reply/session.ts b/src/auto-reply/reply/session.ts
+index 5979c3966..f4347b3be 100644
+--- a/src/auto-reply/reply/session.ts
++++ b/src/auto-reply/reply/session.ts
+@@ -6,6 +6,10 @@ import type { OpenClawConfig } from "../../config/config.js";
+ import type { TtsAutoMode } from "../../config/types.tts.js";
+ import type { MsgContext, TemplateContext } from "../templating.js";
+ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
++import {
++  syncSessionEntryContextMetadata,
++  upsertChatIndex,
++} from "../../agents/chat-context-store.js";
+ import { normalizeChatType } from "../../channels/chat-type.js";
+ import {
+   DEFAULT_RESET_TRIGGERS,
+@@ -20,6 +24,7 @@ import {
+   resolveGroupSessionKey,
+   resolveSessionFilePath,
+   resolveSessionKey,
++  canonicalizeSessionKeyForAgent,
+   resolveSessionTranscriptPath,
+   resolveStorePath,
+   type SessionEntry,
+@@ -198,7 +203,11 @@ export async function initSessionState(params: {
+     }
+   }
+ 
+-  sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, mainKey);
++  sessionKey = canonicalizeSessionKeyForAgent({
++    sessionKey: resolveSessionKey(sessionScope, sessionCtxForState, mainKey, agentId),
++    agentId,
++    mainKey,
++  });
+   const entry = sessionStore[sessionKey];
+   const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
+   const now = Date.now();
+@@ -361,6 +370,11 @@ export async function initSessionState(params: {
+     sessionEntry.outputTokens = undefined;
+     sessionEntry.contextTokens = undefined;
+   }
++  syncSessionEntryContextMetadata({
++    entry: sessionEntry,
++    agentId,
++    sessionKey,
++  });
+   // Preserve per-session overrides while resetting compaction state on /new.
+   sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
+   await updateSessionStore(
+@@ -392,6 +406,15 @@ export async function initSessionState(params: {
+     });
+   }
+ 
++  upsertChatIndex({
++    agentId,
++    sessionKey,
++    sessionId: sessionEntry.sessionId,
++    historyMode: sessionEntry.historyLoadMode,
++    archivedAt: sessionEntry.archivedAt,
++    summaryUpdatedAt: sessionEntry.summaryUpdatedAt,
++  });
++
+   const sessionCtx: TemplateContext = {
+     ...ctx,
+     // Keep BodyStripped aligned with Body (best default for agent prompts).
+diff --git a/src/channels/dock.ts b/src/channels/dock.ts
+index e0aec2269..2542508d3 100644
+--- a/src/channels/dock.ts
++++ b/src/channels/dock.ts
+@@ -125,6 +125,15 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
+         };
+       },
+     },
++    agentPrompt: {
++      messageToolHints: () => [
++        "- For a real Telegram file attachment, use `message` with `action=sendAttachment` (or `action=send`) and pass `media`, `path`, or `filePath`.",
++        "- If you created a local file during this run, pass its exact `filePath`; Telegram delivery will upload the file, not paste its contents as text.",
++        "- Never claim a file was sent unless the `message` tool already succeeded. If the tool sends the attachment, do not also narrate 'sending' in plain text.",
++        "- When the user says 'пришли файлом', 'скинь сюда', or 'отправь вложением', you must use the message tool for an actual attachment, not answer with the file contents.",
++        "- If the user refers to an existing local database/file, first inspect the workspace with read/find/exec, build the requested export, then send the produced file attachment.",
++      ],
++    },
+   },
+   whatsapp: {
+     id: "whatsapp",
+diff --git a/src/channels/plugins/actions/telegram.test.ts b/src/channels/plugins/actions/telegram.test.ts
+index 21922905e..6029f0095 100644
+--- a/src/channels/plugins/actions/telegram.test.ts
++++ b/src/channels/plugins/actions/telegram.test.ts
+@@ -12,10 +12,63 @@ describe("telegramMessageActions", () => {
+   it("excludes sticker actions when not enabled", () => {
+     const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
+     const actions = telegramMessageActions.listActions({ cfg });
++    expect(actions).toContain("sendAttachment");
+     expect(actions).not.toContain("sticker");
+     expect(actions).not.toContain("sticker-search");
+   });
+ 
++  it("maps filePath sends into telegram media uploads", async () => {
++    handleTelegramAction.mockClear();
++    const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
++
++    await telegramMessageActions.handleAction({
++      action: "send",
++      params: {
++        to: "123",
++        filePath: "/tmp/report.csv",
++        caption: "report",
++      },
++      cfg,
++      accountId: undefined,
++    });
++
++    expect(handleTelegramAction).toHaveBeenCalledWith(
++      expect.objectContaining({
++        action: "sendMessage",
++        to: "123",
++        content: "report",
++        mediaUrl: "/tmp/report.csv",
++      }),
++      cfg,
++    );
++  });
++
++  it("supports explicit sendAttachment for Telegram", async () => {
++    handleTelegramAction.mockClear();
++    const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
++
++    await telegramMessageActions.handleAction({
++      action: "sendAttachment",
++      params: {
++        to: "123",
++        path: "/tmp/remdep_contacts.csv",
++        caption: "CSV",
++      },
++      cfg,
++      accountId: undefined,
++    });
++
++    expect(handleTelegramAction).toHaveBeenCalledWith(
++      expect.objectContaining({
++        action: "sendMessage",
++        to: "123",
++        content: "CSV",
++        mediaUrl: "/tmp/remdep_contacts.csv",
++      }),
++      cfg,
++    );
++  });
++
+   it("allows media-only sends and passes asVoice", async () => {
+     handleTelegramAction.mockClear();
+     const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
+diff --git a/src/channels/plugins/actions/telegram.ts b/src/channels/plugins/actions/telegram.ts
+index a4af24e46..c658dfb26 100644
+--- a/src/channels/plugins/actions/telegram.ts
++++ b/src/channels/plugins/actions/telegram.ts
+@@ -14,7 +14,10 @@ const providerId = "telegram";
+ 
+ function readTelegramSendParams(params: Record<string, unknown>) {
+   const to = readStringParam(params, "to", { required: true });
+-  const mediaUrl = readStringParam(params, "media", { trim: false });
++  const mediaUrl =
++    readStringParam(params, "media", { trim: false }) ??
++    readStringParam(params, "path", { trim: false }) ??
++    readStringParam(params, "filePath", { trim: false });
+   const message = readStringParam(params, "message", { required: !mediaUrl, allowEmpty: true });
+   const caption = readStringParam(params, "caption", { allowEmpty: true });
+   const content = message || caption || "";
+@@ -47,6 +50,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
+     }
+     const gate = createActionGate(cfg.channels?.telegram?.actions);
+     const actions = new Set<ChannelMessageActionName>(["send"]);
++    actions.add("sendAttachment");
+     if (gate("reactions")) {
+       actions.add("react");
+     }
+@@ -98,6 +102,18 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
+       );
+     }
+ 
++    if (action === "sendAttachment") {
++      const sendParams = readTelegramSendParams(params);
++      return await handleTelegramAction(
++        {
++          action: "sendMessage",
++          ...sendParams,
++          accountId: accountId ?? undefined,
++        },
++        cfg,
++      );
++    }
++
+     if (action === "react") {
+       const messageId = readStringOrNumberParam(params, "messageId", {
+         required: true,
+diff --git a/src/config/sessions.test.ts b/src/config/sessions.test.ts
+index 686a46d37..e83647609 100644
+--- a/src/config/sessions.test.ts
++++ b/src/config/sessions.test.ts
+@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
+ import { sleep } from "../utils.js";
+ import {
+   buildGroupDisplayName,
++  canonicalizeSessionKeyForAgent,
+   deriveSessionKey,
+   loadSessionStore,
+   resolveSessionFilePath,
+@@ -100,6 +101,23 @@ describe("sessions", () => {
+     );
+   });
+ 
++  it("canonicalizes direct explicit session keys with agent id", () => {
++    expect(
++      canonicalizeSessionKeyForAgent({
++        sessionKey: "main",
++        agentId: "legal",
++        mainKey: "main",
++      }),
++    ).toBe("agent:legal:main");
++    expect(
++      canonicalizeSessionKeyForAgent({
++        sessionKey: "customer-42",
++        agentId: "rail-business",
++        mainKey: "main",
++      }),
++    ).toBe("agent:rail-business:customer-42");
++  });
++
+   it("keeps global scope untouched", () => {
+     expect(resolveSessionKey("global", { From: "+1555" })).toBe("global");
+   });
+diff --git a/src/config/sessions/session-key.ts b/src/config/sessions/session-key.ts
+index 08c645f3c..1550718e0 100644
+--- a/src/config/sessions/session-key.ts
++++ b/src/config/sessions/session-key.ts
+@@ -3,6 +3,7 @@ import type { SessionScope } from "./types.js";
+ import {
+   buildAgentMainSessionKey,
+   DEFAULT_AGENT_ID,
++  normalizeAgentId,
+   normalizeMainKey,
+ } from "../../routing/session-key.js";
+ import { normalizeE164 } from "../../utils.js";
+@@ -21,27 +22,70 @@ export function deriveSessionKey(scope: SessionScope, ctx: MsgContext) {
+   return from || "unknown";
+ }
+ 
+-/**
+- * Resolve the session key with a canonical direct-chat bucket (default: "main").
+- * All non-group direct chats collapse to this bucket; groups stay isolated.
+- */
+-export function resolveSessionKey(scope: SessionScope, ctx: MsgContext, mainKey?: string) {
++export function canonicalizeSessionKeyForAgent(params: {
++  sessionKey: string;
++  agentId?: string;
++  mainKey?: string;
++}) {
++  const raw = params.sessionKey.trim().toLowerCase();
++  if (!raw) {
++    return raw;
++  }
++  if (raw === "global" || raw === "unknown") {
++    return raw;
++  }
++  if (raw.startsWith("agent:")) {
++    return raw;
++  }
++  const resolvedAgentId = normalizeAgentId(params.agentId ?? DEFAULT_AGENT_ID);
++  const canonicalMainKey = normalizeMainKey(params.mainKey);
++  if (raw === "main" || raw === canonicalMainKey) {
++    return buildAgentMainSessionKey({
++      agentId: resolvedAgentId,
++      mainKey: canonicalMainKey,
++    });
++  }
++  return `agent:${resolvedAgentId}:${raw}`;
++}
++
++export function resolveSessionKeyForAgent(
++  scope: SessionScope,
++  ctx: MsgContext,
++  mainKey?: string,
++  agentId?: string,
++) {
+   const explicit = ctx.SessionKey?.trim();
+   if (explicit) {
+-    return explicit.toLowerCase();
++    return canonicalizeSessionKeyForAgent({
++      sessionKey: explicit,
++      agentId,
++      mainKey,
++    });
+   }
+   const raw = deriveSessionKey(scope, ctx);
+   if (scope === "global") {
+     return raw;
+   }
+-  const canonicalMainKey = normalizeMainKey(mainKey);
+-  const canonical = buildAgentMainSessionKey({
+-    agentId: DEFAULT_AGENT_ID,
+-    mainKey: canonicalMainKey,
+-  });
+   const isGroup = raw.includes(":group:") || raw.includes(":channel:");
+   if (!isGroup) {
+-    return canonical;
++    return canonicalizeSessionKeyForAgent({
++      sessionKey: normalizeMainKey(mainKey),
++      agentId,
++      mainKey,
++    });
+   }
+-  return `agent:${DEFAULT_AGENT_ID}:${raw}`;
++  return canonicalizeSessionKeyForAgent({
++    sessionKey: raw,
++    agentId,
++    mainKey,
++  });
++}
++
++export function resolveSessionKey(
++  scope: SessionScope,
++  ctx: MsgContext,
++  mainKey?: string,
++  agentId?: string,
++) {
++  return resolveSessionKeyForAgent(scope, ctx, mainKey, agentId);
+ }
+diff --git a/src/config/sessions/types.ts b/src/config/sessions/types.ts
+index 1d0012a74..da1e46ef0 100644
+--- a/src/config/sessions/types.ts
++++ b/src/config/sessions/types.ts
+@@ -23,6 +23,9 @@ export type SessionOrigin = {
+ };
+ 
+ export type SessionEntry = {
++  agentId?: string;
++  chatId?: string;
++  archivedAt?: number;
+   /**
+    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
+    * Stored on the main session entry.
+@@ -82,6 +85,9 @@ export type SessionEntry = {
+   model?: string;
+   contextTokens?: number;
+   compactionCount?: number;
++  historyLoadMode?: "summary" | "full";
++  summaryUpdatedAt?: number;
++  lastCompactedAt?: number;
+   memoryFlushAt?: number;
+   memoryFlushCompactionCount?: number;
+   cliSessionIds?: Record<string, string>;
+diff --git a/src/gateway/chat-context.test.ts b/src/gateway/chat-context.test.ts
+new file mode 100644
+index 000000000..bfc964644
+--- /dev/null
++++ b/src/gateway/chat-context.test.ts
+@@ -0,0 +1,59 @@
++import { describe, expect, it } from "vitest";
++import { applyChatHistoryWindow, buildContextBudgetBreakdown } from "./chat-context.js";
++
++function textMessage(role: string, text: string, timestamp = Date.now()) {
++  return {
++    role,
++    content: [{ type: "text", text }],
++    timestamp,
++  };
++}
++
++describe("gateway chat context", () => {
++  it("transcript summary line is filtered from tail in summary mode", () => {
++    const result = applyChatHistoryWindow({
++      agentId: "main",
++      sessionKey: "agent:main:chat:test",
++      messages: [
++        {
++          role: "assistant",
++          content: [{ type: "text", text: "old summary" }],
++          timestamp: 1,
++          synthetic: true,
++          summary: true,
++        },
++        textMessage("user", "recent request", 2),
++        textMessage("assistant", "recent reply", 3),
++      ],
++      historyMode: "summary",
++      tailCount: 10,
++    });
++
++    const summaryCount = result.messages.filter(
++      (message) => (message as { synthetic?: boolean; summary?: boolean }).synthetic === true,
++    ).length;
++    expect(summaryCount).toBeLessThanOrEqual(1);
++    expect(JSON.stringify(result.messages)).not.toContain("old summary");
++  });
++
++  it("builds visible context budget breakdown", () => {
++    const budget = buildContextBudgetBreakdown({
++      sessionKey: "agent:main:chat:test",
++      agentId: "main",
++      historyMode: "summary",
++      summaryText: "Current status: fix bug",
++      recentTailMessages: [textMessage("user", "latest request")],
++      memoryText: "OPENAI_API_KEY",
++    });
++
++    expect(budget.sessionKey).toBe("agent:main:chat:test");
++    expect(budget.agentId).toBe("main");
++    expect(budget.historyMode).toBe("summary");
++    expect(budget.summaryTokens).toBeGreaterThan(0);
++    expect(budget.recentTailTokens).toBeGreaterThan(0);
++    expect(budget.memoryTokens).toBeGreaterThan(0);
++    expect(budget.finalTotalTokens).toBe(
++      budget.summaryTokens + budget.recentTailTokens + budget.memoryTokens,
++    );
++  });
++});
+diff --git a/src/gateway/chat-context.ts b/src/gateway/chat-context.ts
+new file mode 100644
+index 000000000..97ec7943d
+--- /dev/null
++++ b/src/gateway/chat-context.ts
+@@ -0,0 +1,297 @@
++import fs from "node:fs";
++import type { SessionEntry } from "../config/sessions.js";
++import {
++  buildChatSummaryRecord,
++  buildSummaryContextMessages,
++  filterSyntheticSummaryMessages,
++  formatChatSummary,
++  isSyntheticSummaryMessage,
++  readChatSummary,
++  upsertChatIndex,
++  writeChatSummary,
++} from "../agents/chat-context-store.js";
++import {
++  DEFAULT_SUMMARY_HISTORY_TAIL,
++  normalizeChatHistoryMode,
++  normalizeSummaryHistoryTail,
++  type ChatHistoryMode,
++} from "../agents/context-policy.js";
++
++type TranscriptHeader = {
++  type?: string;
++  version?: number;
++  id?: string;
++  timestamp?: string;
++  cwd?: string;
++};
++
++export type ContextBudgetBreakdown = {
++  sessionKey: string;
++  agentId: string;
++  historyMode: ChatHistoryMode;
++  summaryTokens: number;
++  recentTailTokens: number;
++  memoryTokens: number;
++  finalTotalTokens: number;
++  recentTailCount: number;
++  summaryPresent: boolean;
++  estimated: true;
++};
++
++function estimateTokenCount(value: string): number {
++  const normalized = value.trim();
++  if (!normalized) {
++    return 0;
++  }
++  return Math.max(1, Math.ceil(normalized.length / 4));
++}
++
++function extractMessageText(message: unknown): string {
++  if (!message || typeof message !== "object") {
++    return "";
++  }
++  const content = (message as { content?: unknown }).content;
++  if (typeof content === "string") {
++    return content;
++  }
++  if (!Array.isArray(content)) {
++    return "";
++  }
++  return content
++    .map((block) => {
++      if (!block || typeof block !== "object") {
++        return "";
++      }
++      return typeof (block as { text?: unknown }).text === "string"
++        ? String((block as { text?: unknown }).text)
++        : "";
++    })
++    .filter(Boolean)
++    .join("\n");
++}
++
++export function buildContextBudgetBreakdown(params: {
++  sessionKey: string;
++  agentId: string;
++  historyMode: ChatHistoryMode;
++  summaryText?: string | null;
++  recentTailMessages: unknown[];
++  memoryText?: string | null;
++}): ContextBudgetBreakdown {
++  const summaryTokens = estimateTokenCount(params.summaryText ?? "");
++  const recentTailTokens = params.recentTailMessages.reduce(
++    (total: number, message) => total + estimateTokenCount(extractMessageText(message)),
++    0,
++  );
++  const memoryTokens = estimateTokenCount(params.memoryText ?? "");
++  return {
++    sessionKey: params.sessionKey,
++    agentId: params.agentId,
++    historyMode: params.historyMode,
++    summaryTokens,
++    recentTailTokens,
++    memoryTokens,
++    finalTotalTokens: summaryTokens + recentTailTokens + memoryTokens,
++    recentTailCount: params.recentTailMessages.length,
++    summaryPresent: summaryTokens > 0,
++    estimated: true,
++  };
++}
++
++function parseHeader(line: string): TranscriptHeader | null {
++  try {
++    const parsed = JSON.parse(line) as TranscriptHeader;
++    return parsed && parsed.type === "session" ? parsed : null;
++  } catch {
++    return null;
++  }
++}
++
++function assertSingleSummaryInvariant(messages: unknown[]) {
++  const summaryMessages = messages.filter((message) => isSyntheticSummaryMessage(message));
++  if (summaryMessages.length > 1) {
++    throw new Error("context assembly invariant violated: multiple summary messages");
++  }
++  if (summaryMessages.length === 1 && messages[0] !== summaryMessages[0]) {
++    throw new Error("context assembly invariant violated: summary must precede recent tail");
++  }
++}
++
++function assertSummaryRecordInvariant(
++  summary: ReturnType<typeof readChatSummary> | ReturnType<typeof buildChatSummaryRecord>,
++) {
++  if (!summary) {
++    return;
++  }
++  const required = [
++    ["currentGoal", summary.currentGoal],
++    ["currentStatus", summary.currentStatus],
++    ["keyDecisions", summary.keyDecisions],
++    ["nextActions", summary.nextActions],
++  ] as const;
++  for (const [label, values] of required) {
++    if (!Array.isArray(values)) {
++      throw new Error(`summary invariant violated: ${label} missing`);
++    }
++  }
++  if (!summary.technicalFacts) {
++    throw new Error("summary invariant violated: technicalFacts missing");
++  }
++}
++
++export function resolveEffectiveHistoryMode(value: unknown, entry?: SessionEntry): ChatHistoryMode {
++  return normalizeChatHistoryMode(value ?? entry?.historyLoadMode);
++}
++
++export function applyChatHistoryWindow(params: {
++  agentId: string;
++  sessionKey: string;
++  messages: unknown[];
++  entry?: SessionEntry;
++  historyMode?: unknown;
++  tailCount?: unknown;
++}): {
++  historyMode: ChatHistoryMode;
++  tailCount: number;
++  messages: unknown[];
++  summary: string | null;
++  budget: ContextBudgetBreakdown;
++} {
++  const historyMode = resolveEffectiveHistoryMode(params.historyMode, params.entry);
++  const tailCount = normalizeSummaryHistoryTail(params.tailCount);
++  const summary = readChatSummary({ agentId: params.agentId, sessionKey: params.sessionKey });
++  assertSummaryRecordInvariant(summary);
++  const normalizedMessages = filterSyntheticSummaryMessages(params.messages);
++  const assembledMessages = buildSummaryContextMessages({
++    messages: normalizedMessages,
++    summary,
++    tailCount,
++    mode: historyMode,
++  });
++  assertSingleSummaryInvariant(assembledMessages);
++  const recentTailMessages = assembledMessages.filter(
++    (message) => !isSyntheticSummaryMessage(message),
++  );
++  return {
++    historyMode,
++    tailCount,
++    summary: summary ? formatChatSummary(summary) : null,
++    messages: assembledMessages,
++    budget: buildContextBudgetBreakdown({
++      sessionKey: params.sessionKey,
++      agentId: params.agentId,
++      historyMode,
++      summaryText: summary ? formatChatSummary(summary) : null,
++      recentTailMessages,
++      memoryText: null,
++    }),
++  };
++}
++
++export function persistChatSummary(params: {
++  agentId: string;
++  sessionKey: string;
++  sessionId?: string;
++  entry?: SessionEntry;
++  messages: unknown[];
++}) {
++  const previous = readChatSummary({ agentId: params.agentId, sessionKey: params.sessionKey });
++  const sourceMessages = filterSyntheticSummaryMessages(params.messages).filter(
++    (message) => !isSyntheticSummaryMessage(message),
++  );
++  const summary = buildChatSummaryRecord({
++    agentId: params.agentId,
++    sessionKey: params.sessionKey,
++    sessionId: params.sessionId,
++    messages: sourceMessages,
++    previous,
++  });
++  assertSummaryRecordInvariant(summary);
++  writeChatSummary(summary);
++  upsertChatIndex({
++    agentId: params.agentId,
++    sessionKey: params.sessionKey,
++    sessionId: params.sessionId,
++    historyMode: params.entry?.historyLoadMode,
++    archivedAt: params.entry?.archivedAt,
++    summaryUpdatedAt: summary.updatedAt,
++  });
++  return summary;
++}
++
++export function rewriteTranscriptWithSummary(params: {
++  transcriptPath: string;
++  summaryText: string;
++  keepMessages: unknown[];
++  summaryGeneration?: number;
++}) {
++  const rawLines = fs
++    .readFileSync(params.transcriptPath, "utf-8")
++    .split(/\r?\n/)
++    .filter((line) => line.trim().length > 0);
++  const header = rawLines[0] ? parseHeader(rawLines[0]) : null;
++  const nextLines: string[] = [];
++  if (header) {
++    nextLines.push(JSON.stringify(header));
++  }
++  nextLines.push(
++    JSON.stringify({
++      role: "assistant",
++      content: [{ type: "text", text: params.summaryText }],
++      timestamp: Date.now(),
++      synthetic: true,
++      summary: true,
++      summaryGeneration: params.summaryGeneration ?? 1,
++    }),
++  );
++  for (const message of params.keepMessages) {
++    nextLines.push(JSON.stringify(message));
++  }
++  fs.writeFileSync(params.transcriptPath, `${nextLines.join("\n")}\n`, "utf-8");
++}
++
++export function compactTranscriptForPreflight(params: {
++  agentId: string;
++  sessionKey: string;
++  sessionId?: string;
++  entry?: SessionEntry;
++  transcriptPath: string;
++  messages: unknown[];
++}) {
++  const sourceMessages = filterSyntheticSummaryMessages(params.messages).filter(
++    (message) => !isSyntheticSummaryMessage(message),
++  );
++  if (sourceMessages.length === 0) {
++    return {
++      compacted: false,
++      summary: null,
++      keptMessages: [] as unknown[],
++    };
++  }
++  const summary = persistChatSummary({
++    agentId: params.agentId,
++    sessionKey: params.sessionKey,
++    sessionId: params.sessionId,
++    entry: params.entry,
++    messages: sourceMessages,
++  });
++  const reduced = applyChatHistoryWindow({
++    agentId: params.agentId,
++    sessionKey: params.sessionKey,
++    messages: sourceMessages,
++    entry: params.entry ? { ...params.entry, historyLoadMode: "summary" } : undefined,
++    historyMode: "summary",
++    tailCount: DEFAULT_SUMMARY_HISTORY_TAIL,
++  });
++  rewriteTranscriptWithSummary({
++    transcriptPath: params.transcriptPath,
++    summaryText: reduced.summary ?? "[Context summary]",
++    keepMessages: reduced.messages.slice(1),
++    summaryGeneration: summary.summaryGeneration,
++  });
++  return {
++    compacted: true,
++    summary,
++    keptMessages: reduced.messages,
++  };
++}
+diff --git a/src/gateway/protocol/index.ts b/src/gateway/protocol/index.ts
+index 98f1e0e52..beb9ad6af 100644
+--- a/src/gateway/protocol/index.ts
++++ b/src/gateway/protocol/index.ts
+@@ -165,6 +165,8 @@ import {
+   SendParamsSchema,
+   type SessionsCompactParams,
+   SessionsCompactParamsSchema,
++  type SessionsArchiveParams,
++  SessionsArchiveParamsSchema,
+   type SessionsDeleteParams,
+   SessionsDeleteParamsSchema,
+   type SessionsListParams,
+@@ -289,6 +291,9 @@ export const validateSessionsResetParams =
+ export const validateSessionsDeleteParams = ajv.compile<SessionsDeleteParams>(
+   SessionsDeleteParamsSchema,
+ );
++export const validateSessionsArchiveParams = ajv.compile<SessionsArchiveParams>(
++  SessionsArchiveParamsSchema,
++);
+ export const validateSessionsCompactParams = ajv.compile<SessionsCompactParams>(
+   SessionsCompactParamsSchema,
+ );
+diff --git a/src/gateway/protocol/schema/logs-chat.ts b/src/gateway/protocol/schema/logs-chat.ts
+index b8d0fe1ba..a29fd2f0b 100644
+--- a/src/gateway/protocol/schema/logs-chat.ts
++++ b/src/gateway/protocol/schema/logs-chat.ts
+@@ -27,6 +27,8 @@ export const ChatHistoryParamsSchema = Type.Object(
+   {
+     sessionKey: NonEmptyString,
+     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
++    historyMode: Type.Optional(Type.Union([Type.Literal("summary"), Type.Literal("full")])),
++    tailCount: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+   },
+   { additionalProperties: false },
+ );
+@@ -39,6 +41,7 @@ export const ChatSendParamsSchema = Type.Object(
+     deliver: Type.Optional(Type.Boolean()),
+     attachments: Type.Optional(Type.Array(Type.Unknown())),
+     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
++    historyMode: Type.Optional(Type.Union([Type.Literal("summary"), Type.Literal("full")])),
+     idempotencyKey: NonEmptyString,
+   },
+   { additionalProperties: false },
+diff --git a/src/gateway/protocol/schema/protocol-schemas.ts b/src/gateway/protocol/schema/protocol-schemas.ts
+index 68670a3d7..962e563db 100644
+--- a/src/gateway/protocol/schema/protocol-schemas.ts
++++ b/src/gateway/protocol/schema/protocol-schemas.ts
+@@ -120,6 +120,7 @@ import {
+ import {
+   SessionsCompactParamsSchema,
+   SessionsDeleteParamsSchema,
++  SessionsArchiveParamsSchema,
+   SessionsListParamsSchema,
+   SessionsPatchParamsSchema,
+   SessionsPreviewParamsSchema,
+@@ -176,6 +177,7 @@ export const ProtocolSchemas: Record<string, TSchema> = {
+   SessionsPatchParams: SessionsPatchParamsSchema,
+   SessionsResetParams: SessionsResetParamsSchema,
+   SessionsDeleteParams: SessionsDeleteParamsSchema,
++  SessionsArchiveParams: SessionsArchiveParamsSchema,
+   SessionsCompactParams: SessionsCompactParamsSchema,
+   SessionsUsageParams: SessionsUsageParamsSchema,
+   ConfigGetParams: ConfigGetParamsSchema,
+diff --git a/src/gateway/protocol/schema/sessions.ts b/src/gateway/protocol/schema/sessions.ts
+index 0b32ef862..fd13f96e7 100644
+--- a/src/gateway/protocol/schema/sessions.ts
++++ b/src/gateway/protocol/schema/sessions.ts
+@@ -7,6 +7,7 @@ export const SessionsListParamsSchema = Type.Object(
+     activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
+     includeGlobal: Type.Optional(Type.Boolean()),
+     includeUnknown: Type.Optional(Type.Boolean()),
++    includeArchived: Type.Optional(Type.Boolean()),
+     /**
+      * Read first 8KB of each session transcript to derive title from first user message.
+      * Performs a file read per session - use `limit` to bound result set on large stores.
+@@ -98,6 +99,13 @@ export const SessionsDeleteParamsSchema = Type.Object(
+   { additionalProperties: false },
+ );
+ 
++export const SessionsArchiveParamsSchema = Type.Object(
++  {
++    key: NonEmptyString,
++  },
++  { additionalProperties: false },
++);
++
+ export const SessionsCompactParamsSchema = Type.Object(
+   {
+     key: NonEmptyString,
+diff --git a/src/gateway/protocol/schema/types.ts b/src/gateway/protocol/schema/types.ts
+index ead66ca78..5e394e29d 100644
+--- a/src/gateway/protocol/schema/types.ts
++++ b/src/gateway/protocol/schema/types.ts
+@@ -111,6 +111,7 @@ import type {
+   NodeRenameParamsSchema,
+ } from "./nodes.js";
+ import type {
++  SessionsArchiveParamsSchema,
+   SessionsCompactParamsSchema,
+   SessionsDeleteParamsSchema,
+   SessionsListParamsSchema,
+@@ -165,6 +166,7 @@ export type SessionsResolveParams = Static<typeof SessionsResolveParamsSchema>;
+ export type SessionsPatchParams = Static<typeof SessionsPatchParamsSchema>;
+ export type SessionsResetParams = Static<typeof SessionsResetParamsSchema>;
+ export type SessionsDeleteParams = Static<typeof SessionsDeleteParamsSchema>;
++export type SessionsArchiveParams = Static<typeof SessionsArchiveParamsSchema>;
+ export type SessionsCompactParams = Static<typeof SessionsCompactParamsSchema>;
+ export type SessionsUsageParams = Static<typeof SessionsUsageParamsSchema>;
+ export type ConfigGetParams = Static<typeof ConfigGetParamsSchema>;
+diff --git a/src/gateway/server-methods/chat.preflight.test.ts b/src/gateway/server-methods/chat.preflight.test.ts
+new file mode 100644
+index 000000000..3603956fd
+--- /dev/null
++++ b/src/gateway/server-methods/chat.preflight.test.ts
+@@ -0,0 +1,148 @@
++import fs from "node:fs";
++import os from "node:os";
++import path from "node:path";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++const state = {
++  transcriptPath: "",
++};
++
++const loadSessionEntryMock = vi.fn();
++const readSessionMessagesMock = vi.fn();
++const compactTranscriptForPreflightMock = vi.fn();
++const updateSessionStoreMock = vi.fn();
++const resolveSessionFilePathMock = vi.fn();
++
++vi.mock("../../config/sessions.js", async () => {
++  const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
++    "../../config/sessions.js",
++  );
++  return {
++    ...actual,
++    resolveSessionFilePath: resolveSessionFilePathMock,
++    updateSessionStore: updateSessionStoreMock,
++  };
++});
++
++vi.mock("../session-utils.js", async () => {
++  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
++  return {
++    ...actual,
++    loadSessionEntry: loadSessionEntryMock,
++    readSessionMessages: readSessionMessagesMock,
++  };
++});
++
++vi.mock("../chat-context.js", async () => {
++  const actual = await vi.importActual<typeof import("../chat-context.js")>("../chat-context.js");
++  return {
++    ...actual,
++    compactTranscriptForPreflight: compactTranscriptForPreflightMock,
++  };
++});
++
++describe("performHardLimitPreflightCompact", () => {
++  let tempDir = "";
++
++  beforeEach(() => {
++    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-preflight-"));
++    state.transcriptPath = path.join(tempDir, "sess-1.jsonl");
++    fs.writeFileSync(state.transcriptPath, "{}\n", "utf-8");
++    resolveSessionFilePathMock.mockImplementation(() => state.transcriptPath);
++    loadSessionEntryMock.mockReturnValue({
++      storePath: path.join(tempDir, "sessions.json"),
++      entry: {
++        sessionId: "sess-1",
++        sessionFile: state.transcriptPath,
++        totalTokens: 180_000,
++        totalTokensFresh: true,
++        contextTokens: 200_000,
++      },
++      canonicalKey: "agent:main:main",
++    });
++    readSessionMessagesMock.mockReturnValue([
++      {
++        role: "user",
++        content: [{ type: "text", text: "old context" }],
++        timestamp: Date.now(),
++      },
++    ]);
++    compactTranscriptForPreflightMock.mockReturnValue({
++      compacted: true,
++      summary: { updatedAt: 123 },
++      keptMessages: [],
++    });
++    updateSessionStoreMock.mockImplementation(async (_storePath, mutator) => {
++      const store = {
++        "agent:main:main": {
++          sessionId: "sess-1",
++        },
++      };
++      return await mutator(store);
++    });
++  });
++
++  afterEach(() => {
++    vi.clearAllMocks();
++    fs.rmSync(tempDir, { recursive: true, force: true });
++  });
++
++  it("triggers exactly one compact when hard limit is reached", async () => {
++    const { performHardLimitPreflightCompact } = await import("./chat.js");
++    const guard = { attempted: false, compacted: false };
++
++    const compacted = await performHardLimitPreflightCompact({
++      sessionKey: "agent:main:main",
++      agentId: "main",
++      storePath: path.join(tempDir, "sessions.json"),
++      entry: {
++        sessionId: "sess-1",
++        sessionFile: state.transcriptPath,
++        totalTokens: 180_000,
++        totalTokensFresh: true,
++        contextTokens: 200_000,
++      },
++      guard,
++    });
++
++    expect(compacted).toBe(true);
++    expect(compactTranscriptForPreflightMock).toHaveBeenCalledTimes(1);
++    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
++    expect(guard).toEqual({ attempted: true, compacted: true });
++  });
++
++  it("does not run compact twice inside the same request flow", async () => {
++    const { performHardLimitPreflightCompact } = await import("./chat.js");
++    const guard = { attempted: false, compacted: false };
++
++    await performHardLimitPreflightCompact({
++      sessionKey: "agent:main:main",
++      agentId: "main",
++      storePath: path.join(tempDir, "sessions.json"),
++      entry: {
++        sessionId: "sess-1",
++        sessionFile: state.transcriptPath,
++        totalTokens: 180_000,
++        totalTokensFresh: true,
++        contextTokens: 200_000,
++      },
++      guard,
++    });
++    await performHardLimitPreflightCompact({
++      sessionKey: "agent:main:main",
++      agentId: "main",
++      storePath: path.join(tempDir, "sessions.json"),
++      entry: {
++        sessionId: "sess-1",
++        sessionFile: state.transcriptPath,
++        totalTokens: 180_000,
++        totalTokensFresh: true,
++        contextTokens: 200_000,
++      },
++      guard,
++    });
++
++    expect(compactTranscriptForPreflightMock).toHaveBeenCalledTimes(1);
++    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
++  });
++});
+diff --git a/src/gateway/server-methods/chat.ts b/src/gateway/server-methods/chat.ts
+index d82511386..2a7a213e5 100644
+--- a/src/gateway/server-methods/chat.ts
++++ b/src/gateway/server-methods/chat.ts
+@@ -4,12 +4,20 @@ import path from "node:path";
+ import type { MsgContext } from "../../auto-reply/templating.js";
+ import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
++import {
++  buildContextUsageSnapshot,
++  shouldRunHardLimitPreflightCompact,
++} from "../../agents/context-policy.js";
+ import { resolveThinkingDefault } from "../../agents/model-selection.js";
+ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
+ import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+ import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
+-import { resolveSessionFilePath } from "../../config/sessions.js";
++import {
++  resolveFreshSessionTotalTokens,
++  resolveSessionFilePath,
++  updateSessionStore,
++} from "../../config/sessions.js";
+ import { resolveSendPolicy } from "../../sessions/send-policy.js";
+ import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+ import {
+@@ -19,6 +27,12 @@ import {
+   resolveChatRunExpiresAtMs,
+ } from "../chat-abort.js";
+ import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
++import {
++  applyChatHistoryWindow,
++  compactTranscriptForPreflight,
++  persistChatSummary,
++  resolveEffectiveHistoryMode,
++} from "../chat-context.js";
+ import { stripEnvelopeFromMessages } from "../chat-sanitize.js";
+ import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
+ import {
+@@ -49,6 +63,113 @@ type TranscriptAppendResult = {
+ 
+ type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
+ 
++type PreflightCompactGuard = {
++  attempted: boolean;
++  compacted: boolean;
++};
++
++type PreservedUserInput = {
++  inboundMessage: string;
++  parsedMessage: string;
++  parsedImages: ChatImageContent[];
++  normalizedAttachments: Array<{
++    type?: string;
++    mimeType?: string;
++    fileName?: string;
++    content?: string;
++  }>;
++};
++
++const HARD_LIMIT_PREFLIGHTS = new Map<string, Promise<boolean>>();
++
++function createPreflightCompactGuard(): PreflightCompactGuard {
++  return { attempted: false, compacted: false };
++}
++
++export async function performHardLimitPreflightCompact(params: {
++  sessionKey: string;
++  agentId: string;
++  storePath?: string;
++  entry?: {
++    sessionId?: string;
++    sessionFile?: string;
++    totalTokens?: number;
++    totalTokensFresh?: boolean;
++    contextTokens?: number;
++    historyLoadMode?: "summary" | "full";
++    archivedAt?: number;
++    summaryUpdatedAt?: number;
++    lastCompactedAt?: number;
++    updatedAt?: number;
++  };
++  guard: PreflightCompactGuard;
++}): Promise<boolean> {
++  if (params.guard.attempted) {
++    return params.guard.compacted;
++  }
++  params.guard.attempted = true;
++  const shouldCompact = shouldRunHardLimitPreflightCompact({
++    totalTokens: resolveFreshSessionTotalTokens(params.entry),
++    contextWindow: params.entry?.contextTokens,
++  });
++  if (!shouldCompact || !params.entry?.sessionId || !params.storePath) {
++    return false;
++  }
++  const existing = HARD_LIMIT_PREFLIGHTS.get(params.sessionKey);
++  if (existing) {
++    params.guard.compacted = await existing;
++    return params.guard.compacted;
++  }
++  const run = (async () => {
++    const { entry: latestEntry, storePath } = loadSessionEntry(params.sessionKey);
++    const stillNeedsCompact = shouldRunHardLimitPreflightCompact({
++      totalTokens: resolveFreshSessionTotalTokens(latestEntry),
++      contextWindow: latestEntry?.contextTokens,
++    });
++    if (!stillNeedsCompact || !latestEntry?.sessionId || !storePath) {
++      return false;
++    }
++    const transcriptPath = resolveTranscriptPath({
++      sessionId: latestEntry.sessionId,
++      storePath,
++      sessionFile: latestEntry.sessionFile,
++      agentId: params.agentId,
++    });
++    if (!transcriptPath || !fs.existsSync(transcriptPath)) {
++      return false;
++    }
++    const messages = readSessionMessages(latestEntry.sessionId, storePath, latestEntry.sessionFile);
++    const result = compactTranscriptForPreflight({
++      agentId: params.agentId,
++      sessionKey: params.sessionKey,
++      sessionId: latestEntry.sessionId,
++      entry: latestEntry,
++      transcriptPath,
++      messages,
++    });
++    if (!result.compacted) {
++      return false;
++    }
++    await updateSessionStore(storePath, (store) => {
++      const entryToUpdate = store[params.sessionKey];
++      if (!entryToUpdate) {
++        return;
++      }
++      entryToUpdate.historyLoadMode = "summary";
++      entryToUpdate.summaryUpdatedAt = result.summary?.updatedAt ?? Date.now();
++      entryToUpdate.lastCompactedAt = Date.now();
++      entryToUpdate.totalTokensFresh = false;
++      entryToUpdate.updatedAt = Date.now();
++    });
++    return true;
++  })().finally(() => {
++    HARD_LIMIT_PREFLIGHTS.delete(params.sessionKey);
++  });
++  HARD_LIMIT_PREFLIGHTS.set(params.sessionKey, run);
++  params.guard.compacted = await run;
++  return params.guard.compacted;
++}
++
+ function stripDisallowedChatControlChars(message: string): string {
+   let output = "";
+   for (const char of message) {
+@@ -188,6 +309,10 @@ function appendAssistantTranscriptMessage(params: {
+   }
+ }
+ 
++function isArchivedSessionEntry(entry: { archivedAt?: number } | undefined): boolean {
++  return typeof entry?.archivedAt === "number" && entry.archivedAt > 0;
++}
++
+ function nextChatSeq(context: { agentRunSeq: Map<string, number> }, runId: string) {
+   const next = (context.agentRunSeq.get(runId) ?? 0) + 1;
+   context.agentRunSeq.set(runId, next);
+@@ -245,12 +370,15 @@ export const chatHandlers: GatewayRequestHandlers = {
+       );
+       return;
+     }
+-    const { sessionKey, limit } = params as {
++    const { sessionKey, limit, historyMode, tailCount } = params as {
+       sessionKey: string;
+       limit?: number;
++      historyMode?: "summary" | "full";
++      tailCount?: number;
+     };
+     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
+     const sessionId = entry?.sessionId;
++    const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
+     const rawMessages =
+       sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
+     const hardMax = 1000;
+@@ -259,14 +387,24 @@ export const chatHandlers: GatewayRequestHandlers = {
+     const max = Math.min(hardMax, requested);
+     const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
+     const sanitized = stripEnvelopeFromMessages(sliced);
+-    const capped = capArrayByJsonBytes(sanitized, getMaxChatHistoryMessagesBytes()).items;
++    const historyWindow = applyChatHistoryWindow({
++      agentId: sessionAgentId,
++      sessionKey,
++      messages: sanitized,
++      entry,
++      historyMode,
++      tailCount,
++    });
++    const capped = capArrayByJsonBytes(
++      historyWindow.messages,
++      getMaxChatHistoryMessagesBytes(),
++    ).items;
+     let thinkingLevel = entry?.thinkingLevel;
+     if (!thinkingLevel) {
+       const configured = cfg.agents?.defaults?.thinkingDefault;
+       if (configured) {
+         thinkingLevel = configured;
+       } else {
+-        const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
+         const { provider, model } = resolveSessionModelRef(cfg, entry, sessionAgentId);
+         const catalog = await context.loadGatewayModelCatalog();
+         thinkingLevel = resolveThinkingDefault({
+@@ -282,6 +420,13 @@ export const chatHandlers: GatewayRequestHandlers = {
+       sessionKey,
+       sessionId,
+       messages: capped,
++      historyMode: historyWindow.historyMode,
++      tailCount: historyWindow.tailCount,
++      summary: historyWindow.summary,
++      context: buildContextUsageSnapshot({
++        totalTokens: resolveFreshSessionTotalTokens(entry),
++        contextWindow: entry?.contextTokens,
++      }),
+       thinkingLevel,
+       verboseLevel,
+     });
+@@ -372,6 +517,7 @@ export const chatHandlers: GatewayRequestHandlers = {
+         content?: unknown;
+       }>;
+       timeoutMs?: number;
++      historyMode?: "summary" | "full";
+       idempotencyKey: string;
+     };
+     const sanitizedMessageResult = sanitizeChatSendMessageInput(p.message);
+@@ -427,14 +573,36 @@ export const chatHandlers: GatewayRequestHandlers = {
+         return;
+       }
+     }
++    const preservedUserInput: PreservedUserInput = {
++      inboundMessage,
++      parsedMessage,
++      parsedImages,
++      normalizedAttachments,
++    };
+     const rawSessionKey = p.sessionKey;
+     const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
++    const agentId = resolveSessionAgentId({
++      sessionKey,
++      config: cfg,
++    });
++    const effectiveHistoryMode = resolveEffectiveHistoryMode(p.historyMode, entry);
++    if (entry && effectiveHistoryMode !== entry.historyLoadMode) {
++      const { storePath } = loadSessionEntry(rawSessionKey);
++      await updateSessionStore(storePath, (store) => {
++        const current = store[sessionKey];
++        if (!current) {
++          return;
++        }
++        current.historyLoadMode = effectiveHistoryMode;
++      });
++    }
+     const timeoutMs = resolveAgentTimeoutMs({
+       cfg,
+       overrideMs: p.timeoutMs,
+     });
+     const now = Date.now();
+     const clientRunId = p.idempotencyKey;
++    const preflightGuard = createPreflightCompactGuard();
+ 
+     const sendPolicy = resolveSendPolicy({
+       cfg,
+@@ -488,6 +656,13 @@ export const chatHandlers: GatewayRequestHandlers = {
+     }
+ 
+     try {
++      await performHardLimitPreflightCompact({
++        sessionKey,
++        agentId,
++        storePath: loadSessionEntry(rawSessionKey).storePath,
++        entry,
++        guard: preflightGuard,
++      });
+       const abortController = new AbortController();
+       context.chatAbortControllers.set(clientRunId, {
+         controller: abortController,
+@@ -502,22 +677,27 @@ export const chatHandlers: GatewayRequestHandlers = {
+       };
+       respond(true, ackPayload, undefined, { runId: clientRunId });
+ 
+-      const trimmedMessage = parsedMessage.trim();
++      const trimmedMessage = preservedUserInput.parsedMessage.trim();
+       const injectThinking = Boolean(
+         p.thinking && trimmedMessage && !trimmedMessage.startsWith("/"),
+       );
+-      const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
++      const commandBody = injectThinking
++        ? `/think ${p.thinking} ${preservedUserInput.parsedMessage}`
++        : preservedUserInput.parsedMessage;
+       const clientInfo = client?.connect?.client;
+       // Inject timestamp so agents know the current date/time.
+       // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
+       // See: https://github.com/moltbot/moltbot/issues/3658
+-      const stampedMessage = injectTimestamp(parsedMessage, timestampOptsFromConfig(cfg));
++      const stampedMessage = injectTimestamp(
++        preservedUserInput.parsedMessage,
++        timestampOptsFromConfig(cfg),
++      );
+ 
+       const ctx: MsgContext = {
+-        Body: parsedMessage,
++        Body: preservedUserInput.parsedMessage,
+         BodyForAgent: stampedMessage,
+         BodyForCommands: commandBody,
+-        RawBody: parsedMessage,
++        RawBody: preservedUserInput.inboundMessage,
+         CommandBody: commandBody,
+         SessionKey: sessionKey,
+         Provider: INTERNAL_MESSAGE_CHANNEL,
+@@ -532,10 +712,6 @@ export const chatHandlers: GatewayRequestHandlers = {
+         GatewayClientScopes: client?.connect?.scopes,
+       };
+ 
+-      const agentId = resolveSessionAgentId({
+-        sessionKey,
+-        config: cfg,
+-      });
+       const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+         cfg,
+         agentId,
+@@ -567,7 +743,10 @@ export const chatHandlers: GatewayRequestHandlers = {
+         replyOptions: {
+           runId: clientRunId,
+           abortSignal: abortController.signal,
+-          images: parsedImages.length > 0 ? parsedImages : undefined,
++          images:
++            preservedUserInput.parsedImages.length > 0
++              ? preservedUserInput.parsedImages
++              : undefined,
+           disableBlockStreaming: true,
+           onAgentRunStart: (runId) => {
+             agentRunStarted = true;
+@@ -603,30 +782,54 @@ export const chatHandlers: GatewayRequestHandlers = {
+               const { storePath: latestStorePath, entry: latestEntry } =
+                 loadSessionEntry(sessionKey);
+               const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
+-              const appended = appendAssistantTranscriptMessage({
+-                message: combinedReply,
+-                sessionId,
+-                storePath: latestStorePath,
+-                sessionFile: latestEntry?.sessionFile,
+-                agentId,
+-                createIfMissing: true,
+-              });
+-              if (appended.ok) {
+-                message = appended.message;
++              if (!isArchivedSessionEntry(latestEntry)) {
++                const appended = appendAssistantTranscriptMessage({
++                  message: combinedReply,
++                  sessionId,
++                  storePath: latestStorePath,
++                  sessionFile: latestEntry?.sessionFile,
++                  agentId,
++                  createIfMissing: true,
++                });
++                if (appended.ok) {
++                  message = appended.message;
++                } else {
++                  context.logGateway.warn(
++                    `webchat transcript append failed: ${appended.error ?? "unknown error"}`,
++                  );
++                  const now = Date.now();
++                  message = {
++                    role: "assistant",
++                    content: [{ type: "text", text: combinedReply }],
++                    timestamp: now,
++                    // Keep this compatible with Pi stopReason enums even though this message isn't
++                    // persisted to the transcript due to the append failure.
++                    stopReason: "stop",
++                    usage: { input: 0, output: 0, totalTokens: 0 },
++                  };
++                }
+               } else {
+                 context.logGateway.warn(
+-                  `webchat transcript append failed: ${appended.error ?? "unknown error"}`,
++                  `skip assistant transcript append for archived session "${sessionKey}"`,
+                 );
+-                const now = Date.now();
+-                message = {
+-                  role: "assistant",
+-                  content: [{ type: "text", text: combinedReply }],
+-                  timestamp: now,
+-                  // Keep this compatible with Pi stopReason enums even though this message isn't
+-                  // persisted to the transcript due to the append failure.
+-                  stopReason: "stop",
+-                  usage: { input: 0, output: 0, totalTokens: 0 },
+-                };
++              }
++              if (!isArchivedSessionEntry(latestEntry)) {
++                try {
++                  const latestMessages = readSessionMessages(
++                    sessionId,
++                    latestStorePath,
++                    latestEntry?.sessionFile,
++                  );
++                  persistChatSummary({
++                    agentId,
++                    sessionKey,
++                    sessionId,
++                    entry: latestEntry,
++                    messages: latestMessages,
++                  });
++                } catch (err) {
++                  context.logGateway.warn(`webchat summary update failed: ${formatForLog(err)}`);
++                }
+               }
+             }
+             broadcastChatFinal({
+diff --git a/src/gateway/server-methods/sessions.ts b/src/gateway/server-methods/sessions.ts
+index c10f825d4..675a24af1 100644
+--- a/src/gateway/server-methods/sessions.ts
++++ b/src/gateway/server-methods/sessions.ts
+@@ -1,7 +1,12 @@
+ import { randomUUID } from "node:crypto";
+ import fs from "node:fs";
+-import type { GatewayRequestHandlers } from "./types.js";
++import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
++import { archiveChatIndexEntry, upsertChatIndex } from "../../agents/chat-context-store.js";
++import {
++  DEFAULT_SUMMARY_HISTORY_TAIL,
++  buildContextUsageSnapshot,
++} from "../../agents/context-policy.js";
+ import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../../agents/pi-embedded.js";
+ import { stopSubagentsForRequester } from "../../auto-reply/reply/abort.js";
+ import { clearSessionQueues } from "../../auto-reply/reply/queue.js";
+@@ -15,10 +20,17 @@ import {
+ } from "../../config/sessions.js";
+ import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+ import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
++import { abortChatRunsForSessionKey } from "../chat-abort.js";
++import {
++  applyChatHistoryWindow,
++  persistChatSummary,
++  rewriteTranscriptWithSummary,
++} from "../chat-context.js";
+ import {
+   ErrorCodes,
+   errorShape,
+   formatValidationErrors,
++  validateSessionsArchiveParams,
+   validateSessionsCompactParams,
+   validateSessionsDeleteParams,
+   validateSessionsListParams,
+@@ -34,6 +46,7 @@ import {
+   loadCombinedSessionStoreForGateway,
+   loadSessionEntry,
+   pruneLegacyStoreKeys,
++  readSessionMessages,
+   readSessionPreviewItemsFromTranscript,
+   resolveGatewaySessionStoreTarget,
+   resolveSessionModelRef,
+@@ -94,6 +107,17 @@ async function ensureSessionRuntimeCleanup(params: {
+   key: string;
+   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
+   sessionId?: string;
++  context?: Pick<
++    GatewayRequestContext,
++    | "chatAbortControllers"
++    | "chatRunBuffers"
++    | "chatDeltaSentAt"
++    | "chatAbortedRuns"
++    | "removeChatRun"
++    | "agentRunSeq"
++    | "broadcast"
++    | "nodeSendToSession"
++  >;
+ }) {
+   const queueKeys = new Set<string>(params.target.storeKeys);
+   queueKeys.add(params.target.canonicalKey);
+@@ -102,6 +126,21 @@ async function ensureSessionRuntimeCleanup(params: {
+   }
+   clearSessionQueues([...queueKeys]);
+   stopSubagentsForRequester({ cfg: params.cfg, requesterSessionKey: params.target.canonicalKey });
++  if (params.context) {
++    abortChatRunsForSessionKey(
++      {
++        chatAbortControllers: params.context.chatAbortControllers,
++        chatRunBuffers: params.context.chatRunBuffers,
++        chatDeltaSentAt: params.context.chatDeltaSentAt,
++        chatAbortedRuns: params.context.chatAbortedRuns,
++        removeChatRun: params.context.removeChatRun,
++        agentRunSeq: params.context.agentRunSeq,
++        broadcast: params.context.broadcast,
++        nodeSendToSession: params.context.nodeSendToSession,
++      },
++      { sessionKey: params.target.canonicalKey, stopReason: "session_cleanup" },
++    );
++  }
+   if (!params.sessionId) {
+     return undefined;
+   }
+@@ -285,7 +324,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
+     };
+     respond(true, result, undefined);
+   },
+-  "sessions.reset": async ({ params, respond }) => {
++  "sessions.reset": async ({ params, respond, context }) => {
+     if (!validateSessionsResetParams(params)) {
+       respond(
+         false,
+@@ -321,7 +360,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
+     );
+     await triggerInternalHook(hookEvent);
+     const sessionId = entry?.sessionId;
+-    const cleanupError = await ensureSessionRuntimeCleanup({ cfg, key, target, sessionId });
++    const cleanupError = await ensureSessionRuntimeCleanup({
++      cfg,
++      key,
++      target,
++      sessionId,
++      context,
++    });
+     if (cleanupError) {
+       respond(false, undefined, cleanupError);
+       return;
+@@ -371,7 +416,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
+     });
+     respond(true, { ok: true, key: target.canonicalKey, entry: next }, undefined);
+   },
+-  "sessions.delete": async ({ params, respond }) => {
++  "sessions.delete": async ({ params, respond, context }) => {
+     if (!validateSessionsDeleteParams(params)) {
+       respond(
+         false,
+@@ -408,7 +453,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
+     const { entry } = loadSessionEntry(key);
+     const sessionId = entry?.sessionId;
+     const existed = Boolean(entry);
+-    const cleanupError = await ensureSessionRuntimeCleanup({ cfg, key, target, sessionId });
++    const cleanupError = await ensureSessionRuntimeCleanup({
++      cfg,
++      key,
++      target,
++      sessionId,
++      context,
++    });
+     if (cleanupError) {
+       respond(false, undefined, cleanupError);
+       return;
+@@ -432,6 +483,55 @@ export const sessionsHandlers: GatewayRequestHandlers = {
+ 
+     respond(true, { ok: true, key: target.canonicalKey, deleted: existed, archived }, undefined);
+   },
++  "sessions.archive": async ({ params, respond, context }) => {
++    if (!validateSessionsArchiveParams(params)) {
++      respond(
++        false,
++        undefined,
++        errorShape(
++          ErrorCodes.INVALID_REQUEST,
++          `invalid sessions.archive params: ${formatValidationErrors(validateSessionsArchiveParams.errors)}`,
++        ),
++      );
++      return;
++    }
++    const key = String((params as { key?: string }).key ?? "").trim();
++    if (!key) {
++      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key required"));
++      return;
++    }
++    const cfg = loadConfig();
++    const target = resolveGatewaySessionStoreTarget({ cfg, key });
++    const { entry } = loadSessionEntry(key);
++    const sessionId = entry?.sessionId;
++    const cleanupError = await ensureSessionRuntimeCleanup({
++      cfg,
++      key,
++      target,
++      sessionId,
++      context,
++    });
++    if (cleanupError) {
++      respond(false, undefined, cleanupError);
++      return;
++    }
++    const archivedAt = Date.now();
++    const result = await updateSessionStore(target.storePath, (store) => {
++      const { primaryKey, entry } = migrateAndPruneSessionStoreKey({ cfg, key, store });
++      if (!entry) {
++        return undefined;
++      }
++      entry.archivedAt = archivedAt;
++      entry.updatedAt = archivedAt;
++      return { key: primaryKey, entry };
++    });
++    if (result === undefined) {
++      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "session not found"));
++      return;
++    }
++    archiveChatIndexEntry(target.agentId, target.canonicalKey, archivedAt);
++    respond(true, { ok: true, key: target.canonicalKey, archivedAt }, undefined);
++  },
+   "sessions.compact": async ({ params, respond }) => {
+     if (!validateSessionsCompactParams(params)) {
+       respond(
+@@ -451,11 +551,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
+       return;
+     }
+ 
+-    const maxLines =
+-      typeof p.maxLines === "number" && Number.isFinite(p.maxLines)
+-        ? Math.max(1, Math.floor(p.maxLines))
+-        : 400;
+-
+     const cfg = loadConfig();
+     const target = resolveGatewaySessionStoreTarget({ cfg, key });
+     const storePath = target.storePath;
+@@ -500,25 +595,51 @@ export const sessionsHandlers: GatewayRequestHandlers = {
+       return;
+     }
+ 
+-    const raw = fs.readFileSync(filePath, "utf-8");
+-    const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+-    if (lines.length <= maxLines) {
++    const allMessages = readSessionPreviewItemsFromTranscript(
++      sessionId,
++      target.storePath,
++      entry?.sessionFile,
++      target.agentId,
++      10,
++      280,
++    );
++    const fullMessages = readSessionMessages(sessionId, target.storePath, entry?.sessionFile);
++    if (fullMessages.length === 0) {
+       respond(
+         true,
+         {
+           ok: true,
+           key: target.canonicalKey,
+           compacted: false,
+-          kept: lines.length,
++          reason: "empty transcript",
+         },
+         undefined,
+       );
+       return;
+     }
+ 
++    const summary = persistChatSummary({
++      agentId: target.agentId,
++      sessionKey: target.canonicalKey,
++      sessionId,
++      entry,
++      messages: fullMessages,
++    });
++    const reduced = applyChatHistoryWindow({
++      agentId: target.agentId,
++      sessionKey: target.canonicalKey,
++      messages: fullMessages,
++      entry: { ...entry, historyLoadMode: "summary" },
++      historyMode: "summary",
++      tailCount: DEFAULT_SUMMARY_HISTORY_TAIL,
++    });
++
+     const archived = archiveFileOnDisk(filePath, "bak");
+-    const keptLines = lines.slice(-maxLines);
+-    fs.writeFileSync(filePath, `${keptLines.join("\n")}\n`, "utf-8");
++    rewriteTranscriptWithSummary({
++      transcriptPath: filePath,
++      summaryText: reduced.summary ?? "[Context summary]",
++      keepMessages: reduced.messages.slice(1),
++    });
+ 
+     await updateSessionStore(storePath, (store) => {
+       const entryKey = compactTarget.primaryKey;
+@@ -526,12 +647,19 @@ export const sessionsHandlers: GatewayRequestHandlers = {
+       if (!entryToUpdate) {
+         return;
+       }
+-      delete entryToUpdate.inputTokens;
+-      delete entryToUpdate.outputTokens;
+-      delete entryToUpdate.totalTokens;
+-      delete entryToUpdate.totalTokensFresh;
++      entryToUpdate.historyLoadMode = "summary";
++      entryToUpdate.summaryUpdatedAt = summary.updatedAt;
++      entryToUpdate.lastCompactedAt = Date.now();
+       entryToUpdate.updatedAt = Date.now();
+     });
++    upsertChatIndex({
++      agentId: target.agentId,
++      sessionKey: target.canonicalKey,
++      sessionId,
++      historyMode: "summary",
++      summaryUpdatedAt: summary.updatedAt,
++      archivedAt: entry?.archivedAt,
++    });
+ 
+     respond(
+       true,
+@@ -540,7 +668,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
+         key: target.canonicalKey,
+         compacted: true,
+         archived,
+-        kept: keptLines.length,
++        kept: reduced.messages.length,
++        summary,
++        context: buildContextUsageSnapshot({
++          totalTokens: entry?.totalTokens,
++          contextWindow: entry?.contextTokens,
++        }),
++        preview: allMessages,
+       },
+       undefined,
+     );
+diff --git a/src/gateway/server-startup-agent-context.test.ts b/src/gateway/server-startup-agent-context.test.ts
+new file mode 100644
+index 000000000..5f40f6114
+--- /dev/null
++++ b/src/gateway/server-startup-agent-context.test.ts
+@@ -0,0 +1,87 @@
++import fs from "node:fs/promises";
++import os from "node:os";
++import path from "node:path";
++import { afterEach, describe, expect, it } from "vitest";
++import type { OpenClawConfig } from "../config/config.js";
++import { loadSessionStore, saveSessionStore } from "../config/sessions.js";
++import { runAgentContextMigrationWithBarrier } from "./server-startup-agent-context.js";
++
++describe("runAgentContextMigrationWithBarrier", () => {
++  const cleanupDirs: string[] = [];
++
++  afterEach(async () => {
++    delete process.env.OPENCLAW_STATE_DIR;
++    await Promise.all(
++      cleanupDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
++    );
++  });
++
++  it("is idempotent across concurrent and repeated startup runs", async () => {
++    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-migration-"));
++    cleanupDirs.push(root);
++    process.env.OPENCLAW_STATE_DIR = path.join(root, "state");
++    const storePath = path.join(root, "sessions.json");
++    const cfg = {
++      session: { store: storePath, mainKey: "main" },
++      agents: { list: [{ id: "main" }] },
++    } as OpenClawConfig;
++    await saveSessionStore(storePath, {
++      "agent:main:main": {
++        sessionId: "sess-main",
++        updatedAt: Date.now(),
++        totalTokens: 150_000,
++      },
++    });
++    await fs.writeFile(
++      path.join(root, "sess-main.jsonl"),
++      [
++        JSON.stringify({
++          type: "session",
++          version: 1,
++          id: "sess-main",
++          timestamp: new Date().toISOString(),
++        }),
++        JSON.stringify({
++          message: {
++            role: "user",
++            content: [
++              {
++                type: "text",
++                text: "Investigate OPENAI_API_KEY in src/app.ts and commit deadbeef",
++              },
++            ],
++            timestamp: Date.now(),
++          },
++        }),
++      ].join("\n") + "\n",
++      "utf-8",
++    );
++
++    await Promise.all([
++      runAgentContextMigrationWithBarrier({ cfg, log: { warn: () => undefined } }),
++      runAgentContextMigrationWithBarrier({ cfg, log: { warn: () => undefined } }),
++    ]);
++    await runAgentContextMigrationWithBarrier({ cfg, log: { warn: () => undefined } });
++
++    const store = loadSessionStore(storePath) as Record<
++      string,
++      { sessionId: string; archivedAt?: number }
++    >;
++    const archivedKeys = Object.keys(store).filter((key) =>
++      key.startsWith("agent:main:main:archived:"),
++    );
++    expect(archivedKeys).toHaveLength(1);
++    expect(store["agent:main:main"]).toBeTruthy();
++    expect(store[archivedKeys[0]]?.archivedAt).toBeTypeOf("number");
++
++    const summaryDir = path.join(
++      process.env.OPENCLAW_STATE_DIR,
++      "agents",
++      "main",
++      "memory",
++      "mid_term_summaries",
++    );
++    const files = await fs.readdir(summaryDir);
++    expect(files.length).toBeGreaterThanOrEqual(1);
++  });
++});
+diff --git a/src/gateway/server-startup-agent-context.ts b/src/gateway/server-startup-agent-context.ts
+new file mode 100644
+index 000000000..0f8ba5e24
+--- /dev/null
++++ b/src/gateway/server-startup-agent-context.ts
+@@ -0,0 +1,183 @@
++import crypto from "node:crypto";
++import fs from "node:fs";
++import type { OpenClawConfig } from "../config/config.js";
++import { listAgentIds } from "../agents/agent-scope.js";
++import {
++  ensureConfiguredAgentContextLayouts,
++  syncSessionEntryContextMetadata,
++  upsertChatIndex,
++} from "../agents/chat-context-store.js";
++import { CONTEXT_COMPACT_THRESHOLD } from "../agents/context-policy.js";
++import {
++  resolveAgentMainSessionKey,
++  resolveStorePath,
++  type SessionEntry,
++  updateSessionStore,
++} from "../config/sessions.js";
++import { persistChatSummary } from "./chat-context.js";
++import { readSessionMessages, resolveSessionTranscriptCandidates } from "./session-utils.js";
++
++const CONTEXT_MIGRATION_VERSION = 1;
++let migrationInFlight: Promise<void> | null = null;
++
++type SessionMigrationEntry = SessionEntry & {
++  contextMigrationVersion?: number;
++  archivedFromSessionKey?: string;
++};
++
++function shouldArchiveForMigration(entry: SessionEntry, messages: unknown[]): boolean {
++  if (entry.archivedAt) {
++    return false;
++  }
++  if (typeof entry.totalTokens === "number" && entry.totalTokens >= CONTEXT_COMPACT_THRESHOLD) {
++    return true;
++  }
++  return messages.length > 80;
++}
++
++function createFreshMainSession(entry?: SessionEntry): SessionEntry {
++  const now = Date.now();
++  return {
++    sessionId: crypto.randomUUID(),
++    updatedAt: now,
++    systemSent: false,
++    abortedLastRun: false,
++    historyLoadMode: "summary",
++    thinkingLevel: entry?.thinkingLevel,
++    verboseLevel: entry?.verboseLevel,
++    reasoningLevel: entry?.reasoningLevel,
++    responseUsage: entry?.responseUsage,
++    model: entry?.model,
++    modelOverride: entry?.modelOverride,
++    providerOverride: entry?.providerOverride,
++    label: entry?.label,
++    displayName: entry?.displayName,
++    sendPolicy: entry?.sendPolicy,
++  };
++}
++
++function asMigrationEntry(entry: SessionEntry): SessionMigrationEntry {
++  return entry as SessionMigrationEntry;
++}
++
++function buildArchivedMainSessionKey(mainSessionKey: string, entry: SessionEntry): string {
++  return `${mainSessionKey}:archived:${entry.sessionId ?? "legacy"}`;
++}
++
++async function migrateAgentContextStore(params: {
++  cfg: OpenClawConfig;
++  agentId: string;
++  log: { info?: (msg: string) => void; warn: (msg: string) => void };
++}) {
++  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
++  const mainSessionKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
++  await updateSessionStore(storePath, (mutable) => {
++    const store = mutable as Record<string, SessionMigrationEntry>;
++    for (const [key, entry] of Object.entries(store)) {
++      syncSessionEntryContextMetadata({ entry, agentId: params.agentId, sessionKey: key });
++      upsertChatIndex({
++        agentId: params.agentId,
++        sessionKey: key,
++        sessionId: entry.sessionId,
++        historyMode: entry.historyLoadMode,
++        archivedAt: entry.archivedAt,
++        summaryUpdatedAt: entry.summaryUpdatedAt,
++      });
++      if (entry.contextMigrationVersion === CONTEXT_MIGRATION_VERSION) {
++        continue;
++      }
++      const transcriptPath = resolveSessionTranscriptCandidates(
++        entry.sessionId,
++        storePath,
++        entry.sessionFile,
++        params.agentId,
++      ).find((candidate: string) => fs.existsSync(candidate));
++      if (transcriptPath) {
++        const messages = readSessionMessages(entry.sessionId, storePath, entry.sessionFile);
++        if (messages.length > 0 && !entry.summaryUpdatedAt) {
++          const summary = persistChatSummary({
++            agentId: params.agentId,
++            sessionKey: key,
++            sessionId: entry.sessionId,
++            entry,
++            messages,
++          });
++          entry.summaryUpdatedAt = summary.updatedAt;
++        }
++        entry.historyLoadMode = entry.historyLoadMode === "full" ? "full" : "summary";
++        if (
++          key === mainSessionKey &&
++          shouldArchiveForMigration(entry, messages) &&
++          !entry.archivedAt
++        ) {
++          const archivedKey = buildArchivedMainSessionKey(mainSessionKey, entry);
++          if (!store[archivedKey]) {
++            const archivedEntry: SessionMigrationEntry = {
++              ...entry,
++              archivedAt: Date.now(),
++              updatedAt: Date.now(),
++              archivedFromSessionKey: mainSessionKey,
++              contextMigrationVersion: CONTEXT_MIGRATION_VERSION,
++            };
++            syncSessionEntryContextMetadata({
++              entry: archivedEntry,
++              agentId: params.agentId,
++              sessionKey: archivedKey,
++            });
++            store[archivedKey] = archivedEntry;
++            upsertChatIndex({
++              agentId: params.agentId,
++              sessionKey: archivedKey,
++              sessionId: archivedEntry.sessionId,
++              historyMode: archivedEntry.historyLoadMode,
++              archivedAt: archivedEntry.archivedAt,
++              summaryUpdatedAt: archivedEntry.summaryUpdatedAt,
++            });
++          }
++          const freshMainEntry = asMigrationEntry(createFreshMainSession(entry));
++          syncSessionEntryContextMetadata({
++            entry: freshMainEntry,
++            agentId: params.agentId,
++            sessionKey: mainSessionKey,
++          });
++          freshMainEntry.contextMigrationVersion = CONTEXT_MIGRATION_VERSION;
++          store[mainSessionKey] = freshMainEntry;
++          upsertChatIndex({
++            agentId: params.agentId,
++            sessionKey: mainSessionKey,
++            sessionId: freshMainEntry.sessionId,
++            historyMode: freshMainEntry.historyLoadMode,
++            archivedAt: freshMainEntry.archivedAt,
++            summaryUpdatedAt: freshMainEntry.summaryUpdatedAt,
++          });
++          continue;
++        }
++      }
++      entry.contextMigrationVersion = CONTEXT_MIGRATION_VERSION;
++    }
++  });
++  params.log.info?.(`agent context migration complete for "${params.agentId}"`);
++}
++
++export async function runAgentContextMigration(params: {
++  cfg: OpenClawConfig;
++  log: { info?: (msg: string) => void; warn: (msg: string) => void };
++}): Promise<void> {
++  ensureConfiguredAgentContextLayouts(params.cfg);
++  for (const agentId of listAgentIds(params.cfg)) {
++    await migrateAgentContextStore({ cfg: params.cfg, agentId, log: params.log });
++  }
++}
++
++export function runAgentContextMigrationWithBarrier(params: {
++  cfg: OpenClawConfig;
++  log: { info?: (msg: string) => void; warn: (msg: string) => void };
++}): Promise<void> {
++  if (migrationInFlight) {
++    return migrationInFlight;
++  }
++  migrationInFlight = runAgentContextMigration(params).finally(() => {
++    migrationInFlight = null;
++  });
++  return migrationInFlight;
++}
+diff --git a/src/gateway/server-startup-memory.ts b/src/gateway/server-startup-memory.ts
+index 11360e601..8ca10d5cc 100644
+--- a/src/gateway/server-startup-memory.ts
++++ b/src/gateway/server-startup-memory.ts
+@@ -1,5 +1,6 @@
+ import type { OpenClawConfig } from "../config/config.js";
+-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
++import { listAgentIds } from "../agents/agent-scope.js";
++import { ensureConfiguredAgentContextLayouts } from "../agents/chat-context-store.js";
+ import { resolveMemoryBackendConfig } from "../memory/backend-config.js";
+ import { getMemorySearchManager } from "../memory/index.js";
+ 
+@@ -7,18 +8,20 @@ export async function startGatewayMemoryBackend(params: {
+   cfg: OpenClawConfig;
+   log: { info?: (msg: string) => void; warn: (msg: string) => void };
+ }): Promise<void> {
+-  const agentId = resolveDefaultAgentId(params.cfg);
+-  const resolved = resolveMemoryBackendConfig({ cfg: params.cfg, agentId });
+-  if (resolved.backend !== "qmd" || !resolved.qmd) {
+-    return;
+-  }
++  ensureConfiguredAgentContextLayouts(params.cfg);
++  for (const agentId of listAgentIds(params.cfg)) {
++    const resolved = resolveMemoryBackendConfig({ cfg: params.cfg, agentId });
++    if (resolved.backend !== "qmd" || !resolved.qmd) {
++      continue;
++    }
+ 
+-  const { manager, error } = await getMemorySearchManager({ cfg: params.cfg, agentId });
+-  if (!manager) {
+-    params.log.warn(
+-      `qmd memory startup initialization failed for agent "${agentId}": ${error ?? "unknown error"}`,
+-    );
+-    return;
++    const { manager, error } = await getMemorySearchManager({ cfg: params.cfg, agentId });
++    if (!manager) {
++      params.log.warn(
++        `qmd memory startup initialization failed for agent "${agentId}": ${error ?? "unknown error"}`,
++      );
++      continue;
++    }
++    params.log.info?.(`qmd memory startup initialization armed for agent "${agentId}"`);
+   }
+-  params.log.info?.(`qmd memory startup initialization armed for agent "${agentId}"`);
+ }
+diff --git a/src/gateway/server-startup.ts b/src/gateway/server-startup.ts
+index e9267d855..de7dc09a8 100644
+--- a/src/gateway/server-startup.ts
++++ b/src/gateway/server-startup.ts
+@@ -22,6 +22,7 @@ import {
+   scheduleRestartSentinelWake,
+   shouldWakeFromRestartSentinel,
+ } from "./server-restart-sentinel.js";
++import { runAgentContextMigrationWithBarrier } from "./server-startup-agent-context.js";
+ import { startGatewayMemoryBackend } from "./server-startup-memory.js";
+ 
+ export async function startGatewaySidecars(params: {
+@@ -151,6 +152,9 @@ export async function startGatewaySidecars(params: {
+     params.log.warn(`plugin services failed to start: ${String(err)}`);
+   }
+ 
++  await runAgentContextMigrationWithBarrier({ cfg: params.cfg, log: params.log }).catch((err) => {
++    params.log.warn(`agent context migration failed: ${String(err)}`);
++  });
+   void startGatewayMemoryBackend({ cfg: params.cfg, log: params.log }).catch((err) => {
+     params.log.warn(`qmd memory startup initialization failed: ${String(err)}`);
+   });
+diff --git a/src/gateway/server.chat.gateway-server-chat-b.e2e.test.ts b/src/gateway/server.chat.gateway-server-chat-b.e2e.test.ts
+index a18843780..4bb2373a6 100644
+--- a/src/gateway/server.chat.gateway-server-chat-b.e2e.test.ts
++++ b/src/gateway/server.chat.gateway-server-chat-b.e2e.test.ts
+@@ -224,4 +224,160 @@ describe("gateway server chat", () => {
+       await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+     }
+   });
++
++  test("hard-limit preflight compacts once and preserves last user input", async () => {
++    const tempDirs: string[] = [];
++    const { server, ws } = await startServerWithClient();
++    const spy = vi.mocked(getReplyFromConfig);
++
++    try {
++      await connectOk(ws);
++
++      const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
++      tempDirs.push(sessionDir);
++      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
++
++      await writeSessionStore({
++        entries: {
++          main: {
++            sessionId: "sess-preflight",
++            updatedAt: Date.now(),
++            totalTokens: 180_000,
++            totalTokensFresh: true,
++            contextTokens: 200_000,
++          },
++        },
++      });
++
++      const transcriptPath = path.join(sessionDir, "sess-preflight.jsonl");
++      await fs.writeFile(
++        transcriptPath,
++        [
++          JSON.stringify({
++            type: "session",
++            version: 1,
++            id: "sess-preflight",
++            timestamp: new Date().toISOString(),
++            cwd: process.cwd(),
++          }),
++          JSON.stringify({
++            message: {
++              role: "user",
++              content: [{ type: "text", text: "old request" }],
++              timestamp: Date.now() - 2000,
++            },
++          }),
++          JSON.stringify({
++            message: {
++              role: "assistant",
++              content: [{ type: "text", text: "old reply" }],
++              timestamp: Date.now() - 1000,
++            },
++          }),
++        ].join("\n") + "\n",
++        "utf-8",
++      );
++
++      spy.mockClear();
++      const sendRes = await rpcReq(ws, "chat.send", {
++        sessionKey: "main",
++        message: "latest hard limit input",
++        idempotencyKey: "idem-hard-limit-preflight",
++      });
++      expect(sendRes.ok).toBe(true);
++
++      await waitFor(() => spy.mock.calls.length > 0, 2_000);
++      const ctx = spy.mock.calls.at(-1)?.[0] as
++        | { Body?: string; RawBody?: string; BodyForCommands?: string }
++        | undefined;
++      expect(ctx?.Body).toBe("latest hard limit input");
++      expect(ctx?.RawBody).toBe("latest hard limit input");
++      expect(ctx?.BodyForCommands).toBe("latest hard limit input");
++
++      const transcript = await fs.readFile(transcriptPath, "utf-8");
++      const summaryCount = transcript
++        .split(/\r?\n/)
++        .filter(Boolean)
++        .map((line) => {
++          try {
++            return JSON.parse(line) as { synthetic?: boolean; summary?: boolean };
++          } catch {
++            return null;
++          }
++        })
++        .filter((line) => line?.synthetic === true && line?.summary === true).length;
++      expect(summaryCount).toBe(1);
++    } finally {
++      testState.sessionStorePath = undefined;
++      ws.close();
++      await server.close();
++      await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
++    }
++  });
++
++  test("archive active chat mid-run does not write a late assistant message into archived transcript", async () => {
++    const tempDirs: string[] = [];
++    const { server, ws } = await startServerWithClient();
++    const spy = vi.mocked(getReplyFromConfig);
++
++    try {
++      await connectOk(ws);
++
++      const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
++      tempDirs.push(sessionDir);
++      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
++
++      await writeSessionStore({
++        entries: {
++          main: { sessionId: "sess-archive-mid-run", updatedAt: Date.now() },
++        },
++      });
++
++      const transcriptPath = path.join(sessionDir, "sess-archive-mid-run.jsonl");
++      await fs.writeFile(
++        transcriptPath,
++        `${JSON.stringify({ type: "session", version: 1, id: "sess-archive-mid-run", timestamp: new Date().toISOString(), cwd: process.cwd() })}\n`,
++        "utf-8",
++      );
++
++      let released = false;
++      spy.mockReset();
++      spy.mockImplementationOnce(async (_ctx, opts) => {
++        opts?.onAgentRunStart?.(opts.runId ?? "idem-archive-mid-run");
++        await new Promise<void>((resolve) => setTimeout(resolve, 50));
++        released = true;
++      });
++
++      const sendResP = onceMessage(
++        ws,
++        (o) => o.type === "res" && o.id === "send-archive-mid-run",
++        8_000,
++      );
++      sendReq(ws, "send-archive-mid-run", "chat.send", {
++        sessionKey: "main",
++        message: "hello archive",
++        idempotencyKey: "idem-archive-mid-run",
++        timeoutMs: 30_000,
++      });
++      const sendRes = await sendResP;
++      expect(sendRes.ok).toBe(true);
++      await waitFor(() => spy.mock.calls.length > 0, 2_000);
++
++      const archiveRes = await rpcReq<{ ok?: boolean }>(ws, "sessions.archive", {
++        key: "main",
++      });
++      expect(archiveRes.ok).toBe(true);
++      await waitFor(() => released, 2_000);
++      await new Promise((resolve) => setTimeout(resolve, 100));
++
++      const transcript = await fs.readFile(transcriptPath, "utf-8");
++      expect(transcript).not.toContain("hello archive");
++      expect(transcript).not.toContain("gateway-injected");
++    } finally {
++      testState.sessionStorePath = undefined;
++      ws.close();
++      await server.close();
++      await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
++    }
++  });
+ });
+diff --git a/src/gateway/session-utils.ts b/src/gateway/session-utils.ts
+index 29279feb6..ebff8cc27 100644
+--- a/src/gateway/session-utils.ts
++++ b/src/gateway/session-utils.ts
+@@ -674,6 +674,7 @@ export function listSessionsFromStore(params: {
+ 
+   const includeGlobal = opts.includeGlobal === true;
+   const includeUnknown = opts.includeUnknown === true;
++  const includeArchived = opts.includeArchived === true;
+   const includeDerivedTitles = opts.includeDerivedTitles === true;
+   const includeLastMessage = opts.includeLastMessage === true;
+   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
+@@ -686,7 +687,7 @@ export function listSessionsFromStore(params: {
+       : undefined;
+ 
+   let sessions = Object.entries(store)
+-    .filter(([key]) => {
++    .filter(([key, entry]) => {
+       if (isCronRunSessionKey(key)) {
+         return false;
+       }
+@@ -706,6 +707,9 @@ export function listSessionsFromStore(params: {
+         }
+         return normalizeAgentId(parsed.agentId) === agentId;
+       }
++      if (!includeArchived && typeof entry?.archivedAt === "number" && entry.archivedAt > 0) {
++        return false;
++      }
+       return true;
+     })
+     .filter(([key, entry]) => {
+@@ -758,6 +762,8 @@ export function listSessionsFromStore(params: {
+       const model = resolvedModel.model ?? DEFAULT_MODEL;
+       return {
+         key,
++        agentId: sessionAgentId,
++        chatId: entry?.chatId,
+         entry,
+         kind: classifySessionKey(key, entry),
+         label: entry?.label,
+@@ -769,6 +775,7 @@ export function listSessionsFromStore(params: {
+         chatType: entry?.chatType,
+         origin,
+         updatedAt,
++        archivedAt: entry?.archivedAt,
+         sessionId: entry?.sessionId,
+         systemSent: entry?.systemSent,
+         abortedLastRun: entry?.abortedLastRun,
+diff --git a/src/gateway/session-utils.types.ts b/src/gateway/session-utils.types.ts
+index 233a3d7c7..c0d4f1cc2 100644
+--- a/src/gateway/session-utils.types.ts
++++ b/src/gateway/session-utils.types.ts
+@@ -10,6 +10,8 @@ export type GatewaySessionsDefaults = {
+ 
+ export type GatewaySessionRow = {
+   key: string;
++  agentId?: string;
++  chatId?: string;
+   kind: "direct" | "group" | "global" | "unknown";
+   label?: string;
+   displayName?: string;
+@@ -22,6 +24,7 @@ export type GatewaySessionRow = {
+   chatType?: ChatType;
+   origin?: SessionEntry["origin"];
+   updatedAt: number | null;
++  archivedAt?: number;
+   sessionId?: string;
+   systemSent?: boolean;
+   abortedLastRun?: boolean;
+diff --git a/src/infra/outbound/message-action-params.ts b/src/infra/outbound/message-action-params.ts
+index a0c2c8350..cd4bf36af 100644
+--- a/src/infra/outbound/message-action-params.ts
++++ b/src/infra/outbound/message-action-params.ts
+@@ -85,6 +85,10 @@ export function resolveTelegramAutoThreadId(params: {
+   if (parsedTo.chatId.toLowerCase() !== parsedChannel.chatId.toLowerCase()) {
+     return undefined;
+   }
++  const directChatIdPattern = /^\d+$/;
++  if (directChatIdPattern.test(parsedTo.chatId) && directChatIdPattern.test(parsedChannel.chatId)) {
++    return undefined;
++  }
+   return context.currentThreadTs;
+ }
+ 
+diff --git a/src/infra/outbound/message-action-runner.threading.test.ts b/src/infra/outbound/message-action-runner.threading.test.ts
+index c1b0122ec..8a7a27eab 100644
+--- a/src/infra/outbound/message-action-runner.threading.test.ts
++++ b/src/infra/outbound/message-action-runner.threading.test.ts
+@@ -142,11 +142,11 @@ describe("runMessageAction threading auto-injection", () => {
+       action: "send",
+       params: {
+         channel: "telegram",
+-        target: "telegram:123",
++        target: "telegram:-100123",
+         message: "hi",
+       },
+       toolContext: {
+-        currentChannelId: "telegram:123",
++        currentChannelId: "telegram:-100123",
+         currentThreadTs: "42",
+       },
+       agentId: "main",
+@@ -160,6 +160,35 @@ describe("runMessageAction threading auto-injection", () => {
+     expect(call?.ctx?.params?.threadId).toBe("42");
+   });
+ 
++  it("does not auto-inject telegram threadId in direct messages", async () => {
++    mocks.executeSendAction.mockResolvedValue({
++      handledBy: "plugin",
++      payload: {},
++    });
++
++    await runMessageAction({
++      cfg: telegramConfig,
++      action: "send",
++      params: {
++        channel: "telegram",
++        target: "telegram:156931940",
++        message: "hi",
++      },
++      toolContext: {
++        currentChannelId: "telegram:156931940",
++        currentThreadTs: "3764",
++      },
++      agentId: "main",
++    });
++
++    const call = mocks.executeSendAction.mock.calls.at(-1)?.[0] as {
++      threadId?: string;
++      ctx?: { params?: Record<string, unknown> };
++    };
++    expect(call?.threadId).toBeUndefined();
++    expect(call?.ctx?.params?.threadId).toBeUndefined();
++  });
++
+   it("skips telegram auto-threading when target chat differs", async () => {
+     mocks.executeSendAction.mockResolvedValue({
+       handledBy: "plugin",
+@@ -198,11 +227,11 @@ describe("runMessageAction threading auto-injection", () => {
+       action: "send",
+       params: {
+         channel: "telegram",
+-        target: "telegram:group:123",
++        target: "telegram:group:-100123",
+         message: "hi",
+       },
+       toolContext: {
+-        currentChannelId: "telegram:123",
++        currentChannelId: "telegram:-100123",
+         currentThreadTs: "42",
+       },
+       agentId: "main",
+diff --git a/src/telegram/bot-message-context.ts b/src/telegram/bot-message-context.ts
+index 9cd8f9110..179ecbe96 100644
+--- a/src/telegram/bot-message-context.ts
++++ b/src/telegram/bot-message-context.ts
+@@ -56,6 +56,7 @@ import {
+   hasBotMention,
+   resolveTelegramThreadSpec,
+ } from "./bot/helpers.js";
++import { isRecoverableTelegramNetworkError } from "./network-errors.js";
+ 
+ export type TelegramMediaRef = {
+   path: string;
+@@ -223,6 +224,11 @@ export const buildTelegramMessageContext = async ({
+     await withTelegramApiErrorLogging({
+       operation: "sendChatAction",
+       fn: () => bot.api.sendChatAction(chatId, "typing", buildTypingThreadParams(replyThreadId)),
++      shouldLog: (err) =>
++        !isRecoverableTelegramNetworkError(err, {
++          context: "send",
++          allowMessageMatch: true,
++        }),
+     });
+   };
+ 
+@@ -232,6 +238,11 @@ export const buildTelegramMessageContext = async ({
+         operation: "sendChatAction",
+         fn: () =>
+           bot.api.sendChatAction(chatId, "record_voice", buildTypingThreadParams(replyThreadId)),
++        shouldLog: (err) =>
++          !isRecoverableTelegramNetworkError(err, {
++            context: "send",
++            allowMessageMatch: true,
++          }),
+       });
+     } catch (err) {
+       logVerbose(`telegram record_voice cue failed for chat ${chatId}: ${String(err)}`);
+diff --git a/ui/src/ui/app-chat.test.ts b/ui/src/ui/app-chat.test.ts
+new file mode 100644
+index 000000000..280bb14c9
+--- /dev/null
++++ b/ui/src/ui/app-chat.test.ts
+@@ -0,0 +1,123 @@
++import { beforeEach, describe, expect, it, vi } from "vitest";
++
++const abortChatRunMock = vi.fn(async () => true);
++const loadChatHistoryMock = vi.fn(async () => undefined);
++const sendChatMessageMock = vi.fn(async () => "run-1");
++const loadSessionsMock = vi.fn(async () => undefined);
++const resetToolStreamMock = vi.fn();
++
++vi.mock("./controllers/chat.ts", () => ({
++  abortChatRun: abortChatRunMock,
++  loadChatHistory: loadChatHistoryMock,
++  sendChatMessage: sendChatMessageMock,
++}));
++
++vi.mock("./controllers/sessions.ts", () => ({
++  loadSessions: loadSessionsMock,
++}));
++
++vi.mock("./app-tool-stream.ts", () => ({
++  resetToolStream: resetToolStreamMock,
++}));
++
++function createHost() {
++  const requests: Array<{ method: string; params: unknown }> = [];
++  return {
++    client: {
++      request: vi.fn(async (method: string, params: unknown) => {
++        requests.push({ method, params });
++        return { ok: true };
++      }),
++    },
++    connected: true,
++    chatMessage: "draft",
++    chatAttachments: [
++      { id: "att-1", dataUrl: "data:image/png;base64,AA==", mimeType: "image/png" },
++    ],
++    chatQueue: [{ id: "q-1", text: "queued", createdAt: Date.now() }],
++    chatRunId: "run-active",
++    chatSending: true,
++    chatMessages: [{ role: "assistant", content: [{ type: "text", text: "stale" }] }],
++    chatSummary: "summary",
++    chatContextInfo: { shouldWarn: true },
++    chatToolMessages: [{ id: "tool-1" }],
++    chatStream: "streaming",
++    chatStreamStartedAt: Date.now(),
++    compactionStatus: { active: true },
++    sessionKey: "agent:main:main",
++    basePath: "",
++    hello: { snapshot: { sessionDefaults: { mainKey: "main", defaultAgentId: "main" } } },
++    settings: {
++      gatewayUrl: "ws://127.0.0.1:18789",
++      token: "",
++      sessionKey: "agent:main:main",
++      lastActiveSessionKey: "agent:main:main",
++      theme: "system",
++      chatFocusMode: false,
++      chatShowThinking: true,
++      chatHistoryMode: "summary",
++      splitRatio: 0.6,
++      navCollapsed: false,
++      navGroupsCollapsed: {},
++    },
++    applySettings: vi.fn(),
++    chatAvatarUrl: "avatar.png",
++    chatHistoryMode: "summary",
++    refreshSessionsAfterChat: new Set(["run-active"]),
++    requests,
++  };
++}
++
++describe("app chat runtime reset", () => {
++  beforeEach(() => {
++    vi.clearAllMocks();
++  });
++
++  it("agent switch clears runtime state and busy state", async () => {
++    const { handleSelectChatAgent, isChatBusy } = await import("./app-chat.ts");
++    const host = createHost();
++
++    await handleSelectChatAgent(host as never, "legal");
++
++    expect(abortChatRunMock).toHaveBeenCalledTimes(1);
++    expect(host.chatRunId).toBeNull();
++    expect(host.chatSending).toBe(false);
++    expect(host.chatQueue).toEqual([]);
++    expect(host.chatStream).toBeNull();
++    expect(host.chatMessages).toEqual([]);
++    expect(isChatBusy(host as never)).toBe(false);
++    expect(host.sessionKey).toBe("agent:legal:main");
++  });
++
++  it("archive clears runId queue and stream before switching", async () => {
++    const { archiveActiveChat } = await import("./app-chat.ts");
++    const host = createHost();
++
++    await archiveActiveChat(host as never);
++
++    expect(abortChatRunMock).toHaveBeenCalledTimes(1);
++    expect(host.requests[0]).toEqual({
++      method: "sessions.archive",
++      params: { key: "agent:main:main" },
++    });
++    expect(host.chatRunId).toBeNull();
++    expect(host.chatQueue).toEqual([]);
++    expect(host.chatStream).toBeNull();
++    expect(host.chatSending).toBe(false);
++    expect(host.sessionKey).toMatch(/^agent:main:chat:/);
++  });
++
++  it("new chat clears runId queue and stream", async () => {
++    const { startNewChat } = await import("./app-chat.ts");
++    const host = createHost();
++
++    await startNewChat(host as never);
++
++    expect(abortChatRunMock).toHaveBeenCalledTimes(1);
++    expect(host.chatRunId).toBeNull();
++    expect(host.chatQueue).toEqual([]);
++    expect(host.chatStream).toBeNull();
++    expect(host.chatSending).toBe(false);
++    expect(host.sessionKey).toMatch(/^agent:main:chat:/);
++  });
++});
+diff --git a/ui/src/ui/app-chat.ts b/ui/src/ui/app-chat.ts
+index c648a89d1..7f025f959 100644
+--- a/ui/src/ui/app-chat.ts
++++ b/ui/src/ui/app-chat.ts
+@@ -1,5 +1,6 @@
+ import type { OpenClawApp } from "./app.ts";
+ import type { GatewayHelloOk } from "./gateway.ts";
++import type { UiSettings } from "./storage.ts";
+ import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
+ import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
+ import { scheduleChatScroll } from "./app-scroll.ts";
+@@ -11,16 +12,27 @@ import { normalizeBasePath } from "./navigation.ts";
+ import { generateUUID } from "./uuid.ts";
+ 
+ export type ChatHost = {
++  client: OpenClawApp["client"];
+   connected: boolean;
+   chatMessage: string;
+   chatAttachments: ChatAttachment[];
+   chatQueue: ChatQueueItem[];
+   chatRunId: string | null;
+   chatSending: boolean;
++  chatMessages?: unknown[];
++  chatSummary?: string | null;
++  chatContextInfo?: Record<string, unknown> | null;
++  chatToolMessages?: unknown[];
++  chatStream?: string | null;
++  chatStreamStartedAt?: number | null;
++  compactionStatus?: unknown;
+   sessionKey: string;
+   basePath: string;
+   hello: GatewayHelloOk | null;
++  settings: UiSettings;
++  applySettings: (next: UiSettings) => void;
+   chatAvatarUrl: string | null;
++  chatHistoryMode: "summary" | "full";
+   refreshSessionsAfterChat: Set<string>;
+ };
+ 
+@@ -68,6 +80,62 @@ export async function handleAbortChat(host: ChatHost) {
+   await abortChatRun(host as unknown as OpenClawApp);
+ }
+ 
++export function resetActiveChatRuntimeState(host: ChatHost) {
++  host.chatRunId = null;
++  host.chatSending = false;
++  host.chatQueue = [];
++  host.chatMessage = "";
++  host.chatAttachments = [];
++  host.chatAvatarUrl = null;
++  host.refreshSessionsAfterChat.clear();
++  if ("chatMessages" in host) {
++    host.chatMessages = [];
++  }
++  if ("chatSummary" in host) {
++    host.chatSummary = null;
++  }
++  if ("chatContextInfo" in host) {
++    host.chatContextInfo = null;
++  }
++  if ("chatToolMessages" in host) {
++    host.chatToolMessages = [];
++  }
++  if ("chatStream" in host) {
++    host.chatStream = null;
++  }
++  if ("chatStreamStartedAt" in host) {
++    host.chatStreamStartedAt = null;
++  }
++  if ("compactionStatus" in host) {
++    host.compactionStatus = null;
++  }
++  resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
++}
++
++async function resetActiveChatRuntime(host: ChatHost) {
++  if (host.connected && host.chatRunId) {
++    await abortChatRun(host as unknown as OpenClawApp);
++  }
++  resetActiveChatRuntimeState(host);
++}
++
++async function switchActiveChatSession(
++  host: ChatHost,
++  nextSessionKey: string,
++  opts?: { skipRuntimeReset?: boolean },
++) {
++  if (!opts?.skipRuntimeReset) {
++    await resetActiveChatRuntime(host);
++  }
++  host.sessionKey = nextSessionKey;
++  host.applySettings({
++    ...host.settings,
++    sessionKey: nextSessionKey,
++    lastActiveSessionKey: nextSessionKey,
++  });
++  await refreshChat(host, { scheduleScroll: false });
++}
++
+ function enqueueChatMessage(
+   host: ChatHost,
+   text: string,
+@@ -215,12 +283,66 @@ export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: bool
+   }
+ }
+ 
++export async function compactActiveChat(host: ChatHost) {
++  if (!host.client || !host.connected) {
++    return;
++  }
++  await host.client.request("sessions.compact", { key: host.sessionKey });
++  await refreshChat(host, { scheduleScroll: false });
++}
++
++export async function clearActiveChat(host: ChatHost) {
++  if (!host.client || !host.connected) {
++    return;
++  }
++  await resetActiveChatRuntime(host);
++  await host.client.request("sessions.reset", { key: host.sessionKey, reason: "reset" });
++  await refreshChat(host, { scheduleScroll: false });
++}
++
++export async function archiveActiveChat(host: ChatHost) {
++  if (!host.client || !host.connected) {
++    return;
++  }
++  const currentSessionKey = host.sessionKey;
++  await resetActiveChatRuntime(host);
++  await host.client.request("sessions.archive", { key: currentSessionKey });
++  const nextSessionKey = buildNewChatSessionKey(host);
++  await switchActiveChatSession(host, nextSessionKey, { skipRuntimeReset: true });
++}
++
++export async function handleSelectChatAgent(host: ChatHost, agentId: string) {
++  const nextSessionKey = buildAgentSessionKey(host, agentId);
++  await switchActiveChatSession(host, nextSessionKey);
++}
++
++export async function startNewChat(host: ChatHost) {
++  await switchActiveChatSession(host, buildNewChatSessionKey(host));
++}
++
+ export const flushChatQueueForEvent = flushChatQueue;
+ 
+ type SessionDefaultsSnapshot = {
+   defaultAgentId?: string;
++  mainKey?: string;
+ };
+ 
++function resolveMainKey(host: ChatHost): string {
++  const snapshot = host.hello?.snapshot as
++    | { sessionDefaults?: SessionDefaultsSnapshot }
++    | undefined;
++  return snapshot?.sessionDefaults?.mainKey?.trim() || "main";
++}
++
++function buildAgentSessionKey(host: ChatHost, agentId: string): string {
++  return `agent:${agentId}:${resolveMainKey(host)}`;
++}
++
++function buildNewChatSessionKey(host: ChatHost): string {
++  const agentId = resolveAgentIdForSession(host) ?? "main";
++  return `agent:${agentId}:chat:${Date.now().toString(36)}`;
++}
++
+ function resolveAgentIdForSession(host: ChatHost): string | null {
+   const parsed = parseAgentSessionKey(host.sessionKey);
+   if (parsed?.agentId) {
+diff --git a/ui/src/ui/app-gateway.node.test.ts b/ui/src/ui/app-gateway.node.test.ts
+index ee52c423d..c4679c9e4 100644
+--- a/ui/src/ui/app-gateway.node.test.ts
++++ b/ui/src/ui/app-gateway.node.test.ts
+@@ -52,6 +52,7 @@ function createHost() {
+       theme: "system",
+       chatFocusMode: false,
+       chatShowThinking: true,
++      chatHistoryMode: "summary",
+       splitRatio: 0.6,
+       navCollapsed: false,
+       navGroupsCollapsed: {},
+diff --git a/ui/src/ui/app-render.ts b/ui/src/ui/app-render.ts
+index 3e9662b62..0f672be01 100644
+--- a/ui/src/ui/app-render.ts
++++ b/ui/src/ui/app-render.ts
+@@ -1,7 +1,7 @@
+ import { html, nothing } from "lit";
+ import type { AppViewState } from "./app-view-state.ts";
+ import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
+-import { refreshChatAvatar } from "./app-chat.ts";
++import { refreshChatAvatar, resetActiveChatRuntimeState } from "./app-chat.ts";
+ import { renderUsageTab } from "./app-render-usage-tab.ts";
+ import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers.ts";
+ import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
+@@ -96,6 +96,8 @@ export function renderApp(state: AppViewState) {
+   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
+   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
+   const chatAvatarUrl = state.chatAvatarUrl ?? assistantAvatarUrl ?? null;
++  const chatAgentId =
++    parseAgentSessionKey(state.sessionKey)?.agentId ?? state.agentsList?.defaultId ?? "main";
+   const configValue =
+     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
+   const basePath = normalizeBasePath(state.basePath ?? "");
+@@ -784,15 +786,14 @@ export function renderApp(state: AppViewState) {
+           state.tab === "chat"
+             ? renderChat({
+                 sessionKey: state.sessionKey,
++                activeAgentId: chatAgentId,
++                agents: (state.agentsList?.agents ?? []).map((agent) => ({
++                  id: agent.id,
++                  name: agent.name ?? agent.identity?.name,
++                })),
+                 onSessionKeyChange: (next) => {
++                  resetActiveChatRuntimeState(state);
+                   state.sessionKey = next;
+-                  state.chatMessage = "";
+-                  state.chatAttachments = [];
+-                  state.chatStream = null;
+-                  state.chatStreamStartedAt = null;
+-                  state.chatRunId = null;
+-                  state.chatQueue = [];
+-                  state.resetToolStream();
+                   state.resetChatScroll();
+                   state.applySettings({
+                     ...state.settings,
+@@ -809,6 +810,9 @@ export function renderApp(state: AppViewState) {
+                 sending: state.chatSending,
+                 compactionStatus: state.compactionStatus,
+                 assistantAvatarUrl: chatAvatarUrl,
++                historyMode: state.chatHistoryMode,
++                summary: state.chatSummary,
++                contextInfo: state.chatContextInfo,
+                 messages: state.chatMessages,
+                 toolMessages: state.chatToolMessages,
+                 stream: state.chatStream,
+@@ -841,8 +845,19 @@ export function renderApp(state: AppViewState) {
+                 onSend: () => state.handleSendChat(),
+                 canAbort: Boolean(state.chatRunId),
+                 onAbort: () => void state.handleAbortChat(),
++                onAgentChange: (agentId) => void state.handleSelectChatAgent(agentId),
++                onHistoryModeChange: (mode) => {
++                  state.chatHistoryMode = mode;
++                  state.applySettings({ ...state.settings, chatHistoryMode: mode });
++                  void loadChatHistory(state);
++                },
++                onCompactChat: () => void state.handleCompactChat(),
++                onArchiveChat: () => void state.handleArchiveChat(),
++                onClearActiveChat: () => void state.handleClearActiveChat(),
+                 onQueueRemove: (id) => state.removeQueuedMessage(id),
+-                onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
++                onNewSession: () => {
++                  void state.handleStartNewChat();
++                },
+                 showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
+                 onScrollToBottom: () => state.scrollToBottom(),
+                 // Sidebar props for tool output viewing
+diff --git a/ui/src/ui/app-settings.test.ts b/ui/src/ui/app-settings.test.ts
+index 6978ca6cc..ce7f79ea5 100644
+--- a/ui/src/ui/app-settings.test.ts
++++ b/ui/src/ui/app-settings.test.ts
+@@ -16,6 +16,7 @@ const createHost = (tab: Tab): SettingsHost => ({
+     theme: "system",
+     chatFocusMode: false,
+     chatShowThinking: true,
++    chatHistoryMode: "summary",
+     splitRatio: 0.6,
+     navCollapsed: false,
+     navGroupsCollapsed: {},
+diff --git a/ui/src/ui/app-view-state.ts b/ui/src/ui/app-view-state.ts
+index f01b4f915..a586e2221 100644
+--- a/ui/src/ui/app-view-state.ts
++++ b/ui/src/ui/app-view-state.ts
+@@ -63,6 +63,20 @@ export type AppViewState = {
+   compactionStatus: CompactionStatus | null;
+   chatAvatarUrl: string | null;
+   chatThinkingLevel: string | null;
++  chatHistoryMode: "summary" | "full";
++  chatSummary: string | null;
++  chatContextInfo: {
++    totalTokens: number | null;
++    contextWindow: number | null;
++    utilization: number | null;
++    state: string;
++    shouldWarn: boolean;
++    shouldSuggestCompact: boolean;
++    shouldAutoCompact: boolean;
++    warningThreshold: number;
++    compactThreshold: number;
++    hardLimit: number;
++  } | null;
+   chatQueue: ChatQueueItem[];
+   chatManualRefreshInFlight: boolean;
+   nodesLoading: boolean;
+@@ -273,6 +287,11 @@ export type AppViewState = {
+   setChatMessage: (next: string) => void;
+   handleSendChat: (messageOverride?: string, opts?: { restoreDraft?: boolean }) => Promise<void>;
+   handleAbortChat: () => Promise<void>;
++  handleCompactChat: () => Promise<void>;
++  handleArchiveChat: () => Promise<void>;
++  handleClearActiveChat: () => Promise<void>;
++  handleSelectChatAgent: (agentId: string) => Promise<void>;
++  handleStartNewChat: () => Promise<void>;
+   removeQueuedMessage: (id: string) => void;
+   handleChatScroll: (event: Event) => void;
+   resetToolStream: () => void;
+diff --git a/ui/src/ui/app.ts b/ui/src/ui/app.ts
+index bb2c9f154..c87f84ab4 100644
+--- a/ui/src/ui/app.ts
++++ b/ui/src/ui/app.ts
+@@ -43,9 +43,14 @@ import {
+   handleWhatsAppWait as handleWhatsAppWaitInternal,
+ } from "./app-channels.ts";
+ import {
++  archiveActiveChat as archiveActiveChatInternal,
++  clearActiveChat as clearActiveChatInternal,
++  compactActiveChat as compactActiveChatInternal,
+   handleAbortChat as handleAbortChatInternal,
++  handleSelectChatAgent as handleSelectChatAgentInternal,
+   handleSendChat as handleSendChatInternal,
+   removeQueuedMessage as removeQueuedMessageInternal,
++  startNewChat as startNewChatInternal,
+ } from "./app-chat.ts";
+ import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
+ import { connectGateway as connectGatewayInternal } from "./app-gateway.ts";
+@@ -134,6 +139,9 @@ export class OpenClawApp extends LitElement {
+   @state() compactionStatus: CompactionStatus | null = null;
+   @state() chatAvatarUrl: string | null = null;
+   @state() chatThinkingLevel: string | null = null;
++  @state() chatHistoryMode = this.settings.chatHistoryMode ?? "summary";
++  @state() chatSummary: string | null = null;
++  @state() chatContextInfo: AppViewState["chatContextInfo"] = null;
+   @state() chatQueue: ChatQueueItem[] = [];
+   @state() chatAttachments: ChatAttachment[] = [];
+   @state() chatManualRefreshInFlight = false;
+@@ -433,6 +441,33 @@ export class OpenClawApp extends LitElement {
+     await handleAbortChatInternal(this as unknown as Parameters<typeof handleAbortChatInternal>[0]);
+   }
+ 
++  async handleCompactChat() {
++    await compactActiveChatInternal(
++      this as unknown as Parameters<typeof compactActiveChatInternal>[0],
++    );
++  }
++
++  async handleArchiveChat() {
++    await archiveActiveChatInternal(
++      this as unknown as Parameters<typeof archiveActiveChatInternal>[0],
++    );
++  }
++
++  async handleClearActiveChat() {
++    await clearActiveChatInternal(this as unknown as Parameters<typeof clearActiveChatInternal>[0]);
++  }
++
++  async handleSelectChatAgent(agentId: string) {
++    await handleSelectChatAgentInternal(
++      this as unknown as Parameters<typeof handleSelectChatAgentInternal>[0],
++      agentId,
++    );
++  }
++
++  async handleStartNewChat() {
++    await startNewChatInternal(this as unknown as Parameters<typeof startNewChatInternal>[0]);
++  }
++
+   removeQueuedMessage(id: string) {
+     removeQueuedMessageInternal(
+       this as unknown as Parameters<typeof removeQueuedMessageInternal>[0],
+diff --git a/ui/src/ui/controllers/chat.ts b/ui/src/ui/controllers/chat.ts
+index 127e03dd4..9e087bc36 100644
+--- a/ui/src/ui/controllers/chat.ts
++++ b/ui/src/ui/controllers/chat.ts
+@@ -10,6 +10,9 @@ export type ChatState = {
+   chatLoading: boolean;
+   chatMessages: unknown[];
+   chatThinkingLevel: string | null;
++  chatHistoryMode?: "summary" | "full";
++  chatSummary?: string | null;
++  chatContextInfo?: Record<string, unknown> | null;
+   chatSending: boolean;
+   chatMessage: string;
+   chatAttachments: ChatAttachment[];
+@@ -34,15 +37,23 @@ export async function loadChatHistory(state: ChatState) {
+   state.chatLoading = true;
+   state.lastError = null;
+   try {
+-    const res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
+-      "chat.history",
+-      {
+-        sessionKey: state.sessionKey,
+-        limit: 200,
+-      },
+-    );
++    const res = await state.client.request<{
++      messages?: Array<unknown>;
++      thinkingLevel?: string;
++      historyMode?: "summary" | "full";
++      summary?: string;
++      context?: Record<string, unknown>;
++    }>("chat.history", {
++      sessionKey: state.sessionKey,
++      limit: 200,
++      historyMode: state.chatHistoryMode ?? "summary",
++    });
+     state.chatMessages = Array.isArray(res.messages) ? res.messages : [];
+     state.chatThinkingLevel = res.thinkingLevel ?? null;
++    state.chatHistoryMode =
++      res.historyMode === "full" ? "full" : (state.chatHistoryMode ?? "summary");
++    state.chatSummary = typeof res.summary === "string" ? res.summary : null;
++    state.chatContextInfo = res.context && typeof res.context === "object" ? res.context : null;
+   } catch (err) {
+     state.lastError = String(err);
+   } finally {
+@@ -123,12 +134,18 @@ export async function sendChatMessage(
+     : undefined;
+ 
+   try {
++    const shouldAutoCompact = state.chatContextInfo?.shouldAutoCompact === true;
++    if (shouldAutoCompact) {
++      await state.client.request("sessions.compact", { key: state.sessionKey });
++      await loadChatHistory(state);
++    }
+     await state.client.request("chat.send", {
+       sessionKey: state.sessionKey,
+       message: msg,
+       deliver: false,
+       idempotencyKey: runId,
+       attachments: apiAttachments,
++      historyMode: state.chatHistoryMode ?? "summary",
+     });
+     return runId;
+   } catch (err) {
+diff --git a/ui/src/ui/storage.ts b/ui/src/ui/storage.ts
+index d7d9e4dc7..35a67649a 100644
+--- a/ui/src/ui/storage.ts
++++ b/ui/src/ui/storage.ts
+@@ -10,6 +10,7 @@ export type UiSettings = {
+   theme: ThemeMode;
+   chatFocusMode: boolean;
+   chatShowThinking: boolean;
++  chatHistoryMode: "summary" | "full";
+   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
+   navCollapsed: boolean; // Collapsible sidebar state
+   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
+@@ -29,6 +30,7 @@ export function loadSettings(): UiSettings {
+     theme: "system",
+     chatFocusMode: false,
+     chatShowThinking: true,
++    chatHistoryMode: "summary",
+     splitRatio: 0.6,
+     navCollapsed: false,
+     navGroupsCollapsed: {},
+@@ -65,6 +67,7 @@ export function loadSettings(): UiSettings {
+         typeof parsed.chatShowThinking === "boolean"
+           ? parsed.chatShowThinking
+           : defaults.chatShowThinking,
++      chatHistoryMode: parsed.chatHistoryMode === "full" ? "full" : defaults.chatHistoryMode,
+       splitRatio:
+         typeof parsed.splitRatio === "number" &&
+         parsed.splitRatio >= 0.4 &&
+diff --git a/ui/src/ui/views/chat.ts b/ui/src/ui/views/chat.ts
+index a74b6cf16..0c2189bb5 100644
+--- a/ui/src/ui/views/chat.ts
++++ b/ui/src/ui/views/chat.ts
+@@ -23,6 +23,8 @@ export type CompactionIndicatorStatus = {
+ 
+ export type ChatProps = {
+   sessionKey: string;
++  activeAgentId?: string;
++  agents?: Array<{ id: string; name?: string }>;
+   onSessionKeyChange: (next: string) => void;
+   thinkingLevel: string | null;
+   showThinking: boolean;
+@@ -35,6 +37,17 @@ export type ChatProps = {
+   stream: string | null;
+   streamStartedAt: number | null;
+   assistantAvatarUrl?: string | null;
++  historyMode?: "summary" | "full";
++  summary?: string | null;
++  contextInfo?: {
++    totalTokens?: number | null;
++    contextWindow?: number | null;
++    utilization?: number | null;
++    state?: string;
++    shouldWarn?: boolean;
++    shouldSuggestCompact?: boolean;
++    shouldAutoCompact?: boolean;
++  } | null;
+   draft: string;
+   queue: ChatQueueItem[];
+   connected: boolean;
+@@ -63,6 +76,11 @@ export type ChatProps = {
+   onDraftChange: (next: string) => void;
+   onSend: () => void;
+   onAbort?: () => void;
++  onAgentChange?: (agentId: string) => void;
++  onHistoryModeChange?: (mode: "summary" | "full") => void;
++  onCompactChat?: () => void;
++  onArchiveChat?: () => void;
++  onClearActiveChat?: () => void;
+   onQueueRemove: (id: string) => void;
+   onNewSession: () => void;
+   onOpenSidebar?: (content: string) => void;
+@@ -186,6 +204,63 @@ function renderAttachmentPreview(props: ChatProps) {
+   `;
+ }
+ 
++function renderContextMeta(props: ChatProps) {
++  const agents = props.agents ?? [];
++  const historyMode = props.historyMode ?? "summary";
++  const totalTokens = props.contextInfo?.totalTokens;
++  const contextWindow = props.contextInfo?.contextWindow;
++  const percent =
++    typeof props.contextInfo?.utilization === "number"
++      ? Math.round(props.contextInfo.utilization * 100)
++      : null;
++  const state = props.contextInfo?.state ?? "ok";
++  return html`
++    <div class="chat-toolbar">
++      <label class="field">
++        <span>Agent</span>
++        <select
++          ?disabled=${agents.length === 0 || !props.onAgentChange}
++          @change=${(e: Event) => props.onAgentChange?.((e.target as HTMLSelectElement).value)}
++        >
++          ${agents.map(
++            (agent) => html`<option value=${agent.id} ?selected=${agent.id === props.activeAgentId}>
++              ${agent.name ?? agent.id}
++            </option>`,
++          )}
++        </select>
++      </label>
++      <label class="field">
++        <span>History</span>
++        <select
++          ?disabled=${!props.onHistoryModeChange}
++          @change=${(e: Event) =>
++            props.onHistoryModeChange?.(
++              (e.target as HTMLSelectElement).value as "summary" | "full",
++            )}
++        >
++          <option value="summary" ?selected=${historyMode === "summary"}>Load summary only</option>
++          <option value="full" ?selected=${historyMode === "full"}>Load full history</option>
++        </select>
++      </label>
++      <div class="pill ${props.contextInfo?.shouldWarn ? "pill--warn" : ""}">
++        <span>Context</span>
++        <span class="mono">
++          ${typeof totalTokens === "number" ? totalTokens.toLocaleString() : "?"}
++          ${typeof contextWindow === "number" ? html` / ${contextWindow.toLocaleString()}` : nothing}
++          ${percent != null ? html` (${percent}%)` : nothing}
++        </span>
++        <span>${state}</span>
++      </div>
++      <div class="chat-toolbar__actions">
++        <button class="btn" type="button" @click=${props.onNewSession}>New chat</button>
++        <button class="btn" type="button" ?disabled=${!props.onCompactChat} @click=${props.onCompactChat}>Compact chat</button>
++        <button class="btn" type="button" ?disabled=${!props.onArchiveChat} @click=${props.onArchiveChat}>Archive chat</button>
++        <button class="btn" type="button" ?disabled=${!props.onClearActiveChat} @click=${props.onClearActiveChat}>Clear active chat</button>
++      </div>
++    </div>
++  `;
++}
++
+ export function renderChat(props: ChatProps) {
+   const canCompose = props.connected;
+   const isBusy = props.sending || props.stream !== null;
+@@ -269,6 +344,12 @@ export function renderChat(props: ChatProps) {
+ 
+       ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
+ 
++      ${
++        (props.historyMode ?? "summary") === "summary" && props.summary
++          ? html`<div class="callout"><strong>Summary loaded.</strong> ${props.summary}</div>`
++          : nothing
++      }
++
+       ${
+         props.focusMode
+           ? html`
+@@ -285,6 +366,8 @@ export function renderChat(props: ChatProps) {
+           : nothing
+       }
+ 
++      ${renderContextMeta(props)}
++
+       <div
+         class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}"
+       >
+-- 
+2.50.1 (Apple Git-155)
+
