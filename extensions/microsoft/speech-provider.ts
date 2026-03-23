@@ -5,11 +5,14 @@ import {
   TRUSTED_CLIENT_TOKEN,
   generateSecMsGecToken,
 } from "node-edge-tts/dist/drm.js";
-import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
-import { isVoiceCompatibleAudio } from "../../media/audio.js";
-import type { SpeechProviderPlugin } from "../../plugins/types.js";
-import type { SpeechVoiceOption } from "../provider-types.js";
-import { edgeTTS, inferEdgeExtension } from "../tts-core.js";
+import type { SpeechProviderPlugin } from "openclaw/plugin-sdk/core";
+import {
+  edgeTTS,
+  inferEdgeExtension,
+  isVoiceCompatibleAudio,
+  resolvePreferredOpenClawTmpDir,
+  type SpeechVoiceOption,
+} from "openclaw/plugin-sdk/speech-core";
 
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
 

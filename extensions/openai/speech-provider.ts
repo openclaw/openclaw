@@ -1,5 +1,5 @@
-import type { SpeechProviderPlugin } from "../../plugins/types.js";
-import { OPENAI_TTS_MODELS, OPENAI_TTS_VOICES, openaiTTS } from "../tts-core.js";
+import type { SpeechProviderPlugin } from "openclaw/plugin-sdk/core";
+import { OPENAI_TTS_MODELS, OPENAI_TTS_VOICES, openaiTTS } from "openclaw/plugin-sdk/speech-core";
 
 export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
   return {

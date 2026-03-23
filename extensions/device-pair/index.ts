@@ -577,6 +577,9 @@ export default definePluginEntry({
         const args = ctx.args?.trim() ?? "";
         const tokens = args.split(/\s+/).filter(Boolean);
         const action = tokens[0]?.toLowerCase() ?? "";
+        const gatewayClientScopes = Array.isArray(ctx.gatewayClientScopes)
+          ? ctx.gatewayClientScopes
+          : null;
         api.logger.info?.(
           `device-pair: /pair invoked channel=${ctx.channel} sender=${ctx.senderId ?? "unknown"} action=${
             action || "new"
@@ -598,6 +601,15 @@ export default definePluginEntry({
         }
 
         if (action === "approve") {
+          if (
+            gatewayClientScopes &&
+            !gatewayClientScopes.includes("operator.pairing") &&
+            !gatewayClientScopes.includes("operator.admin")
+          ) {
+            return {
+              text: "⚠️ This command requires operator.pairing for internal gateway callers.",
+            };
+          }
           const requested = tokens[1]?.trim();
           const list = await listDevicePairing();
           if (list.pending.length === 0) {
