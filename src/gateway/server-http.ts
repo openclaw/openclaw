@@ -8,14 +8,13 @@ import {
 import { createServer as createHttpsServer } from "node:https";
 import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
-import { handleSlackHttpRequest } from "../../extensions/slack/api.js";
 import { resolveAgentAvatar } from "../agents/identity-avatar.js";
 import { CANVAS_WS_PATH, handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
 import { loadConfig } from "../config/config.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../security/external-content.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
+import { handleSlackHttpRequest } from "../slack/http/index.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH,
   createAuthRateLimiter,
@@ -29,6 +28,7 @@ import {
   type ResolvedGatewayAuth,
 } from "./auth.js";
 import { normalizeCanvasScopedUrl } from "./canvas-capability.js";
+import { isControlUiIpAllowed } from "./control-ui-ip-filter.js";
 import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
@@ -55,7 +55,7 @@ import {
 } from "./hooks.js";
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
 import { getBearerToken } from "./http-utils.js";
-import { resolveRequestClientIp } from "./net.js";
+import { isLoopbackAddress, resolveRequestClientIp } from "./net.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
@@ -72,8 +72,6 @@ import {
 } from "./server/plugins-http.js";
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-import { handleSessionKillHttpRequest } from "./session-kill-http.js";
-import { handleSessionHistoryHttpRequest } from "./sessions-history-http.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -85,19 +83,6 @@ type HookDispatchers = {
   dispatchWakeHook: (value: { text: string; mode: "now" | "next-heartbeat" }) => void;
   dispatchAgentHook: (value: HookAgentDispatchPayload) => string;
 };
-
-function resolveMappedHookExternalContentSource(params: {
-  subPath: string;
-  payload: Record<string, unknown>;
-  sessionKey: string;
-}) {
-  const payloadSource =
-    typeof params.payload.source === "string" ? params.payload.source.trim().toLowerCase() : "";
-  if (params.subPath === "gmail" || payloadSource === "gmail") {
-    return "gmail" as const;
-  }
-  return resolveHookExternalContentSourceFromSession(params.sessionKey) ?? "webhook";
-}
 
 export type HookClientIpConfig = Readonly<{
   trustedProxies?: string[];
@@ -616,7 +601,6 @@ export function createHooksRequestHandler(
         idempotencyKey,
         sessionKey: normalizedDispatchSessionKey,
         agentId: targetAgentId,
-        externalContentSource: "webhook",
       });
       rememberHookRunId(replayKey, runId, now);
       sendJson(res, 200, { ok: true, runId });
@@ -710,11 +694,6 @@ export function createHooksRequestHandler(
             thinking: mapped.action.thinking,
             timeoutSeconds: mapped.action.timeoutSeconds,
             allowUnsafeExternalContent: mapped.action.allowUnsafeExternalContent,
-            externalContentSource: resolveMappedHookExternalContentSource({
-              subPath,
-              payload: payload as Record<string, unknown>,
-              sessionKey: sessionKey.value,
-            }),
           });
           rememberHookRunId(replayKey, runId, now);
           sendJson(res, 200, { ok: true, runId });
@@ -823,26 +802,6 @@ export function createGatewayHttpServer(opts: {
             }),
         },
         {
-          name: "sessions-kill",
-          run: () =>
-            handleSessionKillHttpRequest(req, res, {
-              auth: resolvedAuth,
-              trustedProxies,
-              allowRealIpFallback,
-              rateLimiter,
-            }),
-        },
-        {
-          name: "sessions-history",
-          run: () =>
-            handleSessionHistoryHttpRequest(req, res, {
-              auth: resolvedAuth,
-              trustedProxies,
-              allowRealIpFallback,
-              rateLimiter,
-            }),
-        },
-        {
           name: "slack",
           run: () => handleSlackHttpRequest(req, res),
         },
@@ -926,6 +885,29 @@ export function createGatewayHttpServer(opts: {
       );
 
       if (controlUiEnabled) {
+        // IP filter: loopback always allowed; lan/custom bind defaults to loopback-only
+        // unless controlUi.allowedNetworks is explicitly configured.
+        requestStages.push({
+          name: "control-ui-ip-guard",
+          run: () => {
+            // When trustedProxies includes loopback and the request is a direct local
+            // connection (no x-forwarded-for), resolveRequestClientIp returns undefined.
+            // Fall back to the raw socket address so loopback-always-allowed (Rule 1) fires.
+            const rawSocketAddr = req.socket?.remoteAddress;
+            const clientIp =
+              resolveRequestClientIp(req, trustedProxies, allowRealIpFallback) ??
+              (isLoopbackAddress(rawSocketAddr) ? rawSocketAddr : undefined);
+            const allowedNetworks = configSnapshot.gateway?.controlUi?.allowedNetworks;
+            const bindMode = configSnapshot.gateway?.bind;
+            if (!isControlUiIpAllowed(clientIp, { allowedNetworks, bindMode })) {
+              res.statusCode = 403;
+              res.setHeader("Content-Type", "text/plain; charset=utf-8");
+              res.end("Forbidden");
+              return true;
+            }
+            return false;
+          },
+        });
         requestStages.push({
           name: "control-ui-avatar",
           run: () =>
