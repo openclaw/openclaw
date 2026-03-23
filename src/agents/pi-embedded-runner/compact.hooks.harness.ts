@@ -296,6 +296,21 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveBootstrapContextForRun: vi.fn(async () => ({ contextFiles: [] })),
   }));
 
+  vi.doMock("../pi-bundle-mcp-tools.js", () => ({
+    createBundleMcpToolRuntime: vi.fn(async () => ({
+      tools: [],
+      dispose: vi.fn(async () => {}),
+    })),
+  }));
+
+  vi.doMock("../pi-bundle-lsp-runtime.js", () => ({
+    createBundleLspToolRuntime: vi.fn(async () => ({
+      tools: [],
+      sessions: [],
+      dispose: vi.fn(async () => {}),
+    })),
+  }));
+
   vi.doMock("../docs-path.js", () => ({
     resolveOpenClawDocsPath: vi.fn(async () => undefined),
   }));
@@ -317,6 +332,10 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("./tool-split.js", () => ({
     splitSdkTools: vi.fn(() => ({ builtInTools: [], customTools: [] })),
+  }));
+
+  vi.doMock("./wait-for-idle-before-flush.js", () => ({
+    flushPendingToolResultsAfterIdle: vi.fn(async () => {}),
   }));
 
   vi.doMock("../transcript-policy.js", () => ({
