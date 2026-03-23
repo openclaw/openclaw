@@ -5,7 +5,6 @@ import { fileExists } from "../infra/archive.js";
 import {
   downloadClawHubSkillArchive,
   fetchClawHubSkillDetail,
-  listClawHubSkills,
   resolveClawHubBaseUrl,
   searchClawHubSkills,
   type ClawHubSkillDetail,
@@ -165,25 +164,11 @@ export async function searchSkillsFromClawHub(params: {
   limit?: number;
   baseUrl?: string;
 }): Promise<ClawHubSkillSearchResult[]> {
-  if (params.query?.trim()) {
-    return await searchClawHubSkills({
-      query: params.query,
-      limit: params.limit,
-      baseUrl: params.baseUrl,
-    });
-  }
-  const list = await listClawHubSkills({
+  return await searchClawHubSkills({
+    query: params.query?.trim() || "*",
     limit: params.limit,
     baseUrl: params.baseUrl,
   });
-  return list.items.map((item) => ({
-    score: 0,
-    slug: item.slug,
-    displayName: item.displayName,
-    summary: item.summary,
-    version: item.latestVersion?.version,
-    updatedAt: item.updatedAt,
-  }));
 }
 
 async function resolveInstallVersion(params: {
