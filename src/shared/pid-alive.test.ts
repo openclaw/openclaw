@@ -14,13 +14,20 @@ function mockProcReads(entries: Record<string, string>) {
 }
 
 async function withLinuxProcessPlatform<T>(run: () => Promise<T>): Promise<T> {
+  return withProcessPlatform("linux", run);
+}
+
+async function withProcessPlatform<T>(
+  platform: NodeJS.Platform,
+  run: () => Promise<T>,
+): Promise<T> {
   const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
   if (!originalPlatformDescriptor) {
     throw new Error("missing process.platform descriptor");
   }
   Object.defineProperty(process, "platform", {
     ...originalPlatformDescriptor,
-    value: "linux",
+    value: platform,
   });
   try {
     vi.resetModules();
@@ -59,30 +66,53 @@ describe("isPidAlive", () => {
       expect(freshIsPidAlive(zombiePid)).toBe(false);
     });
   });
+
+  it("treats unreadable linux proc status as non-zombie when kill succeeds", async () => {
+    const readFileSyncSpy = vi.spyOn(fsSync, "readFileSync").mockImplementation(() => {
+      throw new Error("no proc status");
+    });
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    await withLinuxProcessPlatform(async () => {
+      const { isPidAlive: freshIsPidAlive } = await import("./pid-alive.js");
+      expect(freshIsPidAlive(42)).toBe(true);
+    });
+
+    expect(readFileSyncSpy).toHaveBeenCalledWith("/proc/42/status", "utf8");
+    expect(killSpy).toHaveBeenCalledWith(42, 0);
+  });
 });
 
 describe("getProcessStartTime", () => {
-  it("returns a number on Linux for the current process", async () => {
-    // Simulate a realistic /proc/<pid>/stat line
-    const fakeStat = `${process.pid} (node) S 1 ${process.pid} ${process.pid} 0 -1 4194304 12345 0 0 0 100 50 0 0 20 0 8 0 98765 123456789 5000 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0`;
+  it("parses linux /proc stat start times and rejects malformed variants", async () => {
+    const fakeStatPrefix = "42 (node) S 1 42 42 0 -1 4194304 12345 0 0 0 100 50 0 0 20 0 8 0 ";
+    const fakeStatSuffix =
+      " 123456789 5000 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0";
     mockProcReads({
-      [`/proc/${process.pid}/stat`]: fakeStat,
+      [`/proc/${process.pid}/stat`]: `${process.pid} (node) S 1 ${process.pid} ${process.pid} 0 -1 4194304 12345 0 0 0 100 50 0 0 20 0 8 0 98765 123456789 5000 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0`,
+      "/proc/42/stat": `${fakeStatPrefix}55555${fakeStatSuffix}`,
+      "/proc/43/stat": "43 node S malformed",
+      "/proc/44/stat": `44 (My App (v2)) S 1 44 44 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 66666 0 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0`,
+      "/proc/45/stat": `${fakeStatPrefix}-1${fakeStatSuffix}`,
+      "/proc/46/stat": `${fakeStatPrefix}1.5${fakeStatSuffix}`,
     });
 
     await withLinuxProcessPlatform(async () => {
       const { getProcessStartTime: fresh } = await import("./pid-alive.js");
-      const starttime = fresh(process.pid);
-      expect(starttime).toBe(98765);
+      expect(fresh(process.pid)).toBe(98765);
+      expect(fresh(42)).toBe(55555);
+      expect(fresh(43)).toBeNull();
+      expect(fresh(44)).toBe(66666);
+      expect(fresh(45)).toBeNull();
+      expect(fresh(46)).toBeNull();
     });
   });
 
   it("returns null on non-Linux platforms", () => {
-    if (process.platform === "linux") {
-      // On actual Linux, this test is trivially satisfied by the other tests.
-      expect(true).toBe(true);
-      return;
-    }
-    expect(getProcessStartTime(process.pid)).toBeNull();
+    return withProcessPlatform("darwin", async () => {
+      const { getProcessStartTime: fresh } = await import("./pid-alive.js");
+      expect(fresh(process.pid)).toBeNull();
+    });
   });
 
   it("returns null for invalid PIDs", () => {
@@ -91,27 +121,5 @@ describe("getProcessStartTime", () => {
     expect(getProcessStartTime(1.5)).toBeNull();
     expect(getProcessStartTime(Number.NaN)).toBeNull();
     expect(getProcessStartTime(Number.POSITIVE_INFINITY)).toBeNull();
-  });
-
-  it("returns null for malformed /proc stat content", async () => {
-    mockProcReads({
-      "/proc/42/stat": "42 node S malformed",
-    });
-    await withLinuxProcessPlatform(async () => {
-      const { getProcessStartTime: fresh } = await import("./pid-alive.js");
-      expect(fresh(42)).toBeNull();
-    });
-  });
-
-  it("handles comm fields containing spaces and parentheses", async () => {
-    // comm field with spaces and nested parens: "(My App (v2))"
-    const fakeStat = `42 (My App (v2)) S 1 42 42 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 55555 0 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0`;
-    mockProcReads({
-      "/proc/42/stat": fakeStat,
-    });
-    await withLinuxProcessPlatform(async () => {
-      const { getProcessStartTime: fresh } = await import("./pid-alive.js");
-      expect(fresh(42)).toBe(55555);
-    });
   });
 });

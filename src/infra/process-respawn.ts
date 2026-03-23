@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { scheduleDetachedLaunchdRestartHandoff } from "../daemon/launchd-restart-handoff.js";
 import { triggerOpenClawRestart } from "./restart.js";
 import { detectRespawnSupervisor } from "./supervisor-markers.js";
 
@@ -30,7 +31,26 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
   }
   const supervisor = detectRespawnSupervisor(process.env);
   if (supervisor) {
-    if (supervisor === "launchd" || supervisor === "schtasks") {
+    // Hand off launchd restarts to a detached helper before exiting so config
+    // reloads and SIGUSR1-driven restarts do not depend on exit/respawn timing.
+    if (supervisor === "launchd") {
+      const handoff = scheduleDetachedLaunchdRestartHandoff({
+        env: process.env,
+        mode: "start-after-exit",
+        waitForPid: process.pid,
+      });
+      if (!handoff.ok) {
+        return {
+          mode: "supervised",
+          detail: `launchd exit fallback (${handoff.detail ?? "restart handoff failed"})`,
+        };
+      }
+      return {
+        mode: "supervised",
+        detail: `launchd restart handoff pid ${handoff.pid ?? "unknown"}`,
+      };
+    }
+    if (supervisor === "schtasks") {
       const restart = triggerOpenClawRestart();
       if (!restart.ok) {
         return {

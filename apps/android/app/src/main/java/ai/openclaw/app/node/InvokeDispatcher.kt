@@ -5,12 +5,12 @@ import ai.openclaw.app.protocol.OpenClawCalendarCommand
 import ai.openclaw.app.protocol.OpenClawCanvasA2UICommand
 import ai.openclaw.app.protocol.OpenClawCanvasCommand
 import ai.openclaw.app.protocol.OpenClawCameraCommand
+import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawContactsCommand
 import ai.openclaw.app.protocol.OpenClawDeviceCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
 import ai.openclaw.app.protocol.OpenClawMotionCommand
 import ai.openclaw.app.protocol.OpenClawNotificationsCommand
-import ai.openclaw.app.protocol.OpenClawScreenCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.protocol.OpenClawSystemCommand
 
@@ -25,15 +25,16 @@ class InvokeDispatcher(
   private val contactsHandler: ContactsHandler,
   private val calendarHandler: CalendarHandler,
   private val motionHandler: MotionHandler,
-  private val screenHandler: ScreenHandler,
   private val smsHandler: SmsHandler,
   private val a2uiHandler: A2UIHandler,
   private val debugHandler: DebugHandler,
-  private val appUpdateHandler: AppUpdateHandler,
+  private val callLogHandler: CallLogHandler,
   private val isForeground: () -> Boolean,
   private val cameraEnabled: () -> Boolean,
   private val locationEnabled: () -> Boolean,
-  private val smsAvailable: () -> Boolean,
+  private val sendSmsAvailable: () -> Boolean,
+  private val readSmsAvailable: () -> Boolean,
+  private val callLogAvailable: () -> Boolean,
   private val debugBuild: () -> Boolean,
   private val refreshNodeCanvasCapability: suspend () -> Boolean,
   private val onCanvasA2uiPush: () -> Unit,
@@ -161,19 +162,16 @@ class InvokeDispatcher(
       OpenClawMotionCommand.Activity.rawValue -> motionHandler.handleMotionActivity(paramsJson)
       OpenClawMotionCommand.Pedometer.rawValue -> motionHandler.handleMotionPedometer(paramsJson)
 
-      // Screen command
-      OpenClawScreenCommand.Record.rawValue -> screenHandler.handleScreenRecord(paramsJson)
-
       // SMS command
       OpenClawSmsCommand.Send.rawValue -> smsHandler.handleSmsSend(paramsJson)
+      OpenClawSmsCommand.Search.rawValue -> smsHandler.handleSmsSearch(paramsJson)
+
+      // CallLog command
+      OpenClawCallLogCommand.Search.rawValue -> callLogHandler.handleCallLogSearch(paramsJson)
 
       // Debug commands
       "debug.ed25519" -> debugHandler.handleEd25519()
       "debug.logs" -> debugHandler.handleLogs()
-
-      // App update
-      "app.update" -> appUpdateHandler.handleUpdate(paramsJson)
-
       else -> GatewaySession.InvokeResult.error(code = "INVALID_REQUEST", message = "INVALID_REQUEST: unknown command")
     }
   }
@@ -261,13 +259,31 @@ class InvokeDispatcher(
             message = "PEDOMETER_UNAVAILABLE: step counter not available",
           )
         }
-      InvokeCommandAvailability.SmsAvailable ->
-        if (smsAvailable()) {
+      InvokeCommandAvailability.SendSmsAvailable ->
+        if (sendSmsAvailable()) {
           null
         } else {
           GatewaySession.InvokeResult.error(
             code = "SMS_UNAVAILABLE",
             message = "SMS_UNAVAILABLE: SMS not available on this device",
+          )
+        }
+      InvokeCommandAvailability.ReadSmsAvailable ->
+        if (readSmsAvailable()) {
+          null
+        } else {
+          GatewaySession.InvokeResult.error(
+            code = "SMS_UNAVAILABLE",
+            message = "SMS_UNAVAILABLE: SMS not available on this device",
+          )
+        }
+      InvokeCommandAvailability.CallLogAvailable ->
+        if (callLogAvailable()) {
+          null
+        } else {
+          GatewaySession.InvokeResult.error(
+            code = "CALL_LOG_UNAVAILABLE",
+            message = "CALL_LOG_UNAVAILABLE: call log not available on this build",
           )
         }
       InvokeCommandAvailability.DebugBuild ->

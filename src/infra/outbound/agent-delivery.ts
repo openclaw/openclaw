@@ -23,6 +23,11 @@ export type AgentDeliveryPlan = {
   resolvedAccountId?: string;
   resolvedThreadId?: string | number;
   deliveryTargetMode?: ChannelOutboundTargetMode;
+  /**
+   * Inbound turn named a deliverable channel but omitted a peer/thread id (e.g. runContext without
+   * `currentChannelId`). Do not fall through to `resolveOutboundTarget` / session defaults.
+   */
+  turnSourceMissingPeer?: boolean;
 };
 
 export function resolveAgentDeliveryPlan(params: {
@@ -74,6 +79,12 @@ export function resolveAgentDeliveryPlan(params: {
     params.turnSourceThreadId != null && params.turnSourceThreadId !== ""
       ? params.turnSourceThreadId
       : undefined;
+
+  const hadTurnSourceChannelInput = Boolean(
+    typeof params.turnSourceChannel === "string" && params.turnSourceChannel.trim(),
+  );
+  const turnSourceMissingPeer =
+    hadTurnSourceChannelInput && Boolean(turnSourceChannel) && turnSourceTo === undefined;
 
   const baseDelivery = resolveSessionDeliveryTarget({
     entry: params.sessionEntry,
@@ -133,6 +144,7 @@ export function resolveAgentDeliveryPlan(params: {
     resolvedAccountId,
     resolvedThreadId: baseDelivery.threadId,
     deliveryTargetMode,
+    turnSourceMissingPeer,
   };
 }
 
@@ -150,6 +162,17 @@ export function resolveAgentOutboundTarget(params: {
     params.targetMode ??
     params.plan.deliveryTargetMode ??
     (params.plan.resolvedTo ? "explicit" : "implicit");
+  if (
+    params.plan.turnSourceMissingPeer &&
+    isDeliverableMessageChannel(params.plan.resolvedChannel) &&
+    !params.plan.resolvedTo?.trim()
+  ) {
+    return {
+      resolvedTarget: null,
+      resolvedTo: undefined,
+      targetMode,
+    };
+  }
   if (!isDeliverableMessageChannel(params.plan.resolvedChannel)) {
     return {
       resolvedTarget: null,

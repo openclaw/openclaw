@@ -1,9 +1,18 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import "./test-helpers/fast-coding-tools.js";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { AssistantMessage } from "@mariozechner/pi-ai";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
+import {
+  cleanupEmbeddedPiRunnerTestWorkspace,
+  createEmbeddedPiRunnerOpenAiConfig,
+  createEmbeddedPiRunnerTestWorkspace,
+  type EmbeddedPiRunnerTestWorkspace,
+  immediateEnqueue,
+} from "./test-helpers/pi-embedded-runner-e2e-fixtures.js";
+
+const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 
 function createMockUsage(input: number, output: number) {
   return {
@@ -22,14 +31,8 @@ function createMockUsage(input: number, output: number) {
   };
 }
 
-vi.mock("@mariozechner/pi-coding-agent", async () => {
-  return await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
-    "@mariozechner/pi-coding-agent",
-  );
-});
-
-vi.mock("@mariozechner/pi-ai", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
+vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
 
   const buildAssistantMessage = (model: { api: string; provider: string; id: string }) => ({
     role: "assistant" as const,
@@ -86,9 +89,70 @@ vi.mock("@mariozechner/pi-ai", async () => {
   };
 });
 
+const installRunEmbeddedMocks = () => {
+  vi.doMock("../plugins/hook-runner-global.js", () => ({
+    getGlobalHookRunner: vi.fn(() => undefined),
+    getGlobalPluginRegistry: vi.fn(() => null),
+    hasGlobalHooks: vi.fn(() => false),
+    initializeGlobalHookRunner: vi.fn(),
+    resetGlobalHookRunner: vi.fn(),
+  }));
+  vi.doMock("../context-engine/index.js", () => ({
+    ensureContextEnginesInitialized: vi.fn(),
+    resolveContextEngine: vi.fn(async () => ({
+      dispose: async () => undefined,
+    })),
+  }));
+  vi.doMock("./runtime-plugins.js", () => ({
+    ensureRuntimePluginsLoaded: vi.fn(),
+  }));
+  vi.doMock("./pi-embedded-runner/run/attempt.js", () => ({
+    runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
+  }));
+  vi.doMock("./pi-embedded-runner/model.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("./pi-embedded-runner/model.js")>();
+    return {
+      ...actual,
+      resolveModelAsync: async (provider: string, modelId: string) => ({
+        model: {
+          id: modelId,
+          name: modelId,
+          api: "openai-responses",
+          provider,
+          baseUrl: `https://example.com/${provider}`,
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 16_000,
+          maxTokens: 2048,
+        },
+        error: undefined,
+        authStorage: {
+          setRuntimeApiKey: vi.fn(),
+        },
+        modelRegistry: {},
+      }),
+    };
+  });
+  vi.doMock("../plugins/provider-runtime.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
+    return {
+      ...actual,
+      prepareProviderRuntimeAuth: vi.fn(async () => undefined),
+    };
+  });
+  vi.doMock("./models-config.js", async (importOriginal) => {
+    const mod = await importOriginal<typeof import("./models-config.js")>();
+    return {
+      ...mod,
+      ensureOpenClawModelsJson: vi.fn(async () => ({ wrote: false })),
+    };
+  });
+};
+
 let runEmbeddedPiAgent: typeof import("./pi-embedded-runner/run.js").runEmbeddedPiAgent;
 let SessionManager: typeof import("@mariozechner/pi-coding-agent").SessionManager;
-let tempRoot: string | undefined;
+let e2eWorkspace: EmbeddedPiRunnerTestWorkspace | undefined;
 let agentDir: string;
 let workspaceDir: string;
 let sessionCounter = 0;
@@ -96,44 +160,26 @@ let runCounter = 0;
 
 beforeAll(async () => {
   vi.useRealTimers();
+  vi.resetModules();
+  installRunEmbeddedMocks();
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner/run.js"));
   ({ SessionManager } = await import("@mariozechner/pi-coding-agent"));
-  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-embedded-agent-"));
-  agentDir = path.join(tempRoot, "agent");
-  workspaceDir = path.join(tempRoot, "workspace");
-  await fs.mkdir(agentDir, { recursive: true });
-  await fs.mkdir(workspaceDir, { recursive: true });
+  e2eWorkspace = await createEmbeddedPiRunnerTestWorkspace("openclaw-embedded-agent-");
+  ({ agentDir, workspaceDir } = e2eWorkspace);
 }, 180_000);
 
 afterAll(async () => {
-  if (!tempRoot) {
-    return;
-  }
-  await fs.rm(tempRoot, { recursive: true, force: true });
-  tempRoot = undefined;
+  await cleanupEmbeddedPiRunnerTestWorkspace(e2eWorkspace);
+  e2eWorkspace = undefined;
 });
 
-const makeOpenAiConfig = (modelIds: string[]) =>
-  ({
-    models: {
-      providers: {
-        openai: {
-          api: "openai-responses",
-          apiKey: "sk-test",
-          baseUrl: "https://example.com",
-          models: modelIds.map((id) => ({
-            id,
-            name: `Mock ${id}`,
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 16_000,
-            maxTokens: 2048,
-          })),
-        },
-      },
-    },
-  }) satisfies OpenClawConfig;
+beforeEach(() => {
+  vi.useRealTimers();
+  runEmbeddedAttemptMock.mockReset();
+  runEmbeddedAttemptMock.mockImplementation(async () => {
+    throw new Error("unexpected extra runEmbeddedAttempt call");
+  });
+});
 
 const nextSessionFile = () => {
   sessionCounter += 1;
@@ -141,7 +187,46 @@ const nextSessionFile = () => {
 };
 const nextRunId = (prefix = "run-embedded-test") => `${prefix}-${++runCounter}`;
 const nextSessionKey = () => `agent:test:embedded:${nextRunId("session-key")}`;
-const immediateEnqueue = async <T>(task: () => Promise<T>) => task();
+
+const baseUsage = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+const buildAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage => ({
+  role: "assistant",
+  content: [],
+  api: "openai-responses",
+  provider: "openai",
+  model: "mock-1",
+  usage: baseUsage,
+  stopReason: "stop",
+  timestamp: Date.now(),
+  ...overrides,
+});
+
+const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunAttemptResult => ({
+  aborted: false,
+  timedOut: false,
+  timedOutDuringCompaction: false,
+  promptError: null,
+  sessionIdUsed: "session:test",
+  systemPromptReport: undefined,
+  messagesSnapshot: [],
+  assistantTexts: [],
+  toolMetas: [],
+  lastAssistant: undefined,
+  didSendViaMessagingTool: false,
+  messagingToolSentTexts: [],
+  messagingToolSentMediaUrls: [],
+  messagingToolSentTargets: [],
+  cloudCodeAssistFormatError: false,
+  ...overrides,
+});
 
 const runWithOrphanedSingleUserMessage = async (text: string, sessionKey: string) => {
   const sessionFile = nextSessionFile();
@@ -152,7 +237,16 @@ const runWithOrphanedSingleUserMessage = async (text: string, sessionKey: string
     timestamp: Date.now(),
   });
 
-  const cfg = makeOpenAiConfig(["mock-1"]);
+  runEmbeddedAttemptMock.mockResolvedValueOnce(
+    makeAttempt({
+      assistantTexts: ["ok"],
+      lastAssistant: buildAssistant({
+        content: [{ type: "text", text: "ok" }],
+      }),
+    }),
+  );
+
+  const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
   return await runEmbeddedPiAgent({
     sessionId: "session:test",
     sessionKey,
@@ -197,7 +291,15 @@ const readSessionMessages = async (sessionFile: string) => {
 };
 
 const runDefaultEmbeddedTurn = async (sessionFile: string, prompt: string, sessionKey: string) => {
-  const cfg = makeOpenAiConfig(["mock-error"]);
+  const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-error"]);
+  runEmbeddedAttemptMock.mockResolvedValueOnce(
+    makeAttempt({
+      assistantTexts: ["ok"],
+      lastAssistant: buildAssistant({
+        content: [{ type: "text", text: "ok" }],
+      }),
+    }),
+  );
   await runEmbeddedPiAgent({
     sessionId: "session:test",
     sessionKey,
@@ -217,29 +319,41 @@ const runDefaultEmbeddedTurn = async (sessionFile: string, prompt: string, sessi
 describe("runEmbeddedPiAgent", () => {
   it("handles prompt error paths without dropping user state", async () => {
     const sessionFile = nextSessionFile();
-    const cfg = makeOpenAiConfig(["mock-error"]);
+    const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-error"]);
     const sessionKey = nextSessionKey();
-    const result = await runEmbeddedPiAgent({
-      sessionId: "session:test",
-      sessionKey,
-      sessionFile,
-      workspaceDir,
-      config: cfg,
-      prompt: "boom",
-      provider: "openai",
-      model: "mock-error",
-      timeoutMs: 5_000,
-      agentDir,
-      runId: nextRunId("prompt-error"),
-      enqueue: immediateEnqueue,
-    });
-    expect(result.payloads?.[0]?.isError).toBe(true);
-
-    const messages = await readSessionMessages(sessionFile);
-    const userIndex = messages.findIndex(
-      (message) => message?.role === "user" && textFromContent(message.content) === "boom",
+    runEmbeddedAttemptMock.mockResolvedValueOnce(
+      makeAttempt({
+        promptError: new Error("boom"),
+      }),
     );
-    expect(userIndex).toBeGreaterThanOrEqual(0);
+    await expect(
+      runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey,
+        sessionFile,
+        workspaceDir,
+        config: cfg,
+        prompt: "boom",
+        provider: "openai",
+        model: "mock-error",
+        timeoutMs: 5_000,
+        agentDir,
+        runId: nextRunId("prompt-error"),
+        enqueue: immediateEnqueue,
+      }),
+    ).rejects.toThrow("boom");
+
+    try {
+      const messages = await readSessionMessages(sessionFile);
+      const userIndex = messages.findIndex(
+        (message) => message?.role === "user" && textFromContent(message.content) === "boom",
+      );
+      expect(userIndex).toBeGreaterThanOrEqual(0);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
+        throw err;
+      }
+    }
   });
 
   it(

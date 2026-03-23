@@ -3,9 +3,9 @@ import {
   resolveCommandResolutionFromArgv,
   type CommandResolution,
 } from "./exec-command-resolution.js";
+export { DEFAULT_SAFE_BINS } from "./exec-safe-bin-policy.js";
 
 export {
-  DEFAULT_SAFE_BINS,
   matchAllowlist,
   parseExecArgvToken,
   resolveAllowlistCandidatePath,
@@ -57,6 +57,17 @@ function isDoubleQuoteEscape(next: string | undefined): next is string {
 
 function isEscapedLineContinuation(next: string | undefined): next is string {
   return next === "\n" || next === "\r";
+}
+
+function isShellCommentStart(source: string, index: number): boolean {
+  if (source[index] !== "#") {
+    return false;
+  }
+  if (index === 0) {
+    return true;
+  }
+  const prev = source[index - 1];
+  return Boolean(prev && /\s/.test(prev));
 }
 
 function splitShellPipeline(command: string): { ok: boolean; reason?: string; segments: string[] } {
@@ -245,6 +256,9 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
       buf += ch;
       emptySegment = false;
       continue;
+    }
+    if (isShellCommentStart(command, i)) {
+      break;
     }
 
     if ((ch === "\n" || ch === "\r") && pendingHeredocs.length > 0) {
@@ -500,6 +514,9 @@ export function splitCommandChainWithOperators(command: string): ShellChainPart[
       inDouble = true;
       buf += ch;
       continue;
+    }
+    if (isShellCommentStart(command, i)) {
+      break;
     }
 
     if (ch === "&" && next === "&") {

@@ -6,6 +6,7 @@ import type { SpawnSubagentMode } from "./subagent-spawn.js";
 export type SubagentRunRecord = {
   runId: string;
   childSessionKey: string;
+  controllerSessionKey?: string;
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
   requesterDisplayKey: string;
@@ -13,10 +14,16 @@ export type SubagentRunRecord = {
   cleanup: "delete" | "keep";
   label?: string;
   model?: string;
+  workspaceDir?: string;
   runTimeoutSeconds?: number;
   spawnMode?: SpawnSubagentMode;
   createdAt: number;
+  /** Start time of the current run attempt. */
   startedAt?: number;
+  /** Stable start time for the child session across follow-up runs. */
+  sessionStartedAt?: number;
+  /** Accumulated runtime from prior completed runs for this child session. */
+  accumulatedRuntimeMs?: number;
   endedAt?: number;
   outcome?: SubagentRunOutcome;
   archiveAtMs?: number;

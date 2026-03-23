@@ -69,15 +69,6 @@ describe("config io paths", () => {
     });
   });
 
-  it("honors legacy CLAWDBOT_CONFIG_PATH override", async () => {
-    await withTempHome(async (home) => {
-      const customPath = await writeConfig(home, ".openclaw", 20003, "legacy-custom.json");
-      const io = createIoForHome(home, { CLAWDBOT_CONFIG_PATH: customPath } as NodeJS.ProcessEnv);
-      expect(io.configPath).toBe(customPath);
-      expect(io.loadConfig().gateway?.port).toBe(20003);
-    });
-  });
-
   it("normalizes safe-bin config entries at config load time", async () => {
     await withTempHome(async (home) => {
       const configDir = path.join(home, ".openclaw");
@@ -138,7 +129,7 @@ describe("config io paths", () => {
     });
   });
 
-  it("logs invalid config path details and returns empty config", async () => {
+  it("logs invalid config path details and throws on invalid config", async () => {
     await withTempHome(async (home) => {
       const configDir = path.join(home, ".openclaw");
       await fs.mkdir(configDir, { recursive: true });
@@ -159,7 +150,7 @@ describe("config io paths", () => {
         logger,
       });
 
-      expect(io.loadConfig()).toEqual({});
+      expect(() => io.loadConfig()).toThrow(/Invalid config/);
       expect(logger.error).toHaveBeenCalledWith(
         expect.stringContaining(`Invalid config at ${configPath}:\\n`),
       );

@@ -263,6 +263,7 @@ describe("noteMemorySearchHealth", () => {
     // provider: "local". So with no local file and no API keys, warn.
     expect(note).toHaveBeenCalledTimes(1);
     const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("needs at least one embedding provider");
     expect(message).toContain("openclaw configure --section model");
   });
 
@@ -275,7 +276,7 @@ describe("noteMemorySearchHealth", () => {
     resolveApiKeyForProvider.mockImplementation(async ({ provider }: { provider: string }) => {
       if (provider === "ollama") {
         return {
-          apiKey: "ollama-local",
+          apiKey: "ollama-local", // pragma: allowlist secret
           source: "env: OLLAMA_API_KEY",
           mode: "api-key",
         };

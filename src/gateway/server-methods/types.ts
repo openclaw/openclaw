@@ -21,6 +21,10 @@ export type GatewayClient = {
   canvasHostUrl?: string;
   canvasCapability?: string;
   canvasCapabilityExpiresAtMs?: number;
+  /** Internal-only auth context that cannot be supplied through gateway RPC payloads. */
+  internal?: {
+    allowModelOverride?: boolean;
+  };
 };
 
 export type RespondFn = (
@@ -57,12 +61,19 @@ export type GatewayRequestContext = {
   chatAbortedRuns: Map<string, number>;
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
+  chatDeltaLastBroadcastLen: Map<string, number>;
   addChatRun: (sessionId: string, entry: { sessionKey: string; clientRunId: string }) => void;
   removeChatRun: (
     sessionId: string,
     clientRunId: string,
     sessionKey?: string,
   ) => { sessionKey: string; clientRunId: string } | undefined;
+  subscribeSessionEvents: (connId: string) => void;
+  unsubscribeSessionEvents: (connId: string) => void;
+  subscribeSessionMessageEvents: (connId: string, sessionKey: string) => void;
+  unsubscribeSessionMessageEvents: (connId: string, sessionKey: string) => void;
+  unsubscribeAllSessionEvents: (connId: string) => void;
+  getSessionEventSubscriberConnIds: () => ReadonlySet<string>;
   registerToolEventRecipient: (runId: string, connId: string) => void;
   dedupe: Map<string, DedupeEntry>;
   wizardSessions: Map<string, WizardSession>;

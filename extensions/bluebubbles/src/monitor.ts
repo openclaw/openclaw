@@ -1,13 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import {
-  beginWebhookRequestPipelineOrReject,
-  createWebhookInFlightLimiter,
-  registerWebhookTargetWithPluginRoute,
-  readWebhookBodyOrReject,
-  resolveWebhookTargetWithAuthOrRejectSync,
-  resolveWebhookTargets,
-} from "openclaw/plugin-sdk/bluebubbles";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
 import { normalizeWebhookMessage, normalizeWebhookReaction } from "./monitor-normalize.js";
 import { logVerbose, processMessage, processReaction } from "./monitor-processing.js";
@@ -23,6 +15,13 @@ import {
   type WebhookTarget,
 } from "./monitor-shared.js";
 import { fetchBlueBubblesServerInfo } from "./probe.js";
+import {
+  createWebhookInFlightLimiter,
+  registerWebhookTargetWithPluginRoute,
+  readWebhookBodyOrReject,
+  resolveWebhookTargetWithAuthOrRejectSync,
+  withResolvedWebhookRequestPipeline,
+} from "./runtime-api.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
 
 const webhookTargets = new Map<string, WebhookTarget[]>();
@@ -122,156 +121,145 @@ export async function handleBlueBubblesWebhookRequest(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<boolean> {
-  const resolved = resolveWebhookTargets(req, webhookTargets);
-  if (!resolved) {
-    return false;
-  }
-  const { path, targets } = resolved;
-  const url = new URL(req.url ?? "/", "http://localhost");
-  const requestLifecycle = beginWebhookRequestPipelineOrReject({
+  return await withResolvedWebhookRequestPipeline({
     req,
     res,
+    targetsByPath: webhookTargets,
     allowMethods: ["POST"],
     inFlightLimiter: webhookInFlightLimiter,
-    inFlightKey: `${path}:${req.socket.remoteAddress ?? "unknown"}`,
+    handle: async ({ path, targets }) => {
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const guidParam = url.searchParams.get("guid") ?? url.searchParams.get("password");
+      const headerToken =
+        req.headers["x-guid"] ??
+        req.headers["x-password"] ??
+        req.headers["x-bluebubbles-guid"] ??
+        req.headers["authorization"];
+      const guid = (Array.isArray(headerToken) ? headerToken[0] : headerToken) ?? guidParam ?? "";
+      const target = resolveWebhookTargetWithAuthOrRejectSync({
+        targets,
+        res,
+        isMatch: (target) => {
+          const token = target.account.config.password?.trim() ?? "";
+          return safeEqualSecret(guid, token);
+        },
+      });
+      if (!target) {
+        console.warn(
+          `[bluebubbles] webhook rejected: status=${res.statusCode} path=${path} guid=${maskSecret(url.searchParams.get("guid") ?? url.searchParams.get("password") ?? "")}`,
+        );
+        return true;
+      }
+      const body = await readWebhookBodyOrReject({
+        req,
+        res,
+        profile: "post-auth",
+        invalidBodyMessage: "invalid payload",
+      });
+      if (!body.ok) {
+        console.warn(`[bluebubbles] webhook rejected: status=${res.statusCode}`);
+        return true;
+      }
+
+      const parsed = parseBlueBubblesWebhookPayload(body.value);
+      if (!parsed.ok) {
+        res.statusCode = 400;
+        res.end(parsed.error);
+        console.warn(`[bluebubbles] webhook rejected: ${parsed.error}`);
+        return true;
+      }
+
+      const payload = asRecord(parsed.value) ?? {};
+      const firstTarget = targets[0];
+      if (firstTarget) {
+        logVerbose(
+          firstTarget.core,
+          firstTarget.runtime,
+          `webhook received path=${path} keys=${Object.keys(payload).join(",") || "none"}`,
+        );
+      }
+      const eventTypeRaw = payload.type;
+      const eventType = typeof eventTypeRaw === "string" ? eventTypeRaw.trim() : "";
+      const allowedEventTypes = new Set([
+        "new-message",
+        "updated-message",
+        "message-reaction",
+        "reaction",
+      ]);
+      if (eventType && !allowedEventTypes.has(eventType)) {
+        res.statusCode = 200;
+        res.end("ok");
+        if (firstTarget) {
+          logVerbose(firstTarget.core, firstTarget.runtime, `webhook ignored type=${eventType}`);
+        }
+        return true;
+      }
+      const reaction = normalizeWebhookReaction(payload);
+      if (
+        (eventType === "updated-message" ||
+          eventType === "message-reaction" ||
+          eventType === "reaction") &&
+        !reaction
+      ) {
+        res.statusCode = 200;
+        res.end("ok");
+        if (firstTarget) {
+          logVerbose(
+            firstTarget.core,
+            firstTarget.runtime,
+            `webhook ignored ${eventType || "event"} without reaction`,
+          );
+        }
+        return true;
+      }
+      const message = reaction ? null : normalizeWebhookMessage(payload);
+      if (!message && !reaction) {
+        res.statusCode = 400;
+        res.end("invalid payload");
+        console.warn("[bluebubbles] webhook rejected: unable to parse message payload");
+        return true;
+      }
+
+      target.statusSink?.({ lastInboundAt: Date.now() });
+      if (reaction) {
+        processReaction(reaction, target).catch((err) => {
+          target.runtime.error?.(
+            `[${target.account.accountId}] BlueBubbles reaction failed: ${String(err)}`,
+          );
+        });
+      } else if (message) {
+        // Route messages through debouncer to coalesce rapid-fire events
+        // (e.g., text message + URL balloon arriving as separate webhooks)
+        const debouncer = debounceRegistry.getOrCreateDebouncer(target);
+        debouncer.enqueue({ message, target }).catch((err) => {
+          target.runtime.error?.(
+            `[${target.account.accountId}] BlueBubbles webhook failed: ${String(err)}`,
+          );
+        });
+      }
+
+      res.statusCode = 200;
+      res.end("ok");
+      if (reaction) {
+        if (firstTarget) {
+          logVerbose(
+            firstTarget.core,
+            firstTarget.runtime,
+            `webhook accepted reaction sender=${reaction.senderId} msg=${reaction.messageId} action=${reaction.action}`,
+          );
+        }
+      } else if (message) {
+        if (firstTarget) {
+          logVerbose(
+            firstTarget.core,
+            firstTarget.runtime,
+            `webhook accepted sender=${message.senderId} group=${message.isGroup} chatGuid=${message.chatGuid ?? ""} chatId=${message.chatId ?? ""}`,
+          );
+        }
+      }
+      return true;
+    },
   });
-  if (!requestLifecycle.ok) {
-    return true;
-  }
-
-  try {
-    const guidParam = url.searchParams.get("guid") ?? url.searchParams.get("password");
-    const headerToken =
-      req.headers["x-guid"] ??
-      req.headers["x-password"] ??
-      req.headers["x-bluebubbles-guid"] ??
-      req.headers["authorization"];
-    const guid = (Array.isArray(headerToken) ? headerToken[0] : headerToken) ?? guidParam ?? "";
-    const target = resolveWebhookTargetWithAuthOrRejectSync({
-      targets,
-      res,
-      isMatch: (target) => {
-        const token = target.account.config.password?.trim() ?? "";
-        return safeEqualSecret(guid, token);
-      },
-    });
-    if (!target) {
-      console.warn(
-        `[bluebubbles] webhook rejected: status=${res.statusCode} path=${path} guid=${maskSecret(url.searchParams.get("guid") ?? url.searchParams.get("password") ?? "")}`,
-      );
-      return true;
-    }
-    const body = await readWebhookBodyOrReject({
-      req,
-      res,
-      profile: "post-auth",
-      invalidBodyMessage: "invalid payload",
-    });
-    if (!body.ok) {
-      console.warn(`[bluebubbles] webhook rejected: status=${res.statusCode}`);
-      return true;
-    }
-
-    const parsed = parseBlueBubblesWebhookPayload(body.value);
-    if (!parsed.ok) {
-      res.statusCode = 400;
-      res.end(parsed.error);
-      console.warn(`[bluebubbles] webhook rejected: ${parsed.error}`);
-      return true;
-    }
-
-    const payload = asRecord(parsed.value) ?? {};
-    const firstTarget = targets[0];
-    if (firstTarget) {
-      logVerbose(
-        firstTarget.core,
-        firstTarget.runtime,
-        `webhook received path=${path} keys=${Object.keys(payload).join(",") || "none"}`,
-      );
-    }
-    const eventTypeRaw = payload.type;
-    const eventType = typeof eventTypeRaw === "string" ? eventTypeRaw.trim() : "";
-    const allowedEventTypes = new Set([
-      "new-message",
-      "updated-message",
-      "message-reaction",
-      "reaction",
-    ]);
-    if (eventType && !allowedEventTypes.has(eventType)) {
-      res.statusCode = 200;
-      res.end("ok");
-      if (firstTarget) {
-        logVerbose(firstTarget.core, firstTarget.runtime, `webhook ignored type=${eventType}`);
-      }
-      return true;
-    }
-    const reaction = normalizeWebhookReaction(payload);
-    if (
-      (eventType === "updated-message" ||
-        eventType === "message-reaction" ||
-        eventType === "reaction") &&
-      !reaction
-    ) {
-      res.statusCode = 200;
-      res.end("ok");
-      if (firstTarget) {
-        logVerbose(
-          firstTarget.core,
-          firstTarget.runtime,
-          `webhook ignored ${eventType || "event"} without reaction`,
-        );
-      }
-      return true;
-    }
-    const message = reaction ? null : normalizeWebhookMessage(payload);
-    if (!message && !reaction) {
-      res.statusCode = 400;
-      res.end("invalid payload");
-      console.warn("[bluebubbles] webhook rejected: unable to parse message payload");
-      return true;
-    }
-
-    target.statusSink?.({ lastInboundAt: Date.now() });
-    if (reaction) {
-      processReaction(reaction, target).catch((err) => {
-        target.runtime.error?.(
-          `[${target.account.accountId}] BlueBubbles reaction failed: ${String(err)}`,
-        );
-      });
-    } else if (message) {
-      // Route messages through debouncer to coalesce rapid-fire events
-      // (e.g., text message + URL balloon arriving as separate webhooks)
-      const debouncer = debounceRegistry.getOrCreateDebouncer(target);
-      debouncer.enqueue({ message, target }).catch((err) => {
-        target.runtime.error?.(
-          `[${target.account.accountId}] BlueBubbles webhook failed: ${String(err)}`,
-        );
-      });
-    }
-
-    res.statusCode = 200;
-    res.end("ok");
-    if (reaction) {
-      if (firstTarget) {
-        logVerbose(
-          firstTarget.core,
-          firstTarget.runtime,
-          `webhook accepted reaction sender=${reaction.senderId} msg=${reaction.messageId} action=${reaction.action}`,
-        );
-      }
-    } else if (message) {
-      if (firstTarget) {
-        logVerbose(
-          firstTarget.core,
-          firstTarget.runtime,
-          `webhook accepted sender=${message.senderId} group=${message.isGroup} chatGuid=${message.chatGuid ?? ""} chatId=${message.chatId ?? ""}`,
-        );
-      }
-    }
-    return true;
-  } finally {
-    requestLifecycle.release();
-  }
 }
 
 export async function monitorBlueBubblesProvider(

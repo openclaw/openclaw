@@ -7,6 +7,7 @@ import {
   type ExecApprovalsFile,
   type ExecAsk,
   type ExecSecurity,
+  loadExecApprovals,
   maxAsk,
   minSecurity,
   normalizeExecAsk,
@@ -96,7 +97,9 @@ function resolveNodesRunPolicy(opts: NodesRunOpts, execDefaults: ExecDefaults | 
   if (opts.security && !requestedSecurity) {
     throw new Error("invalid --security (use deny|allowlist|full)");
   }
-  const configuredAsk = normalizeExecAsk(execDefaults?.ask) ?? "on-miss";
+  // Keep local exec defaults in sync with exec-approvals.json when tools.exec.ask is unset.
+  const configuredAsk =
+    normalizeExecAsk(execDefaults?.ask) ?? loadExecApprovals().defaults?.ask ?? "on-miss";
   const requestedAsk = normalizeExecAsk(opts.ask);
   if (opts.ask && !requestedAsk) {
     throw new Error("invalid --ask (use off|on-miss|always)");
@@ -186,7 +189,6 @@ async function maybeRequestNodesRunApproval(params: {
   opts: NodesRunOpts;
   nodeId: string;
   agentId: string | undefined;
-  preparedCmdText: string;
   approvalPlan: ReturnType<typeof requirePreparedRunPayload>["plan"];
   hostSecurity: ExecSecurity;
   hostAsk: ExecAsk;
@@ -212,8 +214,6 @@ async function maybeRequestNodesRunApproval(params: {
     params.opts,
     {
       id: approvalId,
-      command: params.preparedCmdText,
-      commandArgv: params.approvalPlan.argv,
       systemRunPlan: params.approvalPlan,
       cwd: params.approvalPlan.cwd,
       nodeId: params.nodeId,
@@ -269,7 +269,7 @@ function buildSystemRunInvokeParams(params: {
     command: "system.run",
     params: {
       command: params.approvalPlan.argv,
-      rawCommand: params.approvalPlan.rawCommand,
+      rawCommand: params.approvalPlan.commandText,
       cwd: params.approvalPlan.cwd,
       env: params.nodeEnv,
       timeoutMs: params.timeoutMs,
@@ -333,7 +333,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
           }
 
           const result = await callGatewayCli("node.invoke", opts, invokeParams);
-          defaultRuntime.log(JSON.stringify(result, null, 2));
+          defaultRuntime.writeJson(result);
         });
       }),
     { timeoutMs: 30_000 },
@@ -400,7 +400,6 @@ export function registerNodesInvokeCommands(nodes: Command) {
             opts,
             nodeId,
             agentId,
-            preparedCmdText: preparedContext.prepared.cmdText,
             approvalPlan,
             hostSecurity: approvals.hostSecurity,
             hostAsk: approvals.hostAsk,
@@ -422,7 +421,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
 
           const result = await callGatewayCli("node.invoke", opts, invokeParams);
           if (opts.json) {
-            defaultRuntime.log(JSON.stringify(result, null, 2));
+            defaultRuntime.writeJson(result);
             return;
           }
 

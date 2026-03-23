@@ -27,18 +27,18 @@ import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions } from "../types.js";
 import {
-  buildEmbeddedRunBaseParams,
-  buildEmbeddedRunContexts,
+  buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
 import {
   hasAlreadyFlushedForCurrentCompaction,
   resolveMemoryFlushContextWindowTokens,
+  resolveMemoryFlushRelativePathForRun,
   resolveMemoryFlushPromptForRun,
   resolveMemoryFlushSettings,
   shouldRunMemoryFlush,
 } from "./memory-flush.js";
-import type { FollowupRun } from "./queue.js";
+import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 export function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
@@ -465,38 +465,43 @@ export async function runMemoryFlushIfNeeded(params: {
     });
   }
   let memoryCompactionCompleted = false;
+  const memoryFlushNowMs = Date.now();
+  const memoryFlushWritePath = resolveMemoryFlushRelativePathForRun({
+    cfg: params.cfg,
+    nowMs: memoryFlushNowMs,
+  });
   const flushSystemPrompt = [
     params.followupRun.run.extraSystemPrompt,
     memoryFlushSettings.systemPrompt,
   ]
     .filter(Boolean)
     .join("\n\n");
+  let postCompactionSessionId: string | undefined;
   try {
     await runWithModelFallback({
       ...resolveModelFallbackOptions(params.followupRun.run),
+      runId: flushRunId,
       run: async (provider, model, runOptions) => {
-        const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts({
+        const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({
           run: params.followupRun.run,
           sessionCtx: params.sessionCtx,
           hasRepliedRef: params.opts?.hasRepliedRef,
           provider,
-        });
-        const runBaseParams = buildEmbeddedRunBaseParams({
-          run: params.followupRun.run,
-          provider,
           model,
           runId: flushRunId,
-          authProfile,
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
         });
         const result = await runEmbeddedPiAgent({
           ...embeddedContext,
           ...senderContext,
           ...runBaseParams,
+          allowGatewaySubagentBinding: true,
           trigger: "memory",
+          memoryFlushWritePath,
           prompt: resolveMemoryFlushPromptForRun({
             prompt: memoryFlushSettings.prompt,
             cfg: params.cfg,
+            nowMs: memoryFlushNowMs,
           }),
           extraSystemPrompt: flushSystemPrompt,
           bootstrapPromptWarningSignaturesSeen,
@@ -511,6 +516,9 @@ export async function runMemoryFlushIfNeeded(params: {
             }
           },
         });
+        if (result.meta?.agentMeta?.sessionId) {
+          postCompactionSessionId = result.meta.agentMeta.sessionId;
+        }
         bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
           result.meta?.systemPromptReport,
         );
@@ -522,12 +530,31 @@ export async function runMemoryFlushIfNeeded(params: {
       (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.compactionCount : 0) ??
       0;
     if (memoryCompactionCompleted) {
+      const previousSessionId = activeSessionEntry?.sessionId ?? params.followupRun.run.sessionId;
       const nextCount = await incrementCompactionCount({
         sessionEntry: activeSessionEntry,
         sessionStore: activeSessionStore,
         sessionKey: params.sessionKey,
         storePath: params.storePath,
+        newSessionId: postCompactionSessionId,
       });
+      const updatedEntry = params.sessionKey ? activeSessionStore?.[params.sessionKey] : undefined;
+      if (updatedEntry) {
+        activeSessionEntry = updatedEntry;
+        params.followupRun.run.sessionId = updatedEntry.sessionId;
+        if (updatedEntry.sessionFile) {
+          params.followupRun.run.sessionFile = updatedEntry.sessionFile;
+        }
+        const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
+        if (queueKey) {
+          refreshQueuedFollowupSession({
+            key: queueKey,
+            previousSessionId,
+            nextSessionId: updatedEntry.sessionId,
+            nextSessionFile: updatedEntry.sessionFile,
+          });
+        }
+      }
       if (typeof nextCount === "number") {
         memoryFlushCompactionCount = nextCount;
       }
@@ -544,6 +571,10 @@ export async function runMemoryFlushIfNeeded(params: {
         });
         if (updatedEntry) {
           activeSessionEntry = updatedEntry;
+          params.followupRun.run.sessionId = updatedEntry.sessionId;
+          if (updatedEntry.sessionFile) {
+            params.followupRun.run.sessionFile = updatedEntry.sessionFile;
+          }
         }
       } catch (err) {
         logVerbose(`failed to persist memory flush metadata: ${String(err)}`);

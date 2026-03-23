@@ -1,182 +1,128 @@
 ---
-summary: "Web search + fetch tools (Perplexity Search API, Brave, Gemini, Grok, and Kimi providers)"
+summary: "web_search tool -- search the web with Brave, Firecrawl, Gemini, Grok, Kimi, Perplexity, or Tavily"
 read_when:
-  - You want to enable web_search or web_fetch
-  - You need Perplexity or Brave Search API key setup
-  - You want to use Gemini with Google Search grounding
-title: "Web Tools"
+  - You want to enable or configure web_search
+  - You need to choose a search provider
+  - You want to understand auto-detection and provider fallback
+title: "Web Search"
+sidebarTitle: "Web Search"
 ---
 
-# Web tools
+# Web Search
 
-OpenClaw ships two lightweight web tools:
+The `web_search` tool searches the web using your configured provider and
+returns results. Results are cached by query for 15 minutes (configurable).
 
-- `web_search` — Search the web using Perplexity Search API, Brave Search API, Gemini with Google Search grounding, Grok, or Kimi.
-- `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
+<Info>
+  `web_search` is a lightweight HTTP tool, not browser automation. For
+  JS-heavy sites or logins, use the [Web Browser](/tools/browser). For
+  fetching a specific URL, use [Web Fetch](/tools/web-fetch).
+</Info>
 
-These are **not** browser automation. For JS-heavy sites or logins, use the
-[Browser tool](/tools/browser).
+## Quick start
 
-## How it works
+<Steps>
+  <Step title="Get an API key">
+    Pick a provider and get an API key. See the provider pages below for
+    sign-up links.
+  </Step>
+  <Step title="Configure">
+    ```bash
+    openclaw configure --section web
+    ```
+    This stores the key and sets the provider. You can also set an env var
+    (e.g. `BRAVE_API_KEY`) and skip this step.
+  </Step>
+  <Step title="Use it">
+    The agent can now call `web_search`:
 
-- `web_search` calls your configured provider and returns results.
-- Results are cached by query for 15 minutes (configurable).
-- `web_fetch` does a plain HTTP GET and extracts readable content
-  (HTML → markdown/text). It does **not** execute JavaScript.
-- `web_fetch` is enabled by default (unless explicitly disabled).
+    ```javascript
+    await web_search({ query: "OpenClaw plugin SDK" });
+    ```
 
-See [Perplexity Search setup](/perplexity) and [Brave Search setup](/brave-search) for provider-specific details.
+  </Step>
+</Steps>
 
-## Choosing a search provider
+## Choosing a provider
 
-| Provider                  | Pros                                                                                          | Cons                                        | API Key                             |
-| ------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------- | ----------------------------------- |
-| **Perplexity Search API** | Fast, structured results; domain, language, region, and freshness filters; content extraction | —                                           | `PERPLEXITY_API_KEY`                |
-| **Brave Search API**      | Fast, structured results                                                                      | Fewer filtering options; AI-use terms apply | `BRAVE_API_KEY`                     |
-| **Gemini**                | Google Search grounding, AI-synthesized                                                       | Requires Gemini API key                     | `GEMINI_API_KEY`                    |
-| **Grok**                  | xAI web-grounded responses                                                                    | Requires xAI API key                        | `XAI_API_KEY`                       |
-| **Kimi**                  | Moonshot web search capability                                                                | Requires Moonshot API key                   | `KIMI_API_KEY` / `MOONSHOT_API_KEY` |
+<CardGroup cols={2}>
+  <Card title="Brave Search" icon="shield" href="/tools/brave-search">
+    Structured results with snippets. Supports `llm-context` mode, country/language filters. Free tier available.
+  </Card>
+  <Card title="DuckDuckGo" icon="bird" href="/tools/duckduckgo-search">
+    Key-free fallback. No API key needed. Unofficial HTML-based integration.
+  </Card>
+  <Card title="Exa" icon="brain" href="/tools/exa-search">
+    Neural + keyword search with content extraction (highlights, text, summaries).
+  </Card>
+  <Card title="Firecrawl" icon="flame" href="/tools/firecrawl">
+    Structured results. Best paired with `firecrawl_search` and `firecrawl_scrape` for deep extraction.
+  </Card>
+  <Card title="Gemini" icon="sparkles" href="/tools/gemini-search">
+    AI-synthesized answers with citations via Google Search grounding.
+  </Card>
+  <Card title="Grok" icon="zap" href="/tools/grok-search">
+    AI-synthesized answers with citations via xAI web grounding.
+  </Card>
+  <Card title="Kimi" icon="moon" href="/tools/kimi-search">
+    AI-synthesized answers with citations via Moonshot web search.
+  </Card>
+  <Card title="Perplexity" icon="search" href="/tools/perplexity-search">
+    Structured results with content extraction controls and domain filtering.
+  </Card>
+  <Card title="Tavily" icon="globe" href="/tools/tavily">
+    Structured results with search depth, topic filtering, and `tavily_extract` for URL extraction.
+  </Card>
+</CardGroup>
 
-### Auto-detection
+### Provider comparison
 
-If no `provider` is explicitly set, OpenClaw auto-detects which provider to use based on available API keys, checking in this order:
+| Provider                               | Result style               | Filters                                          | API key                                     |
+| -------------------------------------- | -------------------------- | ------------------------------------------------ | ------------------------------------------- |
+| [Brave](/tools/brave-search)           | Structured snippets        | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                             |
+| [DuckDuckGo](/tools/duckduckgo-search) | Structured snippets        | --                                               | None (key-free)                             |
+| [Exa](/tools/exa-search)               | Structured + extracted     | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                               |
+| [Firecrawl](/tools/firecrawl)          | Structured snippets        | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                         |
+| [Gemini](/tools/gemini-search)         | AI-synthesized + citations | --                                               | `GEMINI_API_KEY`                            |
+| [Grok](/tools/grok-search)             | AI-synthesized + citations | --                                               | `XAI_API_KEY`                               |
+| [Kimi](/tools/kimi-search)             | AI-synthesized + citations | --                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
+| [Perplexity](/tools/perplexity-search) | Structured snippets        | Country, language, time, domains, content limits | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
+| [Tavily](/tools/tavily)                | Structured snippets        | Via `tavily_search` tool                         | `TAVILY_API_KEY`                            |
 
-1. **Brave** — `BRAVE_API_KEY` env var or `tools.web.search.apiKey` config
-2. **Gemini** — `GEMINI_API_KEY` env var or `tools.web.search.gemini.apiKey` config
-3. **Kimi** — `KIMI_API_KEY` / `MOONSHOT_API_KEY` env var or `tools.web.search.kimi.apiKey` config
-4. **Perplexity** — `PERPLEXITY_API_KEY` env var or `tools.web.search.perplexity.apiKey` config
-5. **Grok** — `XAI_API_KEY` env var or `tools.web.search.grok.apiKey` config
+## Auto-detection
 
-If no keys are found, it falls back to Brave (you'll get a missing-key error prompting you to configure one).
+Provider lists in docs and setup flows are alphabetical. Auto-detection keeps a
+separate precedence order:
 
-## Setting up web search
+If no `provider` is set, OpenClaw checks for API keys in this order and uses
+the first one found:
 
-Use `openclaw configure --section web` to set up your API key and choose a provider.
+1. **Brave** -- `BRAVE_API_KEY` or `plugins.entries.brave.config.webSearch.apiKey`
+2. **Gemini** -- `GEMINI_API_KEY` or `plugins.entries.google.config.webSearch.apiKey`
+3. **Grok** -- `XAI_API_KEY` or `plugins.entries.xai.config.webSearch.apiKey`
+4. **Kimi** -- `KIMI_API_KEY` / `MOONSHOT_API_KEY` or `plugins.entries.moonshot.config.webSearch.apiKey`
+5. **Perplexity** -- `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` or `plugins.entries.perplexity.config.webSearch.apiKey`
+6. **Firecrawl** -- `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey`
+7. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey`
 
-### Perplexity Search
+If no keys are found, it falls back to Brave (you will get a missing-key error
+prompting you to configure one).
 
-1. Create a Perplexity account at <https://www.perplexity.ai/settings/api>
-2. Generate an API key in the dashboard
-3. Run `openclaw configure --section web` to store the key in config, or set `PERPLEXITY_API_KEY` in your environment.
+<Note>
+  All provider key fields support SecretRef objects. In auto-detect mode,
+  OpenClaw resolves only the selected provider key -- non-selected SecretRefs
+  stay inactive.
+</Note>
 
-See [Perplexity Search API Docs](https://docs.perplexity.ai/guides/search-quickstart) for more details.
-
-### Brave Search
-
-1. Create a Brave Search API account at <https://brave.com/search/api/>
-2. In the dashboard, choose the **Data for Search** plan (not "Data for AI") and generate an API key.
-3. Run `openclaw configure --section web` to store the key in config (recommended), or set `BRAVE_API_KEY` in your environment.
-
-Brave provides paid plans; check the Brave API portal for the current limits and pricing.
-
-### Where to store the key
-
-**Via config (recommended):** run `openclaw configure --section web`. It stores the key under `tools.web.search.perplexity.apiKey` or `tools.web.search.apiKey`.
-
-**Via environment:** set `PERPLEXITY_API_KEY` or `BRAVE_API_KEY` in the Gateway process environment. For a gateway install, put it in `~/.openclaw/.env` (or your service environment). See [Env vars](/help/faq#how-does-openclaw-load-environment-variables).
-
-### Config examples
-
-**Perplexity Search:**
-
-```json5
-{
-  tools: {
-    web: {
-      search: {
-        enabled: true,
-        provider: "perplexity",
-        perplexity: {
-          apiKey: "pplx-...", // optional if PERPLEXITY_API_KEY is set
-        },
-      },
-    },
-  },
-}
-```
-
-**Brave Search:**
-
-```json5
-{
-  tools: {
-    web: {
-      search: {
-        enabled: true,
-        provider: "brave",
-        apiKey: "BSA...", // optional if BRAVE_API_KEY is set
-      },
-    },
-  },
-}
-```
-
-## Using Gemini (Google Search grounding)
-
-Gemini models support built-in [Google Search grounding](https://ai.google.dev/gemini-api/docs/grounding),
-which returns AI-synthesized answers backed by live Google Search results with citations.
-
-### Getting a Gemini API key
-
-1. Go to [Google AI Studio](https://aistudio.google.com/apikey)
-2. Create an API key
-3. Set `GEMINI_API_KEY` in the Gateway environment, or configure `tools.web.search.gemini.apiKey`
-
-### Setting up Gemini search
+## Config
 
 ```json5
 {
   tools: {
     web: {
       search: {
-        provider: "gemini",
-        gemini: {
-          // API key (optional if GEMINI_API_KEY is set)
-          apiKey: "AIza...",
-          // Model (defaults to "gemini-2.5-flash")
-          model: "gemini-2.5-flash",
-        },
-      },
-    },
-  },
-}
-```
-
-**Environment alternative:** set `GEMINI_API_KEY` in the Gateway environment.
-For a gateway install, put it in `~/.openclaw/.env`.
-
-### Notes
-
-- Citation URLs from Gemini grounding are automatically resolved from Google's
-  redirect URLs to direct URLs.
-- Redirect resolution uses the SSRF guard path (HEAD + redirect checks + http/https validation) before returning the final citation URL.
-- Redirect resolution uses strict SSRF defaults, so redirects to private/internal targets are blocked.
-- The default model (`gemini-2.5-flash`) is fast and cost-effective.
-  Any Gemini model that supports grounding can be used.
-
-## web_search
-
-Search the web using your configured provider.
-
-### Requirements
-
-- `tools.web.search.enabled` must not be `false` (default: enabled)
-- API key for your chosen provider:
-  - **Brave**: `BRAVE_API_KEY` or `tools.web.search.apiKey`
-  - **Perplexity**: `PERPLEXITY_API_KEY` or `tools.web.search.perplexity.apiKey`
-  - **Gemini**: `GEMINI_API_KEY` or `tools.web.search.gemini.apiKey`
-  - **Grok**: `XAI_API_KEY` or `tools.web.search.grok.apiKey`
-  - **Kimi**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `tools.web.search.kimi.apiKey`
-
-### Config
-
-```json5
-{
-  tools: {
-    web: {
-      search: {
-        enabled: true,
-        apiKey: "BRAVE_API_KEY_HERE", // optional if BRAVE_API_KEY is set
+        enabled: true, // default: true
+        provider: "brave", // or omit for auto-detection
         maxResults: 5,
         timeoutSeconds: 30,
         cacheTtlMinutes: 15,
@@ -186,16 +132,54 @@ Search the web using your configured provider.
 }
 ```
 
-### Tool parameters
+Provider-specific config (API keys, base URLs, modes) lives under
+`plugins.entries.<plugin>.config.webSearch.*`. See the provider pages for
+examples.
 
-All parameters work for both Brave and Perplexity unless noted.
+### Storing API keys
+
+<Tabs>
+  <Tab title="Config file">
+    Run `openclaw configure --section web` or set the key directly:
+
+    ```json5
+    {
+      plugins: {
+        entries: {
+          brave: {
+            config: {
+              webSearch: {
+                apiKey: "YOUR_KEY", // pragma: allowlist secret
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+  </Tab>
+  <Tab title="Environment variable">
+    Set the provider env var in the Gateway process environment:
+
+    ```bash
+    export BRAVE_API_KEY="YOUR_KEY"
+    ```
+
+    For a gateway install, put it in `~/.openclaw/.env`.
+    See [Env vars](/help/faq#env-vars-and-env-loading).
+
+  </Tab>
+</Tabs>
+
+## Tool parameters
 
 | Parameter             | Description                                           |
 | --------------------- | ----------------------------------------------------- |
 | `query`               | Search query (required)                               |
 | `count`               | Results to return (1-10, default: 5)                  |
-| `country`             | 2-letter ISO country code (e.g., "US", "DE")          |
-| `language`            | ISO 639-1 language code (e.g., "en", "de")            |
+| `country`             | 2-letter ISO country code (e.g. "US", "DE")           |
+| `language`            | ISO 639-1 language code (e.g. "en", "de")             |
 | `freshness`           | Time filter: `day`, `week`, `month`, or `year`        |
 | `date_after`          | Results after this date (YYYY-MM-DD)                  |
 | `date_before`         | Results before this date (YYYY-MM-DD)                 |
@@ -204,104 +188,53 @@ All parameters work for both Brave and Perplexity unless noted.
 | `max_tokens`          | Total content budget, default 25000 (Perplexity only) |
 | `max_tokens_per_page` | Per-page token limit, default 2048 (Perplexity only)  |
 
-**Examples:**
+<Warning>
+  Not all parameters work with all providers. Brave `llm-context` mode
+  rejects `ui_lang`, `freshness`, `date_after`, and `date_before`.
+  Firecrawl and Tavily only support `query` and `count` through `web_search`
+  -- use their dedicated tools for advanced options.
+</Warning>
+
+## Examples
 
 ```javascript
+// Basic search
+await web_search({ query: "OpenClaw plugin SDK" });
+
 // German-specific search
-await web_search({
-  query: "TV online schauen",
-  country: "DE",
-  language: "de",
-});
+await web_search({ query: "TV online schauen", country: "DE", language: "de" });
 
 // Recent results (past week)
-await web_search({
-  query: "TMBG interview",
-  freshness: "week",
-});
+await web_search({ query: "AI developments", freshness: "week" });
 
-// Date range search
+// Date range
 await web_search({
-  query: "AI developments",
+  query: "climate research",
   date_after: "2024-01-01",
   date_before: "2024-06-30",
 });
 
 // Domain filtering (Perplexity only)
 await web_search({
-  query: "climate research",
-  domain_filter: ["nature.com", "science.org", ".edu"],
-});
-
-// Exclude domains (Perplexity only)
-await web_search({
   query: "product reviews",
   domain_filter: ["-reddit.com", "-pinterest.com"],
 });
-
-// More content extraction (Perplexity only)
-await web_search({
-  query: "detailed AI research",
-  max_tokens: 50000,
-  max_tokens_per_page: 4096,
-});
 ```
 
-## web_fetch
+## Tool profiles
 
-Fetch a URL and extract readable content.
-
-### web_fetch requirements
-
-- `tools.web.fetch.enabled` must not be `false` (default: enabled)
-- Optional Firecrawl fallback: set `tools.web.fetch.firecrawl.apiKey` or `FIRECRAWL_API_KEY`.
-
-### web_fetch config
+If you use tool profiles or allowlists, add `web_search` or `group:web`:
 
 ```json5
 {
   tools: {
-    web: {
-      fetch: {
-        enabled: true,
-        maxChars: 50000,
-        maxCharsCap: 50000,
-        maxResponseBytes: 2000000,
-        timeoutSeconds: 30,
-        cacheTtlMinutes: 15,
-        maxRedirects: 3,
-        userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        readability: true,
-        firecrawl: {
-          enabled: true,
-          apiKey: "FIRECRAWL_API_KEY_HERE", // optional if FIRECRAWL_API_KEY is set
-          baseUrl: "https://api.firecrawl.dev",
-          onlyMainContent: true,
-          maxAgeMs: 86400000, // ms (1 day)
-          timeoutSeconds: 60,
-        },
-      },
-    },
+    allow: ["web_search"],
+    // or: allow: ["group:web"]  (includes both web_search and web_fetch)
   },
 }
 ```
 
-### web_fetch tool parameters
+## Related
 
-- `url` (required, http/https only)
-- `extractMode` (`markdown` | `text`)
-- `maxChars` (truncate long pages)
-
-Notes:
-
-- `web_fetch` uses Readability (main-content extraction) first, then Firecrawl (if configured). If both fail, the tool returns an error.
-- Firecrawl requests use bot-circumvention mode and cache results by default.
-- `web_fetch` sends a Chrome-like User-Agent and `Accept-Language` by default; override `userAgent` if needed.
-- `web_fetch` blocks private/internal hostnames and re-checks redirects (limit with `maxRedirects`).
-- `maxChars` is clamped to `tools.web.fetch.maxCharsCap`.
-- `web_fetch` caps the downloaded response body size to `tools.web.fetch.maxResponseBytes` before parsing; oversized responses are truncated and include a warning.
-- `web_fetch` is best-effort extraction; some sites will need the browser tool.
-- See [Firecrawl](/tools/firecrawl) for key setup and service details.
-- Responses are cached (default 15 minutes) to reduce repeated fetches.
-- If you use tool profiles/allowlists, add `web_search`/`web_fetch` or `group:web`.
-- If the API key is missing, `web_search` returns a short setup hint with a docs link.
+- [Web Fetch](/tools/web-fetch) -- fetch a URL and extract readable content
+- [Web Browser](/tools/browser) -- full browser automation for JS-heavy sites

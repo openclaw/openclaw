@@ -104,7 +104,7 @@ function getWriter(filePath: string): CacheTraceWriter {
   return getQueuedFileWriter(writers, filePath);
 }
 
-function stableStringify(value: unknown): string {
+function stableStringify(value: unknown, seen: WeakSet<object> = new WeakSet()): string {
   if (value === null || value === undefined) {
     return String(value);
   }
@@ -117,30 +117,40 @@ function stableStringify(value: unknown): string {
   if (typeof value !== "object") {
     return JSON.stringify(value) ?? "null";
   }
+  if (seen.has(value)) {
+    return JSON.stringify("[Circular]");
+  }
+  seen.add(value);
   if (value instanceof Error) {
-    return stableStringify({
-      name: value.name,
-      message: value.message,
-      stack: value.stack,
-    });
+    return stableStringify(
+      {
+        name: value.name,
+        message: value.message,
+        stack: value.stack,
+      },
+      seen,
+    );
   }
   if (value instanceof Uint8Array) {
-    return stableStringify({
-      type: "Uint8Array",
-      data: Buffer.from(value).toString("base64"),
-    });
+    return stableStringify(
+      {
+        type: "Uint8Array",
+        data: Buffer.from(value).toString("base64"),
+      },
+      seen,
+    );
   }
   if (Array.isArray(value)) {
     const serializedEntries: string[] = [];
     for (const entry of value) {
-      serializedEntries.push(stableStringify(entry));
+      serializedEntries.push(stableStringify(entry, seen));
     }
     return `[${serializedEntries.join(",")}]`;
   }
   const record = value as Record<string, unknown>;
   const serializedFields: string[] = [];
   for (const key of Object.keys(record).toSorted()) {
-    serializedFields.push(`${JSON.stringify(key)}:${stableStringify(record[key])}`);
+    serializedFields.push(`${JSON.stringify(key)}:${stableStringify(record[key], seen)}`);
   }
   return `{${serializedFields.join(",")}}`;
 }

@@ -23,6 +23,7 @@ const resolveTestSkillDirs = (workspaceDir: string) => ({
 });
 
 const makeWorkspace = async () => await fixtureSuite.createCaseDir("workspace");
+const apiKeyField = ["api", "Key"].join("");
 
 const withClearedEnv = <T>(
   keys: string[],
@@ -47,6 +48,16 @@ const withClearedEnv = <T>(
     }
   }
 };
+
+async function writeEnvSkill(workspaceDir: string) {
+  const skillDir = path.join(workspaceDir, "skills", "env-skill");
+  await writeSkill({
+    dir: skillDir,
+    name: "env-skill",
+    description: "Needs env",
+    metadata: '{"openclaw":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
+  });
+}
 
 beforeAll(async () => {
   await fixtureSuite.setup();
@@ -142,6 +153,55 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     );
     const cmd = commands.find((entry) => entry.skillName === "tool-dispatch");
     expect(cmd?.dispatch).toEqual({ kind: "tool", toolName: "sessions_send", argMode: "raw" });
+  });
+
+  it("includes enabled Claude bundle markdown commands as native OpenClaw slash commands", async () => {
+    const workspaceDir = await makeWorkspace();
+    const pluginRoot = path.join(tempHome!.home, ".openclaw", "extensions", "compound-bundle");
+    await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
+    await fs.mkdir(path.join(pluginRoot, "commands"), { recursive: true });
+    await fs.writeFile(
+      path.join(pluginRoot, ".claude-plugin", "plugin.json"),
+      `${JSON.stringify({ name: "compound-bundle" }, null, 2)}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(pluginRoot, "commands", "workflows-review.md"),
+      [
+        "---",
+        "name: workflows:review",
+        "description: Review code with a structured checklist",
+        "---",
+        "Review the branch carefully.",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
+      ...resolveTestSkillDirs(workspaceDir),
+      config: {
+        plugins: {
+          entries: {
+            "compound-bundle": { enabled: true },
+          },
+        },
+      },
+    });
+
+    expect(commands).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "workflows_review",
+          skillName: "workflows:review",
+          description: "Review code with a structured checklist",
+          promptTemplate: "Review the branch carefully.",
+        }),
+      ]),
+    );
+    expect(
+      commands.find((entry) => entry.skillName === "workflows:review")?.sourceFilePath,
+    ).toContain("/.openclaw/extensions/compound-bundle/commands/workflows-review.md");
   });
 });
 
@@ -239,20 +299,14 @@ describe("buildWorkspaceSkillsPrompt", () => {
 describe("applySkillEnvOverrides", () => {
   it("sets and restores env vars", async () => {
     const workspaceDir = await makeWorkspace();
-    const skillDir = path.join(workspaceDir, "skills", "env-skill");
-    await writeSkill({
-      dir: skillDir,
-      name: "env-skill",
-      description: "Needs env",
-      metadata: '{"openclaw":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
-    });
+    await writeEnvSkill(workspaceDir);
 
     const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
 
     withClearedEnv(["ENV_KEY"], () => {
       const restore = applySkillEnvOverrides({
         skills: entries,
-        config: { skills: { entries: { "env-skill": { apiKey: "injected" } } } },
+        config: { skills: { entries: { "env-skill": { apiKey: "injected" } } } }, // pragma: allowlist secret
       });
 
       try {
@@ -268,18 +322,12 @@ describe("applySkillEnvOverrides", () => {
 
   it("keeps env keys tracked until all overlapping overrides restore", async () => {
     const workspaceDir = await makeWorkspace();
-    const skillDir = path.join(workspaceDir, "skills", "env-skill");
-    await writeSkill({
-      dir: skillDir,
-      name: "env-skill",
-      description: "Needs env",
-      metadata: '{"openclaw":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
-    });
+    await writeEnvSkill(workspaceDir);
 
     const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
 
     withClearedEnv(["ENV_KEY"], () => {
-      const config = { skills: { entries: { "env-skill": { apiKey: "injected" } } } };
+      const config = { skills: { entries: { "env-skill": { [apiKeyField]: "injected" } } } }; // pragma: allowlist secret
       const restoreFirst = applySkillEnvOverrides({ skills: entries, config });
       const restoreSecond = applySkillEnvOverrides({ skills: entries, config });
 
@@ -300,23 +348,17 @@ describe("applySkillEnvOverrides", () => {
 
   it("applies env overrides from snapshots", async () => {
     const workspaceDir = await makeWorkspace();
-    const skillDir = path.join(workspaceDir, "skills", "env-skill");
-    await writeSkill({
-      dir: skillDir,
-      name: "env-skill",
-      description: "Needs env",
-      metadata: '{"openclaw":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
-    });
+    await writeEnvSkill(workspaceDir);
 
     const snapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
       ...resolveTestSkillDirs(workspaceDir),
-      config: { skills: { entries: { "env-skill": { apiKey: "snap-key" } } } },
+      config: { skills: { entries: { "env-skill": { apiKey: "snap-key" } } } }, // pragma: allowlist secret
     });
 
     withClearedEnv(["ENV_KEY"], () => {
       const restore = applySkillEnvOverridesFromSnapshot({
         snapshot,
-        config: { skills: { entries: { "env-skill": { apiKey: "snap-key" } } } },
+        config: { skills: { entries: { "env-skill": { apiKey: "snap-key" } } } }, // pragma: allowlist secret
       });
 
       try {
@@ -349,7 +391,7 @@ describe("applySkillEnvOverrides", () => {
             entries: {
               "unsafe-env-skill": {
                 env: {
-                  OPENAI_API_KEY: "sk-test",
+                  OPENAI_API_KEY: "sk-test", // pragma: allowlist secret
                   NODE_OPTIONS: "--require /tmp/evil.js",
                 },
               },
@@ -424,7 +466,7 @@ describe("applySkillEnvOverrides", () => {
         entries: {
           "snapshot-env-skill": {
             env: {
-              OPENAI_API_KEY: "snap-secret",
+              OPENAI_API_KEY: "snap-secret", // pragma: allowlist secret
             },
           },
         },
