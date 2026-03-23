@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -5,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   findConflictMarkerLines,
   findConflictMarkersInFiles,
+  listTrackedFiles,
 } from "../../scripts/check-no-conflict-markers.mjs";
 
 const tempDirs: string[] = [];
@@ -19,6 +21,13 @@ function makeTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-conflict-markers-"));
   tempDirs.push(dir);
   return dir;
+}
+
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync("git", args, {
+    cwd,
+    encoding: "utf8",
+  }).trim();
 }
 
 describe("check-no-conflict-markers", () => {
@@ -58,6 +67,36 @@ describe("check-no-conflict-markers", () => {
       {
         filePath: textFile,
         lines: [1, 3],
+      },
+    ]);
+  });
+
+  it("finds conflict markers in tracked script files", () => {
+    const rootDir = makeTempDir();
+    git(rootDir, "init", "-q");
+    git(rootDir, "config", "user.email", "test@example.com");
+    git(rootDir, "config", "user.name", "Test User");
+
+    const scriptFile = path.join(rootDir, "scripts", "generate-bundled-plugin-metadata.mjs");
+    fs.mkdirSync(path.dirname(scriptFile), { recursive: true });
+    fs.writeFileSync(
+      scriptFile,
+      [
+        "<<<<<<< HEAD",
+        'const left = "left";',
+        "=======",
+        'const right = "right";',
+        ">>>>>>> branch",
+      ].join("\n"),
+    );
+    git(rootDir, "add", "scripts/generate-bundled-plugin-metadata.mjs");
+
+    const violations = findConflictMarkersInFiles(listTrackedFiles(rootDir));
+
+    expect(violations).toEqual([
+      {
+        filePath: scriptFile,
+        lines: [1, 3, 5],
       },
     ]);
   });
