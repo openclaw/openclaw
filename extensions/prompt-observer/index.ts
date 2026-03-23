@@ -286,7 +286,11 @@ function shouldLogBootstrapFiles(params: {
   sessionKey?: string;
   files: string[];
 }): boolean {
-  const keys = collectSessionKeys(params);
+  const sessionId =
+    typeof params.sessionId === "string" && params.sessionId.trim().length > 0
+      ? params.sessionId
+      : undefined;
+  const keys = sessionId ? [sessionId] : collectSessionKeys(params);
   if (keys.length === 0) {
     return true;
   }

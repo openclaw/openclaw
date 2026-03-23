@@ -20,10 +20,18 @@ Sophia's workspace files and deployment config for running on OpenClaw.
 
 ### Step 1 — Deploy from this fork
 
+Use the Render Blueprint URL for the repository you are currently reviewing. Replace
+`<owner>/<repo>` with the GitHub repository path of that repo:
 Go to:
 
 ```
-https://render.com/deploy?repo=https://github.com/davidelaverga/openclaw
+https://render.com/deploy?repo=https://github.com/<owner>/<repo>
+```
+
+Example:
+
+```
+https://render.com/deploy?repo=https://github.com/openclaw/openclaw
 ```
 
 Set `SETUP_PASSWORD` when prompted. Select Starter plan or above (persistent disk required).
