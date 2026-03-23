@@ -215,7 +215,7 @@ export function createBaiduWebSearchProvider(): WebSearchProviderPlugin {
     placeholder: "bce...",
     signupUrl: "https://console.bce.baidu.com/ai-search/qianfan/ais/console/apiKey",
     docsUrl: "https://docs.openclaw.ai/tools/web",
-    autoDetectOrder: 70,
+    autoDetectOrder: 80,
     credentialPath: "plugins.entries.baidu.config.webSearch.apiKey",
     inactiveSecretPaths: ["plugins.entries.baidu.config.webSearch.apiKey"],
     getCredentialValue: (searchConfig) => {
