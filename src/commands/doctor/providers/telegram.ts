@@ -1,12 +1,10 @@
 import {
   isNumericTelegramUserId,
   normalizeTelegramAllowFromEntry,
-} from "../../../../extensions/telegram/allow-from.js";
-import {
   inspectTelegramAccount,
   listTelegramAccountIds,
   lookupTelegramChatId,
-} from "../../../../extensions/telegram/api.js";
+} from "../../../plugin-sdk/telegram.js";
 import { resolveCommandSecretRefsViaGateway } from "../../../cli/command-secret-gateway.js";
 import { getChannelsCommandSecretTargetIds } from "../../../cli/command-secret-targets.js";
 import type { OpenClawConfig } from "../../../config/config.js";
