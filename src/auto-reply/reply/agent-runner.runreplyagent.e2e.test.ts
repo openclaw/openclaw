@@ -380,6 +380,18 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(vi.mocked(enqueueFollowupRunMock)).toHaveBeenCalledTimes(1);
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
+
+  it("drains followup queue when an unexpected exception escapes the run path", async () => {
+    accountingState.persistRunSessionUsageMock.mockRejectedValueOnce(new Error("persist exploded"));
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+    });
+
+    const { run } = createMinimalRun();
+    await expect(run()).rejects.toThrow("persist exploded");
+    expect(vi.mocked(scheduleFollowupDrainMock)).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("runReplyAgent typing (heartbeat)", () => {
@@ -674,26 +686,37 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
   it("retries transient HTTP failures once with timer-driven backoff", async () => {
     vi.useFakeTimers();
-    let calls = 0;
-    state.runEmbeddedPiAgentMock.mockImplementation(async () => {
-      calls += 1;
-      if (calls === 1) {
-        throw new Error("502 Bad Gateway");
-      }
-      return { payloads: [{ text: "final" }], meta: {} };
-    });
+    try {
+      let calls = 0;
+      state.runEmbeddedPiAgentMock.mockImplementation(async () => {
+        calls += 1;
+        if (calls === 1) {
+          throw new Error("502 Bad Gateway");
+        }
+        return { payloads: [{ text: "final" }], meta: {} };
+      });
 
-    const { run } = createMinimalRun({
-      typingMode: "message",
-    });
-    const runPromise = run();
+      const { run } = createMinimalRun({
+        typingMode: "message",
+      });
+      const runPromise = run();
+      void runPromise.catch(() => {});
+      await vi.dynamicImportSettled();
 
-    await vi.advanceTimersByTimeAsync(2_499);
-    expect(calls).toBe(1);
-    await vi.advanceTimersByTimeAsync(1);
-    await runPromise;
-    expect(calls).toBe(2);
-    vi.useRealTimers();
+      vi.advanceTimersByTime(2_499);
+      await Promise.resolve();
+      expect(calls).toBe(1);
+      vi.advanceTimersByTime(1);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(calls).toBe(2);
+
+      // Restore real timers before awaiting the settled run to avoid Vitest
+      // fake-timer bookkeeping stalling the test worker after the retry fires.
+      vi.useRealTimers();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("delivers tool results in order even when dispatched concurrently", async () => {
