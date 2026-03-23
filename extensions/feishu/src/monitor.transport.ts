@@ -28,6 +28,71 @@ export type MonitorTransportParams = {
   eventDispatcher: Lark.EventDispatcher;
 };
 
+/**
+ * Supervisor reconnection policy for Feishu WebSocket.
+ * Aligned with Slack/Telegram channel patterns (2s initial, 60s max, 1.8x factor).
+ */
+const FEISHU_WS_RECONNECT_POLICY = {
+  initialMs: 2_000,
+  maxMs: 60_000,
+  factor: 1.8,
+  jitter: 0.25,
+} as const;
+
+/**
+ * Health check interval for detecting SDK silent death.
+ *
+ * The Lark SDK's WSClient manages its own reconnection internally, but after
+ * exhausting `reconnectCount` attempts it stops silently — no error thrown, no
+ * event emitted, no promise rejected. The only observable signal is that
+ * `getReconnectInfo().nextConnectTime` stops advancing.
+ *
+ * We poll `getReconnectInfo()` at this interval. If `nextConnectTime` has not
+ * advanced for `HEALTH_CHECK_STALE_MS`, we consider the SDK dead and recreate
+ * the client from scratch.
+ */
+const HEALTH_CHECK_INTERVAL_MS = 30_000;
+
+/**
+ * How long `nextConnectTime` can remain unchanged before we declare the SDK
+ * dead. Must be longer than the SDK's own `reconnectInterval` (server-sent,
+ * typically ~10-30s) to avoid false positives during normal SDK reconnection.
+ */
+const HEALTH_CHECK_STALE_MS = 120_000;
+
+function computeReconnectDelay(attempt: number): number {
+  const { initialMs, maxMs, factor, jitter } = FEISHU_WS_RECONNECT_POLICY;
+  const base = Math.min(initialMs * factor ** (attempt - 1), maxMs);
+  const jitterRange = base * jitter;
+  return base + (Math.random() * 2 - 1) * jitterRange;
+}
+
+function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<"slept" | "aborted"> {
+  if (signal?.aborted) return Promise.resolve("aborted");
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve("slept"), ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve("aborted");
+      },
+      { once: true },
+    );
+  });
+}
+
+function isNonRecoverableFeishuError(err: unknown): boolean {
+  const msg = String(err);
+  return (
+    msg.includes("credentials not configured") ||
+    msg.includes("app_id") ||
+    msg.includes("invalid app") ||
+    msg.includes("app has been disabled") ||
+    msg.includes("app not exist")
+  );
+}
+
 function isFeishuWebhookPayload(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -81,6 +146,31 @@ function respondText(res: http.ServerResponse, statusCode: number, body: string)
   res.end(body);
 }
 
+/**
+ * WebSocket supervisor loop for Feishu connections.
+ *
+ * ## Problem
+ *
+ * The Lark SDK's `WSClient.start()` is fire-and-forget: it kicks off an
+ * internal reconnection loop but returns immediately without awaiting the
+ * connection. When the SDK exhausts its server-configured `reconnectCount`
+ * retries, it stops silently — no error, no event, no rejected promise.
+ * The previous implementation parked on `abortSignal` after calling
+ * `start()`, so it could never detect this silent death.
+ *
+ * ## Solution
+ *
+ * We use `WSClient.getReconnectInfo()` — an SDK method that exposes
+ * `{ lastConnectTime, nextConnectTime }`. A periodic health check polls
+ * this info; if `nextConnectTime` hasn't advanced for `HEALTH_CHECK_STALE_MS`
+ * and the last successful connection is also old, the SDK has given up. We
+ * then `close()` the dead client, apply exponential backoff, and create a
+ * fresh `WSClient`.
+ *
+ * This mirrors the Slack and Telegram supervisor patterns already in
+ * OpenClaw: an outer loop that owns client lifetime, with the transport
+ * SDK managing short-term reconnection internally.
+ */
 export async function monitorWebSocket({
   account,
   accountId,
@@ -89,41 +179,105 @@ export async function monitorWebSocket({
   eventDispatcher,
 }: MonitorTransportParams): Promise<void> {
   const log = runtime?.log ?? console.log;
-  log(`feishu[${accountId}]: starting WebSocket connection...`);
+  const error = runtime?.error ?? console.error;
 
-  const wsClient = createFeishuWSClient(account);
-  wsClients.set(accountId, wsClient);
+  let supervisorAttempts = 0;
 
-  return new Promise((resolve, reject) => {
-    const cleanup = () => {
-      wsClients.delete(accountId);
-      botOpenIds.delete(accountId);
-      botNames.delete(accountId);
-    };
+  while (!abortSignal?.aborted) {
+    log(`feishu[${accountId}]: starting WebSocket connection...`);
 
-    const handleAbort = () => {
-      log(`feishu[${accountId}]: abort signal received, stopping`);
-      cleanup();
-      resolve();
-    };
+    const wsClient = createFeishuWSClient(account);
+    wsClients.set(accountId, wsClient);
 
-    if (abortSignal?.aborted) {
-      cleanup();
-      resolve();
-      return;
-    }
-
-    abortSignal?.addEventListener("abort", handleAbort, { once: true });
+    let sdkDied = false;
 
     try {
       wsClient.start({ eventDispatcher });
       log(`feishu[${accountId}]: WebSocket client started`);
+
+      // SDK started successfully; reset supervisor backoff.
+      supervisorAttempts = 0;
+
+      // Health-check loop: poll getReconnectInfo() to detect SDK silent death.
+      // The SDK's internal reconnection updates nextConnectTime on each retry.
+      // When it gives up, nextConnectTime freezes.
+      let lastSeenNextConnectTime = 0;
+      let staleStartedAt = 0;
+
+      while (!abortSignal?.aborted) {
+        const result = await sleepWithAbort(HEALTH_CHECK_INTERVAL_MS, abortSignal);
+        if (result === "aborted") break;
+
+        const info = wsClient.getReconnectInfo();
+        const now = Date.now();
+
+        if (info.nextConnectTime !== lastSeenNextConnectTime) {
+          // SDK is still actively reconnecting — reset staleness tracker.
+          lastSeenNextConnectTime = info.nextConnectTime;
+          staleStartedAt = 0;
+          continue;
+        }
+
+        // nextConnectTime hasn't changed. If lastConnectTime is recent,
+        // the connection is healthy (no reconnection needed). Only flag
+        // staleness when the last successful connect is also old.
+        if (info.lastConnectTime > 0 && now - info.lastConnectTime < HEALTH_CHECK_STALE_MS) {
+          staleStartedAt = 0;
+          continue;
+        }
+
+        // Start or continue the staleness timer.
+        if (staleStartedAt === 0) {
+          staleStartedAt = now;
+          continue;
+        }
+
+        if (now - staleStartedAt >= HEALTH_CHECK_STALE_MS) {
+          error(
+            `feishu[${accountId}]: SDK reconnection stale for ${Math.round((now - staleStartedAt) / 1000)}s, ` +
+              `last connect at ${info.lastConnectTime ? new Date(info.lastConnectTime).toISOString() : "never"}. ` +
+              `Recreating client.`,
+          );
+          sdkDied = true;
+          break;
+        }
+      }
     } catch (err) {
-      cleanup();
-      abortSignal?.removeEventListener("abort", handleAbort);
-      reject(err);
+      if (isNonRecoverableFeishuError(err)) {
+        error(`feishu[${accountId}]: non-recoverable error, giving up: ${String(err)}`);
+        break;
+      }
+      sdkDied = true;
+      error(`feishu[${accountId}]: WebSocket start error: ${String(err)}`);
+    } finally {
+      try {
+        wsClient.close({ force: true });
+      } catch {
+        // close() may throw if already torn down.
+      }
+      wsClients.delete(accountId);
+      botOpenIds.delete(accountId);
+      botNames.delete(accountId);
     }
-  });
+
+    if (abortSignal?.aborted) break;
+
+    if (sdkDied) {
+      supervisorAttempts += 1;
+      const delayMs = computeReconnectDelay(supervisorAttempts);
+      log(
+        `feishu[${accountId}]: supervisor reconnect attempt ${supervisorAttempts}, ` +
+          `waiting ${Math.round(delayMs / 1000)}s...`,
+      );
+      const result = await sleepWithAbort(delayMs, abortSignal);
+      if (result === "aborted") break;
+      continue;
+    }
+
+    break;
+  }
+
+  log(`feishu[${accountId}]: WebSocket monitor stopped`);
 }
 
 export async function monitorWebhook({
@@ -192,7 +346,6 @@ export async function monitorWebhook({
           return;
         }
 
-        // Lark's default adapter drops invalid signatures as an empty 200. Reject here instead.
         if (
           !isFeishuWebhookSignatureValid({
             headers: req.headers,
