@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MSTeamsConfig } from "../runtime-api.js";
 
 const hostMockState = vi.hoisted(() => ({
@@ -20,6 +20,17 @@ vi.mock("@microsoft/agents-hosting", () => ({
 import { probeMSTeams } from "./probe.js";
 
 describe("msteams probe", () => {
+  beforeEach(() => {
+    hostMockState.tokenError = null;
+    vi.stubEnv("MSTEAMS_APP_ID", "");
+    vi.stubEnv("MSTEAMS_APP_PASSWORD", "");
+    vi.stubEnv("MSTEAMS_TENANT_ID", "");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("returns an error when credentials are missing", async () => {
     const cfg = { enabled: true } as unknown as MSTeamsConfig;
     await expect(probeMSTeams(cfg)).resolves.toMatchObject({
@@ -28,7 +39,6 @@ describe("msteams probe", () => {
   });
 
   it("validates credentials by acquiring a token", async () => {
-    hostMockState.tokenError = null;
     const cfg = {
       enabled: true,
       appId: "app",
