@@ -26,6 +26,8 @@ type Task = {
   status: string;
   priority: string;
   assigneeAgentId: string | null;
+  goalId: string | null;
+  projectId: string | null;
   billingCode: string | null;
   createdAt: number;
   updatedAt: number;
@@ -42,6 +44,10 @@ type TaskComment = {
 };
 
 type AgentEntry = { agentId: string; name: string };
+
+type GoalEntry = { id: string; title: string };
+
+type ProjectEntry = { id: string; name: string };
 
 const TASK_STATUSES = [
   "backlog",
@@ -111,6 +117,8 @@ export function TaskDetailPage() {
   const [task, setTask] = useState<Task | null>(null);
   const [comments, setComments] = useState<TaskComment[]>([]);
   const [agents, setAgents] = useState<AgentEntry[]>([]);
+  const [goals, setGoals] = useState<GoalEntry[]>([]);
+  const [projects, setProjects] = useState<ProjectEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -132,13 +140,17 @@ export function TaskDetailPage() {
       sendRpc<Task>("tasks.get", { id: taskId }),
       sendRpc<{ comments: TaskComment[] }>("tasks.listComments", { taskId }),
       sendRpc<{ agents: AgentEntry[] }>("agents.list").catch(() => ({ agents: [] })),
+      sendRpc<{ goals: GoalEntry[] }>("goals.list", {}).catch(() => ({ goals: [] })),
+      sendRpc<{ projects: ProjectEntry[] }>("projects.list", {}).catch(() => ({ projects: [] })),
     ])
-      .then(([t, commentsRes, agentsRes]) => {
+      .then(([t, commentsRes, agentsRes, goalsRes, projectsRes]) => {
         setTask(t);
         setEditTitle(t.title);
         setEditDesc(t.description ?? "");
         setComments(commentsRes.comments ?? []);
         setAgents(agentsRes.agents ?? []);
+        setGoals(goalsRes.goals ?? []);
+        setProjects(projectsRes.projects ?? []);
         setError(null);
       })
       .catch((err: unknown) => setError(String(err)))
@@ -174,6 +186,24 @@ export function TaskDetailPage() {
       return;
     }
     sendRpc<Task>("tasks.update", { id: task.id, assigneeAgentId: assigneeAgentId || null })
+      .then((updated) => setTask(updated))
+      .catch((err: unknown) => setError(String(err)));
+  };
+
+  const handleGoalChange = (goalId: string) => {
+    if (!task) {
+      return;
+    }
+    sendRpc<Task>("tasks.update", { id: task.id, goalId: goalId || null })
+      .then((updated) => setTask(updated))
+      .catch((err: unknown) => setError(String(err)));
+  };
+
+  const handleProjectChange = (projectId: string) => {
+    if (!task) {
+      return;
+    }
+    sendRpc<Task>("tasks.update", { id: task.id, projectId: projectId || null })
       .then((updated) => setTask(updated))
       .catch((err: unknown) => setError(String(err)));
   };
@@ -352,6 +382,44 @@ export function TaskDetailPage() {
             {agents.map((a) => (
               <option key={a.agentId} value={a.agentId}>
                 {a.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Goal */}
+        <div className="flex flex-col gap-2">
+          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+            Goal
+          </label>
+          <select
+            className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm outline-none focus:border-ring cursor-pointer"
+            value={task.goalId ?? ""}
+            onChange={(e) => handleGoalChange(e.target.value)}
+          >
+            <option value="">No goal</option>
+            {goals.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.title}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Project */}
+        <div className="flex flex-col gap-2">
+          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+            Project
+          </label>
+          <select
+            className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm outline-none focus:border-ring cursor-pointer"
+            value={task.projectId ?? ""}
+            onChange={(e) => handleProjectChange(e.target.value)}
+          >
+            <option value="">No project</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
               </option>
             ))}
           </select>

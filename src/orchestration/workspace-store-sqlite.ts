@@ -213,6 +213,36 @@ export function updateWorkspaceAgentStatus(
 }
 
 /**
+ * Seeds the default workspace with agents from bundled manifests.
+ * Idempotent — uses INSERT OR IGNORE so existing assignments are untouched.
+ */
+export function seedDefaultWorkspaceAgents(
+  agents: { id: string; role?: string }[],
+  workspaceId = "default",
+): number {
+  const db = getStateDb();
+  // Ensure the target workspace exists
+  const ws = db.prepare("SELECT id FROM op1_workspaces WHERE id = ?").get(workspaceId);
+  if (!ws) {
+    return 0;
+  }
+
+  const stmt = db.prepare(
+    `INSERT OR IGNORE INTO op1_workspace_agents (workspace_id, agent_id, role, status, joined_at)
+     VALUES (?, ?, ?, 'active', unixepoch())`,
+  );
+
+  let seeded = 0;
+  for (const agent of agents) {
+    const result = stmt.run(workspaceId, agent.id, agent.role ?? null);
+    if (result.changes > 0) {
+      seeded++;
+    }
+  }
+  return seeded;
+}
+
+/**
  * Resolves the appropriate workspace for an agent.
  * Useful for cost attribution and governance.
  */

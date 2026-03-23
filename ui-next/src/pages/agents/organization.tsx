@@ -25,9 +25,10 @@ import {
   Pencil,
   Plus,
   Minus,
+  Wand2,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import { AgentConfigDialog } from "@/components/agents/agent-config-dialog";
 import {
   AgentFlowNodeComponent,
@@ -536,6 +537,7 @@ function BundleFormDialog({
 
 export function AgentOrganizationPage() {
   const { sendRpc } = useGateway();
+  const navigate = useNavigate();
   const isConnected = useGatewayStore((s) => s.connectionStatus === "connected");
   const [searchParams, setSearchParams] = useSearchParams();
   const bundleFilter = searchParams.get("bundle");
@@ -990,6 +992,10 @@ export function AgentOrganizationPage() {
               <RefreshCw className="size-4" />
             )}
             <span className="ml-1.5">Refresh</span>
+          </Button>
+          <Button size="sm" onClick={() => void navigate("/onboarding?force=true")}>
+            <Wand2 className="size-4 mr-1.5" />
+            Setup Wizard
           </Button>
         </div>
       </div>

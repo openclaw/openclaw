@@ -7,11 +7,18 @@ import {
   Plus,
   RefreshCw,
   Trash2,
-  X,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { DataTable, type Column } from "@/components/ui/custom/data/data-table";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { useGateway } from "@/hooks/use-gateway";
 import { cn } from "@/lib/utils";
 import { useGatewayStore } from "@/store/gateway-store";
@@ -55,8 +62,6 @@ type CostEvent = {
   model: string | null;
 };
 
-type Workspace = { id: string; name: string };
-
 // ── Helpers ───────────────────────────────────────────────────────────
 
 function microToUsd(microcents: number): string {
@@ -95,17 +100,17 @@ function IncidentBadge({ type }: { type: string }) {
 // ── Create Policy Dialog ───────────────────────────────────────────────
 
 function CreatePolicyDialog({
-  workspaces,
+  open,
+  onOpenChange,
   onCreated,
-  onClose,
   sendRpc,
 }: {
-  workspaces: Workspace[];
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
   onCreated: () => void;
-  onClose: () => void;
   sendRpc: <T>(method: string, params?: Record<string, unknown>) => Promise<T>;
 }) {
-  const [workspaceId, setWorkspaceId] = useState(workspaces[0]?.id ?? "");
+  const [workspaceId, setWorkspaceId] = useState("default");
   const [scopeType, setScopeType] = useState<"workspace" | "agent" | "project">("workspace");
   const [scopeId, setScopeId] = useState("");
   const [amountUsd, setAmountUsd] = useState("");
@@ -117,8 +122,26 @@ function CreatePolicyDialog({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // For workspace scope, scopeId = workspaceId
+  // For workspace scope, scopeId defaults to workspaceId
   const effectiveScopeId = scopeType === "workspace" ? workspaceId : scopeId;
+
+  const resetForm = () => {
+    setWorkspaceId("default");
+    setScopeType("workspace");
+    setScopeId("");
+    setAmountUsd("");
+    setWarnPercent("80");
+    setHardStop("100");
+    setWindowKind("calendar_month_utc");
+    setError(null);
+  };
+
+  const handleOpenChange = (v: boolean) => {
+    if (!v) {
+      resetForm();
+    }
+    onOpenChange(v);
+  };
 
   const handleSubmit = () => {
     const usd = parseFloat(amountUsd);
@@ -142,48 +165,41 @@ function CreatePolicyDialog({
     })
       .then(() => {
         onCreated();
-        onClose();
+        handleOpenChange(false);
       })
       .catch((err: unknown) => setError(String(err)))
       .finally(() => setSubmitting(false));
   };
 
+  const canSubmit = amountUsd.trim().length > 0 && !submitting;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="w-full max-w-md rounded-lg border bg-card p-6 flex flex-col gap-4 shadow-xl">
-        <div className="flex items-center justify-between">
-          <h3 className="font-semibold">Create Budget Policy</h3>
-          <Button variant="ghost" size="sm" onClick={onClose}>
-            <X className="size-4" />
-          </Button>
-        </div>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Create Budget Policy</DialogTitle>
+        </DialogHeader>
 
-        {error && (
-          <div className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
-            {error}
-          </div>
-        )}
+        <div className="grid gap-3 py-2">
+          {error && (
+            <div className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+              {error}
+            </div>
+          )}
 
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-muted-foreground">Workspace</label>
-            <select
-              className="h-8 rounded-md border border-input bg-transparent px-2 text-sm outline-none"
+          <div className="grid gap-1.5">
+            <label className="text-sm font-medium">Workspace ID</label>
+            <Input
               value={workspaceId}
               onChange={(e) => setWorkspaceId(e.target.value)}
-            >
-              {workspaces.map((ws) => (
-                <option key={ws.id} value={ws.id}>
-                  {ws.name}
-                </option>
-              ))}
-            </select>
+              placeholder="default"
+            />
           </div>
 
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-muted-foreground">Scope Type</label>
+          <div className="grid gap-1.5">
+            <label className="text-sm font-medium">Scope Type</label>
             <select
-              className="h-8 rounded-md border border-input bg-transparent px-2 text-sm outline-none"
+              className="h-9 rounded-md border border-input bg-transparent px-3 text-sm outline-none focus:ring-1 focus:ring-ring"
               value={scopeType}
               onChange={(e) => setScopeType(e.target.value as typeof scopeType)}
             >
@@ -194,12 +210,11 @@ function CreatePolicyDialog({
           </div>
 
           {scopeType !== "workspace" && (
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium text-muted-foreground">
+            <div className="grid gap-1.5">
+              <label className="text-sm font-medium">
                 {scopeType === "agent" ? "Agent ID" : "Project ID"}
               </label>
-              <input
-                className="h-8 rounded-md border border-input bg-transparent px-2 text-sm outline-none"
+              <Input
                 value={scopeId}
                 onChange={(e) => setScopeId(e.target.value)}
                 placeholder={scopeType === "agent" ? "agent-id" : "project-id"}
@@ -207,10 +222,9 @@ function CreatePolicyDialog({
             </div>
           )}
 
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-muted-foreground">Budget (USD)</label>
-            <input
-              className="h-8 rounded-md border border-input bg-transparent px-2 text-sm outline-none"
+          <div className="grid gap-1.5">
+            <label className="text-sm font-medium">Budget (USD) *</label>
+            <Input
               type="number"
               min="0"
               step="0.01"
@@ -220,10 +234,10 @@ function CreatePolicyDialog({
             />
           </div>
 
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-muted-foreground">Window</label>
+          <div className="grid gap-1.5">
+            <label className="text-sm font-medium">Window</label>
             <select
-              className="h-8 rounded-md border border-input bg-transparent px-2 text-sm outline-none"
+              className="h-9 rounded-md border border-input bg-transparent px-3 text-sm outline-none focus:ring-1 focus:ring-ring"
               value={windowKind}
               onChange={(e) => setWindowKind(e.target.value as typeof windowKind)}
             >
@@ -233,10 +247,9 @@ function CreatePolicyDialog({
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium text-muted-foreground">Warn at %</label>
-              <input
-                className="h-8 rounded-md border border-input bg-transparent px-2 text-sm outline-none"
+            <div className="grid gap-1.5">
+              <label className="text-sm font-medium">Warn at %</label>
+              <Input
                 type="number"
                 min="0"
                 max="100"
@@ -244,10 +257,9 @@ function CreatePolicyDialog({
                 onChange={(e) => setWarnPercent(e.target.value)}
               />
             </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium text-muted-foreground">Hard stop at %</label>
-              <input
-                className="h-8 rounded-md border border-input bg-transparent px-2 text-sm outline-none"
+            <div className="grid gap-1.5">
+              <label className="text-sm font-medium">Hard stop at %</label>
+              <Input
                 type="number"
                 min="0"
                 max="100"
@@ -258,17 +270,17 @@ function CreatePolicyDialog({
           </div>
         </div>
 
-        <div className="flex gap-2 justify-end">
-          <Button variant="outline" size="sm" onClick={onClose}>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => handleOpenChange(false)}>
             Cancel
           </Button>
-          <Button size="sm" disabled={submitting} onClick={handleSubmit}>
-            {submitting ? <Loader2 className="size-3.5 animate-spin mr-1" /> : null}
+          <Button onClick={handleSubmit} disabled={!canSubmit}>
+            {submitting && <Loader2 className="mr-2 size-4 animate-spin" />}
             Create
           </Button>
-        </div>
-      </div>
-    </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -281,7 +293,6 @@ export function BudgetsPage() {
   const [policies, setPolicies] = useState<BudgetPolicy[]>([]);
   const [incidents, setIncidents] = useState<BudgetIncident[]>([]);
   const [recentCosts, setRecentCosts] = useState<CostEvent[]>([]);
-  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -294,13 +305,11 @@ export function BudgetsPage() {
       sendRpc<{ policies: BudgetPolicy[] }>("budgets.policies.list", {}),
       sendRpc<{ incidents: BudgetIncident[] }>("budgets.incidents.list", {}),
       sendRpc<{ events: CostEvent[] }>("costs.events.list", {}),
-      sendRpc<{ workspaces: Workspace[] }>("workspaces.list").catch(() => ({ workspaces: [] })),
     ])
-      .then(([polRes, incRes, costRes, wsRes]) => {
+      .then(([polRes, incRes, costRes]) => {
         setPolicies(polRes.policies ?? []);
         setIncidents(incRes.incidents ?? []);
         setRecentCosts(costRes.events ?? []);
-        setWorkspaces(wsRes.workspaces ?? []);
       })
       .catch((err) => setError(String(err)))
       .finally(() => setLoading(false));
@@ -473,10 +482,16 @@ export function BudgetsPage() {
           <DollarSign className="size-5 text-muted-foreground" />
           <h2 className="text-lg font-semibold">Budgets</h2>
         </div>
-        <Button variant="outline" size="sm" onClick={loadData} disabled={loading}>
-          <RefreshCw className={cn("mr-1 size-3.5", loading && "animate-spin")} />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={loadData} disabled={loading}>
+            <RefreshCw className={cn("mr-1 size-3.5", loading && "animate-spin")} />
+            Refresh
+          </Button>
+          <Button size="sm" onClick={() => setShowCreate(true)}>
+            <Plus className="mr-1 size-3.5" />
+            Create Budget
+          </Button>
+        </div>
       </div>
 
       {error && (
@@ -580,27 +595,12 @@ export function BudgetsPage() {
         />
       </div>
 
-      {showCreate && workspaces.length > 0 && (
-        <CreatePolicyDialog
-          workspaces={workspaces}
-          sendRpc={sendRpc as <T>(method: string, params?: Record<string, unknown>) => Promise<T>}
-          onCreated={loadData}
-          onClose={() => setShowCreate(false)}
-        />
-      )}
-
-      {showCreate && workspaces.length === 0 && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="rounded-lg border bg-card p-6 flex flex-col gap-3 max-w-sm w-full shadow-xl">
-            <p className="text-sm text-muted-foreground">
-              No workspaces found. Create a workspace first before adding budget policies.
-            </p>
-            <Button variant="outline" size="sm" onClick={() => setShowCreate(false)}>
-              Close
-            </Button>
-          </div>
-        </div>
-      )}
+      <CreatePolicyDialog
+        open={showCreate}
+        onOpenChange={setShowCreate}
+        sendRpc={sendRpc as <T>(method: string, params?: Record<string, unknown>) => Promise<T>}
+        onCreated={loadData}
+      />
     </div>
   );
 }

@@ -80,6 +80,8 @@ export function listTasks(filters?: {
   workspaceId?: string;
   status?: TaskStatus;
   assigneeAgentId?: string;
+  goalId?: string;
+  projectId?: string;
 }): Task[] {
   const db = getStateDb();
   let query = "SELECT * FROM op1_tasks WHERE 1=1";
@@ -96,6 +98,14 @@ export function listTasks(filters?: {
   if (filters?.assigneeAgentId) {
     query += " AND assignee_agent_id = ?";
     params.push(filters.assigneeAgentId);
+  }
+  if (filters?.goalId) {
+    query += " AND goal_id = ?";
+    params.push(filters.goalId);
+  }
+  if (filters?.projectId) {
+    query += " AND project_id = ?";
+    params.push(filters.projectId);
   }
 
   query += " ORDER BY updated_at DESC";
@@ -189,6 +199,8 @@ export function updateTask(
     priority?: TaskPriority;
     assigneeAgentId?: string | null;
     billingCode?: string | null;
+    goalId?: string | null;
+    projectId?: string | null;
   },
 ): Task {
   const db = getStateDb();
@@ -238,6 +250,14 @@ export function updateTask(
   if (updates.billingCode !== undefined) {
     sets.push("billing_code = ?");
     params.push(updates.billingCode);
+  }
+  if (updates.goalId !== undefined) {
+    sets.push("goal_id = ?");
+    params.push(updates.goalId);
+  }
+  if (updates.projectId !== undefined) {
+    sets.push("project_id = ?");
+    params.push(updates.projectId);
   }
 
   params.push(taskId);

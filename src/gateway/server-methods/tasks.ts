@@ -54,6 +54,8 @@ export const tasksHandlers: GatewayRequestHandlers = {
         workspaceId: p.workspaceId,
         status: p.status as TaskStatus | undefined,
         assigneeAgentId: p.assigneeAgentId,
+        goalId: p.goalId,
+        projectId: p.projectId,
       });
       respond(true, { tasks });
     } catch (err) {
@@ -98,6 +100,8 @@ export const tasksHandlers: GatewayRequestHandlers = {
         priority: p.priority as TaskPriority | undefined,
         assigneeAgentId: p.assigneeAgentId,
         billingCode: p.billingCode,
+        goalId: p.goalId,
+        projectId: p.projectId,
       });
       logActivity({
         workspaceId: task.workspaceId,

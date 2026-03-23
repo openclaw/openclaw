@@ -1,6 +1,6 @@
 import { PlayCircle, RotateCcw, Import, Wand2 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { OnboardingWizard } from "@/components/onboarding/onboarding-wizard";
 import { Button } from "@/components/ui/button";
 import { useGateway } from "@/hooks/use-gateway";
@@ -20,17 +20,23 @@ type ConfigGetResponse = {
 
 export function OnboardingPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const forceWizard = searchParams.get("force") === "true";
   const { state, loading, complete, reset } = useOnboarding();
   const { sendRpc } = useGateway();
   const isConnected = useGatewayStore((s) => s.connectionStatus === "connected");
-  const [mode, setMode] = useState<PreCheckMode>("loading");
+  const [mode, setMode] = useState<PreCheckMode>(forceWizard ? "wizard" : "loading");
 
   // If onboarding is already completed or skipped, redirect to overview
+  // (unless force=true was passed, e.g. from the org page Setup Wizard button)
   useEffect(() => {
+    if (forceWizard) {
+      return;
+    }
     if (!loading && state && (state.status === "completed" || state.status === "skipped")) {
       void navigate("/overview", { replace: true });
     }
-  }, [loading, state, navigate]);
+  }, [loading, state, navigate, forceWizard]);
 
   // Pre-check: determine mode (fresh, resume, or import)
   const runPreCheck = useCallback(async () => {

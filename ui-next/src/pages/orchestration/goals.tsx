@@ -1,4 +1,4 @@
-import { Target, RefreshCw, Loader2 } from "lucide-react";
+import { Target, RefreshCw, Loader2, Plus } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { DataTable, type Column } from "@/components/ui/custom/data/data-table";
@@ -9,6 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { useGateway } from "@/hooks/use-gateway";
 import { cn } from "@/lib/utils";
 import { useGatewayStore } from "@/store/gateway-store";
@@ -104,6 +105,108 @@ function ProgressBar({ value }: { value: number }) {
 }
 
 const ALL_STATUSES = ["planned", "in_progress", "achieved", "abandoned"];
+const ALL_LEVELS = ["vision", "objective", "key_result"] as const;
+const ALL_CREATE_STATUSES = ["planned", "in_progress"] as const;
+
+type GoalCreateForm = {
+  title: string;
+  description: string;
+  level: string;
+  status: string;
+};
+
+const EMPTY_GOAL_FORM: GoalCreateForm = {
+  title: "",
+  description: "",
+  level: "objective",
+  status: "planned",
+};
+
+// ── Create Dialog ─────────────────────────────────────────────────────
+
+function GoalCreateDialog({
+  open,
+  onOpenChange,
+  form,
+  setForm,
+  onSubmit,
+  submitting,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  form: GoalCreateForm;
+  setForm: (f: GoalCreateForm) => void;
+  onSubmit: () => void;
+  submitting: boolean;
+}) {
+  const update = (patch: Partial<GoalCreateForm>) => setForm({ ...form, ...patch });
+  const canSubmit = form.title.trim().length > 0 && !submitting;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Create Goal</DialogTitle>
+        </DialogHeader>
+        <div className="grid gap-3 py-2">
+          <div className="grid gap-1.5">
+            <label className="text-sm font-medium">Title *</label>
+            <Input
+              value={form.title}
+              onChange={(e) => update({ title: e.target.value })}
+              placeholder="Goal title"
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <label className="text-sm font-medium">Description</label>
+            <Input
+              value={form.description}
+              onChange={(e) => update({ description: e.target.value })}
+              placeholder="Optional description"
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <label className="text-sm font-medium">Level</label>
+            <select
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm outline-none focus:border-ring cursor-pointer"
+              value={form.level}
+              onChange={(e) => update({ level: e.target.value })}
+            >
+              {ALL_LEVELS.map((l) => (
+                <option key={l} value={l}>
+                  {l.replace("_", " ")}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="grid gap-1.5">
+            <label className="text-sm font-medium">Status</label>
+            <select
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm outline-none focus:border-ring cursor-pointer"
+              value={form.status}
+              onChange={(e) => update({ status: e.target.value })}
+            >
+              {ALL_CREATE_STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {s.replace("_", " ")}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button onClick={onSubmit} disabled={!canSubmit}>
+            {submitting && <Loader2 className="mr-2 size-4 animate-spin" />}
+            Create
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 // ── Detail Dialog ─────────────────────────────────────────────────────
 
@@ -213,6 +316,10 @@ export function GoalsPage() {
   const [workspaceFilter, setWorkspaceFilter] = useState<string>("all");
   const [detailGoal, setDetailGoal] = useState<Goal | null>(null);
 
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createForm, setCreateForm] = useState<GoalCreateForm>(EMPTY_GOAL_FORM);
+  const [createSubmitting, setCreateSubmitting] = useState(false);
+
   const loadData = useCallback(() => {
     setLoading(true);
     setError(null);
@@ -248,6 +355,24 @@ export function GoalsPage() {
         loadData();
       })
       .catch((err) => setError(String(err)));
+  };
+
+  const handleCreate = () => {
+    setCreateSubmitting(true);
+    sendRpc("goals.create", {
+      workspaceId: workspaceFilter !== "all" ? workspaceFilter : "default",
+      title: createForm.title.trim(),
+      description: createForm.description.trim() || undefined,
+      level: createForm.level,
+      status: createForm.status,
+    })
+      .then(() => {
+        setCreateOpen(false);
+        setCreateForm(EMPTY_GOAL_FORM);
+        loadData();
+      })
+      .catch((err) => setError(String(err)))
+      .finally(() => setCreateSubmitting(false));
   };
 
   // Build a map for parent title lookup
@@ -329,6 +454,16 @@ export function GoalsPage() {
             <RefreshCw className={cn("mr-1 size-3.5", loading && "animate-spin")} />
             Refresh
           </Button>
+          <Button
+            size="sm"
+            onClick={() => {
+              setCreateForm(EMPTY_GOAL_FORM);
+              setCreateOpen(true);
+            }}
+          >
+            <Plus className="mr-1 size-3.5" />
+            Create Goal
+          </Button>
         </div>
       </div>
 
@@ -358,6 +493,15 @@ export function GoalsPage() {
         goal={detailGoal}
         onClose={() => setDetailGoal(null)}
         onUpdate={handleUpdate}
+      />
+
+      <GoalCreateDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        form={createForm}
+        setForm={setCreateForm}
+        onSubmit={handleCreate}
+        submitting={createSubmitting}
       />
     </div>
   );

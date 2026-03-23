@@ -112,21 +112,15 @@ const navData = {
   agent: [
     {
       title: "Agents",
-      url: "/agents/organization",
+      url: "/agents/browse",
       icon: FolderOpen,
-      subtitle: "Agent organization and workspaces",
+      subtitle: "Agent blueprints and workspaces",
       items: [
         {
           title: "Browse",
           url: "/agents/browse",
           icon: Store,
           subtitle: "Registry blueprints and bundles",
-        },
-        {
-          title: "Organization",
-          url: "/agents/organization",
-          icon: GitBranch,
-          subtitle: "Deployed agent hierarchy",
         },
         {
           title: "Installed",
@@ -206,6 +200,12 @@ const navData = {
     },
   ],
   orchestration: [
+    {
+      title: "Organization",
+      url: "/agents/organization",
+      icon: GitBranch,
+      subtitle: "Agent hierarchy and departments",
+    },
     {
       title: "Projects",
       url: "/projects",

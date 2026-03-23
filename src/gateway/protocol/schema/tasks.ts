@@ -68,6 +68,8 @@ export const TasksListParamsSchema = Type.Object({
     ]),
   ),
   assigneeAgentId: Type.Optional(Type.String()),
+  goalId: Type.Optional(Type.String()),
+  projectId: Type.Optional(Type.String()),
 });
 
 export const TasksGetParamsSchema = Type.Object({
@@ -102,6 +104,8 @@ export const TasksUpdateParamsSchema = Type.Object({
   id: Type.String(),
   title: Type.Optional(NonEmptyString),
   description: Type.Optional(Type.String()),
+  goalId: Type.Optional(Type.String()),
+  projectId: Type.Optional(Type.String()),
   status: Type.Optional(
     Type.Union([
       Type.Literal("backlog"),

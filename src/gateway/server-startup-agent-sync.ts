@@ -18,6 +18,7 @@ import { loadAgentFromDir } from "../config/agent-manifest-validation.js";
 import { loadBlueprint, deployAgent } from "../config/agent-workspace-deploy.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
 import type { AgentManifest } from "../config/zod-schema.agent-manifest.js";
+import { seedDefaultWorkspaceAgents } from "../orchestration/workspace-store-sqlite.js";
 
 const BUNDLED_AGENTS_DIR = join(import.meta.dirname, "..", "agents");
 /** Directories that are not agent folders. */
@@ -55,6 +56,17 @@ export async function reconcileAgentConfigOnStartup(params: {
   }
 
   const nonBundles = manifests.filter((m) => !m.is_bundle);
+
+  // Seed bundled agents into default workspace (idempotent — INSERT OR IGNORE)
+  try {
+    const seeded = seedDefaultWorkspaceAgents(nonBundles.map((m) => ({ id: m.id, role: m.role })));
+    if (seeded > 0) {
+      params.log.warn(`workspace seeding: ${seeded} agent(s) assigned to default workspace`);
+    }
+  } catch (err) {
+    params.log.warn(`workspace agent seeding failed: ${String(err)}`);
+  }
+
   const derived = deriveAllowAgents(nonBundles);
 
   // Re-read config to get freshest state

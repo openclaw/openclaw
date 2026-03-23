@@ -85,6 +85,14 @@ const TIER_MAP: Record<string, TierInfo> = {
     children: ENGINEERING_AGENTS,
     department: "engineering",
   },
+  neo: {
+    tier: 2,
+    label: "Department Head",
+    color: "#94a3b8",
+    parent: "Operator1",
+    children: ENGINEERING_AGENTS,
+    department: "engineering",
+  },
   Morpheus: {
     tier: 2,
     label: "Department Head",
@@ -93,7 +101,23 @@ const TIER_MAP: Record<string, TierInfo> = {
     children: MARKETING_AGENTS,
     department: "marketing",
   },
+  morpheus: {
+    tier: 2,
+    label: "Department Head",
+    color: "#94a3b8",
+    parent: "Operator1",
+    children: MARKETING_AGENTS,
+    department: "marketing",
+  },
   Trinity: {
+    tier: 2,
+    label: "Department Head",
+    color: "#94a3b8",
+    parent: "Operator1",
+    children: FINANCE_AGENTS,
+    department: "finance",
+  },
+  trinity: {
     tier: 2,
     label: "Department Head",
     color: "#94a3b8",

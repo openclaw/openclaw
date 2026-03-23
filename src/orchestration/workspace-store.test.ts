@@ -36,6 +36,7 @@ import {
   listWorkspaceAgents,
   updateWorkspaceAgentStatus,
   resolveAgentWorkspace,
+  seedDefaultWorkspaceAgents,
 } from "./workspace-store-sqlite.js";
 
 describe("workspace-store-sqlite", () => {
@@ -144,6 +145,53 @@ describe("workspace-store-sqlite", () => {
       const agents = listWorkspaceAgents(ws.id);
       expect(agents[0].status).toBe("inactive");
       expect(agents[0].capabilities).toEqual(["code", "review"]);
+    });
+  });
+
+  // ── seedDefaultWorkspaceAgents ───────────────────────────────────
+
+  describe("seedDefaultWorkspaceAgents", () => {
+    it("seeds agents into the default workspace", () => {
+      const agents = [
+        { id: "operator1", role: "COO" },
+        { id: "neo", role: "CTO" },
+        { id: "morpheus", role: "CMO" },
+      ];
+      const seeded = seedDefaultWorkspaceAgents(agents);
+      expect(seeded).toBe(3);
+
+      const assigned = listWorkspaceAgents("default");
+      expect(assigned).toHaveLength(3);
+      expect(assigned.map((a) => a.agentId).toSorted()).toEqual(["morpheus", "neo", "operator1"]);
+      expect(assigned.find((a) => a.agentId === "neo")?.role).toBe("CTO");
+      expect(assigned.find((a) => a.agentId === "neo")?.status).toBe("active");
+    });
+
+    it("is idempotent — does not overwrite existing assignments", () => {
+      seedDefaultWorkspaceAgents([{ id: "neo", role: "CTO" }]);
+
+      // Manually change the role
+      assignAgentToWorkspace("default", "neo", "Lead Engineer");
+
+      // Re-seed — should not overwrite
+      const seeded = seedDefaultWorkspaceAgents([{ id: "neo", role: "CTO" }]);
+      expect(seeded).toBe(0);
+
+      const agents = listWorkspaceAgents("default");
+      expect(agents.find((a) => a.agentId === "neo")?.role).toBe("Lead Engineer");
+    });
+
+    it("returns 0 when workspace does not exist", () => {
+      const seeded = seedDefaultWorkspaceAgents([{ id: "agent-x" }], "nonexistent");
+      expect(seeded).toBe(0);
+    });
+
+    it("seeds agents without a role", () => {
+      const seeded = seedDefaultWorkspaceAgents([{ id: "worker-1" }]);
+      expect(seeded).toBe(1);
+
+      const agents = listWorkspaceAgents("default");
+      expect(agents.find((a) => a.agentId === "worker-1")?.role).toBeNull();
     });
   });
 

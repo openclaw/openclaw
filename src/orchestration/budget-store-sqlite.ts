@@ -107,20 +107,24 @@ export function getBudgetPolicy(id: string): BudgetPolicy | null {
   return row ? rowToBudgetPolicy(row as unknown as BudgetPolicyRow) : null;
 }
 
-export function listBudgetPolicies(filters: {
-  workspaceId: string;
+export function listBudgetPolicies(filters?: {
+  workspaceId?: string;
   scopeType?: BudgetScopeType;
   scopeId?: string;
 }): BudgetPolicy[] {
   const db = getStateDb();
-  let query = "SELECT * FROM op1_budget_policies WHERE workspace_id = ?";
-  const params: Array<string | number | bigint | null> = [filters.workspaceId];
+  let query = "SELECT * FROM op1_budget_policies WHERE 1=1";
+  const params: Array<string | number | bigint | null> = [];
 
-  if (filters.scopeType) {
+  if (filters?.workspaceId) {
+    query += " AND workspace_id = ?";
+    params.push(filters.workspaceId);
+  }
+  if (filters?.scopeType) {
     query += " AND scope_type = ?";
     params.push(filters.scopeType);
   }
-  if (filters.scopeId) {
+  if (filters?.scopeId) {
     query += " AND scope_id = ?";
     params.push(filters.scopeId);
   }

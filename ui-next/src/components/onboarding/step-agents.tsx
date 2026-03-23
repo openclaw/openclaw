@@ -7,7 +7,7 @@ import {
   CheckCircle2,
   FolderOpen,
 } from "lucide-react";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -49,7 +49,7 @@ export function StepAgents({ onValidChange }: Props) {
   const [confirmDisable, setConfirmDisable] = useState<string | null>(null);
 
   // Workspace path
-  const [workspacePath, setWorkspacePath] = useState("~/.openclaw/workspace");
+  const [workspacePath, setWorkspacePath] = useState("");
   const [pathValidation, setPathValidation] = useState<{
     valid: boolean;
     exists: boolean;
@@ -57,12 +57,26 @@ export function StepAgents({ onValidChange }: Props) {
   } | null>(null);
   const [validatingPath, setValidatingPath] = useState(false);
 
-  // Load agents
+  // Load agents and resolve workspace path from the main agent
   useEffect(() => {
     const load = async () => {
       try {
-        const result = await sendRpc<{ agents: AgentSummary[] }>("agents.list", {});
-        setAgents(result.agents ?? []);
+        const [agentsRes, filesRes] = await Promise.all([
+          sendRpc<{ agents: { id: string; name?: string }[] }>("agents.list", {}),
+          sendRpc<{ workspace?: string }>("agents.files.list", { agentId: "main" }).catch(
+            () => null,
+          ),
+        ]);
+        // Map RPC response shape (id) to component shape (agentId)
+        setAgents(
+          (agentsRes.agents ?? []).map((a) => ({
+            agentId: a.id,
+            name: a.name,
+          })),
+        );
+        if (filesRes?.workspace) {
+          setWorkspacePath(filesRes.workspace);
+        }
       } catch {
         // No agents yet
       } finally {
@@ -104,7 +118,7 @@ export function StepAgents({ onValidChange }: Props) {
 
       if (isEnabled) {
         // Disabling: show confirmation with worker count
-        const workers = getAgentChildren(headName);
+        const workers = getConfiguredChildren(headName);
         setConfirmDisable(dept);
         // If user confirms, the confirm handler will do the actual disable
         // For now just set the confirmation state
@@ -160,6 +174,19 @@ export function StepAgents({ onValidChange }: Props) {
       return next;
     });
   }, []);
+
+  // Set of actually configured agent IDs (lowercase) — used to filter hardcoded tier map children
+  const configuredIds = useMemo(
+    () => new Set(agents.map((a) => a.agentId?.toLowerCase()).filter(Boolean)),
+    [agents],
+  );
+
+  // Filter children to only those that actually exist in the config
+  const getConfiguredChildren = useCallback(
+    (headName: string) =>
+      getAgentChildren(headName).filter((w) => configuredIds.has(w.toLowerCase())),
+    [configuredIds],
+  );
 
   if (loading) {
     return (
@@ -222,7 +249,7 @@ export function StepAgents({ onValidChange }: Props) {
       {/* Departments */}
       {DEPARTMENTS.map(({ head, label, department }) => {
         const isEnabled = enabledDepts.has(department);
-        const workers = getAgentChildren(head);
+        const workers = getConfiguredChildren(head);
         const activeWorkers = workers.filter((w) => !disabledAgents.has(w));
         const isExpanded = expandedDepts.has(department);
         const color = DEPARTMENT_COLORS[department] ?? "#888";

@@ -1,8 +1,16 @@
-import { ListTodo, RefreshCw, Loader2 } from "lucide-react";
+import { ListTodo, Plus, RefreshCw, Loader2 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { DataTable, type Column } from "@/components/ui/custom/data/data-table";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { useGateway } from "@/hooks/use-gateway";
 import { cn } from "@/lib/utils";
 import { useGatewayStore } from "@/store/gateway-store";
@@ -110,6 +118,142 @@ function PriorityBadge({ priority }: { priority: string }) {
   );
 }
 
+// ── Create Task Dialog ────────────────────────────────────────────────
+
+type TaskForm = {
+  title: string;
+  description: string;
+  priority: string;
+  status: string;
+  goalId: string;
+  projectId: string;
+};
+
+const EMPTY_TASK_FORM: TaskForm = {
+  title: "",
+  description: "",
+  priority: "medium",
+  status: "backlog",
+  goalId: "",
+  projectId: "",
+};
+
+function CreateTaskDialog({
+  open,
+  onOpenChange,
+  form,
+  setForm,
+  onSubmit,
+  submitting,
+  goals,
+  projects,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  form: TaskForm;
+  setForm: (f: TaskForm) => void;
+  onSubmit: () => void;
+  submitting: boolean;
+  goals: { id: string; title: string }[];
+  projects: { id: string; name: string }[];
+}) {
+  const update = (patch: Partial<TaskForm>) => setForm({ ...form, ...patch });
+  const canSubmit = form.title.trim().length > 0 && !submitting;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Create Task</DialogTitle>
+        </DialogHeader>
+        <div className="grid gap-3 py-2">
+          <div className="grid gap-1.5">
+            <label className="text-sm font-medium">Title *</label>
+            <Input
+              value={form.title}
+              onChange={(e) => update({ title: e.target.value })}
+              placeholder="Task title"
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <label className="text-sm font-medium">Description</label>
+            <Input
+              value={form.description}
+              onChange={(e) => update({ description: e.target.value })}
+              placeholder="Optional description"
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <label className="text-sm font-medium">Goal</label>
+            <select
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm outline-none focus:border-ring cursor-pointer"
+              value={form.goalId}
+              onChange={(e) => update({ goalId: e.target.value })}
+            >
+              <option value="">No goal</option>
+              {goals.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.title}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="grid gap-1.5">
+            <label className="text-sm font-medium">Project</label>
+            <select
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm outline-none focus:border-ring cursor-pointer"
+              value={form.projectId}
+              onChange={(e) => update({ projectId: e.target.value })}
+            >
+              <option value="">No project</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-1.5">
+              <label className="text-sm font-medium">Priority</label>
+              <select
+                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm outline-none focus:border-ring cursor-pointer"
+                value={form.priority}
+                onChange={(e) => update({ priority: e.target.value })}
+              >
+                <option value="low">low</option>
+                <option value="medium">medium</option>
+                <option value="high">high</option>
+                <option value="critical">critical</option>
+              </select>
+            </div>
+            <div className="grid gap-1.5">
+              <label className="text-sm font-medium">Status</label>
+              <select
+                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm outline-none focus:border-ring cursor-pointer"
+                value={form.status}
+                onChange={(e) => update({ status: e.target.value })}
+              >
+                <option value="backlog">backlog</option>
+                <option value="todo">todo</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button onClick={onSubmit} disabled={!canSubmit}>
+            {submitting && <Loader2 className="mr-2 size-4 animate-spin" />}
+            Create
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ── Main Page ──────────────────────────────────────────────────────────
 
 export function TasksPage() {
@@ -119,11 +263,17 @@ export function TasksPage() {
 
   const [tasks, setTasks] = useState<Task[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [goals, setGoals] = useState<{ id: string; title: string }[]>([]);
+  const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [workspaceFilter, setWorkspaceFilter] = useState<string>("all");
+
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createForm, setCreateForm] = useState<TaskForm>(EMPTY_TASK_FORM);
+  const [createSubmitting, setCreateSubmitting] = useState(false);
 
   const loadData = useCallback(() => {
     setLoading(true);
@@ -139,10 +289,16 @@ export function TasksPage() {
     Promise.all([
       sendRpc<{ tasks: Task[] }>("tasks.list", params),
       sendRpc<{ workspaces: Workspace[] }>("workspaces.list"),
+      sendRpc<{ goals: { id: string; title: string }[] }>("goals.list", {}),
+      sendRpc<{ projects: { id: string; name: string }[] }>("projects.list", {}).catch(() => ({
+        projects: [],
+      })),
     ])
-      .then(([taskRes, wsRes]) => {
+      .then(([taskRes, wsRes, goalsRes, projectsRes]) => {
         setTasks(taskRes.tasks ?? []);
         setWorkspaces(wsRes.workspaces ?? []);
+        setGoals(goalsRes.goals ?? []);
+        setProjects(projectsRes.projects ?? []);
       })
       .catch((err) => setError(String(err)))
       .finally(() => setLoading(false));
@@ -153,6 +309,26 @@ export function TasksPage() {
       loadData();
     }
   }, [isConnected, loadData]);
+
+  const handleCreate = () => {
+    setCreateSubmitting(true);
+    sendRpc("tasks.create", {
+      workspaceId: "default",
+      title: createForm.title.trim(),
+      description: createForm.description.trim() || undefined,
+      priority: createForm.priority,
+      status: createForm.status,
+      goalId: createForm.goalId || undefined,
+      projectId: createForm.projectId || undefined,
+    })
+      .then(() => {
+        setCreateOpen(false);
+        setCreateForm(EMPTY_TASK_FORM);
+        loadData();
+      })
+      .catch((err) => setError(String(err)))
+      .finally(() => setCreateSubmitting(false));
+  };
 
   const columns: Column<Task>[] = [
     {
@@ -213,10 +389,22 @@ export function TasksPage() {
           <h2 className="text-lg font-semibold">Tasks</h2>
           <span className="text-sm text-muted-foreground">({tasks.length})</span>
         </div>
-        <Button variant="outline" size="sm" onClick={loadData} disabled={loading}>
-          <RefreshCw className={cn("mr-1 size-3.5", loading && "animate-spin")} />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={loadData} disabled={loading}>
+            <RefreshCw className={cn("mr-1 size-3.5", loading && "animate-spin")} />
+            Refresh
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => {
+              setCreateForm(EMPTY_TASK_FORM);
+              setCreateOpen(true);
+            }}
+          >
+            <Plus className="mr-1 size-3.5" />
+            Create Task
+          </Button>
+        </div>
       </div>
 
       {/* Filters */}
@@ -278,6 +466,17 @@ export function TasksPage() {
           onRowClick={(row) => void navigate(`/tasks/${row.id}`)}
         />
       )}
+
+      <CreateTaskDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        form={createForm}
+        setForm={setCreateForm}
+        onSubmit={handleCreate}
+        submitting={createSubmitting}
+        goals={goals}
+        projects={projects}
+      />
     </div>
   );
 }
