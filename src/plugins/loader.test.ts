@@ -2298,7 +2298,7 @@ module.exports = {
   api.on("before_prompt_build", () => ({ prependContext: "prepend" }));
   api.on("before_agent_start", () => ({
     prependContext: "legacy",
-    modelOverride: "gpt-4o",
+    modelOverride: "gpt-5.4",
     providerOverride: "anthropic",
   }));
   api.on("before_model_resolve", () => ({ providerOverride: "openai" }));
@@ -2327,7 +2327,7 @@ module.exports = {
     const runner = createHookRunner(registry);
     const legacyResult = await runner.runBeforeAgentStart({ prompt: "hello", messages: [] }, {});
     expect(legacyResult).toEqual({
-      modelOverride: "gpt-4o",
+      modelOverride: "gpt-5.4",
       providerOverride: "anthropic",
     });
     const blockedDiagnostics = registry.diagnostics.filter((diag) =>

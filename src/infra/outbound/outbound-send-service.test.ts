@@ -45,7 +45,7 @@ describe("executeSendAction", () => {
       continuePrompt: "",
       output: "",
       sessionId: "s1",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       usage: {},
     };
   }
