@@ -39,14 +39,14 @@ describe("resolveTranscriptPolicy", () => {
     await loadFreshTranscriptPolicyModuleForTest();
   });
 
-  it("enables sanitizeToolCallIds for Anthropic provider", () => {
+  it("disables sanitizeToolCallIds for Anthropic provider (#52612)", () => {
     const policy = resolveTranscriptPolicy({
       provider: "anthropic",
       modelId: "claude-opus-4-5",
       modelApi: "anthropic-messages",
     });
-    expect(policy.sanitizeToolCallIds).toBe(true);
-    expect(policy.toolCallIdMode).toBe("strict");
+    expect(policy.sanitizeToolCallIds).toBe(false);
+    expect(policy.toolCallIdMode).toBeUndefined();
   });
 
   it("enables sanitizeToolCallIds for Google provider", () => {
@@ -111,7 +111,7 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.repairToolUseResultPairing).toBe(true);
     expect(policy.validateAnthropicTurns).toBe(true);
     expect(policy.allowSyntheticToolResults).toBe(true);
-    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.sanitizeToolCallIds).toBe(false);
     expect(policy.sanitizeMode).toBe("full");
   });
 

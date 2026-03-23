@@ -91,8 +91,12 @@ export function resolveTranscriptPolicy(params: {
   const needsNonImageSanitize =
     isGoogle || isAnthropic || isMistral || shouldSanitizeGeminiThoughtSignaturesForProvider;
 
-  const sanitizeToolCallIds =
-    isGoogle || isMistral || isAnthropic || requiresOpenAiCompatibleToolIdSanitization;
+  // Anthropic generates tool IDs with underscores (toolu_01XYZ) that their API
+  // accepts natively. Sanitizing them strips underscores, and the order-dependent
+  // ID rewriting in createOccurrenceAwareResolver causes cache prefix instability
+  // after subagent turns (repairToolUseResultPairing can reorder messages, changing
+  // encounter order → different sanitized IDs → full cacheWrite). See #52612.
+  const sanitizeToolCallIds = isGoogle || isMistral || requiresOpenAiCompatibleToolIdSanitization;
   const toolCallIdMode: ToolCallIdMode | undefined = providerToolCallIdMode
     ? providerToolCallIdMode
     : isMistral
