@@ -1636,6 +1636,16 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.heartbeat.loadSessionContext",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.heartbeat.model",
       "kind": "core",
       "type": "string",
@@ -4283,6 +4293,16 @@
     },
     {
       "path": "agents.list.*.heartbeat.lightContext",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.heartbeat.loadSessionContext",
       "kind": "core",
       "type": "boolean",
       "required": false,

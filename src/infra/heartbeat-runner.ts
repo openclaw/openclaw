@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -493,6 +494,195 @@ function appendHeartbeatWorkspacePathHint(prompt: string, workspaceDir: string):
   return `${prompt}\n${hint}`;
 }
 
+// ---------------------------------------------------------------------------
+// Session context injection
+// ---------------------------------------------------------------------------
+
+const HEARTBEAT_SESSION_CONTEXT_MESSAGES = 20;
+const HEARTBEAT_SESSION_CONTEXT_MAX_CHARS = 500;
+const SESSION_CONTEXT_PREAMBLE = "[Recent conversation history";
+
+/**
+ * Returns true if the message text looks like a heartbeat prompt (possibly
+ * with injected session context). These are recorded in the transcript as
+ * "user" messages and must be excluded to prevent recursive nesting where
+ * each heartbeat reads its own prior context injection as conversation.
+ */
+function isHeartbeatPromptMessage(text: string): boolean {
+  return (
+    text.startsWith(SESSION_CONTEXT_PREAMBLE) || text.startsWith("Read HEARTBEAT.md if it exists")
+  );
+}
+
+/**
+ * Extract text content from a session message's `content` field.
+ * Content can be a plain string or an array of content blocks.
+ */
+function extractMessageText(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content
+      .filter(
+        (block): block is { type: string; text: string } =>
+          !!block &&
+          typeof block === "object" &&
+          block.type === "text" &&
+          typeof block.text === "string",
+      )
+      .map((block) => block.text)
+      .join("\n");
+  }
+  return "";
+}
+
+/**
+ * Load recent conversation history from the session transcript and format it
+ * as a text preamble for the heartbeat prompt. Reloaded on every tick (never
+ * cached) so context stays fresh.
+ *
+ * Returns `undefined` when context cannot or should not be injected:
+ * - session has no transcript file
+ * - only assistant messages in the recent window (avoids feedback loop from
+ *   prior heartbeat outputs)
+ */
+export function loadHeartbeatSessionContext(params: {
+  storePath: string;
+  agentId: string;
+  entry?: { sessionId: string; sessionFile?: string };
+}): string | undefined {
+  const { entry, storePath, agentId } = params;
+  if (!entry?.sessionId) {
+    log.debug("heartbeat session context: no entry/sessionId — skipping");
+    return undefined;
+  }
+
+  let transcriptPath: string;
+  try {
+    transcriptPath = resolveSessionFilePath(entry.sessionId, entry, {
+      agentId,
+      sessionsDir: path.dirname(storePath),
+    });
+  } catch (err) {
+    log.debug("heartbeat session context: could not resolve transcript path", {
+      sessionId: entry.sessionId,
+      err: String(err),
+    });
+    return undefined;
+  }
+
+  log.debug("heartbeat session context: resolved transcript path", {
+    sessionId: entry.sessionId,
+    transcriptPath,
+  });
+
+  if (!fsSync.existsSync(transcriptPath)) {
+    log.debug("heartbeat session context: transcript file not found", { transcriptPath });
+    return undefined;
+  }
+
+  // Read the full transcript and keep only the last N user/assistant messages.
+  // Note: loads the entire file into memory. For very large transcripts a
+  // streaming/tailing approach would be more efficient, but this is fine for
+  // the typical session sizes heartbeat targets.
+  type SimpleMsg = { role: string; text: string };
+  const window: SimpleMsg[] = [];
+  let raw: string;
+  try {
+    raw = fsSync.readFileSync(transcriptPath, "utf-8");
+  } catch {
+    return undefined;
+  }
+
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(trimmed);
+      const msg = parsed?.message;
+      if (!msg || typeof msg.role !== "string") {
+        continue;
+      }
+      if (msg.role !== "user" && msg.role !== "assistant") {
+        continue;
+      }
+      const text = extractMessageText(msg.content);
+      if (!text) {
+        continue;
+      }
+      // Skip heartbeat prompt messages to prevent recursive nesting — these
+      // are recorded as "user" role but are our own injected prompts.
+      if (msg.role === "user" && isHeartbeatPromptMessage(text)) {
+        continue;
+      }
+      window.push({ role: msg.role, text });
+      if (window.length > HEARTBEAT_SESSION_CONTEXT_MESSAGES) {
+        window.shift();
+      }
+    } catch {
+      // skip bad lines
+    }
+  }
+
+  if (window.length === 0) {
+    log.debug("heartbeat session context: no parseable messages in transcript", { transcriptPath });
+    return undefined;
+  }
+  log.debug("heartbeat session context: parsed messages", {
+    total: window.length,
+    transcriptPath,
+  });
+
+  // Skip context if only assistant messages are present — this prevents
+  // heartbeat outputs from feeding back as context in a loop.
+  const hasUserMessage = window.some((m) => m.role === "user");
+  if (!hasUserMessage) {
+    log.debug("heartbeat session context: no user messages in recent history — skipping");
+    return undefined;
+  }
+
+  // Use the transcript file's mtime as a proxy for silence duration. This
+  // reflects when the file was last written (any message type), not necessarily
+  // when the last *user* message arrived. It's an approximation, but avoids
+  // parsing timestamps from individual transcript entries.
+  let silenceNote = "";
+  try {
+    const stat = fsSync.statSync(transcriptPath);
+    const ageMs = Date.now() - stat.mtimeMs;
+    const mins = Math.floor(ageMs / 60_000);
+    if (mins < 60) {
+      silenceNote = `(last message ~${mins} minutes ago)\n`;
+    } else {
+      const hours = Math.floor(mins / 60);
+      const rem = mins % 60;
+      silenceNote =
+        rem === 0 ? `(last message ~${hours}h ago)\n` : `(last message ~${hours}h ${rem}m ago)\n`;
+    }
+  } catch {
+    // mtime unavailable — skip silence note
+  }
+
+  let ctx = `${SESSION_CONTEXT_PREAMBLE} — use this for context when composing your message] ${silenceNote}`;
+  for (const msg of window) {
+    const label = msg.role === "user" ? "User" : "You";
+    // Truncate long messages to avoid bloating the prompt.
+    let content = msg.text;
+    if (content.length > HEARTBEAT_SESSION_CONTEXT_MAX_CHARS) {
+      content = content.slice(0, HEARTBEAT_SESSION_CONTEXT_MAX_CHARS) + "…";
+    }
+    ctx += `${label}: ${content}\n`;
+  }
+
+  log.debug("heartbeat session context loaded", {
+    messages: window.length,
+    silence: silenceNote.trim(),
+  });
+  return ctx;
+}
+
 function resolveHeartbeatRunPrompt(params: {
   cfg: OpenClawConfig;
   heartbeat?: HeartbeatConfig;
@@ -642,13 +832,72 @@ export async function runHeartbeatOnce(opts: {
     delivery.channel !== "none" && delivery.to && visibility.showAlerts,
   );
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  const { prompt, hasExecCompletion, hasCronEvents } = resolveHeartbeatRunPrompt({
+  const {
+    prompt: basePrompt,
+    hasExecCompletion,
+    hasCronEvents,
+  } = resolveHeartbeatRunPrompt({
     cfg,
     heartbeat,
     preflight,
     canRelayToUser,
     workspaceDir,
   });
+
+  // When loadSessionContext is enabled, inject recent conversation history
+  // into the prompt so the LLM has context about the ongoing conversation.
+  // We need the *delivery target* session (e.g. the Telegram conversation),
+  // not the main heartbeat session — those are separate session entries in
+  // the store. Fall back to the main session entry if no match is found.
+  let prompt = basePrompt;
+  if (heartbeat?.loadSessionContext === true) {
+    const { store } = preflight.session;
+    let contextEntry = entry;
+    if (delivery.channel !== "none" && delivery.to) {
+      // lastTo in the store can be channel-prefixed (e.g. "telegram:5673725398")
+      // while delivery.to is the bare ID ("5673725398"). Normalize both sides.
+      const deliveryToNormalized = delivery.to.toLowerCase();
+      const channelPrefix = `${delivery.channel}:`;
+      log.debug("heartbeat session context: searching for delivery target session", {
+        channel: delivery.channel,
+        to: delivery.to,
+      });
+      const matchingKey = Object.keys(store).find((k) => {
+        const e = store[k];
+        if (e?.lastChannel !== delivery.channel) return false;
+        const lastTo = e?.lastTo ?? "";
+        const lastToNormalized = lastTo.startsWith(channelPrefix)
+          ? lastTo.slice(channelPrefix.length).toLowerCase()
+          : lastTo.toLowerCase();
+        return lastToNormalized === deliveryToNormalized;
+      });
+      if (matchingKey) {
+        contextEntry = store[matchingKey];
+        log.debug("heartbeat session context: resolved delivery target session", {
+          key: matchingKey,
+          channel: delivery.channel,
+          to: delivery.to,
+        });
+      } else {
+        log.debug("heartbeat session context: no session matched delivery target", {
+          channel: delivery.channel,
+          to: delivery.to,
+          storeKeys: Object.keys(store).filter((k) => store[k]?.lastChannel === delivery.channel),
+        });
+      }
+    }
+    if (contextEntry?.sessionId) {
+      const sessionContext = loadHeartbeatSessionContext({
+        storePath,
+        agentId,
+        entry: contextEntry,
+      });
+      if (sessionContext) {
+        prompt = `${sessionContext}\n${prompt}`;
+      }
+    }
+  }
+
   const ctx = {
     Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
     From: sender,

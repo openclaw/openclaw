@@ -2720,6 +2720,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   isolatedSession: {
                     type: "boolean",
                   },
+                  loadSessionContext: {
+                    type: "boolean",
+                  },
                 },
                 additionalProperties: false,
               },
@@ -3854,6 +3857,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       type: "boolean",
                     },
                     isolatedSession: {
+                      type: "boolean",
+                    },
+                    loadSessionContext: {
                       type: "boolean",
                     },
                   },

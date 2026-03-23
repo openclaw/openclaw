@@ -269,6 +269,15 @@ export type AgentDefaultsConfig = {
      * Default: false (only the final heartbeat payload is delivered).
      */
     includeReasoning?: boolean;
+    /**
+     * When enabled, inject the last ~20 messages of conversation history into the
+     * heartbeat prompt so the LLM has context about the ongoing conversation.
+     * Only user/assistant messages are included; assistant-only windows are skipped
+     * to avoid feedback loops from prior heartbeat outputs.
+     *
+     * Default: false.
+     */
+    loadSessionContext?: boolean;
   };
   /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
   maxConcurrent?: number;
