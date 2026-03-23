@@ -55,11 +55,13 @@ describe("msteams graph helpers", () => {
       });
     }) as typeof fetch;
 
-    await expect(fetchGraphJson<{ value: Array<{ id: string }> }>({
-      token: "graph-token",
-      path: "/groups?$select=id",
-      headers: { ConsistencyLevel: "eventual" },
-    })).resolves.toEqual({ value: [{ id: "group-1" }] });
+    await expect(
+      fetchGraphJson<{ value: Array<{ id: string }> }>({
+        token: "graph-token",
+        path: "/groups?$select=id",
+        headers: { ConsistencyLevel: "eventual" },
+      }),
+    ).resolves.toEqual({ value: [{ id: "group-1" }] });
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "https://graph.microsoft.com/v1.0/groups?$select=id",
@@ -108,7 +110,9 @@ describe("msteams graph helpers", () => {
 
   it("fails when credentials or access tokens are unavailable", async () => {
     resolveMSTeamsCredentialsMock.mockReturnValue(undefined);
-    await expect(resolveGraphToken({ channels: {} })).rejects.toThrow("MS Teams credentials missing");
+    await expect(resolveGraphToken({ channels: {} })).rejects.toThrow(
+      "MS Teams credentials missing",
+    );
 
     const getAccessToken = vi.fn(async () => ({ token: null }));
     loadMSTeamsSdkWithAuthMock.mockResolvedValue({
