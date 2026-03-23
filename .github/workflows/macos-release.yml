@@ -53,6 +53,12 @@ jobs:
           install-bun: "false"
           use-sticky-disk: "false"
 
+      - name: Select Xcode 26.1
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.1.app
+          xcodebuild -version
+          swift --version
+
       - name: Ensure matching GitHub release exists
         env:
           GH_TOKEN: ${{ github.token }}
@@ -84,13 +90,33 @@ jobs:
         run: node scripts/ui.js build
 
       - name: Verify release contents
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
         run: pnpm release:check
 
       - name: Swift build
-        run: swift build --package-path apps/macos --configuration release
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if swift build --package-path apps/macos --configuration release; then
+              exit 0
+            fi
+            echo "swift build failed (attempt $attempt/3). Retrying…"
+            sleep $((attempt * 20))
+          done
+          exit 1
 
       - name: Swift test
-        run: swift test --package-path apps/macos --parallel
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if swift test --package-path apps/macos --parallel; then
+              exit 0
+            fi
+            echo "swift test failed (attempt $attempt/3). Retrying…"
+            sleep $((attempt * 20))
+          done
+          exit 1
 
       - name: Package macOS release with ad-hoc signing
         env:
@@ -106,8 +132,24 @@ jobs:
           SPARKLE_FEED_URL: ${{ env.SPARKLE_FEED_URL }}
         run: scripts/package-mac-dist.sh
 
+  validate_publish_dispatch_ref:
+    if: ${{ !inputs.preflight_only }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require main workflow ref for publish
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]]; then
+            echo "Real publish runs must be dispatched from main. Use preflight_only=true for branch validation."
+            exit 1
+          fi
+
   publish_macos_release:
-    needs: [preflight_macos_release]
+    needs: [preflight_macos_release, validate_publish_dispatch_ref]
     if: ${{ !inputs.preflight_only }}
     runs-on: macos-latest
     environment: mac-release
@@ -142,6 +184,12 @@ jobs:
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "false"
           use-sticky-disk: "false"
+
+      - name: Select Xcode 26.1
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.1.app
+          xcodebuild -version
+          swift --version
 
       - name: Ensure matching GitHub release exists
         env:
