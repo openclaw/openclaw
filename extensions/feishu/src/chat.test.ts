@@ -24,7 +24,7 @@ describe("registerFeishuChatTools", () => {
     });
   });
 
-  it("registers feishu_chat and handles info/members actions", async () => {
+  it("registers feishu_chat, merges enabled accounts, and routes through the selected account", async () => {
     const registerTool = vi.fn();
     registerFeishuChatTools({
       config: {
@@ -33,7 +33,14 @@ describe("registerFeishuChatTools", () => {
             enabled: true,
             appId: "app_id",
             appSecret: "app_secret", // pragma: allowlist secret
-            tools: { chat: true },
+            tools: { chat: false },
+            accounts: {
+              work: {
+                appId: "work_app_id",
+                appSecret: "work_app_secret", // pragma: allowlist secret
+                tools: { chat: true },
+              },
+            },
           },
         },
       } as any,
@@ -42,7 +49,8 @@ describe("registerFeishuChatTools", () => {
     } as any);
 
     expect(registerTool).toHaveBeenCalledTimes(1);
-    const tool = registerTool.mock.calls[0]?.[0];
+    const toolFactory = registerTool.mock.calls[0]?.[0];
+    const tool = toolFactory?.({ agentAccountId: "work" });
     expect(tool?.name).toBe("feishu_chat");
 
     chatGetMock.mockResolvedValueOnce({
@@ -50,6 +58,9 @@ describe("registerFeishuChatTools", () => {
       data: { name: "group name", user_count: 3 },
     });
     const infoResult = await tool.execute("tc_1", { action: "info", chat_id: "oc_1" });
+    expect(createFeishuClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: "work", appId: "work_app_id" }),
+    );
     expect(infoResult.details).toEqual(
       expect.objectContaining({ chat_id: "oc_1", name: "group name", user_count: 3 }),
     );
@@ -93,6 +104,22 @@ describe("registerFeishuChatTools", () => {
         email: "member1@example.com",
         department_ids: ["od_1"],
       }),
+    );
+
+    chatGetMock.mockResolvedValueOnce({
+      code: 0,
+      data: { name: "default group", user_count: 7 },
+    });
+    const explicitAccountResult = await tool.execute("tc_4", {
+      action: "info",
+      accountId: "default",
+      chat_id: "oc_default",
+    });
+    expect(createFeishuClientMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ accountId: "default", appId: "app_id" }),
+    );
+    expect(explicitAccountResult.details).toEqual(
+      expect.objectContaining({ chat_id: "oc_default", name: "default group", user_count: 7 }),
     );
   });
 
