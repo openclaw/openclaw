@@ -79,6 +79,10 @@ function resolveAllowModelOverrideFromClient(
   return resolveSenderIsOwnerFromClient(client) || client?.internal?.allowModelOverride === true;
 }
 
+function resolveCanResetSessionFromClient(client: GatewayRequestHandlerOptions["client"]): boolean {
+  return resolveSenderIsOwnerFromClient(client);
+}
+
 async function runSessionResetFromAgent(params: {
   key: string;
   reason: "new" | "reset";
@@ -240,6 +244,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     };
     const senderIsOwner = resolveSenderIsOwnerFromClient(client);
     const allowModelOverride = resolveAllowModelOverrideFromClient(client);
+    const canResetSession = resolveCanResetSessionFromClient(client);
     const requestedModelOverride = Boolean(request.provider || request.model);
     if (requestedModelOverride && !allowModelOverride) {
       respond(
@@ -378,6 +383,14 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const resetCommandMatch = message.match(RESET_COMMAND_RE);
     if (resetCommandMatch && requestedSessionKey) {
+      if (!canResetSession) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${ADMIN_SCOPE}`),
+        );
+        return;
+      }
       const resetReason = resetCommandMatch[1]?.toLowerCase() === "new" ? "new" : "reset";
       const resetResult = await runSessionResetFromAgent({
         key: requestedSessionKey,
