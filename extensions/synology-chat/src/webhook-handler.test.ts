@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { resolveChatUserId, sendMessage } from "./client.js";
+import { resolveLegacyWebhookNameToChatUserId, sendMessage } from "./client.js";
 import { makeFormBody, makeReq, makeRes, makeStalledReq } from "./test-http-utils.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 import type { WebhookHandlerDeps } from "./webhook-handler.js";
@@ -8,10 +8,10 @@ import {
   createWebhookHandler,
 } from "./webhook-handler.js";
 
-// Mock sendMessage and resolveChatUserId to prevent real HTTP calls
+// Mock sendMessage and resolveLegacyWebhookNameToChatUserId to prevent real HTTP calls
 vi.mock("./client.js", () => ({
   sendMessage: vi.fn().mockResolvedValue(true),
-  resolveChatUserId: vi.fn().mockResolvedValue(undefined),
+  resolveLegacyWebhookNameToChatUserId: vi.fn().mockResolvedValue(undefined),
 }));
 
 function makeAccount(
@@ -342,7 +342,7 @@ describe("createWebhookHandler", () => {
     await handler(req, res);
 
     expect(res._status).toBe(204);
-    expect(resolveChatUserId).not.toHaveBeenCalled();
+    expect(resolveLegacyWebhookNameToChatUserId).not.toHaveBeenCalled();
     expect(deliver).toHaveBeenCalledWith(
       expect.objectContaining({
         from: "123",
@@ -358,7 +358,7 @@ describe("createWebhookHandler", () => {
   });
 
   it("only resolves reply recipient by username when break-glass mode is enabled", async () => {
-    vi.mocked(resolveChatUserId).mockResolvedValueOnce(456);
+    vi.mocked(resolveLegacyWebhookNameToChatUserId).mockResolvedValueOnce(456);
     const deliver = vi.fn().mockResolvedValue("Bot reply");
     const handler = createWebhookHandler({
       account: makeAccount({
@@ -374,7 +374,7 @@ describe("createWebhookHandler", () => {
     await handler(req, res);
 
     expect(res._status).toBe(204);
-    expect(resolveChatUserId).toHaveBeenCalledWith(
+    expect(resolveLegacyWebhookNameToChatUserId).toHaveBeenCalledWith(
       "https://nas.example.com/incoming",
       "testuser",
       true,
@@ -395,7 +395,7 @@ describe("createWebhookHandler", () => {
   });
 
   it("falls back to payload.user_id when break-glass resolution does not find a match", async () => {
-    vi.mocked(resolveChatUserId).mockResolvedValueOnce(undefined);
+    vi.mocked(resolveLegacyWebhookNameToChatUserId).mockResolvedValueOnce(undefined);
     const deliver = vi.fn().mockResolvedValue("Bot reply");
     const handler = createWebhookHandler({
       account: makeAccount({
@@ -411,7 +411,7 @@ describe("createWebhookHandler", () => {
     await handler(req, res);
 
     expect(res._status).toBe(204);
-    expect(resolveChatUserId).toHaveBeenCalledWith(
+    expect(resolveLegacyWebhookNameToChatUserId).toHaveBeenCalledWith(
       "https://nas.example.com/incoming",
       "testuser",
       true,

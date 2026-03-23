@@ -75,7 +75,7 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", async () => {
 vi.mock("./client.js", () => ({
   sendMessage: vi.fn().mockResolvedValue(true),
   sendFileUrl: vi.fn().mockResolvedValue(true),
-  resolveChatUserId: vi.fn().mockResolvedValue(undefined),
+  resolveLegacyWebhookNameToChatUserId: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./runtime.js", () => ({
