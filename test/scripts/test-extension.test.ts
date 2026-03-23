@@ -46,9 +46,8 @@ describe("scripts/test-extension.mjs", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "line", cwd: process.cwd() });
 
     expect(plan.roots).toContain("extensions/line");
-    expect(plan.roots).toContain("src/line");
-    expect(plan.config).toBe("vitest.channels.config.ts");
-    expect(plan.testFiles.some((file) => file.startsWith("src/line/"))).toBe(true);
+    expect(plan.config).toBe("vitest.extensions.config.ts");
+    expect(plan.testFiles.some((file) => file.startsWith("extensions/line/"))).toBe(true);
   });
 
   it("infers the extension from the current working directory", () => {
