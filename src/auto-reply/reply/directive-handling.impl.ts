@@ -18,9 +18,11 @@ import { maybeHandleModelDirectiveInfo } from "./directive-handling.model.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
 import { maybeHandleQueueDirective } from "./directive-handling.queue-validation.js";
 import {
+  canPersistInternalExecDirective,
   formatDirectiveAck,
   formatElevatedRuntimeHint,
   formatElevatedUnavailableText,
+  formatInternalExecPersistenceDeniedText,
   enqueueModeSwitchEvents,
   withOptions,
 } from "./directive-handling.shared.js";
@@ -92,6 +94,10 @@ export async function handleDirectiveOnly(
     sessionKey: params.sessionKey,
   }).sandboxed;
   const shouldHintDirectRuntime = directives.hasElevatedDirective && !runtimeIsSandboxed;
+  const allowInternalExecPersistence = canPersistInternalExecDirective({
+    surface: params.surface,
+    gatewayClientScopes: params.gatewayClientScopes,
+  });
 
   const modelInfo = await maybeHandleModelDirectiveInfo({
     directives,
@@ -344,7 +350,7 @@ export async function handleDirectiveOnly(
       elevatedChanged ||
       (directives.elevatedLevel !== prevElevatedLevel && directives.elevatedLevel !== undefined);
   }
-  if (directives.hasExecDirective && directives.hasExecOptions) {
+  if (directives.hasExecDirective && directives.hasExecOptions && allowInternalExecPersistence) {
     if (directives.execHost) {
       sessionEntry.execHost = directives.execHost;
     }
@@ -453,7 +459,7 @@ export async function handleDirectiveOnly(
       parts.push(formatElevatedRuntimeHint());
     }
   }
-  if (directives.hasExecDirective && directives.hasExecOptions) {
+  if (directives.hasExecDirective && directives.hasExecOptions && allowInternalExecPersistence) {
     const execParts: string[] = [];
     if (directives.execHost) {
       execParts.push(`host=${directives.execHost}`);
@@ -470,6 +476,9 @@ export async function handleDirectiveOnly(
     if (execParts.length > 0) {
       parts.push(formatDirectiveAck(`Exec defaults set (${execParts.join(", ")}).`));
     }
+  }
+  if (directives.hasExecDirective && directives.hasExecOptions && !allowInternalExecPersistence) {
+    parts.push(formatDirectiveAck(formatInternalExecPersistenceDeniedText()));
   }
   if (shouldDowngradeXHigh) {
     parts.push(
