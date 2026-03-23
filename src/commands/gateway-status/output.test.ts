@@ -34,7 +34,6 @@ function makeProbedTarget(
     configSummary: null,
     self: null,
     authDiagnostics: overrides.authDiagnostics ?? [],
-    ...overrides,
   } as GatewayStatusProbedTarget;
 }
 
