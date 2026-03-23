@@ -940,28 +940,6 @@ append_holiday_taglines() {
     esac
 }
 
-map_legacy_env() {
-    local key="$1"
-    local legacy="$2"
-    if [[ -z "${!key:-}" && -n "${!legacy:-}" ]]; then
-        printf -v "$key" '%s' "${!legacy}"
-    fi
-}
-
-map_legacy_env "OPENCLAW_TAGLINE_INDEX" "CLAWDBOT_TAGLINE_INDEX"
-map_legacy_env "OPENCLAW_NO_ONBOARD" "CLAWDBOT_NO_ONBOARD"
-map_legacy_env "OPENCLAW_NO_PROMPT" "CLAWDBOT_NO_PROMPT"
-map_legacy_env "OPENCLAW_DRY_RUN" "CLAWDBOT_DRY_RUN"
-map_legacy_env "OPENCLAW_INSTALL_METHOD" "CLAWDBOT_INSTALL_METHOD"
-map_legacy_env "OPENCLAW_VERSION" "CLAWDBOT_VERSION"
-map_legacy_env "OPENCLAW_BETA" "CLAWDBOT_BETA"
-map_legacy_env "OPENCLAW_GIT_DIR" "CLAWDBOT_GIT_DIR"
-map_legacy_env "OPENCLAW_GIT_UPDATE" "CLAWDBOT_GIT_UPDATE"
-map_legacy_env "OPENCLAW_NPM_LOGLEVEL" "CLAWDBOT_NPM_LOGLEVEL"
-map_legacy_env "OPENCLAW_VERBOSE" "CLAWDBOT_VERBOSE"
-map_legacy_env "OPENCLAW_PROFILE" "CLAWDBOT_PROFILE"
-map_legacy_env "OPENCLAW_INSTALL_SH_NO_RUN" "CLAWDBOT_INSTALL_SH_NO_RUN"
-
 pick_tagline() {
     append_holiday_taglines
     local count=${#TAGLINES[@]}
@@ -995,6 +973,7 @@ SHARP_IGNORE_GLOBAL_LIBVIPS="${SHARP_IGNORE_GLOBAL_LIBVIPS:-1}"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
 NPM_SILENT_FLAG="--silent"
 VERBOSE="${OPENCLAW_VERBOSE:-0}"
+VERIFY_INSTALL="${OPENCLAW_VERIFY_INSTALL:-0}"
 OPENCLAW_BIN=""
 PNPM_CMD=()
 HELP=0
@@ -1010,23 +989,25 @@ Options:
   --install-method, --method npm|git   Install via npm (default) or from a git checkout
   --npm                               Shortcut for --install-method npm
   --git, --github                     Shortcut for --install-method git
-  --version <version|dist-tag>         npm install: version (default: latest)
+  --version <version|dist-tag|spec>    npm install target (default: latest; use "main" for GitHub main)
   --beta                               Use beta if available, else latest
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw)
   --no-git-update                      Skip git pull for existing checkout
   --no-onboard                          Skip onboarding (non-interactive)
   --no-prompt                           Disable prompts (required in CI/automation)
+  --verify                              Run a post-install smoke verify
   --dry-run                             Print what would happen (no changes)
   --verbose                             Print debug output (set -x, npm verbose)
   --help, -h                            Show this help
 
 Environment variables:
   OPENCLAW_INSTALL_METHOD=git|npm
-  OPENCLAW_VERSION=latest|next|<semver>
+  OPENCLAW_VERSION=latest|next|main|<semver>|<spec>
   OPENCLAW_BETA=0|1
   OPENCLAW_GIT_DIR=...
   OPENCLAW_GIT_UPDATE=0|1
   OPENCLAW_NO_PROMPT=1
+  OPENCLAW_VERIFY_INSTALL=1
   OPENCLAW_DRY_RUN=1
   OPENCLAW_NO_ONBOARD=1
   OPENCLAW_VERBOSE=1
@@ -1036,6 +1017,8 @@ Environment variables:
 Examples:
   curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash
   curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --no-onboard
+  curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --no-onboard --verify
+  curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --version main
   curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method git --no-onboard
 EOF
 }
@@ -1057,6 +1040,10 @@ parse_args() {
                 ;;
             --verbose)
                 VERBOSE=1
+                shift
+                ;;
+            --verify)
+                VERIFY_INSTALL=1
                 shift
                 ;;
             --no-prompt)
@@ -1955,6 +1942,43 @@ resolve_beta_version() {
     echo "$beta"
 }
 
+is_explicit_package_install_spec() {
+    local value="${1:-}"
+    [[ "$value" == *"://"* || "$value" == *"#"* || "$value" =~ ^(file|github|git\+ssh|git\+https|git\+http|git\+file|npm): ]]
+}
+
+can_resolve_registry_package_version() {
+    local value="${1:-}"
+    if [[ -z "$value" ]]; then
+        return 0
+    fi
+    if [[ "${value,,}" == "main" ]]; then
+        return 1
+    fi
+    if is_explicit_package_install_spec "$value"; then
+        return 1
+    fi
+    return 0
+}
+
+resolve_package_install_spec() {
+    local package_name="$1"
+    local value="$2"
+    if [[ "${value,,}" == "main" ]]; then
+        echo "github:openclaw/openclaw#main"
+        return 0
+    fi
+    if is_explicit_package_install_spec "$value"; then
+        echo "$value"
+        return 0
+    fi
+    if [[ "$value" == "latest" ]]; then
+        echo "${package_name}@latest"
+        return 0
+    fi
+    echo "${package_name}@${value}"
+}
+
 install_openclaw() {
     local package_name="openclaw"
     if [[ "$USE_BETA" == "1" ]]; then
@@ -1975,18 +1999,16 @@ install_openclaw() {
     fi
 
     local resolved_version=""
-    resolved_version="$(npm view "${package_name}@${OPENCLAW_VERSION}" version 2>/dev/null || true)"
+    if can_resolve_registry_package_version "${OPENCLAW_VERSION}"; then
+        resolved_version="$(npm view "${package_name}@${OPENCLAW_VERSION}" version 2>/dev/null || true)"
+    fi
     if [[ -n "$resolved_version" ]]; then
         ui_info "Installing OpenClaw v${resolved_version}"
     else
         ui_info "Installing OpenClaw (${OPENCLAW_VERSION})"
     fi
     local install_spec=""
-    if [[ "${OPENCLAW_VERSION}" == "latest" ]]; then
-        install_spec="${package_name}@latest"
-    else
-        install_spec="${package_name}@${OPENCLAW_VERSION}"
-    fi
+    install_spec="$(resolve_package_install_spec "${package_name}" "${OPENCLAW_VERSION}")"
 
     if ! install_openclaw_npm "${install_spec}"; then
         ui_warn "npm install failed; retrying"
@@ -2196,7 +2218,38 @@ refresh_gateway_service_if_loaded() {
         return 0
     fi
 
-    run_quiet_step "Probing gateway service" "$claw" gateway status --probe --deep || true
+    run_quiet_step "Probing gateway service" "$claw" gateway status --deep || true
+}
+
+verify_installation() {
+    if [[ "${VERIFY_INSTALL}" != "1" ]]; then
+        return 0
+    fi
+
+    ui_stage "Verifying installation"
+    local claw="${OPENCLAW_BIN:-}"
+    if [[ -z "$claw" ]]; then
+        claw="$(resolve_openclaw_bin || true)"
+    fi
+    if [[ -z "$claw" ]]; then
+        ui_error "Install verify failed: openclaw not on PATH yet"
+        warn_openclaw_not_found
+        return 1
+    fi
+
+    run_quiet_step "Checking OpenClaw version" "$claw" --version || return 1
+
+    if is_gateway_daemon_loaded "$claw"; then
+        run_quiet_step "Checking gateway service" "$claw" gateway status --deep || {
+            ui_error "Install verify failed: gateway service unhealthy"
+            ui_info "Run: openclaw gateway status --deep"
+            return 1
+        }
+    else
+        ui_info "Gateway service not loaded; skipping gateway deep probe"
+    fi
+
+    ui_success "Install verify complete"
 }
 
 # Main installation flow
@@ -2483,6 +2536,10 @@ main() {
                 fi
             fi
         fi
+    fi
+
+    if ! verify_installation; then
+        exit 1
     fi
 
     if [[ "$should_open_dashboard" == "true" ]]; then

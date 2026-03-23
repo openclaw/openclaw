@@ -5,6 +5,11 @@ import { type CanvasHostHandler, createCanvasHostHandler } from "../canvas-host/
 import type { CliDeps } from "../cli/deps.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
+import {
+  pinActivePluginHttpRouteRegistry,
+  releasePinnedPluginHttpRouteRegistry,
+  resolveActivePluginHttpRouteRegistry,
+} from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -70,6 +75,7 @@ export async function createGatewayRuntimeState(params: {
   getReadiness?: ReadinessChecker;
 }): Promise<{
   canvasHost: CanvasHostHandler | null;
+  releasePluginRouteRegistry: () => void;
   httpServer: HttpServer;
   httpServers: HttpServer[];
   httpBindHosts: string[];
@@ -82,6 +88,7 @@ export async function createGatewayRuntimeState(params: {
   chatRunState: ReturnType<typeof createChatRunState>;
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
+  chatDeltaLastBroadcastLen: Map<string, number>;
   addChatRun: (sessionId: string, entry: ChatRunEntry) => void;
   removeChatRun: (
     sessionId: string,
@@ -91,147 +98,159 @@ export async function createGatewayRuntimeState(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   toolEventRecipients: ReturnType<typeof createToolEventRecipientRegistry>;
 }> {
-  let canvasHost: CanvasHostHandler | null = null;
-  if (params.canvasHostEnabled) {
-    try {
-      const handler = await createCanvasHostHandler({
-        runtime: params.canvasRuntime,
-        rootDir: params.cfg.canvasHost?.root,
-        basePath: CANVAS_HOST_PATH,
-        allowInTests: params.allowCanvasHostInTests,
-        liveReload: params.cfg.canvasHost?.liveReload,
-      });
-      if (handler.rootDir) {
-        canvasHost = handler;
-        params.logCanvas.info(
-          `canvas host mounted at http://${params.bindHost}:${params.port}${CANVAS_HOST_PATH}/ (root ${handler.rootDir})`,
-        );
+  pinActivePluginHttpRouteRegistry(params.pluginRegistry);
+  try {
+    let canvasHost: CanvasHostHandler | null = null;
+    if (params.canvasHostEnabled) {
+      try {
+        const handler = await createCanvasHostHandler({
+          runtime: params.canvasRuntime,
+          rootDir: params.cfg.canvasHost?.root,
+          basePath: CANVAS_HOST_PATH,
+          allowInTests: params.allowCanvasHostInTests,
+          liveReload: params.cfg.canvasHost?.liveReload,
+        });
+        if (handler.rootDir) {
+          canvasHost = handler;
+          params.logCanvas.info(
+            `canvas host mounted at http://${params.bindHost}:${params.port}${CANVAS_HOST_PATH}/ (root ${handler.rootDir})`,
+          );
+        }
+      } catch (err) {
+        params.logCanvas.warn(`canvas host failed to start: ${String(err)}`);
       }
-    } catch (err) {
-      params.logCanvas.warn(`canvas host failed to start: ${String(err)}`);
     }
-  }
 
-  const clients = new Set<GatewayWsClient>();
-  const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
+    const clients = new Set<GatewayWsClient>();
+    const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
 
-  const handleHooksRequest = createGatewayHooksRequestHandler({
-    deps: params.deps,
-    getHooksConfig: params.hooksConfig,
-    getClientIpConfig: params.getHookClientIpConfig,
-    bindHost: params.bindHost,
-    port: params.port,
-    logHooks: params.logHooks,
-  });
-
-  const handlePluginRequest = createGatewayPluginRequestHandler({
-    registry: params.pluginRegistry,
-    log: params.logPlugins,
-  });
-  const shouldEnforcePluginGatewayAuth = (pathContext: PluginRoutePathContext): boolean => {
-    return shouldEnforceGatewayAuthForPluginPath(params.pluginRegistry, pathContext);
-  };
-
-  const bindHosts = await resolveGatewayListenHosts(params.bindHost);
-  if (!isLoopbackHost(params.bindHost)) {
-    params.log.warn(
-      "⚠️  Gateway is binding to a non-loopback address. " +
-        "Ensure authentication is configured before exposing to public networks.",
-    );
-  }
-  if (params.cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true) {
-    params.log.warn(
-      "⚠️  gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true is enabled. " +
-        "Host-header origin fallback weakens origin checks and should only be used as break-glass.",
-    );
-  }
-  const httpServers: HttpServer[] = [];
-  const httpBindHosts: string[] = [];
-  for (const host of bindHosts) {
-    const httpServer = createGatewayHttpServer({
-      canvasHost,
-      clients,
-      controlUiEnabled: params.controlUiEnabled,
-      controlUiBasePath: params.controlUiBasePath,
-      controlUiRoot: params.controlUiRoot,
-      openAiChatCompletionsEnabled: params.openAiChatCompletionsEnabled,
-      openAiChatCompletionsConfig: params.openAiChatCompletionsConfig,
-      openResponsesEnabled: params.openResponsesEnabled,
-      openResponsesConfig: params.openResponsesConfig,
-      strictTransportSecurityHeader: params.strictTransportSecurityHeader,
-      handleHooksRequest,
-      handlePluginRequest,
-      shouldEnforcePluginGatewayAuth,
-      resolvedAuth: params.resolvedAuth,
-      rateLimiter: params.rateLimiter,
-      getReadiness: params.getReadiness,
-      tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
+    const handleHooksRequest = createGatewayHooksRequestHandler({
+      deps: params.deps,
+      getHooksConfig: params.hooksConfig,
+      getClientIpConfig: params.getHookClientIpConfig,
+      bindHost: params.bindHost,
+      port: params.port,
+      logHooks: params.logHooks,
     });
-    try {
-      await listenGatewayHttpServer({
-        httpServer,
-        bindHost: host,
-        port: params.port,
-      });
-      httpServers.push(httpServer);
-      httpBindHosts.push(host);
-    } catch (err) {
-      if (host === bindHosts[0]) {
-        throw err;
-      }
+
+    const handlePluginRequest = createGatewayPluginRequestHandler({
+      registry: params.pluginRegistry,
+      log: params.logPlugins,
+    });
+    const shouldEnforcePluginGatewayAuth = (pathContext: PluginRoutePathContext): boolean => {
+      return shouldEnforceGatewayAuthForPluginPath(
+        resolveActivePluginHttpRouteRegistry(params.pluginRegistry),
+        pathContext,
+      );
+    };
+
+    const bindHosts = await resolveGatewayListenHosts(params.bindHost);
+    if (!isLoopbackHost(params.bindHost)) {
       params.log.warn(
-        `gateway: failed to bind loopback alias ${host}:${params.port} (${String(err)})`,
+        "⚠️  Gateway is binding to a non-loopback address. " +
+          "Ensure authentication is configured before exposing to public networks.",
       );
     }
-  }
-  const httpServer = httpServers[0];
-  if (!httpServer) {
-    throw new Error("Gateway HTTP server failed to start");
-  }
+    if (params.cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true) {
+      params.log.warn(
+        "⚠️  gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true is enabled. " +
+          "Host-header origin fallback weakens origin checks and should only be used as break-glass.",
+      );
+    }
+    const httpServers: HttpServer[] = [];
+    const httpBindHosts: string[] = [];
+    for (const host of bindHosts) {
+      const httpServer = createGatewayHttpServer({
+        canvasHost,
+        clients,
+        controlUiEnabled: params.controlUiEnabled,
+        controlUiBasePath: params.controlUiBasePath,
+        controlUiRoot: params.controlUiRoot,
+        openAiChatCompletionsEnabled: params.openAiChatCompletionsEnabled,
+        openAiChatCompletionsConfig: params.openAiChatCompletionsConfig,
+        openResponsesEnabled: params.openResponsesEnabled,
+        openResponsesConfig: params.openResponsesConfig,
+        strictTransportSecurityHeader: params.strictTransportSecurityHeader,
+        handleHooksRequest,
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth,
+        resolvedAuth: params.resolvedAuth,
+        rateLimiter: params.rateLimiter,
+        getReadiness: params.getReadiness,
+        tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
+      });
+      try {
+        await listenGatewayHttpServer({
+          httpServer,
+          bindHost: host,
+          port: params.port,
+        });
+        httpServers.push(httpServer);
+        httpBindHosts.push(host);
+      } catch (err) {
+        if (host === bindHosts[0]) {
+          throw err;
+        }
+        params.log.warn(
+          `gateway: failed to bind loopback alias ${host}:${params.port} (${String(err)})`,
+        );
+      }
+    }
+    const httpServer = httpServers[0];
+    if (!httpServer) {
+      throw new Error("Gateway HTTP server failed to start");
+    }
 
-  const wss = new WebSocketServer({
-    noServer: true,
-    maxPayload: MAX_PREAUTH_PAYLOAD_BYTES,
-  });
-  for (const server of httpServers) {
-    attachGatewayUpgradeHandler({
-      httpServer: server,
-      wss,
-      canvasHost,
-      clients,
-      resolvedAuth: params.resolvedAuth,
-      rateLimiter: params.rateLimiter,
+    const wss = new WebSocketServer({
+      noServer: true,
+      maxPayload: MAX_PREAUTH_PAYLOAD_BYTES,
     });
+    for (const server of httpServers) {
+      attachGatewayUpgradeHandler({
+        httpServer: server,
+        wss,
+        canvasHost,
+        clients,
+        resolvedAuth: params.resolvedAuth,
+        rateLimiter: params.rateLimiter,
+      });
+    }
+
+    const agentRunSeq = new Map<string, number>();
+    const dedupe = new Map<string, DedupeEntry>();
+    const chatRunState = createChatRunState();
+    const chatRunRegistry = chatRunState.registry;
+    const chatRunBuffers = chatRunState.buffers;
+    const chatDeltaSentAt = chatRunState.deltaSentAt;
+    const chatDeltaLastBroadcastLen = chatRunState.deltaLastBroadcastLen;
+    const addChatRun = chatRunRegistry.add;
+    const removeChatRun = chatRunRegistry.remove;
+    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    const toolEventRecipients = createToolEventRecipientRegistry();
+
+    return {
+      canvasHost,
+      releasePluginRouteRegistry: () => releasePinnedPluginHttpRouteRegistry(params.pluginRegistry),
+      httpServer,
+      httpServers,
+      httpBindHosts,
+      wss,
+      clients,
+      broadcast,
+      broadcastToConnIds,
+      agentRunSeq,
+      dedupe,
+      chatRunState,
+      chatRunBuffers,
+      chatDeltaSentAt,
+      chatDeltaLastBroadcastLen,
+      addChatRun,
+      removeChatRun,
+      chatAbortControllers,
+      toolEventRecipients,
+    };
+  } catch (err) {
+    releasePinnedPluginHttpRouteRegistry(params.pluginRegistry);
+    throw err;
   }
-
-  const agentRunSeq = new Map<string, number>();
-  const dedupe = new Map<string, DedupeEntry>();
-  const chatRunState = createChatRunState();
-  const chatRunRegistry = chatRunState.registry;
-  const chatRunBuffers = chatRunState.buffers;
-  const chatDeltaSentAt = chatRunState.deltaSentAt;
-  const addChatRun = chatRunRegistry.add;
-  const removeChatRun = chatRunRegistry.remove;
-  const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
-  const toolEventRecipients = createToolEventRecipientRegistry();
-
-  return {
-    canvasHost,
-    httpServer,
-    httpServers,
-    httpBindHosts,
-    wss,
-    clients,
-    broadcast,
-    broadcastToConnIds,
-    agentRunSeq,
-    dedupe,
-    chatRunState,
-    chatRunBuffers,
-    chatDeltaSentAt,
-    addChatRun,
-    removeChatRun,
-    chatAbortControllers,
-    toolEventRecipients,
-  };
 }

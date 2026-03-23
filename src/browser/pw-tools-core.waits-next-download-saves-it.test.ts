@@ -15,14 +15,16 @@ const tmpDirMocks = vi.hoisted(() => ({
   resolvePreferredOpenClawTmpDir: vi.fn(() => "/tmp/openclaw"),
 }));
 vi.mock("../infra/tmp-openclaw-dir.js", () => tmpDirMocks);
-const mod = await import("./pw-tools-core.js");
+let mod: typeof import("./pw-tools-core.js");
 
 describe("pw-tools-core", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     for (const fn of Object.values(tmpDirMocks)) {
       fn.mockClear();
     }
     tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue("/tmp/openclaw");
+    mod = await import("./pw-tools-core.js");
   });
 
   async function withTempDir<T>(run: (tempDir: string) => Promise<T>): Promise<T> {
@@ -291,6 +293,6 @@ describe("pw-tools-core", () => {
         targetId: "T1",
         ref: "   ",
       }),
-    ).rejects.toThrow(/ref is required/i);
+    ).rejects.toThrow(/ref or selector is required/i);
   });
 });

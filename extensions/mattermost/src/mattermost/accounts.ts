@@ -1,5 +1,6 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { createAccountListHelpers, type OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
+import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
+import { createAccountListHelpers, type OpenClawConfig } from "../runtime-api.js";
 import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "../secret-input.js";
 import type {
   MattermostAccountConfig,
@@ -35,45 +36,19 @@ const {
 } = createAccountListHelpers("mattermost");
 export { listMattermostAccountIds, resolveDefaultMattermostAccountId };
 
-function resolveAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): MattermostAccountConfig | undefined {
-  const accounts = cfg.channels?.mattermost?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return undefined;
-  }
-  return accounts[accountId] as MattermostAccountConfig | undefined;
-}
-
 function mergeMattermostAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): MattermostAccountConfig {
-  const {
-    accounts: _ignored,
-    defaultAccount: _ignoredDefaultAccount,
-    ...base
-  } = (cfg.channels?.mattermost ?? {}) as MattermostAccountConfig & {
-    accounts?: unknown;
-    defaultAccount?: unknown;
-  };
-  const account = resolveAccountConfig(cfg, accountId) ?? {};
-
-  // Shallow merging is fine for most keys, but `commands` should be merged
-  // so that account-specific overrides (callbackPath/callbackUrl) do not
-  // accidentally reset global settings like `native: true`.
-  const mergedCommands = {
-    ...(base.commands ?? {}),
-    ...(account.commands ?? {}),
-  };
-
-  const merged = { ...base, ...account };
-  if (Object.keys(mergedCommands).length > 0) {
-    merged.commands = mergedCommands;
-  }
-
-  return merged;
+  return resolveMergedAccountConfig<MattermostAccountConfig>({
+    channelConfig: cfg.channels?.mattermost as MattermostAccountConfig | undefined,
+    accounts: cfg.channels?.mattermost?.accounts as
+      | Record<string, Partial<MattermostAccountConfig>>
+      | undefined,
+    accountId,
+    omitKeys: ["defaultAccount"],
+    nestedObjectKeys: ["commands"],
+  });
 }
 
 function resolveMattermostRequireMention(config: MattermostAccountConfig): boolean | undefined {
