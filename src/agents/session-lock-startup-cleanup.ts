@@ -68,7 +68,8 @@ async function cleanAllAgentSessionLocks(params: {
         agentsCleaned.push(agentId);
       }
     } catch (err) {
-      // Skip agents whose sessions directory doesn't exist or is inaccessible
+      // cleanStaleLockFiles handles ENOENT internally; this catch covers
+      // EACCES and any other unexpected errors to avoid killing the whole sweep.
       const code = (err as { code?: string }).code;
       if (code !== "ENOENT" && code !== "EACCES") {
         log.warn(`failed to clean locks for agent ${String(agentId)}: ${String(err)}`);
