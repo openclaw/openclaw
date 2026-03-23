@@ -33,6 +33,72 @@ describe("exa web search provider", () => {
     expect(Number.isNaN(Date.parse(iso))).toBe(false);
   });
 
+  it("accepts current Exa contents object options from the docs", () => {
+    expect(
+      __testing.parseExaContents({
+        text: { maxCharacters: 1200 },
+        highlights: {
+          maxCharacters: 4000,
+          query: "latest model launches",
+          numSentences: 4,
+          highlightsPerUrl: 2,
+        },
+        summary: { query: "launch details" },
+      }),
+    ).toEqual({
+      value: {
+        text: { maxCharacters: 1200 },
+        highlights: {
+          maxCharacters: 4000,
+          query: "latest model launches",
+          numSentences: 4,
+          highlightsPerUrl: 2,
+        },
+        summary: { query: "launch details" },
+      },
+    });
+  });
+
+  it("rejects invalid Exa contents objects", () => {
+    expect(
+      __testing.parseExaContents({
+        highlights: { numSentences: 0 },
+      }),
+    ).toMatchObject({
+      error: "invalid_contents",
+    });
+  });
+
+  it("exposes newer documented Exa search types and count limits", () => {
+    const provider = createExaWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: { exa: { apiKey: "exa-secret" } },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    const parameters = tool.parameters as {
+      properties?: {
+        count?: { maximum?: number };
+        type?: { enum?: string[] };
+      };
+    };
+
+    expect(parameters.properties?.count?.maximum).toBe(100);
+    expect(parameters.properties?.type?.enum).toEqual([
+      "auto",
+      "neural",
+      "fast",
+      "deep",
+      "deep-reasoning",
+      "instant",
+    ]);
+    expect(__testing.resolveExaSearchCount(80, 10)).toBe(80);
+    expect(__testing.resolveExaSearchCount(120, 10)).toBe(100);
+  });
+
   it("returns validation errors for conflicting time filters", async () => {
     const provider = createExaWebSearchProvider();
     const tool = provider.createTool({
