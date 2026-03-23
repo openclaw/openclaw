@@ -41,6 +41,7 @@ const CORRECTION_TAG_REGEX = /^(?<base>\d{4}\.[1-9]\d?\.[1-9]\d?)-(?<correction>
 const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const MAX_CALVER_DISTANCE_DAYS = 2;
 const REQUIRED_PACKED_PATHS = ["dist/control-ui/index.html"];
+const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
 
 function normalizeRepoUrl(value: unknown): string {
   if (typeof value !== "string") {
@@ -385,6 +386,28 @@ export function parseNpmPackJsonOutput(stdout: string): NpmPackResult[] | null {
   return null;
 }
 
+export function collectControlUiPackErrors(paths: Iterable<string>): string[] {
+  const packedPaths = new Set(paths);
+  const assetPaths = [...packedPaths].filter((path) => path.startsWith(CONTROL_UI_ASSET_PREFIX));
+  const errors: string[] = [];
+
+  for (const requiredPath of REQUIRED_PACKED_PATHS) {
+    if (!packedPaths.has(requiredPath)) {
+      errors.push(
+        `npm package is missing required path "${requiredPath}". Ensure UI assets are built and included before publish.`,
+      );
+    }
+  }
+
+  if (assetPaths.length === 0) {
+    errors.push(
+      `npm package is missing Control UI asset payload under "${CONTROL_UI_ASSET_PREFIX}". Refuse release when the dashboard tarball would be empty.`,
+    );
+  }
+
+  return errors;
+}
+
 function collectPackedTarballErrors(): string[] {
   const errors: string[] = [];
   let stdout = "";
@@ -415,15 +438,7 @@ function collectPackedTarballErrors(): string[] {
       .filter((path): path is string => typeof path === "string" && path.length > 0),
   );
 
-  for (const requiredPath of REQUIRED_PACKED_PATHS) {
-    if (!packedPaths.has(requiredPath)) {
-      errors.push(
-        `npm package is missing required path "${requiredPath}". Ensure UI assets are built and included before publish.`,
-      );
-    }
-  }
-
-  return errors;
+  return collectControlUiPackErrors(packedPaths);
 }
 
 function main(): number {

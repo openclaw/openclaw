@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  collectControlUiPackErrors,
   collectReleasePackageMetadataErrors,
   collectReleaseTagErrors,
   parseNpmPackJsonOutput,
@@ -127,6 +128,24 @@ describe("parseNpmPackJsonOutput", () => {
 
   it("returns null when no JSON payload is present", () => {
     expect(parseNpmPackJsonOutput("> openclaw@2026.3.23 prepack")).toBeNull();
+  });
+});
+
+describe("collectControlUiPackErrors", () => {
+  it("rejects packs that ship the dashboard HTML without the asset payload", () => {
+    expect(collectControlUiPackErrors(["dist/control-ui/index.html"])).toEqual([
+      'npm package is missing Control UI asset payload under "dist/control-ui/assets/". Refuse release when the dashboard tarball would be empty.',
+    ]);
+  });
+
+  it("accepts packs that ship dashboard HTML and bundled assets", () => {
+    expect(
+      collectControlUiPackErrors([
+        "dist/control-ui/index.html",
+        "dist/control-ui/assets/index-Bu8rSoJV.js",
+        "dist/control-ui/assets/index-BK0yXA_h.css",
+      ]),
+    ).toEqual([]);
   });
 });
 
