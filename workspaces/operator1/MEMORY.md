@@ -59,6 +59,7 @@ _Details archived in `memory/archive-2026-q1.md`_
 
 ## Pending
 
+- [ ] **Task delegation polling** — Main agent polls sub-agents during heartbeats; timeout triggers follow-up
 - [ ] Personal life management approach decision
 - [ ] Consider adding second LLM provider as fallback
 - [ ] Add WordPress credentials when ready for assisted publishing

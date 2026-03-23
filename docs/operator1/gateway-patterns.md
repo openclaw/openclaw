@@ -1,6 +1,6 @@
 ---
 summary: "Gateway deployment patterns for Operator1 — collocated single-process vs independent multi-gateway setups."
-updated: "2026-03-22"
+updated: "2026-03-23"
 title: "Gateway Patterns"
 ---
 

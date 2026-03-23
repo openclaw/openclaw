@@ -1,6 +1,6 @@
 ---
 summary: "Channel integrations for Operator1 — configuring Telegram, iMessage, and other channels for multi-agent routing."
-updated: "2026-03-22"
+updated: "2026-03-23"
 title: "Channels"
 ---
 

@@ -1,6 +1,6 @@
 ---
 summary: "Deployment guide for the Operator1 multi-agent system — prerequisites, new machine setup, and deployment modes."
-updated: "2026-03-22"
+updated: "2026-03-23"
 title: "Deployment"
 ---
 
