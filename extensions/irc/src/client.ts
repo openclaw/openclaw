@@ -334,7 +334,8 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
             sendRaw(command);
           }
           // If we're on a fallback nick and have NickServ credentials,
-          // GHOST the desired nick and reclaim it.
+          // wait for IDENTIFY to be processed, then GHOST the desired
+          // nick and reclaim it.
           if (
             currentNick.toLowerCase() !== desiredNick.toLowerCase() &&
             options.nickserv?.enabled !== false &&
@@ -342,15 +343,22 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
           ) {
             const service = sanitizeIrcTarget(options.nickserv.service?.trim() || "NickServ");
             const nsPassword = sanitizeIrcOutboundText(options.nickserv.password);
-            sendRaw(`PRIVMSG ${service} :GHOST ${desiredNick} ${nsPassword}`);
-            // Delay the NICK reclaim slightly to let GHOST complete.
+            // Delay GHOST so IDENTIFY has time to complete first.
             setTimeout(() => {
               try {
-                sendRaw(`NICK ${desiredNick}`);
+                sendRaw(`PRIVMSG ${service} :GHOST ${desiredNick} ${nsPassword}`);
               } catch {
                 // Socket may have closed; ignore.
               }
-            }, 1000);
+              // Then reclaim the nick after GHOST processes.
+              setTimeout(() => {
+                try {
+                  sendRaw(`NICK ${desiredNick}`);
+                } catch {
+                  // Socket may have closed; ignore.
+                }
+              }, 2000);
+            }, 2000);
           }
         } catch (err) {
           fail(err);
