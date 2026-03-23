@@ -17,7 +17,7 @@ It replaces the default permissive persona with three hardened architectural pri
 
 ## ⚠️ SEPARATED CONCERNS: What This Cannot Stop ⚠️
 **Prompt engineering is probabilistic; file-system security is deterministic.** 
-`ROBUST_SOUL.md` provides a highly robust Layer 1 defense and will catch ~95% of prompt-based attacks. However, it **cannot** stop attackers who bypass the LLM entirely. Be aware of these architectural limitations:
+`ROBUST_SOUL.md` provides a highly robust Layer 1 defense to counter prompt-based attacks. However, it **cannot** stop attackers who bypass the LLM entirely. Be aware of these architectural limitations:
 *   **Pre-Bootstrap Execution:** Malicious skills that execute native code *before* `SOUL.md` is fully parsed.
 *   **Runtime Bypass:** Direct syscalls or file writes from compromised skills that do not route through the guarded LLM tool wrappers.
 *   **Root-Level Malware:** Local malware that reads/writes plaintext workspace files regardless of agent prompts.
