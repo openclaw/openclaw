@@ -8,6 +8,18 @@ function defaultQueueModeForChannel(_channel?: string): QueueMode {
   return "collect";
 }
 
+/**
+ * Resolve a channel plugin queue-mode default.
+ * Returns undefined when the channel key is missing, the plugin is absent,
+ * or the plugin default does not map to a valid queue mode.
+ */
+function resolvePluginQueueMode(channelKey: string | undefined): QueueMode | undefined {
+  if (!channelKey) {
+    return undefined;
+  }
+  return normalizeQueueMode(getChannelPlugin(channelKey)?.defaults?.queue?.mode);
+}
+
 /** Resolve per-channel debounce override from debounceMsByChannel map. */
 function resolveChannelDebounce(
   byChannel: InboundDebounceByProvider | undefined,
@@ -41,6 +53,7 @@ export function resolveQueueSettings(params: ResolveQueueSettingsParams): QueueS
     normalizeQueueMode(params.sessionEntry?.queueMode) ??
     normalizeQueueMode(providerModeRaw) ??
     normalizeQueueMode(queueCfg?.mode) ??
+    resolvePluginQueueMode(channelKey) ??
     defaultQueueModeForChannel(channelKey);
   const debounceRaw =
     params.inlineOptions?.debounceMs ??

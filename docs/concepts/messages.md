@@ -115,6 +115,7 @@ current run, or collected for a followup turn.
 
 - Configure via `messages.queue` (and `messages.queue.byChannel`).
 - Modes: `interrupt`, `steer`, `followup`, `collect`, plus backlog variants.
+- Defaults: Slack uses `followup`; most other chat surfaces use `collect`.
 
 Details: [Queueing](/concepts/queue).
 

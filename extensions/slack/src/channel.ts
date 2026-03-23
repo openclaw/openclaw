@@ -149,6 +149,11 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   streaming: {
     blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
   },
+  defaults: {
+    queue: {
+      mode: "followup",
+    },
+  },
   reload: { configPrefixes: ["channels.slack"] },
   configSchema: buildChannelConfigSchema(SlackConfigSchema),
   config: {

@@ -122,7 +122,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
         whatsapp: "collect",
         telegram: "collect",
         discord: "collect",
-        slack: "collect",
+        slack: "followup",
         signal: "collect",
         imessage: "collect",
         webchat: "collect",

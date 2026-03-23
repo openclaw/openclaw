@@ -1,3 +1,4 @@
+import type { QueueMode } from "../../auto-reply/reply/queue/types.js";
 import type { ChannelOnboardingAdapter } from "./onboarding-types.js";
 import type {
   ChannelAuthAdapter,
@@ -52,6 +53,7 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   capabilities: ChannelCapabilities;
   defaults?: {
     queue?: {
+      mode?: QueueMode;
       debounceMs?: number;
     };
   };

@@ -28,7 +28,7 @@ Inbound messages can steer the current run, wait for a followup turn, or do both
 
 - `steer`: inject immediately into the current run (cancels pending tool calls after the next tool boundary). If not streaming, falls back to followup.
 - `followup`: enqueue for the next agent turn after the current run ends.
-- `collect`: coalesce all queued messages into a **single** followup turn (default). If messages target different channels/threads, they drain individually to preserve routing.
+- `collect`: coalesce all queued messages into a **single** followup turn. If messages target different channels/threads, they drain individually to preserve routing.
 - `steer-backlog` (aka `steer+backlog`): steer now **and** preserve the message for a followup turn.
 - `interrupt` (legacy): abort the active run for that session, then run the newest message.
 - `queue` (legacy alias): same as `steer`.
@@ -40,7 +40,8 @@ Send `/queue collect` as a standalone command (per-session) or set `messages.que
 
 Defaults (when unset in config):
 
-- All surfaces → `collect`
+- Slack → `followup`
+- All other surfaces → `collect`
 
 Configure globally or per channel via `messages.queue`:
 
@@ -52,7 +53,7 @@ Configure globally or per channel via `messages.queue`:
       debounceMs: 1000,
       cap: 20,
       drop: "summarize",
-      byChannel: { discord: "collect" },
+      byChannel: { slack: "followup" },
     },
   },
 }
