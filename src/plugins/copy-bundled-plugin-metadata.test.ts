@@ -361,4 +361,25 @@ describe("copyBundledPluginMetadata", () => {
 
     expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", "acpx"))).toBe(false);
   });
+
+  it("still bundles previously released optional plugins without the opt-in env", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-released-optional-");
+    const pluginDir = path.join(repoRoot, "extensions", "whatsapp");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
+      id: "whatsapp",
+      configSchema: { type: "object" },
+    });
+    writeJson(path.join(pluginDir, "package.json"), {
+      name: "@openclaw/whatsapp",
+      openclaw: {
+        extensions: ["./index.ts"],
+        install: { npmSpec: "@openclaw/whatsapp" },
+      },
+    });
+
+    copyBundledPluginMetadataWithEnv({ repoRoot, env: {} });
+
+    expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", "whatsapp"))).toBe(true);
+  });
 });
