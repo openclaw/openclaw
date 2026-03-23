@@ -51,7 +51,8 @@ The agent will:
 - Check if any non-comment line exactly matches the provided token
 - If match found and date not expired → allow exemption
 
-**Security note:** The token file must remain read-only for the agent process (OS-level protection). Prompt injection cannot create or modify it.
+**Security note:** The token file must remain read-only for the agent process (OS-level protection). Prompt injection cannot create or modify it. 
+**Limitations:** Override tokens do never allow write access to files which are read-only or immutable for the agent - this needs filesystem operation (chmod / chattr).
 
 ---
 
