@@ -1,52 +1,69 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as sessionMeta from "../acp/runtime/session-meta.js";
+import * as sessionPaths from "../config/sessions/paths.js";
+import * as gatewayCall from "../gateway/call.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import * as heartbeatWake from "../infra/heartbeat-wake.js";
+import * as systemEvents from "../infra/system-events.js";
 import {
   resolveAcpSpawnStreamLogPath,
   startAcpSpawnParentStreamRelay,
 } from "./acp-spawn-parent-stream.js";
-
-const enqueueSystemEventMock = vi.fn();
-const requestHeartbeatNowMock = vi.fn();
-const readAcpSessionEntryMock = vi.fn();
-const resolveSessionFilePathMock = vi.fn();
-const resolveSessionFilePathOptionsMock = vi.fn();
-
-vi.mock("../infra/system-events.js", () => ({
-  enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
-}));
-
-vi.mock("../infra/heartbeat-wake.js", () => ({
-  requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
-}));
-
-vi.mock("../acp/runtime/session-meta.js", () => ({
-  readAcpSessionEntry: (...args: unknown[]) => readAcpSessionEntryMock(...args),
-}));
-
-vi.mock("../config/sessions/paths.js", () => ({
-  resolveSessionFilePath: (...args: unknown[]) => resolveSessionFilePathMock(...args),
-  resolveSessionFilePathOptions: (...args: unknown[]) => resolveSessionFilePathOptionsMock(...args),
-}));
-
-function collectedTexts() {
-  return enqueueSystemEventMock.mock.calls.map((call) => String(call[0] ?? ""));
-}
+import * as subagentAnnounce from "./subagent-announce.js";
+import * as subagentRegistry from "./subagent-registry.js";
 
 describe("startAcpSpawnParentStreamRelay", () => {
+  let enqueueSystemEventSpy: ReturnType<typeof vi.spyOn>;
+  let requestHeartbeatNowSpy: ReturnType<typeof vi.spyOn>;
+  let readAcpSessionEntrySpy: ReturnType<typeof vi.spyOn>;
+  let resolveSessionFilePathSpy: ReturnType<typeof vi.spyOn>;
+  let resolveSessionFilePathOptionsSpy: ReturnType<typeof vi.spyOn>;
+  let callGatewaySpy: ReturnType<typeof vi.spyOn>;
+  let readSubagentOutputSpy: ReturnType<typeof vi.spyOn>;
+  let completeSubagentRunSpy: ReturnType<typeof vi.spyOn>;
+
   beforeEach(() => {
-    enqueueSystemEventMock.mockClear();
-    requestHeartbeatNowMock.mockClear();
-    readAcpSessionEntryMock.mockReset();
-    resolveSessionFilePathMock.mockReset();
-    resolveSessionFilePathOptionsMock.mockReset();
-    resolveSessionFilePathOptionsMock.mockImplementation((value: unknown) => value);
+    enqueueSystemEventSpy = vi
+      .spyOn(systemEvents, "enqueueSystemEvent")
+      .mockImplementation(() => false);
+    requestHeartbeatNowSpy = vi
+      .spyOn(heartbeatWake, "requestHeartbeatNow")
+      .mockImplementation(() => {});
+    readAcpSessionEntrySpy = vi
+      .spyOn(sessionMeta, "readAcpSessionEntry")
+      .mockReturnValue(undefined as never);
+    resolveSessionFilePathSpy = vi
+      .spyOn(sessionPaths, "resolveSessionFilePath")
+      .mockReturnValue("");
+    resolveSessionFilePathOptionsSpy = vi
+      .spyOn(sessionPaths, "resolveSessionFilePathOptions")
+      .mockImplementation((value: unknown) => value as never);
+    callGatewaySpy = vi.spyOn(gatewayCall, "callGateway").mockResolvedValue(undefined as never);
+    readSubagentOutputSpy = vi
+      .spyOn(subagentAnnounce, "readSubagentOutput")
+      .mockResolvedValue(undefined);
+    completeSubagentRunSpy = vi
+      .spyOn(subagentRegistry, "completeSubagentRun")
+      .mockResolvedValue(undefined as never);
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-04T01:00:00.000Z"));
   });
 
   afterEach(() => {
+    enqueueSystemEventSpy.mockRestore();
+    requestHeartbeatNowSpy.mockRestore();
+    readAcpSessionEntrySpy.mockRestore();
+    resolveSessionFilePathSpy.mockRestore();
+    resolveSessionFilePathOptionsSpy.mockRestore();
+    callGatewaySpy.mockRestore();
+    readSubagentOutputSpy.mockRestore();
+    completeSubagentRunSpy.mockRestore();
     vi.useRealTimers();
   });
+
+  function collectedTexts() {
+    return enqueueSystemEventSpy.mock.calls.map((call) => String(call[0] ?? ""));
+  }
 
   it("relays assistant progress and completion to the parent session", () => {
     const relay = startAcpSpawnParentStreamRelay({
@@ -78,10 +95,10 @@ describe("startAcpSpawnParentStreamRelay", () => {
     });
 
     const texts = collectedTexts();
-    expect(texts.some((text) => text.includes("Started codex session"))).toBe(true);
-    expect(texts.some((text) => text.includes("codex: hello from child"))).toBe(true);
-    expect(texts.some((text) => text.includes("codex run completed in 2s"))).toBe(true);
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
+    expect(texts.some((text: string) => text.includes("Started codex session"))).toBe(true);
+    expect(texts.some((text: string) => text.includes("codex: hello from child"))).toBe(true);
+    expect(texts.some((text: string) => text.includes("codex run completed in 2s"))).toBe(true);
+    expect(requestHeartbeatNowSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         reason: "acp:spawn:stream",
         sessionKey: "agent:main:main",
@@ -90,7 +107,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
-  it("emits a no-output notice and a resumed notice when output returns", () => {
+  it("emits a no-output notice and a resumed notice when output returns", async () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-2",
       parentSessionKey: "agent:main:main",
@@ -101,10 +118,10 @@ describe("startAcpSpawnParentStreamRelay", () => {
       noOutputPollMs: 250,
     });
 
-    vi.advanceTimersByTime(1_500);
-    expect(collectedTexts().some((text) => text.includes("has produced no output for 1s"))).toBe(
-      true,
-    );
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(
+      collectedTexts().some((text: string) => text.includes("has produced no output for 1s")),
+    ).toBe(true);
 
     emitAgentEvent({
       runId: "run-2",
@@ -116,8 +133,8 @@ describe("startAcpSpawnParentStreamRelay", () => {
     vi.advanceTimersByTime(5);
 
     const texts = collectedTexts();
-    expect(texts.some((text) => text.includes("resumed output."))).toBe(true);
-    expect(texts.some((text) => text.includes("codex: resumed output"))).toBe(true);
+    expect(texts.some((text: string) => text.includes("resumed output."))).toBe(true);
+    expect(texts.some((text: string) => text.includes("codex: resumed output"))).toBe(true);
 
     emitAgentEvent({
       runId: "run-2",
@@ -127,11 +144,11 @@ describe("startAcpSpawnParentStreamRelay", () => {
         error: "boom",
       },
     });
-    expect(collectedTexts().some((text) => text.includes("run failed: boom"))).toBe(true);
+    expect(collectedTexts().some((text: string) => text.includes("run failed: boom"))).toBe(true);
     relay.dispose();
   });
 
-  it("auto-disposes stale relays after max lifetime timeout", () => {
+  it("auto-disposes stale relays after max lifetime timeout", async () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-3",
       parentSessionKey: "agent:main:main",
@@ -142,12 +159,12 @@ describe("startAcpSpawnParentStreamRelay", () => {
       maxRelayLifetimeMs: 1_000,
     });
 
-    vi.advanceTimersByTime(1_001);
-    expect(collectedTexts().some((text) => text.includes("stream relay timed out after 1s"))).toBe(
-      true,
-    );
+    await vi.advanceTimersByTimeAsync(1_001);
+    expect(
+      collectedTexts().some((text: string) => text.includes("stream relay timed out after 1s")),
+    ).toBe(true);
 
-    const before = enqueueSystemEventMock.mock.calls.length;
+    const before = enqueueSystemEventSpy.mock.calls.length;
     emitAgentEvent({
       runId: "run-3",
       stream: "assistant",
@@ -157,7 +174,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     });
     vi.advanceTimersByTime(5);
 
-    expect(enqueueSystemEventMock.mock.calls).toHaveLength(before);
+    expect(enqueueSystemEventSpy.mock.calls).toHaveLength(before);
     relay.dispose();
   });
 
@@ -170,11 +187,15 @@ describe("startAcpSpawnParentStreamRelay", () => {
       emitStartNotice: false,
     });
 
-    expect(collectedTexts().some((text) => text.includes("Started codex session"))).toBe(false);
+    expect(collectedTexts().some((text: string) => text.includes("Started codex session"))).toBe(
+      false,
+    );
 
     relay.notifyStarted();
 
-    expect(collectedTexts().some((text) => text.includes("Started codex session"))).toBe(true);
+    expect(collectedTexts().some((text: string) => text.includes("Started codex session"))).toBe(
+      true,
+    );
     relay.dispose();
   });
 
@@ -205,31 +226,29 @@ describe("startAcpSpawnParentStreamRelay", () => {
     vi.advanceTimersByTime(15);
 
     const texts = collectedTexts();
-    expect(texts.some((text) => text.includes("codex: hello world"))).toBe(true);
+    expect(texts.some((text: string) => text.includes("codex: hello world"))).toBe(true);
     relay.dispose();
   });
 
   it("resolves ACP spawn stream log path from session metadata", () => {
-    readAcpSessionEntryMock.mockReturnValue({
+    readAcpSessionEntrySpy.mockReturnValue({
       storePath: "/tmp/openclaw/agents/codex/sessions/sessions.json",
       entry: {
         sessionId: "sess-123",
         sessionFile: "/tmp/openclaw/agents/codex/sessions/sess-123.jsonl",
       },
     });
-    resolveSessionFilePathMock.mockReturnValue(
-      "/tmp/openclaw/agents/codex/sessions/sess-123.jsonl",
-    );
+    resolveSessionFilePathSpy.mockReturnValue("/tmp/openclaw/agents/codex/sessions/sess-123.jsonl");
 
     const resolved = resolveAcpSpawnStreamLogPath({
       childSessionKey: "agent:codex:acp:child-1",
     });
 
     expect(resolved).toBe("/tmp/openclaw/agents/codex/sessions/sess-123.acp-stream.jsonl");
-    expect(readAcpSessionEntryMock).toHaveBeenCalledWith({
+    expect(readAcpSessionEntrySpy).toHaveBeenCalledWith({
       sessionKey: "agent:codex:acp:child-1",
     });
-    expect(resolveSessionFilePathMock).toHaveBeenCalledWith(
+    expect(resolveSessionFilePathSpy).toHaveBeenCalledWith(
       "sess-123",
       expect.objectContaining({
         sessionId: "sess-123",
@@ -238,5 +257,45 @@ describe("startAcpSpawnParentStreamRelay", () => {
         storePath: "/tmp/openclaw/agents/codex/sessions/sessions.json",
       }),
     );
+  });
+
+  it("probes for completed relay before emitting stall warning", async () => {
+    callGatewaySpy.mockResolvedValue({ status: "ok", endedAt: Date.now() } as never);
+
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-6",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-6",
+      agentId: "codex",
+      streamFlushMs: 1,
+      noOutputNoticeMs: 1_000,
+      noOutputPollMs: 250,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_500);
+    const texts = collectedTexts();
+    expect(texts.some((text: string) => text.includes("has produced no output"))).toBe(false);
+    expect(texts.some((text: string) => text.includes("run completed"))).toBe(true);
+    relay.dispose();
+  });
+
+  it("uses transcript fallback before emitting stall warning", async () => {
+    readSubagentOutputSpy.mockResolvedValue("transcript result");
+
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-7",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-7",
+      agentId: "codex",
+      streamFlushMs: 1,
+      noOutputNoticeMs: 1_000,
+      noOutputPollMs: 250,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_500);
+    const texts = collectedTexts();
+    expect(texts.some((text: string) => text.includes("has produced no output"))).toBe(false);
+    expect(texts.some((text: string) => text.includes("run completed"))).toBe(true);
+    relay.dispose();
   });
 });

@@ -523,7 +523,7 @@ async function refreshFrozenResultFromSession(sessionKey: string): Promise<boole
   return changed;
 }
 
-async function completeSubagentRun(params: {
+export async function completeSubagentRun(params: {
   runId: string;
   endedAt?: number;
   outcome: SubagentRunOutcome;

@@ -931,7 +931,9 @@ export async function spawnAcpDirect(
         expectsCompletionMessage: true,
         spawnMode,
       });
-    } catch {}
+    } catch (err) {
+      log.warn("registerSubagentRun failed for run %s: %s", childRunId, err);
+    }
     parentRelay?.notifyStarted();
     return {
       status: "accepted",
