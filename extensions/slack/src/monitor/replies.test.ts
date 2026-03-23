@@ -6,6 +6,7 @@ vi.mock("../send.js", () => ({
 }));
 
 let deliverReplies: typeof import("./replies.js").deliverReplies;
+import { deliverSlackSlashReplies } from "./replies.js";
 
 function baseParams(overrides?: Record<string, unknown>) {
   return {
@@ -95,5 +96,25 @@ describe("deliverReplies identity passthrough", () => {
         blocks,
       }),
     );
+  });
+});
+
+describe("deliverSlackSlashReplies chunking", () => {
+  it("keeps a 4205-character reply in a single slash response by default", async () => {
+    const respond = vi.fn(async () => undefined);
+    const text = "a".repeat(4205);
+
+    await deliverSlackSlashReplies({
+      replies: [{ text }],
+      respond,
+      ephemeral: true,
+      textLimit: 8000,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(respond).toHaveBeenCalledWith({
+      text,
+      response_type: "ephemeral",
+    });
   });
 });
