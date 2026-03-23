@@ -203,7 +203,7 @@ Use the interactive config wizard to set MiniMax without editing JSON:
 
 This usually means the **MiniMax provider isn’t configured** (no provider entry
 and no MiniMax auth profile/env key found). A fix for this detection is in
-**2026.1.12** (unreleased at the time of writing). Fix by:
+**2026.1.12**. Fix by:
 
 - Upgrading to **2026.1.12** (or run from source `main`), then restarting the gateway.
 - Running `openclaw configure` and selecting a **MiniMax** auth option, or
