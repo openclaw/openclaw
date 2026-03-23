@@ -132,6 +132,10 @@ export const en: TranslationMap = {
       cost: "Cost",
       skills: "Skills",
       recentSessions: "Recent Sessions",
+      cronJobs: "{count} jobs",
+      tokensMessages: "{tokens} tokens · {messages} messages",
+      skillsBlocked: "Blocked: {count}",
+      skillsActive: "Active: {count}",
     },
     attention: {
       title: "Attention",

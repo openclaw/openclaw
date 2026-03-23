@@ -494,6 +494,106 @@ describe("chat view", () => {
     await i18n.setLocale("en");
   });
 
+  it("renders the overview entry surfaces in Spanish without English fallback text", async () => {
+    const container = document.createElement("div");
+    const props = createOverviewProps({
+      settings: {
+        ...createOverviewProps().settings,
+        locale: "es",
+      },
+      usageResult: {
+        totals: {
+          totalCost: 1.25,
+          totalTokens: 345,
+        },
+        aggregates: {
+          messages: {
+            total: 7,
+          },
+        },
+      } as OverviewProps["usageResult"],
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: 1_000,
+            label: "main",
+            model: "gpt-5",
+          },
+        ],
+      },
+      skillsReport: {
+        workspaceDir: "",
+        managedSkillsDir: "",
+        skills: [],
+      } as OverviewProps["skillsReport"],
+      cronJobs: [],
+      cronStatus: {
+        enabled: true,
+        jobs: 0,
+        nextWakeAtMs: null,
+      },
+      attentionItems: [
+        {
+          severity: "warning",
+          icon: "radio",
+          title: "Attention item",
+          description: "Review this item",
+        },
+      ],
+      eventLog: [
+        {
+          ts: 1_000,
+          event: "gateway.connected",
+        },
+      ],
+      overviewLogLines: ["gateway ready"],
+    });
+
+    await i18n.setLocale("es");
+    render(renderOverview(props), container);
+    await Promise.resolve();
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("Cómo conectarse");
+    expect(text).toContain("Costo");
+    expect(text).toContain("Habilidades");
+    expect(text).toContain("Sesiones recientes");
+    expect(text).toContain("345 tokens · 7 mensajes");
+    expect(text).toContain("Activas: 0");
+    expect(text).toContain("0 tareas");
+    expect(text).toContain("Atención");
+    expect(text).toContain("Registro de eventos");
+    expect(text).toContain("Registros de la puerta de enlace");
+    expect(text).not.toContain("How to connect");
+    expect(text).not.toContain("Event Log");
+    expect(text).not.toContain("Gateway Logs");
+    expect(text).not.toContain("0 jobs");
+    expect(text).not.toContain("Active: 0");
+
+    await i18n.setLocale("en");
+  });
+
+  it("ships Spanish translations for overview entry navigation and palette copy", async () => {
+    await i18n.setLocale("es");
+
+    expect(i18n.t("common.search")).toBe("Buscar");
+    expect(i18n.t("tabs.aiAgents")).toBe("IA y agentes");
+    expect(i18n.t("subtitles.appearance")).toBe(
+      "Tema, interfaz y ajustes del asistente de configuración.",
+    );
+    expect(i18n.t("overview.connection.title")).toBe("Cómo conectarse");
+    expect(i18n.t("overview.connection.docsLink")).toBe("Leer la documentación →");
+    expect(i18n.t("overview.palette.placeholder")).toBe("Escribe un comando…");
+
+    await i18n.setLocale("en");
+  });
+
   it("renders compacting indicator as a badge", () => {
     const container = document.createElement("div");
     render(
