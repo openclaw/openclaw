@@ -40,6 +40,7 @@ import { whatsappInboundLog, whatsappOutboundLog } from "../loggers.js";
 import type { WebInboundMsg } from "../types.js";
 import { elide } from "../util.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
+import { resolveGroupPolicyFor } from "./group-activation.js";
 import { formatGroupMembers } from "./group-members.js";
 import { trackBackgroundTask, updateLastRouteInBackground } from "./last-route.js";
 import { buildInboundLine } from "./message-line.js";
@@ -411,6 +412,19 @@ export async function processMessage(params: {
           // web UI only; sending them here leaks chain-of-thought to end users.
           return;
         }
+
+        // Outbound guard: refuse to send to non-allowlisted groups even if inbound
+        // gating was bypassed (defense in depth against race conditions or batching).
+        if (params.msg.chatType === "group") {
+          const groupPolicy = resolveGroupPolicyFor(params.cfg, conversationId);
+          if (groupPolicy.allowlistEnabled && !groupPolicy.allowed) {
+            whatsappOutboundLog.warn(
+              `Blocked outbound reply to non-allowlisted group ${conversationId}`,
+            );
+            return;
+          }
+        }
+
         await deliverWebReply({
           replyResult: payload,
           msg: params.msg,

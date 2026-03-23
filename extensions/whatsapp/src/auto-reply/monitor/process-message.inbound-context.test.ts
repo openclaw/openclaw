@@ -443,4 +443,47 @@ describe("web processMessage inbound context", () => {
 
     expect(updateLastRouteMock).toHaveBeenCalledTimes(1);
   });
+
+  it("blocks outbound replies to non-allowlisted groups (defense in depth)", async () => {
+    deliverWebReplyMock.mockClear();
+
+    await processMessage(
+      makeProcessMessageArgs({
+        routeSessionKey: "agent:main:whatsapp:group:123@g.us",
+        groupHistoryKey: "whatsapp:default:group:123@g.us",
+        cfg: {
+          channels: {
+            whatsapp: {
+              groupPolicy: "allowlist",
+            },
+          },
+          messages: {},
+          session: { store: sessionStorePath },
+        } as unknown as ReturnType<typeof import("../../../../../src/config/config.js").loadConfig>,
+        msg: {
+          id: "g-blocked-1",
+          from: "123@g.us",
+          conversationId: "123@g.us",
+          to: "+2000",
+          chatType: "group",
+          body: "hello",
+          senderName: "Alice",
+          senderE164: "+111",
+          selfE164: "+999",
+          sendComposing: async () => {},
+          reply: async () => {},
+          sendMedia: async () => {},
+        },
+      }),
+    );
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const deliver = (capturedDispatchParams as any)?.dispatcherOptions?.deliver as
+      | ((payload: { text?: string }, info: { kind: "final" }) => Promise<void>)
+      | undefined;
+    expect(deliver).toBeTypeOf("function");
+
+    await deliver?.({ text: "should be blocked" }, { kind: "final" });
+    expect(deliverWebReplyMock).not.toHaveBeenCalled();
+  });
 });
