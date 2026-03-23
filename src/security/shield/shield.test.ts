@@ -4,7 +4,6 @@
 // ─────────────────────────────────────────────
 
 import { describe, it, expect, beforeEach } from "vitest";
-
 import {
   // Circuit Breaker
   createDefaultCircuit,
@@ -55,7 +54,6 @@ import {
   // Gateway Shield
   GatewayShield,
 } from "./index.js";
-
 import {
   validateOrigin,
   validatePayloadSize,
@@ -346,13 +344,23 @@ describe("Function Health", () => {
 
 describe("Function Throttle", () => {
   it("allows all traffic for HEALTHY functions", () => {
-    const health = { functionName: "test", healthScore: 90, status: "HEALTHY" as const, lastChecked: "" };
+    const health = {
+      functionName: "test",
+      healthScore: 90,
+      status: "HEALTHY" as const,
+      lastChecked: "",
+    };
     const config = getThrottleConfig(health);
     expect(config.capacityPercent).toBe(100);
   });
 
   it("reduces capacity for DEGRADED functions", () => {
-    const health = { functionName: "test", healthScore: 60, status: "DEGRADED" as const, lastChecked: "" };
+    const health = {
+      functionName: "test",
+      healthScore: 60,
+      status: "DEGRADED" as const,
+      lastChecked: "",
+    };
     const config = getThrottleConfig(health);
     expect(config.capacityPercent).toBeGreaterThan(50);
     expect(config.capacityPercent).toBeLessThan(100);
@@ -360,7 +368,12 @@ describe("Function Throttle", () => {
   });
 
   it("blocks all traffic for CIRCUIT_OPEN", () => {
-    const health = { functionName: "test", healthScore: 5, status: "CIRCUIT_OPEN" as const, lastChecked: "" };
+    const health = {
+      functionName: "test",
+      healthScore: 5,
+      status: "CIRCUIT_OPEN" as const,
+      lastChecked: "",
+    };
     const decision = makeThrottleDecision(health, 100, 50);
     expect(decision.allowed).toBe(false);
   });
@@ -376,14 +389,24 @@ describe("Emergency Escalation", () => {
     expect(result.action).toBe("NONE");
   });
 
-  it("returns ALERT for single critical function", () => {
-    const result = evaluateEscalation(["auth-handler"]);
+  it("returns ALERT for single non-pipeline critical function", () => {
+    // message-handler is gateway-critical but NOT in the pipeline-down rule
+    // (only ws-connection and auth-handler trigger GATEWAY_PIPELINE_DOWN)
+    const result = evaluateEscalation(["message-handler"]);
     expect(result.action).toBe("ALERT");
+    expect(result.ruleId).toBe("SINGLE_CRITICAL");
   });
 
   it("returns PARTIAL_PAUSE for ws-connection down", () => {
     const result = evaluateEscalation(["ws-connection"]);
     expect(result.action).toBe("PARTIAL_PAUSE");
+    expect(result.ruleId).toBe("GATEWAY_PIPELINE_DOWN");
+  });
+
+  it("returns PARTIAL_PAUSE for auth-handler down", () => {
+    const result = evaluateEscalation(["auth-handler"]);
+    expect(result.action).toBe("PARTIAL_PAUSE");
+    expect(result.ruleId).toBe("GATEWAY_PIPELINE_DOWN");
   });
 
   it("returns PARTIAL_PAUSE for 3+ open circuits", () => {
@@ -412,9 +435,30 @@ describe("Metrics Collector", () => {
   it("aggregates metrics by function and minute", () => {
     const now = Date.now();
     const metrics: RequestMetric[] = [
-      { functionName: "fn-a", startTime: now, endTime: now + 100, status: 200, error: false, timeout: false },
-      { functionName: "fn-a", startTime: now, endTime: now + 200, status: 500, error: true, timeout: false },
-      { functionName: "fn-b", startTime: now, endTime: now + 50, status: 200, error: false, timeout: false },
+      {
+        functionName: "fn-a",
+        startTime: now,
+        endTime: now + 100,
+        status: 200,
+        error: false,
+        timeout: false,
+      },
+      {
+        functionName: "fn-a",
+        startTime: now,
+        endTime: now + 200,
+        status: 500,
+        error: true,
+        timeout: false,
+      },
+      {
+        functionName: "fn-b",
+        startTime: now,
+        endTime: now + 50,
+        status: 200,
+        error: false,
+        timeout: false,
+      },
     ];
 
     const result = aggregateByFunctionAndMinute(metrics);

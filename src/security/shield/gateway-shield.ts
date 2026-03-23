@@ -15,30 +15,15 @@ import {
   recordSuccess,
   recordFailure,
 } from "./circuit-breaker.js";
-
-import {
-  type SessionEvent,
-  type AnomalyResult,
-  evaluateSession,
-} from "./session-monitor.js";
-
+import { type EscalationResult, evaluateEscalation } from "./emergency-escalation.js";
 import {
   type FunctionHealth,
   type FunctionMetrics,
   buildFunctionHealth,
 } from "./function-health.js";
-
 import { makeThrottleDecision } from "./function-throttle.js";
-
-import {
-  type EscalationResult,
-  evaluateEscalation,
-} from "./emergency-escalation.js";
-
-import {
-  type RequestMetric,
-  aggregateByFunctionAndMinute,
-} from "./metrics-collector.js";
+import { type RequestMetric, aggregateByFunctionAndMinute } from "./metrics-collector.js";
+import { type SessionEvent, type AnomalyResult, evaluateSession } from "./session-monitor.js";
 
 // ─── Types ───────────────────────────────────
 
@@ -100,6 +85,10 @@ export class GatewayShield {
   private sessionEvents: SessionEvent[] = [];
   private requestMetrics: RequestMetric[] = [];
   private healthScores: Map<string, FunctionHealth> = new Map();
+  /** Rolling baseline: stores last-known p95 latency per function */
+  private baselineP95: Map<string, number> = new Map();
+  /** Rolling baseline: stores last-known invocations per function */
+  private baselineVolume: Map<string, number> = new Map();
   private recentAnomalies: AnomalyResult[] = [];
   private escalation: EscalationResult | null = null;
   private totalEventsProcessed = 0;
@@ -255,12 +244,24 @@ export class GatewayShield {
         availability: agg.total > 0 ? (agg.success / agg.total) * 100 : 100,
       };
 
-      // Use existing baseline or default
-      const existingHealth = this.healthScores.get(agg.functionName);
-      const baselineP95 = existingHealth ? existingHealth.healthScore : 0;
+      // Use stored baseline latency/volume from prior cycles.
+      // First cycle has no baseline (0) so no latency penalty applies.
+      const priorP95 = this.baselineP95.get(agg.functionName) ?? 0;
+      const priorVolume = this.baselineVolume.get(agg.functionName) ?? 0;
 
-      const health = buildFunctionHealth(agg.functionName, metrics, baselineP95, 0);
+      const health = buildFunctionHealth(agg.functionName, metrics, priorP95, priorVolume);
       this.healthScores.set(agg.functionName, health);
+
+      // Update rolling baselines for next cycle (exponential moving average)
+      const alpha = 0.3; // Weight for new data
+      this.baselineP95.set(
+        agg.functionName,
+        priorP95 > 0 ? priorP95 * (1 - alpha) + agg.p95 * alpha : agg.p95,
+      );
+      this.baselineVolume.set(
+        agg.functionName,
+        priorVolume > 0 ? priorVolume * (1 - alpha) + agg.total * alpha : agg.total,
+      );
     }
 
     return this.healthScores;
@@ -300,10 +301,7 @@ export class GatewayShield {
    * Validate a WebSocket message payload size.
    * Returns null if valid, error string if rejected.
    */
-  validateWsPayload(
-    payloadBytes: number,
-    authenticated: boolean,
-  ): string | null {
+  validateWsPayload(payloadBytes: number, authenticated: boolean): string | null {
     const limit = authenticated
       ? this.config.maxWsPayloadBytes
       : this.config.maxPreAuthPayloadBytes;
@@ -383,6 +381,8 @@ export class GatewayShield {
     this.sessionEvents = [];
     this.requestMetrics = [];
     this.healthScores.clear();
+    this.baselineP95.clear();
+    this.baselineVolume.clear();
     this.recentAnomalies = [];
     this.escalation = null;
     this.totalEventsProcessed = 0;

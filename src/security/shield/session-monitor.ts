@@ -168,7 +168,11 @@ export function detectDeviceSpray(
     severity: 3,
     reason: `${uniqueDevices.size} distinct devices in ${windowMinutes}min (threshold: ${THRESHOLDS.DEVICE_SPRAY_COUNT})`,
     recommendedAction: "restrict",
-    details: { deviceCount: uniqueDevices.size, threshold: THRESHOLDS.DEVICE_SPRAY_COUNT, windowMinutes },
+    details: {
+      deviceCount: uniqueDevices.size,
+      threshold: THRESHOLDS.DEVICE_SPRAY_COUNT,
+      windowMinutes,
+    },
   };
 }
 

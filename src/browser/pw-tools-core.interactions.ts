@@ -300,7 +300,10 @@ export async function evaluateViaPlaywright(opts: {
   }
   // Security: reject function bodies that attempt prototype pollution,
   // constructor access, or import() to limit the eval attack surface.
-  const BLOCKED_PATTERNS = /\b(__proto__|constructor\s*\[|import\s*\(|require\s*\(|process\s*\.\s*env|child_process)\b/;
+  // Each pattern uses its own appropriate boundary: \b for word-bounded
+  // tokens, lookahead for patterns ending in non-word characters.
+  const BLOCKED_PATTERNS =
+    /\b__proto__\b|constructor\s*\[|import\s*\(|require\s*\(|\bprocess\s*\.\s*env\b|\bchild_process\b/;
   if (BLOCKED_PATTERNS.test(fnText)) {
     throw new Error("evaluate function contains blocked patterns");
   }

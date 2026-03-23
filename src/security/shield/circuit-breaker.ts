@@ -54,10 +54,7 @@ export function shouldOpenCircuit(failureCount: number): boolean {
   return failureCount >= CIRCUIT_CONFIG.FAILURE_THRESHOLD;
 }
 
-export function shouldTransitionToHalfOpen(
-  circuit: CircuitState,
-  now: number,
-): boolean {
+export function shouldTransitionToHalfOpen(circuit: CircuitState, now: number): boolean {
   if (circuit.state !== "OPEN" || circuit.openedAt === null) return false;
   const elapsed = now - circuit.openedAt;
   return elapsed >= circuit.cooldownSeconds * 1000;
