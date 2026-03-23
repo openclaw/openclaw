@@ -1,8 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const runFirecrawlScrape = vi.fn(async (params: Record<string, unknown>) => ({
-  ok: true,
-  params,
+const { runFirecrawlScrape } = vi.hoisted(() => ({
+  runFirecrawlScrape: vi.fn(async (params: Record<string, unknown>) => ({
+    ok: true,
+    params,
+  })),
 }));
 
 vi.mock("./firecrawl-client.js", () => ({
@@ -10,6 +12,15 @@ vi.mock("./firecrawl-client.js", () => ({
 }));
 
 describe("firecrawl scrape tool", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    runFirecrawlScrape.mockReset();
+    runFirecrawlScrape.mockImplementation(async (params: Record<string, unknown>) => ({
+      ok: true,
+      params,
+    }));
+  });
+
   it("maps scrape params and defaults extract mode to markdown", async () => {
     const { createFirecrawlScrapeTool } = await import("./firecrawl-scrape-tool.js");
     const tool = createFirecrawlScrapeTool({

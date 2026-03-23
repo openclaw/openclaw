@@ -43,14 +43,39 @@ const mergeManifestEntries = (section, keys) => {
   return merged;
 };
 
+const mergeManifestStrings = (section, keys) => {
+  const merged = [];
+  const seen = new Set();
+  for (const key of keys) {
+    const values = Array.isArray(section?.[key]) ? section[key] : [];
+    for (const value of values) {
+      if (typeof value !== "string") {
+        continue;
+      }
+      const normalizedValue = normalizeTrackedRepoPath(value);
+      if (normalizedValue.length === 0 || seen.has(normalizedValue)) {
+        continue;
+      }
+      seen.add(normalizedValue);
+      merged.push(normalizedValue);
+    }
+  }
+  return merged;
+};
+
 export function loadTestRunnerBehavior() {
   const raw = tryReadJsonFile(behaviorManifestPath, {});
   const unit = raw.unit ?? {};
   const base = raw.base ?? {};
+  const channels = raw.channels ?? {};
   const extensions = raw.extensions ?? {};
   return {
     base: {
       threadPinned: mergeManifestEntries(base, ["threadPinned", "threadSingleton"]),
+    },
+    channels: {
+      isolated: mergeManifestEntries(channels, ["isolated"]),
+      isolatedPrefixes: mergeManifestStrings(channels, ["isolatedPrefixes"]),
     },
     extensions: {
       isolated: mergeManifestEntries(extensions, ["isolated"]),
