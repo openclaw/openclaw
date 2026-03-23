@@ -12,9 +12,6 @@ describe("SynologyChatChannelConfigSchema", () => {
   });
 
   it("keeps the schema open for plugin-specific passthrough fields", () => {
-    const additionalProperties = SynologyChatChannelConfigSchema.schema.additionalProperties;
-    expect(additionalProperties === true || JSON.stringify(additionalProperties) === "{}").toBe(
-      true,
-    );
+    expect([true, {}]).toContainEqual(SynologyChatChannelConfigSchema.schema.additionalProperties);
   });
 });

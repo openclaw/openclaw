@@ -556,6 +556,39 @@ describe("readSessionMessages", () => {
       expect((out[0] as { __openclaw?: { seq?: number } }).__openclaw?.seq).toBe(1);
     }
   });
+
+  test("preserves raw assistant transcript content on disk reads", () => {
+    const sessionId = "assistant-scaffolding";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    fs.writeFileSync(
+      transcriptPath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: sessionId }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            text: "<think>hidden</think>Visible top-level",
+            content: [
+              { type: "text", text: "<think>secret</think>Visible content" },
+              { type: "tool_result", text: "<think>keep?</think>Visible tool text" },
+            ],
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const out = readSessionMessages(sessionId, storePath);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({
+      role: "assistant",
+      text: "<think>hidden</think>Visible top-level",
+      content: [
+        { type: "text", text: "<think>secret</think>Visible content" },
+        { type: "tool_result", text: "<think>keep?</think>Visible tool text" },
+      ],
+    });
+  });
 });
 
 describe("readSessionPreviewItemsFromTranscript", () => {
