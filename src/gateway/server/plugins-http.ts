@@ -66,6 +66,9 @@ export function createGatewayPluginRequestHandler(params: {
 }): PluginHttpRequestHandler {
   const { log } = params;
   return async (req, res, providedPathContext, dispatchContext) => {
+    // Use the same registry resolution as registerPluginHttpRoute so routes registered by
+    // channel plugins (e.g. BlueBubbles webhook) are always visible to the HTTP handler.
+    // Prefer the fallback when it has routes and the pinned registry does not (test harness).
     const registry = resolveActivePluginHttpRouteRegistry(params.registry);
     const routes = registry.httpRoutes ?? [];
     if (routes.length === 0) {

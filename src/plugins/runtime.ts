@@ -88,6 +88,15 @@ export function resolveActivePluginHttpRouteRegistry(fallback: PluginRegistry): 
   if (routeCount === 0 && fallbackRouteCount > 0) {
     return fallback;
   }
+  // When the pinned registry is empty, also check state.registry — plugins may have
+  // registered there if they initialized before the pin or during a reload. Fixes
+  // BlueBubbles webhook 404 (issue #52095) where routes exist but the handler missed them.
+  if (routeCount === 0 && state.registry) {
+    const activeRouteCount = state.registry.httpRoutes?.length ?? 0;
+    if (activeRouteCount > 0) {
+      return state.registry;
+    }
+  }
   return routeRegistry;
 }
 
