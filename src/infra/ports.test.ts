@@ -7,10 +7,19 @@ const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
-import { inspectPortUsage } from "./ports-inspect.js";
-import { ensurePortAvailable, handlePortError, PortInUseError } from "./ports.js";
+
+let inspectPortUsage: typeof import("./ports-inspect.js").inspectPortUsage;
+let ensurePortAvailable: typeof import("./ports.js").ensurePortAvailable;
+let handlePortError: typeof import("./ports.js").handlePortError;
+let PortInUseError: typeof import("./ports.js").PortInUseError;
 
 const describeUnix = process.platform === "win32" ? describe.skip : describe;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ inspectPortUsage } = await import("./ports-inspect.js"));
+  ({ ensurePortAvailable, handlePortError, PortInUseError } = await import("./ports.js"));
+});
 
 describe("ports helpers", () => {
   it("ensurePortAvailable rejects when port busy", async () => {

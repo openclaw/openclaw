@@ -43,6 +43,21 @@ type SecretsRuntimeRefreshContext = {
   loadAuthStore: (agentDir?: string) => AuthProfileStore;
 };
 
+const RUNTIME_PATH_ENV_KEYS = [
+  "HOME",
+  "USERPROFILE",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "OPENCLAW_HOME",
+  "OPENCLAW_STATE_DIR",
+  "CLAWDBOT_STATE_DIR",
+  "OPENCLAW_CONFIG_PATH",
+  "CLAWDBOT_CONFIG_PATH",
+  "OPENCLAW_AGENT_DIR",
+  "PI_CODING_AGENT_DIR",
+  "OPENCLAW_TEST_FAST",
+] as const;
+
 let activeSnapshot: PreparedSecretsRuntimeSnapshot | null = null;
 let activeRefreshContext: SecretsRuntimeRefreshContext | null = null;
 const preparedSnapshotRefreshContext = new WeakMap<
@@ -102,17 +117,34 @@ function resolveRefreshAgentDirs(
   return [...new Set([...context.explicitAgentDirs, ...configDerived])];
 }
 
+function mergeSecretsRuntimeEnv(
+  env: NodeJS.ProcessEnv | Record<string, string | undefined> | undefined,
+): Record<string, string | undefined> {
+  const merged = { ...(env ?? process.env) } as Record<string, string | undefined>;
+  for (const key of RUNTIME_PATH_ENV_KEYS) {
+    if (merged[key] !== undefined) {
+      continue;
+    }
+    const processValue = process.env[key];
+    if (processValue !== undefined) {
+      merged[key] = processValue;
+    }
+  }
+  return merged;
+}
+
 export async function prepareSecretsRuntimeSnapshot(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   agentDirs?: string[];
   loadAuthStore?: (agentDir?: string) => AuthProfileStore;
 }): Promise<PreparedSecretsRuntimeSnapshot> {
+  const runtimeEnv = mergeSecretsRuntimeEnv(params.env);
   const sourceConfig = structuredClone(params.config);
   const resolvedConfig = structuredClone(params.config);
   const context = createResolverContext({
     sourceConfig,
-    env: params.env ?? process.env,
+    env: runtimeEnv,
   });
 
   collectConfigAssignments({
@@ -122,12 +154,8 @@ export async function prepareSecretsRuntimeSnapshot(params: {
 
   const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
   const candidateDirs = params.agentDirs?.length
-    ? [
-        ...new Set(
-          params.agentDirs.map((entry) => resolveUserPath(entry, params.env ?? process.env)),
-        ),
-      ]
-    : collectCandidateAgentDirs(resolvedConfig, params.env ?? process.env);
+    ? [...new Set(params.agentDirs.map((entry) => resolveUserPath(entry, runtimeEnv)))]
+    : collectCandidateAgentDirs(resolvedConfig, runtimeEnv);
 
   const authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
   for (const agentDir of candidateDirs) {
@@ -165,7 +193,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     }),
   };
   preparedSnapshotRefreshContext.set(snapshot, {
-    env: { ...(params.env ?? process.env) } as Record<string, string | undefined>,
+    env: runtimeEnv,
     explicitAgentDirs: params.agentDirs?.length ? [...candidateDirs] : null,
     loadAuthStore,
   });

@@ -1,21 +1,66 @@
-export { auditDiscordChannelPermissions } from "../../../extensions/discord/src/audit.js";
-export {
-  listDiscordDirectoryGroupsLive,
-  listDiscordDirectoryPeersLive,
-} from "../../../extensions/discord/src/directory-live.js";
-export { monitorDiscordProvider } from "../../../extensions/discord/src/monitor.js";
-export { probeDiscord } from "../../../extensions/discord/src/probe.js";
-export { resolveDiscordChannelAllowlist } from "../../../extensions/discord/src/resolve-channels.js";
-export { resolveDiscordUserAllowlist } from "../../../extensions/discord/src/resolve-users.js";
-export {
-  createThreadDiscord,
-  deleteMessageDiscord,
-  editChannelDiscord,
-  editMessageDiscord,
-  pinMessageDiscord,
-  sendDiscordComponentMessage,
-  sendMessageDiscord,
-  sendPollDiscord,
-  sendTypingDiscord,
-  unpinMessageDiscord,
-} from "../../../extensions/discord/src/send.js";
+import {
+  auditDiscordChannelPermissions as auditDiscordChannelPermissionsImpl,
+  listDiscordDirectoryGroupsLive as listDiscordDirectoryGroupsLiveImpl,
+  listDiscordDirectoryPeersLive as listDiscordDirectoryPeersLiveImpl,
+  monitorDiscordProvider as monitorDiscordProviderImpl,
+  probeDiscord as probeDiscordImpl,
+  resolveDiscordChannelAllowlist as resolveDiscordChannelAllowlistImpl,
+  resolveDiscordUserAllowlist as resolveDiscordUserAllowlistImpl,
+} from "../../plugin-sdk/discord.js";
+import {
+  createThreadDiscord as createThreadDiscordImpl,
+  deleteMessageDiscord as deleteMessageDiscordImpl,
+  editChannelDiscord as editChannelDiscordImpl,
+  editMessageDiscord as editMessageDiscordImpl,
+  pinMessageDiscord as pinMessageDiscordImpl,
+  sendDiscordComponentMessage as sendDiscordComponentMessageImpl,
+  sendMessageDiscord as sendMessageDiscordImpl,
+  sendPollDiscord as sendPollDiscordImpl,
+  sendTypingDiscord as sendTypingDiscordImpl,
+  unpinMessageDiscord as unpinMessageDiscordImpl,
+} from "../../plugin-sdk/discord.js";
+import type { PluginRuntimeChannel } from "./types-channel.js";
+
+type RuntimeDiscordOps = Pick<
+  PluginRuntimeChannel["discord"],
+  | "auditChannelPermissions"
+  | "listDirectoryGroupsLive"
+  | "listDirectoryPeersLive"
+  | "probeDiscord"
+  | "resolveChannelAllowlist"
+  | "resolveUserAllowlist"
+  | "sendComponentMessage"
+  | "sendMessageDiscord"
+  | "sendPollDiscord"
+  | "monitorDiscordProvider"
+> & {
+  typing: Pick<PluginRuntimeChannel["discord"]["typing"], "pulse">;
+  conversationActions: Pick<
+    PluginRuntimeChannel["discord"]["conversationActions"],
+    "editMessage" | "deleteMessage" | "pinMessage" | "unpinMessage" | "createThread" | "editChannel"
+  >;
+};
+
+export const runtimeDiscordOps = {
+  auditChannelPermissions: auditDiscordChannelPermissionsImpl,
+  listDirectoryGroupsLive: listDiscordDirectoryGroupsLiveImpl,
+  listDirectoryPeersLive: listDiscordDirectoryPeersLiveImpl,
+  probeDiscord: probeDiscordImpl,
+  resolveChannelAllowlist: resolveDiscordChannelAllowlistImpl,
+  resolveUserAllowlist: resolveDiscordUserAllowlistImpl,
+  sendComponentMessage: sendDiscordComponentMessageImpl,
+  sendMessageDiscord: sendMessageDiscordImpl,
+  sendPollDiscord: sendPollDiscordImpl,
+  monitorDiscordProvider: monitorDiscordProviderImpl,
+  typing: {
+    pulse: sendTypingDiscordImpl,
+  },
+  conversationActions: {
+    editMessage: editMessageDiscordImpl,
+    deleteMessage: deleteMessageDiscordImpl,
+    pinMessage: pinMessageDiscordImpl,
+    unpinMessage: unpinMessageDiscordImpl,
+    createThread: createThreadDiscordImpl,
+    editChannel: editChannelDiscordImpl,
+  },
+} satisfies RuntimeDiscordOps;

@@ -3,21 +3,16 @@ import {
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
-import { lookupContextTokens } from "../../agents/context.js";
+import { lookupCachedContextTokens } from "../../agents/context-cache.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
-import {
-  buildModelAliasIndex,
-  type ModelAliasIndex,
-  modelKey,
-  resolveDefaultModelForAgent,
-  resolveModelRefFromString,
-} from "../../agents/model-selection.js";
+import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
+import { updateSessionStore } from "../../config/sessions/store.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { resolveProfileOverride } from "./directive-handling.auth.js";
+import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { enqueueModeSwitchEvents } from "./directive-handling.shared.js";
 import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
@@ -64,7 +59,7 @@ export async function persistInlineDirectives(params: {
   const activeAgentId = sessionKey
     ? resolveSessionAgentId({ sessionKey, config: cfg })
     : resolveDefaultAgentId(cfg);
-  const agentDir = resolveAgentDir(cfg, activeAgentId);
+  const agentDir = params.agentDir ?? resolveAgentDir(cfg, activeAgentId);
 
   if (sessionEntry && sessionStore && sessionKey) {
     const prevElevatedLevel =
@@ -139,49 +134,40 @@ export async function persistInlineDirectives(params: {
         ? params.effectiveModelDirective
         : undefined;
     if (modelDirective) {
-      const resolved = resolveModelRefFromString({
-        raw: modelDirective,
+      const modelResolution = resolveModelSelectionFromDirective({
+        directives: {
+          ...directives,
+          hasModelDirective: true,
+          rawModelDirective: modelDirective,
+        },
+        cfg,
+        agentDir,
         defaultProvider,
+        defaultModel,
         aliasIndex,
+        allowedModelKeys,
+        allowedModelCatalog: [],
+        provider,
       });
-      if (resolved) {
-        const key = modelKey(resolved.ref.provider, resolved.ref.model);
-        if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
-          let profileOverride: string | undefined;
-          if (directives.rawModelProfile) {
-            const profileResolved = resolveProfileOverride({
-              rawProfile: directives.rawModelProfile,
-              provider: resolved.ref.provider,
-              cfg,
-              agentDir,
-            });
-            if (profileResolved.error) {
-              throw new Error(profileResolved.error);
-            }
-            profileOverride = profileResolved.profileId;
-          }
-          const isDefault =
-            resolved.ref.provider === defaultProvider && resolved.ref.model === defaultModel;
-          const { updated: modelUpdated } = applyModelOverrideToSessionEntry({
-            entry: sessionEntry,
-            selection: {
-              provider: resolved.ref.provider,
-              model: resolved.ref.model,
-              isDefault,
-            },
-            profileOverride,
-          });
-          provider = resolved.ref.provider;
-          model = resolved.ref.model;
-          const nextLabel = `${provider}/${model}`;
-          if (nextLabel !== initialModelLabel) {
-            enqueueSystemEvent(formatModelSwitchEvent(nextLabel, resolved.alias), {
+      if (modelResolution.modelSelection) {
+        const { updated: modelUpdated } = applyModelOverrideToSessionEntry({
+          entry: sessionEntry,
+          selection: modelResolution.modelSelection,
+          profileOverride: modelResolution.profileOverride,
+        });
+        provider = modelResolution.modelSelection.provider;
+        model = modelResolution.modelSelection.model;
+        const nextLabel = `${provider}/${model}`;
+        if (nextLabel !== initialModelLabel) {
+          enqueueSystemEvent(
+            formatModelSwitchEvent(nextLabel, modelResolution.modelSelection.alias),
+            {
               sessionKey,
               contextKey: `model:${nextLabel}`,
-            });
-          }
-          updated = updated || modelUpdated;
+            },
+          );
         }
+        updated = updated || modelUpdated;
       }
     }
     if (directives.hasQueueDirective && directives.queueReset) {
@@ -213,24 +199,7 @@ export async function persistInlineDirectives(params: {
   return {
     provider,
     model,
-    contextTokens: agentCfg?.contextTokens ?? lookupContextTokens(model) ?? DEFAULT_CONTEXT_TOKENS,
+    contextTokens:
+      agentCfg?.contextTokens ?? lookupCachedContextTokens(model) ?? DEFAULT_CONTEXT_TOKENS,
   };
-}
-
-export function resolveDefaultModel(params: { cfg: OpenClawConfig; agentId?: string }): {
-  defaultProvider: string;
-  defaultModel: string;
-  aliasIndex: ModelAliasIndex;
-} {
-  const mainModel = resolveDefaultModelForAgent({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  });
-  const defaultProvider = mainModel.provider;
-  const defaultModel = mainModel.model;
-  const aliasIndex = buildModelAliasIndex({
-    cfg: params.cfg,
-    defaultProvider,
-  });
-  return { defaultProvider, defaultModel, aliasIndex };
 }

@@ -1,29 +1,35 @@
+import { buildAnthropicVertexProvider } from "../../extensions/anthropic-vertex/provider-catalog.js";
+import {
+  QIANFAN_BASE_URL,
+  QIANFAN_DEFAULT_MODEL_ID,
+} from "../../extensions/qianfan/provider-catalog.js";
+import { XIAOMI_DEFAULT_MODEL_ID } from "../../extensions/xiaomi/provider-catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
+import { hasAnthropicVertexAvailableAuth } from "./anthropic-vertex-provider.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
-import { normalizeGoogleModelId } from "./model-id-normalization.js";
+import { normalizeGoogleModelId, normalizeXaiModelId } from "./model-id-normalization.js";
 import { resolveOllamaApiBase } from "./models-config.providers.discovery.js";
-import {
-  QIANFAN_BASE_URL,
-  QIANFAN_DEFAULT_MODEL_ID,
-  XIAOMI_DEFAULT_MODEL_ID,
-} from "./models-config.providers.static.js";
+export { buildKimiCodingProvider } from "../../extensions/kimi-coding/provider-catalog.js";
+export { buildKilocodeProvider } from "../../extensions/kilocode/provider-catalog.js";
 export {
-  buildKimiCodingProvider,
-  buildKilocodeProvider,
-  buildNvidiaProvider,
-  buildModelStudioProvider,
-  buildQianfanProvider,
-  buildXiaomiProvider,
   MODELSTUDIO_BASE_URL,
   MODELSTUDIO_DEFAULT_MODEL_ID,
+  buildModelStudioProvider,
+} from "../../extensions/modelstudio/provider-catalog.js";
+export { buildNvidiaProvider } from "../../extensions/nvidia/provider-catalog.js";
+export {
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_ID,
+  buildQianfanProvider,
+} from "../../extensions/qianfan/provider-catalog.js";
+export {
   XIAOMI_DEFAULT_MODEL_ID,
-} from "./models-config.providers.static.js";
+  buildXiaomiProvider,
+} from "../../extensions/xiaomi/provider-catalog.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
@@ -38,7 +44,7 @@ import {
 } from "./model-auth-markers.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
 export { resolveOllamaApiBase } from "./models-config.providers.discovery.js";
-export { normalizeGoogleModelId };
+export { normalizeGoogleModelId, normalizeXaiModelId };
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
@@ -548,7 +554,10 @@ export function normalizeProviders(params: {
         mutated = true;
         normalizedProvider = { ...normalizedProvider, apiKey };
       } else {
-        const fromEnv = resolveEnvApiKeyVarName(normalizedKey, env);
+        const fromEnv =
+          normalizedKey === "anthropic-vertex"
+            ? resolveEnvApiKey(normalizedKey, env)?.apiKey
+            : resolveEnvApiKeyVarName(normalizedKey, env);
         const apiKey = fromEnv ?? profileApiKey?.apiKey;
         if (apiKey?.trim()) {
           if (profileApiKey && profileApiKey.source !== "plaintext") {
@@ -613,10 +622,22 @@ type ProviderApiKeyResolver = (provider: string) => {
   discoveryApiKey?: string;
 };
 
+type ProviderAuthResolver = (
+  provider: string,
+  options?: { oauthMarker?: string },
+) => {
+  apiKey: string | undefined;
+  discoveryApiKey?: string;
+  mode: "api_key" | "oauth" | "token" | "none";
+  source: "env" | "profile" | "none";
+  profileId?: string;
+};
+
 type ImplicitProviderContext = ImplicitProviderParams & {
   authStore: ReturnType<typeof ensureAuthProfileStore>;
   env: NodeJS.ProcessEnv;
   resolveProviderApiKey: ProviderApiKeyResolver;
+  resolveProviderAuth: ProviderAuthResolver;
 };
 
 function mergeImplicitProviderSet(
@@ -664,6 +685,8 @@ async function resolvePluginImplicitProviders(
       env: ctx.env,
       resolveProviderApiKey: (providerId) =>
         ctx.resolveProviderApiKey(providerId?.trim() || provider.id),
+      resolveProviderAuth: (providerId, options) =>
+        ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
     });
     mergeImplicitProviderSet(
       discovered,
@@ -700,11 +723,74 @@ export async function resolveImplicitProviders(
       discoveryApiKey: fromProfiles?.discoveryApiKey,
     };
   };
+  const resolveProviderAuth: ProviderAuthResolver = (
+    provider: string,
+    options?: { oauthMarker?: string },
+  ) => {
+    const envVar = resolveEnvApiKeyVarName(provider, env);
+    if (envVar) {
+      return {
+        apiKey: envVar,
+        discoveryApiKey: toDiscoveryApiKey(env[envVar]),
+        mode: "api_key",
+        source: "env",
+      };
+    }
+
+    const ids = listProfilesForProvider(authStore, provider);
+    let oauthCandidate:
+      | {
+          apiKey: string | undefined;
+          discoveryApiKey?: string;
+          mode: "oauth";
+          source: "profile";
+          profileId: string;
+        }
+      | undefined;
+    for (const id of ids) {
+      const cred = authStore.profiles[id];
+      if (!cred) {
+        continue;
+      }
+      if (cred.type === "oauth") {
+        oauthCandidate ??= {
+          apiKey: options?.oauthMarker,
+          discoveryApiKey: toDiscoveryApiKey(cred.access),
+          mode: "oauth",
+          source: "profile",
+          profileId: id,
+        };
+        continue;
+      }
+      const resolved = resolveApiKeyFromCredential(cred, env);
+      if (!resolved) {
+        continue;
+      }
+      return {
+        apiKey: resolved.apiKey,
+        discoveryApiKey: resolved.discoveryApiKey,
+        mode: cred.type,
+        source: "profile",
+        profileId: id,
+      };
+    }
+    if (oauthCandidate) {
+      return oauthCandidate;
+    }
+
+    return {
+      apiKey: undefined,
+      discoveryApiKey: undefined,
+      mode: "none",
+      source: "none",
+    };
+  };
   const context: ImplicitProviderContext = {
     ...params,
     authStore,
     env,
     resolveProviderApiKey,
+    resolveProviderAuth,
   };
 
   mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "simple"));
@@ -731,9 +817,34 @@ export async function resolveImplicitProviders(
       : implicitBedrock;
   }
 
+  const implicitAnthropicVertex = resolveImplicitAnthropicVertexProvider({ env });
+  if (implicitAnthropicVertex) {
+    const existing = providers["anthropic-vertex"];
+    providers["anthropic-vertex"] = existing
+      ? {
+          ...implicitAnthropicVertex,
+          ...existing,
+          models:
+            Array.isArray(existing.models) && existing.models.length > 0
+              ? existing.models
+              : implicitAnthropicVertex.models,
+        }
+      : implicitAnthropicVertex;
+  }
+
   return providers;
 }
 
+export function resolveImplicitAnthropicVertexProvider(params: {
+  env?: NodeJS.ProcessEnv;
+}): ProviderConfig | null {
+  const env = params.env ?? process.env;
+  if (!hasAnthropicVertexAvailableAuth(env)) {
+    return null;
+  }
+
+  return buildAnthropicVertexProvider({ env });
+}
 export async function resolveImplicitBedrockProvider(params: {
   agentDir: string;
   config?: OpenClawConfig;

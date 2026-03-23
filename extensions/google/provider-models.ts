@@ -1,38 +1,13 @@
-import { normalizeModelCompat } from "../../src/agents/model-compat.js";
 import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
-} from "../../src/plugins/types.js";
+} from "openclaw/plugin-sdk/plugin-entry";
+import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-models";
 
 const GEMINI_3_1_PRO_PREFIX = "gemini-3.1-pro";
 const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
 const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3-pro-preview"] as const;
 const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview"] as const;
-
-function cloneFirstTemplateModel(params: {
-  providerId: string;
-  modelId: string;
-  templateIds: readonly string[];
-  ctx: ProviderResolveDynamicModelContext;
-}): ProviderRuntimeModel | undefined {
-  const trimmedModelId = params.modelId.trim();
-  for (const templateId of [...new Set(params.templateIds)].filter(Boolean)) {
-    const template = params.ctx.modelRegistry.find(
-      params.providerId,
-      templateId,
-    ) as ProviderRuntimeModel | null;
-    if (!template) {
-      continue;
-    }
-    return normalizeModelCompat({
-      ...template,
-      id: trimmedModelId,
-      name: trimmedModelId,
-      reasoning: true,
-    } as ProviderRuntimeModel);
-  }
-  return undefined;
-}
 
 export function resolveGoogle31ForwardCompatModel(params: {
   providerId: string;
@@ -55,6 +30,7 @@ export function resolveGoogle31ForwardCompatModel(params: {
     modelId: trimmed,
     templateIds,
     ctx: params.ctx,
+    patch: { reasoning: true },
   });
 }
 

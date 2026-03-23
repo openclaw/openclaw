@@ -1,4 +1,6 @@
-import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import type { PluginRegistry } from "./registry.js";
 
 const REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
 
@@ -10,21 +12,13 @@ type RegistryState = {
   version: number;
 };
 
-const state: RegistryState = (() => {
-  const globalState = globalThis as typeof globalThis & {
-    [REGISTRY_STATE]?: RegistryState;
-  };
-  if (!globalState[REGISTRY_STATE]) {
-    globalState[REGISTRY_STATE] = {
-      registry: createEmptyPluginRegistry(),
-      httpRouteRegistry: null,
-      httpRouteRegistryPinned: false,
-      key: null,
-      version: 0,
-    };
-  }
-  return globalState[REGISTRY_STATE];
-})();
+const state = resolveGlobalSingleton<RegistryState>(REGISTRY_STATE, () => ({
+  registry: createEmptyPluginRegistry(),
+  httpRouteRegistry: null,
+  httpRouteRegistryPinned: false,
+  key: null,
+  version: 0,
+}));
 
 export function setActivePluginRegistry(registry: PluginRegistry, cacheKey?: string) {
   state.registry = registry;
@@ -96,4 +90,13 @@ export function getActivePluginRegistryKey(): string | null {
 
 export function getActivePluginRegistryVersion(): number {
   return state.version;
+}
+
+export function resetPluginRuntimeStateForTest(): void {
+  const emptyRegistry = createEmptyPluginRegistry();
+  state.registry = emptyRegistry;
+  state.httpRouteRegistry = emptyRegistry;
+  state.httpRouteRegistryPinned = false;
+  state.key = null;
+  state.version += 1;
 }

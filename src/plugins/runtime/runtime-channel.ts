@@ -53,10 +53,7 @@ import {
   normalizeAccountId as normalizeLineAccountId,
   resolveDefaultLineAccountId,
   resolveLineAccount,
-} from "../../line/accounts.js";
-import { monitorLineProvider } from "../../line/monitor.js";
-import { probeLineBot } from "../../line/probe.js";
-import {
+  buildTemplateMessageFromPayload,
   createQuickReplyItems,
   pushFlexMessage,
   pushLocationMessage,
@@ -64,9 +61,10 @@ import {
   pushMessagesLine,
   pushTemplateMessage,
   pushTextMessageWithQuickReplies,
+  monitorLineProvider,
+  probeLineBot,
   sendMessageLine,
-} from "../../line/send.js";
-import { buildTemplateMessageFromPayload } from "../../line/template-messages.js";
+} from "../../../extensions/line/runtime-api.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
@@ -78,6 +76,7 @@ import {
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
 import { createRuntimeDiscord } from "./runtime-discord.js";
 import { createRuntimeIMessage } from "./runtime-imessage.js";
+import { createRuntimeMatrix } from "./runtime-matrix.js";
 import { createRuntimeSignal } from "./runtime-signal.js";
 import { createRuntimeSlack } from "./runtime-slack.js";
 import { createRuntimeTelegram } from "./runtime-telegram.js";
@@ -206,18 +205,19 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     },
   } satisfies Omit<
     PluginRuntime["channel"],
-    "discord" | "slack" | "telegram" | "signal" | "imessage" | "whatsapp"
+    "discord" | "slack" | "telegram" | "matrix" | "signal" | "imessage" | "whatsapp"
   > &
     Partial<
       Pick<
         PluginRuntime["channel"],
-        "discord" | "slack" | "telegram" | "signal" | "imessage" | "whatsapp"
+        "discord" | "slack" | "telegram" | "matrix" | "signal" | "imessage" | "whatsapp"
       >
     >;
 
   defineCachedValue(channelRuntime, "discord", createRuntimeDiscord);
   defineCachedValue(channelRuntime, "slack", createRuntimeSlack);
   defineCachedValue(channelRuntime, "telegram", createRuntimeTelegram);
+  defineCachedValue(channelRuntime, "matrix", createRuntimeMatrix);
   defineCachedValue(channelRuntime, "signal", createRuntimeSignal);
   defineCachedValue(channelRuntime, "imessage", createRuntimeIMessage);
   defineCachedValue(channelRuntime, "whatsapp", createRuntimeWhatsApp);

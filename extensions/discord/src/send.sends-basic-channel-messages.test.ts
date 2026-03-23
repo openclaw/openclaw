@@ -1,6 +1,6 @@
 import { ChannelType, PermissionFlagsBits, Routes } from "discord-api-types/v10";
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { loadWebMedia } from "../../whatsapp/src/media.js";
 import {
   __resetDiscordDirectoryCacheForTest,
   rememberDiscordDirectoryUser,
@@ -21,7 +21,7 @@ import {
 } from "./send.js";
 import { makeDiscordRest } from "./send.test-harness.js";
 
-vi.mock("../../whatsapp/src/media.js", async () => {
+vi.mock("openclaw/plugin-sdk/web-media", async () => {
   const { discordWebMediaMockFactory } = await import("./send.test-harness.js");
   return discordWebMediaMockFactory();
 });
@@ -269,6 +269,27 @@ describe("sendMessageDiscord", () => {
     expect(loadWebMedia).toHaveBeenCalledWith(
       "file:///tmp/photo.jpg",
       expect.objectContaining({ maxBytes: 8 * 1024 * 1024 }),
+    );
+  });
+
+  it("prefers the caller-provided filename for media attachments", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock.mockResolvedValue({ id: "msg", channel_id: "789" });
+
+    await sendMessageDiscord("channel:789", "photo", {
+      rest,
+      token: "t",
+      mediaUrl: "file:///tmp/generated-image",
+      filename: "renderable.png",
+    });
+
+    expect(postMock).toHaveBeenCalledWith(
+      Routes.channelMessages("789"),
+      expect.objectContaining({
+        body: expect.objectContaining({
+          files: [expect.objectContaining({ name: "renderable.png" })],
+        }),
+      }),
     );
   });
 

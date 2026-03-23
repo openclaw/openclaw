@@ -34,11 +34,29 @@ vi.mock("../media/mime.js", () => ({
   detectMime: vi.fn(async () => "image/png"),
 }));
 
-import { runBrowserProxyCommand } from "./invoke-browser.js";
+let runBrowserProxyCommand: typeof import("./invoke-browser.js").runBrowserProxyCommand;
 
 describe("runBrowserProxyCommand", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+  beforeEach(async () => {
+    // No-isolate runs can reuse a cached invoke-browser module that was loaded
+    // via node-host entrypoints before this file's mocks were declared.
+    vi.useRealTimers();
+    vi.resetModules();
+    dispatcherMocks.dispatch.mockReset();
+    dispatcherMocks.createBrowserRouteDispatcher.mockReset().mockImplementation(() => ({
+      dispatch: dispatcherMocks.dispatch,
+    }));
+    controlServiceMocks.createBrowserControlContext.mockReset().mockReturnValue({ control: true });
+    controlServiceMocks.startBrowserControlServiceFromConfig.mockReset().mockResolvedValue(true);
+    configMocks.loadConfig.mockReset().mockReturnValue({
+      browser: {},
+      nodeHost: { browserProxy: { enabled: true } },
+    });
+    browserConfigMocks.resolveBrowserConfig.mockReset().mockReturnValue({
+      enabled: true,
+      defaultProfile: "openclaw",
+    });
+    ({ runBrowserProxyCommand } = await import("./invoke-browser.js"));
     configMocks.loadConfig.mockReturnValue({
       browser: {},
       nodeHost: { browserProxy: { enabled: true } },
@@ -51,6 +69,7 @@ describe("runBrowserProxyCommand", () => {
   });
 
   it("adds profile and browser status details on ws-backed timeouts", async () => {
+    vi.useFakeTimers();
     dispatcherMocks.dispatch
       .mockImplementationOnce(async () => {
         await new Promise(() => {});
@@ -65,7 +84,7 @@ describe("runBrowserProxyCommand", () => {
         },
       });
 
-    await expect(
+    const result = expect(
       runBrowserProxyCommand(
         JSON.stringify({
           method: "GET",
@@ -77,9 +96,12 @@ describe("runBrowserProxyCommand", () => {
     ).rejects.toThrow(
       /browser proxy timed out for GET \/snapshot after 5ms; ws-backed browser action; profile=openclaw; status\(running=true, cdpHttp=true, cdpReady=false, cdpUrl=http:\/\/127\.0\.0\.1:18792\)/,
     );
+    await vi.advanceTimersByTimeAsync(10);
+    await result;
   });
 
   it("includes chrome-mcp transport in timeout diagnostics when no CDP URL exists", async () => {
+    vi.useFakeTimers();
     dispatcherMocks.dispatch
       .mockImplementationOnce(async () => {
         await new Promise(() => {});
@@ -95,7 +117,7 @@ describe("runBrowserProxyCommand", () => {
         },
       });
 
-    await expect(
+    const result = expect(
       runBrowserProxyCommand(
         JSON.stringify({
           method: "GET",
@@ -107,9 +129,12 @@ describe("runBrowserProxyCommand", () => {
     ).rejects.toThrow(
       /browser proxy timed out for GET \/snapshot after 5ms; ws-backed browser action; profile=user; status\(running=true, cdpHttp=true, cdpReady=false, transport=chrome-mcp\)/,
     );
+    await vi.advanceTimersByTimeAsync(10);
+    await result;
   });
 
   it("redacts sensitive cdpUrl details in timeout diagnostics", async () => {
+    vi.useFakeTimers();
     dispatcherMocks.dispatch
       .mockImplementationOnce(async () => {
         await new Promise(() => {});
@@ -125,7 +150,7 @@ describe("runBrowserProxyCommand", () => {
         },
       });
 
-    await expect(
+    const result = expect(
       runBrowserProxyCommand(
         JSON.stringify({
           method: "GET",
@@ -137,6 +162,8 @@ describe("runBrowserProxyCommand", () => {
     ).rejects.toThrow(
       /status\(running=true, cdpHttp=true, cdpReady=false, cdpUrl=https:\/\/example\.com\/chrome\?token=supers…7890\)/,
     );
+    await vi.advanceTimersByTimeAsync(10);
+    await result;
   });
 
   it("keeps non-timeout browser errors intact", async () => {

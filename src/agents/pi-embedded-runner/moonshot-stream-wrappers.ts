@@ -1,6 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { usesMoonshotThinkingPayloadCompat } from "../provider-capabilities.js";
 
 type MoonshotThinkingType = "enabled" | "disabled";
 
@@ -62,7 +63,7 @@ export function shouldApplyMoonshotPayloadCompat(params: {
   const normalizedProvider = params.provider.trim().toLowerCase();
   const normalizedModelId = params.modelId.trim().toLowerCase();
 
-  if (normalizedProvider === "moonshot") {
+  if (usesMoonshotThinkingPayloadCompat(normalizedProvider)) {
     return true;
   }
 

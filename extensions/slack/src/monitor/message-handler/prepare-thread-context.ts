@@ -1,6 +1,6 @@
-import { formatInboundEnvelope } from "../../../../../src/auto-reply/envelope.js";
-import { readSessionUpdatedAt } from "../../../../../src/config/sessions.js";
-import { logVerbose } from "../../../../../src/globals.js";
+import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
+import { readSessionUpdatedAt } from "openclaw/plugin-sdk/config-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
@@ -30,7 +30,7 @@ export async function resolveSlackThreadContextData(params: {
   storePath: string;
   sessionKey: string;
   envelopeOptions: ReturnType<
-    typeof import("../../../../../src/auto-reply/envelope.js").resolveEnvelopeFormatOptions
+    typeof import("openclaw/plugin-sdk/channel-inbound").resolveEnvelopeFormatOptions
   >;
   effectiveDirectMedia: SlackMediaResult[] | null;
 }): Promise<SlackThreadContextData> {

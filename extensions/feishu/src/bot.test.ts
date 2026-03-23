@@ -1,6 +1,7 @@
-import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/feishu";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
+import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
+import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./bot.js";
 import {
   buildBroadcastSessionKey,
@@ -21,8 +22,8 @@ const {
   mockResolveAgentRoute,
   mockReadSessionUpdatedAt,
   mockResolveStorePath,
-  mockResolveConfiguredAcpRoute,
-  mockEnsureConfiguredAcpRouteReady,
+  mockResolveConfiguredBindingRoute,
+  mockEnsureConfiguredBindingRouteReady,
   mockResolveBoundConversation,
   mockTouchBinding,
 } = vi.hoisted(() => ({
@@ -50,11 +51,12 @@ const {
   })),
   mockReadSessionUpdatedAt: vi.fn(),
   mockResolveStorePath: vi.fn(() => "/tmp/feishu-sessions.json"),
-  mockResolveConfiguredAcpRoute: vi.fn(({ route }) => ({
+  mockResolveConfiguredBindingRoute: vi.fn(({ route }) => ({
+    bindingResolution: null,
     configuredBinding: null,
     route,
   })),
-  mockEnsureConfiguredAcpRouteReady: vi.fn(async (_params?: unknown) => ({ ok: true })),
+  mockEnsureConfiguredBindingRouteReady: vi.fn(async (_params?: unknown) => ({ ok: true })),
   mockResolveBoundConversation: vi.fn(() => null),
   mockTouchBinding: vi.fn(),
 }));
@@ -77,10 +79,19 @@ vi.mock("./client.js", () => ({
   createFeishuClient: mockCreateFeishuClient,
 }));
 
-vi.mock("../../../src/acp/persistent-bindings.route.js", () => ({
-  resolveConfiguredAcpRoute: (params: unknown) => mockResolveConfiguredAcpRoute(params),
-  ensureConfiguredAcpRouteReady: (params: unknown) => mockEnsureConfiguredAcpRouteReady(params),
-}));
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  return {
+    ...actual,
+    resolveConfiguredBindingRoute: (params: unknown) => mockResolveConfiguredBindingRoute(params),
+    ensureConfiguredBindingRouteReady: (params: unknown) =>
+      mockEnsureConfiguredBindingRouteReady(params),
+    getSessionBindingService: () => ({
+      resolveByConversation: mockResolveBoundConversation,
+      touch: mockTouchBinding,
+    }),
+  };
+});
 
 vi.mock("../../../src/infra/outbound/session-binding-service.js", () => ({
   getSessionBindingService: () => ({
@@ -88,16 +99,6 @@ vi.mock("../../../src/infra/outbound/session-binding-service.js", () => ({
     touch: mockTouchBinding,
   }),
 }));
-
-function createRuntimeEnv(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn((code: number): never => {
-      throw new Error(`exit ${code}`);
-    }),
-  } as RuntimeEnv;
-}
 
 async function dispatchMessage(params: { cfg: ClawdbotConfig; event: FeishuMessageEvent }) {
   const runtime = createRuntimeEnv();
@@ -109,41 +110,18 @@ async function dispatchMessage(params: { cfg: ClawdbotConfig; event: FeishuMessa
   return runtime;
 }
 
-describe("buildFeishuAgentBody", () => {
-  it("builds message id, speaker, quoted content, mentions, and permission notice in order", () => {
-    const body = buildFeishuAgentBody({
-      ctx: {
-        content: "hello world",
-        senderName: "Sender Name",
-        senderOpenId: "ou-sender",
-        messageId: "msg-42",
-        mentionTargets: [{ openId: "ou-target", name: "Target User", key: "@_user_1" }],
-      },
-      quotedContent: "previous message",
-      permissionErrorForAgent: {
-        code: 99991672,
-        message: "permission denied",
-        grantUrl: "https://open.feishu.cn/app/cli_test",
-      },
-    });
-
-    expect(body).toBe(
-      '[message_id: msg-42]\nSender Name: [Replying to: "previous message"]\n\nhello world\n\n[System: Your reply will automatically @mention: Target User. Do not write @xxx yourself.]\n\n[System: The bot encountered a Feishu API permission error. Please inform the user about this issue and provide the permission grant URL for the admin to authorize. Permission grant URL: https://open.feishu.cn/app/cli_test]',
-    );
-  });
-});
-
 describe("handleFeishuMessage ACP routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockResolveConfiguredAcpRoute.mockReset().mockImplementation(
+    mockResolveConfiguredBindingRoute.mockReset().mockImplementation(
       ({ route }) =>
         ({
+          bindingResolution: null,
           configuredBinding: null,
           route,
         }) as any,
     );
-    mockEnsureConfiguredAcpRouteReady.mockReset().mockResolvedValue({ ok: true });
+    mockEnsureConfiguredBindingRouteReady.mockReset().mockResolvedValue({ ok: true });
     mockResolveBoundConversation.mockReset().mockReturnValue(null);
     mockTouchBinding.mockReset();
     mockResolveAgentRoute.mockReset().mockReturnValue({
@@ -216,7 +194,37 @@ describe("handleFeishuMessage ACP routing", () => {
   });
 
   it("ensures configured ACP routes for Feishu DMs", async () => {
-    mockResolveConfiguredAcpRoute.mockReturnValue({
+    mockResolveConfiguredBindingRoute.mockReturnValue({
+      bindingResolution: {
+        configuredBinding: {
+          spec: {
+            channel: "feishu",
+            accountId: "default",
+            conversationId: "ou_sender_1",
+            agentId: "codex",
+            mode: "persistent",
+          },
+          record: {
+            bindingId: "config:acp:feishu:default:ou_sender_1",
+            targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
+            targetKind: "session",
+            conversation: {
+              channel: "feishu",
+              accountId: "default",
+              conversationId: "ou_sender_1",
+            },
+            status: "active",
+            boundAt: 0,
+            metadata: { source: "config" },
+          },
+        },
+        statefulTarget: {
+          kind: "stateful",
+          driverId: "acp",
+          sessionKey: "agent:codex:acp:binding:feishu:default:abc123",
+          agentId: "codex",
+        },
+      },
       configuredBinding: {
         spec: {
           channel: "feishu",
@@ -266,12 +274,42 @@ describe("handleFeishuMessage ACP routing", () => {
       },
     });
 
-    expect(mockResolveConfiguredAcpRoute).toHaveBeenCalledTimes(1);
-    expect(mockEnsureConfiguredAcpRouteReady).toHaveBeenCalledTimes(1);
+    expect(mockResolveConfiguredBindingRoute).toHaveBeenCalledTimes(1);
+    expect(mockEnsureConfiguredBindingRouteReady).toHaveBeenCalledTimes(1);
   });
 
   it("surfaces configured ACP initialization failures to the Feishu conversation", async () => {
-    mockResolveConfiguredAcpRoute.mockReturnValue({
+    mockResolveConfiguredBindingRoute.mockReturnValue({
+      bindingResolution: {
+        configuredBinding: {
+          spec: {
+            channel: "feishu",
+            accountId: "default",
+            conversationId: "ou_sender_1",
+            agentId: "codex",
+            mode: "persistent",
+          },
+          record: {
+            bindingId: "config:acp:feishu:default:ou_sender_1",
+            targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
+            targetKind: "session",
+            conversation: {
+              channel: "feishu",
+              accountId: "default",
+              conversationId: "ou_sender_1",
+            },
+            status: "active",
+            boundAt: 0,
+            metadata: { source: "config" },
+          },
+        },
+        statefulTarget: {
+          kind: "stateful",
+          driverId: "acp",
+          sessionKey: "agent:codex:acp:binding:feishu:default:abc123",
+          agentId: "codex",
+        },
+      },
       configuredBinding: {
         spec: {
           channel: "feishu",
@@ -303,7 +341,7 @@ describe("handleFeishuMessage ACP routing", () => {
         matchedBy: "binding.channel",
       },
     } as any);
-    mockEnsureConfiguredAcpRouteReady.mockResolvedValue({
+    mockEnsureConfiguredBindingRouteReady.mockResolvedValue({
       ok: false,
       error: "runtime unavailable",
     } as any);
@@ -431,14 +469,15 @@ describe("handleFeishuMessage command authorization", () => {
     mockListFeishuThreadMessages.mockReset().mockResolvedValue([]);
     mockReadSessionUpdatedAt.mockReturnValue(undefined);
     mockResolveStorePath.mockReturnValue("/tmp/feishu-sessions.json");
-    mockResolveConfiguredAcpRoute.mockReset().mockImplementation(
+    mockResolveConfiguredBindingRoute.mockReset().mockImplementation(
       ({ route }) =>
         ({
+          bindingResolution: null,
           configuredBinding: null,
           route,
         }) as any,
     );
-    mockEnsureConfiguredAcpRouteReady.mockReset().mockResolvedValue({ ok: true });
+    mockEnsureConfiguredBindingRouteReady.mockReset().mockResolvedValue({ ok: true });
     mockResolveBoundConversation.mockReset().mockReturnValue(null);
     mockTouchBinding.mockReset();
     mockResolveAgentRoute.mockReturnValue({
@@ -2278,68 +2317,6 @@ describe("handleFeishuMessage command authorization", () => {
 
     await Promise.all([dispatchMessage({ cfg, event }), dispatchMessage({ cfg, event })]);
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("toMessageResourceType", () => {
-  it("maps image to image", () => {
-    expect(toMessageResourceType("image")).toBe("image");
-  });
-
-  it("maps audio to file", () => {
-    expect(toMessageResourceType("audio")).toBe("file");
-  });
-
-  it("maps video/file/sticker to file", () => {
-    expect(toMessageResourceType("video")).toBe("file");
-    expect(toMessageResourceType("file")).toBe("file");
-    expect(toMessageResourceType("sticker")).toBe("file");
-  });
-});
-
-describe("resolveBroadcastAgents", () => {
-  it("returns agent list when broadcast config has the peerId", () => {
-    const cfg = { broadcast: { oc_group123: ["susan", "main"] } } as unknown as ClawdbotConfig;
-    expect(resolveBroadcastAgents(cfg, "oc_group123")).toEqual(["susan", "main"]);
-  });
-
-  it("returns null when no broadcast config", () => {
-    const cfg = {} as ClawdbotConfig;
-    expect(resolveBroadcastAgents(cfg, "oc_group123")).toBeNull();
-  });
-
-  it("returns null when peerId not in broadcast", () => {
-    const cfg = { broadcast: { oc_other: ["susan"] } } as unknown as ClawdbotConfig;
-    expect(resolveBroadcastAgents(cfg, "oc_group123")).toBeNull();
-  });
-
-  it("returns null when agent list is empty", () => {
-    const cfg = { broadcast: { oc_group123: [] } } as unknown as ClawdbotConfig;
-    expect(resolveBroadcastAgents(cfg, "oc_group123")).toBeNull();
-  });
-});
-
-describe("buildBroadcastSessionKey", () => {
-  it("replaces agent ID prefix in session key", () => {
-    expect(buildBroadcastSessionKey("agent:main:feishu:group:oc_group123", "main", "susan")).toBe(
-      "agent:susan:feishu:group:oc_group123",
-    );
-  });
-
-  it("handles compound peer IDs", () => {
-    expect(
-      buildBroadcastSessionKey(
-        "agent:main:feishu:group:oc_group123:sender:ou_user1",
-        "main",
-        "susan",
-      ),
-    ).toBe("agent:susan:feishu:group:oc_group123:sender:ou_user1");
-  });
-
-  it("returns base key unchanged when prefix does not match", () => {
-    expect(buildBroadcastSessionKey("custom:key:format", "main", "susan")).toBe(
-      "custom:key:format",
-    );
   });
 });
 

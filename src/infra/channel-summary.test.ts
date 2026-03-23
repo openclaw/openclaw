@@ -1,12 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import { buildChannelSummary } from "./channel-summary.js";
 
 vi.mock("../channels/plugins/index.js", () => ({
   listChannelPlugins: vi.fn(),
 }));
-
-const { buildChannelSummary } = await import("./channel-summary.js");
-const { listChannelPlugins } = await import("../channels/plugins/index.js");
 
 function makeSlackHttpSummaryPlugin(): ChannelPlugin {
   return {
@@ -61,7 +60,7 @@ function makeSlackHttpSummaryPlugin(): ChannelPlugin {
       isEnabled: () => true,
     },
     actions: {
-      listActions: () => ["send"],
+      describeMessageTool: () => ({ actions: ["send"] }),
     },
   };
 }
@@ -119,7 +118,7 @@ function makeTelegramSummaryPlugin(params: {
       }),
     },
     actions: {
-      listActions: () => ["send"],
+      describeMessageTool: () => ({ actions: ["send"] }),
     },
   };
 }
@@ -164,7 +163,7 @@ function makeSignalSummaryPlugin(params: { enabled: boolean; configured: boolean
       isEnabled: (account) => Boolean((account as { enabled?: boolean }).enabled),
     },
     actions: {
-      listActions: () => ["send"],
+      describeMessageTool: () => ({ actions: ["send"] }),
     },
   };
 }
@@ -202,7 +201,7 @@ function makeFallbackSummaryPlugin(params: {
       isEnabled: (account) => Boolean((account as { enabled?: boolean }).enabled),
     },
     actions: {
-      listActions: () => ["send"],
+      describeMessageTool: () => ({ actions: ["send"] }),
     },
   };
 }

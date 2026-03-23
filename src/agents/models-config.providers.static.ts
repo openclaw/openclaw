@@ -1,4 +1,8 @@
 export {
+  ANTHROPIC_VERTEX_DEFAULT_MODEL_ID,
+  buildAnthropicVertexProvider,
+} from "../../extensions/anthropic-vertex/provider-catalog.js";
+export {
   buildBytePlusCodingProvider,
   buildBytePlusProvider,
 } from "../../extensions/byteplus/provider-catalog.js";

@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { PluginRuntime } from "openclaw/plugin-sdk/nostr";
 import { describe, expect, it } from "vitest";
+import type { PluginRuntime } from "../runtime-api.js";
 import {
   readNostrBusState,
   writeNostrBusState,
