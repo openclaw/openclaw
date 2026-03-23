@@ -315,7 +315,7 @@ export type DispatchWrapperUnwrapResult =
   | { kind: "blocked"; wrapper: string }
   | { kind: "unwrapped"; wrapper: string; argv: string[] };
 
-export type DispatchWrapperExecutionPlan = {
+export type DispatchWrapperTrustPlan = {
   argv: string[];
   wrappers: string[];
   policyBlocked: boolean;
@@ -358,7 +358,7 @@ export function unwrapDispatchWrappersForResolution(
   argv: string[],
   maxDepth = MAX_DISPATCH_WRAPPER_DEPTH,
 ): string[] {
-  const plan = resolveDispatchWrapperExecutionPlan(argv, maxDepth);
+  const plan = resolveDispatchWrapperTrustPlan(argv, maxDepth);
   return plan.argv;
 }
 
@@ -378,7 +378,7 @@ function blockedDispatchWrapperPlan(params: {
   argv: string[];
   wrappers: string[];
   blockedWrapper: string;
-}): DispatchWrapperExecutionPlan {
+}): DispatchWrapperTrustPlan {
   return {
     argv: params.argv,
     wrappers: params.wrappers,
@@ -387,10 +387,10 @@ function blockedDispatchWrapperPlan(params: {
   };
 }
 
-export function resolveDispatchWrapperExecutionPlan(
+export function resolveDispatchWrapperTrustPlan(
   argv: string[],
   maxDepth = MAX_DISPATCH_WRAPPER_DEPTH,
-): DispatchWrapperExecutionPlan {
+): DispatchWrapperTrustPlan {
   let current = argv;
   const wrappers: string[] = [];
   for (let depth = 0; depth < maxDepth; depth += 1) {
