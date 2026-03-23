@@ -11,6 +11,9 @@ describe("firecrawl web search provider", () => {
     const { createFirecrawlWebSearchProvider } = await import("./firecrawl-search-provider.js");
 
     const provider = createFirecrawlWebSearchProvider();
+    if (!provider.applySelectionConfig) {
+      throw new Error("Expected applySelectionConfig to be defined");
+    }
     const applied = provider.applySelectionConfig({});
 
     expect(provider.id).toBe("firecrawl");
@@ -24,6 +27,9 @@ describe("firecrawl web search provider", () => {
     const tool = provider.createTool({
       config: { test: true },
     } as never);
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
 
     const result = await tool.execute({
       query: "openclaw docs",

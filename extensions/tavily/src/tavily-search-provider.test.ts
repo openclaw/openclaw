@@ -11,6 +11,9 @@ describe("tavily web search provider", () => {
     const { createTavilyWebSearchProvider } = await import("./tavily-search-provider.js");
 
     const provider = createTavilyWebSearchProvider();
+    if (!provider.applySelectionConfig) {
+      throw new Error("Expected applySelectionConfig to be defined");
+    }
     const applied = provider.applySelectionConfig({});
 
     expect(provider.id).toBe("tavily");
@@ -24,6 +27,9 @@ describe("tavily web search provider", () => {
     const tool = provider.createTool({
       config: { test: true },
     } as never);
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
 
     const result = await tool.execute({
       query: "weather sf",

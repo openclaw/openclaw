@@ -19,6 +19,7 @@ vi.mock("../plugins/loader.js", () => ({
 function createSpeechProvider(id: string, aliases?: string[]): SpeechProviderPlugin {
   return {
     id,
+    label: id,
     ...(aliases ? { aliases } : {}),
     isConfigured: () => true,
     synthesize: async () => ({
@@ -47,6 +48,7 @@ describe("speech provider registry", () => {
       speechProviders: [
         {
           pluginId: "test-openai",
+          source: "test",
           provider: createSpeechProvider("openai"),
         },
       ],
@@ -64,6 +66,7 @@ describe("speech provider registry", () => {
       speechProviders: [
         {
           pluginId: "test-microsoft",
+          source: "test",
           provider: createSpeechProvider("microsoft", ["edge"]),
         },
       ],
