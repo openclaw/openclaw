@@ -6,7 +6,6 @@ import {
   getScopedCredentialValue,
   MAX_SEARCH_COUNT,
   mergeScopedSearchConfig,
-  normalizeFreshness,
   normalizeToIsoDate,
   readCachedSearchPayload,
   readConfiguredSecretString,
@@ -37,6 +36,7 @@ type ExaConfig = {
 };
 
 type ExaSearchType = (typeof EXA_SEARCH_TYPES)[number];
+type ExaFreshness = (typeof EXA_FRESHNESS_VALUES)[number];
 
 type ExaContentsArgs = {
   highlights?: boolean;
@@ -54,6 +54,16 @@ type ExaSearchResult = {
 type ExaSearchResponse = {
   results?: unknown;
 };
+
+function normalizeExaFreshness(value: string | undefined): ExaFreshness | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const trimmed = value.trim().toLowerCase();
+  return EXA_FRESHNESS_VALUES.includes(trimmed as ExaFreshness)
+    ? (trimmed as ExaFreshness)
+    : undefined;
+}
 
 function optionalStringEnum<T extends readonly string[]>(values: T, description: string) {
   return Type.Optional(
@@ -104,7 +114,7 @@ function normalizeExaResults(payload: unknown): ExaSearchResult[] {
   );
 }
 
-function resolveFreshnessStartDate(freshness: (typeof EXA_FRESHNESS_VALUES)[number]): string {
+function resolveFreshnessStartDate(freshness: ExaFreshness): string {
   const now = new Date();
   if (freshness === "day") {
     now.setUTCDate(now.getUTCDate() - 1);
@@ -132,7 +142,7 @@ async function runExaSearch(params: {
   apiKey: string;
   query: string;
   count: number;
-  freshness?: (typeof EXA_FRESHNESS_VALUES)[number];
+  freshness?: ExaFreshness;
   dateAfter?: string;
   dateBefore?: string;
   type: ExaSearchType;
@@ -262,7 +272,7 @@ function createExaToolDefinition(
         searchConfig?.maxResults ??
         undefined;
       const rawFreshness = readStringParam(params, "freshness");
-      const freshness = rawFreshness ? normalizeFreshness(rawFreshness, "exa") : undefined;
+      const freshness = normalizeExaFreshness(rawFreshness);
       if (rawFreshness && !freshness) {
         return {
           error: "invalid_freshness",
