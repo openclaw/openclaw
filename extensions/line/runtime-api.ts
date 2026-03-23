@@ -29,40 +29,12 @@ export * from "./src/bot-access.js";
 export * from "./src/channel-access-token.js";
 export * from "./src/config-schema.js";
 export * from "./src/download.js";
-export * from "./src/flex-templates.js";
 export * from "./src/group-keys.js";
 export * from "./src/markdown-to-line.js";
 export * from "./src/probe.js";
 export * from "./src/send.js";
 export * from "./src/signature.js";
-export { datetimePickerAction, messageAction, postbackAction, uriAction } from "./src/rich-menu.js";
-export {
-  createDefaultMenuConfig,
-  createGridLayout,
-  type RichMenuArea,
-  type RichMenuRequest,
-  type RichMenuResponse,
-} from "./src/rich-menu.js";
-export {
-  createButtonMenu,
-  createButtonTemplate,
-  createCarouselColumn,
-  createConfirmTemplate,
-  createImageCarousel,
-  createImageCarouselColumn,
-  createLinkMenu,
-  createProductCarousel,
-  createTemplateCarousel,
-  createYesNoConfirm,
-  buildTemplateMessageFromPayload,
-  type ButtonsTemplate,
-  type CarouselColumn,
-  type CarouselTemplate,
-  type ConfirmTemplate,
-  type ImageCarouselColumn,
-  type ImageCarouselTemplate,
-  type TemplateMessage,
-} from "./src/template-messages.js";
+export * from "./src/template-messages.js";
 export type {
   LineChannelData,
   LineConfig,
@@ -72,3 +44,59 @@ export type {
 export * from "./src/webhook-node.js";
 export * from "./src/webhook.js";
 export * from "./src/webhook-utils.js";
+export { datetimePickerAction, messageAction, postbackAction, uriAction } from "./src/actions.js";
+export type { Action } from "./src/actions.js";
+export {
+  createActionCard,
+  createAgendaCard,
+  createAppleTvRemoteCard,
+  createCarousel,
+  createDeviceControlCard,
+  createEventCard,
+  createImageCard,
+  createInfoCard,
+  createListCard,
+  createMediaPlayerCard,
+  createNotificationBubble,
+  createReceiptCard,
+  toFlexMessage,
+} from "./src/flex-templates.js";
+export type {
+  CardAction,
+  FlexBox,
+  FlexBubble,
+  FlexButton,
+  FlexCarousel,
+  FlexComponent,
+  FlexContainer,
+  FlexImage,
+  FlexText,
+  ListItem,
+} from "./src/flex-templates.js";
+export {
+  cancelDefaultRichMenu,
+  createDefaultMenuConfig,
+  createGridLayout,
+  createRichMenu,
+  createRichMenuAlias,
+  deleteRichMenu,
+  deleteRichMenuAlias,
+  getDefaultRichMenuId,
+  getRichMenu,
+  getRichMenuIdOfUser,
+  getRichMenuList,
+  linkRichMenuToUser,
+  linkRichMenuToUsers,
+  setDefaultRichMenu,
+  unlinkRichMenuFromUser,
+  unlinkRichMenuFromUsers,
+  uploadRichMenuImage,
+} from "./src/rich-menu.js";
+export type {
+  CreateRichMenuParams,
+  RichMenuArea,
+  RichMenuAreaRequest,
+  RichMenuRequest,
+  RichMenuResponse,
+  RichMenuSize,
+} from "./src/rich-menu.js";

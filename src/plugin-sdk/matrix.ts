@@ -153,11 +153,17 @@ export {
   collectStatusIssuesFromLastError,
 } from "./status-helpers.js";
 export {
+  findMatrixAccountEntry,
+  resolveConfiguredMatrixAccountIds,
+  resolveMatrixChannelConfig,
+} from "../../extensions/matrix/src/account-selection.js";
+export {
   resolveMatrixAccountStorageRoot,
   resolveMatrixCredentialsDir,
   resolveMatrixCredentialsPath,
   resolveMatrixLegacyFlatStoragePaths,
 } from "../../extensions/matrix/helper-api.js";
+export { resolveMatrixAccountStringValues } from "../../extensions/matrix/src/auth-precedence.js";
 export { getMatrixScopedEnvVarNames } from "../../extensions/matrix/helper-api.js";
 export {
   requiresExplicitMatrixDefaultAccount,
