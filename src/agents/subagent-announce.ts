@@ -1402,8 +1402,7 @@ export async function runSubagentAnnounceFlow(params: {
       typeof params.maxAnnounceChars === "number" &&
       params.maxAnnounceChars >= 1 &&
       findings.length > params.maxAnnounceChars
-        ? findings.slice(0, params.maxAnnounceChars) +
-          "\n\n[truncated — full output in transcript]"
+        ? findings.slice(0, params.maxAnnounceChars) + "\n\n[truncated — full output in transcript]"
         : findings;
 
     const internalEvents: AgentInternalEvent[] = [
