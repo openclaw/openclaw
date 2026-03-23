@@ -558,6 +558,8 @@ export async function runReplyAgent(params: {
 
     await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
 
+    const durationMs = Date.now() - runStartedAt;
+
     if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
       const input = usage.input ?? 0;
       const output = usage.output ?? 0;
@@ -592,7 +594,7 @@ export async function runReplyAgent(params: {
           used: totalTokens,
         },
         costUsd,
-        durationMs: Date.now() - runStartedAt,
+        durationMs,
       });
     }
 
@@ -614,6 +616,7 @@ export async function runReplyAgent(params: {
         usage,
         showCost,
         costConfig,
+        durationMs,
       });
       if (formatted && responseUsageMode === "full" && sessionKey) {
         formatted = `${formatted} · session \`${sessionKey}\``;
