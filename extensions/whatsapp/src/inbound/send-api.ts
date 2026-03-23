@@ -67,6 +67,7 @@ export function createWebSendApi(params: {
             fileName,
             caption: text || undefined,
             mimetype: mediaType,
+            ...mentionsSpread(text),
           };
         }
       } else {
