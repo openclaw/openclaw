@@ -58779,6 +58779,34 @@
       "hasChildren": false
     },
     {
+      "path": "research",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Research",
+      "help": "Research feature gate for experimental telemetry/export/replay surfaces. Keep this disabled in normal product use so no research artifacts or listeners are activated unless explicitly requested.",
+      "hasChildren": true
+    },
+    {
+      "path": "research.enabled",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Research Enabled",
+      "help": "Master toggle for research primitives such as event emission, trajectory export, and replay/control endpoints (default: false). Keep off unless you intentionally run research workflows.",
+      "hasChildren": false
+    },
+    {
       "path": "secrets",
       "kind": "core",
       "type": "object",
