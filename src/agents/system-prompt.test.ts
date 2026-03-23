@@ -148,7 +148,7 @@ describe("buildAgentSystemPrompt", () => {
       "When a skill drives external API writes, assume rate limits: prefer fewer larger writes, avoid tight one-item loops, serialize bursts when possible, and respect 429/Retry-After.",
     );
     expect(prompt).toContain(
-      "Instruction precedence (highest → lowest): SKILL.md (active skill) > AGENTS.md > TOOLS.md > SOUL.md.",
+      "Instruction precedence (highest → lowest): SKILL.md (active skill) > AGENTS.md > TOOLS.md > SOUL.md. When instructions conflict, follow the higher-priority source.",
     );
   });
 
