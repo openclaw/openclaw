@@ -1,6 +1,16 @@
-import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Loader2 } from "lucide-react";
+import {
+  AlertCircle,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  RefreshCw,
+  X,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { useGateway } from "@/hooks/use-gateway";
 import { cn } from "@/lib/utils";
 import type { DelegationEntry } from "@/store/delegation-store";
 
@@ -142,6 +152,78 @@ function DelegationCard({ entry }: { entry: DelegationEntry }) {
           {truncate(entry.resultPreview, 200)}
         </p>
       )}
+
+      {/* Action buttons for stale/failed delegations */}
+      {(entry.status === "stale" || entry.status === "failed") && (
+        <DelegationActions runId={entry.runId} status={entry.status} />
+      )}
+    </div>
+  );
+}
+
+function DelegationActions({ runId, status }: { runId: string; status: string }) {
+  const { sendRpc } = useGateway();
+  const [acting, setActing] = useState(false);
+
+  const handleRetry = () => {
+    setActing(true);
+    sendRpc("sessions.delegations.retry", { runId })
+      .catch(() => {})
+      .finally(() => setActing(false));
+  };
+
+  const handleCancel = () => {
+    setActing(true);
+    sendRpc("sessions.delegations.cancel", { runId })
+      .catch(() => {})
+      .finally(() => setActing(false));
+  };
+
+  const handleResume = () => {
+    setActing(true);
+    sendRpc("sessions.delegations.resume", { runId })
+      .catch(() => {})
+      .finally(() => setActing(false));
+  };
+
+  return (
+    <div className="flex items-center gap-1.5 pl-4 pt-1">
+      {status === "stale" && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-6 px-2 text-[10px] text-blue-400 border-blue-500/30 hover:bg-blue-500/10"
+          onClick={handleResume}
+          disabled={acting}
+        >
+          {acting ? (
+            <Loader2 className="h-3 w-3 animate-spin mr-1" />
+          ) : (
+            <RefreshCw className="h-3 w-3 mr-1" />
+          )}
+          Resume
+        </Button>
+      )}
+      <Button
+        size="sm"
+        variant="outline"
+        className="h-6 px-2 text-[10px] text-amber-400 border-amber-500/30 hover:bg-amber-500/10"
+        onClick={handleRetry}
+        disabled={acting}
+      >
+        <RefreshCw className="h-3 w-3 mr-1" />
+        Retry
+      </Button>
+      <Button
+        size="sm"
+        variant="outline"
+        className="h-6 px-2 text-[10px] text-red-400 border-red-500/30 hover:bg-red-500/10"
+        onClick={handleCancel}
+        disabled={acting}
+      >
+        <X className="h-3 w-3 mr-1" />
+        Cancel
+      </Button>
     </div>
   );
 }
