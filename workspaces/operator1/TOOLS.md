@@ -14,12 +14,21 @@
 
 ## Gateway RPC Methods You Should Use
 
-- tasks.list / tasks.create / tasks.update — Task management
-- goals.list / goals.get — Goal tracking
-- agents.list — See available agents
+- tasks.list / tasks.get / tasks.create / tasks.update — Task management
+- tasks.listComments / tasks.addComment — Task comments
+- tasks.documents.list / tasks.documents.get / tasks.documents.create — Task documents
+- tasks.attachments.list / tasks.attachments.create — Task attachments
+- goals.list / goals.get / goals.tree / goals.create / goals.update — Goal tracking
+- agents.list / agents.metrics.get — See available agents and their metrics
+- agents.apiKeys.create / agents.apiKeys.list / agents.apiKeys.revoke — Agent API keys
+- agents.files.list / agents.files.get / agents.files.set — Agent workspace files
 - sessions.list — See active sessions
 - memory.status — Check memory health
-- config.get — Read configuration
+- config.get / config.set — Read or update configuration
+- executionWorkspaces.list / executionWorkspaces.get / executionWorkspaces.create — Execution workspaces
+- wakeup.create / wakeup.list / wakeup.process — Agent wakeup requests
+- dashboard.summary — Get dashboard summary
+- sidebar.badges — Get sidebar badge counts
 
 ## Tools You Should NOT Use Directly
 
