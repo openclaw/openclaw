@@ -605,6 +605,117 @@ describe("AcpSessionManager", () => {
     }
   });
 
+  it("times out a hung initializeSession actor task and lets the next queued initialize run", async () => {
+    vi.useFakeTimers();
+    try {
+      const runtimeState = createRuntime();
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+        const params = paramsUnknown as {
+          sessionKey: string;
+          mutate: (
+            current: SessionAcpMeta | undefined,
+            entry: { acp?: SessionAcpMeta } | undefined,
+          ) => SessionAcpMeta | null | undefined;
+        };
+        const next = params.mutate(undefined, undefined);
+        return next
+          ? {
+              sessionKey: params.sessionKey,
+              storeSessionKey: params.sessionKey,
+              acp: next,
+            }
+          : null;
+      });
+
+      let firstEnsureStarted = false;
+      const releaseFirstEnsure = createDeferred();
+      let ensureCalls = 0;
+      runtimeState.ensureSession.mockImplementation(
+        async (input: { sessionKey: string; agent: string; mode: "persistent" | "oneshot" }) => {
+          ensureCalls += 1;
+          const callNumber = ensureCalls;
+          if (callNumber === 1) {
+            firstEnsureStarted = true;
+            await releaseFirstEnsure.promise;
+          }
+          return {
+            sessionKey: input.sessionKey,
+            backend: "acpx",
+            runtimeSessionName: `${input.sessionKey}:${input.mode}:runtime:${callNumber}`,
+          };
+        },
+      );
+
+      const manager = new AcpSessionManager();
+      const cfg = {
+        ...baseCfg,
+        acp: {
+          ...baseCfg.acp,
+          sessionLane: {
+            taskTimeoutMs: 100,
+          },
+        },
+      } as OpenClawConfig;
+
+      const first = manager.initializeSession({
+        cfg,
+        sessionKey: "agent:codex:acp:session-1",
+        agent: "codex",
+        mode: "persistent",
+      });
+      void first.catch(() => undefined);
+      await vi.waitFor(() => {
+        expect(firstEnsureStarted).toBe(true);
+      });
+
+      const second = manager.initializeSession({
+        cfg,
+        sessionKey: "agent:codex:acp:session-1",
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      await vi.advanceTimersByTimeAsync(150);
+
+      await expect(first).rejects.toMatchObject({
+        code: "ACP_SESSION_INIT_FAILED",
+        message: "ACP session lane task timed out after 100ms for agent:codex:acp:session-1.",
+      });
+      await expect(second).resolves.toMatchObject({
+        handle: expect.objectContaining({
+          runtimeSessionName: "agent:codex:acp:session-1:persistent:runtime:2",
+        }),
+        meta: expect.objectContaining({
+          state: "idle",
+        }),
+      });
+
+      expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+      expect(manager.getObservabilitySnapshot(cfg).turns.queueDepth).toBe(0);
+      expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalledTimes(1);
+
+      releaseFirstEnsure.resolve();
+      await flushMicrotasks(10);
+
+      expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalledTimes(1);
+      expect(runtimeState.close).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reason: "init-meta-failed",
+          handle: expect.objectContaining({
+            runtimeSessionName: "agent:codex:acp:session-1:persistent:runtime:1",
+          }),
+        }),
+      );
+      expect(manager.getObservabilitySnapshot(cfg).runtimeCache.activeSessions).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps timed-out runtime handles counted until timeout cleanup finishes", async () => {
     vi.useFakeTimers();
     try {
@@ -1852,6 +1963,85 @@ describe("AcpSessionManager", () => {
           }),
         }),
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps idle runtime handles counted while eviction close is still pending", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-02-23T00:00:00.000Z"));
+      const runtimeState = createRuntime();
+      const releaseClose = createDeferred();
+      runtimeState.close.mockImplementation(() => releaseClose.promise);
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
+        return {
+          sessionKey,
+          storeSessionKey: sessionKey,
+          acp: {
+            ...readySessionMeta(),
+            runtimeSessionName: `runtime:${sessionKey}`,
+          },
+        };
+      });
+      const cfg = {
+        acp: {
+          ...baseCfg.acp,
+          maxConcurrentSessions: 1,
+          runtime: {
+            ttlMinutes: 0.01,
+          },
+          sessionLane: {
+            taskTimeoutMs: 100,
+          },
+        },
+      } as OpenClawConfig;
+
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        cfg,
+        sessionKey: "agent:codex:acp:session-a",
+        text: "first",
+        mode: "prompt",
+        requestId: "r1",
+      });
+
+      vi.advanceTimersByTime(2_000);
+      const second = manager.runTurn({
+        cfg,
+        sessionKey: "agent:codex:acp:session-b",
+        text: "second",
+        mode: "prompt",
+        requestId: "r2",
+      });
+      void second.catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(150);
+
+      await expect(second).rejects.toMatchObject({
+        code: "ACP_SESSION_INIT_FAILED",
+        message: expect.stringContaining("max concurrent sessions"),
+      });
+      expect(manager.getObservabilitySnapshot(cfg).runtimeCache.activeSessions).toBe(1);
+      expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
+      expect(runtimeState.close).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reason: "idle-evicted",
+          handle: expect.objectContaining({
+            sessionKey: "agent:codex:acp:session-a",
+          }),
+        }),
+      );
+
+      releaseClose.resolve();
+      await flushMicrotasks(5);
+
+      expect(manager.getObservabilitySnapshot(cfg).runtimeCache.activeSessions).toBe(0);
     } finally {
       vi.useRealTimers();
     }
