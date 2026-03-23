@@ -12,6 +12,8 @@ const defaultRuntime = {
   writeStdout: vi.fn(),
   writeJson: vi.fn(),
   exit: vi.fn(),
+  writeStdout: vi.fn(),
+  writeJson: vi.fn(),
 };
 
 const passwordKey = () => ["pass", "word"].join("");
