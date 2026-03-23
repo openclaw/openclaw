@@ -16,6 +16,7 @@ export async function consumeAcpTurnStream(params: {
   runtime: AcpRuntime;
   turn: AcpRuntimeTurnInput;
   eventGate: AcpTurnEventGate;
+  isStale?: () => boolean;
   onEvent?: (event: AcpRuntimeEvent) => Promise<void> | void;
   onOutputEvent?: (
     event: Extract<AcpRuntimeEvent, { type: "text_delta" | "tool_call" }>,
@@ -27,6 +28,9 @@ export async function consumeAcpTurnStream(params: {
 
   for await (const event of params.runtime.runTurn(params.turn)) {
     if (!params.eventGate.open) {
+      continue;
+    }
+    if (params.isStale?.()) {
       continue;
     }
     if (event.type === "done") {
@@ -43,7 +47,7 @@ export async function consumeAcpTurnStream(params: {
     await params.onEvent?.(event);
   }
 
-  if (params.eventGate.open && streamError) {
+  if (params.eventGate.open && !params.isStale?.() && streamError) {
     throw streamError;
   }
 
