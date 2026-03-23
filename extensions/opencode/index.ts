@@ -1,17 +1,19 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
-import { OPENCODE_ZEN_DEFAULT_MODEL } from "openclaw/plugin-sdk/provider-models";
+import {
+  isMiniMaxModernModelId,
+  OPENCODE_ZEN_DEFAULT_MODEL,
+} from "openclaw/plugin-sdk/provider-models";
 import { applyOpencodeZenConfig } from "./onboard.js";
 
 const PROVIDER_ID = "opencode";
-const MINIMAX_PREFIX = "minimax-m2.5";
 
 function isModernOpencodeModel(modelId: string): boolean {
   const lower = modelId.trim().toLowerCase();
   if (lower.endsWith("-free") || lower === "alpha-glm-4.7") {
     return false;
   }
-  return !lower.startsWith(MINIMAX_PREFIX);
+  return !isMiniMaxModernModelId(lower);
 }
 
 export default definePluginEntry({
