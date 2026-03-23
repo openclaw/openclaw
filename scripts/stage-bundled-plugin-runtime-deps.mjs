@@ -114,7 +114,11 @@ export function stageBundledPluginRuntimeDeps(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   for (const pluginDir of listBundledPluginRuntimeDirs(repoRoot)) {
     const pluginId = path.basename(pluginDir);
-    const packageJson = readJson(path.join(pluginDir, "package.json"));
+    const manifestPath = path.join(pluginDir, "package.json");
+    if (!fs.existsSync(manifestPath)) {
+      continue;
+    }
+    const packageJson = readJson(manifestPath);
     const nodeModulesDir = path.join(pluginDir, "node_modules");
     removePathIfExists(nodeModulesDir);
     if (!hasRuntimeDeps(packageJson) || !shouldStageRuntimeDeps(packageJson)) {

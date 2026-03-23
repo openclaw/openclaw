@@ -1045,6 +1045,56 @@ export function wrapStreamFnTrimToolCallNames(
   };
 }
 
+export function wrapStreamFnSanitizeMalformedToolCalls(
+  baseFn: StreamFn,
+  allowedToolNames?: Set<string>,
+  options?: {
+    validateGeminiTurns?: boolean;
+    validateAnthropicTurns?: boolean;
+    repairToolUseResultPairing?: boolean;
+  },
+): StreamFn {
+  return (model, context, streamOptions) => {
+    const ctx = context as unknown as { messages?: unknown };
+    const messages = ctx?.messages;
+    if (!Array.isArray(messages)) {
+      return baseFn(model, context, streamOptions);
+    }
+
+    let nextMessages = messages as AgentMessage[];
+    const replaySanitized = _sanitizeReplayToolCallInputs(nextMessages, allowedToolNames);
+    nextMessages = replaySanitized.messages;
+    const shouldValidateGemini = options?.validateGeminiTurns ?? true;
+    if (shouldValidateGemini) {
+      nextMessages = validateGeminiTurns(nextMessages);
+    }
+    const shouldValidateAnthropic = options?.validateAnthropicTurns ?? true;
+    if (shouldValidateAnthropic) {
+      nextMessages = validateAnthropicTurns(nextMessages, {
+        preserveLatestAssistantMessage:
+          latestAssistantMessageHasReplayProtectedBlocks(nextMessages),
+      });
+    }
+    nextMessages = _sanitizeAnthropicReplayToolResults(nextMessages);
+    const shouldRepairToolUse = options?.repairToolUseResultPairing ?? true;
+    if (shouldRepairToolUse) {
+      nextMessages = sanitizeToolUseResultPairing(nextMessages, {
+        preserveLatestAssistantMessage:
+          latestAssistantMessageHasReplayProtectedBlocks(nextMessages),
+        preserveErroredAssistantResults: true,
+      });
+    }
+    if (nextMessages === messages) {
+      return baseFn(model, context, streamOptions);
+    }
+    const nextContext = {
+      ...(context as unknown as Record<string, unknown>),
+      messages: nextMessages,
+    } as unknown;
+    return baseFn(model, nextContext as typeof context, streamOptions);
+  };
+}
+
 export function wrapStreamFnDropThinkingBlocks(baseFn: StreamFn): StreamFn {
   return (model, context, options) => {
     const ctx = context as unknown as { messages?: unknown };
@@ -2327,6 +2377,7 @@ export async function runEmbeddedAttempt(
         params.thinkLevel,
         sessionAgentId,
         params.model.api,
+        effectiveWorkspace,
       );
 
       if (cacheTrace) {

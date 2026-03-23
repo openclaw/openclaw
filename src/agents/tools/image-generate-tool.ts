@@ -488,14 +488,14 @@ export function createImageGenerateTool(options?: {
   const effectiveCfg =
     applyImageGenerationModelConfigDefaults(cfg, imageGenerationModelConfig) ?? cfg;
   const localRoots = resolveMediaToolLocalRoots(options?.workspaceDir, {
-    workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
+    workspaceOnly: options?.fsPolicy?.readWorkspaceOnly === true,
   });
   const sandboxConfig =
     options?.sandbox && options.sandbox.root.trim()
       ? {
           root: options.sandbox.root.trim(),
           bridge: options.sandbox.bridge,
-          workspaceOnly: options.fsPolicy?.workspaceOnly === true,
+          workspaceOnly: options.fsPolicy?.readWorkspaceOnly === true,
         }
       : null;
 

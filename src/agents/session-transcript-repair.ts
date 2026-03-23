@@ -345,6 +345,8 @@ export function sanitizeToolCallInputs(
 export type ToolUseRepairOptions = {
   /** Skip repairing around the newest assistant turn when it has replay-protected blocks. */
   preserveLatestAssistantMessage?: boolean;
+  /** Keep real toolResult blocks for surviving tool calls on errored/aborted assistant turns. */
+  preserveErroredAssistantResults?: boolean;
 };
 
 export function sanitizeToolUseResultPairing(

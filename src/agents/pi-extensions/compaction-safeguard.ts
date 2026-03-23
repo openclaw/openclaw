@@ -12,6 +12,10 @@ import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { extractKeywords, isQueryStopWordToken } from "../../memory/query-expansion.js";
 import {
+  hasMeaningfulConversationContent,
+  isRealConversationMessage,
+} from "../compaction-real-conversation.js";
+import {
   runTargetBudgetCompaction,
   type CompactionPreparationLike,
   type CompactionResultLike,

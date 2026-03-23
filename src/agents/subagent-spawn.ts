@@ -4,7 +4,13 @@ import { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinkin
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { SessionEntry } from "../config/sessions.js";
+import { updateSessionStore } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
+import {
+  pruneLegacyStoreKeys,
+  resolveGatewaySessionStoreTarget,
+} from "../gateway/session-utils.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   isValidAgentId,
@@ -389,6 +395,51 @@ function summarizeError(err: unknown): string {
     return err;
   }
   return "error";
+}
+
+async function persistInitialChildSessionRuntimeModel(params: {
+  cfg: OpenClawConfig;
+  childSessionKey: string;
+  resolvedModel: string;
+}): Promise<string | undefined> {
+  const { provider, model } = splitModelRef(params.resolvedModel);
+  const normalizedModel = model?.trim();
+  if (!normalizedModel) {
+    return undefined;
+  }
+  try {
+    const target = resolveGatewaySessionStoreTarget({
+      cfg: params.cfg,
+      key: params.childSessionKey,
+    });
+    await updateSessionStore(target.storePath, (store) => {
+      const current =
+        store[target.canonicalKey] ??
+        ({
+          sessionId: target.canonicalKey,
+          updatedAt: Date.now(),
+        } as SessionEntry);
+      const next: SessionEntry = {
+        ...current,
+        model: normalizedModel,
+        updatedAt: Date.now(),
+      };
+      if (provider?.trim()) {
+        next.modelProvider = provider.trim();
+      } else {
+        delete next.modelProvider;
+      }
+      store[target.canonicalKey] = next;
+      pruneLegacyStoreKeys({
+        store,
+        canonicalKey: target.canonicalKey,
+        candidates: target.storeKeys,
+      });
+    });
+    return undefined;
+  } catch (err) {
+    return summarizeError(err);
+  }
 }
 
 async function ensureThreadBindingForSubagentSpawn(params: {

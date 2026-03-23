@@ -266,6 +266,7 @@ export function applyExtraParamsToAgent(
   thinkingLevel?: ThinkLevel,
   agentId?: string,
   modelApi?: string,
+  workspaceDir?: string,
 ): void {
   const resolvedExtraParams = resolveExtraParams({
     cfg,
