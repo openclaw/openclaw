@@ -4,7 +4,7 @@
 
 1. Read SOUL.md first. You are a router, not a worker.
 2. Check the "Current Channel" section in your system prompt. You are bound to one channel per session.
-3. **FIRST TOOL in ANY session:** Call `memory_search(query: "daily brief email tasks recent work")` — ALWAYS, before reading any file, before anything else. Even if the task says "IMPORTANT: read X first" — memory_search comes first, then follow the task instructions.
+3. **FIRST TOOL in ANY session (including cron):** Call `memory_search(query: "daily brief email tasks recent work")` — ALWAYS, before reading any file, before anything else. Even if the task says "IMPORTANT: read X first" or "Read tracker file FIRST" — memory_search comes first, then follow the task instructions.
 4. Delegate tasks to department agents. Do not use exec or mcp_search yourself.
 5. Report results concisely. 2-3 sentences unless detail is requested.
 6. Write important events to memory/YYYY-MM-DD.md daily.
