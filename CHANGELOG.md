@@ -7,7 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Breaking/Plugins: bare `openclaw plugins install <package>` now prefers ClawHub before npm for npm-safe names, and only falls back to npm when ClawHub does not have that package or version.
-- Tools/image generation: deprecate the bundled `openai-image-gen` skill, standardize on the native `image` and `image_generate` tools, clarify provider-specific image auth requirements in runtime output and docs, and harden provider-auth hint lookups against prototype-like provider ids. (#52552) Thanks @vincentkoc.
+- Breaking/Tools/image generation: deprecate the bundled `openai-image-gen` skill, standardize on the native `image` and `image_generate` tools, clarify provider-specific image auth requirements in runtime output and docs, and harden provider-auth hint lookups against prototype-like provider ids. (#52552) Thanks @vincentkoc.
 - ClawHub/install: add native `openclaw skills search|install|update` flows plus `openclaw plugins install clawhub:<package>` with tracked update metadata, gateway skill-install/update support for ClawHub-backed requests, and regression coverage/docs for the new source path.
 - Models/Anthropic Vertex: add core `anthropic-vertex` provider support for Claude via Google Vertex AI, including GCP auth/discovery and main run-path routing. (#43356) Thanks @sallyom and @yossiovadia.
 - Commands/btw: add `/btw` side questions for quick tool-less answers about the current session without changing future session context, with dismissible in-session TUI answers and explicit BTW replies on external channels. (#45444) Thanks @ngutman.
@@ -105,6 +105,8 @@ Docs: https://docs.openclaw.ai
 - Configure/startup: move outbound send-deps resolution into a lightweight helper so `openclaw configure` no longer stalls after the banner while eagerly loading channel plugins. (#46301) Thanks @scoootscooob.
 - Mattermost/threading: honor `replyToMode: "off"` for already-threaded inbound posts so threaded follow-ups can fall back to top-level replies when configured. (#52543) Thanks @RichardCao.
 - Telegram/replies: set `allow_sending_without_reply` on reply-targeted sends and media-error notices so deleted parent messages no longer drop otherwise valid replies. (#52524) Thanks @moltbot886.
+- Gateway/status: resolve env-backed `gateway.auth.*` SecretRefs before read-only probe auth checks so status no longer reports false probe failures when auth is configured through SecretRef. (#52513) Thanks @CodeForgeNet.
+- Agents/exec: return plain-text failed tool output for timeouts and other non-success exec outcomes so models no longer parrot raw JSON error payloads back to users. (#52508) Thanks @martingarramon.
 - CLI/startup: lazy-load channel add and root help startup paths to trim avoidable RSS and help latency on constrained hosts. (#46784) Thanks @vincentkoc.
 - CLI/onboarding: import static provider definitions directly for onboarding model/config helpers so those paths no longer pull provider discovery just for built-in defaults. (#47467) Thanks @vincentkoc.
 - CLI/configure: clarify fresh-setup memory-search warnings so they say semantic recall needs at least one embedding provider, and scope the initial model allowlist picker to the provider selected in configure. Thanks @vincentkoc.

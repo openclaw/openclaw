@@ -1,5 +1,4 @@
-// Curated auth + onboarding helpers for provider plugins.
-// Keep this surface focused on reusable provider-owned login flows.
+// Public auth/onboarding helpers for provider plugins.
 
 export type { OpenClawConfig } from "../config/config.js";
 export type { SecretInput } from "../config/types.secrets.js";
@@ -16,6 +15,7 @@ export {
   resolveOAuthApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
 } from "../agents/model-auth-markers.js";
+export { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 export {
   formatApiKeyPreview,
   normalizeApiKeyInput,

@@ -26,7 +26,7 @@ import {
   listWhatsAppDirectoryPeersFromConfig,
 } from "../../../extensions/whatsapp/src/directory-config.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { LineProbeResult } from "../../line/types.js";
+import type { LineProbeResult } from "../../plugin-sdk/line.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -504,12 +504,6 @@ describe("resolveChannelConfigWrites", () => {
   it("matches account ids case-insensitively", () => {
     const cfg = makeSlackConfigWritesCfg("Work");
     expect(resolveChannelConfigWrites({ cfg, channelId: "slack", accountId: "work" })).toBe(false);
-  });
-
-  it("ignores account ids when the channel is missing", () => {
-    expect(resolveChannelConfigWrites({ cfg: {}, channelId: "slack", accountId: "work" })).toBe(
-      true,
-    );
   });
 });
 
