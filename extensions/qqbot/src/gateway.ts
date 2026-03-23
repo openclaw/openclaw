@@ -10,6 +10,7 @@ import {
   sendGroupMessage,
   clearTokenCache,
   initApiConfig,
+  initApiLog,
   startBackgroundTokenRefresh,
   stopBackgroundTokenRefresh,
   sendC2CInputNotify,
@@ -122,6 +123,9 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
   triggerUpdateCheck(log);
 
   // 初始化 API 配置（markdown 支持）
+  if (log) {
+    initApiLog({ info: (m) => log.info(m), error: (m) => log.error(m), debug: (m) => log.info(m) });
+  }
   initApiConfig(account.appId, {
     markdownSupport: account.markdownSupport,
   });
