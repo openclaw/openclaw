@@ -111,8 +111,11 @@ function DelegationCard({ entry }: { entry: DelegationEntry }) {
     entry.endedAt != null && entry.endedAt > 0 ? entry.elapsedMs : refTime > 0 ? now - refTime : 0;
 
   // Extract agent name from childSessionKey (agent:<name>:subagent:...) or use label/agentId
+  // Extract agent name from childSessionKey (agent:<name>:subagent:...)
   const agentFromKey = entry.childSessionKey?.split(":")?.[1];
-  const agentDisplay = entry.label ?? entry.agentId ?? agentFromKey ?? "sub-agent";
+  const agentName = entry.agentId ?? agentFromKey ?? "sub-agent";
+  const taskLabel = entry.label ?? null;
+  const agentDisplay = `${agentName}${taskLabel ? ` — ${taskLabel}` : ""}`;
   const task = entry.task ? truncate(entry.task, 80) : null;
 
   return (
@@ -133,7 +136,7 @@ function DelegationCard({ entry }: { entry: DelegationEntry }) {
       {/* Top row: dot + agent name + status badge + actions + elapsed */}
       <div className="flex items-center gap-2 min-w-0">
         <StatusDot status={entry.status} />
-        <span className="font-medium text-foreground/90 truncate max-w-[120px]">
+        <span className="font-medium text-foreground/90 truncate max-w-[200px]">
           {agentDisplay}
         </span>
         <StatusBadge status={entry.status} />
