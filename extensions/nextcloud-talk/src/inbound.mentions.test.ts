@@ -10,9 +10,10 @@ import {
 // ---------------------------------------------------------------------------
 
 describe("parseStructuredNextcloudTalkBody", () => {
-  it("returns plain text unchanged with empty mentionEntries", () => {
+  it("returns plain text unchanged with empty mentionEntries and structured=false", () => {
     const result = parseStructuredNextcloudTalkBody("hello world");
     expect(result.text).toBe("hello world");
+    expect(result.structured).toBe(false);
     expect(result.mentionEntries).toEqual([]);
   });
 
@@ -20,10 +21,11 @@ describe("parseStructuredNextcloudTalkBody", () => {
     const raw = "  not json  ";
     const result = parseStructuredNextcloudTalkBody(raw);
     expect(result.text).toBe(raw);
+    expect(result.structured).toBe(false);
     expect(result.mentionEntries).toEqual([]);
   });
 
-  it("extracts message text and mention entries from a valid structured body", () => {
+  it("strips placeholder tokens and sets structured=true for a valid structured body", () => {
     const raw = JSON.stringify({
       message: "Hey {mention0}, how are you?",
       parameters: {
@@ -31,7 +33,8 @@ describe("parseStructuredNextcloudTalkBody", () => {
       },
     });
     const result = parseStructuredNextcloudTalkBody(raw);
-    expect(result.text).toBe("Hey {mention0}, how are you?");
+    expect(result.text).toBe("Hey , how are you?");
+    expect(result.structured).toBe(true);
     expect(result.mentionEntries).toHaveLength(1);
     expect(result.mentionEntries[0]).toMatchObject({
       key: "mention0",
@@ -41,10 +44,35 @@ describe("parseStructuredNextcloudTalkBody", () => {
     });
   });
 
+  it("produces empty text for a mention-only structured body", () => {
+    const raw = JSON.stringify({
+      message: "{mention-user1}",
+      parameters: {
+        "mention-user1": { type: "user", id: "agent", name: "iClaw" },
+      },
+    });
+    const result = parseStructuredNextcloudTalkBody(raw);
+    expect(result.text).toBe("");
+    expect(result.structured).toBe(true);
+  });
+
+  it("strips placeholder before a command so command parsing can see it", () => {
+    const raw = JSON.stringify({
+      message: "{mention0} /reset",
+      parameters: {
+        mention0: { type: "user", id: "agent" },
+      },
+    });
+    const result = parseStructuredNextcloudTalkBody(raw);
+    expect(result.text).toBe("/reset");
+    expect(result.structured).toBe(true);
+  });
+
   it("falls back to raw body text when JSON has no message field", () => {
     const raw = JSON.stringify({ parameters: {} });
     const result = parseStructuredNextcloudTalkBody(raw);
-    expect(result.text).toBe(raw);
+    expect(result.text).toBe(raw.trim());
+    expect(result.structured).toBe(true);
     expect(result.mentionEntries).toEqual([]);
   });
 
@@ -52,6 +80,7 @@ describe("parseStructuredNextcloudTalkBody", () => {
     const raw = "{broken json";
     const result = parseStructuredNextcloudTalkBody(raw);
     expect(result.text).toBe(raw);
+    expect(result.structured).toBe(false);
     expect(result.mentionEntries).toEqual([]);
   });
 
@@ -59,6 +88,7 @@ describe("parseStructuredNextcloudTalkBody", () => {
     const raw = JSON.stringify({ message: "hello" });
     const result = parseStructuredNextcloudTalkBody(raw);
     expect(result.text).toBe("hello");
+    expect(result.structured).toBe(true);
     expect(result.mentionEntries).toEqual([]);
   });
 
@@ -71,9 +101,11 @@ describe("parseStructuredNextcloudTalkBody", () => {
     });
     const result = parseStructuredNextcloudTalkBody(raw);
     expect(result.mentionEntries[0]?.mentionId).toBe("agent@cloud.example.com");
+    // placeholder stripped
+    expect(result.text).toBe("ping");
   });
 
-  it("multiple mention entries are all captured", () => {
+  it("multiple mention entries are all captured and placeholders stripped", () => {
     const raw = JSON.stringify({
       message: "{a} and {b}",
       parameters: {
@@ -86,6 +118,7 @@ describe("parseStructuredNextcloudTalkBody", () => {
     expect(result.mentionEntries.map((e) => e.id)).toEqual(
       expect.arrayContaining(["alice", "bob"]),
     );
+    expect(result.text).toBe("and");
   });
 });
 
