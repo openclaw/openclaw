@@ -72,6 +72,7 @@ describe("bundled web search metadata", () => {
     expect(resolveBundledWebSearchPluginIds({})).toEqual([
       "brave",
       "duckduckgo",
+      "exa",
       "firecrawl",
       "google",
       "moonshot",

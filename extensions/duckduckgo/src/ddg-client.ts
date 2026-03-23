@@ -73,12 +73,15 @@ function decodeDuckDuckGoUrl(rawUrl: string): string {
   return rawUrl;
 }
 
-function readHtmlAttribute(tagAttributes: string, attribute: string): string {
-  return new RegExp(`\\b${attribute}="([^"]*)"`, "i").exec(tagAttributes)?.[1] ?? "";
+function readHrefAttribute(tagAttributes: string): string {
+  return /\bhref="([^"]*)"/i.exec(tagAttributes)?.[1] ?? "";
 }
 
 function isBotChallenge(html: string): boolean {
-  return /captcha|challenge|are you a human|g-recaptcha/i.test(html);
+  if (/class="[^"]*\bresult__a\b[^"]*"/i.test(html)) {
+    return false;
+  }
+  return /g-recaptcha|are you a human|id="challenge-form"|name="challenge"/i.test(html);
 }
 
 function parseDuckDuckGoHtml(html: string): DuckDuckGoResult[] {
@@ -90,7 +93,7 @@ function parseDuckDuckGoHtml(html: string): DuckDuckGoResult[] {
   for (const match of html.matchAll(resultRegex)) {
     const rawAttributes = match[1] ?? "";
     const rawTitle = match[2] ?? "";
-    const rawUrl = readHtmlAttribute(rawAttributes, "href");
+    const rawUrl = readHrefAttribute(rawAttributes);
     const matchEnd = (match.index ?? 0) + match[0].length;
     const trailingHtml = html.slice(matchEnd);
     const nextResultIndex = trailingHtml.search(nextResultRegex);

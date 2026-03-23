@@ -56,4 +56,20 @@ describe("duckduckgo html parsing", () => {
     expect(__testing.isBotChallenge(html)).toBe(true);
     expect(__testing.parseDuckDuckGoHtml(html)).toEqual([]);
   });
+
+  it("does not treat ordinary result snippets mentioning challenge as bot pages", () => {
+    const html = `
+      <a class="result__a" href="https://example.com/challenge">Coding Challenge</a>
+      <a class="result__snippet">A fun coding challenge for interview prep.</a>
+    `;
+
+    expect(__testing.isBotChallenge(html)).toBe(false);
+    expect(__testing.parseDuckDuckGoHtml(html)).toEqual([
+      {
+        title: "Coding Challenge",
+        url: "https://example.com/challenge",
+        snippet: "A fun coding challenge for interview prep.",
+      },
+    ]);
+  });
 });
