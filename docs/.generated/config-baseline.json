@@ -31098,6 +31098,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.synology-chat.dangerouslyAllowNameMatching",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram",
       "kind": "channel",
       "type": "object",
