@@ -2,8 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import unitConfig from "../vitest.unit.config.ts";
 import {
+  createUnitVitestConfig,
   loadExtraExcludePatternsFromEnv,
   loadIncludePatternsFromEnv,
 } from "../vitest.unit.config.ts";
@@ -81,6 +81,7 @@ describe("loadExtraExcludePatternsFromEnv", () => {
 
 describe("unit vitest config", () => {
   it("defaults unit tests to non-isolated mode", () => {
+    const unitConfig = createUnitVitestConfig({});
     expect(unitConfig.test?.isolate).toBe(false);
   });
 });
