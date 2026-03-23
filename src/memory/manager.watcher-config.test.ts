@@ -115,27 +115,38 @@ describe("memory watcher config", () => {
       string[],
       Record<string, unknown>,
     ];
+    // chokidar v4+ removed glob support, so we watch directories directly
+    // and filter non-.md files via the `ignored` callback.
     expect(watchedPaths).toEqual(
       expect.arrayContaining([
         path.join(workspaceDir, "MEMORY.md"),
         path.join(workspaceDir, "memory.md"),
-        path.join(workspaceDir, "memory", "**", "*.md"),
-        path.join(extraDir, "**", "*.md"),
+        path.join(workspaceDir, "memory"),
+        extraDir,
       ]),
     );
     expect(options.ignoreInitial).toBe(true);
     expect(options.awaitWriteFinish).toEqual({ stabilityThreshold: 25, pollInterval: 100 });
 
-    const ignored = options.ignored as ((watchPath: string) => boolean) | undefined;
+    const ignored = options.ignored as
+      | ((watchPath: string, stats?: import("fs").Stats) => boolean)
+      | undefined;
     expect(ignored).toBeTypeOf("function");
     expect(ignored?.(path.join(workspaceDir, "memory", "node_modules", "pkg", "index.md"))).toBe(
       true,
     );
     expect(ignored?.(path.join(workspaceDir, "memory", ".venv", "lib", "python.md"))).toBe(true);
+    // Directory paths should not be ignored (chokidar needs to descend into them).
     expect(ignored?.(path.join(workspaceDir, "memory", "project", "notes.md"))).toBe(false);
+    // Non-.md files should be ignored when stats indicate a file.
+    const fakeFileStats = { isFile: () => true } as import("fs").Stats;
+    expect(ignored?.(path.join(workspaceDir, "memory", "data.json"), fakeFileStats)).toBe(true);
+    expect(ignored?.(path.join(workspaceDir, "memory", "notes.md"), fakeFileStats)).toBe(false);
+    // Case-insensitive .md check (macOS/Windows compat).
+    expect(ignored?.(path.join(workspaceDir, "memory", "NOTES.MD"), fakeFileStats)).toBe(false);
   });
 
-  it("watches multimodal extensions with case-insensitive globs", async () => {
+  it("watches multimodal extensions via directory + ignored callback", async () => {
     await setupWatcherWorkspace({ name: "PHOTO.PNG", contents: "png" });
     const cfg = createWatcherConfig({
       provider: "gemini",
@@ -147,15 +158,26 @@ describe("memory watcher config", () => {
     await expectWatcherManager(cfg);
 
     expect(watchMock).toHaveBeenCalledTimes(1);
-    const [watchedPaths] = watchMock.mock.calls[0] as unknown as [
+    const [watchedPaths, options] = watchMock.mock.calls[0] as unknown as [
       string[],
       Record<string, unknown>,
     ];
-    expect(watchedPaths).toEqual(
-      expect.arrayContaining([
-        path.join(extraDir, "**", "*.[pP][nN][gG]"),
-        path.join(extraDir, "**", "*.[wW][aA][vV]"),
-      ]),
-    );
+    // chokidar v4+ removed glob support — extraPaths directories are watched
+    // directly, and the ignored callback allows multimodal extensions through.
+    expect(watchedPaths).toEqual(expect.arrayContaining([extraDir]));
+
+    const ignored = options.ignored as
+      | ((watchPath: string, stats?: import("fs").Stats) => boolean)
+      | undefined;
+    expect(ignored).toBeTypeOf("function");
+    const fakeFileStats = { isFile: () => true } as import("fs").Stats;
+    // Multimodal image/audio files should NOT be ignored.
+    expect(ignored?.(path.join(extraDir, "photo.png"), fakeFileStats)).toBe(false);
+    expect(ignored?.(path.join(extraDir, "PHOTO.PNG"), fakeFileStats)).toBe(false);
+    expect(ignored?.(path.join(extraDir, "audio.wav"), fakeFileStats)).toBe(false);
+    // Non-multimodal, non-.md files should still be ignored.
+    expect(ignored?.(path.join(extraDir, "data.json"), fakeFileStats)).toBe(true);
+    // .md files should also pass through.
+    expect(ignored?.(path.join(extraDir, "notes.md"), fakeFileStats)).toBe(false);
   });
 });
