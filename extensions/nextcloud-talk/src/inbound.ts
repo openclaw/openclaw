@@ -28,6 +28,90 @@ import { getNextcloudTalkRuntime } from "./runtime.js";
 import { sendMessageNextcloudTalk } from "./send.js";
 import type { CoreConfig, NextcloudTalkInboundMessage } from "./types.js";
 
+function parseStructuredNextcloudTalkBody(raw: string): {
+  text: string;
+  explicitMention: boolean;
+  mentionDebug: Array<{
+    key: string;
+    type?: string;
+    id?: string;
+    mentionId?: string;
+    name?: string;
+  }>;
+} {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("{")) {
+    return { text: raw, explicitMention: false, mentionDebug: [] };
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as {
+      message?: unknown;
+      parameters?: Record<
+        string,
+        {
+          type?: unknown;
+          id?: unknown;
+          name?: unknown;
+          "mention-id"?: unknown;
+          mentionId?: unknown;
+        }
+      >;
+    };
+    const text = typeof parsed.message === "string" ? parsed.message : raw;
+    const parameters =
+      parsed.parameters && typeof parsed.parameters === "object" ? parsed.parameters : {};
+    const mentionDebug = Object.entries(parameters).map(([key, value]) => ({
+      key,
+      type: typeof value?.type === "string" ? value.type : undefined,
+      id: typeof value?.id === "string" ? value.id : undefined,
+      mentionId:
+        typeof value?.["mention-id"] === "string"
+          ? value["mention-id"]
+          : typeof value?.mentionId === "string"
+            ? value.mentionId
+            : undefined,
+      name: typeof value?.name === "string" ? value.name : undefined,
+    }));
+    return { text, explicitMention: false, mentionDebug };
+  } catch {
+    return { text: raw, explicitMention: false, mentionDebug: [] };
+  }
+}
+
+function resolveExplicitNextcloudTalkMention(params: {
+  mentionDebug: Array<{
+    key: string;
+    type?: string;
+    id?: string;
+    mentionId?: string;
+    name?: string;
+  }>;
+  account: ResolvedNextcloudTalkAccount;
+}): boolean {
+  const configuredApiUser = params.account.config.apiUser?.trim().toLowerCase();
+  const configuredName = params.account.name?.trim().toLowerCase();
+  const accountId = params.account.accountId.trim().toLowerCase();
+  const expectedIds = new Set<string>();
+  if (accountId) expectedIds.add(accountId);
+  if (configuredApiUser) {
+    expectedIds.add(configuredApiUser);
+    const apiLocalPart = configuredApiUser.split("@")[0]?.trim();
+    if (apiLocalPart) expectedIds.add(apiLocalPart.toLowerCase());
+  }
+  if (configuredName) expectedIds.add(configuredName);
+
+  return params.mentionDebug.some((entry) => {
+    if ((entry.type ?? "").toLowerCase() !== "user") {
+      return false;
+    }
+    const candidates = [entry.id, entry.mentionId, entry.name]
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .map((value) => value.trim().toLowerCase());
+    return candidates.some((candidate) => expectedIds.has(candidate));
+  });
+}
+
 const CHANNEL_ID = "nextcloud-talk" as const;
 
 async function deliverNextcloudTalkReply(params: {
@@ -68,6 +152,11 @@ export async function handleNextcloudTalkInbound(params: {
 
   const rawBody = message.text?.trim() ?? "";
   if (!rawBody) {
+    return;
+  }
+  const parsedBody = parseStructuredNextcloudTalkBody(rawBody);
+  const effectiveBody = parsedBody.text?.trim() ?? rawBody;
+  if (!effectiveBody) {
     return;
   }
 
@@ -134,7 +223,10 @@ export async function handleNextcloudTalkInbound(params: {
   });
   const useAccessGroups =
     (config.commands as Record<string, unknown> | undefined)?.useAccessGroups !== false;
-  const hasControlCommand = core.channel.text.hasControlCommand(rawBody, config as OpenClawConfig);
+  const hasControlCommand = core.channel.text.hasControlCommand(
+    effectiveBody,
+    config as OpenClawConfig,
+  );
   const access = resolveDmGroupAccessWithCommandGate({
     isGroup,
     dmPolicy,
@@ -206,15 +298,25 @@ export async function handleNextcloudTalkInbound(params: {
   }
 
   const mentionRegexes = core.channel.mentions.buildMentionRegexes(config as OpenClawConfig);
-  const wasMentioned = mentionRegexes.length
-    ? core.channel.mentions.matchesMentionPatterns(rawBody, mentionRegexes)
-    : false;
+  const mentionPatternSources = mentionRegexes.map((re) => re.source);
+  const explicitMention = resolveExplicitNextcloudTalkMention({
+    mentionDebug: parsedBody.mentionDebug,
+    account,
+  });
+  const wasMentioned =
+    explicitMention ||
+    (mentionRegexes.length
+      ? core.channel.mentions.matchesMentionPatterns(effectiveBody, mentionRegexes)
+      : false);
   const shouldRequireMention = isGroup
     ? resolveNextcloudTalkRequireMention({
         roomConfig,
         wildcardConfig: roomMatch.wildcardConfig,
       })
     : false;
+  runtime.log?.(
+    `nextcloud-talk: mention debug room=${roomToken} sender=${senderId} raw=${JSON.stringify(rawBody)} text=${JSON.stringify(effectiveBody)} mentionMeta=${JSON.stringify(parsedBody.mentionDebug)} patterns=${JSON.stringify(mentionPatternSources)} explicit=${explicitMention} matched=${wasMentioned} requireMention=${shouldRequireMention}`,
+  );
   const mentionGate = resolveNextcloudTalkMentionGate({
     isGroup,
     requireMention: shouldRequireMention,
@@ -263,9 +365,9 @@ export async function handleNextcloudTalkInbound(params: {
 
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
-    BodyForAgent: rawBody,
-    RawBody: rawBody,
-    CommandBody: rawBody,
+    BodyForAgent: effectiveBody,
+    RawBody: effectiveBody,
+    CommandBody: effectiveBody,
     From: isGroup ? `nextcloud-talk:room:${roomToken}` : `nextcloud-talk:${senderId}`,
     To: `nextcloud-talk:${roomToken}`,
     SessionKey: route.sessionKey,
