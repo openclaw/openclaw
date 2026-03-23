@@ -6,6 +6,8 @@
  */
 
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
+import { VERSION } from "../version.js";
+import { resolveBotName } from "./bot-name-registry.js";
 import type { PluginRegistry } from "./registry.js";
 import type {
   PluginHookAfterCompactionEvent,
@@ -159,6 +161,13 @@ function getHooksForNameAndPlugin<K extends PluginHookName>(
 export function createHookRunner(registry: PluginRegistry, options: HookRunnerOptions = {}) {
   const logger = options.logger;
   const catchErrors = options.catchErrors ?? true;
+  const openclaw_version = VERSION;
+
+  /** Resolve bot_name from whichever ctx fields are available. */
+  const resolveBot = (ctx: object): string | undefined => {
+    const c = ctx as { accountId?: string; channelId?: string };
+    return resolveBotName([c.accountId, c.channelId]);
+  };
 
   const mergeBeforeModelResolve = (
     acc: PluginHookBeforeModelResolveResult | undefined,
@@ -432,7 +441,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   ): Promise<PluginHookBeforeModelResolveResult | undefined> {
     return runModifyingHook<"before_model_resolve", PluginHookBeforeModelResolveResult>(
       "before_model_resolve",
-      event,
+      { ...event, openclaw_version, bot_name: resolveBot(ctx) },
       ctx,
       mergeBeforeModelResolve,
     );
@@ -448,7 +457,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   ): Promise<PluginHookBeforePromptBuildResult | undefined> {
     return runModifyingHook<"before_prompt_build", PluginHookBeforePromptBuildResult>(
       "before_prompt_build",
-      event,
+      { ...event, openclaw_version, bot_name: resolveBot(ctx) },
       ctx,
       mergeBeforePromptBuild,
     );
@@ -464,7 +473,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   ): Promise<PluginHookBeforeAgentStartResult | undefined> {
     return runModifyingHook<"before_agent_start", PluginHookBeforeAgentStartResult>(
       "before_agent_start",
-      event,
+      { ...event, openclaw_version, bot_name: resolveBot(ctx) },
       ctx,
       (acc, next) => ({
         ...mergeBeforePromptBuild(acc, next),
@@ -482,7 +491,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     event: PluginHookAgentEndEvent,
     ctx: PluginHookAgentContext,
   ): Promise<void> {
-    return runVoidHook("agent_end", event, ctx);
+    return runVoidHook("agent_end", { ...event, openclaw_version, bot_name: resolveBot(ctx) }, ctx);
   }
 
   /**
@@ -491,7 +500,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
    * Runs in parallel (fire-and-forget).
    */
   async function runLlmInput(event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) {
-    return runVoidHook("llm_input", event, ctx);
+    return runVoidHook("llm_input", { ...event, openclaw_version, bot_name: resolveBot(ctx) }, ctx);
   }
 
   /**
@@ -500,7 +509,11 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
    * Runs in parallel (fire-and-forget).
    */
   async function runLlmOutput(event: PluginHookLlmOutputEvent, ctx: PluginHookAgentContext) {
-    return runVoidHook("llm_output", event, ctx);
+    return runVoidHook(
+      "llm_output",
+      { ...event, openclaw_version, bot_name: resolveBot(ctx) },
+      ctx,
+    );
   }
 
   /**
@@ -510,7 +523,11 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     event: PluginHookBeforeCompactionEvent,
     ctx: PluginHookAgentContext,
   ): Promise<void> {
-    return runVoidHook("before_compaction", event, ctx);
+    return runVoidHook(
+      "before_compaction",
+      { ...event, openclaw_version, bot_name: resolveBot(ctx) },
+      ctx,
+    );
   }
 
   /**
@@ -520,7 +537,11 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     event: PluginHookAfterCompactionEvent,
     ctx: PluginHookAgentContext,
   ): Promise<void> {
-    return runVoidHook("after_compaction", event, ctx);
+    return runVoidHook(
+      "after_compaction",
+      { ...event, openclaw_version, bot_name: resolveBot(ctx) },
+      ctx,
+    );
   }
 
   /**
@@ -532,7 +553,11 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     event: PluginHookBeforeResetEvent,
     ctx: PluginHookAgentContext,
   ): Promise<void> {
-    return runVoidHook("before_reset", event, ctx);
+    return runVoidHook(
+      "before_reset",
+      { ...event, openclaw_version, bot_name: resolveBot(ctx) },
+      ctx,
+    );
   }
 
   // =========================================================================
@@ -549,7 +574,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   ): Promise<PluginHookInboundClaimResult | undefined> {
     return runClaimingHook<"inbound_claim", PluginHookInboundClaimResult>(
       "inbound_claim",
-      event,
+      { ...event, openclaw_version, bot_name: resolveBot(ctx) },
       ctx,
     );
   }
@@ -562,7 +587,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     return runClaimingHookForPlugin<"inbound_claim", PluginHookInboundClaimResult>(
       "inbound_claim",
       pluginId,
-      event,
+      { ...event, openclaw_version, bot_name: resolveBot(ctx) },
       ctx,
     );
   }
@@ -575,7 +600,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     return runClaimingHookForPluginOutcome<"inbound_claim", PluginHookInboundClaimResult>(
       "inbound_claim",
       pluginId,
-      event,
+      { ...event, openclaw_version, bot_name: resolveBot(ctx) },
       ctx,
     );
   }
@@ -588,7 +613,11 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,
   ): Promise<void> {
-    return runVoidHook("message_received", event, ctx);
+    return runVoidHook(
+      "message_received",
+      { ...event, openclaw_version, bot_name: resolveBot(ctx) },
+      ctx,
+    );
   }
 
   /**
@@ -602,7 +631,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   ): Promise<PluginHookMessageSendingResult | undefined> {
     return runModifyingHook<"message_sending", PluginHookMessageSendingResult>(
       "message_sending",
-      event,
+      { ...event, openclaw_version, bot_name: resolveBot(ctx) },
       ctx,
       (acc, next) => ({
         content: next.content ?? acc?.content,
@@ -619,7 +648,11 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     event: PluginHookMessageSentEvent,
     ctx: PluginHookMessageContext,
   ): Promise<void> {
-    return runVoidHook("message_sent", event, ctx);
+    return runVoidHook(
+      "message_sent",
+      { ...event, openclaw_version, bot_name: resolveBot(ctx) },
+      ctx,
+    );
   }
 
   // =========================================================================
@@ -637,7 +670,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   ): Promise<PluginHookBeforeToolCallResult | undefined> {
     return runModifyingHook<"before_tool_call", PluginHookBeforeToolCallResult>(
       "before_tool_call",
-      event,
+      { ...event, openclaw_version, bot_name: resolveBot(ctx) },
       ctx,
       (acc, next) => ({
         params: next.params ?? acc?.params,
@@ -655,7 +688,11 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     event: PluginHookAfterToolCallEvent,
     ctx: PluginHookToolContext,
   ): Promise<void> {
-    return runVoidHook("after_tool_call", event, ctx);
+    return runVoidHook(
+      "after_tool_call",
+      { ...event, openclaw_version, bot_name: resolveBot(ctx) },
+      ctx,
+    );
   }
 
   /**
@@ -677,12 +714,13 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       return undefined;
     }
 
-    let current = event.message;
+    const eventWithVersion = { ...event, openclaw_version, bot_name: resolveBot(ctx) };
+    let current = eventWithVersion.message;
 
     for (const hook of hooks) {
       try {
         // oxlint-disable-next-line typescript/no-explicit-any
-        const out = (hook.handler as any)({ ...event, message: current }, ctx) as
+        const out = (hook.handler as any)({ ...eventWithVersion, message: current }, ctx) as
           | PluginHookToolResultPersistResult
           | void
           | Promise<unknown>;
@@ -742,12 +780,13 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       return undefined;
     }
 
-    let current = event.message;
+    const eventWithVersion = { ...event, openclaw_version, bot_name: resolveBot(ctx) };
+    let current = eventWithVersion.message;
 
     for (const hook of hooks) {
       try {
         // oxlint-disable-next-line typescript/no-explicit-any
-        const out = (hook.handler as any)({ ...event, message: current }, ctx) as
+        const out = (hook.handler as any)({ ...eventWithVersion, message: current }, ctx) as
           | PluginHookBeforeMessageWriteResult
           | void
           | Promise<unknown>;
@@ -806,7 +845,11 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     event: PluginHookSessionStartEvent,
     ctx: PluginHookSessionContext,
   ): Promise<void> {
-    return runVoidHook("session_start", event, ctx);
+    return runVoidHook(
+      "session_start",
+      { ...event, openclaw_version, bot_name: resolveBot(ctx) },
+      ctx,
+    );
   }
 
   /**
@@ -817,7 +860,11 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     event: PluginHookSessionEndEvent,
     ctx: PluginHookSessionContext,
   ): Promise<void> {
-    return runVoidHook("session_end", event, ctx);
+    return runVoidHook(
+      "session_end",
+      { ...event, openclaw_version, bot_name: resolveBot(ctx) },
+      ctx,
+    );
   }
 
   /**
@@ -830,7 +877,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   ): Promise<PluginHookSubagentSpawningResult | undefined> {
     return runModifyingHook<"subagent_spawning", PluginHookSubagentSpawningResult>(
       "subagent_spawning",
-      event,
+      { ...event, openclaw_version, bot_name: resolveBot(ctx) },
       ctx,
       mergeSubagentSpawningResult,
     );
@@ -846,7 +893,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   ): Promise<PluginHookSubagentDeliveryTargetResult | undefined> {
     return runModifyingHook<"subagent_delivery_target", PluginHookSubagentDeliveryTargetResult>(
       "subagent_delivery_target",
-      event,
+      { ...event, openclaw_version, bot_name: resolveBot(ctx) },
       ctx,
       mergeSubagentDeliveryTargetResult,
     );
@@ -860,7 +907,11 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     event: PluginHookSubagentSpawnedEvent,
     ctx: PluginHookSubagentContext,
   ): Promise<void> {
-    return runVoidHook("subagent_spawned", event, ctx);
+    return runVoidHook(
+      "subagent_spawned",
+      { ...event, openclaw_version, bot_name: resolveBot(ctx) },
+      ctx,
+    );
   }
 
   /**
@@ -871,7 +922,11 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     event: PluginHookSubagentEndedEvent,
     ctx: PluginHookSubagentContext,
   ): Promise<void> {
-    return runVoidHook("subagent_ended", event, ctx);
+    return runVoidHook(
+      "subagent_ended",
+      { ...event, openclaw_version, bot_name: resolveBot(ctx) },
+      ctx,
+    );
   }
 
   // =========================================================================
@@ -886,7 +941,11 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     event: PluginHookGatewayStartEvent,
     ctx: PluginHookGatewayContext,
   ): Promise<void> {
-    return runVoidHook("gateway_start", event, ctx);
+    return runVoidHook(
+      "gateway_start",
+      { ...event, openclaw_version, bot_name: resolveBot(ctx) },
+      ctx,
+    );
   }
 
   /**
@@ -897,7 +956,11 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     event: PluginHookGatewayStopEvent,
     ctx: PluginHookGatewayContext,
   ): Promise<void> {
-    return runVoidHook("gateway_stop", event, ctx);
+    return runVoidHook(
+      "gateway_stop",
+      { ...event, openclaw_version, bot_name: resolveBot(ctx) },
+      ctx,
+    );
   }
 
   // =========================================================================

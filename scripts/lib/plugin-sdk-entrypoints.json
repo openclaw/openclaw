@@ -30,6 +30,7 @@
   "security-runtime",
   "gateway-runtime",
   "cli-runtime",
+  "bot-name-registry",
   "hook-runtime",
   "process-runtime",
   "acp-runtime",

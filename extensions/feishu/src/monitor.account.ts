@@ -1,5 +1,6 @@
 import * as crypto from "crypto";
 import * as Lark from "@larksuiteoapi/node-sdk";
+import { registerBotName, unregisterBotName } from "openclaw/plugin-sdk/bot-name-registry";
 import type { ClawdbotConfig, RuntimeEnv, HistoryEntry } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
@@ -646,8 +647,12 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
   botOpenIds.set(accountId, botOpenId ?? "");
   if (botName) {
     botNames.set(accountId, botName);
+    registerBotName(accountId, botName);
+    log(`feishu[${accountId}]: bot name registered: "${botName}"`);
   } else {
     botNames.delete(accountId);
+    unregisterBotName(accountId);
+    log(`feishu[${accountId}]: bot name not available, skipping registry`);
   }
   log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
 

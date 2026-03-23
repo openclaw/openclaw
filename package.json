@@ -161,6 +161,10 @@
       "types": "./dist/plugin-sdk/cli-runtime.d.ts",
       "default": "./dist/plugin-sdk/cli-runtime.js"
     },
+    "./plugin-sdk/bot-name-registry": {
+      "types": "./dist/plugin-sdk/bot-name-registry.d.ts",
+      "default": "./dist/plugin-sdk/bot-name-registry.js"
+    },
     "./plugin-sdk/hook-runtime": {
       "types": "./dist/plugin-sdk/hook-runtime.d.ts",
       "default": "./dist/plugin-sdk/hook-runtime.js"
