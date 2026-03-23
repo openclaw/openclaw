@@ -37,13 +37,23 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain("apt-get install -y --no-install-recommends xvfb");
   });
 
-  it("prunes runtime dependencies after the build stage", async () => {
+  it("installs runtime dependencies in a dedicated prod-deps stage", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
+    const extDepsCopyIndex = dockerfile.indexOf("COPY --from=ext-deps /out/ ./extensions/");
+    const prodInstallIndex = dockerfile.indexOf("pnpm install --frozen-lockfile --prod");
+    const fullCopyIndex = dockerfile.indexOf("COPY . .");
+
+    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS prod-deps");
+    expect(extDepsCopyIndex).toBeGreaterThan(-1);
+    expect(prodInstallIndex).toBeGreaterThan(-1);
+    expect(fullCopyIndex).toBeGreaterThan(-1);
+    expect(extDepsCopyIndex).toBeLessThan(prodInstallIndex);
+    expect(fullCopyIndex).toBeGreaterThan(prodInstallIndex);
     expect(dockerfile).toContain("FROM build AS runtime-assets");
-    expect(dockerfile).toContain("CI=true pnpm prune --prod");
     expect(dockerfile).toContain(
-      "COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules",
+      "COPY --from=prod-deps --chown=node:node /app/node_modules ./node_modules",
     );
+    expect(dockerfile).not.toContain("CI=true pnpm prune --prod");
   });
 
   it("normalizes plugin and agent paths permissions in image layers", async () => {
