@@ -394,6 +394,25 @@ describe("applyAuthProfileConfig", () => {
 
     expect(next.auth?.order).toBeUndefined();
   });
+
+  it("creates provider order when an existing profile uses an aliased provider id", () => {
+    const next = applyAuthProfileConfig(
+      {
+        auth: {
+          profiles: {
+            "qwen:legacy": { provider: "qwen", mode: "api_key" },
+          },
+        },
+      },
+      {
+        profileId: "qwen-portal:default",
+        provider: "qwen-portal",
+        mode: "api_key",
+      },
+    );
+
+    expect(next.auth?.order?.["qwen-portal"]).toEqual(["qwen-portal:default", "qwen:legacy"]);
+  });
 });
 
 describe("applyMinimaxApiConfig", () => {

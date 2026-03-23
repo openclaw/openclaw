@@ -13,7 +13,11 @@ import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.
 import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { hasAnthropicVertexAvailableAuth } from "./anthropic-vertex-provider.js";
-import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
+import {
+  ensureAuthProfileStore,
+  listProfilesForProvider,
+  resolveAuthProfileOrder,
+} from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
 import {
   resolveImplicitGigachatBaseUrl,
@@ -651,6 +655,66 @@ type ProviderAuthResolver = (
   profileId?: string;
 };
 
+export function resolveStoredProviderAuth(params: {
+  cfg?: OpenClawConfig;
+  store: ReturnType<typeof ensureAuthProfileStore>;
+  provider: string;
+  env?: NodeJS.ProcessEnv;
+  oauthMarker?: string;
+}): ReturnType<ProviderAuthResolver> {
+  const ids = resolveAuthProfileOrder({
+    cfg: params.cfg,
+    store: params.store,
+    provider: params.provider,
+  });
+  let oauthCandidate:
+    | {
+        apiKey: string | undefined;
+        discoveryApiKey?: string;
+        mode: "oauth";
+        source: "profile";
+        profileId: string;
+      }
+    | undefined;
+  for (const id of ids) {
+    const cred = params.store.profiles[id];
+    if (!cred) {
+      continue;
+    }
+    if (cred.type === "oauth") {
+      oauthCandidate ??= {
+        apiKey: params.oauthMarker,
+        discoveryApiKey: toDiscoveryApiKey(cred.access),
+        mode: "oauth",
+        source: "profile",
+        profileId: id,
+      };
+      continue;
+    }
+    const resolved = resolveApiKeyFromCredential(cred, params.env);
+    if (!resolved) {
+      continue;
+    }
+    return {
+      apiKey: resolved.apiKey,
+      discoveryApiKey: resolved.discoveryApiKey,
+      mode: cred.type,
+      source: "profile",
+      profileId: id,
+    };
+  }
+  if (oauthCandidate) {
+    return oauthCandidate;
+  }
+
+  return {
+    apiKey: undefined,
+    discoveryApiKey: undefined,
+    mode: "none",
+    source: "none",
+  };
+}
+
 type ImplicitProviderContext = ImplicitProviderParams & {
   authStore: ReturnType<typeof ensureAuthProfileStore>;
   env: NodeJS.ProcessEnv;
@@ -777,53 +841,13 @@ export async function resolveImplicitProviders(
       };
     }
 
-    const ids = listProfilesForProvider(authStore, provider);
-    let oauthCandidate:
-      | {
-          apiKey: string | undefined;
-          discoveryApiKey?: string;
-          mode: "oauth";
-          source: "profile";
-          profileId: string;
-        }
-      | undefined;
-    for (const id of ids) {
-      const cred = authStore.profiles[id];
-      if (!cred) {
-        continue;
-      }
-      if (cred.type === "oauth") {
-        oauthCandidate ??= {
-          apiKey: options?.oauthMarker,
-          discoveryApiKey: toDiscoveryApiKey(cred.access),
-          mode: "oauth",
-          source: "profile",
-          profileId: id,
-        };
-        continue;
-      }
-      const resolved = resolveApiKeyFromCredential(cred, env);
-      if (!resolved) {
-        continue;
-      }
-      return {
-        apiKey: resolved.apiKey,
-        discoveryApiKey: resolved.discoveryApiKey,
-        mode: cred.type,
-        source: "profile",
-        profileId: id,
-      };
-    }
-    if (oauthCandidate) {
-      return oauthCandidate;
-    }
-
-    return {
-      apiKey: undefined,
-      discoveryApiKey: undefined,
-      mode: "none",
-      source: "none",
-    };
+    return resolveStoredProviderAuth({
+      cfg: params.config,
+      store: authStore,
+      provider,
+      env,
+      oauthMarker: options?.oauthMarker,
+    });
   };
   const context: ImplicitProviderContext = {
     ...params,
