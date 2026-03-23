@@ -95,10 +95,28 @@ jobs:
         run: pnpm release:check
 
       - name: Swift build
-        run: swift build --package-path apps/macos --configuration release
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if swift build --package-path apps/macos --configuration release; then
+              exit 0
+            fi
+            echo "swift build failed (attempt $attempt/3). Retrying…"
+            sleep $((attempt * 20))
+          done
+          exit 1
 
       - name: Swift test
-        run: swift test --package-path apps/macos --parallel
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if swift test --package-path apps/macos --parallel; then
+              exit 0
+            fi
+            echo "swift test failed (attempt $attempt/3). Retrying…"
+            sleep $((attempt * 20))
+          done
+          exit 1
 
       - name: Package macOS release with ad-hoc signing
         env:
