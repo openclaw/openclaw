@@ -105,6 +105,8 @@ Treat Gateway and node as one operator trust domain, with different roles:
 - `sessionKey` is routing/context selection, not per-user auth.
 - Exec approvals (allowlist + ask) are guardrails for operator intent, not hostile multi-tenant isolation.
 - Exec approvals bind exact request context and best-effort direct local file operands; they do not semantically model every runtime/interpreter loader path. Use sandboxing and host isolation for strong boundaries.
+- **Per-host allowlists** (`exec-approvals.json` map format): each agent can have separate allowlist entries per exec host (`"gateway"`, `"sandbox"`, `"node"`) plus a `"default"` fallback. This prevents a binary allowed on one host from implicitly being allowed on another.
+- `tools.exec.allowedHosts` lets agents request a more isolated host than their configured default at runtime. Validation prevents escalation (sandbox cannot opt into gateway, gateway cannot opt into node).
 
 If you need hostile-user isolation, split trust boundaries by OS user/host and run separate gateways.
 

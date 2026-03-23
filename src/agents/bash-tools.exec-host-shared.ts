@@ -173,7 +173,7 @@ export function resolveExecHostApprovalContext(params: {
   agentId?: string;
   security: ExecSecurity;
   ask: ExecAsk;
-  host: "gateway" | "node";
+  host: "gateway" | "node" | "sandbox";
 }): ExecHostApprovalContext {
   const approvals = resolveExecApprovals(params.agentId, {
     security: params.security,
@@ -338,7 +338,7 @@ export async function sendExecApprovalFollowupResult(
 }
 
 export function buildExecApprovalPendingToolResult(params: {
-  host: "gateway" | "node";
+  host: "gateway" | "node" | "sandbox";
   command: string;
   cwd: string;
   warningText: string;

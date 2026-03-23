@@ -308,10 +308,42 @@ export function createExecTool(
       const requestedHost = normalizeExecHost(params.host) ?? null;
       let host: ExecHost = requestedHost ?? configuredHost;
       if (!elevatedRequested && requestedHost && requestedHost !== configuredHost) {
-        throw new Error(
-          `exec host not allowed (requested ${renderExecHostLabel(requestedHost)}; ` +
-            `configure tools.exec.host=${renderExecHostLabel(configuredHost)} to allow).`,
-        );
+        // tools.exec.allowedHosts: optional explicit allowlist of hosts the agent may request.
+        // When absent, only the configured host is allowed (backward-compatible).
+        // Validation rules enforced at runtime (schema validation catches config errors at load):
+        //   host=sandbox → allowedHosts must not include "gateway" or "node" (container escape)
+        //   host=gateway → allowedHosts must not include "node" (unknown trust boundary)
+        //   host=node    → allowedHosts may only include "node"
+        const allowedHosts = defaults?.allowedHosts;
+        if (allowedHosts) {
+          // Guard against misconfigured allowedHosts that would permit privilege escalation.
+          if (configuredHost === "sandbox" && allowedHosts.some((h) => h !== "sandbox")) {
+            throw new Error(
+              `exec: tools.exec.allowedHosts cannot include less-isolated hosts when host=sandbox (container escape prevention).`,
+            );
+          }
+          if (configuredHost === "gateway" && allowedHosts.some((h) => h === "node")) {
+            throw new Error(
+              `exec: tools.exec.allowedHosts cannot include "node" when host=gateway (unknown trust boundary).`,
+            );
+          }
+          if (configuredHost === "node" && allowedHosts.some((h) => h !== "node")) {
+            throw new Error(
+              `exec: tools.exec.allowedHosts can only include "node" when host=node.`,
+            );
+          }
+          if (!allowedHosts.includes(requestedHost)) {
+            throw new Error(
+              `exec host not allowed (requested ${renderExecHostLabel(requestedHost)}; ` +
+                `add to tools.exec.allowedHosts to allow).`,
+            );
+          }
+        } else {
+          throw new Error(
+            `exec host not allowed (requested ${renderExecHostLabel(requestedHost)}; ` +
+              `configure tools.exec.host=${renderExecHostLabel(configuredHost)} to allow).`,
+          );
+        }
       }
       if (elevatedRequested) {
         host = "gateway";
@@ -458,7 +490,15 @@ export function createExecTool(
         });
       }
 
-      if (host === "gateway" && !bypassApprovals) {
+      // Sandbox exec only goes through allowlist processing when the agent explicitly
+      // requested sandbox via allowedHosts (i.e. requestedHost === "sandbox").
+      // Default sandbox-without-sandbox-runtime (host="sandbox" by fallback, no sandbox config)
+      // must NOT enter this path — it would hit the security=deny guard in
+      // resolveExecHostApprovalContext and block agents that have no exec config at all.
+      const needsAllowlistProcessing =
+        host === "gateway" ||
+        (host === "sandbox" && requestedHost === "sandbox" && defaults?.allowedHosts != null);
+      if (needsAllowlistProcessing && !bypassApprovals) {
         const gatewayResult = await processGatewayAllowlist({
           command: params.command,
           workdir,
@@ -469,6 +509,9 @@ export function createExecTool(
           defaultTimeoutSec,
           security,
           ask,
+          host,
+          sandbox: host === "sandbox" ? sandbox : undefined,
+          containerWorkdir: host === "sandbox" ? containerWorkdir : undefined,
           safeBins,
           safeBinProfiles,
           strictInlineEval: defaults?.strictInlineEval,

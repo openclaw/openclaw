@@ -228,6 +228,15 @@ export type GroupToolPolicyBySenderConfig = Record<string, GroupToolPolicyConfig
 export type ExecToolConfig = {
   /** Exec host routing (default: sandbox). */
   host?: "sandbox" | "gateway" | "node";
+  /**
+   * Optional allowlist of hosts agents may request at runtime.
+   * When absent, only the configured host is allowed (current behavior).
+   * Validation rules:
+   *   - host=sandbox → allowedHosts cannot include "gateway" or "node" (escape prevention)
+   *   - host=gateway → allowedHosts cannot include "node" (unknown trust boundary)
+   *   - host=node    → allowedHosts can only include "node"
+   */
+  allowedHosts?: Array<"sandbox" | "gateway" | "node">;
   /** Exec security mode (default: deny). */
   security?: "deny" | "allowlist" | "full";
   /** Exec ask mode (default: on-miss). */

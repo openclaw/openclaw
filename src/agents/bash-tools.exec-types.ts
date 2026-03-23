@@ -4,6 +4,8 @@ import type { BashSandboxConfig } from "./bash-tools.shared.js";
 
 export type ExecToolDefaults = {
   host?: ExecHost;
+  /** Optional explicit allowlist of hosts the agent may request at runtime. */
+  allowedHosts?: ExecHost[];
   security?: ExecSecurity;
   ask?: ExecAsk;
   node?: string;

@@ -236,7 +236,7 @@ export function buildApprovalPendingMessage(params: {
   approvalId: string;
   command: string;
   cwd: string;
-  host: "gateway" | "node";
+  host: "gateway" | "node" | "sandbox";
   nodeId?: string;
 }) {
   let fence = "```";

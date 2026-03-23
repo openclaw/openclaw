@@ -164,7 +164,7 @@ function readExecApprovalPendingDetails(result: unknown): {
   approvalId: string;
   approvalSlug: string;
   expiresAtMs?: number;
-  host: "gateway" | "node";
+  host: "gateway" | "node" | "sandbox";
   command: string;
   cwd?: string;
   nodeId?: string;
@@ -184,7 +184,14 @@ function readExecApprovalPendingDetails(result: unknown): {
   const approvalId = typeof details.approvalId === "string" ? details.approvalId.trim() : "";
   const approvalSlug = typeof details.approvalSlug === "string" ? details.approvalSlug.trim() : "";
   const command = typeof details.command === "string" ? details.command : "";
-  const host = details.host === "node" ? "node" : details.host === "gateway" ? "gateway" : null;
+  const host =
+    details.host === "node"
+      ? "node"
+      : details.host === "gateway"
+        ? "gateway"
+        : details.host === "sandbox"
+          ? "sandbox"
+          : null;
   if (!approvalId || !approvalSlug || !command || !host) {
     return null;
   }

@@ -13,7 +13,7 @@ export type RequestExecApprovalDecisionParams = {
   env?: Record<string, string>;
   cwd: string;
   nodeId?: string;
-  host: "gateway" | "node";
+  host: "gateway" | "node" | "sandbox";
   security: ExecSecurity;
   ask: ExecAsk;
   agentId?: string;
@@ -155,7 +155,7 @@ type HostExecApprovalParams = {
   systemRunPlan?: SystemRunApprovalPlan;
   env?: Record<string, string>;
   workdir: string;
-  host: "gateway" | "node";
+  host: "gateway" | "node" | "sandbox";
   nodeId?: string;
   security: ExecSecurity;
   ask: ExecAsk;

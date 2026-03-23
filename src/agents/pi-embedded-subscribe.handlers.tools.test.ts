@@ -221,6 +221,48 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
   });
 
+  it("emits a deterministic approval payload for sandbox host", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-approval-sandbox",
+        isError: false,
+        result: {
+          details: {
+            status: "approval-pending",
+            approvalId: "sandbox-approval-uuid-1234",
+            approvalSlug: "sbx12345",
+            expiresAtMs: 1_800_000_000_000,
+            host: "sandbox",
+            command: "rm -rf /tmp/test",
+            cwd: "/workspace",
+          },
+        },
+      } as never,
+    );
+
+    // sandbox host should be recognized and not silently dropped
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("```txt\n/approve sbx12345 allow-once\n```"),
+        channelData: {
+          execApproval: {
+            approvalId: "sandbox-approval-uuid-1234",
+            approvalSlug: "sbx12345",
+            allowedDecisions: ["allow-once", "allow-always", "deny"],
+          },
+        },
+      }),
+    );
+    expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
+  });
+
   it("emits a deterministic unavailable payload when the initiating surface cannot approve", async () => {
     const { ctx } = createTestContext();
     const onToolResult = vi.fn();

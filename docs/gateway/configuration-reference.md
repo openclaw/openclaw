@@ -1877,6 +1877,89 @@ Controls elevated (host) exec access:
 }
 ```
 
+#### `tools.exec.allowedHosts`
+
+The optional `allowedHosts` field lets an agent opt into a more isolated exec host at runtime (e.g. `sandbox`) while remaining configured with a more permissive default (e.g. `gateway`). When absent, only the configured `host` is allowed.
+
+```json5
+{
+  tools: {
+    exec: {
+      host: "gateway", // default exec host (also the most permissive allowed host)
+      allowedHosts: ["gateway", "sandbox"], // hosts the agent may request at runtime
+      security: "allowlist",
+      ask: "off",
+    },
+  },
+}
+```
+
+**Validation rules:**
+
+- `host` must be the most permissive host in `allowedHosts` — you can always go more isolated, never less.
+- `host: "sandbox"` → `allowedHosts` must not include `"gateway"` or `"node"` (container escape).
+- `host: "gateway"` → `allowedHosts` must not include `"node"` (unknown trust boundary).
+- `host: "node"` → `allowedHosts` may only include `"node"`.
+
+#### `exec-approvals.json` per-host allowlists
+
+The `allowlist` field in `exec-approvals.json` supports a per-host map format in addition to the legacy flat array format.
+
+**New map format:**
+
+```json
+{
+  "version": 1,
+  "agents": {
+    "myagent": {
+      "allowlist": {
+        "default": [{ "id": "...", "pattern": "/usr/bin/curl" }],
+        "gateway": [
+          { "id": "...", "pattern": "/home/linuxbrew/.linuxbrew/bin/gh" },
+          { "id": "...", "pattern": "/usr/bin/curl" }
+        ],
+        "sandbox": [{ "pattern": "python3" }, { "pattern": "curl" }]
+      }
+    }
+  }
+}
+```
+
+**Resolution order at runtime:** `allowlist[host]` → `allowlist["default"]` → empty (blocked if `security=allowlist`).
+
+**Migration from legacy array format:**
+
+Agents using the old array format are automatically treated as `{ "default": [...] }` at load time. A warning is logged at startup:
+
+```
+exec-approvals: agent "myagent" uses legacy array allowlist format — run "openclaw doctor" to migrate
+```
+
+Run `openclaw doctor --fix` to auto-migrate all agents to the map format.
+
+**Common pattern: restrictive gateway + open sandbox:**
+
+Use a restrictive allowlist on gateway (only trusted binaries) and a wildcard `"*"` on sandbox (all commands allowed inside the container):
+
+```json
+{
+  "version": 1,
+  "agents": {
+    "myagent": {
+      "allowlist": {
+        "gateway": [
+          { "pattern": "/usr/local/bin/gh" },
+          { "pattern": "/usr/local/bin/xurl" }
+        ],
+        "sandbox": [{ "pattern": "*" }]
+      }
+    }
+  }
+}
+```
+
+The `"*"` wildcard matches any parsed executable command. Combined with `allowedHosts: ["gateway", "sandbox"]`, this lets the agent run arbitrary commands inside the sandbox while restricting gateway exec to explicitly approved binaries.
+
 ### `tools.loopDetection`
 
 Tool-loop safety checks are **disabled by default**. Set `enabled: true` to activate detection.
