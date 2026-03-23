@@ -2,24 +2,18 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let collectTelegramUnmentionedGroupIds: typeof import("./audit.js").collectTelegramUnmentionedGroupIds;
 let auditTelegramGroupMembership: typeof import("./audit.js").auditTelegramGroupMembership;
-const undiciFetch = vi.hoisted(() => vi.fn());
+const fetchWithTimeoutMock = vi.hoisted(() => vi.fn());
 
-vi.mock("undici", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("undici")>();
+vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-runtime")>();
   return {
     ...actual,
-    Agent:
-      actual.Agent ??
-      class Agent {
-        close() {}
-        destroy() {}
-      },
-    fetch: undiciFetch,
+    fetchWithTimeout: fetchWithTimeoutMock,
   };
 });
 
 function mockGetChatMemberStatus(status: string) {
-  undiciFetch.mockResolvedValueOnce(
+  fetchWithTimeoutMock.mockResolvedValueOnce(
     new Response(JSON.stringify({ ok: true, result: { status } }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
@@ -43,7 +37,7 @@ describe("telegram audit", () => {
   });
 
   beforeEach(() => {
-    undiciFetch.mockReset();
+    fetchWithTimeoutMock.mockReset();
   });
 
   it("collects unmentioned numeric group ids and flags wildcard", async () => {

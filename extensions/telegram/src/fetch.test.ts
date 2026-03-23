@@ -59,6 +59,7 @@ let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
 let resolveTelegramTransport: typeof import("./fetch.js").resolveTelegramTransport;
 
 beforeEach(async () => {
+  vi.resetModules();
   ({ resolveFetch } = await import("../../../src/infra/fetch.js"));
   ({ resolveTelegramFetch, resolveTelegramTransport } = await import("./fetch.js"));
 });

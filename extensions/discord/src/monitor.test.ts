@@ -892,6 +892,22 @@ const { enqueueSystemEventSpy, resolveAgentRouteMock } = vi.hoisted(() => ({
   })),
 }));
 
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return {
+    ...actual,
+    enqueueSystemEvent: enqueueSystemEventSpy,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/routing")>();
+  return {
+    ...actual,
+    resolveAgentRoute: resolveAgentRouteMock,
+  };
+});
+
 vi.mock("../../../src/infra/system-events.js", () => ({
   enqueueSystemEvent: enqueueSystemEventSpy,
 }));

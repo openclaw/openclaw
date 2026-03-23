@@ -1,8 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { logVerbose } from "../../../../src/globals.js";
 import { sleep } from "../../../../src/utils.js";
 import { loadWebMedia } from "../media.js";
-import { deliverWebReply } from "./deliver-reply.js";
 import type { WebInboundMsg } from "./types.js";
 
 vi.mock("../../../../src/globals.js", async (importOriginal) => {
@@ -25,6 +24,8 @@ vi.mock("../../../../src/utils.js", async (importOriginal) => {
     sleep: vi.fn(async () => {}),
   };
 });
+
+let deliverWebReply: typeof import("./deliver-reply.js").deliverWebReply;
 
 function makeMsg(): WebInboundMsg {
   return {
@@ -84,6 +85,11 @@ async function expectReplySuppressed(replyResult: { text: string; isReasoning?: 
 }
 
 describe("deliverWebReply", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ deliverWebReply } = await import("./deliver-reply.js"));
+  });
+
   it("suppresses payloads flagged as reasoning", async () => {
     await expectReplySuppressed({ text: "Reasoning:\n_hidden_", isReasoning: true });
   });
