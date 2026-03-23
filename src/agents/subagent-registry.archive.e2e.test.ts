@@ -1,9 +1,10 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const noop = () => {};
-const loadConfigMock = vi.fn(() => ({
+let currentConfig = {
   agents: { defaults: { subagents: { archiveAfterMinutes: 60 } } },
-}));
+};
+const loadConfigMock = vi.fn(() => currentConfig);
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(async (request: unknown) => {
@@ -44,16 +45,15 @@ vi.mock("./subagent-registry.store.js", () => ({
 describe("subagent registry archive behavior", () => {
   let mod: typeof import("./subagent-registry.js");
 
-  beforeAll(async () => {
-    mod = await import("./subagent-registry.js");
-  });
-
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
-    loadConfigMock.mockReturnValue({
+    currentConfig = {
       agents: { defaults: { subagents: { archiveAfterMinutes: 60 } } },
-    });
+    };
+    loadConfigMock.mockClear();
+    mod = await import("./subagent-registry.js");
   });
 
   afterEach(() => {
@@ -78,9 +78,9 @@ describe("subagent registry archive behavior", () => {
   });
 
   it("sets archiveAtMs and sweeps delete-mode run subagents", async () => {
-    loadConfigMock.mockReturnValue({
+    currentConfig = {
       agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
-    });
+    };
 
     mod.registerSubagentRun({
       runId: "run-delete-1",
@@ -140,9 +140,9 @@ describe("subagent registry archive behavior", () => {
   });
 
   it("recomputes archiveAtMs when replacing a delete-mode run after steer restart", async () => {
-    loadConfigMock.mockReturnValue({
+    currentConfig = {
       agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
-    });
+    };
 
     mod.registerSubagentRun({
       runId: "run-delete-old",
@@ -168,9 +168,9 @@ describe("subagent registry archive behavior", () => {
   });
 
   it("treats archiveAfterMinutes=0 as never archive", () => {
-    loadConfigMock.mockReturnValue({
+    currentConfig = {
       agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
-    });
+    };
 
     mod.registerSubagentRun({
       runId: "run-no-archive",
