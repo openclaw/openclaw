@@ -4,11 +4,13 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  scripts/verify-vida-release.sh [--fork-tag <vida-vYYYY.M.D>] [--openclaw-ref <ref>] [--docker-dir <path>] [--skip-docker]
+  scripts/verify-vida-release.sh [--fork-tag <vida-vYYYY.M.D>] [--openclaw-ref <ref>] [--upstream-tag <vYYYY.M.D>] [--max-ahead-commits <n>] [--docker-dir <path>] [--skip-docker]
 
 Defaults:
   --fork-tag      latest local tag matching vida-v*
   --openclaw-ref  same as --fork-tag
+  --upstream-tag  derived from --fork-tag by stripping the vida- prefix
+  --max-ahead-commits 25
   --docker-dir    ../openclaw-docker
 USAGE
 }
@@ -18,6 +20,8 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 FORK_TAG=""
 OPENCLAW_REF=""
+UPSTREAM_TAG=""
+MAX_AHEAD_COMMITS=25
 DOCKER_DIR="${REPO_ROOT}/../openclaw-docker"
 SKIP_DOCKER=0
 
@@ -29,6 +33,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --openclaw-ref)
       OPENCLAW_REF="${2:-}"
+      shift 2
+      ;;
+    --upstream-tag)
+      UPSTREAM_TAG="${2:-}"
+      shift 2
+      ;;
+    --max-ahead-commits)
+      MAX_AHEAD_COMMITS="${2:-}"
       shift 2
       ;;
     --docker-dir)
@@ -69,6 +81,14 @@ if [[ -z "${OPENCLAW_REF}" ]]; then
   OPENCLAW_REF="${FORK_TAG}"
 fi
 
+if [[ -z "${UPSTREAM_TAG}" ]]; then
+  case "${FORK_TAG}" in
+    vida-v*)
+      UPSTREAM_TAG="${FORK_TAG#vida-}"
+      ;;
+  esac
+fi
+
 derive_image_tag() {
   local ref="$1"
   local parsed
@@ -88,6 +108,9 @@ EXPECTED_IMAGE_TAG="$(derive_image_tag "${OPENCLAW_REF}")"
 echo "Release verification inputs:"
 echo "- fork tag: ${FORK_TAG}"
 echo "- openclaw ref: ${OPENCLAW_REF}"
+if [[ -n "${UPSTREAM_TAG}" ]]; then
+  echo "- upstream tag: ${UPSTREAM_TAG}"
+fi
 echo "- expected docker tag: ${EXPECTED_IMAGE_TAG}"
 
 if ! git rev-parse -q --verify "refs/tags/${FORK_TAG}" >/dev/null; then
@@ -98,6 +121,29 @@ if ! git ls-remote --exit-code --tags --refs origin "${FORK_TAG}" >/dev/null 2>&
   echo "Error: origin tag '${FORK_TAG}' not found. Push it first:" >&2
   echo "  git push origin ${FORK_TAG}" >&2
   exit 1
+fi
+
+if [[ -n "${UPSTREAM_TAG}" ]]; then
+  if ! git rev-parse -q --verify "refs/tags/${UPSTREAM_TAG}" >/dev/null; then
+    echo "Error: upstream tag '${UPSTREAM_TAG}' not found locally." >&2
+    exit 1
+  fi
+
+  FORK_COMMIT="$(git rev-parse "refs/tags/${FORK_TAG}^{commit}")"
+  UPSTREAM_COMMIT="$(git rev-parse "refs/tags/${UPSTREAM_TAG}^{commit}")"
+  if ! git merge-base --is-ancestor "${UPSTREAM_COMMIT}" "${FORK_COMMIT}"; then
+    echo "Error: fork tag '${FORK_TAG}' is not descended from upstream tag '${UPSTREAM_TAG}'." >&2
+    exit 1
+  fi
+
+  AHEAD_COMMITS="$(git rev-list --count "${UPSTREAM_COMMIT}..${FORK_COMMIT}")"
+  echo "- commits ahead of upstream tag: ${AHEAD_COMMITS}"
+  if [[ "${AHEAD_COMMITS}" -gt "${MAX_AHEAD_COMMITS}" ]]; then
+    echo "Error: fork tag '${FORK_TAG}' is ${AHEAD_COMMITS} commits ahead of '${UPSTREAM_TAG}' (max allowed ${MAX_AHEAD_COMMITS})." >&2
+    echo "Top ahead commits:" >&2
+    git log --oneline "${UPSTREAM_COMMIT}..${FORK_COMMIT}" | head -n 10 >&2
+    exit 1
+  fi
 fi
 
 if [[ "${SKIP_DOCKER}" -eq 1 ]]; then

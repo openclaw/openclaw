@@ -12,6 +12,7 @@ scripts/sync-upstream-main.sh
 ```
 
 Default behavior:
+
 - fetches `upstream` + `origin`
 - checks out `main`
 - rebases local `main` to `origin/main`
@@ -32,6 +33,7 @@ scripts/sync-upstream-main.sh --target-branch main --source-ref upstream/main
 ```
 
 If conflicts happen:
+
 - default handoff file: `tmp/codex-handoff-main-main.md`
 
 Optional handoff controls:
@@ -51,12 +53,19 @@ scripts/sync-upstream-release.sh
 ```
 
 Default behavior:
+
 - resolves latest upstream non-beta tag (`v*`)
-- creates `release-sync/<tag>` from `origin/main`
-- merges upstream release tag
+- creates `release-sync/<tag>` from the upstream release tag itself
+- leaves the branch exactly on that release unless you intentionally add fork-only hotfix commits
 - pushes branch
 - creates and pushes fork tag `vida-<tag>` (example: `vida-v2026.2.14`)
 - runs downstream verifier (`scripts/verify-vida-release.sh`)
+
+If you need a fork-only hotfix on top of a release:
+
+- create the release-sync branch from the upstream tag
+- cherry-pick or commit only the intended hotfixes
+- then create the `vida-<tag>` fork tag from that branch
 
 Useful variants:
 
@@ -109,7 +118,9 @@ scripts/verify-vida-release.sh --fork-tag vida-v2026.2.14
 ```
 
 What it verifies:
+
 - fork tag exists on `origin`
+- fork tag stays close to the intended upstream release tag instead of drifting to `main`
 - `openclaw-docker` build/push previews use expected `OPENCLAW_REF`
 - expected Docker image tag derivation (for example `vida-v2026.2.14` -> `2026-02-14`)
 - `--no-cache` and `--push` flags are present where expected

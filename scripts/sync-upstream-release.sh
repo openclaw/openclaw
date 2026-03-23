@@ -9,7 +9,7 @@ Usage:
 Defaults:
   --tag      latest upstream non-beta release tag
   --branch   release-sync/<tag>
-  --base     origin/main
+  --base     <tag> (the upstream release tag itself)
   --fork-tag explicit fork release tag name (default: <prefix><tag>)
   --fork-tag-prefix fork tag prefix when --fork-tag is omitted (default: vida-)
   --no-fork-tag do not create a fork release tag
@@ -28,7 +28,7 @@ VERIFY_SCRIPT="${SCRIPT_DIR}/verify-vida-release.sh"
 
 TAG=""
 BRANCH=""
-BASE_REF="origin/main"
+BASE_REF=""
 PUSH=1
 DRY_RUN=0
 ALLOW_DIRTY=0
@@ -190,6 +190,10 @@ if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
   exit 1
 fi
 
+if [[ -z "${BASE_REF}" ]]; then
+  BASE_REF="${TAG}"
+fi
+
 if ! git rev-parse -q --verify "$BASE_REF" >/dev/null; then
   echo "Error: base ref '$BASE_REF' not found." >&2
   exit 1
@@ -228,19 +232,25 @@ fi
 echo "Creating branch..."
 git checkout -b "$BRANCH" "$BASE_REF"
 
-echo "Merging release tag $TAG..."
-set +e
-git merge --no-ff --no-edit "$TAG"
-MERGE_EXIT=$?
-set -e
+BASE_COMMIT="$(git rev-parse "$BASE_REF^{commit}")"
+TAG_COMMIT="$(git rev-parse "refs/tags/$TAG^{commit}")"
+if [[ "${BASE_COMMIT}" == "${TAG_COMMIT}" ]]; then
+  echo "Base ref already points at ${TAG}; skipping merge."
+else
+  echo "Merging release tag $TAG..."
+  set +e
+  git merge --no-ff --no-edit "$TAG"
+  MERGE_EXIT=$?
+  set -e
 
-if [[ "$MERGE_EXIT" -ne 0 ]]; then
-  echo
-  echo "Merge reported conflicts or errors on branch '$BRANCH'." >&2
-  write_codex_handoff
-  echo "Resolve conflicts, commit, then push manually:" >&2
-  echo "  git push -u origin $BRANCH" >&2
-  exit "$MERGE_EXIT"
+  if [[ "$MERGE_EXIT" -ne 0 ]]; then
+    echo
+    echo "Merge reported conflicts or errors on branch '$BRANCH'." >&2
+    write_codex_handoff
+    echo "Resolve conflicts, commit, then push manually:" >&2
+    echo "  git push -u origin $BRANCH" >&2
+    exit "$MERGE_EXIT"
+  fi
 fi
 
 if [[ "$PUSH" -eq 1 ]]; then
