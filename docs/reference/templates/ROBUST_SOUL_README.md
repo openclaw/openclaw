@@ -31,7 +31,7 @@ To achieve true Zero-Trust Agentic Security, you **must** pair this prompt with 
 ### 1. The Immutable Soul (File Protections)
 Once configured, revoke the agent's ability to modify its own instructions.
 *   **Linux/macOS:** Run `chmod 444 ~/.openclaw/workspace/SOUL.md` to make it strictly read-only.
-*   **Maximum Security:** Use `sudo chattr +i ~/.openclaw/workspace/SOUL.md` to make the file immutable, preventing even root-level rogue scripts from altering the agent's core axioms.
+*   **Maximum Security (Linux):** Use `sudo chattr +i ~/.openclaw/workspace/SOUL.md` to make the file immutable, preventing even root-level rogue scripts from altering the agent's core axioms.
 
 ### 2. Tool Scope Restriction
 Never give an agent raw bash access if it is connected to external feeds. Sandbox all terminal tools. If your agent only needs to read logs, provide a scoped `cat` or `grep` tool, not `bash`.
