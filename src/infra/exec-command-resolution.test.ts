@@ -154,6 +154,21 @@ describe("exec-command-resolution", () => {
     expect(timeResolution?.executableName).toBe(fixture.exeName);
   });
 
+  it("unwraps shell multiplexers before resolving the effective executable", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const busybox = path.join(dir, "busybox");
+    fs.writeFileSync(busybox, "");
+    fs.chmodSync(busybox, 0o755);
+
+    const resolution = resolveCommandResolutionFromArgv([busybox, "sh", "-lc", "echo hi"]);
+    expect(resolution?.rawExecutable).toBe("sh");
+    expect(resolution?.wrapperChain).toEqual(["busybox"]);
+    expect(resolution?.executableName.toLowerCase()).toContain("sh");
+  });
+
   it("blocks semantic env wrappers, env -S, and deep transparent-wrapper chains", () => {
     const blockedEnv = resolveCommandResolutionFromArgv([
       "/usr/bin/env",

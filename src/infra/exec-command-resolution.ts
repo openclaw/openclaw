@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { matchesExecAllowlistPattern } from "./exec-allowlist-pattern.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.js";
-import { resolveDispatchWrapperExecutionPlan } from "./exec-wrapper-resolution.js";
+import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
 import { resolveExecutablePath as resolveExecutableCandidatePath } from "./executable-path.js";
 import { expandHomePrefix } from "./home-dir.js";
 
@@ -96,7 +96,7 @@ export function resolveCommandResolutionFromArgv(
   cwd?: string,
   env?: NodeJS.ProcessEnv,
 ): CommandResolution | null {
-  const plan = resolveDispatchWrapperExecutionPlan(argv);
+  const plan = resolveExecWrapperTrustPlan(argv);
   const effectiveArgv = plan.argv;
   const rawExecutable = effectiveArgv[0]?.trim();
   if (!rawExecutable) {
@@ -105,7 +105,7 @@ export function resolveCommandResolutionFromArgv(
   return buildCommandResolution({
     rawExecutable,
     effectiveArgv,
-    wrapperChain: plan.wrappers,
+    wrapperChain: plan.wrapperChain,
     policyBlocked: plan.policyBlocked,
     blockedWrapper: plan.blockedWrapper,
     cwd,
