@@ -4,7 +4,7 @@ import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
 } from "../audio.test-helpers.js";
-import { transcribeDeepgramAudio } from "./audio.js";
+import { transcribeDeepgramAudio } from "../../../../extensions/deepgram/media-understanding-provider.js";
 
 installPinnedHostnameTestHooks();
 

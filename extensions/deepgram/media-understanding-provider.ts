@@ -1,10 +1,14 @@
-import type { AudioTranscriptionRequest, AudioTranscriptionResult } from "../../types.js";
+import type {
+  AudioTranscriptionRequest,
+  AudioTranscriptionResult,
+  MediaUnderstandingProvider,
+} from "openclaw/plugin-sdk/media-understanding";
 import {
   assertOkOrThrowHttpError,
   normalizeBaseUrl,
   postTranscriptionRequest,
   requireTranscriptionText,
-} from "../shared.js";
+} from "openclaw/plugin-sdk/media-understanding";
 
 export const DEFAULT_DEEPGRAM_AUDIO_BASE_URL = "https://api.deepgram.com/v1";
 export const DEFAULT_DEEPGRAM_AUDIO_MODEL = "nova-3";
@@ -77,3 +81,9 @@ export async function transcribeDeepgramAudio(
     await release();
   }
 }
+
+export const deepgramProvider: MediaUnderstandingProvider = {
+  id: "deepgram",
+  capabilities: ["audio"],
+  transcribeAudio: transcribeDeepgramAudio,
+};
