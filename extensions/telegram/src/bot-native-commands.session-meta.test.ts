@@ -208,6 +208,7 @@ function registerAndResolveCommandHandlerBase(params: {
       providers: [],
       resolvedDefault: { provider: "openai", model: "gpt-4.1" },
     })),
+    loadWebMedia: vi.fn() as TelegramBotDeps["loadWebMedia"],
     listSkillCommandsForAgents: vi.fn(() => []),
     wasSentByBot: vi.fn(() => false),
   };
