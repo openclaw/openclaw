@@ -216,7 +216,13 @@ describe("memory index", () => {
     vectorEnabled?: boolean;
     cacheEnabled?: boolean;
     minScore?: number;
-    hybrid?: { enabled: boolean; vectorWeight?: number; textWeight?: number };
+    hybrid?: {
+      enabled: boolean;
+      vectorWeight?: number;
+      textWeight?: number;
+      temporalDecay?: { enabled: boolean; halfLifeDays: number };
+      mmr?: { enabled: boolean; lambda: number };
+    };
   }): TestCfg {
     return {
       agents: {
@@ -1090,6 +1096,48 @@ describe("memory index", () => {
         hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
       }),
     );
+  });
+
+  it("preserves multi-token keyword-only hybrid hits when bm25 textScore stays below 1", async () => {
+    await fs.writeFile(
+      path.join(memoryDir, "2026-01-13.md"),
+      "# Log\nWindows hosted Ollama bridge recovery line.",
+    );
+    const manager = await getPersistentManager(
+      createCfg({
+        storePath: indexMainPath,
+        minScore: 0.35,
+        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+      }),
+    );
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("Windows-hosted Ollama bridge");
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0]?.path).toContain("memory/2026-01-13.md");
+  });
+
+  it("preserves keyword fallback hits after temporal decay lowers merged score below minScore", async () => {
+    const memoryPath = path.join(memoryDir, "2026-01-14.md");
+    await fs.writeFile(
+      memoryPath,
+      "# Log\nCurrent evidence from the Windows host includes gpt-oss 20b llama3 2 3b on 11434.",
+    );
+    const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    await fs.utimes(memoryPath, ninetyDaysAgo, ninetyDaysAgo);
+
+    const manager = await getPersistentManager(
+      createCfg({
+        storePath: indexMainPath,
+        minScore: 0.35,
+        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+      }),
+    );
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("gpt-oss 20b llama3.2 3b 11434");
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0]?.path).toContain("memory/2026-01-14.md");
   });
 
   it("reports vector availability after probe", async () => {
