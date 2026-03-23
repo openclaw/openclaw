@@ -23,7 +23,7 @@ OpenClaw has three public release lanes:
 - Do not zero-pad month or day
 - `latest` means the current stable npm release
 - `beta` means the current prerelease npm release
-- Beta releases may ship before the macOS app catches up
+- Every OpenClaw release ships the npm package and macOS app together
 
 ## Release cadence
 
@@ -31,6 +31,15 @@ OpenClaw has three public release lanes:
 - Stable follows only after the latest beta is validated
 - Detailed release procedure, approvals, credentials, and recovery notes are
   maintainer-only
+
+## Release preflight
+
+- Run `pnpm release:check` before every tagged release
+- Run `RELEASE_TAG=vYYYY.M.D node --import tsx scripts/openclaw-npm-release-check.ts`
+  (or the matching beta/correction tag) before approval
+- npm release preflight fails closed unless the tarball includes both
+  `dist/control-ui/index.html` and a non-empty `dist/control-ui/assets/` payload
+  so we do not ship an empty browser dashboard again
 
 ## Public references
 

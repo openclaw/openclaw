@@ -47,9 +47,55 @@ vi.mock("./models-config.js", async (importOriginal) => {
   };
 });
 
+const installRunEmbeddedMocks = () => {
+  vi.doMock("../plugins/hook-runner-global.js", () => ({
+    getGlobalHookRunner: vi.fn(() => undefined),
+  }));
+  vi.doMock("../context-engine/index.js", () => ({
+    ensureContextEnginesInitialized: vi.fn(),
+    resolveContextEngine: vi.fn(async () => ({
+      dispose: async () => undefined,
+    })),
+  }));
+  vi.doMock("./runtime-plugins.js", () => ({
+    ensureRuntimePluginsLoaded: vi.fn(),
+  }));
+  vi.doMock("./pi-embedded-runner/model.js", () => ({
+    resolveModelAsync: async (provider: string, modelId: string) => ({
+      model: {
+        id: modelId,
+        name: modelId,
+        api: "openai-responses",
+        provider,
+        baseUrl: `https://example.com/${provider}`,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 16_000,
+        maxTokens: 2048,
+      },
+      error: undefined,
+      authStorage: {
+        setRuntimeApiKey: vi.fn(),
+      },
+      modelRegistry: {},
+    }),
+  }));
+  vi.doMock("../plugins/provider-runtime.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
+    return {
+      ...actual,
+      prepareProviderRuntimeAuth: vi.fn(async () => undefined),
+      resolveProviderCapabilitiesWithPlugin: vi.fn(() => undefined),
+    };
+  });
+};
+
 let runEmbeddedPiAgent: typeof import("./pi-embedded-runner/run.js").runEmbeddedPiAgent;
 
 beforeAll(async () => {
+  vi.resetModules();
+  installRunEmbeddedMocks();
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner/run.js"));
 });
 
@@ -233,6 +279,7 @@ async function runEmbeddedFallback(params: {
         timeoutMs: 5_000,
         runId: params.runId,
         abortSignal: params.abortSignal,
+        enqueue: async (task) => await task(),
       }),
   });
 }

@@ -1,3 +1,4 @@
+import { Type } from "@sinclair/typebox";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it, vi } from "vitest";
@@ -54,6 +55,24 @@ describe("discordMessageActions", () => {
     );
     expect(discovery?.actions).not.toContain("channel-create");
     expect(discovery?.actions).not.toContain("role-add");
+  });
+
+  it("keeps components optional in the message tool schema", () => {
+    const discovery = discordMessageActions.describeMessageTool?.({
+      cfg: {
+        channels: {
+          discord: {
+            token: "Bot token-main",
+          },
+        },
+      } as OpenClawConfig,
+    });
+    const schema = discovery?.schema;
+    if (!schema || Array.isArray(schema)) {
+      throw new Error("expected discord message-tool schema");
+    }
+
+    expect(Type.Object(schema.properties).required).toBeUndefined();
   });
 
   it("extracts send targets for message and thread reply actions", () => {

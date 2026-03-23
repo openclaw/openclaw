@@ -187,6 +187,9 @@ jobs:
       - name: Build dist
         run: pnpm build
 
+      - name: Build Control UI
+        run: pnpm ui:build
+
       - name: Upload dist artifact
         uses: actions/upload-artifact@v7
         with:
@@ -254,13 +257,21 @@ jobs:
             command: pnpm protocol:check
           - runtime: bun
             task: test
-            command: pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts
+            shard_index: 1
+            shard_count: 2
+            command: pnpm canvas:a2ui:bundle && OPENCLAW_TEST_ISOLATE=1 bunx vitest run --config vitest.unit.config.ts --shard 1/2
+          - runtime: bun
+            task: test
+            shard_index: 2
+            shard_count: 2
+            command: pnpm canvas:a2ui:bundle && OPENCLAW_TEST_ISOLATE=1 bunx vitest run --config vitest.unit.config.ts --shard 2/2
           - runtime: node
             task: compat-node22
             node_version: "22.x"
             cache_key_suffix: "node22"
             command: |
               pnpm build
+              pnpm ui:build
               node openclaw.mjs --help
               node openclaw.mjs status --json --timeout 1
               pnpm test:build:singleton

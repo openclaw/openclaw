@@ -5,9 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../../../src/logging.js";
 import { baileys, getLastSocket, resetBaileysMocks, resetLoadConfigMock } from "./test-helpers.js";
 
-const { createWaSocket, formatError, logWebSelfId, waitForWaConnection } =
-  await import("./session.js");
 const useMultiFileAuthStateMock = vi.mocked(baileys.useMultiFileAuthState);
+
+let createWaSocket: typeof import("./session.js").createWaSocket;
+let formatError: typeof import("./session.js").formatError;
+let logWebSelfId: typeof import("./session.js").logWebSelfId;
+let waitForWaConnection: typeof import("./session.js").waitForWaConnection;
 
 async function flushCredsUpdate() {
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -55,7 +58,10 @@ function mockCredsJsonSpies(readContents: string) {
 }
 
 describe("web session", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ createWaSocket, formatError, logWebSelfId, waitForWaConnection } =
+      await import("./session.js"));
     vi.clearAllMocks();
     resetBaileysMocks();
     resetLoadConfigMock();
