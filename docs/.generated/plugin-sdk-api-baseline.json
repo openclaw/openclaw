@@ -10,8 +10,8 @@
           "exportName": "buildFalImageGenerationProvider",
           "kind": "function",
           "source": {
-            "line": 188,
-            "path": "src/image-generation/providers/fal.ts"
+            "line": 190,
+            "path": "extensions/fal/image-generation-provider.ts"
           }
         },
         {
@@ -19,8 +19,8 @@
           "exportName": "buildGoogleImageGenerationProvider",
           "kind": "function",
           "source": {
-            "line": 96,
-            "path": "src/image-generation/providers/google.ts"
+            "line": 98,
+            "path": "extensions/google/image-generation-provider.ts"
           }
         },
         {
@@ -28,8 +28,8 @@
           "exportName": "buildOpenAIImageGenerationProvider",
           "kind": "function",
           "source": {
-            "line": 42,
-            "path": "src/image-generation/providers/openai.ts"
+            "line": 43,
+            "path": "extensions/openai/image-generation-provider.ts"
           }
         },
         {

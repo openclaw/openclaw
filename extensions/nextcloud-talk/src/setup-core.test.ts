@@ -53,7 +53,9 @@ describe("nextcloud talk setup core", () => {
       },
     });
 
-    expect(clearNextcloudTalkAccountFields(cfg, DEFAULT_ACCOUNT_ID, ["botSecret"])).toMatchObject({
+    expect(
+      clearNextcloudTalkAccountFields(cfg, DEFAULT_ACCOUNT_ID, ["botSecret"]),
+    ).toMatchObject({
       channels: {
         "nextcloud-talk": {
           baseUrl: "https://cloud.example.com",
@@ -70,19 +72,18 @@ describe("nextcloud talk setup core", () => {
       },
     });
 
-    expect(
-      clearNextcloudTalkAccountFields(cfg, "work", ["botSecret", "botSecretFile"]),
-    ).toMatchObject({
-      channels: {
-        "nextcloud-talk": {
-          accounts: {
-            work: {
-              apiPassword: "api-secret",
+    expect(clearNextcloudTalkAccountFields(cfg, "work", ["botSecret", "botSecretFile"]))
+      .toMatchObject({
+        channels: {
+          "nextcloud-talk": {
+            accounts: {
+              work: {
+                apiPassword: "api-secret",
+              },
             },
           },
         },
-      },
-    });
+      });
   });
 
   it("sets top-level DM policy state", async () => {

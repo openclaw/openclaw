@@ -469,6 +469,28 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "deepgram",
+    idHint: "deepgram-media-understanding",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/deepgram-media-understanding",
+    packageVersion: "2026.3.14",
+    packageDescription: "OpenClaw Deepgram media-understanding plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "deepgram",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+    },
+  },
+  {
     dirName: "diagnostics-otel",
     idHint: "diagnostics-otel",
     source: {
@@ -1047,6 +1069,28 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       channels: ["googlechat"],
+    },
+  },
+  {
+    dirName: "groq",
+    idHint: "groq-media-understanding",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/groq-media-understanding",
+    packageVersion: "2026.3.14",
+    packageDescription: "OpenClaw Groq media-understanding plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "groq",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
     },
   },
   {
