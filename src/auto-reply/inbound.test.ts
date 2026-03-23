@@ -401,6 +401,74 @@ describe("createInboundDebouncer", () => {
       setTimeoutSpy.mockRestore();
     }
   });
+
+  it("keeps fire-and-forget keyed work ahead of a later buffered item", async () => {
+    const started: string[] = [];
+    const finished: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const debouncer = createInboundDebouncer<{ key: string; id: string; debounce: boolean }>({
+      debounceMs: 50,
+      buildKey: (item) => item.key,
+      shouldDebounce: (item) => item.debounce,
+      onFlush: async (items) => {
+        const ids = items.map((entry) => entry.id).join(",");
+        started.push(ids);
+        if (ids === "1") {
+          await firstGate;
+        }
+        finished.push(ids);
+      },
+    });
+
+    try {
+      await debouncer.enqueue({ key: "a", id: "1", debounce: true });
+
+      const firstTimerIndex = setTimeoutSpy.mock.calls.findLastIndex((call) => call[1] === 50);
+      expect(firstTimerIndex).toBeGreaterThanOrEqual(0);
+      clearTimeout(
+        setTimeoutSpy.mock.results[firstTimerIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+      const firstFlush = (
+        setTimeoutSpy.mock.calls[firstTimerIndex]?.[0] as (() => Promise<void>) | undefined
+      )?.();
+
+      await vi.waitFor(() => {
+        expect(started).toEqual(["1"]);
+      });
+
+      const secondEnqueue = debouncer.enqueue({ key: "a", id: "2", debounce: false });
+      const thirdEnqueue = debouncer.enqueue({ key: "a", id: "3", debounce: true });
+
+      const thirdTimerIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call, index) => index > firstTimerIndex && call[1] === 50,
+      );
+      expect(thirdTimerIndex).toBeGreaterThan(firstTimerIndex);
+      clearTimeout(
+        setTimeoutSpy.mock.results[thirdTimerIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+      const thirdFlush = (
+        setTimeoutSpy.mock.calls[thirdTimerIndex]?.[0] as (() => Promise<void>) | undefined
+      )?.();
+
+      await Promise.resolve();
+
+      expect(started).toEqual(["1"]);
+      expect(finished).toEqual([]);
+
+      releaseFirst();
+      await Promise.all([firstFlush, secondEnqueue, thirdFlush, thirdEnqueue]);
+
+      expect(started).toEqual(["1", "2", "3"]);
+      expect(finished).toEqual(["1", "2", "3"]);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
 });
 
 describe("initSessionState BodyStripped", () => {
