@@ -374,12 +374,12 @@ describe("createWebhookHandler", () => {
     await handler(req, res);
 
     expect(res._status).toBe(204);
-    expect(resolveLegacyWebhookNameToChatUserId).toHaveBeenCalledWith(
-      "https://nas.example.com/incoming",
-      "testuser",
-      true,
+    expect(resolveLegacyWebhookNameToChatUserId).toHaveBeenCalledWith({
+      incomingUrl: "https://nas.example.com/incoming",
+      mutableWebhookUsername: "testuser",
+      allowInsecureSsl: true,
       log,
-    );
+    });
     expect(deliver).toHaveBeenCalledWith(
       expect.objectContaining({
         from: "123",
@@ -411,12 +411,12 @@ describe("createWebhookHandler", () => {
     await handler(req, res);
 
     expect(res._status).toBe(204);
-    expect(resolveLegacyWebhookNameToChatUserId).toHaveBeenCalledWith(
-      "https://nas.example.com/incoming",
-      "testuser",
-      true,
+    expect(resolveLegacyWebhookNameToChatUserId).toHaveBeenCalledWith({
+      incomingUrl: "https://nas.example.com/incoming",
+      mutableWebhookUsername: "testuser",
+      allowInsecureSsl: true,
       log,
-    );
+    });
     expect(log.warn).toHaveBeenCalledWith(
       'Could not resolve Chat API user_id for "testuser" — falling back to webhook user_id 123. Reply delivery may fail.',
     );
