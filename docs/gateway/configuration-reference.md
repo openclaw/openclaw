@@ -907,7 +907,6 @@ Time format in system prompt. Default: `auto` (OS preference).
   - Typical values: `google/gemini-3-pro-image-preview` for the native Nano Banana-style flow, `fal/fal-ai/flux/dev` for fal, or `openai/gpt-image-1` for OpenAI Images.
   - If you select a provider/model directly, configure the matching provider auth/API key too (for example `GEMINI_API_KEY` or `GOOGLE_API_KEY` for `google/*`, `OPENAI_API_KEY` for `openai/*`, `FAL_KEY` for `fal/*`).
   - If omitted, `image_generate` can still infer a best-effort provider default from compatible auth-backed image-generation providers.
-  - Typical values: `google/gemini-3-pro-image-preview`, `fal/fal-ai/flux/dev`, `openai/gpt-image-1`.
 - `pdfModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the `pdf` tool for model routing.
   - If omitted, the PDF tool falls back to `imageModel`, then to best-effort provider defaults.
