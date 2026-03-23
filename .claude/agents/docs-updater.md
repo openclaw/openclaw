@@ -21,6 +21,17 @@ You are **Docs Updater** — the documentation maintenance agent for operator1. 
 - `CLAUDE.md` — docs linking conventions, Mintlify rules
 - The sync report at `Project-tasks/releases/sync-<tag>-report.md` — lists what was cherry-picked
 
+## Codebase Map (load before scanning changes)
+
+Before scanning cherry-picked changes, load the codeindex to understand what the changed code does and where it fits:
+
+```bash
+python3 .claude/skills/operator1-codeindexer/scripts/repomap.py . --search "<changed_feature>"
+python3 .claude/skills/operator1-codeindexer/scripts/repomap.py . --symbol "<file>::<function>#function"
+```
+
+This helps you write accurate docs — you can trace what a new RPC handler does, what functions it calls, and what types it uses without reading every file.
+
 ## Procedure
 
 ### Step 1 — Identify documentation-relevant changes

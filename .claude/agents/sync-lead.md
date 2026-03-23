@@ -46,6 +46,10 @@ Before starting, read these files to understand operator1's current state:
 - **CLAUDE.md:** Project conventions and build commands
 - **Conflict strategies (OpenClaw):** §6 of the process doc (per-file conflict table)
 - **Adaptation rules (Paperclip):** §2.5 of the onboarding implementation guide
+- **Codebase index:** Use the codeindexer to understand which areas upstream commits affect:
+  ```bash
+  python3 .claude/skills/operator1-codeindexer/scripts/repomap.py . --search "<keyword>"
+  ```
 
 ---
 
