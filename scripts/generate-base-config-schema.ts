@@ -7,6 +7,7 @@ import { formatGeneratedModule } from "./lib/format-generated-module.mjs";
 
 const GENERATED_BY = "scripts/generate-base-config-schema.ts";
 const DEFAULT_OUTPUT_PATH = "src/config/schema.base.generated.ts";
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function readIfExists(filePath: string): string | null {
   try {
@@ -17,9 +18,8 @@ function readIfExists(filePath: string): string | null {
 }
 
 function formatTypeScriptModule(source: string, outputPath: string): string {
-  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   return formatGeneratedModule(source, {
-    repoRoot,
+    repoRoot: REPO_ROOT,
     outputPath,
     errorLabel: "base config schema",
   });
@@ -45,9 +45,7 @@ export function writeBaseConfigSchemaModule(params?: {
   outputPath?: string;
   check?: boolean;
 }): { changed: boolean; wrote: boolean; outputPath: string } {
-  const repoRoot = path.resolve(
-    params?.repoRoot ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."),
-  );
+  const repoRoot = path.resolve(params?.repoRoot ?? REPO_ROOT);
   const outputPath = path.resolve(repoRoot, params?.outputPath ?? DEFAULT_OUTPUT_PATH);
   const current = readIfExists(outputPath);
   const generatedAt =
