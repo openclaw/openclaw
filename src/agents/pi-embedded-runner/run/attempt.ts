@@ -1399,6 +1399,18 @@ function wrapStreamDecodeXaiToolCallArguments(
   return stream;
 }
 
+export function resolveFirstResponseTimeoutMs(totalTimeoutMs: number): number {
+  if (!Number.isFinite(totalTimeoutMs) || totalTimeoutMs <= 0) {
+    return 30_000;
+  }
+  const normalizedTotal = Math.max(1, Math.floor(totalTimeoutMs));
+  const candidate = Math.min(30_000, Math.max(5_000, Math.floor(normalizedTotal / 3)));
+  if (candidate < normalizedTotal) {
+    return candidate;
+  }
+  return Math.max(1, normalizedTotal - Math.min(1_000, Math.floor(normalizedTotal / 5)));
+}
+
 function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
   return (model, context, options) => {
     const maybeStream = baseFn(model, context, options);
@@ -2209,6 +2221,7 @@ export async function runEmbeddedAttempt(
         if (wsApiKey) {
           activeSession.agent.streamFn = createOpenAIWebSocketStreamFn(wsApiKey, params.sessionId, {
             signal: runAbortController.signal,
+            firstResponseTimeoutMs: resolveFirstResponseTimeoutMs(params.timeoutMs),
           });
         } else {
           log.warn(`[ws-stream] no API key for provider=${params.provider}; using HTTP transport`);
@@ -2525,7 +2538,6 @@ export async function runEmbeddedAttempt(
           );
         });
       };
-
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
         runId: params.runId,
