@@ -462,11 +462,21 @@ describe("exec tool backgrounding", () => {
       allowBackground: false,
     });
     const result = await executeExecCommand(customBash, longDelayCmd);
-    const text = (result as { content: { text: string }[] }).content[0].text;
+    const text = readTextContent(result.content);
     expect(text).toMatch(/timed out/i);
     expect(text).toMatch(/re-run with a higher timeout/i);
-    const details = (result as { details: { status: string } }).details;
-    expect(details.status).toBe("failed");
+    const details = result.details as {
+      status?: string;
+      exitCode?: number | null;
+      durationMs?: number;
+      aggregated?: string;
+    };
+    expect(details).toMatchObject({
+      status: "failed",
+      exitCode: null,
+      aggregated: "",
+    });
+    expect(details.durationMs).toEqual(expect.any(Number));
   });
 
   it.each<DisallowedElevationCase>(DISALLOWED_ELEVATION_CASES)(
