@@ -258,11 +258,15 @@ export function shouldInjectBedrockBearerWrapper(
   if (authOverride !== undefined && authOverride !== "aws-sdk") {
     return false;
   }
-  // If profiles exist for this provider, resolveApiKeyForProvider uses them
-  // before the bearer env fallback — don't overwrite with the bearer wrapper.
-  const authStore = store ?? ensureAuthProfileStore();
-  if (listProfilesForProvider(authStore, provider).length > 0) {
-    return false;
+  // When auth: "aws-sdk" is set, resolveApiKeyForProvider skips profiles and
+  // goes directly to resolveAwsSdkAuthInfo (which returns the bearer token).
+  // Only check profiles when there is no explicit override — in that path,
+  // profiles are resolved before the bearer env fallback.
+  if (authOverride === undefined) {
+    const authStore = store ?? ensureAuthProfileStore();
+    if (listProfilesForProvider(authStore, provider).length > 0) {
+      return false;
+    }
   }
   return true;
 }
