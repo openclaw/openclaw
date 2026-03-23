@@ -13,6 +13,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       "moonshot:kimi",
       "perplexity:perplexity",
       "firecrawl:firecrawl",
+      "exa:exa",
       "tavily:tavily",
     ]);
     expect(providers.map((provider) => provider.credentialPath)).toEqual([
@@ -23,6 +24,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       "plugins.entries.moonshot.config.webSearch.apiKey",
       "plugins.entries.perplexity.config.webSearch.apiKey",
       "plugins.entries.firecrawl.config.webSearch.apiKey",
+      "plugins.entries.exa.config.webSearch.apiKey",
       "plugins.entries.tavily.config.webSearch.apiKey",
     ]);
     expect(providers.find((provider) => provider.id === "firecrawl")?.applySelectionConfig).toEqual(
@@ -51,6 +53,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       "moonshot",
       "perplexity",
       "firecrawl",
+      "exa",
       "tavily",
     ]);
   });
@@ -106,6 +109,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       "moonshot:kimi",
       "perplexity:perplexity",
       "firecrawl:firecrawl",
+      "exa:exa",
       "tavily:tavily",
     ]);
   });
