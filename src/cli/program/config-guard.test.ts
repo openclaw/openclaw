@@ -144,6 +144,12 @@ describe("ensureConfigReady", () => {
     expect(gatewayRuntime.exit).not.toHaveBeenCalled();
   });
 
+  it("does not exit for invalid config on plugins install", async () => {
+    setInvalidSnapshot();
+    const runtime = await runEnsureConfigReady(["plugins", "install"]);
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
   it("runs doctor migration flow only once per module instance", async () => {
     const runtimeA = makeRuntime();
     const runtimeB = makeRuntime();
