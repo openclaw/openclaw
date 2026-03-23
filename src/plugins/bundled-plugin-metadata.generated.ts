@@ -88,7 +88,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         },
         expectedVersion: {
           label: "Expected acpx Version",
-          help: 'Exact version to enforce (for example 0.1.16) or "any" to skip strict version matching.',
+          help: 'Exact version to enforce or "any" to skip strict version matching.',
         },
         cwd: {
           label: "Default Working Directory",
@@ -488,6 +488,47 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+    },
+  },
+  {
+    dirName: "deepseek",
+    idHint: "deepseek",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/deepseek-provider",
+    packageVersion: "2026.3.14",
+    packageDescription: "OpenClaw DeepSeek provider plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "deepseek",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      providers: ["deepseek"],
+      providerAuthEnvVars: {
+        deepseek: ["DEEPSEEK_API_KEY"],
+      },
+      providerAuthChoices: [
+        {
+          provider: "deepseek",
+          method: "api-key",
+          choiceId: "deepseek-api-key",
+          choiceLabel: "DeepSeek API key",
+          groupId: "deepseek",
+          groupLabel: "DeepSeek",
+          groupHint: "API key",
+          optionKey: "deepseekApiKey",
+          cliFlag: "--deepseek-api-key",
+          cliOption: "--deepseek-api-key <key>",
+          cliDescription: "DeepSeek API key",
+        },
+      ],
     },
   },
   {

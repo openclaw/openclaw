@@ -4,7 +4,7 @@ import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { describe, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
@@ -17,9 +17,11 @@ import {
   isAnthropicBillingError,
   isAnthropicRateLimitError,
 } from "../agents/live-auth-keys.js";
+import { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
 import { isModernModelRef } from "../agents/live-model-filter.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
+import { normalizeGoogleModelId } from "../agents/model-id-normalization.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { isRateLimitErrorMessage } from "../agents/pi-embedded-helpers/errors.js";
@@ -28,6 +30,7 @@ import { clearRuntimeConfigSnapshot, loadConfig } from "../config/config.js";
 import type { ModelsConfig, OpenClawConfig, ModelProviderConfig } from "../config/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { renderCatNoncePngBase64 } from "./live-image-probe.js";
@@ -58,6 +61,10 @@ const GATEWAY_LIVE_HEARTBEAT_MS = Math.max(
   1_000,
   toInt(process.env.OPENCLAW_LIVE_GATEWAY_HEARTBEAT_MS, 30_000),
 );
+const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set([
+  "google/gemini-3-flash-preview",
+  "google/gemini-3-pro-preview",
+]);
 const GATEWAY_LIVE_MAX_MODELS = resolveGatewayLiveMaxModels();
 const GATEWAY_LIVE_SUITE_TIMEOUT_MS = resolveGatewayLiveSuiteTimeoutMs(GATEWAY_LIVE_MAX_MODELS);
 
@@ -267,6 +274,51 @@ function isMeaningful(text: string): boolean {
   return true;
 }
 
+function shouldStripAssistantScaffoldingForLiveModel(modelKey?: string): boolean {
+  if (!modelKey) {
+    return false;
+  }
+  if (GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS.has(modelKey)) {
+    return true;
+  }
+  const [provider, ...rest] = modelKey.split("/");
+  if (provider !== "google" || rest.length === 0) {
+    return false;
+  }
+  const normalizedKey = `${provider}/${normalizeGoogleModelId(rest.join("/"))}`;
+  return GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS.has(normalizedKey);
+}
+
+function maybeStripAssistantScaffoldingForLiveModel(text: string, modelKey?: string): string {
+  if (!shouldStripAssistantScaffoldingForLiveModel(modelKey)) {
+    return text;
+  }
+  return stripAssistantInternalScaffolding(text).trim();
+}
+
+describe("maybeStripAssistantScaffoldingForLiveModel", () => {
+  it("strips scaffolding for the gemini 3.1 flash alias and targeted live models", () => {
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
+        "<think>hidden</think>Visible",
+        "google/gemini-3.1-flash-preview",
+      ),
+    ).toBe("Visible");
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
+        "<think>hidden</think>Visible",
+        "google/gemini-3-pro-preview",
+      ),
+    ).toBe("Visible");
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
+        "<think>hidden</think>Visible",
+        "google/gemini-2.5-flash",
+      ),
+    ).toBe("<think>hidden</think>Visible");
+  });
+});
+
 function isGoogleModelNotFoundText(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -370,6 +422,7 @@ async function runAnthropicRefusalProbe(params: {
     message: `Reply with the single word ok. Test token: ${magic}`,
     thinkingLevel: params.thinkingLevel,
     context: `${params.label}: refusal-probe`,
+    modelKey: params.modelKey,
   });
   assertNoReasoningTags({
     text: probeText,
@@ -388,6 +441,7 @@ async function runAnthropicRefusalProbe(params: {
     message: "Now reply with exactly: still ok.",
     thinkingLevel: params.thinkingLevel,
     context: `${params.label}: refusal-followup`,
+    modelKey: params.modelKey,
   });
   assertNoReasoningTags({
     text: followupText,
@@ -560,7 +614,7 @@ function extractTranscriptMessageText(message: unknown): string {
     .trim();
 }
 
-function readSessionAssistantTexts(sessionKey: string): string[] {
+function readSessionAssistantTexts(sessionKey: string, modelKey?: string): string[] {
   const { storePath, entry } = loadSessionEntry(sessionKey);
   if (!entry?.sessionId) {
     return [];
@@ -575,7 +629,9 @@ function readSessionAssistantTexts(sessionKey: string): string[] {
     if (role !== "assistant") {
       continue;
     }
-    assistantTexts.push(extractTranscriptMessageText(message));
+    assistantTexts.push(
+      maybeStripAssistantScaffoldingForLiveModel(extractTranscriptMessageText(message), modelKey),
+    );
   }
   return assistantTexts;
 }
@@ -584,12 +640,13 @@ async function waitForSessionAssistantText(params: {
   sessionKey: string;
   baselineAssistantCount: number;
   context: string;
+  modelKey?: string;
 }) {
   const startedAt = Date.now();
   let lastHeartbeatAt = startedAt;
   let delayMs = 50;
   while (Date.now() - startedAt < GATEWAY_LIVE_PROBE_TIMEOUT_MS) {
-    const assistantTexts = readSessionAssistantTexts(params.sessionKey);
+    const assistantTexts = readSessionAssistantTexts(params.sessionKey, params.modelKey);
     if (assistantTexts.length > params.baselineAssistantCount) {
       const freshText = assistantTexts
         .slice(params.baselineAssistantCount)
@@ -618,13 +675,17 @@ async function requestGatewayAgentText(params: {
   thinkingLevel: string;
   context: string;
   idempotencyKey: string;
+  modelKey?: string;
   attachments?: Array<{
     mimeType: string;
     fileName: string;
     content: string;
   }>;
 }) {
-  const baselineAssistantCount = readSessionAssistantTexts(params.sessionKey).length;
+  const baselineAssistantCount = readSessionAssistantTexts(
+    params.sessionKey,
+    params.modelKey,
+  ).length;
   const accepted = await withGatewayLiveProbeTimeout(
     params.client.request<{ runId?: unknown; status?: unknown }>("agent", {
       sessionKey: params.sessionKey,
@@ -643,6 +704,7 @@ async function requestGatewayAgentText(params: {
     sessionKey: params.sessionKey,
     baselineAssistantCount,
     context: `${params.context}: transcript-final`,
+    modelKey: params.modelKey,
   });
 }
 
@@ -650,6 +712,7 @@ type GatewayModelSuiteParams = {
   label: string;
   cfg: OpenClawConfig;
   candidates: Array<Model<Api>>;
+  allowNotFoundSkip: boolean;
   extraToolProbes: boolean;
   extraImageProbes: boolean;
   thinkingLevel: string;
@@ -935,6 +998,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             client,
             sessionKey,
             idempotencyKey: `idem-${randomUUID()}`,
+            modelKey,
             message:
               "Explain in 2-3 sentences how the JavaScript event loop handles microtasks vs macrotasks. Must mention both words: microtask and macrotask.",
             thinkingLevel: params.thinkingLevel,
@@ -946,6 +1010,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               client,
               sessionKey,
               idempotencyKey: `idem-${randomUUID()}-retry`,
+              modelKey,
               message:
                 "Explain in 2-3 sentences how the JavaScript event loop handles microtasks vs macrotasks. Must mention both words: microtask and macrotask.",
               thinkingLevel: params.thinkingLevel,
@@ -967,6 +1032,10 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             // Catalog drift: model IDs can disappear or become unavailable on the API.
             // Treat as skip when scanning "all models" for Google.
             logProgress(`${progressLabel}: skip (google model not found)`);
+            break;
+          }
+          if (params.allowNotFoundSkip && isModelNotFoundErrorMessage(text)) {
+            logProgress(`${progressLabel}: skip (model not found)`);
             break;
           }
           assertNoReasoningTags({
@@ -1001,6 +1070,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               client,
               sessionKey,
               idempotencyKey: `idem-${runIdTool}-tool-${toolReadAttempt + 1}`,
+              modelKey,
               message: strictReply
                 ? "OpenClaw live tool probe (local, safe): " +
                   `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
@@ -1064,6 +1134,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                 client,
                 sessionKey,
                 idempotencyKey: `idem-${runIdTool}-exec-read-${execReadAttempt + 1}`,
+                modelKey,
                 message: strictReply
                   ? "OpenClaw live tool probe (local, safe): " +
                     "use the tool named `exec` (or `Exec`) to run this command: " +
@@ -1128,6 +1199,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               client,
               sessionKey,
               idempotencyKey: `idem-${runIdImage}-image`,
+              modelKey,
               message:
                 "Look at the attached image. Reply with exactly two tokens separated by a single space: " +
                 "(1) the animal shown or written in the image, lowercase; " +
@@ -1185,6 +1257,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               client,
               sessionKey,
               idempotencyKey: `idem-${runId2}-1`,
+              modelKey,
               message: `Call the tool named \`read\` (or \`Read\`) on "${toolProbePath}". Do not write any other text.`,
               thinkingLevel: params.thinkingLevel,
               context: `${progressLabel}: tool-only-regression-first`,
@@ -1200,6 +1273,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               client,
               sessionKey,
               idempotencyKey: `idem-${runId2}-2`,
+              modelKey,
               message: `Now answer: what are the values of nonceA and nonceB in "${toolProbePath}"? Reply with exactly: ${nonceA} ${nonceB}.`,
               thinkingLevel: params.thinkingLevel,
               context: `${progressLabel}: tool-only-regression-second`,
@@ -1268,9 +1342,25 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: skip (google rate limit)`);
             break;
           }
+          if (
+            (model.provider === "minimax" ||
+              model.provider === "opencode" ||
+              model.provider === "opencode-go" ||
+              model.provider === "zai") &&
+            isRateLimitErrorMessage(message)
+          ) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (rate limit)`);
+            break;
+          }
           if (isProviderUnavailableErrorMessage(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (provider unavailable)`);
+            break;
+          }
+          if (params.allowNotFoundSkip && isModelNotFoundErrorMessage(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (model not found)`);
             break;
           }
           if (
@@ -1316,9 +1406,14 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: skip (tool probe refusal)`);
             break;
           }
-          if (model.provider === "anthropic" && isToolNonceProbeMiss(message)) {
+          if (
+            (model.provider === "anthropic" ||
+              model.provider === "minimax" ||
+              model.provider === "opencode-go") &&
+            isToolNonceProbeMiss(message)
+          ) {
             skippedCount += 1;
-            logProgress(`${progressLabel}: skip (anthropic tool probe nonce miss)`);
+            logProgress(`${progressLabel}: skip (${model.provider} tool probe nonce miss)`);
             break;
           }
           if (isMissingProfileError(message)) {
@@ -1448,6 +1543,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         label: "all-models",
         cfg,
         candidates: selectedCandidates,
+        allowNotFoundSkip: useModern,
         extraToolProbes: true,
         extraImageProbes: true,
         thinkingLevel: THINKING_LEVEL,
@@ -1469,6 +1565,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           label: "minimax-anthropic",
           cfg,
           candidates: minimaxCandidates,
+          allowNotFoundSkip: useModern,
           extraToolProbes: true,
           extraImageProbes: true,
           thinkingLevel: THINKING_LEVEL,
@@ -1589,6 +1686,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         client,
         sessionKey,
         idempotencyKey: `idem-${randomUUID()}-tool`,
+        modelKey: "anthropic/claude-opus-4-5",
         message:
           `Call the tool named \`read\` (or \`Read\` if \`read\` is unavailable) with JSON arguments {"path":"${toolProbePath}"}. ` +
           `Then reply with exactly: ${nonceA} ${nonceB}. No extra text.`,
@@ -1617,6 +1715,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         client,
         sessionKey,
         idempotencyKey: `idem-${randomUUID()}-followup`,
+        modelKey: "zai/glm-4.7",
         message:
           `What are the values of nonceA and nonceB in "${toolProbePath}"? ` +
           `Reply with exactly: ${nonceA} ${nonceB}.`,

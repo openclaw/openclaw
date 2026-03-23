@@ -16,6 +16,16 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 - Pass `--json` for machine-readable summaries.
 - Per-phase logs land under `/tmp/openclaw-parallels-*`.
 - Do not run local and gateway agent turns in parallel on the same fresh workspace or session.
+- For `prlctl exec`, pass the VM name before `--current-user` (`prlctl exec "$VM" --current-user ...`), not the other way around.
+
+## npm install then update
+
+- Preferred entrypoint: `pnpm test:parallels:npm-update`
+- Flow: fresh snapshot -> install npm package baseline -> smoke -> install current main tgz on the same guest -> smoke again.
+- Same-guest update verification should set the default model explicitly to `openai/gpt-5.4` before the agent turn and use a fresh explicit `--session-id` so old session model state does not leak into the check.
+- Keep the aggregate npm-update Linux VM name aligned with the default Linux smoke VM (`Ubuntu 24.04.3 ARM64` on Peter's host today). Do not hardcode a different Linux guest in the wrapper unless the per-OS Linux smoke default changed too.
+- On Windows same-guest update checks, restart the gateway after the npm upgrade before `gateway status` / `agent`; in-place global npm updates can otherwise leave stale hashed `dist/*` module imports alive in the running service.
+- Linux same-guest update verification should also export `HOME=/root`, pass `OPENAI_API_KEY` via `prlctl exec ... /usr/bin/env`, and use `openclaw agent --local`; the fresh Linux baseline does not rely on persisted gateway credentials.
 
 ## macOS flow
 
@@ -23,6 +33,7 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 - Default to the snapshot closest to `macOS 26.3.1 latest`.
 - On Peter's Tahoe VM, `fresh-latest-march-2026` can hang in `prlctl snapshot-switch`; if restore times out there, rerun with `--snapshot-hint 'macOS 26.3.1 latest'` before blaming auth or the harness.
 - `prlctl exec` is fine for deterministic repo commands, but use the guest Terminal or `prlctl enter` when installer parity or shell-sensitive behavior matters.
+- Multi-word `openclaw agent --message ...` checks should go through a guest shell wrapper (`guest_current_user_sh` / `guest_current_user_cli` or `/bin/sh -lc ...`), not raw `prlctl exec ... node openclaw.mjs ...`, or the message can be split into extra argv tokens and Commander reports `too many arguments for 'agent'`.
 - On the fresh Tahoe snapshot, `brew` exists but `node` may be missing from PATH in noninteractive exec. Use `/opt/homebrew/bin/node` when needed.
 - Fresh host-served tgz installs should install as guest root with `HOME=/var/root`, then run onboarding as the desktop user via `prlctl exec --current-user`.
 - Root-installed tgz smoke can log plugin blocks for world-writable `extensions/*`; do not treat that as an onboarding or gateway failure unless plugin loading is the task.

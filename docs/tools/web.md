@@ -91,6 +91,9 @@ returns results. Results are cached by query for 15 minutes (configurable).
 
 ## Auto-detection
 
+Provider lists in docs and setup flows are alphabetical. Auto-detection keeps a
+separate precedence order:
+
 If no `provider` is set, OpenClaw checks for API keys in this order and uses
 the first one found:
 
