@@ -1,9 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import {
-  beginWebhookRequestPipelineOrReject,
-  resolveWebhookTargets,
-} from "openclaw/plugin-sdk/bluebubbles";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
 import {
   normalizeWebhookMessage,
@@ -24,6 +20,8 @@ import {
 } from "./monitor-shared.js";
 import { fetchBlueBubblesServerInfo } from "./probe.js";
 import {
+  beginWebhookRequestPipelineOrReject,
+  resolveWebhookTargets,
   createWebhookInFlightLimiter,
   registerWebhookTargetWithPluginRoute,
   readWebhookBodyOrReject,
@@ -218,8 +216,7 @@ function shouldIgnoreUpdatedNonConversationalEvent(
   }
   const text = message.text.trim();
   const hasEditMetadata =
-    (typeof message.itemType === "number" && Number.isFinite(message.itemType)) ||
-    (typeof message.dateEdited === "number" && Number.isFinite(message.dateEdited));
+    typeof message.dateEdited === "number" && Number.isFinite(message.dateEdited);
   const hasMediaPayload =
     (message.attachments?.length ?? 0) > 0 || Boolean(message.balloonBundleId?.trim());
 

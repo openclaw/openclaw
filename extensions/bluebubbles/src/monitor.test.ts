@@ -2467,6 +2467,64 @@ describe("BlueBubbles webhook monitor", () => {
       expect(cached?.body).toBe("original outbound body guid-only");
     });
 
+    it("ignores empty updated-message churn when only itemType is present", async () => {
+      const account = createMockAccount({ dmPolicy: "open" });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      await handleBlueBubblesWebhookRequest(
+        createMockRequest("POST", "/bluebubbles-webhook", {
+          type: "new-message",
+          data: {
+            text: "original outbound body item-type",
+            handle: { address: "+15551234567" },
+            isGroup: false,
+            isFromMe: true,
+            guid: "edited-msg-item-type-only-1",
+            chatGuid: "iMessage;-;+15551234567",
+            date: Date.now(),
+          },
+        }),
+        createMockResponse(),
+      );
+
+      await handleBlueBubblesWebhookRequest(
+        createMockRequest("POST", "/bluebubbles-webhook", {
+          type: "updated-message",
+          data: {
+            text: "",
+            handle: { address: "+15551234567" },
+            isGroup: false,
+            isFromMe: true,
+            guid: "edited-msg-item-type-only-1",
+            chatGuid: "iMessage;-;+15551234567",
+            itemType: 0,
+            date: Date.now(),
+          },
+        }),
+        createMockResponse(),
+      );
+
+      await flushAsync();
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+      const cached = resolveReplyContextFromCache({
+        accountId: "default",
+        replyToId: "edited-msg-item-type-only-1",
+        chatGuid: "iMessage;-;+15551234567",
+      });
+      expect(cached?.body).toBe("original outbound body item-type");
+    });
+
     it("returns 200 for updated-message payloads that cannot be normalized", async () => {
       const account = createMockAccount({ dmPolicy: "open" });
       const config: OpenClawConfig = {};
