@@ -64,9 +64,11 @@ describe("mattermost setup core", () => {
 
   it("validates env and explicit credential requirements", async () => {
     const { mattermostSetupAdapter } = await import("./setup-core.js");
+    const validateInput = mattermostSetupAdapter.validateInput;
+    expect(validateInput).toBeTypeOf("function");
 
     expect(
-      mattermostSetupAdapter.validateInput({
+      validateInput!({
         accountId: "secondary",
         input: { useEnv: true },
       } as never),
@@ -74,7 +76,7 @@ describe("mattermost setup core", () => {
 
     normalizeMattermostBaseUrl.mockReturnValue(undefined);
     expect(
-      mattermostSetupAdapter.validateInput({
+      validateInput!({
         accountId: DEFAULT_ACCOUNT_ID,
         input: { useEnv: false, botToken: "tok", httpUrl: "not-a-url" },
       } as never),
@@ -82,7 +84,7 @@ describe("mattermost setup core", () => {
 
     normalizeMattermostBaseUrl.mockReturnValue("https://chat.example.com");
     expect(
-      mattermostSetupAdapter.validateInput({
+      validateInput!({
         accountId: DEFAULT_ACCOUNT_ID,
         input: { useEnv: false, botToken: "tok", httpUrl: "https://chat.example.com" },
       } as never),
@@ -92,9 +94,11 @@ describe("mattermost setup core", () => {
   it("applies normalized config for default and named accounts", async () => {
     normalizeMattermostBaseUrl.mockReturnValue("https://chat.example.com");
     const { mattermostSetupAdapter } = await import("./setup-core.js");
+    const applyAccountConfig = mattermostSetupAdapter.applyAccountConfig;
+    expect(applyAccountConfig).toBeTypeOf("function");
 
     expect(
-      mattermostSetupAdapter.applyAccountConfig({
+      applyAccountConfig!({
         cfg: { channels: { mattermost: {} } },
         accountId: DEFAULT_ACCOUNT_ID,
         input: {
@@ -115,7 +119,7 @@ describe("mattermost setup core", () => {
     });
 
     expect(
-      mattermostSetupAdapter.applyAccountConfig({
+      applyAccountConfig!({
         cfg: {
           channels: {
             mattermost: {

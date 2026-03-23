@@ -103,29 +103,34 @@ describe("nextcloud talk setup core", () => {
   });
 
   it("validates env/default-account constraints and applies config patches", () => {
+    const validateInput = nextcloudTalkSetupAdapter.validateInput;
+    const applyAccountConfig = nextcloudTalkSetupAdapter.applyAccountConfig;
+    expect(validateInput).toBeTypeOf("function");
+    expect(applyAccountConfig).toBeTypeOf("function");
+
     expect(
-      nextcloudTalkSetupAdapter.validateInput({
+      validateInput!({
         accountId: "work",
         input: { useEnv: true },
       } as never),
     ).toBe("NEXTCLOUD_TALK_BOT_SECRET can only be used for the default account.");
 
     expect(
-      nextcloudTalkSetupAdapter.validateInput({
+      validateInput!({
         accountId: DEFAULT_ACCOUNT_ID,
         input: { useEnv: false, baseUrl: "", secret: "" },
       } as never),
     ).toBe("Nextcloud Talk requires bot secret or --secret-file (or --use-env).");
 
     expect(
-      nextcloudTalkSetupAdapter.validateInput({
+      validateInput!({
         accountId: DEFAULT_ACCOUNT_ID,
         input: { useEnv: false, secret: "secret", baseUrl: "" },
       } as never),
     ).toBe("Nextcloud Talk requires --base-url.");
 
     expect(
-      nextcloudTalkSetupAdapter.applyAccountConfig({
+      applyAccountConfig!({
         cfg: {
           channels: {
             "nextcloud-talk": {},
@@ -150,7 +155,7 @@ describe("nextcloud talk setup core", () => {
     });
 
     expect(
-      nextcloudTalkSetupAdapter.applyAccountConfig({
+      applyAccountConfig!({
         cfg: {
           channels: {
             "nextcloud-talk": {

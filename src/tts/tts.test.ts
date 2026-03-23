@@ -1,9 +1,14 @@
 import { completeSimple, type AssistantMessage } from "@mariozechner/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildElevenLabsSpeechProvider } from "../../extensions/elevenlabs/speech-provider.ts";
+import { buildMicrosoftSpeechProvider } from "../../extensions/microsoft/speech-provider.ts";
+import { buildOpenAISpeechProvider } from "../../extensions/openai/speech-provider.ts";
 import { ensureCustomApiRegistered } from "../agents/custom-api-registry.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { withEnv } from "../test-utils/env.js";
 import * as tts from "./tts.js";
 
@@ -124,6 +129,13 @@ function createOpenAiTelephonyCfg(model: "tts-1" | "gpt-4o-mini-tts"): OpenClawC
 
 describe("tts", () => {
   beforeEach(() => {
+    const registry = createEmptyPluginRegistry();
+    registry.speechProviders = [
+      { pluginId: "openai", provider: buildOpenAISpeechProvider(), source: "test" },
+      { pluginId: "microsoft", provider: buildMicrosoftSpeechProvider(), source: "test" },
+      { pluginId: "elevenlabs", provider: buildElevenLabsSpeechProvider(), source: "test" },
+    ];
+    setActivePluginRegistry(registry, "tts-test");
     vi.clearAllMocks();
     vi.mocked(completeSimple).mockResolvedValue(
       mockAssistantMessage([{ type: "text", text: "Summary" }]),
