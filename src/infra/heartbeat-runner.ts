@@ -36,6 +36,12 @@ import {
   saveSessionStore,
   updateSessionStore,
 } from "../config/sessions.js";
+import {
+  evaluateSessionFreshness,
+  resolveChannelResetConfig,
+  resolveSessionResetPolicy,
+  resolveSessionResetType,
+} from "../config/sessions/reset.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -393,7 +399,7 @@ type HeartbeatReasonFlags = {
   isWakeReason: boolean;
 };
 
-type HeartbeatSkipReason = "empty-heartbeat-file";
+type HeartbeatSkipReason = "empty-heartbeat-file" | "session-stale";
 
 type HeartbeatPreflight = HeartbeatReasonFlags & {
   session: ReturnType<typeof resolveHeartbeatSession>;
@@ -444,6 +450,36 @@ async function resolveHeartbeatPreflight(params: {
     hasTaggedCronEvents,
     shouldInspectPendingEvents,
   } satisfies Omit<HeartbeatPreflight, "skipReason">;
+
+  // Check session freshness for non-isolated scheduled heartbeats before running.
+  // If the main session is stale (past the daily reset window), skip the heartbeat
+  // so the session can reset naturally when the user sends their first real message.
+  // Event-driven heartbeats (exec, cron, wake) bypass this via shouldBypassFileGates.
+  if (!params.heartbeat?.isolatedSession && session.entry && !shouldBypassFileGates) {
+    const now = Date.now();
+    const resetType = resolveSessionResetType({ sessionKey: session.sessionKey });
+    const channelReset = resolveChannelResetConfig({
+      sessionCfg: params.cfg.session,
+      channel: session.entry.lastChannel ?? session.entry.channel,
+    });
+    const resetPolicy = resolveSessionResetPolicy({
+      sessionCfg: params.cfg.session,
+      resetType,
+      resetOverride: channelReset,
+    });
+    const freshness = evaluateSessionFreshness({
+      updatedAt: session.entry.updatedAt,
+      now,
+      policy: resetPolicy,
+    });
+
+    if (!freshness.fresh) {
+      return {
+        ...basePreflight,
+        skipReason: "session-stale",
+      };
+    }
+  }
 
   if (shouldBypassFileGates) {
     return basePreflight;
