@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const readJsonWebhookBodyOrReject = vi.hoisted(() => vi.fn());
 const resolveWebhookTargetWithAuthOrReject = vi.hoisted(() => vi.fn());
@@ -67,6 +67,13 @@ function installSimplePipeline(targets: unknown[]) {
 }
 
 describe("googlechat monitor webhook", () => {
+  beforeEach(() => {
+    readJsonWebhookBodyOrReject.mockReset();
+    resolveWebhookTargetWithAuthOrReject.mockReset();
+    withResolvedWebhookRequestPipeline.mockReset();
+    verifyGoogleChatRequest.mockReset();
+  });
+
   it("accepts add-on payloads that carry systemIdToken in the body", async () => {
     installSimplePipeline([
       {
@@ -172,5 +179,55 @@ describe("googlechat monitor webhook", () => {
     expect(processEvent).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(401);
     expect(res.body).toBe("unauthorized");
+  });
+
+  it("logs auth rejection reasons for header-bearer requests", async () => {
+    const error = vi.fn();
+    installSimplePipeline([
+      {
+        account: {
+          accountId: "default",
+          config: { appPrincipal: "chat-app" },
+        },
+        runtime: { error },
+        audienceType: "app-url",
+        audience: "https://example.com/googlechat",
+      },
+    ]);
+    readJsonWebhookBodyOrReject.mockResolvedValue({
+      ok: true,
+      value: {
+        type: "MESSAGE",
+        space: { name: "spaces/AAA" },
+        message: { name: "spaces/AAA/messages/1", text: "hello" },
+      },
+    });
+    resolveWebhookTargetWithAuthOrReject.mockImplementation(async ({ isMatch, targets }) => {
+      for (const target of targets) {
+        if (await isMatch(target)) {
+          return target;
+        }
+      }
+      return null;
+    });
+    verifyGoogleChatRequest.mockResolvedValue({ ok: false, reason: "invalid token" });
+    const processEvent = vi.fn(async () => {});
+
+    const { createGoogleChatWebhookRequestHandler } = await import("./monitor-webhook.js");
+    const handler = createGoogleChatWebhookRequestHandler({
+      webhookTargets: new Map(),
+      webhookInFlightLimiter: {} as never,
+      processEvent,
+    });
+
+    const req = createRequest("Bearer test-token");
+    const res = createResponse();
+    await expect(handler(req, res)).resolves.toBe(true);
+
+    expect(processEvent).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining("webhook auth rejected (header) path=/googlechat"),
+    );
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("reason=invalid token"));
   });
 });

@@ -39,6 +39,20 @@ describe("verifyGoogleChatRequest", () => {
     ).resolves.toEqual({ ok: true });
   });
 
+  it("accepts app-url tokens when issuer is Chat issuer and email is absent", async () => {
+    mockTicket({
+      iss: "chat@system.gserviceaccount.com",
+    });
+
+    await expect(
+      verifyGoogleChatRequest({
+        bearer: "token",
+        audienceType: "app-url",
+        audience: "https://example.com/googlechat",
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+
   it("rejects add-on tokens when no principal binding is configured", async () => {
     mockTicket({
       email: "service-123@gcp-sa-gsuiteaddons.iam.gserviceaccount.com",
@@ -62,6 +76,22 @@ describe("verifyGoogleChatRequest", () => {
     mockTicket({
       email: "service-123@gcp-sa-gsuiteaddons.iam.gserviceaccount.com",
       email_verified: true,
+      sub: "principal-1",
+    });
+
+    await expect(
+      verifyGoogleChatRequest({
+        bearer: "token",
+        audienceType: "app-url",
+        audience: "https://example.com/googlechat",
+        expectedAddOnPrincipal: "principal-1",
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  it("accepts add-on tokens matched by issuer with principal binding", async () => {
+    mockTicket({
+      iss: "service-123@gcp-sa-gsuiteaddons.iam.gserviceaccount.com",
       sub: "principal-1",
     });
 

@@ -116,14 +116,25 @@ export async function verifyGoogleChatRequest(params: {
       const email = String(payload?.email ?? "")
         .trim()
         .toLowerCase();
-      if (!payload?.email_verified) {
+      const issuer = String(payload?.iss ?? "")
+        .trim()
+        .toLowerCase();
+
+      // Some token variants omit email claims; when email is present, keep
+      // enforcing verification.
+      if (email && !payload?.email_verified) {
         return { ok: false, reason: "email not verified" };
       }
-      if (email === CHAT_ISSUER) {
+      if (issuer === CHAT_ISSUER || email === CHAT_ISSUER) {
         return { ok: true };
       }
-      if (!ADDON_ISSUER_PATTERN.test(email)) {
-        return { ok: false, reason: `invalid issuer: ${email}` };
+      const addOnIssuerMatches =
+        ADDON_ISSUER_PATTERN.test(issuer) || ADDON_ISSUER_PATTERN.test(email);
+      if (!addOnIssuerMatches) {
+        return {
+          ok: false,
+          reason: `invalid issuer/email: iss=${issuer || "<missing>"} email=${email || "<missing>"}`,
+        };
       }
       const expectedAddOnPrincipal = params.expectedAddOnPrincipal?.trim().toLowerCase();
       if (!expectedAddOnPrincipal) {

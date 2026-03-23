@@ -160,7 +160,7 @@ async function processMessageWithPipeline(params: {
   const sender = message.sender ?? event.user;
   const senderId = sender?.name ?? "";
   const senderName = sender?.displayName ?? "";
-  const senderEmail = sender?.email ?? undefined;
+  const senderEmail = sender?.email ?? event.user?.email ?? undefined;
 
   const allowBots = account.config.allowBots === true;
   if (!allowBots) {
