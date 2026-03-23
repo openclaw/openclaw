@@ -470,14 +470,14 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
   },
   {
     dirName: "deepgram",
-    idHint: "deepgram-media-understanding",
+    idHint: "deepgram",
     source: {
       source: "./index.ts",
       built: "index.js",
     },
-    packageName: "@openclaw/deepgram-media-understanding",
+    packageName: "@openclaw/deepgram-provider",
     packageVersion: "2026.3.14",
-    packageDescription: "OpenClaw Deepgram media-understanding plugin",
+    packageDescription: "OpenClaw Deepgram media-understanding provider",
     packageManifest: {
       extensions: ["./index.ts"],
     },
@@ -771,6 +771,49 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         type: "object",
         additionalProperties: false,
         properties: {},
+      },
+    },
+  },
+  {
+    dirName: "exa",
+    idHint: "exa-plugin",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/exa-plugin",
+    packageVersion: "2026.3.22",
+    packageDescription: "OpenClaw Exa plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "exa",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          webSearch: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              apiKey: {
+                type: ["string", "object"],
+              },
+            },
+          },
+        },
+      },
+      providerAuthEnvVars: {
+        exa: ["EXA_API_KEY"],
+      },
+      uiHints: {
+        "webSearch.apiKey": {
+          label: "Exa API Key",
+          help: "Exa Search API key (fallback: EXA_API_KEY env var).",
+          sensitive: true,
+          placeholder: "exa-...",
+        },
       },
     },
   },
@@ -1073,14 +1116,14 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
   },
   {
     dirName: "groq",
-    idHint: "groq-media-understanding",
+    idHint: "groq",
     source: {
       source: "./index.ts",
       built: "index.js",
     },
-    packageName: "@openclaw/groq-media-understanding",
+    packageName: "@openclaw/groq-provider",
     packageVersion: "2026.3.14",
-    packageDescription: "OpenClaw Groq media-understanding plugin",
+    packageDescription: "OpenClaw Groq media-understanding provider",
     packageManifest: {
       extensions: ["./index.ts"],
     },

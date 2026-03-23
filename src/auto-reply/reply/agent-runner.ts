@@ -66,11 +66,11 @@ let usageCostRuntimePromise: Promise<typeof import("./usage-cost.runtime.js")> |
 let contextTokensRuntimePromise: Promise<
   typeof import("../../agents/context-tokens.runtime.js")
 > | null = null;
-let replyMediaPathsRuntimePromise: Promise<
-  typeof import("./reply-media-paths.runtime.js")
-> | null = null;
-let sessionStoreRuntimePromise: Promise<typeof import("../../config/sessions/store.runtime.js")> | null =
+let replyMediaPathsRuntimePromise: Promise<typeof import("./reply-media-paths.runtime.js")> | null =
   null;
+let sessionStoreRuntimePromise: Promise<
+  typeof import("../../config/sessions/store.runtime.js")
+> | null = null;
 
 function loadPiEmbeddedQueueRuntime() {
   piEmbeddedQueueRuntimePromise ??= import("../../agents/pi-embedded-queue.runtime.js");

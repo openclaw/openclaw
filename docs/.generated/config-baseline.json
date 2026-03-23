@@ -47319,8 +47319,8 @@
       "tags": [
         "advanced"
       ],
-      "label": "@openclaw/deepgram-media-understanding",
-      "help": "OpenClaw Deepgram media-understanding plugin (plugin: deepgram)",
+      "label": "@openclaw/deepgram-provider",
+      "help": "OpenClaw Deepgram media-understanding provider (plugin: deepgram)",
       "hasChildren": true
     },
     {
@@ -47333,7 +47333,7 @@
       "tags": [
         "advanced"
       ],
-      "label": "@openclaw/deepgram-media-understanding Config",
+      "label": "@openclaw/deepgram-provider Config",
       "help": "Plugin-defined config payload for deepgram.",
       "hasChildren": false
     },
@@ -47347,7 +47347,7 @@
       "tags": [
         "advanced"
       ],
-      "label": "Enable @openclaw/deepgram-media-understanding",
+      "label": "Enable @openclaw/deepgram-provider",
       "hasChildren": false
     },
     {
@@ -49206,8 +49206,8 @@
       "tags": [
         "advanced"
       ],
-      "label": "@openclaw/groq-media-understanding",
-      "help": "OpenClaw Groq media-understanding plugin (plugin: groq)",
+      "label": "@openclaw/groq-provider",
+      "help": "OpenClaw Groq media-understanding provider (plugin: groq)",
       "hasChildren": true
     },
     {
@@ -49220,7 +49220,7 @@
       "tags": [
         "advanced"
       ],
-      "label": "@openclaw/groq-media-understanding Config",
+      "label": "@openclaw/groq-provider Config",
       "help": "Plugin-defined config payload for groq.",
       "hasChildren": false
     },
@@ -49234,7 +49234,7 @@
       "tags": [
         "advanced"
       ],
-      "label": "Enable @openclaw/groq-media-understanding",
+      "label": "Enable @openclaw/groq-provider",
       "hasChildren": false
     },
     {

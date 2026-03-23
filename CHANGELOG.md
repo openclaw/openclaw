@@ -78,11 +78,13 @@ Docs: https://docs.openclaw.ai
 - Agents: add per-agent thinking/reasoning/fast defaults and auto-revert disallowed model overrides to the agent's default selection. Thanks @xuanmingguo and @vincentkoc.
 - Control UI/usage: drop the empty session-detail placeholder card so the usage view stays single-column until a real session detail panel is selected. (#52013) Thanks @BunsDev.
 - Hooks/workspace: keep repo-local `<workspace>/hooks` disabled until explicitly enabled, block workspace hook name collisions from shadowing bundled/managed/plugin hooks, and treat `hooks.internal.load.extraDirs` as trusted managed hook sources.
+- Web tools/Exa: add Exa as a bundled web-search plugin with Exa-native date filters, search-mode selection, and optional content extraction under `plugins.entries.exa.config.webSearch.*`. Thanks @V-Gutierrez and @vincentkoc.
 - CLI/hooks: route hook-pack install and update through `openclaw plugins`, keep `openclaw hooks` focused on hook visibility and per-hook controls, and show plugin-managed hook details in CLI output.
 - Plugins/hooks: add `before_message_process` hook that fires after message routing but before the AI agent runs; plugins can return `{ handled: true }` to intercept the message and skip AI processing (first-claim-wins across registered plugins).
 
 ### Fixes
 
+- Plugins/Matrix: move bundled plugin `KeyedAsyncQueue` imports onto the stable `plugin-sdk/core` surface so Matrix Docker/runtime builds do not depend on the brittle keyed-async-queue subpath. Thanks @ecohash-co and @vincentkoc.
 - Nostr/security: enforce inbound DM policy before decrypt, route Nostr DMs through the standard reply pipeline, and add pre-crypto rate and size guards so unknown senders cannot bypass pairing or force unbounded crypto work. Thanks @kuranikaran.
 - Agents/default timeout: raise the shared default agent timeout from `600s` to `48h` so long-running ACP and agent sessions do not fail unless you configure a shorter limit.
 - Gateway/Linux: auto-detect nvm-managed Node TLS CA bundle needs before CLI startup and refresh installed services that are missing `NODE_EXTRA_CA_CERTS`. (#51146) Thanks @GodsBoy.
@@ -220,6 +222,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Agents/bootstrap warnings: move bootstrap truncation warnings out of the system prompt and into the per-turn prompt body so prompt-cache reuse stays stable when truncation warnings appear or disappear. (#48753) Thanks @scoootscooob and @obviyus.
+- Plugins/Matrix: accept shared send-tool media aliases (`mediaUrl`, `filePath`, `path`) and preserve `asVoice` / `audioAsVoice` through Matrix action dispatch so media-only sends and voice-message intents reach the plugin send layer correctly. Thanks @psacc and @vincentkoc.
 - Telegram/DM topic session keys: route named-account DM topics through the same per-account base session key across inbound messages, native commands, and session-state lookups so `/status` and thread recovery stop creating phantom `agent:main:main:thread:...` sessions. (#48204) Thanks @vincentkoc.
 - macOS/node service startup: use `openclaw node start/stop --json` from the Mac app instead of the removed `openclaw service node ...` command shape, so current CLI installs expose the full node exec surface again. (#46843) Fixes #43171. Thanks @Br1an67.
 - macOS/launch at login: stop emitting `KeepAlive` for the desktop app launch agent so OpenClaw no longer relaunches immediately after a manual quit while launch at login remains enabled. (#40213) Thanks @stablegenius49.
@@ -273,6 +276,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/network discovery: guard LAN, tailnet, and pairing interface enumeration so WSL2 and restricted hosts degrade to missing-address fallbacks instead of crashing on `uv_interface_addresses` errors. (#44180, #47590)
 - Gateway/bonjour: suppress the non-fatal `@homebridge/ciao` IPv4-loss assertion during interface churn so WiFi/VPN/sleep-wake changes no longer take down the gateway. (#38628, #47159, #52431)
 - Browser/launch: stop forcing an extra blank tab on browser launch so managed browser startup no longer opens an unwanted empty page. (#52451) Thanks @rogerdigital.
+- ACP/Codex session replay: preserve hidden assistant thinking when loading or rebinding existing ACP sessions so stored thought chunks do not replay into visible assistant text. Thanks @vincentkoc.
 
 ### Breaking
 
