@@ -167,5 +167,14 @@ jobs:
 
           echo "Publishing openclaw@${PACKAGE_VERSION}"
 
+      - name: Build
+        run: pnpm build
+
+      - name: Build Control UI
+        run: pnpm ui:build
+
+      - name: Verify release contents
+        run: pnpm release:check
+
       - name: Publish
         run: bash scripts/openclaw-npm-publish.sh --publish
