@@ -159,7 +159,6 @@ function getHooksForNameAndPlugin<K extends PluginHookName>(
 export function createHookRunner(registry: PluginRegistry, options: HookRunnerOptions = {}) {
   const logger = options.logger;
   const catchErrors = options.catchErrors ?? true;
-  const hookCheckpointLogsEnabled = process.env.OPENCLAW_PLUGIN_CHECKPOINTS === "1";
 
   const mergeBeforeModelResolve = (
     acc: PluginHookBeforeModelResolveResult | undefined,
@@ -251,17 +250,9 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     }
 
     logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers)`);
-    if (hookCheckpointLogsEnabled) {
-      logger?.warn(
-        `[hooks][checkpoints] dispatch ${hookName} handlers=${hooks.map((hook) => hook.pluginId).join(",")}`,
-      );
-    }
 
     const promises = hooks.map(async (hook) => {
       try {
-        if (hookCheckpointLogsEnabled) {
-          logger?.warn(`[hooks][checkpoints] invoke ${hookName} plugin=${hook.pluginId}`);
-        }
         await (hook.handler as (event: unknown, ctx: unknown) => Promise<void>)(event, ctx);
       } catch (err) {
         handleHookError({ hookName, pluginId: hook.pluginId, error: err });
