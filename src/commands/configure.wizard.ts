@@ -663,8 +663,10 @@ export async function runConfigureWizard(
     }
 
     const bind = nextConfig.gateway?.bind ?? "loopback";
+    // LAN bind means 0.0.0.0 — localhost still reaches it and avoids browser
+    // secure-context failures when the displayed URL is opened in a browser.
     const links = resolveControlUiLinks({
-      bind,
+      bind: bind === "lan" ? "loopback" : bind,
       port: gatewayPort,
       customBindHost: nextConfig.gateway?.customBindHost,
       basePath: nextConfig.gateway?.controlUi?.basePath,
