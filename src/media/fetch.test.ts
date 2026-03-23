@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
@@ -67,11 +67,9 @@ describe("fetchRemoteMedia", () => {
   const redactedTelegramToken = `${telegramToken.slice(0, 6)}…${telegramToken.slice(-4)}`;
   const telegramFileUrl = `https://api.telegram.org/file/bot${telegramToken}/photos/1.jpg`;
 
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ fetchRemoteMedia } = await import("./fetch.js"));
-  });
-
-  beforeEach(() => {
     vi.useRealTimers();
     fetchWithSsrFGuardMock.mockReset().mockImplementation(async (paramsUnknown: unknown) => {
       const params = paramsUnknown as {
