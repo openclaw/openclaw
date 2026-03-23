@@ -30,8 +30,17 @@ type ToolStartRecord = {
 /** Track tool execution start data for after_tool_call hook. */
 const toolStartData = new Map<string, ToolStartRecord>();
 
+let d0ToolLifecycleReporterPromise:
+  | Promise<typeof import("./d0-tool-analytics-reporter.js")>
+  | undefined;
+
 function buildToolStartKey(runId: string, toolCallId: string): string {
   return `${runId}:${toolCallId}`;
+}
+
+function loadD0ToolLifecycleReporter() {
+  d0ToolLifecycleReporterPromise ??= import("./d0-tool-analytics-reporter.js");
+  return d0ToolLifecycleReporterPromise;
 }
 
 function isCronAddAction(args: unknown): boolean {
@@ -430,9 +439,9 @@ export async function handleToolExecutionEnd(
   emitToolResultOutput({ ctx, toolName, meta, isToolError, result, sanitizedResult });
 
   // Run after_tool_call plugin hook (fire-and-forget)
+  const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
   const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();
   if (hookRunnerAfter?.hasHooks("after_tool_call")) {
-    const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
     const hookEvent: PluginHookAfterToolCallEvent = {
       toolName,
       params: afterToolCallArgs,
@@ -455,4 +464,27 @@ export async function handleToolExecutionEnd(
         ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
       });
   }
+
+  void loadD0ToolLifecycleReporter()
+    .then(({ reportD0ToolLifecycle }) =>
+      reportD0ToolLifecycle(
+        {
+          toolName,
+          status: isToolError ? "error" : "success",
+          runId,
+          toolCallId,
+          sessionKey: ctx.params.sessionKey,
+          sessionId: ctx.params.sessionId,
+          durationMs,
+          error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
+        },
+        {
+          sessionKey: ctx.params.sessionKey,
+          sessionId: ctx.params.sessionId,
+        },
+      ),
+    )
+    .catch((err) => {
+      ctx.log.warn(`D0 tool analytics report failed: tool=${toolName} error=${String(err)}`);
+    });
 }
