@@ -16,7 +16,12 @@ export {
   buildComputedAccountStatusSnapshot,
   buildTokenChannelStatusSummary,
 } from "openclaw/plugin-sdk/status-helpers";
-export { DEFAULT_ACCOUNT_ID, formatDocsLink, setSetupChannelEnabled, splitSetupEntries } from "openclaw/plugin-sdk/setup";
+export {
+  DEFAULT_ACCOUNT_ID,
+  formatDocsLink,
+  setSetupChannelEnabled,
+  splitSetupEntries,
+} from "openclaw/plugin-sdk/setup";
 export * from "../../src/plugin-sdk/line-runtime.js";
 
 export * from "./src/accounts.js";
@@ -25,15 +30,76 @@ export * from "./src/bot-access.js";
 export * from "./src/channel-access-token.js";
 export * from "./src/config-schema.js";
 export * from "./src/download.js";
-export * from "./src/flex-templates.js";
+export {
+  createActionCard,
+  createAgendaCard,
+  createAppleTvRemoteCard,
+  createCarousel,
+  createDeviceControlCard,
+  createEventCard,
+  createImageCard,
+  createInfoCard,
+  createListCard,
+  createMediaPlayerCard,
+  createNotificationBubble,
+  createReceiptCard,
+  toFlexMessage,
+} from "./src/flex-templates.js";
+export type {
+  CardAction,
+  FlexBox,
+  FlexBubble,
+  FlexButton,
+  FlexCarousel,
+  FlexComponent,
+  FlexContainer,
+  FlexImage,
+  FlexText,
+  ListItem,
+} from "./src/flex-templates.js";
 export * from "./src/group-keys.js";
 export * from "./src/markdown-to-line.js";
 export * from "./src/probe.js";
-export * from "./src/rich-menu.js";
+export {
+  cancelDefaultRichMenu,
+  createDefaultMenuConfig,
+  createGridLayout,
+  createRichMenu,
+  createRichMenuAlias,
+  datetimePickerAction,
+  deleteRichMenu,
+  deleteRichMenuAlias,
+  getDefaultRichMenuId,
+  getRichMenu,
+  getRichMenuIdOfUser,
+  getRichMenuList,
+  linkRichMenuToUser,
+  linkRichMenuToUsers,
+  messageAction,
+  postbackAction,
+  setDefaultRichMenu,
+  unlinkRichMenuFromUser,
+  unlinkRichMenuFromUsers,
+  uriAction,
+  uploadRichMenuImage,
+} from "./src/rich-menu.js";
+export type {
+  CreateRichMenuParams,
+  RichMenuArea,
+  RichMenuAreaRequest,
+  RichMenuRequest,
+  RichMenuResponse,
+  RichMenuSize,
+} from "./src/rich-menu.js";
 export * from "./src/send.js";
 export * from "./src/signature.js";
 export * from "./src/template-messages.js";
-export type { LineChannelData, LineConfig, ResolvedLineAccount } from "./src/types.js";
+export type {
+  LineChannelData,
+  LineConfig,
+  LineProbeResult,
+  ResolvedLineAccount,
+} from "./src/types.js";
 export * from "./src/webhook-node.js";
 export * from "./src/webhook.js";
 export * from "./src/webhook-utils.js";
