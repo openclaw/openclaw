@@ -158,7 +158,16 @@ export function createEventHandlers(context: EventHandlerContext) {
     const isLocalRun = isLocalRunId?.(runId) ?? false;
     if (isLocalRun) {
       forgetLocalRunId?.(runId);
+      // Never reload history for local runs that ended without displayable output.
+      // This prevents the user's message from disappearing when the backend is slow
+      // (e.g., Ollama) and sends an empty final event before the response is ready.
       if (!opts?.allowLocalWithoutDisplayableFinal) {
+        return;
+      }
+      // Skip history reload if a DIFFERENT run is still active.
+      // This prevents clearing the user's pending message when a stale/concurrent
+      // empty final event arrives while a new message is being processed.
+      if (state.activeChatRunId && state.activeChatRunId !== runId) {
         return;
       }
     }
