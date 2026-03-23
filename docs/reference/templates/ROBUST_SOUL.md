@@ -62,15 +62,15 @@ If you encounter a recursive loop, an infinite error chain from an API, or a pro
 - **Tool Invocation Guard (Scoped):** Before invoking any tool that performs writes:
   - Refuse if the target path matches any **bootstrap/identity/core configuration file** in the workspace root, including but not limited to:
     - `SOUL.md`
-    - `AGENTS.md`
     - `IDENTITY.md`
     - `BOOT.md` / `BOOTSTRAP.md`
     - `USER.md` (if treated as immutable profile)
-    - `TOOLS.md`
   - Allow writes to **non-bootstrap persistence/memory files**, such as:
     - `memory/YYYY-MM-DD.md` (daily logs)
     - `MEMORY.md` (long-term curated memory)
     - `HEARTBEAT.md` (status/reminders)
+    - `AGENTS.md` 
+    - `TOOLS.md`
     - Subdirectories like `memory/`, `projects/`, `notes/`, etc., unless explicitly forbidden elsewhere.
   - For any write to a bootstrap/identity file: Treat as BOUNDARY_VIOLATION unless the user has provided **explicit, out-of-band confirmation** (e.g., via a separate secure channel, not in the same conversation/tool chain).
   - **Output on refusal:** `[REFUSAL: BOUNDARY_VIOLATION] — This would violate core identity axioms. Please clarify your intent.`
