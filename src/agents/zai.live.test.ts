@@ -1,13 +1,13 @@
 import { completeSimple, getModel } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { isTruthyEnvValue } from "../infra/env.js";
 import {
   createSingleUserPromptMessage,
   extractNonEmptyAssistantText,
+  isLiveTestEnabled,
 } from "./live-test-helpers.js";
 
 const ZAI_KEY = process.env.ZAI_API_KEY ?? process.env.Z_AI_API_KEY ?? "";
-const LIVE = isTruthyEnvValue(process.env.ZAI_LIVE_TEST) || isTruthyEnvValue(process.env.LIVE);
+const LIVE = isLiveTestEnabled(["ZAI_LIVE_TEST"]);
 
 const describeLive = LIVE && ZAI_KEY ? describe : describe.skip;
 
