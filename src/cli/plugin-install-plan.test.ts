@@ -82,6 +82,29 @@ describe("plugin install plan helpers", () => {
     expect(result).toBeNull();
   });
 
+  it("rejects plugin-id bundled matches when the catalog npm spec was overridden", () => {
+    const findBundledSource = vi
+      .fn()
+      .mockImplementation(({ kind }: { kind: "pluginId" | "npmSpec"; value: string }) => {
+        if (kind === "pluginId") {
+          return {
+            pluginId: "whatsapp",
+            localPath: "/tmp/extensions/whatsapp",
+            npmSpec: "@openclaw/whatsapp",
+          };
+        }
+        return undefined;
+      });
+
+    const result = resolveBundledInstallPlanForCatalogEntry({
+      pluginId: "whatsapp",
+      npmSpec: "@vendor/whatsapp-fork",
+      findBundledSource,
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("uses npm-spec bundled fallback only for package-not-found", () => {
     const findBundledSource = vi.fn().mockReturnValue({
       pluginId: "voice-call",
