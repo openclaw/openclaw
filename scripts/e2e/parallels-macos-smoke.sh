@@ -438,15 +438,6 @@ guest_current_user_exec() {
     "$@"
 }
 
-guest_current_user_cli() {
-  local parts=() arg joined=""
-  for arg in "$@"; do
-    parts+=("$(shell_quote "$arg")")
-  done
-  joined="${parts[*]}"
-  guest_current_user_sh "$joined"
-}
-
 guest_script() {
   local mode script
   mode="$1"
@@ -684,9 +675,9 @@ EOF
 }
 
 run_ref_onboard() {
-  guest_current_user_cli \
+  guest_current_user_exec \
     /usr/bin/env "OPENAI_API_KEY=$OPENAI_API_KEY_VALUE" \
-    "$GUEST_OPENCLAW_BIN" onboard \
+    "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" onboard \
     --non-interactive \
     --mode local \
     --auth-choice openai-api-key \
@@ -700,23 +691,19 @@ run_ref_onboard() {
 }
 
 verify_gateway() {
-  guest_current_user_cli "$GUEST_OPENCLAW_BIN" gateway status --deep --require-rpc
+  guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" gateway status --deep --require-rpc
 }
 
 show_gateway_status_compat() {
-  if guest_current_user_cli "$GUEST_OPENCLAW_BIN" gateway status --help | grep -Fq -- "--require-rpc"; then
-    guest_current_user_cli "$GUEST_OPENCLAW_BIN" gateway status --deep --require-rpc
+  if guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" gateway status --help | grep -Fq -- "--require-rpc"; then
+    guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" gateway status --deep --require-rpc
     return
   fi
-  guest_current_user_cli "$GUEST_OPENCLAW_BIN" gateway status --deep
+  guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" gateway status --deep
 }
 
 verify_turn() {
-  guest_current_user_cli \
-    "$GUEST_OPENCLAW_BIN" agent \
-    --agent main \
-    --message "Reply with exact ASCII text OK only." \
-    --json
+  guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" agent --agent main --message ping --json
 }
 
 configure_discord_smoke() {

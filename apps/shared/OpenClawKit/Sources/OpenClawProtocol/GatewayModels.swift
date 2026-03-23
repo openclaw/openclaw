@@ -537,6 +537,9 @@ public struct AgentParams: Codable, Sendable {
     public let lane: String?
     public let extrasystemprompt: String?
     public let internalevents: [[String: AnyCodable]]?
+    public let clienttools: [[String: AnyCodable]]?
+    public let disabletools: Bool?
+    public let streamparams: [String: AnyCodable]?
     public let inputprovenance: [String: AnyCodable]?
     public let idempotencykey: String
     public let label: String?
@@ -566,6 +569,9 @@ public struct AgentParams: Codable, Sendable {
         lane: String?,
         extrasystemprompt: String?,
         internalevents: [[String: AnyCodable]]?,
+        clienttools: [[String: AnyCodable]]?,
+        disabletools: Bool?,
+        streamparams: [String: AnyCodable]?,
         inputprovenance: [String: AnyCodable]?,
         idempotencykey: String,
         label: String?)
@@ -594,6 +600,9 @@ public struct AgentParams: Codable, Sendable {
         self.lane = lane
         self.extrasystemprompt = extrasystemprompt
         self.internalevents = internalevents
+        self.clienttools = clienttools
+        self.disabletools = disabletools
+        self.streamparams = streamparams
         self.inputprovenance = inputprovenance
         self.idempotencykey = idempotencykey
         self.label = label
@@ -624,6 +633,9 @@ public struct AgentParams: Codable, Sendable {
         case lane
         case extrasystemprompt = "extraSystemPrompt"
         case internalevents = "internalEvents"
+        case clienttools = "clientTools"
+        case disabletools = "disableTools"
+        case streamparams = "streamParams"
         case inputprovenance = "inputProvenance"
         case idempotencykey = "idempotencyKey"
         case label

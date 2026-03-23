@@ -512,6 +512,7 @@ function runAgentAttempt(params: {
     prompt: effectivePrompt,
     images: params.isFallbackRetry ? undefined : params.opts.images,
     clientTools: params.opts.clientTools,
+    disableTools: params.opts.disableTools,
     provider: params.providerOverride,
     model: params.modelOverride,
     authProfileId,
@@ -1236,6 +1237,7 @@ async function agentCommandInternal(
             endedAt: Date.now(),
             aborted: result.meta.aborted ?? false,
             stopReason,
+            pendingToolCalls: result.meta.pendingToolCalls,
           },
         });
       }

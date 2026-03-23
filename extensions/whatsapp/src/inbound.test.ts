@@ -1,15 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-let extractLocationData: typeof import("./inbound.js").extractLocationData;
-let extractMediaPlaceholder: typeof import("./inbound.js").extractMediaPlaceholder;
-let extractText: typeof import("./inbound.js").extractText;
+import { describe, expect, it } from "vitest";
+import { extractLocationData, extractMediaPlaceholder, extractText } from "./inbound.js";
 
 describe("web inbound helpers", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ extractLocationData, extractMediaPlaceholder, extractText } = await import("./inbound.js"));
-  });
-
   it("prefers the main conversation body", () => {
     const body = extractText({
       conversation: " hello ",

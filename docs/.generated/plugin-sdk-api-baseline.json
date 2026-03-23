@@ -55,7 +55,7 @@
           "exportName": "onDiagnosticEvent",
           "kind": "function",
           "source": {
-            "line": 229,
+            "line": 223,
             "path": "src/infra/diagnostic-events.ts"
           }
         },
@@ -325,7 +325,7 @@
           "exportName": "DiagnosticEventPayload",
           "kind": "type",
           "source": {
-            "line": 150,
+            "line": 152,
             "path": "src/infra/diagnostic-events.ts"
           }
         },
@@ -2359,7 +2359,7 @@
           "exportName": "buildCommandsMessage",
           "kind": "function",
           "source": {
-            "line": 961,
+            "line": 847,
             "path": "src/auto-reply/status.ts"
           }
         },
@@ -2368,7 +2368,7 @@
           "exportName": "buildCommandsMessagePaginated",
           "kind": "function",
           "source": {
-            "line": 970,
+            "line": 856,
             "path": "src/auto-reply/status.ts"
           }
         },
@@ -2404,7 +2404,7 @@
           "exportName": "buildHelpMessage",
           "kind": "function",
           "source": {
-            "line": 841,
+            "line": 727,
             "path": "src/auto-reply/status.ts"
           }
         },

@@ -1,8 +1,4 @@
 import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "../errors.js";
-import {
-  assertBrowserNavigationAllowed,
-  withBrowserNavigationPolicy,
-} from "../navigation-guard.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { getProfileContext, jsonError, toNumber, toStringOrEmpty } from "./utils.js";
@@ -132,10 +128,6 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       ctx,
       mapTabError: true,
       run: async (profileCtx) => {
-        await assertBrowserNavigationAllowed({
-          url,
-          ...withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy),
-        });
         await profileCtx.ensureBrowserAvailable();
         const tab = await profileCtx.openTab(url);
         res.json(tab);

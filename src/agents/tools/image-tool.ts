@@ -3,7 +3,6 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { getMediaUnderstandingProvider } from "../../media-understanding/provider-registry.js";
 import { buildProviderRegistry } from "../../media-understanding/runner.js";
 import { loadWebMedia } from "../../media/web-media.js";
-import type { MediaUnderstandingProvider } from "../../plugin-sdk/media-understanding.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import {
@@ -39,24 +38,10 @@ const ANTHROPIC_IMAGE_PRIMARY = "anthropic/claude-opus-4-6";
 const ANTHROPIC_IMAGE_FALLBACK = "anthropic/claude-opus-4-5";
 const DEFAULT_MAX_IMAGES = 20;
 
-const imageToolProviderDeps = {
-  buildProviderRegistry,
-  getMediaUnderstandingProvider,
-};
-
 export const __testing = {
   decodeDataUrl,
   coerceImageAssistantText,
   resolveImageToolMaxTokens,
-  setProviderDepsForTest(overrides?: {
-    buildProviderRegistry?: typeof buildProviderRegistry;
-    getMediaUnderstandingProvider?: typeof getMediaUnderstandingProvider;
-  }) {
-    imageToolProviderDeps.buildProviderRegistry =
-      overrides?.buildProviderRegistry ?? buildProviderRegistry;
-    imageToolProviderDeps.getMediaUnderstandingProvider =
-      overrides?.getMediaUnderstandingProvider ?? getMediaUnderstandingProvider;
-  },
 } as const;
 
 function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requestedMaxTokens = 4096) {
@@ -154,16 +139,13 @@ async function runImagePrompt(params: {
 }> {
   const effectiveCfg = applyImageModelConfigDefaults(params.cfg, params.imageModelConfig);
   const providerCfg: OpenClawConfig = effectiveCfg ?? {};
-  const providerRegistry = imageToolProviderDeps.buildProviderRegistry(undefined, providerCfg);
+  const providerRegistry = buildProviderRegistry(undefined, providerCfg);
 
   const result = await runWithImageModelFallback({
     cfg: effectiveCfg,
     modelOverride: params.modelOverride,
     run: async (provider, modelId) => {
-      const imageProvider = imageToolProviderDeps.getMediaUnderstandingProvider(
-        provider,
-        providerRegistry as Map<string, MediaUnderstandingProvider>,
-      );
+      const imageProvider = getMediaUnderstandingProvider(provider, providerRegistry);
       if (!imageProvider) {
         throw new Error(`No media-understanding provider registered for ${provider}`);
       }

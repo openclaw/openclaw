@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveProviderCapabilitiesWithPlugin as resolveProviderCapabilitiesWithPluginRuntime } from "../plugins/provider-runtime.js";
+import { resolveProviderCapabilitiesWithPlugin } from "../plugins/provider-runtime.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export type ProviderCapabilities = {
@@ -82,31 +82,13 @@ const PLUGIN_CAPABILITIES_FALLBACKS: Record<string, Partial<ProviderCapabilities
   },
 };
 
-const defaultResolveProviderCapabilitiesWithPlugin = resolveProviderCapabilitiesWithPluginRuntime;
-const providerCapabilityDeps = {
-  resolveProviderCapabilitiesWithPlugin: defaultResolveProviderCapabilitiesWithPlugin,
-};
-
-export const __testing = {
-  setResolveProviderCapabilitiesWithPluginForTest(
-    resolveProviderCapabilitiesWithPlugin?: typeof defaultResolveProviderCapabilitiesWithPlugin,
-  ): void {
-    providerCapabilityDeps.resolveProviderCapabilitiesWithPlugin =
-      resolveProviderCapabilitiesWithPlugin ?? defaultResolveProviderCapabilitiesWithPlugin;
-  },
-  resetDepsForTests(): void {
-    providerCapabilityDeps.resolveProviderCapabilitiesWithPlugin =
-      defaultResolveProviderCapabilitiesWithPlugin;
-  },
-};
-
 export function resolveProviderCapabilities(
   provider?: string | null,
   options?: ProviderCapabilityLookupOptions,
 ): ProviderCapabilities {
   const normalized = normalizeProviderId(provider ?? "");
   const pluginCapabilities = normalized
-    ? providerCapabilityDeps.resolveProviderCapabilitiesWithPlugin({
+    ? resolveProviderCapabilitiesWithPlugin({
         provider: normalized,
         config: options?.config,
         workspaceDir: options?.workspaceDir,

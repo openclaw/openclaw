@@ -1,5 +1,11 @@
 import { ChannelType } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerDiscordComponentEntries } from "./components-registry.js";
+import {
+  editDiscordComponentMessage,
+  registerBuiltDiscordComponentMessage,
+  sendDiscordComponentMessage,
+} from "./send.components.js";
 import { makeDiscordRest } from "./send.test-harness.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn(() => ({ session: { dmScope: "main" } })));
@@ -18,23 +24,10 @@ vi.mock("./components-registry.js", () => ({
   registerDiscordComponentEntries: vi.fn(),
 }));
 
-let registerDiscordComponentEntries: typeof import("./components-registry.js").registerDiscordComponentEntries;
-let editDiscordComponentMessage: typeof import("./send.components.js").editDiscordComponentMessage;
-let registerBuiltDiscordComponentMessage: typeof import("./send.components.js").registerBuiltDiscordComponentMessage;
-let sendDiscordComponentMessage: typeof import("./send.components.js").sendDiscordComponentMessage;
-
 describe("sendDiscordComponentMessage", () => {
-  let registerMock: ReturnType<typeof vi.mocked<typeof registerDiscordComponentEntries>>;
+  const registerMock = vi.mocked(registerDiscordComponentEntries);
 
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ registerDiscordComponentEntries } = await import("./components-registry.js"));
-    ({
-      editDiscordComponentMessage,
-      registerBuiltDiscordComponentMessage,
-      sendDiscordComponentMessage,
-    } = await import("./send.components.js"));
-    registerMock = vi.mocked(registerDiscordComponentEntries);
+  beforeEach(() => {
     vi.clearAllMocks();
   });
 

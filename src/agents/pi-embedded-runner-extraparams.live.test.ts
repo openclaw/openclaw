@@ -253,11 +253,7 @@ describeGeminiLive("pi embedded extra params (gemini live)", () => {
     const thinkingConfig = (
       capturedPayload?.config as { thinkingConfig?: Record<string, unknown> } | undefined
     )?.thinkingConfig;
-    const thinkingBudget = thinkingConfig?.thinkingBudget;
-    if (thinkingBudget !== undefined) {
-      expect(typeof thinkingBudget).toBe("number");
-      expect(thinkingBudget).toBeGreaterThanOrEqual(0);
-    }
+    expect(thinkingConfig?.thinkingBudget).toBeUndefined();
     expect(thinkingConfig?.thinkingLevel).toBe("HIGH");
 
     const imagePart = (

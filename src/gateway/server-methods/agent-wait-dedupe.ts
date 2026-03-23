@@ -1,10 +1,17 @@
 import type { DedupeEntry } from "../server-shared.js";
+import { parsePendingToolCalls } from "./pending-tool-calls.js";
 
 export type AgentWaitTerminalSnapshot = {
   status: "ok" | "error" | "timeout";
   startedAt?: number;
   endedAt?: number;
   error?: string;
+  stopReason?: string;
+  pendingToolCalls?: Array<{
+    id: string;
+    name: string;
+    arguments: string;
+  }>;
 };
 
 const AGENT_WAITERS_BY_RUN_ID = new Map<string, Set<() => void>>();
@@ -72,6 +79,14 @@ export function readTerminalSnapshotFromDedupeEntry(
         endedAt?: unknown;
         error?: unknown;
         summary?: unknown;
+        stopReason?: unknown;
+        pendingToolCalls?: unknown;
+        result?: {
+          meta?: {
+            stopReason?: unknown;
+            pendingToolCalls?: unknown;
+          };
+        };
       }
     | undefined;
   const status = typeof payload?.status === "string" ? payload.status : undefined;
@@ -87,6 +102,15 @@ export function readTerminalSnapshotFromDedupeEntry(
       : typeof payload?.summary === "string"
         ? payload.summary
         : entry.error?.message;
+  const stopReason =
+    typeof payload?.result?.meta?.stopReason === "string"
+      ? payload.result.meta.stopReason
+      : typeof payload?.stopReason === "string"
+        ? payload.stopReason
+        : undefined;
+  const pendingToolCalls =
+    parsePendingToolCalls(payload?.result?.meta?.pendingToolCalls) ??
+    parsePendingToolCalls(payload?.pendingToolCalls);
 
   if (status === "ok" || status === "timeout") {
     return {
@@ -94,6 +118,8 @@ export function readTerminalSnapshotFromDedupeEntry(
       startedAt,
       endedAt,
       error: status === "timeout" ? errorMessage : undefined,
+      stopReason,
+      pendingToolCalls,
     };
   }
   if (status === "error" || !entry.ok) {
@@ -102,6 +128,8 @@ export function readTerminalSnapshotFromDedupeEntry(
       startedAt,
       endedAt,
       error: errorMessage,
+      stopReason,
+      pendingToolCalls,
     };
   }
   return null;
