@@ -27,12 +27,7 @@ export function isOpenRouterBaseUrl(baseUrl: unknown): boolean {
   }
 }
 
-function routesOpenRouterToProvider(
-  model: {
-    compat?: unknown;
-  },
-  providerId: string,
-): boolean {
+function resolveExclusiveOpenRouterProvider(model: { compat?: unknown }): string | undefined {
   const compat =
     model.compat && typeof model.compat === "object" && !Array.isArray(model.compat)
       ? (model.compat as { openRouterRouting?: unknown })
@@ -55,20 +50,14 @@ function routesOpenRouterToProvider(
           .flatMap((entry) => (typeof entry === "string" ? [entry.trim().toLowerCase()] : []))
           .filter(Boolean)
       : [];
-
-  const only = normalizeRoutingList(routing?.only);
-  if (only.length === 1 && only[0] === providerId) {
-    return true;
-  }
-
   const allowFallbacks = routing?.allowFallbacks ?? routing?.allow_fallbacks;
   const order = normalizeRoutingList(routing?.order);
-  if (allowFallbacks === false && order.length === 1 && order[0] === providerId) {
-    return true;
+  if (allowFallbacks === false && order.length === 1) {
+    return order[0];
   }
 
   const providers = normalizeRoutingList(routing?.providers);
-  return providers.length === 1 && providers[0] === providerId;
+  return providers.length === 1 ? providers[0] : undefined;
 }
 
 export function hasOpenRouterStrictToolSupportRoute(model: {
@@ -82,10 +71,17 @@ export function hasOpenRouterStrictToolSupportRoute(model: {
   }
 
   const modelId = typeof model.id === "string" ? model.id.trim().toLowerCase() : "";
-  if (modelId.startsWith("openai/") || routesOpenRouterToProvider(model, "openai")) {
+  const exclusiveProvider = resolveExclusiveOpenRouterProvider(model);
+  if (exclusiveProvider === "openai") {
     return true;
   }
-  if (!modelId.startsWith("anthropic/") && !routesOpenRouterToProvider(model, "anthropic")) {
+  if (modelId.startsWith("openai/")) {
+    return exclusiveProvider === undefined;
+  }
+  if (exclusiveProvider && exclusiveProvider !== "anthropic") {
+    return false;
+  }
+  if (!modelId.startsWith("anthropic/") && exclusiveProvider !== "anthropic") {
     return false;
   }
 

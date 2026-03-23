@@ -378,7 +378,7 @@ describe("extra-params: OpenAI-compatible tool payloads", () => {
     expect(payload.tools?.[0]?.function?.strict).toBe(true);
   });
 
-  it("keeps function.strict for openrouter auto requests dynamically routed to OpenAI", () => {
+  it("strips function.strict when provider.only does not guarantee an exclusive OpenAI route", () => {
     const payload = runExtraParamsCase({
       applyProvider: "openrouter",
       applyModelId: "auto",
@@ -419,7 +419,7 @@ describe("extra-params: OpenAI-compatible tool payloads", () => {
       tools?: Array<{ function?: Record<string, unknown> }>;
     };
 
-    expect(payload.tools?.[0]?.function?.strict).toBe(true);
+    expect(payload.tools?.[0]?.function).not.toHaveProperty("strict");
   });
 
   it("strips function.strict when an OpenRouter route only prefers OpenAI but still allows fallbacks", () => {
@@ -549,6 +549,51 @@ describe("extra-params: OpenAI-compatible tool payloads", () => {
         api: "openai-completions",
         provider: "openrouter",
         id: "deepseek/deepseek-chat-v3-0324",
+        baseUrl: "https://openrouter.ai/api/v1",
+        headers: { "x-anthropic-beta": "structured-outputs-2025-11-13" },
+      }),
+      payload: {
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "web_search",
+              parameters: { type: "object", properties: {} },
+              strict: true,
+            },
+          },
+        ],
+      },
+    }).payload as {
+      tools?: Array<{ function?: Record<string, unknown> }>;
+    };
+
+    expect(payload.tools?.[0]?.function).not.toHaveProperty("strict");
+  });
+
+  it("strips function.strict for Anthropic model slugs when routing is pinned to a non-Anthropic provider", () => {
+    const payload = runExtraParamsCase({
+      applyProvider: "openrouter",
+      applyModelId: "anthropic/claude-sonnet-4",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/anthropic/claude-sonnet-4": {
+                params: {
+                  provider: {
+                    providers: ["amazon-bedrock"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      model: makeModel({
+        api: "openai-completions",
+        provider: "openrouter",
+        id: "anthropic/claude-sonnet-4",
         baseUrl: "https://openrouter.ai/api/v1",
         headers: { "x-anthropic-beta": "structured-outputs-2025-11-13" },
       }),
