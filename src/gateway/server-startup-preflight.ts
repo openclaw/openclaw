@@ -12,7 +12,18 @@ import type { GatewayRuntimeConfig } from "./server-runtime-config.js";
 export type GatewayStartupPreflightPhase =
   | "config_legacy_migration"
   | "config_validation"
-  | "plugin_auto_enable";
+  | "plugin_auto_enable"
+  | "plugin_bootstrap"
+  | "secrets_precheck"
+  | "auth_bootstrap"
+  | "runtime_policy"
+  | "tls_runtime_resolution"
+  | "transport_bootstrap"
+  | "sidecar_startup"
+  | "discovery_startup"
+  | "tailscale_exposure"
+  | "runtime_config_resolution"
+  | "control_ui_root_resolution";
 
 export type GatewayStartupContext = {
   preflightSnapshot: ConfigFileSnapshot;
@@ -47,8 +58,29 @@ function isGatewayStartupPreflightPhase(value: unknown): value is GatewayStartup
   return (
     value === "config_legacy_migration" ||
     value === "config_validation" ||
-    value === "plugin_auto_enable"
+    value === "plugin_auto_enable" ||
+    value === "plugin_bootstrap" ||
+    value === "secrets_precheck" ||
+    value === "auth_bootstrap" ||
+    value === "runtime_policy" ||
+    value === "tls_runtime_resolution" ||
+    value === "transport_bootstrap" ||
+    value === "sidecar_startup" ||
+    value === "discovery_startup" ||
+    value === "tailscale_exposure" ||
+    value === "runtime_config_resolution" ||
+    value === "control_ui_root_resolution"
   );
+}
+
+function formatStartupPhaseErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message.trim().length > 0) {
+    return err.message;
+  }
+  if (typeof err === "string" && err.trim().length > 0) {
+    return err;
+  }
+  return fallback;
 }
 
 export function classifyGatewayStartupPreflightError(
@@ -223,6 +255,42 @@ type GatewayStartupRuntimePolicyDeps = {
   seedControlUiAllowedOrigins: (config: OpenClawConfig) => Promise<OpenClawConfig>;
 };
 
+type GatewayStartupPluginBootstrapPhaseDeps<TBootstrapResult> = {
+  loadPlugins: () => Promise<TBootstrapResult> | TBootstrapResult;
+};
+
+type GatewayStartupTlsRuntimePhaseDeps<TTlsRuntime> = {
+  loadTlsRuntime: () => Promise<TTlsRuntime> | TTlsRuntime;
+};
+
+type GatewayStartupTransportBootstrapPhaseDeps<TTransportRuntime> = {
+  bootstrapTransport: () => Promise<TTransportRuntime> | TTransportRuntime;
+};
+
+type GatewayStartupSidecarPhaseDeps<TSidecarRuntime> = {
+  startSidecars: () => Promise<TSidecarRuntime> | TSidecarRuntime;
+};
+
+type GatewayStartupDiscoveryPhaseDeps<TDiscoveryRuntime> = {
+  startDiscovery: () => Promise<TDiscoveryRuntime> | TDiscoveryRuntime;
+};
+
+type GatewayStartupTailscaleExposurePhaseDeps<TTailscaleCleanup> = {
+  startTailscaleExposure: () => Promise<TTailscaleCleanup> | TTailscaleCleanup;
+};
+
+type GatewayStartupRuntimeConfigPhaseDeps = {
+  context: GatewayStartupContext;
+  resolveRuntimeConfig: (config: OpenClawConfig) => Promise<GatewayRuntimeConfig>;
+};
+
+type GatewayStartupControlUiRootPhaseDeps = {
+  context: GatewayStartupContext & { runtimeConfig: GatewayRuntimeConfig };
+  resolveControlUiRootState: (params: {
+    runtimeConfig: GatewayRuntimeConfig;
+  }) => Promise<ControlUiRootState | undefined>;
+};
+
 /**
  * Startup phase: fail-fast secrets precheck before runtime boot.
  */
@@ -237,7 +305,15 @@ export async function runGatewayStartupSecretsPrecheck(
     );
   }
   const startupPreflightConfig = deps.prepareConfig(freshSnapshot.config);
-  await deps.activateRuntimeSecrets(startupPreflightConfig);
+  try {
+    await deps.activateRuntimeSecrets(startupPreflightConfig);
+  } catch (err) {
+    throw new GatewayStartupPreflightError(
+      "secrets_precheck",
+      formatStartupPhaseErrorMessage(err, "Failed to resolve startup secrets."),
+      { cause: err },
+    );
+  }
   return {
     ...deps.context,
     preflightSnapshot: freshSnapshot,
@@ -254,35 +330,46 @@ export async function runGatewayStartupAuthBootstrap(
 ): Promise<GatewayStartupContext> {
   const env = deps.env ?? process.env;
 
-  let cfgAtStart = deps.loadConfig();
-  const authBootstrap = await deps.ensureGatewayStartupAuth({
-    cfg: cfgAtStart,
-    env,
-    authOverride: deps.authOverride,
-    tailscaleOverride: deps.tailscaleOverride,
-    persist: true,
-  });
-  cfgAtStart = authBootstrap.cfg;
-  if (authBootstrap.generatedToken) {
-    if (authBootstrap.persistedGeneratedToken) {
-      deps.log.info(
-        "Gateway auth token was missing. Generated a new token and saved it to config (gateway.auth.token).",
-      );
-    } else {
-      deps.log.warn(
-        "Gateway auth token was missing. Generated a runtime token for this startup without changing config; restart will generate a different token. Persist one with `openclaw config set gateway.auth.mode token` and `openclaw config set gateway.auth.token <token>`.",
-      );
+  try {
+    let cfgAtStart = deps.loadConfig();
+    const authBootstrap = await deps.ensureGatewayStartupAuth({
+      cfg: cfgAtStart,
+      env,
+      authOverride: deps.authOverride,
+      tailscaleOverride: deps.tailscaleOverride,
+      persist: true,
+    });
+    cfgAtStart = authBootstrap.cfg;
+    if (authBootstrap.generatedToken) {
+      if (authBootstrap.persistedGeneratedToken) {
+        deps.log.info(
+          "Gateway auth token was missing. Generated a new token and saved it to config (gateway.auth.token).",
+        );
+      } else {
+        deps.log.warn(
+          "Gateway auth token was missing. Generated a runtime token for this startup without changing config; restart will generate a different token. Persist one with `openclaw config set gateway.auth.mode token` and `openclaw config set gateway.auth.token <token>`.",
+        );
+      }
     }
-  }
 
-  return {
-    ...deps.context,
-    config: (await deps.activateRuntimeSecrets(cfgAtStart)).config,
-    authBootstrap: {
-      generatedToken: Boolean(authBootstrap.generatedToken),
-      persistedGeneratedToken: authBootstrap.persistedGeneratedToken,
-    },
-  };
+    return {
+      ...deps.context,
+      config: (await deps.activateRuntimeSecrets(cfgAtStart)).config,
+      authBootstrap: {
+        generatedToken: Boolean(authBootstrap.generatedToken),
+        persistedGeneratedToken: authBootstrap.persistedGeneratedToken,
+      },
+    };
+  } catch (err) {
+    if (err instanceof GatewayStartupPreflightError) {
+      throw err;
+    }
+    throw new GatewayStartupPreflightError(
+      "auth_bootstrap",
+      formatStartupPhaseErrorMessage(err, "Failed to bootstrap gateway auth during startup."),
+      { cause: err },
+    );
+  }
 }
 
 export function createGatewayStartupContext(
@@ -306,19 +393,179 @@ export function createGatewayStartupContext(
 export async function runGatewayStartupRuntimePolicyPhase(
   deps: GatewayStartupRuntimePolicyDeps,
 ): Promise<GatewayStartupContext> {
-  const diagnosticsEnabled = deps.isDiagnosticsEnabled(deps.context.config);
-  if (diagnosticsEnabled) {
-    deps.startDiagnosticHeartbeat();
+  try {
+    const diagnosticsEnabled = deps.isDiagnosticsEnabled(deps.context.config);
+    if (diagnosticsEnabled) {
+      deps.startDiagnosticHeartbeat();
+    }
+
+    deps.setGatewaySigusr1RestartPolicy({
+      allowExternal: deps.isRestartEnabled(deps.context.config),
+    });
+    deps.setPreRestartDeferralCheck(deps.getPendingWorkCount);
+
+    return {
+      ...deps.context,
+      config: await deps.seedControlUiAllowedOrigins(deps.context.config),
+      diagnosticsEnabled,
+    };
+  } catch (err) {
+    if (err instanceof GatewayStartupPreflightError) {
+      throw err;
+    }
+    throw new GatewayStartupPreflightError(
+      "runtime_policy",
+      formatStartupPhaseErrorMessage(err, "Failed to apply startup runtime policies."),
+      { cause: err },
+    );
   }
+}
 
-  deps.setGatewaySigusr1RestartPolicy({
-    allowExternal: deps.isRestartEnabled(deps.context.config),
-  });
-  deps.setPreRestartDeferralCheck(deps.getPendingWorkCount);
+/**
+ * Startup phase: initialize plugin registry and plugin-backed gateway methods.
+ */
+export async function runGatewayStartupPluginBootstrapPhase<TBootstrapResult>(
+  deps: GatewayStartupPluginBootstrapPhaseDeps<TBootstrapResult>,
+): Promise<TBootstrapResult> {
+  try {
+    return await deps.loadPlugins();
+  } catch (err) {
+    throw new GatewayStartupPreflightError(
+      "plugin_bootstrap",
+      formatStartupPhaseErrorMessage(err, "Failed to bootstrap gateway plugins."),
+      { cause: err },
+    );
+  }
+}
 
-  return {
-    ...deps.context,
-    config: await deps.seedControlUiAllowedOrigins(deps.context.config),
-    diagnosticsEnabled,
-  };
+/**
+ * Startup phase: resolve and validate TLS runtime before transport boot.
+ */
+export async function runGatewayStartupTlsRuntimePhase<TTlsRuntime>(
+  deps: GatewayStartupTlsRuntimePhaseDeps<TTlsRuntime>,
+): Promise<TTlsRuntime> {
+  try {
+    return await deps.loadTlsRuntime();
+  } catch (err) {
+    throw new GatewayStartupPreflightError(
+      "tls_runtime_resolution",
+      formatStartupPhaseErrorMessage(err, "Failed to resolve gateway TLS runtime."),
+      { cause: err },
+    );
+  }
+}
+
+/**
+ * Startup phase: bootstrap the core gateway transport/runtime surfaces.
+ */
+export async function runGatewayStartupTransportBootstrapPhase<TTransportRuntime>(
+  deps: GatewayStartupTransportBootstrapPhaseDeps<TTransportRuntime>,
+): Promise<TTransportRuntime> {
+  try {
+    return await deps.bootstrapTransport();
+  } catch (err) {
+    throw new GatewayStartupPreflightError(
+      "transport_bootstrap",
+      formatStartupPhaseErrorMessage(err, "Failed to bootstrap gateway transport runtime."),
+      { cause: err },
+    );
+  }
+}
+
+/**
+ * Startup phase: start browser/plugin sidecars after the core gateway transport is live.
+ */
+export async function runGatewayStartupSidecarPhase<TSidecarRuntime>(
+  deps: GatewayStartupSidecarPhaseDeps<TSidecarRuntime>,
+): Promise<TSidecarRuntime> {
+  try {
+    return await deps.startSidecars();
+  } catch (err) {
+    throw new GatewayStartupPreflightError(
+      "sidecar_startup",
+      formatStartupPhaseErrorMessage(err, "Failed to start gateway sidecars."),
+      { cause: err },
+    );
+  }
+}
+
+/**
+ * Startup phase: start discovery services after the core gateway runtime is ready.
+ */
+export async function runGatewayStartupDiscoveryPhase<TDiscoveryRuntime>(
+  deps: GatewayStartupDiscoveryPhaseDeps<TDiscoveryRuntime>,
+): Promise<TDiscoveryRuntime> {
+  try {
+    return await deps.startDiscovery();
+  } catch (err) {
+    throw new GatewayStartupPreflightError(
+      "discovery_startup",
+      formatStartupPhaseErrorMessage(err, "Failed to start gateway discovery."),
+      { cause: err },
+    );
+  }
+}
+
+/**
+ * Startup phase: start optional Tailscale exposure after discovery/runtime initialization.
+ */
+export async function runGatewayStartupTailscaleExposurePhase<TTailscaleCleanup>(
+  deps: GatewayStartupTailscaleExposurePhaseDeps<TTailscaleCleanup>,
+): Promise<TTailscaleCleanup> {
+  try {
+    return await deps.startTailscaleExposure();
+  } catch (err) {
+    throw new GatewayStartupPreflightError(
+      "tailscale_exposure",
+      formatStartupPhaseErrorMessage(err, "Failed to start gateway Tailscale exposure."),
+      { cause: err },
+    );
+  }
+}
+
+/**
+ * Startup phase: resolve transport/runtime settings from startup config.
+ */
+export async function runGatewayStartupRuntimeConfigPhase(
+  deps: GatewayStartupRuntimeConfigPhaseDeps,
+): Promise<GatewayStartupContext & { runtimeConfig: GatewayRuntimeConfig }> {
+  try {
+    return {
+      ...deps.context,
+      runtimeConfig: await deps.resolveRuntimeConfig(deps.context.config),
+    };
+  } catch (err) {
+    throw new GatewayStartupPreflightError(
+      "runtime_config_resolution",
+      formatStartupPhaseErrorMessage(err, "Failed to resolve gateway runtime config."),
+      { cause: err },
+    );
+  }
+}
+
+/**
+ * Startup phase: resolve control UI root state from runtime config.
+ */
+export async function runGatewayStartupControlUiRootPhase(
+  deps: GatewayStartupControlUiRootPhaseDeps,
+): Promise<
+  GatewayStartupContext & {
+    runtimeConfig: GatewayRuntimeConfig;
+    controlUiRootState: ControlUiRootState | undefined;
+  }
+> {
+  try {
+    return {
+      ...deps.context,
+      controlUiRootState: await deps.resolveControlUiRootState({
+        runtimeConfig: deps.context.runtimeConfig,
+      }),
+    };
+  } catch (err) {
+    throw new GatewayStartupPreflightError(
+      "control_ui_root_resolution",
+      formatStartupPhaseErrorMessage(err, "Failed to resolve control UI root."),
+      { cause: err },
+    );
+  }
 }
