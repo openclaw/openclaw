@@ -11,6 +11,10 @@ import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
+import {
+  normalizeAttachments,
+  resolveAttachmentKind,
+} from "../../media-understanding/attachments.normalize.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -52,6 +56,41 @@ function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): st
   }
   const agentSet = new Set(agent);
   return channel.filter((name) => agentSet.has(name));
+}
+
+function hasUpstreamLinkUnderstanding(ctx: MsgContext): boolean {
+  return Boolean(
+    Array.isArray(ctx.LinkUnderstanding) &&
+    ctx.LinkUnderstanding.some((entry) => typeof entry === "string" && entry.trim().length > 0),
+  );
+}
+
+function hasUpstreamMediaUnderstanding(ctx: MsgContext): boolean {
+  if (!Array.isArray(ctx.MediaUnderstanding) || ctx.MediaUnderstanding.length === 0) {
+    return false;
+  }
+
+  const covered = new Set(ctx.MediaUnderstanding.map((entry) => entry.kind));
+  const attachmentKinds = normalizeAttachments(ctx)
+    .map((entry) => resolveAttachmentKind(entry))
+    .filter(
+      (kind): kind is "image" | "audio" | "video" =>
+        kind === "image" || kind === "audio" || kind === "video",
+    );
+
+  if (attachmentKinds.length === 0) {
+    return true;
+  }
+
+  return attachmentKinds.every((kind) => {
+    if (kind === "image") {
+      return covered.has("image.description");
+    }
+    if (kind === "audio") {
+      return covered.has("audio.transcription");
+    }
+    return covered.has("video.description");
+  });
 }
 
 export async function getReplyFromConfig(
@@ -126,16 +165,20 @@ export async function getReplyFromConfig(
   const finalized = finalizeInboundContext(ctx);
 
   if (!isFastTestEnv) {
-    await applyMediaUnderstanding({
-      ctx: finalized,
-      cfg,
-      agentDir,
-      activeModel: { provider, model },
-    });
-    await applyLinkUnderstanding({
-      ctx: finalized,
-      cfg,
-    });
+    if (!hasUpstreamMediaUnderstanding(finalized)) {
+      await applyMediaUnderstanding({
+        ctx: finalized,
+        cfg,
+        agentDir,
+        activeModel: { provider, model },
+      });
+    }
+    if (!hasUpstreamLinkUnderstanding(finalized)) {
+      await applyLinkUnderstanding({
+        ctx: finalized,
+        cfg,
+      });
+    }
   }
   emitPreAgentMessageHooks({
     ctx: finalized,

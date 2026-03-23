@@ -123,8 +123,23 @@ export function buildWechatLinuxOutboundTarget(raw: string): {
   };
 }
 
+type WechatLinuxUpstreamMediaUnderstanding = {
+  kind: "audio.transcription" | "image.description" | "video.description";
+  attachmentIndex: number;
+  text: string;
+  provider: string;
+};
+
+const GENERIC_MEDIA_CONTENT_RE =
+  /^(图片|视频|语音|文件|链接|image|video|voice|file|link)(?:\s+\d+\s*s)?$/iu;
+const UPSTREAM_PROVIDER = "wechat-linux";
+
 function trimText(value: unknown): string {
   return String(value ?? "").trim();
+}
+
+function normalizeTextList(values?: readonly string[]): string[] {
+  return Array.from(new Set((values ?? []).map((value) => value.trim()).filter(Boolean)));
 }
 
 function pushUniqueLine(target: string[], label: string, value: unknown) {
@@ -149,7 +164,160 @@ function pushUniqueBlock(target: string[], label: string, values: string[]) {
   }
 }
 
-export function buildWechatLinuxBodyForAgent(message: BridgeMessage): string {
+function resolveWechatLinuxTypeLabel(message: BridgeMessage): string {
+  return (
+    trimText(message.type_label) ||
+    (message.normalized_kind && message.normalized_kind !== "skip" ? message.normalized_kind : "")
+  );
+}
+
+function hasVisibleWechatLinuxTypeLabel(typeLabel: string): boolean {
+  return Boolean(typeLabel && typeLabel !== "text" && typeLabel !== "普通文本");
+}
+
+function isWechatLinuxDocumentReady(document: Record<string, unknown>): boolean {
+  const status = trimText(document.status);
+  if (status !== "ok") {
+    return false;
+  }
+  return Boolean(
+    trimText(document.summary) || trimText(document.title) || trimText(document.doc_path),
+  );
+}
+
+function resolveWechatLinuxFallbackContent(message: BridgeMessage): string {
+  const details = (message.details ?? {}) as Record<string, unknown>;
+  return (
+    trimText(details.preview) ||
+    trimText(details.description) ||
+    trimText(details.summary) ||
+    trimText(message.raw_xml)
+  );
+}
+
+function isMeaningfulWechatLinuxContent(params: {
+  content: string;
+  typeLabel: string;
+  analysisText: string;
+  transcript: string;
+  documentTitle: string;
+  documentSummary: string;
+}): boolean {
+  const content = params.content;
+  if (!content) {
+    return false;
+  }
+  if (GENERIC_MEDIA_CONTENT_RE.test(content)) {
+    return false;
+  }
+  if (params.typeLabel && content === params.typeLabel) {
+    return false;
+  }
+  if (params.analysisText && content === params.analysisText) {
+    return false;
+  }
+  if (params.transcript && content === params.transcript) {
+    return false;
+  }
+  if (params.documentTitle && content === params.documentTitle) {
+    return false;
+  }
+  if (params.documentSummary && content === params.documentSummary) {
+    return false;
+  }
+  return true;
+}
+
+function resolveWechatLinuxAttachmentIndex(
+  message: BridgeMessage,
+  mimePrefix: "audio/" | "image/" | "video/",
+): number {
+  const mediaTypes = message.media_types ?? [];
+  for (const [index, value] of mediaTypes.entries()) {
+    if (value.trim().toLowerCase().startsWith(mimePrefix)) {
+      return index;
+    }
+  }
+  return 0;
+}
+
+function resolveWechatLinuxAnalysisKind(
+  message: BridgeMessage,
+): "image.description" | "video.description" | undefined {
+  const mediaTypes = (message.media_types ?? []).map((value) => value.trim().toLowerCase());
+  if (message.base_type === 43 || message.normalized_kind === "video") {
+    return "video.description";
+  }
+  if (message.base_type === 3 || message.normalized_kind === "image") {
+    return "image.description";
+  }
+  if (mediaTypes.some((value) => value.startsWith("video/"))) {
+    return "video.description";
+  }
+  if (mediaTypes.some((value) => value.startsWith("image/"))) {
+    return "image.description";
+  }
+  return undefined;
+}
+
+export function buildWechatLinuxMediaUnderstanding(
+  message: BridgeMessage,
+): WechatLinuxUpstreamMediaUnderstanding[] {
+  const outputs: WechatLinuxUpstreamMediaUnderstanding[] = [];
+  const details = (message.details ?? {}) as Record<string, unknown>;
+  const transcript = trimText(details.wechat_transcript);
+  if (transcript) {
+    outputs.push({
+      kind: "audio.transcription",
+      attachmentIndex: resolveWechatLinuxAttachmentIndex(message, "audio/"),
+      text: transcript,
+      provider: UPSTREAM_PROVIDER,
+    });
+  }
+
+  const analysisText = trimText(message.analysis_text);
+  const analysisKind = analysisText ? resolveWechatLinuxAnalysisKind(message) : undefined;
+  if (analysisText && analysisKind) {
+    outputs.push({
+      kind: analysisKind,
+      attachmentIndex: resolveWechatLinuxAttachmentIndex(
+        message,
+        analysisKind === "video.description" ? "video/" : "image/",
+      ),
+      text: analysisText,
+      provider: UPSTREAM_PROVIDER,
+    });
+  }
+
+  return outputs;
+}
+
+export function buildWechatLinuxLinkUnderstanding(message: BridgeMessage): string[] {
+  const document = (message.document ?? {}) as Record<string, unknown>;
+  if (!isWechatLinuxDocumentReady(document)) {
+    return [];
+  }
+
+  const lines = ["[Link Document]"];
+  const title = trimText(document.title);
+  const summary = trimText(document.summary);
+  if (title) {
+    lines.push(`Title:\n${title}`);
+  }
+  if (summary) {
+    lines.push(`Summary:\n${summary}`);
+  }
+  return [lines.join("\n")];
+}
+
+function buildWechatLinuxDetailedBody(
+  message: BridgeMessage,
+  opts: {
+    includeDocumentPath: boolean;
+    includeMediaPaths: boolean;
+    includeRawUrls: boolean;
+  },
+): string {
   const content = trimText(message.content);
   const analysisText = trimText(message.analysis_text);
   const details = (message.details ?? {}) as Record<string, unknown>;
@@ -157,10 +325,8 @@ export function buildWechatLinuxBodyForAgent(message: BridgeMessage): string {
   const parts = [content];
   const contextBlocks: string[] = [];
 
-  const typeLabel =
-    trimText(message.type_label) ||
-    (message.normalized_kind && message.normalized_kind !== "skip" ? message.normalized_kind : "");
-  if (typeLabel && typeLabel !== "text" && typeLabel !== "普通文本") {
+  const typeLabel = resolveWechatLinuxTypeLabel(message);
+  if (hasVisibleWechatLinuxTypeLabel(typeLabel)) {
     pushUniqueLine(contextBlocks, "消息类型", typeLabel);
   }
 
@@ -182,12 +348,15 @@ export function buildWechatLinuxBodyForAgent(message: BridgeMessage): string {
   pushUniqueLine(contextBlocks, "来源", details.source_display_name);
   pushUniqueLine(contextBlocks, "文件名", details.file_name);
   pushUniqueLine(contextBlocks, "文件大小", details.size_human);
-  pushUniqueLine(contextBlocks, "链接", details.url);
+  if (opts.includeRawUrls) {
+    pushUniqueLine(contextBlocks, "链接", details.url);
+  }
 
-  const urlList = Array.from(
-    new Set((message.url_list ?? []).map((value) => value.trim()).filter(Boolean)),
-  );
-  if (urlList.length > 1 || (urlList.length === 1 && urlList[0] !== trimText(details.url))) {
+  const urlList = normalizeTextList(message.url_list ?? []);
+  if (
+    opts.includeRawUrls &&
+    (urlList.length > 1 || (urlList.length === 1 && urlList[0] !== trimText(details.url)))
+  ) {
     pushUniqueBlock(contextBlocks, "链接列表", urlList);
   }
 
@@ -204,25 +373,116 @@ export function buildWechatLinuxBodyForAgent(message: BridgeMessage): string {
   if (documentSummary && documentSummary !== content && documentSummary !== analysisText) {
     pushUniqueLine(contextBlocks, "文档摘要", documentSummary);
   }
-  if (documentPath) {
+  if (opts.includeDocumentPath && documentPath) {
     pushUniqueLine(contextBlocks, "文档路径", documentPath);
   }
 
-  const mediaPaths = Array.from(
-    new Set((message.media_paths ?? []).map((value) => value.trim()).filter(Boolean)),
-  );
-  if (mediaPaths.length > 0) {
+  const mediaPaths = normalizeTextList(message.media_paths ?? []);
+  if (opts.includeMediaPaths && mediaPaths.length > 0) {
     pushUniqueBlock(contextBlocks, "附件路径", mediaPaths);
   }
 
-  const fallbackContent =
-    trimText(details.preview) ||
-    trimText(details.description) ||
-    trimText(details.summary) ||
-    trimText(message.raw_xml);
+  const fallbackContent = resolveWechatLinuxFallbackContent(message);
   if (!parts[0] && fallbackContent) {
     parts[0] = fallbackContent;
   }
 
   return [...parts.filter(Boolean), ...contextBlocks].join("\n\n").trim();
+}
+
+export function buildWechatLinuxBodyForSearch(message: BridgeMessage): string {
+  return buildWechatLinuxDetailedBody(message, {
+    includeDocumentPath: true,
+    includeMediaPaths: true,
+    includeRawUrls: true,
+  });
+}
+
+export function buildWechatLinuxBodyForAgent(message: BridgeMessage): string {
+  const content = trimText(message.content);
+  const analysisText = trimText(message.analysis_text);
+  const details = (message.details ?? {}) as Record<string, unknown>;
+  const document = (message.document ?? {}) as Record<string, unknown>;
+  const typeLabel = resolveWechatLinuxTypeLabel(message);
+  const transcript = trimText(details.wechat_transcript);
+  const detailTitle = trimText(details.title);
+  const documentReady = isWechatLinuxDocumentReady(document);
+  const documentTitle = trimText(document.title);
+  const documentSummary = trimText(document.summary);
+  const documentStatus = trimText(document.status);
+  const meaningfulContent =
+    content &&
+    (content === analysisText ||
+      content === transcript ||
+      content === documentTitle ||
+      content === documentSummary)
+      ? content
+      : isMeaningfulWechatLinuxContent({
+            content,
+            typeLabel,
+            analysisText,
+            transcript,
+            documentTitle,
+            documentSummary,
+          })
+        ? content
+        : "";
+  const parts = meaningfulContent ? [meaningfulContent] : [];
+  const contextBlocks: string[] = [];
+
+  if (hasVisibleWechatLinuxTypeLabel(typeLabel)) {
+    pushUniqueLine(contextBlocks, "消息类型", typeLabel);
+  }
+  if (analysisText && analysisText !== meaningfulContent) {
+    pushUniqueLine(contextBlocks, "分析", analysisText);
+  }
+  if (transcript && transcript !== meaningfulContent && transcript !== analysisText) {
+    pushUniqueLine(contextBlocks, "语音转写", transcript);
+  }
+  pushUniqueLine(contextBlocks, "转写来源", details.transcript_source);
+  pushUniqueLine(contextBlocks, "转写错误", details.asr_error);
+
+  if (documentStatus && documentStatus !== "skip" && documentStatus !== "ok") {
+    pushUniqueLine(contextBlocks, "文档状态", documentStatus);
+  }
+  if (documentReady) {
+    if (documentTitle && documentTitle !== detailTitle && documentTitle !== meaningfulContent) {
+      pushUniqueLine(contextBlocks, "文档标题", documentTitle);
+    }
+    if (
+      documentSummary &&
+      documentSummary !== meaningfulContent &&
+      documentSummary !== analysisText &&
+      documentSummary !== transcript
+    ) {
+      pushUniqueLine(contextBlocks, "文档摘要", documentSummary);
+    }
+  } else {
+    if (detailTitle && detailTitle !== meaningfulContent) {
+      pushUniqueLine(contextBlocks, "标题", detailTitle);
+    }
+    pushUniqueLine(contextBlocks, "来源", details.source_display_name);
+    pushUniqueLine(contextBlocks, "文件名", details.file_name);
+    pushUniqueLine(contextBlocks, "文件大小", details.size_human);
+    pushUniqueLine(contextBlocks, "链接", details.url);
+    const urlList = normalizeTextList(message.url_list ?? []);
+    if (urlList.length > 1 || (urlList.length === 1 && urlList[0] !== trimText(details.url))) {
+      pushUniqueBlock(contextBlocks, "链接列表", urlList);
+    }
+  }
+
+  const hasSuccessfulPreprocess = Boolean(analysisText || transcript || documentReady);
+  if (!hasSuccessfulPreprocess) {
+    const mediaPaths = normalizeTextList(message.media_paths ?? []);
+    if (mediaPaths.length > 0) {
+      pushUniqueBlock(contextBlocks, "附件路径", mediaPaths);
+    }
+  }
+
+  const fallbackContent = resolveWechatLinuxFallbackContent(message);
+  if (parts.length === 0 && fallbackContent) {
+    parts.push(fallbackContent);
+  }
+
+  return [...parts, ...contextBlocks].filter(Boolean).join("\n\n").trim();
 }

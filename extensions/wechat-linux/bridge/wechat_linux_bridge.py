@@ -21,6 +21,25 @@ DEFAULT_WINDOW_CLASS = "wechat"
 DEFAULT_WINDOW_MODE = "auto"
 DEFAULT_HEALTH_TIMEOUT_MS = 1200
 DEFAULT_DEBOUNCE_MS = 450
+DEFAULT_POLL_FALLBACK_MS = 5000
+DEFAULT_PENDING_IMAGE_CLICK_CONFIDENCE = 0.55
+DEFAULT_PENDING_IMAGE_CLICK_RETRY_SEC = 8.0
+DEFAULT_PENDING_IMAGE_CLICK_SETTLE_SEC = 1.2
+
+PENDING_IMAGE_CLICK_PROMPT = """你将看到一张微信聊天窗口截图。
+请寻找当前会话里最近一张可点击的图片缩略图，并返回缩略图中心点。
+
+要求：
+- 优先选择最靠近底部、最新的一张图片消息。
+- 只选择聊天内容区域里的图片缩略图，不要选择头像、表情、按钮或其他 UI。
+- x_ratio 和 y_ratio 必须是相对于整张截图的 0 到 1 浮点数。
+- 只返回 JSON，不要输出解释。
+
+格式：
+{"found": true, "x_ratio": 0.62, "y_ratio": 0.71, "confidence": 0.91}
+
+如果找不到明确可点击的图片缩略图，返回：
+{"found": false, "x_ratio": 0.0, "y_ratio": 0.0, "confidence": 0.0}"""
 
 
 def expand_path(value: str | None) -> str:
@@ -53,12 +72,14 @@ def ensure_pywxdump_importable(root: str):
         sys.path.insert(0, resolved_root)
     import linux_wx_chat_daemon as daemon  # type: ignore
     import linux_wx_msg_monitor as monitor  # type: ignore
+    import linux_wx_x11_send as x11  # type: ignore
     from linux_get_wx_key import find_db_storage  # type: ignore
     from linux_wx_event_watch import InotifyWatcher  # type: ignore
 
     return {
         "daemon": daemon,
         "monitor": monitor,
+        "x11": x11,
         "find_db_storage": find_db_storage,
         "InotifyWatcher": InotifyWatcher,
         "root": resolved_root,
@@ -360,9 +381,81 @@ def choose_readable_path(paths: list[str]) -> list[str]:
     return resolved
 
 
+def resolve_message_archive_root(
+    wx_monitor: Any,
+    message: dict[str, Any],
+    *,
+    local_id: int,
+    context: dict[str, Any],
+) -> str:
+    document = message.get("document") or {}
+    doc_path = normalize_text(document.get("doc_path"))
+    if doc_path:
+        return os.path.dirname(doc_path)
+
+    timestamp = int(message.get("timestamp") or 0)
+    if timestamp > 0:
+        day_dir = time.strftime("%Y-%m-%d", time.localtime(timestamp))
+    else:
+        day_dir = "unknown-day"
+    chat_hash = normalize_text(message.get("chat_hash")) or normalize_text(context.get("chat_hash")) or "unknown"
+    doc_root = normalize_text(getattr(wx_monitor, "doc_root", "")) or os.path.join(
+        wx_monitor.output_dir, "_monitor_docs"
+    )
+    return os.path.join(doc_root, chat_hash, day_dir, str(local_id))
+
+
+def materialize_media_artifacts(
+    paths: list[str],
+    archive_root: str,
+) -> list[str]:
+    if not paths:
+        return []
+
+    media_dir = os.path.join(archive_root, "media")
+    os.makedirs(media_dir, exist_ok=True)
+    resolved: list[str] = []
+
+    for index, source in enumerate(paths):
+        source_path = normalize_text(source)
+        if not source_path or not os.path.isfile(source_path):
+            continue
+        source_real = os.path.abspath(source_path)
+        if os.path.dirname(source_real) == os.path.abspath(media_dir):
+            resolved.append(source_real)
+            continue
+
+        filename = os.path.basename(source_real) or f"attachment-{index + 1}"
+        stem, ext = os.path.splitext(filename)
+        dest_path = os.path.join(media_dir, filename)
+        suffix = 1
+        while os.path.exists(dest_path):
+            try:
+                if os.path.samefile(dest_path, source_real):
+                    break
+            except OSError:
+                pass
+            dest_path = os.path.join(media_dir, f"{stem}-{suffix}{ext}")
+            suffix += 1
+
+        if not os.path.exists(dest_path):
+            try:
+                os.link(source_real, dest_path)
+            except OSError:
+                shutil.copy2(source_real, dest_path)
+
+        resolved.append(os.path.abspath(dest_path))
+
+    return resolved
+
+
 def collect_media_artifacts(
+    wx_monitor: Any,
     message: dict[str, Any],
     locator: PlainFileLocator,
+    *,
+    local_id: int,
+    context: dict[str, Any],
 ) -> tuple[list[str], list[str]]:
     details = message.get("details") or {}
     artifacts = message.get("artifacts") or {}
@@ -391,6 +484,16 @@ def collect_media_artifacts(
             candidate_paths.append(located)
 
     media_paths = choose_readable_path(candidate_paths)
+    if media_paths:
+        media_paths = materialize_media_artifacts(
+            media_paths,
+            resolve_message_archive_root(
+                wx_monitor,
+                message,
+                local_id=local_id,
+                context=context,
+            ),
+        )
     media_types = [guess_content_type(item) or "application/octet-stream" for item in media_paths]
     return media_paths, media_types
 
@@ -454,7 +557,13 @@ def normalize_bridge_message_from_parsed(
         parsed["content"] = parsed_content
     else:
         parsed["content"] = ""
-    media_paths, media_types = collect_media_artifacts(parsed, file_locator)
+    media_paths, media_types = collect_media_artifacts(
+        wx_monitor,
+        parsed,
+        file_locator,
+        local_id=int(local_id),
+        context=context,
+    )
 
     chat_type = "group" if context["is_chatroom"] else "direct"
     is_self = False
@@ -515,13 +624,15 @@ def build_daemon_args(
     video_analysis = resolve_bool_arg(args, "video_analysis", True)
     voice_asr = resolve_bool_arg(args, "voice_asr", True)
     link_docs = resolve_bool_arg(args, "link_docs", True)
+    output_dir = expand_path(args.output_dir or DEFAULT_OUTPUT_DIR)
+    link_doc_root = normalize_text(args.link_doc_root) or os.path.join(output_dir, "_monitor_docs")
     return argparse.Namespace(
         command="watch" if all_chats else "send",
         target=target,
         auto_resolve_target=True,
         key_file=expand_path(args.key_file or DEFAULT_KEY_FILE),
         db_dir=resolve_db_dir(modules, args),
-        output=expand_path(args.output_dir or DEFAULT_OUTPUT_DIR),
+        output=output_dir,
         interval=30,
         format="json",
         webhook=None,
@@ -544,7 +655,7 @@ def build_daemon_args(
         video_frame_count=1,
         no_voice_asr=not voice_asr,
         link_hook_cmd=normalize_text(args.link_hook_cmd) or build_default_link_hook_command(modules),
-        link_doc_root=normalize_text(args.link_doc_root),
+        link_doc_root=link_doc_root,
         link_domains=normalize_text(args.link_domains) or default_doc_domains_csv(monitor),
         link_hook_timeout=max(1, int(getattr(args, "link_hook_timeout_sec", 30) or 30)),
         no_link_docs=not link_docs,
@@ -781,9 +892,222 @@ def fetch_new_messages(
                 )
                 if bridge_message is None:
                     continue
+                if parsed_message.get("base_type") == 3 and hasattr(wx_monitor, "track_pending_image"):
+                    wx_monitor.track_pending_image(parsed_message)
+                    if local_id := bridge_message.get("local_id"):
+                        if int(local_id) in getattr(wx_monitor, "pending_images", {}):
+                            pending_entry = getattr(wx_monitor, "_openclaw_pending_images", {})
+                            pending_entry[int(local_id)] = {
+                                "bridge_message": bridge_message,
+                                "parsed_message": dict(parsed_message),
+                            }
+                            wx_monitor._openclaw_pending_images = pending_entry
+                            continue
                 parsed.append((bridge_message["timestamp"], bridge_message["local_id"], bridge_message))
         parsed.sort(key=lambda item: (item[0], item[1]))
         return [item[2] for item in parsed]
+
+
+def locate_pending_image_thumbnail_with_vision(
+    monitor_module: Any,
+    image_path: str,
+    ollama_url: str,
+    model: str,
+    *,
+    api_key_env: str,
+) -> dict[str, Any]:
+    raw = ""
+    try:
+        raw = monitor_module.analyze_images_with_ollama(
+            [image_path],
+            PENDING_IMAGE_CLICK_PROMPT,
+            ollama_url,
+            model,
+            api_key_env=api_key_env,
+            request_options={"timeout": 45},
+        )
+    except Exception:
+        raw = ""
+
+    data = monitor_module.parse_json_object_from_text(raw)
+    result = {
+        "found": bool(data.get("found")),
+        "x_ratio": float(data.get("x_ratio", 0.0) or 0.0),
+        "y_ratio": float(data.get("y_ratio", 0.0) or 0.0),
+        "confidence": float(data.get("confidence", 0.0) or 0.0),
+        "raw": raw,
+    }
+    if (
+        result["found"]
+        and 0.0 <= result["x_ratio"] <= 1.0
+        and 0.0 <= result["y_ratio"] <= 1.0
+    ):
+        return result
+    return {"found": False, "x_ratio": 0.0, "y_ratio": 0.0, "confidence": 0.0, "raw": raw}
+
+
+def try_click_pending_image(
+    modules: dict[str, Any],
+    args: argparse.Namespace,
+    message: dict[str, Any],
+) -> tuple[bool, str]:
+    daemon = modules["daemon"]
+    monitor_module = modules["monitor"]
+    x11 = modules["x11"]
+
+    target_args = build_daemon_args(modules, args, target=normalize_text(message.get("chat_id")), all_chats=False)
+    target_args.allow_active_main_window = True
+    target_args.force_focus_main_window = True
+    wx_monitor = daemon.build_monitor(target_args, doc_enabled=False)
+    daemon.setup_monitor(wx_monitor, announce=False)
+    apply_runtime_feature_overrides(wx_monitor, args, monitor_module, enable_link_docs=False)
+
+    session = daemon.resolve_chat_window_session(target_args, wx_monitor, purpose="watch")
+    if not session:
+        return False, "未找到可用聊天窗口"
+
+    if isinstance(session, dict):
+        window = session["window"]
+        window_mode = session["window_mode"]
+    else:
+        window = session
+        window_mode = "standalone"
+
+    screenshot_path = ""
+    try:
+        x11.activate_window(window.window_id, display=target_args.display, xauthority=target_args.xauthority)
+        time.sleep(0.2)
+        if window_mode == "main":
+            conversation_roi = x11.derive_main_window_rois(window)["conversation"]
+            screenshot_path = x11.capture_window_roi_png(
+                window,
+                conversation_roi,
+                display=target_args.display,
+                xauthority=target_args.xauthority,
+            )
+        else:
+            screenshot_path = x11.capture_window_png(
+                window.window_id,
+                display=target_args.display,
+                xauthority=target_args.xauthority,
+            )
+
+        located = locate_pending_image_thumbnail_with_vision(
+            monitor_module,
+            screenshot_path,
+            wx_monitor.ollama_url,
+            wx_monitor.vision_model,
+            api_key_env=getattr(wx_monitor, "vision_api_key_env", monitor_module.DEFAULT_OPENAI_API_KEY_ENV),
+        )
+        if not located.get("found") or float(located.get("confidence") or 0.0) < DEFAULT_PENDING_IMAGE_CLICK_CONFIDENCE:
+            return False, "未定位到可点击的图片缩略图"
+
+        if window_mode == "main":
+            x11.click_roi_ratio(
+                x11.derive_main_window_rois(window)["conversation"],
+                located["x_ratio"],
+                located["y_ratio"],
+                display=target_args.display,
+                xauthority=target_args.xauthority,
+            )
+        else:
+            x11.click_window_ratio(
+                window,
+                located["x_ratio"],
+                located["y_ratio"],
+                display=target_args.display,
+                xauthority=target_args.xauthority,
+            )
+        time.sleep(DEFAULT_PENDING_IMAGE_CLICK_SETTLE_SEC)
+        try:
+            x11.key("Escape", display=target_args.display, xauthority=target_args.xauthority)
+        except Exception:
+            pass
+        return True, f"已自动点击图片缩略图(confidence={float(located.get('confidence') or 0.0):.2f})"
+    finally:
+        if screenshot_path:
+            shutil.rmtree(os.path.dirname(screenshot_path), ignore_errors=True)
+
+
+def refresh_pending_bridge_images(
+    modules: dict[str, Any],
+    args: argparse.Namespace,
+    wx_monitor: Any,
+    file_locator: PlainFileLocator,
+) -> list[dict[str, Any]]:
+    pending_entry = getattr(wx_monitor, "_openclaw_pending_images", {})
+    if not pending_entry or not hasattr(wx_monitor, "refresh_pending_images"):
+        return []
+
+    now = time.time()
+    active_pending = getattr(wx_monitor, "pending_images", {})
+    for local_id, state in list(pending_entry.items()):
+        pending = active_pending.get(local_id)
+        parsed_message = (pending or {}).get("msg") or state.get("parsed_message") or {}
+        artifacts = parsed_message.get("artifacts") or {}
+        if artifacts.get("analysis_status") != "needs_download_or_decoder":
+            continue
+        next_click_at = float(state.get("next_click_at") or 0.0)
+        if now < next_click_at:
+            continue
+        clicked, note = try_click_pending_image(modules, args, parsed_message)
+        state["click_attempts"] = int(state.get("click_attempts") or 0) + 1
+        state["next_click_at"] = now + DEFAULT_PENDING_IMAGE_CLICK_RETRY_SEC
+        parsed_artifacts = dict(artifacts)
+        parsed_artifacts["analysis_note"] = note
+        parsed_message["artifacts"] = parsed_artifacts
+        if pending:
+            pending["msg"] = parsed_message
+
+    updates_by_local_id: dict[int, dict[str, Any]] = {}
+    for message in wx_monitor.refresh_pending_images():
+        local_id = int(message.get("local_id") or 0)
+        if local_id > 0:
+            updates_by_local_id[local_id] = message
+
+    active_pending_ids = set(getattr(wx_monitor, "pending_images", {}).keys())
+    emitted: list[tuple[int, int, dict[str, Any]]] = []
+
+    for local_id, state in list(pending_entry.items()):
+        bridge_message = dict(state.get("bridge_message") or {})
+        parsed_message = updates_by_local_id.get(local_id)
+        if parsed_message is None:
+            if local_id in active_pending_ids:
+                continue
+            emitted.append((bridge_message.get("timestamp") or 0, local_id, bridge_message))
+            pending_entry.pop(local_id, None)
+            continue
+
+        media_paths, media_types = collect_media_artifacts(
+            wx_monitor,
+            parsed_message,
+            file_locator,
+            local_id=local_id,
+            context={
+                "chat_hash": parsed_message.get("chat_hash") or "",
+            },
+        )
+        bridge_message.update(
+            {
+                "content": normalize_text(parsed_message.get("content")),
+                "analysis_text": normalize_text(parsed_message.get("analysis_text")),
+                "normalized_kind": normalize_text(parsed_message.get("normalized_kind") or "unsupported"),
+                "type_label": normalize_text(parsed_message.get("type_label")),
+                "details": parsed_message.get("details") or {},
+                "artifacts": parsed_message.get("artifacts") or {},
+                "document": parsed_message.get("document") or {},
+                "raw_xml": normalize_text(parsed_message.get("raw_xml")),
+                "url_list": list(parsed_message.get("url_list") or []),
+                "media_paths": media_paths,
+                "media_types": media_types,
+            }
+        )
+        emitted.append((bridge_message.get("timestamp") or 0, local_id, bridge_message))
+        pending_entry.pop(local_id, None)
+
+    wx_monitor._openclaw_pending_images = pending_entry
+    emitted.sort(key=lambda item: (item[0], item[1]))
+    return [item[2] for item in emitted]
 
 
 def append_search_text(parts: list[str], value: Any) -> None:
@@ -956,9 +1280,14 @@ def is_relevant_message_change(path: str) -> bool:
 def watch_command(args: argparse.Namespace) -> int:
     modules = ensure_pywxdump_importable(args.pywxdump_root)
     watcher_cls = modules["InotifyWatcher"]
+    monitor = modules["monitor"]
     wx_monitor = build_all_chat_monitor(modules, args, enable_link_docs=True)
     file_locator = PlainFileLocator(wx_monitor.wx_root)
     self_sender_ids: set[str] = set()
+    last_seen_message_mtime = float(
+        monitor.tracked_db_mtime(wx_monitor.db_storage, "message/message_0.db")
+    )
+    last_fallback_poll_at = time.monotonic()
 
     emit_json({"type": "ready", "chat_count": len(wx_monitor.chat_states)})
 
@@ -966,11 +1295,23 @@ def watch_command(args: argparse.Namespace) -> int:
     with watcher_cls(watch_paths) as watcher:
         while True:
             changed = watcher.wait(timeout_ms=int(args.health_timeout_ms))
-            if not changed:
+            current_mtime = float(monitor.tracked_db_mtime(wx_monitor.db_storage, "message/message_0.db"))
+            force_scan = current_mtime > last_seen_message_mtime
+            pending_updates = refresh_pending_bridge_images(modules, args, wx_monitor, file_locator)
+            for message in pending_updates:
+                emit_json({"type": "message", "message": message})
+
+            if changed:
+                relevant = [path for path in changed if is_relevant_message_change(path)]
+                if relevant:
+                    force_scan = True
+            elif (time.monotonic() - last_fallback_poll_at) * 1000 >= DEFAULT_POLL_FALLBACK_MS:
+                force_scan = True
+            if not force_scan:
                 continue
-            relevant = [path for path in changed if is_relevant_message_change(path)]
-            if not relevant:
-                continue
+
+            last_seen_message_mtime = max(last_seen_message_mtime, current_mtime)
+            last_fallback_poll_at = time.monotonic()
             time.sleep(max(0, int(args.debounce_ms)) / 1000.0)
             for message in fetch_new_messages(modules, wx_monitor, file_locator, self_sender_ids):
                 emit_json({"type": "message", "message": message})

@@ -177,4 +177,28 @@ describe("getReplyFromConfig message hooks", () => {
     expect(mocks.createInternalHookEvent).not.toHaveBeenCalled();
     expect(mocks.triggerInternalHook).not.toHaveBeenCalled();
   });
+
+  it("skips duplicate upstream media and link preprocessing when already populated", async () => {
+    await getReplyFromConfig(
+      buildCtx({
+        MediaPath: "/tmp/inbound.png",
+        MediaType: "image/png",
+        MediaUnderstanding: [
+          {
+            kind: "image.description",
+            attachmentIndex: 0,
+            text: "upstream image summary",
+            provider: "wechat-linux",
+          },
+        ],
+        LinkUnderstanding: ["[Link Document]\nSummary:\nupstream summary"],
+      }),
+      undefined,
+      {},
+    );
+
+    expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
+    expect(mocks.applyLinkUnderstanding).not.toHaveBeenCalled();
+    expect(mocks.createInternalHookEvent).toHaveBeenCalledTimes(1);
+  });
 });

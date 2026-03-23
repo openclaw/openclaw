@@ -46,33 +46,48 @@ function isAudioPath(path: string | undefined): boolean {
   return false;
 }
 
-export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
-  // Attachment indices follow MediaPaths/MediaUrls ordering as supplied by the channel.
+function isSuccessfulMediaDecision(value: unknown): value is { outcome: "success" } {
+  return Boolean(
+    value && typeof value === "object" && (value as { outcome?: unknown }).outcome === "success",
+  );
+}
+
+export function collectSuppressedMediaAttachmentIndexes(ctx: MsgContext): {
+  suppressed: Set<number>;
+  transcribedAudio: Set<number>;
+} {
   const suppressed = new Set<number>();
-  const transcribedAudioIndices = new Set<number>();
+  const transcribedAudio = new Set<number>();
   if (Array.isArray(ctx.MediaUnderstanding)) {
     for (const output of ctx.MediaUnderstanding) {
       suppressed.add(output.attachmentIndex);
       if (output.kind === "audio.transcription") {
-        transcribedAudioIndices.add(output.attachmentIndex);
+        transcribedAudio.add(output.attachmentIndex);
       }
     }
   }
   if (Array.isArray(ctx.MediaUnderstandingDecisions)) {
     for (const decision of ctx.MediaUnderstandingDecisions) {
-      if (decision.outcome !== "success") {
+      if (!isSuccessfulMediaDecision(decision)) {
         continue;
       }
       for (const attachment of decision.attachments) {
         if (attachment.chosen?.outcome === "success") {
           suppressed.add(attachment.attachmentIndex);
           if (decision.capability === "audio") {
-            transcribedAudioIndices.add(attachment.attachmentIndex);
+            transcribedAudio.add(attachment.attachmentIndex);
           }
         }
       }
     }
   }
+  return { suppressed, transcribedAudio };
+}
+
+export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
+  // Attachment indices follow MediaPaths/MediaUrls ordering as supplied by the channel.
+  const { suppressed, transcribedAudio: transcribedAudioIndices } =
+    collectSuppressedMediaAttachmentIndexes(ctx);
   const pathsFromArray = Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : undefined;
   const paths =
     pathsFromArray && pathsFromArray.length > 0

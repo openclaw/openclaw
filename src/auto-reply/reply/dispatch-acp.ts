@@ -16,6 +16,7 @@ import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
+import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import {
   normalizeAttachmentPath,
@@ -28,6 +29,7 @@ import {
   maybeResolveTextAlias,
   shouldHandleTextCommands,
 } from "../commands-registry.js";
+import { collectSuppressedMediaAttachmentIndexes } from "../media-note.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
@@ -68,8 +70,12 @@ const ACP_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 
 async function resolveAcpAttachments(ctx: FinalizedMsgContext): Promise<AcpTurnAttachment[]> {
   const mediaAttachments = normalizeAttachments(ctx);
+  const { suppressed } = collectSuppressedMediaAttachmentIndexes(ctx);
   const results: AcpTurnAttachment[] = [];
   for (const attachment of mediaAttachments) {
+    if (suppressed.has(attachment.index)) {
+      continue;
+    }
     const mediaType = attachment.mime ?? "application/octet-stream";
     if (!mediaType.startsWith("image/")) {
       continue;
@@ -96,6 +102,13 @@ async function resolveAcpAttachments(ctx: FinalizedMsgContext): Promise<AcpTurnA
     }
   }
   return results;
+}
+
+function hasUpstreamLinkUnderstanding(ctx: FinalizedMsgContext): boolean {
+  return Boolean(
+    Array.isArray(ctx.LinkUnderstanding) &&
+    ctx.LinkUnderstanding.some((entry) => typeof entry === "string" && entry.trim().length > 0),
+  );
 }
 
 function resolveCommandCandidateText(ctx: FinalizedMsgContext): string {
@@ -279,6 +292,18 @@ export async function tryDispatchAcpReply(params: {
       } catch (err) {
         logVerbose(
           `dispatch-acp: media understanding failed, proceeding with raw content: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    if (!hasUpstreamLinkUnderstanding(params.ctx)) {
+      try {
+        await applyLinkUnderstanding({
+          ctx: params.ctx,
+          cfg: params.cfg,
+        });
+      } catch (err) {
+        logVerbose(
+          `dispatch-acp: link understanding failed, proceeding with raw content: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
     }

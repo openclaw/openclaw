@@ -2,7 +2,7 @@ import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-runtime
 import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { resolveWechatLinuxAccount } from "./accounts.js";
 import { resolveWechatLinuxBridgeTarget, searchWechatLinuxBridgeHistory } from "./bridge.js";
-import { buildWechatLinuxBodyForAgent } from "./normalize.js";
+import { buildWechatLinuxBodyForSearch } from "./normalize.js";
 import type { BridgeMessage, BridgeSearchKind, BridgeSearchResult, CoreConfig } from "./types.js";
 
 type WechatLinuxToolContext = {
@@ -79,7 +79,7 @@ function formatMatchSummary(match: BridgeMessage, index: number): string {
   const lines = [
     `${index + 1}. [${formatTimestamp(match.timestamp, match.time)}] ${match.chat_name} / ${match.sender_display}`,
   ];
-  const body = trimSnippet(buildWechatLinuxBodyForAgent(match));
+  const body = trimSnippet(buildWechatLinuxBodyForSearch(match));
   if (body) {
     lines.push(body);
   }

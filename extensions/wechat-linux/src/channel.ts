@@ -54,6 +54,18 @@ import type {
   ResolvedWechatLinuxAccount,
 } from "./types.js";
 
+const traceWechatLinuxBridge = process.env.OPENCLAW_WECHAT_LINUX_TRACE === "1";
+
+function summarizeWechatLinuxTraceContent(value: string | undefined): string {
+  const text = String(value ?? "")
+    .replace(/\s+/gu, " ")
+    .trim();
+  if (!text) {
+    return "";
+  }
+  return text.length > 120 ? `${text.slice(0, 117)}...` : text;
+}
+
 const meta = {
   id: "wechat-linux",
   label: "WeChat",
@@ -452,12 +464,42 @@ export const wechatLinuxPlugin: ChannelPlugin<ResolvedWechatLinuxAccount, Bridge
             newlineIndex = stdoutBuffer.indexOf("\n");
             continue;
           }
-          if (
-            envelope.message.is_self ||
-            isRecentWechatLinuxOutbound(account.accountId, envelope.message.local_id)
-          ) {
+          const ignoredSelf = envelope.message.is_self === true;
+          const ignoredRecent = isRecentWechatLinuxOutbound(
+            account.accountId,
+            envelope.message.local_id,
+          );
+          if (traceWechatLinuxBridge) {
+            const summary = summarizeWechatLinuxTraceContent(envelope.message.content);
+            const traceParts = [
+              `[${account.accountId}] bridge message`,
+              `local_id=${envelope.message.local_id}`,
+              `chat_id=${envelope.message.chat_id}`,
+              `sender_id=${envelope.message.sender_id}`,
+              `type=${envelope.message.type_label ?? envelope.message.normalized_kind}`,
+              `is_self=${String(envelope.message.is_self ?? false)}`,
+              `recent_outbound=${String(ignoredRecent)}`,
+            ];
+            if (summary) {
+              traceParts.push(`content=${JSON.stringify(summary)}`);
+            }
+            ctx.log?.info(traceParts.join(" "));
+          }
+          if (ignoredSelf || ignoredRecent) {
+            if (traceWechatLinuxBridge) {
+              ctx.log?.info(
+                `[${account.accountId}] bridge message ignored local_id=${envelope.message.local_id} reason=${
+                  ignoredSelf ? "self" : "recent_outbound"
+                }`,
+              );
+            }
             newlineIndex = stdoutBuffer.indexOf("\n");
             continue;
+          }
+          if (traceWechatLinuxBridge) {
+            ctx.log?.info(
+              `[${account.accountId}] bridge message accepted local_id=${envelope.message.local_id}`,
+            );
           }
           void handleWechatLinuxInbound({
             message: envelope.message,

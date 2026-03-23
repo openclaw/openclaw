@@ -52,6 +52,11 @@ const bindingServiceMocks = vi.hoisted(() => ({
   listBySession: vi.fn<(sessionKey: string) => SessionBindingRecord[]>(() => []),
 }));
 
+const preprocessMocks = vi.hoisted(() => ({
+  applyMediaUnderstanding: vi.fn(async (_params: unknown) => undefined),
+  applyLinkUnderstanding: vi.fn(async (_params: unknown) => undefined),
+}));
+
 vi.mock("../../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => managerMocks,
 }));
@@ -85,6 +90,14 @@ vi.mock("../../infra/outbound/session-binding-service.js", () => ({
   getSessionBindingService: () => ({
     listBySession: (sessionKey: string) => bindingServiceMocks.listBySession(sessionKey),
   }),
+}));
+
+vi.mock("../../media-understanding/apply.js", () => ({
+  applyMediaUnderstanding: (params: unknown) => preprocessMocks.applyMediaUnderstanding(params),
+}));
+
+vi.mock("../../link-understanding/apply.js", () => ({
+  applyLinkUnderstanding: (params: unknown) => preprocessMocks.applyLinkUnderstanding(params),
 }));
 
 const { tryDispatchAcpReply } = await import("./dispatch-acp.js");
@@ -232,6 +245,10 @@ describe("tryDispatchAcpReply", () => {
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue(null);
     bindingServiceMocks.listBySession.mockReset();
     bindingServiceMocks.listBySession.mockReturnValue([]);
+    preprocessMocks.applyMediaUnderstanding.mockReset();
+    preprocessMocks.applyMediaUnderstanding.mockResolvedValue(undefined);
+    preprocessMocks.applyLinkUnderstanding.mockReset();
+    preprocessMocks.applyLinkUnderstanding.mockResolvedValue(undefined);
   });
 
   it("routes ACP block output to originating channel", async () => {
@@ -385,6 +402,68 @@ describe("tryDispatchAcpReply", () => {
           ],
         }),
       );
+      expect(preprocessMocks.applyMediaUnderstanding).toHaveBeenCalledTimes(1);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("runs ACP link preprocessing when no upstream link summary exists", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockResolvedValue(undefined);
+
+    await runDispatch({
+      bodyForAgent: "https://example.com/spec",
+    });
+
+    expect(preprocessMocks.applyLinkUnderstanding).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips ACP link preprocessing when upstream link summary already exists", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockResolvedValue(undefined);
+
+    await runDispatch({
+      bodyForAgent: "doc summary",
+      ctxOverrides: {
+        LinkUnderstanding: ["[Link Document]\nSummary:\nready"],
+      },
+    });
+
+    expect(preprocessMocks.applyLinkUnderstanding).not.toHaveBeenCalled();
+  });
+
+  it("suppresses ACP raw image attachments after successful upstream preprocessing", async () => {
+    setReadyAcpResolution();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
+    const imagePath = path.join(tempDir, "inbound.png");
+    try {
+      await fs.writeFile(imagePath, "image-bytes");
+      managerMocks.runTurn.mockResolvedValue(undefined);
+
+      await runDispatch({
+        bodyForAgent: "processed image summary",
+        ctxOverrides: {
+          MediaPath: imagePath,
+          MediaType: "image/png",
+          MediaUnderstanding: [
+            {
+              kind: "image.description",
+              attachmentIndex: 0,
+              text: "ready",
+              provider: "wechat-linux",
+            },
+          ],
+        },
+      });
+
+      expect(managerMocks.runTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "processed image summary",
+          attachments: undefined,
+        }),
+      );
+      expect(preprocessMocks.applyMediaUnderstanding).not.toHaveBeenCalled();
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }

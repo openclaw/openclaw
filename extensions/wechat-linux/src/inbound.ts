@@ -14,6 +14,8 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { readStoreAllowFromForDmPolicy } from "openclaw/plugin-sdk/security-runtime";
 import {
   buildWechatLinuxBodyForAgent,
+  buildWechatLinuxLinkUnderstanding,
+  buildWechatLinuxMediaUnderstanding,
   normalizeWechatLinuxAllowlist,
   resolveWechatLinuxAllowlistMatch,
 } from "./normalize.js";
@@ -285,6 +287,8 @@ export async function handleWechatLinuxInbound(params: {
     body: rawBody,
   });
   const mediaPayload = collectReadableMedia(message);
+  const upstreamMediaUnderstanding = buildWechatLinuxMediaUnderstanding(message);
+  const upstreamLinkUnderstanding = buildWechatLinuxLinkUnderstanding(message);
 
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
@@ -309,6 +313,9 @@ export async function handleWechatLinuxInbound(params: {
     OriginatingChannel: CHANNEL_ID,
     OriginatingTo: `wechat-linux:${message.chat_id}`,
     CommandAuthorized: commandAuthorized,
+    MediaUnderstanding:
+      upstreamMediaUnderstanding.length > 0 ? upstreamMediaUnderstanding : undefined,
+    LinkUnderstanding: upstreamLinkUnderstanding.length > 0 ? upstreamLinkUnderstanding : undefined,
     ...mediaPayload,
   });
 
