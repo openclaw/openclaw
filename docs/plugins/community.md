@@ -71,6 +71,19 @@ cost, tokens, errors, and more.
 openclaw plugins install @opik/opik-openclaw
 ```
 
+### Prometheus Avatar `[Alpha]`
+
+Give your OpenClaw agent a Live2D avatar with real-time lip-sync, emotion
+expressions, and text-to-speech. Includes creator tools for AI asset generation
+and one-click deployment to the Prometheus Marketplace.
+
+- **npm:** `@prometheus-avatar/openclaw-plugin`
+- **repo:** [github.com/myths-labs/prometheus-avatar](https://github.com/myths-labs/prometheus-avatar)
+
+```bash
+openclaw plugins install @prometheus-avatar/openclaw-plugin
+```
+
 ### QQbot
 
 Connect OpenClaw to QQ via the QQ Bot API. Supports private chats, group
