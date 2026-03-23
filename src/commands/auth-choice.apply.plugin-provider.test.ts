@@ -19,11 +19,6 @@ vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
   runProviderModelSelectedHook,
 }));
 
-const upsertAuthProfile = vi.hoisted(() => vi.fn());
-vi.mock("../agents/auth-profiles.js", () => ({
-  upsertAuthProfile,
-}));
-
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "default"));
 const resolveAgentWorkspaceDir = vi.hoisted(() => vi.fn(() => "/tmp/workspace"));
 const resolveAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent"));
@@ -44,8 +39,12 @@ vi.mock("../agents/agent-paths.js", () => ({
 }));
 
 const applyAuthProfileConfig = vi.hoisted(() => vi.fn((config) => config));
+const shouldSyncSiblingAgentsForCredential = vi.hoisted(() => vi.fn(() => false));
+const writeAuthProfile = vi.hoisted(() => vi.fn());
 vi.mock("../plugins/provider-auth-helpers.js", () => ({
   applyAuthProfileConfig,
+  shouldSyncSiblingAgentsForCredential,
+  writeAuthProfile,
 }));
 
 const isRemoteEnvironment = vi.hoisted(() => vi.fn(() => false));
@@ -104,6 +103,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     applyAuthProfileConfig.mockImplementation((config) => config);
+    shouldSyncSiblingAgentsForCredential.mockReturnValue(false);
   });
 
   it("returns an agent model override when default model application is deferred", async () => {
@@ -140,14 +140,22 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     expect(result?.config.agents?.defaults?.model).toEqual({
       primary: "ollama/qwen3:4b",
     });
-    expect(upsertAuthProfile).toHaveBeenCalledWith({
-      profileId: "ollama:default",
-      credential: {
+    expect(writeAuthProfile).toHaveBeenCalledWith(
+      "ollama:default",
+      {
         type: "api_key",
         provider: "ollama",
         key: "ollama-local",
       },
-      agentDir: "/tmp/agent",
+      "/tmp/agent",
+      {
+        syncSiblingAgents: false,
+      },
+    );
+    expect(shouldSyncSiblingAgentsForCredential).toHaveBeenCalledWith({
+      type: "api_key",
+      provider: "ollama",
+      key: "ollama-local",
     });
     expect(runProviderModelSelectedHook).toHaveBeenCalledWith({
       config: result?.config,
