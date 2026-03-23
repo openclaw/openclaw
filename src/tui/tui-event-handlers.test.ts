@@ -395,9 +395,14 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   });
 
   it("clears orphaned streaming when final arrives inactive but no runs remain in flight", () => {
-    const { state, chatLog, setActivityStatus, handleChatEvent } = createHandlersHarness({
-      state: { activeChatRunId: null },
-    });
+    // Local BTW runs skip the "capture activeChatRunId when null" branch, so final can keep
+    // wasActiveRun === false while deltas still set streaming — the only way to hit
+    // shouldClearOrphanedActivityStatus() without a second concurrent chat run.
+    const { state, chatLog, setActivityStatus, handleChatEvent, noteLocalBtwRunId } =
+      createHandlersHarness({
+        state: { activeChatRunId: null },
+      });
+    noteLocalBtwRunId("run-orphan");
 
     handleChatEvent({
       runId: "run-orphan",
@@ -405,11 +410,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       state: "delta",
       message: { content: "partial" },
     });
-    expect(state.activeChatRunId).toBe("run-orphan");
+    expect(state.activeChatRunId).toBeNull();
     setActivityStatus.mockClear();
-
-    // Simulate active pointer lost while the same run still completes (failover / gateway race).
-    state.activeChatRunId = null;
 
     handleChatEvent({
       runId: "run-orphan",
