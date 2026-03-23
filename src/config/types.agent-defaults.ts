@@ -189,6 +189,14 @@ export type AgentDefaultsConfig = {
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
+  /**
+   * Default response usage footer mode for new sessions.
+   * Mirrors `/usage off|tokens|full` but persists across session resets.
+   * - "off": no usage footer (default)
+   * - "tokens": show per-response token counts
+   * - "full": show tokens + estimated cost + model + thinking level
+   */
+  responseUsageDefault?: "off" | "tokens" | "full";
   /** Default elevated level when no /elevated directive is present. */
   elevatedDefault?: "off" | "on" | "ask" | "full";
   /** Default block streaming level when no override is present. */

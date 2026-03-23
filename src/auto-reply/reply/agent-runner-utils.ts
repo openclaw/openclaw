@@ -99,6 +99,10 @@ export const formatResponseUsageLine = (params: {
     cacheRead: number;
     cacheWrite: number;
   };
+  /** Short model identifier to include in the footer (e.g. "claude-sonnet-4-6"). */
+  model?: string;
+  /** Active thinking level to include in the footer (e.g. "adaptive", "low", "medium", "high"). */
+  thinkingLevel?: string;
 }): string | null => {
   const usage = params.usage;
   if (!usage) {
@@ -124,8 +128,13 @@ export const formatResponseUsageLine = (params: {
         })
       : undefined;
   const costLabel = params.showCost ? formatUsd(cost) : undefined;
-  const suffix = costLabel ? ` · est ${costLabel}` : "";
-  return `Usage: ${inputLabel} in / ${outputLabel} out${suffix}`;
+  const suffix = costLabel ? ` · ${costLabel}` : "";
+  const modelLabel = params.model ? ` · ${params.model}` : "";
+  const thinkingLabel =
+    params.thinkingLevel && params.thinkingLevel !== "off"
+      ? ` [${params.thinkingLevel}]`
+      : "";
+  return `Usage: ${inputLabel} in / ${outputLabel} out${suffix}${modelLabel}${thinkingLabel}`;
 };
 
 export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPayload[] => {

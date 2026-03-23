@@ -590,7 +590,8 @@ export async function runReplyAgent(params: {
 
     const responseUsageRaw =
       activeSessionEntry?.responseUsage ??
-      (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
+      (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined) ??
+      cfg?.agents?.defaults?.responseUsageDefault;
     const responseUsageMode = resolveResponseUsageMode(responseUsageRaw);
     if (responseUsageMode !== "off" && hasNonzeroUsage(usage)) {
       const authMode = resolveModelAuthMode(providerUsed, cfg);
@@ -606,6 +607,8 @@ export async function runReplyAgent(params: {
         usage,
         showCost,
         costConfig,
+        model: modelUsed,
+        thinkingLevel: activeSessionEntry?.thinkingLevel ?? undefined,
       });
       if (formatted && responseUsageMode === "full" && sessionKey) {
         formatted = `${formatted} · session \`${sessionKey}\``;
