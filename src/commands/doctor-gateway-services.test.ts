@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createDoctorPrompter } from "./doctor-prompter.js";
 
 const fsMocks = vi.hoisted(() => ({
   realpath: vi.fn(),
@@ -97,6 +98,8 @@ import {
   maybeScanExtraGatewayServices,
 } from "./doctor-gateway-services.js";
 
+const originalStdinIsTTY = process.stdin.isTTY;
+
 function makeDoctorIo() {
   return { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 }
@@ -159,6 +162,13 @@ describe("maybeRepairGatewayServiceConfig", () => {
         typeof cfg.gateway?.auth?.token === "string" ? cfg.gateway.auth.token.trim() : undefined;
       const envToken = env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined;
       return { token: configToken || envToken };
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: originalStdinIsTTY,
+      configurable: true,
     });
   });
 
@@ -342,6 +352,57 @@ describe("maybeRepairGatewayServiceConfig", () => {
     });
 
     await runRepair({ gateway: {} });
+
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway service entrypoint does not match the current install."),
+      "Gateway service config",
+    );
+    expect(mocks.install).toHaveBeenCalledTimes(1);
+  });
+
+  it("repairs entrypoint mismatch in non-interactive fix mode", async () => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: false,
+      configurable: true,
+    });
+    mocks.readCommand.mockResolvedValue({
+      programArguments: [
+        "/usr/bin/node",
+        "/Users/test/Library/npm/node_modules/openclaw/dist/entry.js",
+        "gateway",
+        "--port",
+        "18789",
+      ],
+      environment: {},
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: true,
+      issues: [],
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: [
+        "/usr/bin/node",
+        "/Users/test/Library/npm/node_modules/openclaw/dist/index.js",
+        "gateway",
+        "--port",
+        "18789",
+      ],
+      workingDirectory: "/tmp",
+      environment: {},
+    });
+
+    await maybeRepairGatewayServiceConfig(
+      { gateway: {} },
+      "local",
+      makeDoctorIo(),
+      createDoctorPrompter({
+        runtime: makeDoctorIo(),
+        options: {
+          repair: true,
+          nonInteractive: true,
+        },
+      }),
+    );
 
     expect(mocks.note).toHaveBeenCalledWith(
       expect.stringContaining("Gateway service entrypoint does not match the current install."),
