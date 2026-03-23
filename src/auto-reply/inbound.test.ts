@@ -606,6 +606,79 @@ describe("createInboundDebouncer", () => {
       setTimeoutSpy.mockRestore();
     }
   });
+
+  it("counts tracked debounce keys by union of buffers and active chains", async () => {
+    const started: string[] = [];
+    const finished: string[] = [];
+    let releaseChainOnly!: () => void;
+    const chainOnlyGate = new Promise<void>((resolve) => {
+      releaseChainOnly = resolve;
+    });
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 50,
+      maxTrackedKeys: 3,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        const ids = items.map((entry) => entry.id).join(",");
+        started.push(ids);
+        if (ids === "2") {
+          await chainOnlyGate;
+        }
+        finished.push(ids);
+      },
+    });
+
+    try {
+      await debouncer.enqueue({ key: "a", id: "1" });
+      const firstTimerIndex = setTimeoutSpy.mock.calls.findLastIndex((call) => call[1] === 50);
+      expect(firstTimerIndex).toBeGreaterThanOrEqual(0);
+      clearTimeout(
+        setTimeoutSpy.mock.results[firstTimerIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+
+      await debouncer.enqueue({ key: "b", id: "2" });
+      const secondTimerIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call, index) => index > firstTimerIndex && call[1] === 50,
+      );
+      expect(secondTimerIndex).toBeGreaterThan(firstTimerIndex);
+      clearTimeout(
+        setTimeoutSpy.mock.results[secondTimerIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+      const secondFlush = (
+        setTimeoutSpy.mock.calls[secondTimerIndex]?.[0] as (() => Promise<void>) | undefined
+      )?.();
+
+      await vi.waitFor(() => {
+        expect(started).toEqual(["2"]);
+      });
+
+      await debouncer.enqueue({ key: "c", id: "3" });
+      const timerCountBeforeOverflow = setTimeoutSpy.mock.calls.length;
+      const thirdTimerIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call, index) => index > secondTimerIndex && call[1] === 50,
+      );
+      expect(thirdTimerIndex).toBeGreaterThan(secondTimerIndex);
+      clearTimeout(
+        setTimeoutSpy.mock.results[thirdTimerIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+
+      const overflowEnqueue = debouncer.enqueue({ key: "d", id: "4" });
+
+      expect(setTimeoutSpy.mock.calls).toHaveLength(timerCountBeforeOverflow);
+      await vi.waitFor(() => {
+        expect(started).toEqual(["2", "4"]);
+        expect(finished).toEqual(["4"]);
+      });
+
+      releaseChainOnly();
+      await Promise.all([secondFlush, overflowEnqueue]);
+      expect(finished).toEqual(["4", "2"]);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
 });
 
 describe("initSessionState BodyStripped", () => {

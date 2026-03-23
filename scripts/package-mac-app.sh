@@ -246,6 +246,17 @@ else
   echo "WARN: model catalog missing at $MODEL_CATALOG_SRC (continuing)" >&2
 fi
 
+echo "📦 Copying Control UI assets"
+CONTROL_UI_SRC="$ROOT_DIR/dist/control-ui"
+CONTROL_UI_DEST="$APP_ROOT/Contents/Resources/control-ui"
+if [ -d "$CONTROL_UI_SRC" ] && [ -f "$CONTROL_UI_SRC/index.html" ]; then
+  rm -rf "$CONTROL_UI_DEST"
+  cp -R "$CONTROL_UI_SRC" "$CONTROL_UI_DEST"
+else
+  echo "ERROR: Control UI assets missing at $CONTROL_UI_SRC. Run pnpm ui:build first." >&2
+  exit 1
+fi
+
 echo "📦 Copying OpenClawKit resources"
 OPENCLAWKIT_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/OpenClawKit_OpenClawKit.bundle"
 if [ -d "$OPENCLAWKIT_BUNDLE" ]; then

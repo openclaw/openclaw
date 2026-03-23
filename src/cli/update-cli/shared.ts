@@ -121,7 +121,11 @@ export function resolveGitInstallDir(): string {
 }
 
 function resolveDefaultGitDir(): string {
-  return path.join(os.homedir(), "openclaw");
+  const home = os.homedir();
+  if (home.startsWith("/")) {
+    return path.posix.join(home, "openclaw");
+  }
+  return path.join(home, "openclaw");
 }
 
 export function resolveNodeRunner(): string {
