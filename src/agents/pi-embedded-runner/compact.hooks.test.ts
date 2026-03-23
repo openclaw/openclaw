@@ -4,7 +4,6 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getCustomApiRegistrySourceId } from "../custom-api-registry.js";
 import {
   contextEngineCompactMock,
-  createOpenClawCodingToolsMock,
   ensureRuntimePluginsLoaded,
   estimateTokensMock,
   getMemorySearchManagerMock,
@@ -184,6 +183,15 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
   }
 
   it("bootstraps runtime plugins with the resolved workspace", async () => {
+    // This assertion only cares about bootstrap wiring, so stop before the
+    // rest of the compaction pipeline can pull in unrelated runtime surfaces.
+    resolveModelMock.mockReturnValue({
+      model: undefined,
+      error: "stop after bootstrap",
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    } as never);
+
     await compactEmbeddedPiSessionDirect({
       sessionId: "session-1",
       sessionFile: "/tmp/session.jsonl",
@@ -197,6 +205,15 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
   });
 
   it("forwards gateway subagent binding opt-in during compaction bootstrap", async () => {
+    // Coding-tool forwarding is covered elsewhere; this compaction test only
+    // owns the runtime bootstrap wiring.
+    resolveModelMock.mockReturnValue({
+      model: undefined,
+      error: "stop after bootstrap",
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    } as never);
+
     await compactEmbeddedPiSessionDirect({
       sessionId: "session-1",
       sessionFile: "/tmp/session.jsonl",
@@ -209,11 +226,6 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       workspaceDir: "/tmp/workspace",
       allowGatewaySubagentBinding: true,
     });
-    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowGatewaySubagentBinding: true,
-      }),
-    );
   });
 
   it("emits internal + plugin compaction hooks with counts", async () => {
