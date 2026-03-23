@@ -659,7 +659,7 @@ describe("applyMistralProviderConfig", () => {
       (model) => model.id === "mistral-large-latest",
     );
     expect(mistralDefault?.contextWindow).toBe(262144);
-    expect(mistralDefault?.maxTokens).toBe(262144);
+    expect(mistralDefault?.maxTokens).toBe(16384);
   });
 });
 
