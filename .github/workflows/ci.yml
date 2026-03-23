@@ -117,12 +117,18 @@ jobs:
         id: changed
         env:
           BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
         run: |
           node --input-type=module <<'EOF'
           import { appendFileSync } from "node:fs";
           import { listChangedExtensionIds } from "./scripts/test-extension.mjs";
 
-          const extensionIds = listChangedExtensionIds({ base: process.env.BASE_SHA, head: "HEAD" });
+          const extensionIds = listChangedExtensionIds({
+            base: process.env.BASE_SHA,
+            head: "HEAD",
+            fallbackBaseRef: process.env.BASE_REF,
+            unavailableBaseBehavior: "all",
+          });
           const matrix = JSON.stringify({ include: extensionIds.map((extension) => ({ extension })) });
 
           appendFileSync(process.env.GITHUB_OUTPUT, `has_changed_extensions=${extensionIds.length > 0}\n`, "utf8");
