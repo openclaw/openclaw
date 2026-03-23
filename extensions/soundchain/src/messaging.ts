@@ -173,12 +173,14 @@ export function createMessagingClient(apiUrl: string, token: string): MessagingC
   let baseUrl: string;
   try {
     const parsed = new URL(apiUrl);
-    // Use same hostname (don't strip api. prefix — REST may live on same host)
-    const host = parsed.hostname;
+    // Strip "api." prefix — REST routes live on the main domain (soundchain.io)
+    const host = parsed.hostname.replace(/^api\./, "");
     const port = parsed.port ? `:${parsed.port}` : "";
     baseUrl = `${parsed.protocol}//${host}${port}`;
   } catch {
-    baseUrl = "https://soundchain.io";
+    throw new Error(
+      `Invalid SoundChain apiUrl: "${apiUrl}". Expected a valid URL like "https://soundchain.io" or "https://api.soundchain.io/graphql".`,
+    );
   }
 
   const REST_TIMEOUT_MS = 10_000;
@@ -223,13 +225,20 @@ export function createMessagingClient(apiUrl: string, token: string): MessagingC
     },
 
     async sendMessage(toProfileId: string, message: string): Promise<ChatMessage> {
+      // Try REST first; only fall back to GraphQL on connection/network errors
+      // (NOT on HTTP errors where the server may have already processed the message)
       try {
         const data = await restPost("/api/pulse/send", { toId: toProfileId, message });
         const result = data.message as ChatMessage | undefined;
         if (!result) throw new Error("sendMessage returned null");
         return result;
-      } catch {
-        // Fallback to GraphQL
+      } catch (err: unknown) {
+        const isNetworkError =
+          err instanceof TypeError || // fetch network failure
+          (err instanceof DOMException && err.name === "AbortError"); // timeout
+        if (!isNetworkError) throw err; // Server responded — do NOT retry (avoids duplicate DMs)
+
+        // Network failure — safe to retry via GraphQL since REST never reached the server
         const data = await graphql(apiUrl, token, SEND_MESSAGE_MUTATION, {
           toId: toProfileId,
           message,
