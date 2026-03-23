@@ -24,11 +24,11 @@ import type {
 } from "../config/types.tts.js";
 import { logVerbose } from "../globals.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { stripMarkdown } from "../shared/text/strip-markdown.js";
 import {
   OPENAI_DEFAULT_TTS_MODEL as DEFAULT_OPENAI_MODEL,
   OPENAI_DEFAULT_TTS_VOICE as DEFAULT_OPENAI_VOICE,
 } from "../plugins/provider-model-defaults.js";
+import { stripMarkdown } from "../shared/text/strip-markdown.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
   getSpeechProvider,

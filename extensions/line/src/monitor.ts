@@ -1,8 +1,16 @@
 import type { WebhookRequestBody } from "@line/bot-sdk";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { dispatchReplyWithBufferedBlockDispatcher, chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
-import { danger, logVerbose, waitForAbortSignal, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import {
+  dispatchReplyWithBufferedBlockDispatcher,
+  chunkMarkdownText,
+} from "openclaw/plugin-sdk/reply-runtime";
+import {
+  danger,
+  logVerbose,
+  waitForAbortSignal,
+  type RuntimeEnv,
+} from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizePluginHttpPath,
   registerPluginHttpRoute,

@@ -49,9 +49,8 @@ import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
-let replyMediaPathsRuntimePromise: Promise<
-  typeof import("./reply-media-paths.runtime.js")
-> | null = null;
+let replyMediaPathsRuntimePromise: Promise<typeof import("./reply-media-paths.runtime.js")> | null =
+  null;
 
 function loadReplyMediaPathsRuntime() {
   replyMediaPathsRuntimePromise ??= import("./reply-media-paths.runtime.js");

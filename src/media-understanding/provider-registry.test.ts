@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { buildMediaUnderstandingRegistry, getMediaUnderstandingProvider } from "./provider-registry.js";
+import {
+  buildMediaUnderstandingRegistry,
+  getMediaUnderstandingProvider,
+} from "./provider-registry.js";
 
 describe("media-understanding provider registry", () => {
   afterEach(() => {

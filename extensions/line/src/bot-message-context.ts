@@ -5,12 +5,12 @@ import {
   resolveInboundSessionEnvelopeContext,
   toLocationContext,
 } from "openclaw/plugin-sdk/channel-inbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   recordInboundSession,
   resolvePinnedMainDmOwnerFromAllowlist,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";

@@ -48,23 +48,6 @@ import {
   updateLastRoute,
 } from "../../config/sessions.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
-import {
-  listLineAccountIds,
-  normalizeAccountId as normalizeLineAccountId,
-  resolveDefaultLineAccountId,
-  resolveLineAccount,
-  buildTemplateMessageFromPayload,
-  createQuickReplyItems,
-  pushFlexMessage,
-  pushLocationMessage,
-  pushMessageLine,
-  pushMessagesLine,
-  pushTemplateMessage,
-  pushTextMessageWithQuickReplies,
-  monitorLineProvider,
-  probeLineBot,
-  sendMessageLine,
-} from "../../../extensions/line/runtime-api.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
@@ -73,6 +56,25 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
+import {
+  buildTemplateMessageFromPayload,
+  createQuickReplyItems,
+  monitorLineProvider,
+  probeLineBot,
+  pushFlexMessage,
+  pushLocationMessage,
+  pushMessageLine,
+  pushMessagesLine,
+  pushTemplateMessage,
+  pushTextMessageWithQuickReplies,
+  sendMessageLine,
+} from "../../plugin-sdk/line-runtime.js";
+import {
+  listLineAccountIds,
+  normalizeAccountId as normalizeLineAccountId,
+  resolveDefaultLineAccountId,
+  resolveLineAccount,
+} from "../../plugin-sdk/line.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
 import { createRuntimeDiscord } from "./runtime-discord.js";
 import { createRuntimeIMessage } from "./runtime-imessage.js";

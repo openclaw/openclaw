@@ -10,12 +10,8 @@ describe("voice-call allowlist", () => {
   });
 
   it("matches normalized allowlist entries and rejects blank callers", () => {
-    expect(
-      isAllowlistedCaller("14155550123", ["+1 (415) 555-0123", " 020-7946-0958 "]),
-    ).toBe(true);
-    expect(isAllowlistedCaller("02079460958", ["+1 (415) 555-0123", " 020-7946-0958 "])).toBe(
-      true,
-    );
+    expect(isAllowlistedCaller("14155550123", ["+1 (415) 555-0123", " 020-7946-0958 "])).toBe(true);
+    expect(isAllowlistedCaller("02079460958", ["+1 (415) 555-0123", " 020-7946-0958 "])).toBe(true);
     expect(isAllowlistedCaller("", ["+1 (415) 555-0123"])).toBe(false);
     expect(isAllowlistedCaller("14155550123", ["", "abc"])).toBe(false);
   });
