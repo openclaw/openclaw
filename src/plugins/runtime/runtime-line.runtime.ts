@@ -1,6 +1,6 @@
-export { monitorLineProvider } from "../../line/monitor.js";
-export { probeLineBot } from "../../line/probe.js";
 export {
+  monitorLineProvider,
+  probeLineBot,
   pushFlexMessage,
   pushLocationMessage,
   pushMessageLine,
@@ -8,4 +8,4 @@ export {
   pushTemplateMessage,
   pushTextMessageWithQuickReplies,
   sendMessageLine,
-} from "../../line/send.js";
+} from "../../../extensions/line/runtime-api.js";
