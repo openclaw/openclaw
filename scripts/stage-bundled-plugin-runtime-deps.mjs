@@ -86,7 +86,14 @@ function installPluginRuntimeDeps(pluginDir, pluginId) {
   sanitizeBundledManifestForRuntimeInstall(pluginDir);
   const result = spawnSync(
     "npm",
-    ["install", "--omit=dev", "--silent", "--ignore-scripts", "--package-lock=false"],
+    [
+      "install",
+      "--omit=dev",
+      "--silent",
+      "--ignore-scripts",
+      "--legacy-peer-deps",
+      "--package-lock=false",
+    ],
     {
       cwd: pluginDir,
       encoding: "utf8",
