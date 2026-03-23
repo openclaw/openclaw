@@ -120,8 +120,8 @@ function resolveLoaderPluginSdkPackageRoot(
         })
       : null;
   return (
-    fromCwd ??
     fromExplicitHints ??
+    fromCwd ??
     findNearestPluginSdkPackageRoot(path.dirname(params.modulePath)) ??
     (params.cwd ? findNearestPluginSdkPackageRoot(params.cwd) : null) ??
     findNearestPluginSdkPackageRoot(process.cwd())
@@ -207,9 +207,14 @@ export function resolvePluginSdkAliasFile(params: {
 const cachedPluginSdkExportedSubpaths = new Map<string, string[]>();
 const cachedPluginSdkScopedAliasMaps = new Map<string, Record<string, string>>();
 
-export function listPluginSdkExportedSubpaths(params: { modulePath?: string } = {}): string[] {
-  const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
-  const packageRoot = resolveLoaderPluginSdkPackageRoot({ modulePath });
+export function listPluginSdkExportedSubpaths(params: LoaderModuleResolveParams = {}): string[] {
+  const modulePath = resolveLoaderModulePath(params);
+  const packageRoot = resolveLoaderPluginSdkPackageRoot({
+    modulePath,
+    argv1: params.argv1,
+    cwd: params.cwd,
+    moduleUrl: params.moduleUrl,
+  });
   if (!packageRoot) {
     return [];
   }
@@ -223,10 +228,15 @@ export function listPluginSdkExportedSubpaths(params: { modulePath?: string } = 
 }
 
 export function resolvePluginSdkScopedAliasMap(
-  params: { modulePath?: string } = {},
+  params: LoaderModuleResolveParams = {},
 ): Record<string, string> {
-  const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
-  const packageRoot = resolveLoaderPluginSdkPackageRoot({ modulePath });
+  const modulePath = resolveLoaderModulePath(params);
+  const packageRoot = resolveLoaderPluginSdkPackageRoot({
+    modulePath,
+    argv1: params.argv1,
+    cwd: params.cwd,
+    moduleUrl: params.moduleUrl,
+  });
   if (!packageRoot) {
     return {};
   }
@@ -240,7 +250,12 @@ export function resolvePluginSdkScopedAliasMap(
     return cached;
   }
   const aliasMap: Record<string, string> = {};
-  for (const subpath of listPluginSdkExportedSubpaths({ modulePath })) {
+  for (const subpath of listPluginSdkExportedSubpaths({
+    modulePath,
+    argv1: params.argv1,
+    cwd: params.cwd,
+    moduleUrl: params.moduleUrl,
+  })) {
     const candidateMap = {
       src: path.join(packageRoot, "src", "plugin-sdk", `${subpath}.ts`),
       dist: path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`),
@@ -285,17 +300,21 @@ export function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {})
   return null;
 }
 
-export function buildPluginLoaderAliasMap(modulePath: string): Record<string, string> {
+export function buildPluginLoaderAliasMap(
+  modulePath: string,
+  params: Omit<LoaderModuleResolveParams, "modulePath"> = {},
+): Record<string, string> {
+  const loaderParams = { ...params, modulePath };
   const pluginSdkAlias = resolvePluginSdkAliasFile({
     srcFile: "root-alias.cjs",
     distFile: "root-alias.cjs",
-    modulePath,
+    ...loaderParams,
   });
-  const extensionApiAlias = resolveExtensionApiAlias({ modulePath });
+  const extensionApiAlias = resolveExtensionApiAlias(loaderParams);
   return {
     ...(extensionApiAlias ? { "openclaw/extension-api": extensionApiAlias } : {}),
     ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
-    ...resolvePluginSdkScopedAliasMap({ modulePath }),
+    ...resolvePluginSdkScopedAliasMap(loaderParams),
   };
 }
 

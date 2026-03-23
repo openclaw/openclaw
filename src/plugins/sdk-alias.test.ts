@@ -461,6 +461,135 @@ describe("plugin sdk alias helpers", () => {
     );
   });
 
+  it("prefers the current loader module root over cwd fallback for local plugins", async () => {
+    const wrongRoot = createPluginSdkAliasFixture({
+      srcFile: "plugin-entry.ts",
+      distFile: "plugin-entry.js",
+      srcBody: "export const definePluginEntry = () => 'wrong-root';\n",
+      distBody: "export const definePluginEntry = () => 'wrong-root';\n",
+      packageExports: {
+        "./plugin-sdk/plugin-entry": { default: "./dist/plugin-sdk/plugin-entry.js" },
+      },
+    });
+    const correctRoot = createPluginSdkAliasFixture({
+      srcFile: "plugin-entry.ts",
+      distFile: "plugin-entry.js",
+      srcBody: "export const definePluginEntry = () => 'correct-root';\n",
+      distBody: "export const definePluginEntry = () => 'correct-root';\n",
+      packageExports: {
+        "./plugin-sdk/plugin-entry": { default: "./dist/plugin-sdk/plugin-entry.js" },
+      },
+    });
+    const wrongRootAlias = path.join(wrongRoot.root, "src", "plugin-sdk", "root-alias.cjs");
+    const correctRootAlias = path.join(correctRoot.root, "src", "plugin-sdk", "root-alias.cjs");
+    fs.writeFileSync(wrongRootAlias, "module.exports = {};\n", "utf-8");
+    fs.writeFileSync(
+      path.join(wrongRoot.root, "dist", "plugin-sdk", "root-alias.cjs"),
+      "module.exports = {};\n",
+      "utf-8",
+    );
+    fs.writeFileSync(correctRootAlias, "module.exports = {};\n", "utf-8");
+    fs.writeFileSync(
+      path.join(correctRoot.root, "dist", "plugin-sdk", "root-alias.cjs"),
+      "module.exports = {};\n",
+      "utf-8",
+    );
+
+    const localPluginEntry = path.join(makeTempDir(), "extensions", "demo-plugin", "index.ts");
+    mkdirSafe(path.dirname(localPluginEntry));
+    fs.writeFileSync(
+      localPluginEntry,
+      `import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+
+export const loadedEntry = definePluginEntry();
+`,
+      "utf-8",
+    );
+
+    const withoutModuleHint = withCwd(wrongRoot.root, () =>
+      withEnv({ NODE_ENV: undefined }, () => buildPluginLoaderAliasMap(localPluginEntry)),
+    );
+    expect(fs.realpathSync(withoutModuleHint["openclaw/plugin-sdk"] ?? "")).toBe(
+      fs.realpathSync(wrongRootAlias),
+    );
+
+    const withModuleHint = withCwd(wrongRoot.root, () =>
+      withEnv({ NODE_ENV: undefined }, () =>
+        buildPluginLoaderAliasMap(localPluginEntry, {
+          moduleUrl: pathToFileURL(path.join(correctRoot.root, "src", "plugins", "loader.ts")).href,
+        }),
+      ),
+    );
+    expect(fs.realpathSync(withModuleHint["openclaw/plugin-sdk"] ?? "")).toBe(
+      fs.realpathSync(correctRootAlias),
+    );
+    expect(fs.realpathSync(withModuleHint["openclaw/plugin-sdk/plugin-entry"] ?? "")).toBe(
+      fs.realpathSync(path.join(correctRoot.root, "src", "plugin-sdk", "plugin-entry.ts")),
+    );
+
+    const createJiti = await getCreateJiti();
+    const jiti = createJiti(import.meta.url, {
+      ...buildPluginLoaderJitiOptions(withModuleHint),
+      tryNative: false,
+    });
+    expect(jiti(localPluginEntry)).toMatchObject({
+      loadedEntry: "correct-root",
+    });
+  }, 240_000);
+
+  it("prefers the current loader module root even when the plugin lives under another OpenClaw root", () => {
+    const wrongRoot = createPluginSdkAliasFixture({
+      srcFile: "plugin-entry.ts",
+      distFile: "plugin-entry.js",
+      srcBody: "export const definePluginEntry = () => 'wrong-root';\n",
+      distBody: "export const definePluginEntry = () => 'wrong-root';\n",
+      packageExports: {
+        "./plugin-sdk/plugin-entry": { default: "./dist/plugin-sdk/plugin-entry.js" },
+      },
+    });
+    const correctRoot = createPluginSdkAliasFixture({
+      srcFile: "plugin-entry.ts",
+      distFile: "plugin-entry.js",
+      srcBody: "export const definePluginEntry = () => 'correct-root';\n",
+      distBody: "export const definePluginEntry = () => 'correct-root';\n",
+      packageExports: {
+        "./plugin-sdk/plugin-entry": { default: "./dist/plugin-sdk/plugin-entry.js" },
+      },
+    });
+    fs.writeFileSync(
+      path.join(wrongRoot.root, "src", "plugin-sdk", "root-alias.cjs"),
+      "module.exports = {};\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(correctRoot.root, "src", "plugin-sdk", "root-alias.cjs"),
+      "module.exports = {};\n",
+      "utf-8",
+    );
+    const foreignPluginEntry = path.join(
+      wrongRoot.root,
+      "extensions",
+      "foreign-plugin",
+      "index.ts",
+    );
+    mkdirSafe(path.dirname(foreignPluginEntry));
+    fs.writeFileSync(foreignPluginEntry, 'export const plugin = "foreign";\n', "utf-8");
+
+    const aliasMap = withCwd(wrongRoot.root, () =>
+      withEnv({ NODE_ENV: undefined }, () =>
+        buildPluginLoaderAliasMap(foreignPluginEntry, {
+          moduleUrl: pathToFileURL(path.join(correctRoot.root, "src", "plugins", "loader.ts")).href,
+        }),
+      ),
+    );
+    expect(fs.realpathSync(aliasMap["openclaw/plugin-sdk"] ?? "")).toBe(
+      fs.realpathSync(path.join(correctRoot.root, "src", "plugin-sdk", "root-alias.cjs")),
+    );
+    expect(fs.realpathSync(aliasMap["openclaw/plugin-sdk/plugin-entry"] ?? "")).toBe(
+      fs.realpathSync(path.join(correctRoot.root, "src", "plugin-sdk", "plugin-entry.ts")),
+    );
+  });
+
   it("does not resolve plugin-sdk alias files from cwd fallback when package root is not an OpenClaw root", () => {
     const fixture = createPluginSdkAliasFixture({
       srcFile: "channel-runtime.ts",
@@ -544,6 +673,53 @@ export const syntheticRuntimeMarker = {
       syntheticRuntimeMarker: {
         resolveOutboundSendDep: expect.any(Function),
       },
+    });
+  }, 240_000);
+
+  it("loads a local TypeScript plugin that imports plugin-sdk/plugin-entry", async () => {
+    const fixture = createPluginSdkAliasFixture({
+      srcFile: "plugin-entry.ts",
+      distFile: "plugin-entry.js",
+      srcBody: "export const definePluginEntry = () => 'source-plugin-entry';\n",
+      distBody: "export const definePluginEntry = () => 'dist-plugin-entry';\n",
+      packageExports: {
+        "./plugin-sdk/plugin-entry": { default: "./dist/plugin-sdk/plugin-entry.js" },
+      },
+    });
+    const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
+    const distRootAlias = path.join(fixture.root, "dist", "plugin-sdk", "root-alias.cjs");
+    fs.writeFileSync(sourceRootAlias, "module.exports = {};\n", "utf-8");
+    fs.writeFileSync(distRootAlias, "module.exports = {};\n", "utf-8");
+
+    const localPluginEntry = path.join(fixture.root, "extensions", "demo-plugin", "index.ts");
+    mkdirSafe(path.dirname(localPluginEntry));
+    fs.writeFileSync(
+      localPluginEntry,
+      `import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+
+export const loadedEntry = definePluginEntry();
+`,
+      "utf-8",
+    );
+
+    const aliasMap = withEnv({ NODE_ENV: undefined }, () =>
+      buildPluginLoaderAliasMap(localPluginEntry),
+    );
+    expect(fs.realpathSync(aliasMap["openclaw/plugin-sdk"] ?? "")).toBe(
+      fs.realpathSync(sourceRootAlias),
+    );
+    expect(fs.realpathSync(aliasMap["openclaw/plugin-sdk/plugin-entry"] ?? "")).toBe(
+      fs.realpathSync(path.join(fixture.root, "src", "plugin-sdk", "plugin-entry.ts")),
+    );
+
+    const createJiti = await getCreateJiti();
+    const jiti = createJiti(import.meta.url, {
+      ...buildPluginLoaderJitiOptions(aliasMap),
+      tryNative: false,
+    });
+
+    expect(jiti(localPluginEntry)).toMatchObject({
+      loadedEntry: "source-plugin-entry",
     });
   }, 240_000);
 

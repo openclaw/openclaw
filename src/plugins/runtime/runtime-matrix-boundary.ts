@@ -73,10 +73,11 @@ function getJiti(modulePath: string) {
     srcFile: "root-alias.cjs",
     distFile: "root-alias.cjs",
     modulePath,
+    moduleUrl: import.meta.url,
   });
   const aliasMap = {
     ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
-    ...resolvePluginSdkScopedAliasMap({ modulePath }),
+    ...resolvePluginSdkScopedAliasMap({ modulePath, moduleUrl: import.meta.url }),
   };
   const loader = createJiti(import.meta.url, {
     ...buildPluginLoaderJitiOptions(aliasMap),
