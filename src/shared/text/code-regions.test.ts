@@ -37,6 +37,28 @@ describe("shared/text/code-regions", () => {
     expect(text.slice(regions[1].start, regions[1].end)).toBe("`inline`");
   });
 
+  it("supports variable-length fences (4 or more backticks/tildes)", () => {
+    const text = [
+      "````xml",
+      "<sample />",
+      "````",
+      "Outside.",
+      "~~~~json",
+      "{}",
+      "~~~~",
+      "End.",
+    ].join("\n");
+
+    const regions = findCodeRegions(text);
+
+    expect(regions).toHaveLength(2);
+    expect(text.slice(regions[0].start, regions[0].end)).toBe("````xml\n<sample />\n````\n");
+    expect(text.slice(regions[1].start, regions[1].end)).toBe("~~~~json\n{}\n~~~~\n");
+
+    const outsideIdx = text.indexOf("Outside.");
+    expect(isInsideCode(outsideIdx, regions)).toBe(false);
+  });
+
   it("reports whether positions are inside discovered regions", () => {
     const text = "plain `code` done";
     const regions = findCodeRegions(text);

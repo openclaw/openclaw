@@ -6,7 +6,7 @@ export interface CodeRegion {
 export function findCodeRegions(text: string): CodeRegion[] {
   const regions: CodeRegion[] = [];
 
-  const fencedRe = /(^|\n)(```|~~~)[^\n]*\n[\s\S]*?(?:\n\2(?:\n|$)|$)/g;
+  const fencedRe = /(^|\n)(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:\n\2[ \t]*(?:\n|$)|$)/g;
   for (const match of text.matchAll(fencedRe)) {
     const start = (match.index ?? 0) + match[1].length;
     regions.push({ start, end: start + match[0].length - match[1].length });
