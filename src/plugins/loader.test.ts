@@ -1443,7 +1443,6 @@ describe("loadOpenClawPlugins", () => {
     const subpaths = __testing.listPluginSdkExportedSubpaths();
     expect(subpaths).toContain("compat");
     expect(subpaths).toContain("telegram");
-    expect(subpaths).toContain("tinyfish");
     expect(subpaths).not.toContain("root-alias");
   });
 

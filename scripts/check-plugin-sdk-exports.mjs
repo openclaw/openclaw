@@ -78,7 +78,6 @@ const requiredSubpathEntries = [
   "talk-voice",
   "test-utils",
   "thread-ownership",
-  "tinyfish",
   "tlon",
   "twitch",
   "voice-call",

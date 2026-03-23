@@ -1,4 +1,4 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/tinyfish";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/compat";
 import { createTinyFishTool } from "./src/tinyfish-tool.js";
 
 const plugin = {

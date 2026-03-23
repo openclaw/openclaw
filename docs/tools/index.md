@@ -175,8 +175,6 @@ Optional plugin tools:
 - [Diffs](/tools/diffs): read-only diff viewer and PNG or PDF file renderer for before/after text or unified patches.
 - [LLM Task](/tools/llm-task): JSON-only LLM step for structured workflow output (optional schema validation).
 - [Lobster](/tools/lobster): typed workflow runtime with resumable approvals (requires the Lobster CLI on the gateway host).
-- [TinyFish](/plugins/tinyfish): hosted browser automation for public multi-step workflows, forms, and JS-heavy pages.
-
 ## Tool inventory
 
 ### `apply_patch`

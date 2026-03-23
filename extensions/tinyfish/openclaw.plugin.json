@@ -2,7 +2,6 @@
   "id": "tinyfish",
   "name": "TinyFish",
   "description": "Hosted browser automation for complex public web workflows.",
-  "skills": ["./skills"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

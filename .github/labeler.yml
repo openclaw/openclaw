@@ -256,7 +256,3 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/talk-voice/**"
-"extensions: tinyfish":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/tinyfish/**"

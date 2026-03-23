@@ -42,7 +42,6 @@ const bundledExtensionSubpathLoaders = [
   { id: "talk-voice", load: () => import("openclaw/plugin-sdk/talk-voice") },
   { id: "test-utils", load: () => import("openclaw/plugin-sdk/test-utils") },
   { id: "thread-ownership", load: () => import("openclaw/plugin-sdk/thread-ownership") },
-  { id: "tinyfish", load: () => import("openclaw/plugin-sdk/tinyfish") },
   { id: "tlon", load: () => import("openclaw/plugin-sdk/tlon") },
   { id: "twitch", load: () => import("openclaw/plugin-sdk/twitch") },
   { id: "voice-call", load: () => import("openclaw/plugin-sdk/voice-call") },

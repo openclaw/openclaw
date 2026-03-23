@@ -5,7 +5,7 @@ import {
   readStringParam,
   ToolInputError,
   type OpenClawPluginApi,
-} from "openclaw/plugin-sdk/tinyfish";
+} from "openclaw/plugin-sdk/compat";
 
 const DEFAULT_BASE_URL = "https://agent.tinyfish.ai";
 const RUN_STREAM_PATH = "v1/automation/run-sse";
