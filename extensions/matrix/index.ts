@@ -6,6 +6,10 @@ import { setMatrixRuntime } from "./src/runtime.js";
 export { matrixPlugin } from "./src/channel.js";
 export { setMatrixRuntime } from "./src/runtime.js";
 
+// Idempotency guard: track registration state to prevent duplicate registration
+// which can cause "Cannot redefine property" errors in bundled builds.
+let isRegistered = false;
+
 export default defineChannelPluginEntry({
   id: "matrix",
   name: "Matrix",
@@ -13,6 +17,13 @@ export default defineChannelPluginEntry({
   plugin: matrixPlugin,
   setRuntime: setMatrixRuntime,
   registerFull(api) {
+    // Guard against duplicate registration
+    if (isRegistered) {
+      api.logger.info?.("matrix: plugin already registered, skipping duplicate registration");
+      return;
+    }
+    isRegistered = true;
+
     void import("./src/plugin-entry.runtime.js")
       .then(({ ensureMatrixCryptoRuntime }) =>
         ensureMatrixCryptoRuntime({ log: api.logger.info }).catch((err: unknown) => {
