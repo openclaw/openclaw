@@ -790,10 +790,12 @@ export async function synthesizeSpeech(params: {
       addedProviders.add(p.toLowerCase());
     }
   }
-  for (const p of customPlugins) {
-    if (!addedProviders.has(p.toLowerCase())) {
-      providerOrder.push(p);
-      addedProviders.add(p.toLowerCase());
+  if (!params.disableFallback) {
+    for (const p of customPlugins) {
+      if (!addedProviders.has(p.toLowerCase())) {
+        providerOrder.push(p);
+        addedProviders.add(p.toLowerCase());
+      }
     }
   }
 
@@ -859,7 +861,10 @@ export async function synthesizeSpeech(params: {
           latencyMs: Date.now() - providerStart,
           provider,
           outputFormat: result.mime,
-          voiceCompatible: isVoiceCompatibleAudio({ fileName: audioPath }),
+          voiceCompatible: isVoiceCompatibleAudio({
+            fileName: audioPath,
+            contentType: result.mime,
+          }),
         };
       } catch (err) {
         const isBuiltin = builtinSet.has(provider.toLowerCase());

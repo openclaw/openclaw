@@ -483,46 +483,27 @@ export async function runProviderEntry(params: {
 
     // Get auth for all providers (built-in and plugins)
     // Require API key if not a plugin OR if plugin doesn't implement this handler
-    // Check if plugin actually implements this specific handler (not inherited from built-in)
-    const pluginEntry =
-      pluginRegistry?.providers.find(
-        (e: {
-          provider: {
-            id: string;
-            routingCapabilities?: unknown;
-            describeImage?: unknown;
-            transcribeAudio?: unknown;
-            describeVideo?: unknown;
-          };
-        }) =>
-          normalizeMediaProviderId(e.provider.id) === providerId &&
-          (capability === "image"
-            ? e.provider.describeImage
-            : capability === "audio"
-              ? e.provider.transcribeAudio
-              : capability === "video"
-                ? e.provider.describeVideo
-                : false),
-      ) ??
-      pluginRegistry?.mediaUnderstandingProviders.find(
-        (e: {
-          provider: {
-            id: string;
-            routingCapabilities?: unknown;
-            describeImage?: unknown;
-            transcribeAudio?: unknown;
-            describeVideo?: unknown;
-          };
-        }) =>
-          normalizeMediaProviderId(e.provider.id) === providerId &&
-          (capability === "image"
-            ? e.provider.describeImage
-            : capability === "audio"
-              ? e.provider.transcribeAudio
-              : capability === "video"
-                ? e.provider.describeVideo
-                : false),
-      );
+    // Only check the unified providers array (new system) for plugin-style handlers
+    // Legacy providers in mediaUnderstandingProviders use the legacy request shape with cfg
+    const pluginEntry = pluginRegistry?.providers.find(
+      (e: {
+        provider: {
+          id: string;
+          routingCapabilities?: unknown;
+          describeImage?: unknown;
+          transcribeAudio?: unknown;
+          describeVideo?: unknown;
+        };
+      }) =>
+        normalizeMediaProviderId(e.provider.id) === providerId &&
+        (capability === "image"
+          ? e.provider.describeImage
+          : capability === "audio"
+            ? e.provider.transcribeAudio
+            : capability === "video"
+              ? e.provider.describeVideo
+              : false),
+    );
     const pluginImplementsHandler = !!pluginEntry;
     const imageAuth = await resolveProviderExecutionContext({
       providerId,
