@@ -10,7 +10,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-
 ## 2026.3.22
 
 ### Breaking
@@ -114,6 +113,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Doctor/WhatsApp: stop auto-enable from appending built-in channel ids like `whatsapp` to `plugins.allow`, so `openclaw doctor --fix` no longer writes schema-invalid plugin allowlist entries when repairing built-in channels. Fixes #52931. Thanks @vincentkoc.
 - Agents/Anthropic: preserve latest assistant thinking and redacted-thinking block ordering during transcript image sanitization so follow-up turns do not trip Anthropic's unmodified-thinking validation. Thanks @vincentkoc.
 - Models/OpenAI Codex OAuth and Plugins/MiniMax OAuth: ensure env-configured HTTP/HTTPS proxy dispatchers are initialized before OAuth preflight and token exchange requests so proxy-required environments can complete MiniMax and OpenAI Codex sign-in flows again. (#52228; fixes #51619, #51569) Thanks @openperf.
 - Plugins/DeepSeek: refactor the bundled DeepSeek provider onto the shared single-provider plugin entry, move its coverage into the extension test lane, and keep bundled auth env-var metadata on the generated manifest path. (#48762) Thanks @07akioni.
