@@ -20,6 +20,8 @@ vi.mock("../infra/agent-events.js", () => ({
   emitAgentEvent: vi.fn(),
 }));
 
+const fetchMock = vi.hoisted(() => vi.fn(async () => new Response(null, { status: 200 })));
+
 function createToolHandlerCtx(params: {
   runId: string;
   sessionKey?: string;
@@ -76,6 +78,10 @@ describe("after_tool_call hook wiring", () => {
     hookMocks.runner.runBeforeToolCall.mockResolvedValue(undefined);
     hookMocks.runner.runAfterToolCall.mockClear();
     hookMocks.runner.runAfterToolCall.mockResolvedValue(undefined);
+    fetchMock.mockClear();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubEnv("D0_BACKEND_INTERNAL_URL", "http://backend.internal");
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "gateway-token");
   });
 
   it("calls runAfterToolCall in handleToolExecutionEnd when hook is registered", async () => {
@@ -212,6 +218,85 @@ describe("after_tool_call hook wiring", () => {
     );
 
     expect(hookMocks.runner.runAfterToolCall).not.toHaveBeenCalled();
+  });
+
+  it("reports D0 TG tool lifecycle through the backend bridge when runtime env is configured", async () => {
+    const ctx = createToolHandlerCtx({
+      runId: "tg-run-1",
+      sessionKey: "agent:main:telegram:direct:12345",
+      sessionId: "ephemeral-tg-1",
+      agentId: "main",
+    });
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "read",
+        toolCallId: "tg-tool-call-1",
+        args: { path: "/tmp/tg.txt" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "read",
+        toolCallId: "tg-tool-call-1",
+        isError: false,
+        result: { content: [{ type: "text", text: "ok" }] },
+      } as never,
+    );
+
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://backend.internal/v1/backend/d0/tool-analytics",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          authorization: "Bearer gateway-token",
+        }),
+      }),
+    );
+  });
+
+  it("does not block tool completion when the TG analytics bridge fetch hangs", async () => {
+    fetchMock.mockImplementation(() => new Promise(() => {}));
+    const ctx = createToolHandlerCtx({
+      runId: "tg-run-hang",
+      sessionKey: "agent:main:telegram:direct:54321",
+      sessionId: "ephemeral-tg-hang",
+      agentId: "main",
+    });
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "read",
+        toolCallId: "tg-tool-call-hang",
+        args: { path: "/tmp/hang.txt" },
+      } as never,
+    );
+
+    const completion = await Promise.race([
+      handleToolExecutionEnd(
+        ctx as never,
+        {
+          type: "tool_execution_end",
+          toolName: "read",
+          toolCallId: "tg-tool-call-hang",
+          isError: false,
+          result: { content: [{ type: "text", text: "ok" }] },
+        } as never,
+      ).then(() => "completed"),
+      new Promise<string>((resolve) => setTimeout(() => resolve("timed_out"), 50)),
+    ]);
+
+    expect(completion).toBe("completed");
   });
 
   it("keeps start args isolated per run when toolCallId collides", async () => {
