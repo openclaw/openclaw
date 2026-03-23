@@ -508,6 +508,42 @@ export async function dispatchReplyFromConfig(params: {
       return { queuedFinal: false, counts };
     }
 
+    // Policy feedback: check if reply should be suppressed (active mode only).
+    // Gate behind isPolicyFeedbackActive() to avoid dynamic import on every message
+    // when the subsystem is off or passive.
+    try {
+      const bridge = await import("../../policy-feedback/gateway-bridge.js");
+      if (bridge.isPolicyFeedbackActive()) {
+        const channel =
+          sessionStoreEntry.entry?.channel ??
+          ctx.OriginatingChannel ??
+          ctx.Surface ??
+          ctx.Provider ??
+          "unknown";
+        const effectiveSessionKey = sessionStoreEntry.sessionKey ?? sessionKey ?? "";
+        const hints = await bridge.getPolicyHintsSafe({
+          agentId,
+          sessionKey: effectiveSessionKey,
+          channelId: typeof channel === "string" ? channel : "unknown",
+        });
+        if (hints.recommendation === "suppress" && hints.mode === "active") {
+          bridge.logPolicyAction({
+            agentId,
+            sessionKey: effectiveSessionKey,
+            actionType: "suppressed",
+            channelId: typeof channel === "string" ? channel : "unknown",
+            contextSummary: "Reply suppressed by policy feedback",
+          });
+          const counts = dispatcher.getQueuedCounts();
+          recordProcessed("completed", { reason: "policy_feedback_suppress" });
+          markIdle("message_completed");
+          return { queuedFinal: false, counts };
+        }
+      }
+    } catch {
+      // Policy feedback unavailable — proceed normally
+    }
+
     const shouldSendToolSummaries = ctx.ChatType !== "group" && ctx.CommandSource !== "native";
     const acpDispatch = await dispatchAcpRuntime.tryDispatchAcpReply({
       ctx,

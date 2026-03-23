@@ -1973,6 +1973,34 @@ export async function runEmbeddedAttempt(
       ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
       : undefined;
 
+    // Fetch policy feedback hints for advisory prompt injection (non-blocking).
+    // Use the user's timezone (not server time) so scoring models learn correct patterns.
+    let policyHintsSection: string | undefined;
+    try {
+      const { isPolicyFeedbackActive, getPolicyHintsForPrompt } = await import(
+        "../../../policy-feedback/gateway-bridge.js"
+      );
+      if (isPolicyFeedbackActive()) {
+        let userHour: number | undefined;
+        try {
+          const userNow = new Date(
+            new Date().toLocaleString("en-US", { timeZone: userTimezone || undefined }),
+          );
+          userHour = userNow.getHours();
+        } catch {
+          userHour = new Date().getHours(); // Fallback to server time
+        }
+        policyHintsSection = await getPolicyHintsForPrompt({
+          agentId: runtimeInfo.agentId ?? "default",
+          sessionKey: params.sessionKey ?? "",
+          channelId: runtimeInfo.channel ?? "unknown",
+          hourOfDay: userHour,
+        });
+      }
+    } catch {
+      // Policy feedback unavailable — no hints injected
+    }
+
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
       defaultThinkLevel: params.thinkLevel,
@@ -2000,6 +2028,7 @@ export async function runEmbeddedAttempt(
       userTimeFormat,
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
+      policyHintsSection,
     });
     const systemPromptReport = buildSystemPromptReport({
       source: "run",
