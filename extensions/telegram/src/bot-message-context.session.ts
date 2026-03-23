@@ -273,27 +273,31 @@ export async function buildTelegramInboundContextPayload(params: {
     storePath,
     sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
     ctx: ctxPayload,
-    updateLastRoute: !isGroup || updateLastRouteThreadId != null
-      ? {
-          sessionKey: updateLastRouteSessionKey,
-          channel: "telegram",
-          to: `telegram:${chatId}`,
-          accountId: route.accountId,
-          threadId: updateLastRouteThreadId,
-          mainDmOwnerPin:
-            !isGroup && updateLastRouteSessionKey === route.mainSessionKey && pinnedMainDmOwner && senderId
-              ? {
-                  ownerRecipient: pinnedMainDmOwner,
-                  senderRecipient: senderId,
-                  onSkip: ({ ownerRecipient, senderRecipient }) => {
-                    logVerbose(
-                      `telegram: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                    );
-                  },
-                }
-              : undefined,
-        }
-      : undefined,
+    updateLastRoute:
+      !isGroup || updateLastRouteThreadId != null
+        ? {
+            sessionKey: updateLastRouteSessionKey,
+            channel: "telegram",
+            to: `telegram:${chatId}`,
+            accountId: route.accountId,
+            threadId: updateLastRouteThreadId,
+            mainDmOwnerPin:
+              !isGroup &&
+              updateLastRouteSessionKey === route.mainSessionKey &&
+              pinnedMainDmOwner &&
+              senderId
+                ? {
+                    ownerRecipient: pinnedMainDmOwner,
+                    senderRecipient: senderId,
+                    onSkip: ({ ownerRecipient, senderRecipient }) => {
+                      logVerbose(
+                        `telegram: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                      );
+                    },
+                  }
+                : undefined,
+          }
+        : undefined,
     onRecordError: (err) => {
       logVerbose(`telegram: failed updating session meta: ${String(err)}`);
     },
