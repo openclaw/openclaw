@@ -20,6 +20,10 @@ import {
   resolveThreadSessionKeys,
   type RoutePeer,
 } from "openclaw/plugin-sdk/routing";
+import {
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
 import { parseTelegramTopicConversation } from "../runtime-api.js";
 import {
   buildTokenChannelStatusSummary,
@@ -448,14 +452,8 @@ export const telegramPlugin = createChatChannelPlugin({
       listGroups: async (params) => listTelegramDirectoryGroupsFromConfig(params),
     }),
     actions: telegramMessageActions,
-    status: {
-      defaultRuntime: {
-        accountId: DEFAULT_ACCOUNT_ID,
-        running: false,
-        lastStartAt: null,
-        lastStopAt: null,
-        lastError: null,
-      },
+    status: createComputedAccountStatusAdapter<ResolvedTelegramAccount, TelegramProbe, unknown>({
+      defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
       collectStatusIssues: collectTelegramStatusIssues,
       buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
       probeAccount: async ({ account, timeoutMs }) =>
@@ -520,7 +518,7 @@ export const telegramPlugin = createChatChannelPlugin({
         });
         return { ...audit, unresolvedGroups, hasWildcardUnmentionedGroups };
       },
-      buildAccountSnapshot: ({ account, cfg, runtime, probe, audit }) => {
+      resolveAccountSnapshot: ({ account, cfg, runtime, audit }) => {
         const configuredFromStatus = resolveConfiguredFromCredentialStatuses(account);
         const ownerAccountId = findTelegramTokenOwnerAccountId({
           cfg,
@@ -547,20 +545,16 @@ export const telegramPlugin = createChatChannelPlugin({
           name: account.name,
           enabled: account.enabled,
           configured,
-          ...projectCredentialSnapshotFields(account),
-          running: runtime?.running ?? false,
-          lastStartAt: runtime?.lastStartAt ?? null,
-          lastStopAt: runtime?.lastStopAt ?? null,
-          lastError: runtime?.lastError ?? duplicateTokenReason,
-          mode: runtime?.mode ?? (account.config.webhookUrl ? "webhook" : "polling"),
-          probe,
-          audit,
-          allowUnmentionedGroups,
-          lastInboundAt: runtime?.lastInboundAt ?? null,
-          lastOutboundAt: runtime?.lastOutboundAt ?? null,
+          extra: {
+            ...projectCredentialSnapshotFields(account),
+            lastError: runtime?.lastError ?? duplicateTokenReason,
+            mode: runtime?.mode ?? (account.config.webhookUrl ? "webhook" : "polling"),
+            audit,
+            allowUnmentionedGroups,
+          },
         };
       },
-    },
+    }),
     gateway: {
       startAccount: async (ctx) => {
         const account = ctx.account;

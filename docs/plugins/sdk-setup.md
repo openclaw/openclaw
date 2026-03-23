@@ -1,5 +1,5 @@
 ---
-title: "Plugin SDK Setup"
+title: "Plugin Setup and Config"
 sidebarTitle: "Setup and Config"
 summary: "Setup wizards, setup-entry.ts, config schemas, and package.json metadata"
 read_when:
@@ -276,6 +276,17 @@ The `ChannelSetupWizard` type supports `credentials`, `textInputs`,
 `dmPolicy`, `allowFrom`, `groupAccess`, `prepare`, `finalize`, and more.
 See bundled plugins (e.g. `extensions/discord/src/channel.setup.ts`) for
 full examples.
+
+For DM allowlist prompts that only need the standard
+`note -> prompt -> parse -> merge -> patch` flow, prefer the shared setup
+helpers from `openclaw/plugin-sdk/setup`: `createPromptParsedAllowFromForAccount(...)`,
+`createTopLevelChannelParsedAllowFromPrompt(...)`, and
+`createNestedChannelParsedAllowFromPrompt(...)`.
+
+For channel setup status blocks that only vary by labels, scores, and optional
+extra lines, prefer `createStandardChannelSetupStatus(...)` from
+`openclaw/plugin-sdk/setup` instead of hand-rolling the same `status` object in
+each plugin.
 
 For optional setup surfaces that should only appear in certain contexts, use
 `createOptionalChannelSetupSurface` from `openclaw/plugin-sdk/channel-setup`:

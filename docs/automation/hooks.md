@@ -82,13 +82,12 @@ Hooks run inside the Gateway process. Treat bundled hooks, managed hooks, and `h
 
 ## Hook Discovery
 
-Hooks are automatically discovered from these directories:
+Hooks are automatically discovered from these directories, in order of increasing override precedence:
 
-1. **Bundled hooks**: `<openclaw>/dist/hooks/bundled/` (shipped with OpenClaw)
+1. **Bundled hooks**: shipped with OpenClaw; located at `<openclaw>/dist/hooks/bundled/` for npm installs (or a sibling `hooks/bundled/` for compiled binaries)
 2. **Plugin hooks**: hooks bundled inside installed plugins (see [Plugin hooks](/plugins/architecture#provider-runtime-hooks))
-3. **Managed hooks**: `~/.openclaw/hooks/` (user-installed, shared across workspaces; can override bundled and plugin hooks)
-4. **Extra hook directories**: `hooks.internal.load.extraDirs` (operator-configured shared hook folders; treated as managed)
-5. **Workspace hooks**: `<workspace>/hooks/` (per-agent, disabled by default until explicitly enabled; cannot override hooks from other sources)
+3. **Managed hooks**: `~/.openclaw/hooks/` (user-installed, shared across workspaces; can override bundled and plugin hooks). **Extra hook directories** configured via `hooks.internal.load.extraDirs` are also treated as managed hooks and share the same override precedence.
+4. **Workspace hooks**: `<workspace>/hooks/` (per-agent, disabled by default until explicitly enabled; cannot override hooks from other sources)
 
 Workspace hooks can add new hook names for a repo, but they cannot override bundled, managed, or plugin-provided hooks with the same name.
 
@@ -226,15 +225,17 @@ Each event includes:
   timestamp: Date,             // When the event occurred
   messages: string[],          // Push messages here to send to user
   context: {
-    // Command events:
-    sessionEntry?: SessionEntry,
-    sessionId?: string,
-    sessionFile?: string,
-    commandSource?: string,    // e.g., 'whatsapp', 'telegram'
+    // Command events (command:new, command:reset):
+    sessionEntry?: SessionEntry,       // current session entry
+    previousSessionEntry?: SessionEntry, // pre-reset entry (preferred for session-memory)
+    commandSource?: string,            // e.g., 'whatsapp', 'telegram'
     senderId?: string,
     workspaceDir?: string,
-    bootstrapFiles?: WorkspaceBootstrapFile[],
     cfg?: OpenClawConfig,
+    // Command events (command:stop only):
+    sessionId?: string,
+    // Agent bootstrap events (agent:bootstrap):
+    bootstrapFiles?: WorkspaceBootstrapFile[],
     // Message events (see Message Events section for full details):
     from?: string,             // message:received
     to?: string,               // message:sent
@@ -509,7 +510,7 @@ Hooks can have custom configuration:
 
 ### Extra Directories
 
-Load hooks from additional directories:
+Load hooks from additional directories (treated as managed hooks, same override precedence):
 
 ```json
 {
@@ -915,9 +916,11 @@ test("my handler works", async () => {
 ```
 Gateway startup
     ↓
-Scan directories (bundled → plugin → managed → workspace)
+Scan directories (bundled → plugin → managed + extra dirs → workspace)
     ↓
 Parse HOOK.md files
+    ↓
+Sort by override precedence (bundled < plugin < managed < workspace)
     ↓
 Check eligibility (bins, env, config, os)
     ↓

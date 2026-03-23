@@ -7,14 +7,10 @@ import {
   adaptScopedAccountAccessor,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import {
-  createPairingPrefixStripper,
-  createTextPairingAdapter,
-} from "openclaw/plugin-sdk/channel-pairing";
+import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createOpenProviderConfiguredRouteWarningCollector } from "openclaw/plugin-sdk/channel-policy";
-import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { resolveTargetsWithOptionalToken } from "openclaw/plugin-sdk/channel-targets";
-import { createScopedAccountReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   createChannelDirectoryAdapter,
   createRuntimeDirectoryLiveAdapter,
@@ -30,6 +26,10 @@ import {
   resolveThreadSessionKeys,
   type RoutePeer,
 } from "openclaw/plugin-sdk/routing";
+import {
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
 import {
   listEnabledSlackAccounts,
   resolveSlackAccount,
@@ -50,7 +50,6 @@ import { normalizeAllowListLower } from "./monitor/allow-list.js";
 import type { SlackProbe } from "./probe.js";
 import { resolveSlackUserAllowlist } from "./resolve-users.js";
 import {
-  buildComputedAccountStatusSnapshot,
   DEFAULT_ACCOUNT_ID,
   looksLikeSlackTargetId,
   normalizeSlackMessagingTarget,
@@ -344,58 +343,245 @@ const collectSlackSecurityWarnings =
     },
   });
 
-export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
-  ...createSlackPluginBase({
-    setupWizard: slackSetupWizard,
-    setup: slackSetupAdapter,
-  }),
-  pairing: createTextPairingAdapter({
-    idLabel: "slackUserId",
-    message: PAIRING_APPROVED_MESSAGE,
-    normalizeAllowEntry: createPairingPrefixStripper(/^(slack|user):/i),
-    notify: async ({ id, message }) => {
-      const cfg = getSlackRuntime().config.loadConfig();
-      const account = resolveSlackAccount({
-        cfg,
-        accountId: DEFAULT_ACCOUNT_ID,
-      });
-      const token = getTokenForOperation(account, "write");
-      const botToken = account.botToken?.trim();
-      const tokenOverride = token && token !== botToken ? token : undefined;
-      if (tokenOverride) {
-        await getSlackRuntime().channel.slack.sendMessageSlack(`user:${id}`, message, {
-          token: tokenOverride,
-        });
-      } else {
-        await getSlackRuntime().channel.slack.sendMessageSlack(`user:${id}`, message);
-      }
-    },
-  }),
-  allowlist: {
-    ...buildLegacyDmAccountAllowlistAdapter({
-      channelId: "slack",
-      resolveAccount: resolveSlackAccount,
-      normalize: ({ cfg, accountId, values }) =>
-        slackConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
-      resolveDmAllowFrom: (account) => account.config.allowFrom ?? account.config.dm?.allowFrom,
-      resolveGroupPolicy: (account) => account.groupPolicy,
-      resolveGroupOverrides: resolveSlackAllowlistGroupOverrides,
+export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = createChatChannelPlugin<
+  ResolvedSlackAccount,
+  SlackProbe
+>({
+  base: {
+    ...createSlackPluginBase({
+      setupWizard: slackSetupWizard,
+      setup: slackSetupAdapter,
     }),
-    resolveNames: resolveSlackAllowlistNames,
+    allowlist: {
+      ...buildLegacyDmAccountAllowlistAdapter({
+        channelId: "slack",
+        resolveAccount: resolveSlackAccount,
+        normalize: ({ cfg, accountId, values }) =>
+          slackConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
+        resolveDmAllowFrom: (account) => account.config.allowFrom ?? account.config.dm?.allowFrom,
+        resolveGroupPolicy: (account) => account.groupPolicy,
+        resolveGroupOverrides: resolveSlackAllowlistGroupOverrides,
+      }),
+      resolveNames: resolveSlackAllowlistNames,
+    },
+    groups: {
+      resolveRequireMention: resolveSlackGroupRequireMention,
+      resolveToolPolicy: resolveSlackGroupToolPolicy,
+    },
+    messaging: {
+      normalizeTarget: normalizeSlackMessagingTarget,
+      resolveSessionTarget: ({ id }) => normalizeSlackMessagingTarget(`channel:${id}`),
+      parseExplicitTarget: ({ raw }) => parseSlackExplicitTarget(raw),
+      inferTargetChatType: ({ to }) => parseSlackExplicitTarget(to)?.chatType,
+      resolveOutboundSessionRoute: async (params) => await resolveSlackOutboundSessionRoute(params),
+      enableInteractiveReplies: ({ cfg, accountId }) =>
+        isSlackInteractiveRepliesEnabled({ cfg, accountId }),
+      hasStructuredReplyPayload: ({ payload }) => {
+        const slackData = payload.channelData?.slack;
+        if (!slackData || typeof slackData !== "object" || Array.isArray(slackData)) {
+          return false;
+        }
+        try {
+          return Boolean(parseSlackBlocksInput((slackData as { blocks?: unknown }).blocks)?.length);
+        } catch {
+          return false;
+        }
+      },
+      targetResolver: {
+        looksLikeId: looksLikeSlackTargetId,
+        hint: "<channelId|user:ID|channel:ID>",
+        resolveTarget: async ({ input }) => {
+          const parsed = parseSlackExplicitTarget(input);
+          if (!parsed) {
+            return null;
+          }
+          return {
+            to: parsed.to,
+            kind: parsed.chatType === "direct" ? "user" : "group",
+            source: "normalized",
+          };
+        },
+      },
+    },
+    directory: createChannelDirectoryAdapter({
+      listPeers: async (params) => listSlackDirectoryPeersFromConfig(params),
+      listGroups: async (params) => listSlackDirectoryGroupsFromConfig(params),
+      ...createRuntimeDirectoryLiveAdapter({
+        getRuntime: () => getSlackRuntime().channel.slack,
+        listPeersLive: (runtime) => runtime.listDirectoryPeersLive,
+        listGroupsLive: (runtime) => runtime.listDirectoryGroupsLive,
+      }),
+    }),
+    resolver: {
+      resolveTargets: async ({ cfg, accountId, inputs, kind }) => {
+        const toResolvedTarget = <
+          T extends { input: string; resolved: boolean; id?: string; name?: string },
+        >(
+          entry: T,
+          note?: string,
+        ) => ({
+          input: entry.input,
+          resolved: entry.resolved,
+          id: entry.id,
+          name: entry.name,
+          note,
+        });
+        const account = resolveSlackAccount({ cfg, accountId });
+        if (kind === "group") {
+          return resolveTargetsWithOptionalToken({
+            token: account.config.userToken?.trim() || account.botToken?.trim(),
+            inputs,
+            missingTokenNote: "missing Slack token",
+            resolveWithToken: ({ token, inputs }) =>
+              getSlackRuntime().channel.slack.resolveChannelAllowlist({
+                token,
+                entries: inputs,
+              }),
+            mapResolved: (entry) =>
+              toResolvedTarget(entry, entry.archived ? "archived" : undefined),
+          });
+        }
+        return resolveTargetsWithOptionalToken({
+          token: account.config.userToken?.trim() || account.botToken?.trim(),
+          inputs,
+          missingTokenNote: "missing Slack token",
+          resolveWithToken: ({ token, inputs }) =>
+            getSlackRuntime().channel.slack.resolveUserAllowlist({
+              token,
+              entries: inputs,
+            }),
+          mapResolved: (entry) => toResolvedTarget(entry, entry.note),
+        });
+      },
+    },
+    actions: createSlackActions(SLACK_CHANNEL, {
+      invoke: async (action, cfg, toolContext) =>
+        await getSlackRuntime().channel.slack.handleSlackAction(
+          action,
+          cfg as OpenClawConfig,
+          toolContext as SlackActionContext | undefined,
+        ),
+    }),
+    status: createComputedAccountStatusAdapter<ResolvedSlackAccount, SlackProbe>({
+      defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
+      buildChannelSummary: ({ snapshot }) =>
+        buildPassiveProbedChannelStatusSummary(snapshot, {
+          botTokenSource: snapshot.botTokenSource ?? "none",
+          appTokenSource: snapshot.appTokenSource ?? "none",
+        }),
+      probeAccount: async ({ account, timeoutMs }) => {
+        const token = account.botToken?.trim();
+        if (!token) {
+          return { ok: false, error: "missing token" };
+        }
+        return await getSlackRuntime().channel.slack.probeSlack(token, timeoutMs);
+      },
+      formatCapabilitiesProbe: ({ probe }) => {
+        const slackProbe = probe as SlackProbe | undefined;
+        const lines = [];
+        if (slackProbe?.bot?.name) {
+          lines.push({ text: `Bot: @${slackProbe.bot.name}` });
+        }
+        if (slackProbe?.team?.name || slackProbe?.team?.id) {
+          const id = slackProbe.team?.id ? ` (${slackProbe.team.id})` : "";
+          lines.push({ text: `Team: ${slackProbe.team?.name ?? "unknown"}${id}` });
+        }
+        return lines;
+      },
+      buildCapabilitiesDiagnostics: async ({ account, timeoutMs }) => {
+        const lines = [];
+        const details: Record<string, unknown> = {};
+        const botToken = account.botToken?.trim();
+        const userToken = account.config.userToken?.trim();
+        const botScopes = botToken
+          ? await fetchSlackScopes(botToken, timeoutMs)
+          : { ok: false, error: "Slack bot token missing." };
+        lines.push(formatSlackScopeDiagnostic({ tokenType: "bot", result: botScopes }));
+        details.botScopes = botScopes;
+        if (userToken) {
+          const userScopes = await fetchSlackScopes(userToken, timeoutMs);
+          lines.push(formatSlackScopeDiagnostic({ tokenType: "user", result: userScopes }));
+          details.userScopes = userScopes;
+        }
+        return { lines, details };
+      },
+      resolveAccountSnapshot: ({ account }) => {
+        const mode = account.config.mode ?? "socket";
+        const configured =
+          (mode === "http"
+            ? resolveConfiguredFromRequiredCredentialStatuses(account, [
+                "botTokenStatus",
+                "signingSecretStatus",
+              ])
+            : resolveConfiguredFromRequiredCredentialStatuses(account, [
+                "botTokenStatus",
+                "appTokenStatus",
+              ])) ?? isSlackPluginAccountConfigured(account);
+        return {
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured,
+          extra: {
+            ...projectCredentialSnapshotFields(account),
+          },
+        };
+      },
+    }),
+    gateway: {
+      startAccount: async (ctx) => {
+        const account = ctx.account;
+        const botToken = account.botToken?.trim();
+        const appToken = account.appToken?.trim();
+        ctx.log?.info(`[${account.accountId}] starting provider`);
+        return getSlackRuntime().channel.slack.monitorSlackProvider({
+          botToken: botToken ?? "",
+          appToken: appToken ?? "",
+          accountId: account.accountId,
+          config: ctx.cfg,
+          runtime: ctx.runtime,
+          abortSignal: ctx.abortSignal,
+          mediaMaxMb: account.config.mediaMaxMb,
+          slashCommand: account.config.slashCommand,
+          setStatus: ctx.setStatus as (next: Record<string, unknown>) => void,
+          getStatus: ctx.getStatus as () => Record<string, unknown>,
+        });
+      },
+    },
+  },
+  pairing: {
+    text: {
+      idLabel: "slackUserId",
+      message: PAIRING_APPROVED_MESSAGE,
+      normalizeAllowEntry: createPairingPrefixStripper(/^(slack|user):/i),
+      notify: async ({ id, message }) => {
+        const cfg = getSlackRuntime().config.loadConfig();
+        const account = resolveSlackAccount({
+          cfg,
+          accountId: DEFAULT_ACCOUNT_ID,
+        });
+        const token = getTokenForOperation(account, "write");
+        const botToken = account.botToken?.trim();
+        const tokenOverride = token && token !== botToken ? token : undefined;
+        if (tokenOverride) {
+          await getSlackRuntime().channel.slack.sendMessageSlack(`user:${id}`, message, {
+            token: tokenOverride,
+          });
+        } else {
+          await getSlackRuntime().channel.slack.sendMessageSlack(`user:${id}`, message);
+        }
+      },
+    },
   },
   security: {
     resolveDmPolicy: resolveSlackDmPolicy,
     collectWarnings: collectSlackSecurityWarnings,
   },
-  groups: {
-    resolveRequireMention: resolveSlackGroupRequireMention,
-    resolveToolPolicy: resolveSlackGroupToolPolicy,
-  },
   threading: {
-    resolveReplyToMode: createScopedAccountReplyToModeResolver<ResolvedSlackAccount>({
+    scopedAccountReplyToMode: {
       resolveAccount: adaptScopedAccountAccessor(resolveSlackAccount),
       resolveReplyToMode: (account, chatType) => resolveSlackReplyToMode(account, chatType),
-    }),
+    },
     allowExplicitReplyTagsWhenOff: false,
     buildToolContext: (params) => buildSlackThreadingToolContext(params),
     resolveAutoThreadId: ({ cfg, accountId, to, toolContext, replyToId }) =>
@@ -412,105 +598,13 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       threadId: null,
     }),
   },
-  messaging: {
-    normalizeTarget: normalizeSlackMessagingTarget,
-    resolveSessionTarget: ({ id }) => normalizeSlackMessagingTarget(`channel:${id}`),
-    parseExplicitTarget: ({ raw }) => parseSlackExplicitTarget(raw),
-    inferTargetChatType: ({ to }) => parseSlackExplicitTarget(to)?.chatType,
-    resolveOutboundSessionRoute: async (params) => await resolveSlackOutboundSessionRoute(params),
-    enableInteractiveReplies: ({ cfg, accountId }) =>
-      isSlackInteractiveRepliesEnabled({ cfg, accountId }),
-    hasStructuredReplyPayload: ({ payload }) => {
-      const slackData = payload.channelData?.slack;
-      if (!slackData || typeof slackData !== "object" || Array.isArray(slackData)) {
-        return false;
-      }
-      try {
-        return Boolean(parseSlackBlocksInput((slackData as { blocks?: unknown }).blocks)?.length);
-      } catch {
-        return false;
-      }
-    },
-    targetResolver: {
-      looksLikeId: looksLikeSlackTargetId,
-      hint: "<channelId|user:ID|channel:ID>",
-      resolveTarget: async ({ input }) => {
-        const parsed = parseSlackExplicitTarget(input);
-        if (!parsed) {
-          return null;
-        }
-        return {
-          to: parsed.to,
-          kind: parsed.chatType === "direct" ? "user" : "group",
-          source: "normalized",
-        };
-      },
-    },
-  },
-  directory: createChannelDirectoryAdapter({
-    listPeers: async (params) => listSlackDirectoryPeersFromConfig(params),
-    listGroups: async (params) => listSlackDirectoryGroupsFromConfig(params),
-    ...createRuntimeDirectoryLiveAdapter({
-      getRuntime: () => getSlackRuntime().channel.slack,
-      listPeersLive: (runtime) => runtime.listDirectoryPeersLive,
-      listGroupsLive: (runtime) => runtime.listDirectoryGroupsLive,
-    }),
-  }),
-  resolver: {
-    resolveTargets: async ({ cfg, accountId, inputs, kind }) => {
-      const toResolvedTarget = <
-        T extends { input: string; resolved: boolean; id?: string; name?: string },
-      >(
-        entry: T,
-        note?: string,
-      ) => ({
-        input: entry.input,
-        resolved: entry.resolved,
-        id: entry.id,
-        name: entry.name,
-        note,
-      });
-      const account = resolveSlackAccount({ cfg, accountId });
-      if (kind === "group") {
-        return resolveTargetsWithOptionalToken({
-          token: account.config.userToken?.trim() || account.botToken?.trim(),
-          inputs,
-          missingTokenNote: "missing Slack token",
-          resolveWithToken: ({ token, inputs }) =>
-            getSlackRuntime().channel.slack.resolveChannelAllowlist({
-              token,
-              entries: inputs,
-            }),
-          mapResolved: (entry) => toResolvedTarget(entry, entry.archived ? "archived" : undefined),
-        });
-      }
-      return resolveTargetsWithOptionalToken({
-        token: account.config.userToken?.trim() || account.botToken?.trim(),
-        inputs,
-        missingTokenNote: "missing Slack token",
-        resolveWithToken: ({ token, inputs }) =>
-          getSlackRuntime().channel.slack.resolveUserAllowlist({
-            token,
-            entries: inputs,
-          }),
-        mapResolved: (entry) => toResolvedTarget(entry, entry.note),
-      });
-    },
-  },
-  actions: createSlackActions(SLACK_CHANNEL, {
-    invoke: async (action, cfg, toolContext) =>
-      await getSlackRuntime().channel.slack.handleSlackAction(
-        action,
-        cfg as OpenClawConfig,
-        toolContext as SlackActionContext | undefined,
-      ),
-  }),
-  setup: slackSetupAdapter,
   outbound: {
-    deliveryMode: "direct",
-    chunker: null,
-    textChunkLimit: 4000,
-    ...createAttachedChannelResultAdapter({
+    base: {
+      deliveryMode: "direct",
+      chunker: null,
+      textChunkLimit: 4000,
+    },
+    attachedResults: {
       channel: "slack",
       sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg }) => {
         const { send, threadTsValue, tokenOverride } = resolveSlackSendContext({
@@ -554,102 +648,6 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
           ...(tokenOverride ? { token: tokenOverride } : {}),
         });
       },
-    }),
-  },
-  status: {
-    defaultRuntime: {
-      accountId: DEFAULT_ACCOUNT_ID,
-      running: false,
-      lastStartAt: null,
-      lastStopAt: null,
-      lastError: null,
-    },
-    buildChannelSummary: ({ snapshot }) =>
-      buildPassiveProbedChannelStatusSummary(snapshot, {
-        botTokenSource: snapshot.botTokenSource ?? "none",
-        appTokenSource: snapshot.appTokenSource ?? "none",
-      }),
-    probeAccount: async ({ account, timeoutMs }) => {
-      const token = account.botToken?.trim();
-      if (!token) {
-        return { ok: false, error: "missing token" };
-      }
-      return await getSlackRuntime().channel.slack.probeSlack(token, timeoutMs);
-    },
-    formatCapabilitiesProbe: ({ probe }) => {
-      const slackProbe = probe as SlackProbe | undefined;
-      const lines = [];
-      if (slackProbe?.bot?.name) {
-        lines.push({ text: `Bot: @${slackProbe.bot.name}` });
-      }
-      if (slackProbe?.team?.name || slackProbe?.team?.id) {
-        const id = slackProbe.team?.id ? ` (${slackProbe.team.id})` : "";
-        lines.push({ text: `Team: ${slackProbe.team?.name ?? "unknown"}${id}` });
-      }
-      return lines;
-    },
-    buildCapabilitiesDiagnostics: async ({ account, timeoutMs }) => {
-      const lines = [];
-      const details: Record<string, unknown> = {};
-      const botToken = account.botToken?.trim();
-      const userToken = account.config.userToken?.trim();
-      const botScopes = botToken
-        ? await fetchSlackScopes(botToken, timeoutMs)
-        : { ok: false, error: "Slack bot token missing." };
-      lines.push(formatSlackScopeDiagnostic({ tokenType: "bot", result: botScopes }));
-      details.botScopes = botScopes;
-      if (userToken) {
-        const userScopes = await fetchSlackScopes(userToken, timeoutMs);
-        lines.push(formatSlackScopeDiagnostic({ tokenType: "user", result: userScopes }));
-        details.userScopes = userScopes;
-      }
-      return { lines, details };
-    },
-    buildAccountSnapshot: ({ account, runtime, probe }) => {
-      const mode = account.config.mode ?? "socket";
-      const configured =
-        (mode === "http"
-          ? resolveConfiguredFromRequiredCredentialStatuses(account, [
-              "botTokenStatus",
-              "signingSecretStatus",
-            ])
-          : resolveConfiguredFromRequiredCredentialStatuses(account, [
-              "botTokenStatus",
-              "appTokenStatus",
-            ])) ?? isSlackPluginAccountConfigured(account);
-      return buildComputedAccountStatusSnapshot(
-        {
-          accountId: account.accountId,
-          name: account.name,
-          enabled: account.enabled,
-          configured,
-          runtime,
-          probe,
-        },
-        {
-          ...projectCredentialSnapshotFields(account),
-        },
-      );
     },
   },
-  gateway: {
-    startAccount: async (ctx) => {
-      const account = ctx.account;
-      const botToken = account.botToken?.trim();
-      const appToken = account.appToken?.trim();
-      ctx.log?.info(`[${account.accountId}] starting provider`);
-      return getSlackRuntime().channel.slack.monitorSlackProvider({
-        botToken: botToken ?? "",
-        appToken: appToken ?? "",
-        accountId: account.accountId,
-        config: ctx.cfg,
-        runtime: ctx.runtime,
-        abortSignal: ctx.abortSignal,
-        mediaMaxMb: account.config.mediaMaxMb,
-        slashCommand: account.config.slashCommand,
-        setStatus: ctx.setStatus as (next: Record<string, unknown>) => void,
-        getStatus: ctx.getStatus as () => Record<string, unknown>,
-      });
-    },
-  },
-};
+});

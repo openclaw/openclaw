@@ -32,16 +32,28 @@ const FALLBACK_GATEWAY_CONTEXT_STATE_KEY: unique symbol = Symbol.for(
 
 type FallbackGatewayContextState = {
   context: GatewayRequestContext | undefined;
+  resolveContext: (() => GatewayRequestContext | undefined) | undefined;
 };
 
 const fallbackGatewayContextState = resolveGlobalSingleton<FallbackGatewayContextState>(
   FALLBACK_GATEWAY_CONTEXT_STATE_KEY,
-  () => ({ context: undefined }),
+  () => ({ context: undefined, resolveContext: undefined }),
 );
 
 export function setFallbackGatewayContext(ctx: GatewayRequestContext): void {
-  // TODO: This startup snapshot can become stale if runtime config/context changes.
   fallbackGatewayContextState.context = ctx;
+  fallbackGatewayContextState.resolveContext = undefined;
+}
+
+export function setFallbackGatewayContextResolver(
+  resolveContext: () => GatewayRequestContext | undefined,
+): void {
+  fallbackGatewayContextState.resolveContext = resolveContext;
+}
+
+function getFallbackGatewayContext(): GatewayRequestContext | undefined {
+  const resolved = fallbackGatewayContextState.resolveContext?.();
+  return resolved ?? fallbackGatewayContextState.context;
 }
 
 type PluginSubagentOverridePolicy = {
@@ -238,7 +250,7 @@ async function dispatchGatewayMethod<T>(
   },
 ): Promise<T> {
   const scope = getPluginRuntimeGatewayRequestScope();
-  const context = scope?.context ?? fallbackGatewayContextState.context;
+  const context = scope?.context ?? getFallbackGatewayContext();
   const isWebchatConnect = scope?.isWebchatConnect ?? (() => false);
   if (!context) {
     throw new Error(

@@ -1,5 +1,5 @@
 ---
-title: "Plugin SDK Runtime"
+title: "Plugin Runtime Helpers"
 sidebarTitle: "Runtime Helpers"
 summary: "api.runtime -- the injected runtime helpers available to plugins"
 read_when:
@@ -50,13 +50,15 @@ const timeoutMs = api.runtime.agent.resolveAgentTimeoutMs(cfg);
 // Ensure workspace exists
 await api.runtime.agent.ensureAgentWorkspace(cfg);
 
-// Run an embedded Pi agent (requires sessionFile + workspaceDir at minimum)
+// Run an embedded Pi agent
 const agentDir = api.runtime.agent.resolveAgentDir(cfg);
 const result = await api.runtime.agent.runEmbeddedPiAgent({
   sessionId: "my-plugin:task-1",
+  runId: crypto.randomUUID(),
   sessionFile: path.join(agentDir, "sessions", "my-plugin-task-1.jsonl"),
   workspaceDir: api.runtime.agent.resolveAgentWorkspaceDir(cfg),
   prompt: "Summarize the latest changes",
+  timeoutMs: api.runtime.agent.resolveAgentTimeoutMs(cfg),
 });
 ```
 
