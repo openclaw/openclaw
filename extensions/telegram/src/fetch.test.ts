@@ -223,6 +223,13 @@ afterEach(() => {
 });
 
 describe("resolveTelegramFetch", () => {
+  function stubDirectTransportEnv() {
+    vi.stubEnv("HTTP_PROXY", "");
+    vi.stubEnv("http_proxy", "");
+    vi.stubEnv("HTTPS_PROXY", "");
+    vi.stubEnv("https_proxy", "");
+  }
+
   it("wraps proxy fetches and leaves retry policy to caller-provided fetch", async () => {
     const proxyFetch = vi.fn(async () => ({ ok: true }) as Response) as unknown as typeof fetch;
 
@@ -244,6 +251,7 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("uses resolver-scoped Agent dispatcher with configured transport policy", async () => {
+    stubDirectTransportEnv();
     undiciFetch.mockResolvedValue({ ok: true } as Response);
 
     const resolved = resolveTelegramFetchOrThrow(undefined, {
@@ -398,6 +406,7 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("treats ALL_PROXY-only env as direct transport and arms sticky IPv4 fallback", async () => {
+    stubDirectTransportEnv();
     vi.stubEnv("ALL_PROXY", "socks5://127.0.0.1:1080");
     undiciFetch
       .mockRejectedValueOnce(buildFetchFallbackError("EHOSTUNREACH"))
@@ -528,6 +537,7 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("retries once and then keeps sticky IPv4 dispatcher for subsequent requests", async () => {
+    stubDirectTransportEnv();
     primeStickyFallbackRetry("ETIMEDOUT");
 
     const resolved = resolveTelegramFetchOrThrow(undefined, {
@@ -562,6 +572,7 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("escalates from IPv4 fallback to pinned Telegram IP and keeps it sticky", async () => {
+    stubDirectTransportEnv();
     undiciFetch
       .mockRejectedValueOnce(buildFetchFallbackError("ETIMEDOUT"))
       .mockRejectedValueOnce(buildFetchFallbackError("EHOSTUNREACH"))
