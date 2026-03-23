@@ -247,7 +247,7 @@ TRASH
 
   select_skip_hooks() {
     # Hooks multiselect: pick "Skip for now".
-    wait_for_log "Enable hooks?" 60 true || true
+    wait_for_log "Enable hooks?" 60
     send $'"'"' \r'"'"' 0.6
   }
 
@@ -261,15 +261,15 @@ TRASH
 
   send_reset_config_only() {
     # Risk acknowledgement (default is "No").
-    wait_for_log "Continue?" 40 true || true
+    wait_for_log "Continue?" 40
     send $'"'"'y\r'"'"' 0.8
     # Select reset flow for existing config.
-    wait_for_log "Config handling" 40 true || true
+    wait_for_log "Config handling" 40
     send $'"'"'\e[B'"'"' 0.3
     send $'"'"'\e[B'"'"' 0.3
     send $'"'"'\r'"'"' 0.4
     # Reset scope -> Config only (default).
-    wait_for_log "Reset scope" 40 true || true
+    wait_for_log "Reset scope" 40
     send $'"'"'\r'"'"' 0.4
     select_skip_hooks
   }

@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import {
+  CHROME_MCP_ATTACH_READY_POLL_MS,
+  CHROME_MCP_ATTACH_READY_WINDOW_MS,
   PROFILE_ATTACH_RETRY_TIMEOUT_MS,
   PROFILE_POST_RESTART_WS_TIMEOUT_MS,
   resolveCdpReachabilityTimeouts,
@@ -151,6 +153,25 @@ export function createProfileAvailability({
     );
   };
 
+  const waitForChromeMcpReadyAfterAttach = async (): Promise<void> => {
+    const deadlineMs = Date.now() + CHROME_MCP_ATTACH_READY_WINDOW_MS;
+    let lastError: unknown;
+    while (Date.now() < deadlineMs) {
+      try {
+        await listChromeMcpTabs(profile.name, profile.userDataDir);
+        return;
+      } catch (err) {
+        lastError = err;
+      }
+      await new Promise((r) => setTimeout(r, CHROME_MCP_ATTACH_READY_POLL_MS));
+    }
+    const detail = lastError instanceof Error ? ` Last error: ${lastError.message}` : "";
+    throw new BrowserProfileUnavailableError(
+      `Chrome MCP existing-session attach for profile "${profile.name}" timed out waiting for tabs to become available.` +
+        ` Approve the browser attach prompt, keep the browser open, and retry.${detail}`,
+    );
+  };
+
   const ensureBrowserAvailable = async (): Promise<void> => {
     await reconcileProfileRuntime();
     if (capabilities.usesChromeMcp) {
@@ -160,6 +181,7 @@ export function createProfileAvailability({
         );
       }
       await ensureChromeMcpAvailable(profile.name, profile.userDataDir);
+      await waitForChromeMcpReadyAfterAttach();
       return;
     }
     const current = state();

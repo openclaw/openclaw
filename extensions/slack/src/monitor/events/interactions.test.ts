@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { registerSlackInteractionEvents } from "./interactions.js";
 
 const enqueueSystemEventMock = vi.fn();
 const dispatchPluginInteractiveHandlerMock = vi.fn(async () => ({
@@ -10,20 +9,28 @@ const dispatchPluginInteractiveHandlerMock = vi.fn(async () => ({
 const resolvePluginConversationBindingApprovalMock = vi.fn();
 const buildPluginBindingResolvedTextMock = vi.fn(() => "Binding updated.");
 
-vi.mock("../../../../../src/infra/system-events.js", () => ({
-  enqueueSystemEvent: (...args: unknown[]) =>
-    (enqueueSystemEventMock as (...innerArgs: unknown[]) => unknown)(...args),
-}));
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return {
+    ...actual,
+    enqueueSystemEvent: (...args: unknown[]) =>
+      (enqueueSystemEventMock as (...innerArgs: unknown[]) => unknown)(...args),
+  };
+});
 
-vi.mock("../../../../../src/plugins/interactive.js", () => ({
-  dispatchPluginInteractiveHandler: (...args: unknown[]) =>
-    (dispatchPluginInteractiveHandlerMock as (...innerArgs: unknown[]) => unknown)(...args),
-}));
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>();
+  return {
+    ...actual,
+    dispatchPluginInteractiveHandler: (...args: unknown[]) =>
+      (dispatchPluginInteractiveHandlerMock as (...innerArgs: unknown[]) => unknown)(...args),
+  };
+});
 
-vi.mock("../../../../../src/plugins/conversation-binding.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../../../../../src/plugins/conversation-binding.js")
-  >("../../../../../src/plugins/conversation-binding.js");
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
+    "openclaw/plugin-sdk/conversation-runtime",
+  );
   return {
     ...actual,
     resolvePluginConversationBindingApproval: (...args: unknown[]) =>
@@ -34,6 +41,13 @@ vi.mock("../../../../../src/plugins/conversation-binding.js", async () => {
       (buildPluginBindingResolvedTextMock as (...innerArgs: unknown[]) => unknown)(...args),
   };
 });
+
+let registerSlackInteractionEvents: typeof import("./interactions.js").registerSlackInteractionEvents;
+
+vi.mock("../../../../../src/infra/system-events.js", () => ({
+  enqueueSystemEvent: (...args: unknown[]) =>
+    (enqueueSystemEventMock as (...innerArgs: unknown[]) => unknown)(...args),
+}));
 
 type RegisteredHandler = (args: {
   ack: () => Promise<void>;
@@ -183,7 +197,9 @@ function createContext(overrides?: {
 }
 
 describe("registerSlackInteractionEvents", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ registerSlackInteractionEvents } = await import("./interactions.js"));
     enqueueSystemEventMock.mockClear();
     dispatchPluginInteractiveHandlerMock.mockClear();
     resolvePluginConversationBindingApprovalMock.mockClear();

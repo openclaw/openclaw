@@ -10,7 +10,7 @@ import {
   type MatrixEvent,
 } from "matrix-js-sdk";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/core";
 import type { SsrFPolicy } from "../runtime-api.js";
 import { resolveMatrixRoomKeyBackupReadinessError } from "./backup-health.js";
 import { FileBackedMatrixSyncStore } from "./client/file-sync-store.js";
@@ -365,11 +365,21 @@ export class MatrixClient {
     await this.startSyncSession({ bootstrapCrypto: false });
   }
 
-  stop(): void {
+  stopSyncWithoutPersist(): void {
     if (this.idbPersistTimer) {
       clearInterval(this.idbPersistTimer);
       this.idbPersistTimer = null;
     }
+    this.client.stopClient();
+    this.started = false;
+  }
+
+  async drainPendingDecryptions(reason = "matrix client shutdown"): Promise<void> {
+    await this.decryptBridge.drainPendingDecryptions(reason);
+  }
+
+  stop(): void {
+    this.stopSyncWithoutPersist();
     this.decryptBridge.stop();
     // Final persist on shutdown
     this.syncStore?.markCleanShutdown();
@@ -380,8 +390,6 @@ export class MatrixClient {
       }).catch(noop),
       this.syncStore?.flush().catch(noop),
     ]).then(() => undefined);
-    this.client.stopClient();
-    this.started = false;
   }
 
   async stopAndPersist(): Promise<void> {

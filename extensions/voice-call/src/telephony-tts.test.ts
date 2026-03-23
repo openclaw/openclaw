@@ -14,6 +14,14 @@ function createCoreConfig(): CoreConfig {
   return { messages: { tts } };
 }
 
+function requireMergedTtsConfig(mergedConfig: CoreConfig | undefined) {
+  const tts = mergedConfig?.messages?.tts;
+  if (!tts) {
+    throw new Error("telephony TTS runtime did not receive merged TTS config");
+  }
+  return tts as Record<string, unknown>;
+}
+
 async function mergeOverride(override: unknown): Promise<Record<string, unknown>> {
   let mergedConfig: CoreConfig | undefined;
   const provider = createTelephonyTtsProvider({
@@ -32,8 +40,7 @@ async function mergeOverride(override: unknown): Promise<Record<string, unknown>
   });
 
   await provider.synthesizeForTelephony("hello");
-  expect(mergedConfig?.messages?.tts).toBeDefined();
-  return mergedConfig?.messages?.tts as Record<string, unknown>;
+  return requireMergedTtsConfig(mergedConfig);
 }
 
 afterEach(() => {
