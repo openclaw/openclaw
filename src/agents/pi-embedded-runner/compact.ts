@@ -844,7 +844,7 @@ export async function compactEmbeddedPiSessionDirect(
       // The main run flow applies this via applyExtraParamsToAgent, but
       // compaction creates its session directly — without the wrapper,
       // compaction calls would fail when only bearer token auth is set.
-      if (shouldInjectBedrockBearerWrapper(provider, params.config)) {
+      if (shouldInjectBedrockBearerWrapper(provider, params.config, apiKeyInfo?.source)) {
         const bearerToken = resolveBedrockBearerToken();
         log.debug(
           `applying Bedrock bearer token auth header for compaction (${provider}/${modelId})`,

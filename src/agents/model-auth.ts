@@ -236,17 +236,20 @@ export function resolveBedrockBearerToken(
 
 /**
  * Returns true when the Bedrock bearer token wrapper should be injected.
- * Only true when:
- * 1. Provider normalizes to amazon-bedrock
- * 2. AWS_BEARER_TOKEN_BEDROCK env var is set
- * 3. Auth override is either undefined (implicit) or "aws-sdk"
- * 4. No auth profiles exist for this provider (profiles take precedence
- *    over the bearer env fallback in resolveApiKeyForProvider)
+ *
+ * When `resolvedAuthSource` is provided (from `resolveApiKeyForProvider`),
+ * the decision is based on whether auth actually resolved to the bearer env
+ * var — this is the most accurate path and avoids false positives/negatives
+ * from profile-existence heuristics.
+ *
+ * When `resolvedAuthSource` is not available (e.g. in `applyExtraParamsToAgent`
+ * which doesn't receive resolved auth), falls back to a static check:
+ * provider is Bedrock + bearer env is set + auth override is compatible.
  */
 export function shouldInjectBedrockBearerWrapper(
   provider: string,
   cfg?: OpenClawConfig,
-  store?: AuthProfileStore,
+  resolvedAuthSource?: string,
 ): boolean {
   if (normalizeProviderId(provider) !== "amazon-bedrock") {
     return false;
@@ -254,21 +257,14 @@ export function shouldInjectBedrockBearerWrapper(
   if (!resolveBedrockBearerToken()) {
     return false;
   }
+  // When the caller provides the resolved auth source, use it directly:
+  // only inject when auth actually resolved to the bearer env var.
+  if (resolvedAuthSource !== undefined) {
+    return resolvedAuthSource.includes(AWS_BEARER_ENV);
+  }
+  // Fallback heuristic when resolved auth is not available.
   const authOverride = resolveProviderAuthOverride(cfg, provider);
-  if (authOverride !== undefined && authOverride !== "aws-sdk") {
-    return false;
-  }
-  // When auth: "aws-sdk" is set, resolveApiKeyForProvider skips profiles and
-  // goes directly to resolveAwsSdkAuthInfo (which returns the bearer token).
-  // Only check profiles when there is no explicit override — in that path,
-  // profiles are resolved before the bearer env fallback.
-  if (authOverride === undefined) {
-    const authStore = store ?? ensureAuthProfileStore();
-    if (listProfilesForProvider(authStore, provider).length > 0) {
-      return false;
-    }
-  }
-  return true;
+  return authOverride === undefined || authOverride === "aws-sdk";
 }
 
 export function resolveAwsSdkEnvVarName(env: NodeJS.ProcessEnv = process.env): string | undefined {
