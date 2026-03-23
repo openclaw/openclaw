@@ -571,6 +571,81 @@ describe("extra-params: OpenAI-compatible tool payloads", () => {
     expect(payload.tools?.[0]?.function).not.toHaveProperty("strict");
   });
 
+  it("strips function.strict for default-routed Anthropic OpenRouter routes", () => {
+    const payload = runExtraParamsCase({
+      applyProvider: "openrouter",
+      applyModelId: "anthropic/claude-sonnet-4",
+      model: makeModel({
+        api: "openai-completions",
+        provider: "openrouter",
+        id: "anthropic/claude-sonnet-4",
+        baseUrl: "https://openrouter.ai/api/v1",
+        headers: { "x-anthropic-beta": "structured-outputs-2025-11-13" },
+      }),
+      payload: {
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "web_search",
+              parameters: { type: "object", properties: {} },
+              strict: true,
+            },
+          },
+        ],
+      },
+    }).payload as {
+      tools?: Array<{ function?: Record<string, unknown> }>;
+    };
+
+    expect(payload.tools?.[0]?.function).not.toHaveProperty("strict");
+  });
+
+  it("preserves function.strict for Anthropic OpenRouter routes pinned to Anthropic", () => {
+    const payload = runExtraParamsCase({
+      applyProvider: "openrouter",
+      applyModelId: "anthropic/claude-sonnet-4",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/anthropic/claude-sonnet-4": {
+                params: {
+                  provider: {
+                    providers: ["anthropic"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      model: makeModel({
+        api: "openai-completions",
+        provider: "openrouter",
+        id: "anthropic/claude-sonnet-4",
+        baseUrl: "https://openrouter.ai/api/v1",
+        headers: { "x-anthropic-beta": "structured-outputs-2025-11-13" },
+      }),
+      payload: {
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "web_search",
+              parameters: { type: "object", properties: {} },
+              strict: true,
+            },
+          },
+        ],
+      },
+    }).payload as {
+      tools?: Array<{ function?: Record<string, unknown> }>;
+    };
+
+    expect(payload.tools?.[0]?.function?.strict).toBe(true);
+  });
+
   it("strips function.strict for Anthropic model slugs when routing is pinned to a non-Anthropic provider", () => {
     const payload = runExtraParamsCase({
       applyProvider: "openrouter",
@@ -614,6 +689,51 @@ describe("extra-params: OpenAI-compatible tool payloads", () => {
     };
 
     expect(payload.tools?.[0]?.function).not.toHaveProperty("strict");
+  });
+
+  it("preserves function.strict for OpenRouter OpenAI routes pinned to Azure", () => {
+    const payload = runExtraParamsCase({
+      applyProvider: "openrouter",
+      applyModelId: "openai/gpt-4o",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/openai/gpt-4o": {
+                params: {
+                  provider: {
+                    order: ["azure"],
+                    allowFallbacks: false,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      model: makeModel({
+        api: "openai-completions",
+        provider: "openrouter",
+        id: "openai/gpt-4o",
+        baseUrl: "https://openrouter.ai/api/v1",
+      }),
+      payload: {
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "web_search",
+              parameters: { type: "object", properties: {} },
+              strict: true,
+            },
+          },
+        ],
+      },
+    }).payload as {
+      tools?: Array<{ function?: Record<string, unknown> }>;
+    };
+
+    expect(payload.tools?.[0]?.function?.strict).toBe(true);
   });
 
   it("still strips function.strict for other OpenRouter proxy routes", () => {

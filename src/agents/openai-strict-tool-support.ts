@@ -72,16 +72,16 @@ export function hasOpenRouterStrictToolSupportRoute(model: {
 
   const modelId = typeof model.id === "string" ? model.id.trim().toLowerCase() : "";
   const exclusiveProvider = resolveExclusiveOpenRouterProvider(model);
-  if (exclusiveProvider === "openai") {
+  if (exclusiveProvider === "openai" || exclusiveProvider === "azure") {
     return true;
   }
   if (modelId.startsWith("openai/")) {
     return exclusiveProvider === undefined;
   }
-  if (exclusiveProvider && exclusiveProvider !== "anthropic") {
+  if (exclusiveProvider !== "anthropic") {
     return false;
   }
-  if (!modelId.startsWith("anthropic/") && exclusiveProvider !== "anthropic") {
+  if (!modelId.startsWith("anthropic/")) {
     return false;
   }
 
