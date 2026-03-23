@@ -103,6 +103,8 @@ type RunWithModelFallbackParams = {
 };
 
 beforeEach(() => {
+  vi.useRealTimers();
+  vi.clearAllTimers();
   runEmbeddedPiAgentMock.mockClear();
   runCliAgentMock.mockClear();
   runWithModelFallbackMock.mockClear();
@@ -151,6 +153,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.clearAllTimers();
   vi.useRealTimers();
   resetSystemEventsForTest();
 });
