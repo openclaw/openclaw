@@ -24,21 +24,24 @@ vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => serviceMock,
 }));
 
-vi.mock("../../runtime.js", () => ({
-  defaultRuntime: {
-    log: (message: string) => runtimeLogs.push(message),
-    error: (message: string) => runtimeErrors.push(message),
-    writeStdout: (value: string) => {
-      runtimeLogs.push(value.endsWith("\n") ? value.slice(0, -1) : value);
+vi.mock("../../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../runtime.js")>();
+  return {
+    ...actual,
+    defaultRuntime: {
+      ...actual.defaultRuntime,
+      log: (message: string) => runtimeLogs.push(message),
+      error: (message: string) => runtimeErrors.push(message),
+      writeStdout: (value: string) =>
+        runtimeLogs.push(value.endsWith("\n") ? value.slice(0, -1) : value),
+      writeJson: (value: unknown, space = 2) =>
+        runtimeLogs.push(JSON.stringify(value, null, space > 0 ? space : undefined)),
+      exit: (code: number) => {
+        throw new Error(`__exit__:${code}`);
+      },
     },
-    writeJson: (value: unknown, space = 2) => {
-      runtimeLogs.push(JSON.stringify(value, null, space > 0 ? space : undefined));
-    },
-    exit: (code: number) => {
-      throw new Error(`__exit__:${code}`);
-    },
-  },
-}));
+  };
+});
 
 const { runDaemonInstall } = await import("./install.js");
 const { clearConfigCache } = await import("../../config/config.js");
