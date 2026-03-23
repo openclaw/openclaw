@@ -478,8 +478,24 @@ function stopSweeper() {
 async function sweepSubagentRuns() {
   const now = Date.now();
   let mutated = false;
+  const SESSION_RUN_TTL_MS = 5 * 60 * 1000; // 5 min absolute TTL for session-mode runs
   for (const [runId, entry] of subagentRuns.entries()) {
-    if (!entry.archiveAtMs || entry.archiveAtMs > now) {
+    // Session-mode runs have no archiveAtMs — apply absolute TTL after completion.
+    if (!entry.archiveAtMs) {
+      if (typeof entry.endedAt === "number" && now - entry.endedAt > SESSION_RUN_TTL_MS) {
+        clearPendingLifecycleError(runId);
+        void notifyContextEngineSubagentEnded({
+          childSessionKey: entry.childSessionKey,
+          reason: "swept",
+          workspaceDir: entry.workspaceDir,
+        });
+        subagentRuns.delete(runId);
+        mutated = true;
+        await safeRemoveAttachmentsDir(entry);
+      }
+      continue;
+    }
+    if (entry.archiveAtMs > now) {
       continue;
     }
     clearPendingLifecycleError(runId);
@@ -506,6 +522,14 @@ async function sweepSubagentRuns() {
       // ignore
     }
   }
+  // Sweep orphaned pendingLifecycleError entries (absolute TTL).
+  const PENDING_ERROR_TTL_MS = 5 * 60 * 1000;
+  for (const [runId, pending] of pendingLifecycleErrorByRunId.entries()) {
+    if (now - pending.endedAt > PENDING_ERROR_TTL_MS) {
+      clearPendingLifecycleError(runId);
+    }
+  }
+
   if (mutated) {
     persistSubagentRuns();
   }
