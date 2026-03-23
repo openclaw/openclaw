@@ -78,4 +78,15 @@ describe("replay runner", () => {
     expect(() => stepReplayRun({ run })).toThrowError(ReplayControlError);
     expect(() => stepReplayRun({ run })).toThrow(/Max tool calls exceeded/);
   });
+
+  it("enforces timeoutMs across replay step execution", async () => {
+    const trajectoryPath = await writeTrajectoryFixture();
+    const run = await createReplayRun({
+      runId: "run-4",
+      request: { trajectoryPath, mode: "recorded", timeoutMs: 1 },
+      nowMs: 1000,
+    });
+    expect(() => stepReplayRun({ run, nowMs: 1002 })).toThrowError(ReplayControlError);
+    expect(() => stepReplayRun({ run, nowMs: 1002 })).toThrow(/Replay timeout exceeded/);
+  });
 });

@@ -98,6 +98,13 @@ export function stepReplayRun(params: { run: ReplayRunState; nowMs?: number }): 
       message: `Max steps exceeded (${run.limits.maxSteps})`,
     });
   }
+  if (nowMs - run.createdAtMs > run.limits.timeoutMs) {
+    throw new ReplayControlError({
+      code: "limit_exceeded",
+      status: 400,
+      message: `Replay timeout exceeded (${run.limits.timeoutMs}ms)`,
+    });
+  }
 
   const currentStep = run.stepIdx;
   const stepToolCalls = run.trajectory.toolCalls.filter(

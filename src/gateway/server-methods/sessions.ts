@@ -143,8 +143,8 @@ async function searchSessionsViaFts(params: {
   });
   const allowedKinds = params.kinds?.length ? new Set(params.kinds) : undefined;
   const requestedKeys = params.requestedKeys?.length ? new Set(params.requestedKeys) : undefined;
-  const sessionIdToKey = new Map<string, string>();
   const allowedPaths = new Set<string>();
+  const pathToSession = new Map<string, { sessionKey: string; sessionId: string }>();
   for (const row of listed.sessions) {
     const key = typeof row.key === "string" ? row.key : "";
     const sessionId = typeof row.sessionId === "string" ? row.sessionId : "";
@@ -160,8 +160,21 @@ async function searchSessionsViaFts(params: {
     if (requestedKeys && !requestedKeys.has(key)) {
       continue;
     }
-    sessionIdToKey.set(sessionId, key);
-    allowedPaths.add(`sessions/${sessionId}.jsonl`);
+    const storedSessionFile = loadSessionEntry(key).entry?.sessionFile;
+    const transcriptCandidates = resolveSessionTranscriptCandidates(
+      sessionId,
+      storePath,
+      storedSessionFile,
+      resolveAgentIdFromSessionKey(key),
+    );
+    for (const candidate of transcriptCandidates) {
+      const relPath = path.relative(storePath, candidate).replace(/\\/g, "/");
+      if (!relPath) {
+        continue;
+      }
+      allowedPaths.add(relPath);
+      pathToSession.set(relPath, { sessionKey: key, sessionId });
+    }
   }
   if (allowedPaths.size === 0 && visibleKeys !== null) {
     return { count: 0, results: [] };
@@ -186,18 +199,13 @@ async function searchSessionsViaFts(params: {
       if (allowedPaths.size > 0 && !allowedPaths.has(relPath)) {
         continue;
       }
-      const base = path.basename(relPath);
-      const sessionId = base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : "";
-      if (!sessionId) {
-        continue;
-      }
-      const sessionKey = sessionIdToKey.get(sessionId);
-      if (!sessionKey) {
+      const session = pathToSession.get(relPath);
+      if (!session) {
         continue;
       }
       rows.push({
-        sessionKey,
-        sessionId,
+        sessionKey: session.sessionKey,
+        sessionId: session.sessionId,
         snippet: hit.snippet,
         score: hit.score,
         startLine: hit.startLine,
