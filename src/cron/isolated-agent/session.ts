@@ -64,27 +64,42 @@ export function resolveCronSession(params: {
     previousSessionId: isNewSession ? entry?.sessionId : undefined,
   });
 
-  // For isolated sessions (forceNew), create a completely fresh session entry
-  // without inheriting any context from previous runs.
-  const sessionEntry: SessionEntry = isNewSession
+  // Build session entry based on mode:
+  // - Isolated mode (forceNew): completely fresh entry, no inherited context
+  // - New session (expired): preserve user config, clear routing metadata
+  // - Reuse session: preserve everything, clear routing metadata only
+  const sessionEntry: SessionEntry = params.forceNew
     ? {
+        // Isolated mode: completely fresh entry
         sessionId,
         updatedAt: params.nowMs,
         systemSent,
       }
-    : {
-        // Preserve existing per-session overrides when reusing session
-        ...entry,
-        // Always update these core fields
-        sessionId,
-        updatedAt: params.nowMs,
-        systemSent,
-        // Clear delivery routing state inherited from prior sessions
-        lastChannel: undefined,
-        lastTo: undefined,
-        lastAccountId: undefined,
-        lastThreadId: undefined,
-        deliveryContext: undefined,
-      };
+    : isNewSession
+      ? {
+          // New session (expired): preserve user config from old entry
+          ...entry,
+          sessionId,
+          updatedAt: params.nowMs,
+          systemSent,
+          // Clear routing metadata for fresh inference
+          lastChannel: undefined,
+          lastTo: undefined,
+          lastAccountId: undefined,
+          lastThreadId: undefined,
+          deliveryContext: undefined,
+        }
+      : {
+          // Reuse session: preserve everything, just clear routing
+          ...entry,
+          sessionId,
+          updatedAt: params.nowMs,
+          systemSent,
+          lastChannel: undefined,
+          lastTo: undefined,
+          lastAccountId: undefined,
+          lastThreadId: undefined,
+          deliveryContext: undefined,
+        };
   return { storePath, store, sessionEntry, systemSent, isNewSession };
 }
