@@ -231,7 +231,12 @@ describe("createTelegramBot channel_post media", () => {
       expect(sendMessageSpy).toHaveBeenCalledWith(
         1234,
         "⚠️ Failed to download media. Please try again.",
-        { reply_to_message_id: 411 },
+        {
+          reply_parameters: {
+            message_id: 411,
+            allow_sending_without_reply: true,
+          },
+        },
       );
       expect(replySpy).not.toHaveBeenCalled();
     } finally {

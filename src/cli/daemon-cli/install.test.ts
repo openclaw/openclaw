@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureFullEnv } from "../../test-utils/env.js";
+import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import type { DaemonActionResponse } from "./response.js";
 
 const resolveNodeStartupTlsEnvironmentMock = vi.hoisted(() => vi.fn());
@@ -125,19 +126,9 @@ vi.mock("./response.js", () => ({
   installDaemonServiceAndEmit: installDaemonServiceAndEmitMock,
 }));
 
-const runtimeLogs: string[] = [];
+const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 vi.mock("../../runtime.js", () => ({
-  defaultRuntime: {
-    log: (message: string) => runtimeLogs.push(message),
-    writeStdout: (value: string) => {
-      runtimeLogs.push(value.endsWith("\n") ? value.slice(0, -1) : value);
-    },
-    writeJson: (value: unknown, space = 2) => {
-      runtimeLogs.push(JSON.stringify(value, null, space));
-    },
-    error: vi.fn(),
-    exit: vi.fn(),
-  },
+  defaultRuntime,
 }));
 
 function expectFirstInstallPlanCallOmitsToken() {
@@ -176,7 +167,7 @@ describe("runDaemonInstall", () => {
     isGatewayDaemonRuntimeMock.mockReset();
     installDaemonServiceAndEmitMock.mockReset();
     service.isLoaded.mockReset();
-    runtimeLogs.length = 0;
+    resetRuntimeCapture();
     actionState.warnings.length = 0;
     actionState.emitted.length = 0;
     actionState.failed.length = 0;
@@ -209,7 +200,6 @@ describe("runDaemonInstall", () => {
       NODE_USE_SYSTEM_CA: undefined,
     });
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.CLAWDBOT_GATEWAY_TOKEN;
   });
 
   afterEach(() => {

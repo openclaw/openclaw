@@ -17,13 +17,24 @@ jobs:
   # Preflight: establish the fast global truth for this revision before the
   # expensive platform and test lanes fan out.
   # Detect docs-only changes to skip heavy jobs (test, build, Windows, macOS, Android).
-  # Lint and format always run. Fail-safe: if detection fails, run everything.
-  docs-scope:
+  # Run scope detection, changed-extension detection, and fast security checks in
+  # one visible job so operators have a single preflight box to inspect and rerun.
+  # Fail-safe: if detection steps are skipped, downstream outputs fall back to
+  # conservative defaults that keep heavy lanes enabled.
+  preflight:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     outputs:
-      docs_only: ${{ steps.check.outputs.docs_only }}
-      docs_changed: ${{ steps.check.outputs.docs_changed }}
+      docs_only: ${{ steps.docs_scope.outputs.docs_only }}
+      docs_changed: ${{ steps.docs_scope.outputs.docs_changed }}
+      run_node: ${{ steps.changed_scope.outputs.run_node || 'false' }}
+      run_macos: ${{ steps.changed_scope.outputs.run_macos || 'false' }}
+      run_android: ${{ steps.changed_scope.outputs.run_android || 'false' }}
+      run_skills_python: ${{ steps.changed_scope.outputs.run_skills_python || 'false' }}
+      run_windows: ${{ steps.changed_scope.outputs.run_windows || 'false' }}
+      has_changed_extensions: ${{ steps.changed_extensions.outputs.has_changed_extensions || 'false' }}
+      changed_extensions_matrix: ${{ steps.changed_extensions.outputs.changed_extensions_matrix || '{"include":[]}' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -32,44 +43,21 @@ jobs:
           fetch-tags: false
           submodules: false
 
-      - name: Ensure docs-scope base commit
+      - name: Ensure preflight base commit
         uses: ./.github/actions/ensure-base-commit
         with:
           base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
           fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
       - name: Detect docs-only changes
-        id: check
+        id: docs_scope
         uses: ./.github/actions/detect-docs-changes
 
-  # Detect which heavy areas are touched so CI can skip unrelated expensive jobs.
-  # Fail-safe: if detection fails, downstream jobs run.
-  changed-scope:
-    needs: [docs-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    outputs:
-      run_node: ${{ steps.scope.outputs.run_node }}
-      run_macos: ${{ steps.scope.outputs.run_macos }}
-      run_android: ${{ steps.scope.outputs.run_android }}
-      run_skills_python: ${{ steps.scope.outputs.run_skills_python }}
-      run_windows: ${{ steps.scope.outputs.run_windows }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 1
-          fetch-tags: false
-          submodules: false
-
-      - name: Ensure changed-scope base commit
-        uses: ./.github/actions/ensure-base-commit
-        with:
-          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
-          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
-
+      # Detect which heavy areas are touched so CI can skip unrelated expensive jobs.
+      # Fail-safe: if skipped, downstream lanes run.
       - name: Detect changed scopes
-        id: scope
+        id: changed_scope
+        if: steps.docs_scope.outputs.docs_only != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -82,28 +70,8 @@ jobs:
 
           node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
 
-  changed-extensions:
-    needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    outputs:
-      has_changed_extensions: ${{ steps.changed.outputs.has_changed_extensions }}
-      changed_extensions_matrix: ${{ steps.changed.outputs.changed_extensions_matrix }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 1
-          fetch-tags: false
-          submodules: false
-
-      - name: Ensure changed-extensions base commit
-        uses: ./.github/actions/ensure-base-commit
-        with:
-          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
-          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
-
       - name: Setup Node environment
+        if: steps.docs_scope.outputs.docs_only != 'true'
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
@@ -111,42 +79,27 @@ jobs:
           use-sticky-disk: "false"
 
       - name: Detect changed extensions
-        id: changed
+        id: changed_extensions
+        if: steps.docs_scope.outputs.docs_only != 'true' && steps.changed_scope.outputs.run_node == 'true'
         env:
           BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
         run: |
           node --input-type=module <<'EOF'
           import { appendFileSync } from "node:fs";
           import { listChangedExtensionIds } from "./scripts/test-extension.mjs";
 
-          const extensionIds = listChangedExtensionIds({ base: process.env.BASE_SHA, head: "HEAD" });
+          const extensionIds = listChangedExtensionIds({
+            base: process.env.BASE_SHA,
+            head: "HEAD",
+            fallbackBaseRef: process.env.BASE_REF,
+            unavailableBaseBehavior: "all",
+          });
           const matrix = JSON.stringify({ include: extensionIds.map((extension) => ({ extension })) });
 
           appendFileSync(process.env.GITHUB_OUTPUT, `has_changed_extensions=${extensionIds.length > 0}\n`, "utf8");
           appendFileSync(process.env.GITHUB_OUTPUT, `changed_extensions_matrix=${matrix}\n`, "utf8");
           EOF
-
-  secrets:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
-
-      - name: Ensure secrets base commit
-        uses: ./.github/actions/ensure-base-commit
-        with:
-          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
-          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "false"
-          install-deps: "false"
 
       - name: Setup Python
         id: setup-python
@@ -201,27 +154,8 @@ jobs:
           pre-commit run zizmor --files "${workflow_files[@]}"
 
       - name: Audit production dependencies
+        if: steps.docs_scope.outputs.docs_only != 'true'
         run: pre-commit run --all-files pnpm-audit-prod
-
-  # Preflight hub: collapse setup jobs into one explicit fanout node so the
-  # graph matches operator mental model instead of raw YAML ordering.
-  preflight:
-    needs: [docs-scope, changed-scope, changed-extensions, secrets]
-    if: always() && needs.docs-scope.result == 'success' && (needs.changed-scope.result == 'success' || needs.changed-scope.result == 'skipped') && (needs.changed-extensions.result == 'success' || needs.changed-extensions.result == 'skipped') && needs.secrets.result == 'success'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    outputs:
-      docs_only: ${{ needs.docs-scope.outputs.docs_only }}
-      docs_changed: ${{ needs.docs-scope.outputs.docs_changed }}
-      run_node: ${{ needs.changed-scope.outputs.run_node || 'false' }}
-      run_macos: ${{ needs.changed-scope.outputs.run_macos || 'false' }}
-      run_android: ${{ needs.changed-scope.outputs.run_android || 'false' }}
-      run_skills_python: ${{ needs.changed-scope.outputs.run_skills_python || 'false' }}
-      run_windows: ${{ needs.changed-scope.outputs.run_windows || 'false' }}
-      has_changed_extensions: ${{ needs.changed-extensions.outputs.has_changed_extensions || 'false' }}
-      changed_extensions_matrix: ${{ needs.changed-extensions.outputs.changed_extensions_matrix || '{"include":[]}' }}
-    steps:
-      - name: Preflight complete
-        run: echo "Preflight scope complete."
 
   # Fanout: downstream lanes branch from preflight outputs instead of waiting
   # on unrelated Linux checks.
@@ -230,6 +164,7 @@ jobs:
     needs: [preflight]
     if: github.event_name == 'push' && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -264,6 +199,7 @@ jobs:
     needs: [preflight, build-artifacts]
     if: github.event_name == 'push' && needs.preflight.outputs.docs_only != 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -289,6 +225,7 @@ jobs:
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -384,6 +321,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true' && needs.preflight.outputs.has_changed_extensions == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.preflight.outputs.changed_extensions_matrix) }}
@@ -410,6 +348,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -433,6 +372,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -530,6 +470,7 @@ jobs:
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -570,6 +511,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.docs_changed == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -589,6 +531,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.preflight.outputs.run_skills_python == 'true')
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -615,7 +558,7 @@ jobs:
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_windows == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
     runs-on: blacksmith-32vcpu-windows-2025
-    timeout-minutes: 45
+    timeout-minutes: 20
     env:
       NODE_OPTIONS: --max-old-space-size=6144
       # Keep total concurrency predictable on the 32 vCPU runner.
@@ -755,6 +698,7 @@ jobs:
     needs: [preflight]
     if: github.event_name == 'pull_request' && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_macos == 'true'
     runs-on: macos-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -831,6 +775,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_android == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:

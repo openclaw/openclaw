@@ -271,7 +271,7 @@ enum ExecApprovalsPromptPresenter {
         commandText.drawsBackground = true
         commandText.backgroundColor = NSColor.textBackgroundColor
         commandText.font = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-        commandText.string = request.command
+        commandText.string = ExecApprovalCommandDisplaySanitizer.sanitize(request.command)
         commandText.textContainerInset = NSSize(width: 6, height: 6)
         commandText.textContainer?.lineFragmentPadding = 0
         commandText.textContainer?.widthTracksTextView = true
