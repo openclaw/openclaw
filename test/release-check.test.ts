@@ -3,6 +3,7 @@ import {
   collectAppcastSparkleVersionErrors,
   collectBundledExtensionManifestErrors,
   collectForbiddenPackPaths,
+  collectMissingPackPaths,
   collectPackUnpackedSizeErrors,
 } from "../scripts/release-check.ts";
 
@@ -112,6 +113,21 @@ describe("collectForbiddenPackPaths", () => {
         "node_modules/.bin/openclaw",
       ]),
     ).toEqual(["extensions/tlon/node_modules/.bin/tlon", "node_modules/.bin/openclaw"]);
+  });
+});
+
+describe("collectMissingPackPaths", () => {
+  it("requires the shipped channel catalog in npm pack output", () => {
+    expect(
+      collectMissingPackPaths([
+        "dist/index.js",
+        "dist/entry.js",
+        "dist/plugin-sdk/index.js",
+        "dist/plugin-sdk/index.d.ts",
+        "dist/plugin-sdk/root-alias.cjs",
+        "dist/build-info.json",
+      ]),
+    ).toContain("dist/channel-catalog.json");
   });
 });
 
