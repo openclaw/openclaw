@@ -50,8 +50,8 @@ RUN set -eux; \
       -DGGML_AVX512_VNNI=OFF \
       -DGGML_AVX512_BF16=OFF; \
     make -C /tmp/whispersrc/build whisper-cli -j"$(nproc)"; \
-    WHISPER_SO="$(find /tmp/whispersrc/build -type f -name 'libwhisper.so' | head -n1)"; \
-    GGML_SO="$(find /tmp/whispersrc/build -type f -name 'libggml.so' | head -n1)"; \
+    WHISPER_SO="$(find /tmp/whispersrc/build -type f -name 'libwhisper.so*' | sort | head -n1)"; \
+    GGML_SO="$(find /tmp/whispersrc/build -type f -name 'libggml.so*' | sort | head -n1)"; \
     test -n "${WHISPER_SO}"; \
     test -n "${GGML_SO}"; \
     cp /tmp/whispersrc/build/bin/whisper-cli "${WHISPER_ASSETS_DIR}/whisper-cli"; \
