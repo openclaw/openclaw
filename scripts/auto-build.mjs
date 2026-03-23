@@ -20,6 +20,23 @@ const BRAND_DIR = resolve(OUTPUT_DIR, BRAND_NAME);
 
 console.log("=== 自动打包部署脚本 ===\n");
 
+// 检查pnpm是否安装
+function checkPNPM() {
+  try {
+    execSync("pnpm --version", { stdio: "ignore" });
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+// 确保pnpm安装
+if (!checkPNPM()) {
+  console.error("错误: pnpm 未安装！");
+  console.error("请先安装 pnpm: npm install -g pnpm");
+  process.exit(1);
+}
+
 // 确保输出目录存在
 try {
   mkdirSync(OUTPUT_DIR, { recursive: true });
