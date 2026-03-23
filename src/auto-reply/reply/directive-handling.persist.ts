@@ -101,7 +101,7 @@ export async function persistInlineDirectives(params: {
       provider,
       model,
       contextTokens:
-        agentCfg?.contextTokens ?? lookupContextTokens(model) ?? DEFAULT_CONTEXT_TOKENS,
+        agentCfg?.contextTokens ?? lookupCachedContextTokens(model) ?? DEFAULT_CONTEXT_TOKENS,
     };
   }
   if (
@@ -123,7 +123,7 @@ export async function persistInlineDirectives(params: {
       provider,
       model,
       contextTokens:
-        agentCfg?.contextTokens ?? lookupContextTokens(model) ?? DEFAULT_CONTEXT_TOKENS,
+        agentCfg?.contextTokens ?? lookupCachedContextTokens(model) ?? DEFAULT_CONTEXT_TOKENS,
     };
   }
 

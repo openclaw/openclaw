@@ -826,6 +826,18 @@ describe("persistInlineDirectives internal exec scope gate", () => {
 });
 
 describe("persistInlineDirectives model-switch context guard", () => {
+  const allowedModelKeys = new Set(["anthropic/claude-opus-4-5", "openai/gpt-4o"]);
+  const sessionKey = "agent:main:dm:1";
+  const storePath = "/tmp/sessions.json";
+
+  function createSessionEntry(overrides?: Partial<SessionEntry>): SessionEntry {
+    return {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      ...overrides,
+    };
+  }
+
   it("does not persist an oversized switch during inline directive persistence", async () => {
     const directives = parseInlineDirectives("please continue /model openai/gpt-4o");
     const sessionEntry = createSessionEntry({
