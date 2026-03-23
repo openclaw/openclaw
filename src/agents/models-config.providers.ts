@@ -679,6 +679,24 @@ function mergeImplicitProviderSet(
   }
 }
 
+function isBundledImplicitProviderAllowed(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): boolean {
+  // Keep bundled implicit-provider discovery compatible with plugins.allow,
+  // but still honor explicit deny/disabled config for the owning plugin.
+  const allowedProviders = resolvePluginProviders({
+    config: params.config,
+    env: params.env,
+    onlyPluginIds: [params.provider],
+    activate: false,
+    cache: false,
+    bundledProviderAllowlistCompat: true,
+  });
+  return allowedProviders.some((provider) => provider.id === params.provider);
+}
+
 async function resolveImplicitAimlapiProvider(params: {
   config?: OpenClawConfig;
   explicitProviders?: Record<string, ProviderConfig> | null;
@@ -688,15 +706,13 @@ async function resolveImplicitAimlapiProvider(params: {
   if (params.explicitProviders?.aimlapi) {
     return undefined;
   }
-  const allowedAimlapiProviders = resolvePluginProviders({
-    config: params.config,
-    env: params.env,
-    onlyPluginIds: ["aimlapi"],
-    activate: false,
-    cache: false,
-    bundledProviderAllowlistCompat: true,
-  });
-  if (!allowedAimlapiProviders.some((provider) => provider.id === "aimlapi")) {
+  if (
+    !isBundledImplicitProviderAllowed({
+      provider: "aimlapi",
+      config: params.config,
+      env: params.env,
+    })
+  ) {
     return undefined;
   }
   const envVar = resolveEnvApiKeyVarName("aimlapi", params.env);
@@ -862,16 +878,24 @@ export async function resolveImplicitProviders(
   mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "paired"));
   mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "late"));
 
-  if (!providers.aimlapi) {
-    const implicitAimlapi = await resolveImplicitAimlapiProvider({
-      config: params.config,
-      explicitProviders: params.explicitProviders,
-      authStore,
-      env,
-    });
-    if (implicitAimlapi) {
-      providers.aimlapi = implicitAimlapi;
-    }
+  const implicitAimlapi = await resolveImplicitAimlapiProvider({
+    config: params.config,
+    explicitProviders: params.explicitProviders,
+    authStore,
+    env,
+  });
+  if (implicitAimlapi) {
+    const existing = providers.aimlapi;
+    providers.aimlapi = existing
+      ? {
+          ...implicitAimlapi,
+          ...existing,
+          models:
+            Array.isArray(existing.models) && existing.models.length > 0
+              ? existing.models
+              : implicitAimlapi.models,
+        }
+      : implicitAimlapi;
   }
 
   const implicitBedrock = await resolveImplicitBedrockProvider({

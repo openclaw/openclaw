@@ -77,6 +77,35 @@ describe("AIMLAPI provider", () => {
     expect(providers?.aimlapi).toBeUndefined();
   });
 
+  it("should not include aimlapi from auth profile when plugins.deny blocks the plugin", async () => {
+    const authProfilesPath = path.join(tempDir, "auth-profiles.json");
+    await fs.writeFile(
+      authProfilesPath,
+      JSON.stringify({
+        version: 1,
+        profiles: {
+          "aimlapi:default": {
+            type: "api_key",
+            provider: "aimlapi",
+            key: "profile-aimlapi-key",
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const providers = await resolveImplicitProviders({
+      agentDir: tempDir,
+      config: {
+        plugins: {
+          deny: ["aimlapi"],
+        },
+      },
+    });
+
+    expect(providers?.aimlapi).toBeUndefined();
+  });
+
   it("should include aimlapi when auth profile is configured", async () => {
     const authProfilesPath = path.join(tempDir, "auth-profiles.json");
     await fs.writeFile(
