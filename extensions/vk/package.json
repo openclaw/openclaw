@@ -1,0 +1,43 @@
+{
+  "name": "@openclaw/vk",
+  "version": "2026.3.22",
+  "description": "OpenClaw VK channel plugin",
+  "type": "module",
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.22"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "vk",
+      "label": "VK",
+      "selectionLabel": "VK (Long Poll API)",
+      "detailLabel": "VK Group Bot",
+      "docsPath": "/channels/vk",
+      "docsLabel": "vk",
+      "blurb": "VK group bot via Long Poll API for direct-message routing.",
+      "order": 85,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@openclaw/vk",
+      "localPath": "extensions/vk",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.3.22"
+    }
+  }
+}

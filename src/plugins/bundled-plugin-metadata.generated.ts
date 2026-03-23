@@ -3141,6 +3141,51 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "vk",
+    idHint: "vk",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    setupSource: {
+      source: "./setup-entry.ts",
+      built: "setup-entry.js",
+    },
+    packageName: "@openclaw/vk",
+    packageVersion: "2026.3.22",
+    packageDescription: "OpenClaw VK channel plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+      setupEntry: "./setup-entry.ts",
+      channel: {
+        id: "vk",
+        label: "VK",
+        selectionLabel: "VK (Long Poll API)",
+        detailLabel: "VK Group Bot",
+        docsPath: "/channels/vk",
+        docsLabel: "vk",
+        blurb: "VK group bot via Long Poll API for direct-message routing.",
+        order: 85,
+        quickstartAllowFrom: true,
+      },
+      install: {
+        npmSpec: "@openclaw/vk",
+        localPath: "extensions/vk",
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.3.22",
+      },
+    },
+    manifest: {
+      id: "vk",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      channels: ["vk"],
+    },
+  },
+  {
     dirName: "vllm",
     idHint: "vllm",
     source: {
