@@ -1,5 +1,7 @@
 import type { Client } from "@buape/carbon";
 import type { GatewayPresenceUpdate } from "discord-api-types/v10";
+import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
 import {
   resolveDiscordMemberAllowed,
@@ -20,8 +22,6 @@ import {
   resolveDiscordAutoThreadReplyPlan,
   resolveDiscordReplyDeliveryPlan,
 } from "./threading.js";
-import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
-import { beforeEach, describe, expect, it } from "vitest";
 
 describe("resolveDiscordOwnerAllowFrom", () => {
   it("returns undefined when no allowlist is configured", () => {
