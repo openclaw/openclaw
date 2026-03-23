@@ -24,11 +24,11 @@ import type {
 } from "../config/types.tts.js";
 import { logVerbose } from "../globals.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { stripMarkdown } from "../line/markdown-to-line.js";
+import { stripMarkdown } from "../shared/text/strip-markdown.js";
 import {
   OPENAI_DEFAULT_TTS_MODEL as DEFAULT_OPENAI_MODEL,
   OPENAI_DEFAULT_TTS_VOICE as DEFAULT_OPENAI_VOICE,
-} from "../providers/openai-defaults.js";
+} from "../plugins/provider-model-defaults.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
   getSpeechProvider,
@@ -36,7 +36,6 @@ import {
   normalizeSpeechProviderId,
 } from "./provider-registry.js";
 import type { SpeechVoiceOption } from "./provider-types.js";
-import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 import {
   DEFAULT_OPENAI_BASE_URL,
   isValidOpenAIModel,
@@ -86,6 +85,8 @@ const DEFAULT_OUTPUT = {
   extension: ".mp3",
   voiceCompatible: false,
 };
+
+const TTS_AUTO_MODES = new Set<TtsAutoMode>(["off", "always", "inbound", "tagged"]);
 
 export type ResolvedTtsConfig = {
   auto: TtsAutoMode;
@@ -230,6 +231,17 @@ type TtsStatusEntry = {
 };
 
 let lastTtsAttempt: TtsStatusEntry | undefined;
+
+export function normalizeTtsAutoMode(value: unknown): TtsAutoMode | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (TTS_AUTO_MODES.has(normalized as TtsAutoMode)) {
+    return normalized as TtsAutoMode;
+  }
+  return undefined;
+}
 
 function resolveModelOverridePolicy(
   overrides: TtsModelOverrideConfig | undefined,
