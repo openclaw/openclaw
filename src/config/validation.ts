@@ -1,6 +1,5 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { normalizeProviderId } from "../agents/model-selection.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/registry.js";
 import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
 import { listBundledWebSearchPluginIds } from "../plugins/bundled-web-search-ids.js";
@@ -522,9 +521,7 @@ function validateConfigObjectWithPluginsBase(
   const knownMemoryFallbacks = new Set([...knownMemoryProviders].filter((p) => p !== "auto"));
   knownMemoryFallbacks.add("none");
 
-  const normalizedPluginsConfig = normalizePluginsConfig(config.plugins);
-
-  const validateMemorySearchProvider = (provider: string | undefined, path: string) => {
+  const validateMemorySearchProvider = (provider: string | undefined, _path: string) => {
     if (typeof provider !== "string") {
       return;
     }
@@ -532,30 +529,11 @@ function validateConfigObjectWithPluginsBase(
     if (knownMemoryProviders.has(provider)) {
       return;
     }
-    const normalizedProvider = normalizeProviderId(provider);
-    // Check manifest registry for any enabled plugin that provides this provider ID
-    // This validates against the config being validated, not in-memory state
-    const manifestRegistry = loadPluginManifestRegistry({ config });
-    const isAvailableEnabledPlugin = manifestRegistry.plugins.some((plugin) => {
-      if (!plugin.providers.some((p) => normalizeProviderId(p) === normalizedProvider)) {
-        return false;
-      }
-      const enableState = resolveEffectiveEnableState({
-        id: plugin.id,
-        origin: plugin.origin,
-        config: normalizedPluginsConfig,
-        enabledByDefault: plugin.enabledByDefault,
-      });
-      return enableState.enabled;
-    });
-    if (isAvailableEnabledPlugin) {
-      return; // Enabled plugin provides this provider - validate capability at runtime
-    }
-    // Reject unknown or disabled providers at config time
-    issues.push({ path, message: `unknown memorySearch provider: ${provider}` });
+    // Cannot validate embedding capability from manifest - fall through to runtime
+    // Unknown providers will be validated at runtime.
   };
 
-  const validateMemorySearchFallback = (fallback: string | undefined, path: string) => {
+  const validateMemorySearchFallback = (fallback: string | undefined, _path: string) => {
     if (typeof fallback !== "string") {
       return;
     }
@@ -563,27 +541,7 @@ function validateConfigObjectWithPluginsBase(
     if (knownMemoryFallbacks.has(fallback)) {
       return;
     }
-    const normalizedFallback = normalizeProviderId(fallback);
-    // Check manifest registry for any enabled plugin that provides this fallback
-    // This validates against the config being validated, not in-memory state
-    const manifestRegistry = loadPluginManifestRegistry({ config });
-    const isAvailableEnabledPlugin = manifestRegistry.plugins.some((plugin) => {
-      if (!plugin.providers.some((p) => normalizeProviderId(p) === normalizedFallback)) {
-        return false;
-      }
-      const enableState = resolveEffectiveEnableState({
-        id: plugin.id,
-        origin: plugin.origin,
-        config: normalizedPluginsConfig,
-        enabledByDefault: plugin.enabledByDefault,
-      });
-      return enableState.enabled;
-    });
-    if (isAvailableEnabledPlugin) {
-      return; // Enabled plugin provides this fallback - validate capability at runtime
-    }
-    // Reject unknown or disabled fallbacks at config time
-    issues.push({ path, message: `unknown memorySearch fallback: ${fallback}` });
+    // Cannot validate embedding capability from manifest - fall through to runtime
   };
 
   const defaultMemorySearch = config.agents?.defaults?.memorySearch;

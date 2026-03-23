@@ -107,7 +107,13 @@ export function buildMediaUnderstandingRegistry(
   cfg?: OpenClawConfig,
 ): Map<string, MediaUnderstandingProvider> {
   const currentVersion = getActivePluginRegistryVersion();
-  if (!overrides && mediaUnderstandingRegistryCache && cachedRegistryVersion === currentVersion) {
+  // Bypass cache when cfg is provided - config may affect plugin enable/disable
+  if (
+    !overrides &&
+    !cfg &&
+    mediaUnderstandingRegistryCache &&
+    cachedRegistryVersion === currentVersion
+  ) {
     return mediaUnderstandingRegistryCache;
   }
 

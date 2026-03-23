@@ -549,10 +549,11 @@ export function resolveTtsApiKey(
   cfg: OpenClawConfig | undefined,
   provider: string,
 ): string | undefined {
-  if (provider === "elevenlabs") {
+  const normalizedProvider = normalizeSpeechProviderId(provider) ?? provider.toLowerCase();
+  if (normalizedProvider === "elevenlabs") {
     return config.elevenlabs.apiKey || process.env.ELEVENLABS_API_KEY || process.env.XI_API_KEY;
   }
-  if (provider === "openai") {
+  if (normalizedProvider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
   // Check for custom/plugin provider API key in config

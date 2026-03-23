@@ -27,7 +27,10 @@ import type { InternalHookHandler } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { ImageGenerationProvider } from "../image-generation/types.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
-import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
+import type {
+  MediaUnderstandingProvider,
+  TextToSpeechRequest,
+} from "../media-understanding/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 import type {
@@ -968,7 +971,7 @@ export type ProviderPlugin = {
     fetchFn?: typeof fetch;
   }) => Promise<{ text: string; model?: string }>;
   textToSpeech?: (
-    req: PluginTextToSpeechRequest,
+    req: TextToSpeechRequest,
   ) => Promise<{ audio: Buffer; mime: string; sampleRate?: number }>;
 };
 
@@ -987,6 +990,7 @@ export {
   type TextToSpeechRequest,
   type TextToSpeechResult,
 } from "../media-understanding/types.js";
+export type { TextToSpeechRequest as PluginTextToSpeechRequest } from "../media-understanding/types.js";
 
 // Plugin-specific request types (used by plugin callbacks)
 // =============================================================================
@@ -1035,20 +1039,6 @@ export type PluginVideoDescriptionRequest = {
   baseUrl?: string;
   headers?: Record<string, string>;
   fetchFn?: typeof fetch;
-};
-
-export type PluginTextToSpeechRequest = {
-  text: string;
-  model?: string;
-  modelId?: string;
-  voice?: string;
-  voiceId?: string;
-  apiKey: string;
-  baseUrl?: string;
-  headers?: Record<string, string>;
-  timeoutMs: number;
-  fetchFn?: typeof fetch;
-  telephony?: boolean;
 };
 
 export type WebSearchProviderId = string;
