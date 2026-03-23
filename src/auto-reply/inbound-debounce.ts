@@ -203,7 +203,11 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       return;
     }
     if (!canTrackKey(key)) {
-      await runFlush([item]);
+      // When the debounce map is saturated, fall back to immediate keyed work
+      // instead of buffering, but still preserve same-key ordering.
+      await enqueueKeyTask(key, async () => {
+        await runFlush([item]);
+      });
       return;
     }
 
