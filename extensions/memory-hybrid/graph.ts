@@ -488,3 +488,80 @@ Text: "${JSON.stringify(text).slice(1, -1)}"`;
     return { nodes: [], edges: [] };
   }
 }
+
+/**
+ * Batch version of extractGraphFromText.
+ * Consolidates multiple facts into a single LLM request to save API quota (High TPM/Low RPM).
+ */
+export async function extractGraphFromBatch(
+  facts: string[],
+  chatModel: ChatModel,
+): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
+  if (facts.length === 0) return { nodes: [], edges: [] };
+  if (facts.length === 1) return extractGraphFromText(facts[0], chatModel);
+
+  const factList = facts.map((f, i) => `${i + 1}. ${f}`).join("\n");
+  const prompt = `Extract a unified knowledge graph from the multiple facts provided below.
+Return ONLY valid JSON.
+
+Format:
+{
+  "nodes": [{"id": "EntityName", "type": "Person|Place|Concept|Tool|Language|Company|Other", "description": "short description"}],
+  "edges": [{"source": "EntityName1", "target": "EntityName2", "relation": "verb_phrase"}]
+}
+
+Rules:
+- Create nodes for all distinct entities mentioned across ALL facts.
+- Combine overlapping entities (e.g. "vova" and "vladimir" if they refer to the same person in context).
+- IDs must be clean, normalized lowercase strings.
+- Relations: [ "HAS", "LIKES", "DISLIKES", "USES", "CREATED", "KNOWS", "WORKS_AT", "IS_A", "RELATED_TO", "EXPERIENCED" ]
+
+Facts:
+${factList}`;
+
+  try {
+    const response = await chatModel.complete([{ role: "user", content: prompt }], true);
+    const cleanJson = response
+      .replace(/```json\s*/g, "")
+      .replace(/```\s*/g, "")
+      .trim();
+
+    const data = JSON.parse(cleanJson);
+    const allowedRelations = new Set([
+      "HAS",
+      "LIKES",
+      "DISLIKES",
+      "USES",
+      "CREATED",
+      "KNOWS",
+      "WORKS_AT",
+      "IS_A",
+      "RELATED_TO",
+      "EXPERIENCED",
+    ]);
+
+    const nodes: GraphNode[] = (data.nodes || [])
+      .filter((n: any) => n.id && n.type)
+      .map((n: any) => ({
+        id: String(n.id).toLowerCase().trim(),
+        type: String(n.type),
+        description: n.description ? String(n.description) : undefined,
+      }));
+
+    const edges: GraphEdge[] = (data.edges || [])
+      .filter((e: any) => e.source && e.target && e.relation)
+      .map((e: any) => ({
+        source: String(e.source).toLowerCase().trim(),
+        target: String(e.target).toLowerCase().trim(),
+        relation: allowedRelations.has(String(e.relation).toUpperCase())
+          ? String(e.relation).toUpperCase()
+          : "RELATED_TO",
+        timestamp: Date.now(),
+      }));
+
+    return { nodes, edges };
+  } catch (error) {
+    console.warn(`[memory-hybrid][graph] extractGraphFromBatch failed:`, String(error));
+    return { nodes: [], edges: [] };
+  }
+}

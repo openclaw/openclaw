@@ -84,6 +84,50 @@ export class Embeddings {
     return vector;
   }
 
+  async embedBatch(texts: string[]): Promise<number[][]> {
+    if (texts.length === 0) return [];
+
+    // Simple caching for batch: only embed what we need
+    const results: number[][] = new Array(texts.length);
+    const neededIndices: number[] = [];
+    const neededTexts: string[] = [];
+
+    for (let i = 0; i < texts.length; i++) {
+      const cacheKey = `${this.model}:${texts[i]}`;
+      if (this.cache.has(cacheKey)) {
+        const val = this.cache.get(cacheKey)!;
+        this.cache.delete(cacheKey);
+        this.cache.set(cacheKey, val); // Move to LRU end
+        results[i] = val;
+      } else {
+        neededIndices.push(i);
+        neededTexts.push(texts[i]);
+      }
+    }
+
+    if (neededTexts.length > 0) {
+      let newVectors: number[][];
+      if (this.provider === "openai") {
+        newVectors = await this.embedOpenAIBatch(neededTexts);
+      } else {
+        const dims = this.outputDimensionality ?? EMBEDDING_DIMENSIONS[this.model];
+        newVectors = await this.embedGoogleBatch(neededTexts, dims);
+      }
+
+      for (let i = 0; i < neededTexts.length; i++) {
+        const cacheKey = `${this.model}:${neededTexts[i]}`;
+        if (this.cache.size >= this.maxCacheSize) {
+          const firstKey = this.cache.keys().next().value;
+          if (firstKey) this.cache.delete(firstKey);
+        }
+        this.cache.set(cacheKey, newVectors[i]);
+        results[neededIndices[i]] = newVectors[i];
+      }
+    }
+
+    return results;
+  }
+
   private async embedOpenAI(text: string): Promise<number[]> {
     return this.withRetry(async () => {
       const response = await this.openai!.embeddings.create({
@@ -91,6 +135,16 @@ export class Embeddings {
         input: text,
       });
       return response.data[0].embedding;
+    });
+  }
+
+  private async embedOpenAIBatch(texts: string[]): Promise<number[][]> {
+    return this.withRetry(async () => {
+      const response = await this.openai!.embeddings.create({
+        model: this.model,
+        input: texts,
+      });
+      return response.data.map((d) => d.embedding);
     });
   }
 
@@ -116,7 +170,6 @@ export class Embeddings {
 
       if (!response.ok) {
         const errorBody = await response.text();
-        // Sanitize API key from error messages
         const sanitizedError = errorBody.replace(this.apiKey, "[REDACTED]");
         throw new Error(`Google Embedding API error (${response.status}): ${sanitizedError}`);
       }
@@ -128,6 +181,44 @@ export class Embeddings {
         throw new Error(`Unexpected Google Embedding API response: ${JSON.stringify(data)}`);
       }
       return values;
+    });
+  }
+
+  private async embedGoogleBatch(texts: string[], dimensions?: number): Promise<number[][]> {
+    return this.withRetry(async () => {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:batchEmbedContents?key=${this.apiKey}`;
+
+      const requests = texts.map((text) => {
+        const req: any = {
+          model: `models/${this.model}`,
+          content: { parts: [{ text }] },
+          taskType: "RETRIEVAL_DOCUMENT",
+        };
+        if (dimensions) {
+          req.outputDimensionality = dimensions;
+        }
+        return req;
+      });
+
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requests }),
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+        const sanitizedError = errorBody.replace(this.apiKey, "[REDACTED]");
+        throw new Error(`Google Batch Embedding API error (${response.status}): ${sanitizedError}`);
+      }
+
+      const data = (await response.json()) as { embeddings?: Array<{ values?: number[] }> };
+      const embeddings = data?.embeddings;
+
+      if (!embeddings || !Array.isArray(embeddings)) {
+        throw new Error(`Unexpected Google Batch Embedding API response: ${JSON.stringify(data)}`);
+      }
+      return embeddings.map((e) => e.values ?? []);
     });
   }
 

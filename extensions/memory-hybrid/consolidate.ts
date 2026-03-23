@@ -145,6 +145,51 @@ Return ONLY the merged fact as a single plain text string (no JSON, no quotes, n
   }
 }
 
+/**
+ * Batch version of mergeFacts.
+ * Takes multiple clusters (arrays of facts) and merges each one in a single LLM request.
+ * Returns an array of merged strings (null if a specific merge failed).
+ */
+export async function mergeFactsBatch(
+  clusters: string[][],
+  chatModel: ChatModel,
+): Promise<Array<string | null>> {
+  if (clusters.length === 0) return [];
+  if (clusters.length === 1) return [await mergeFacts(clusters[0], chatModel)];
+
+  const formattedClusters = clusters
+    .map((facts, i) => {
+      const list = facts.map((f, j) => `  ${j + 1}. ${f}`).join("\n");
+      return `Cluster ${i + 1}:\n${list}`;
+    })
+    .join("\n\n");
+
+  const prompt = `Merge the following independent clusters of facts. For EACH cluster, provide one concise, complete statement that captures all details.
+
+Format: Return a JSON array of strings corresponding to the clusters.
+Example: ["Merged fact 1", "Merged fact 2", ...]
+
+Clusters to merge:
+${formattedClusters}`;
+
+  try {
+    const response = await chatModel.complete([{ role: "user", content: prompt }], true);
+    const cleanJson = response
+      .replace(/```json\s*/g, "")
+      .replace(/```\s*/g, "")
+      .trim();
+    const results = JSON.parse(cleanJson);
+
+    if (!Array.isArray(results)) throw new Error("Batch merge response is not an array");
+
+    // Map results back to index, ensuring we return null for any missing/invalid entries
+    return clusters.map((_, i) => (typeof results[i] === "string" ? results[i] : null));
+  } catch (error) {
+    console.warn(`[memory-hybrid][consolidate] mergeFactsBatch failed:`, String(error));
+    return clusters.map(() => null);
+  }
+}
+
 // ============================================================================
 // Export cosine similarity for testing
 // ============================================================================

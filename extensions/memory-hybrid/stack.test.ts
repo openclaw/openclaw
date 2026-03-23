@@ -36,9 +36,9 @@ describe("ConversationStack", () => {
     expect(stack.isEmpty).toBe(true);
   });
 
-  it("pushes a single turn and compresses it", async () => {
+  it("pushes a single turn and buffers it (no immediate compression)", async () => {
     const mock = createMockChatModel(["Vova asked about memory plugin architecture."]);
-    const stack = new ConversationStack();
+    const stack = new ConversationStack(30, 3); // batch size 3
 
     await stack.push(
       "Як працює архітектура плагіну пам'яті?",
@@ -46,38 +46,66 @@ describe("ConversationStack", () => {
       mock as any,
     );
 
-    expect(stack.turnCount).toBe(1);
-    expect(stack.isEmpty).toBe(false);
-    expect(mock.complete).toHaveBeenCalledTimes(1);
+    expect(stack.turnCount).toBe(0); // Not compressed yet
+    expect(stack.isEmpty).toBe(false); // But not empty (pending)
+    expect(mock.complete).toHaveBeenCalledTimes(0);
 
     const summary = stack.getSummary();
-    expect(summary).toContain("Vova asked about memory plugin architecture");
+    expect(summary).toContain("(Pending 1) USER: Як працює архітектура");
   });
 
-  it("accumulates multiple turns into a stack", async () => {
-    const mock = createMockChatModel([
-      "Turn 1: User asked about bugs.",
-      "Turn 2: User requested feature list.",
-      "Turn 3: User approved the plan.",
-    ]);
-    const stack = new ConversationStack();
+  it("compresses when batchSize is reached", async () => {
+    const mock = createMockChatModel(["Batch summary result."]);
+    const stack = new ConversationStack(30, 2); // batch size 2
 
-    await stack.push("Які баги є?", "Ось список...", mock as any);
-    await stack.push("Які фічі є?", "Ось фічі...", mock as any);
-    await stack.push("Ок, погнали!", "Починаю...", mock as any);
+    await stack.push(
+      "Question 1 is about architecture",
+      "Answer 1 explains everything",
+      mock as any,
+    );
+    expect(stack.turnCount).toBe(0);
 
-    expect(stack.turnCount).toBe(3);
-    expect(mock.complete).toHaveBeenCalledTimes(3);
+    await stack.push("Question 2 is about memory", "Answer 2 clarifies it", mock as any);
+    expect(stack.turnCount).toBe(1);
+    expect(mock.complete).toHaveBeenCalledTimes(1);
+  });
+
+  it("manual flush() triggers compression", async () => {
+    const mock = createMockChatModel(["Forced summary."]);
+    const stack = new ConversationStack(30, 10); // large batch
+
+    await stack.push(
+      "Question 1 is about architecture",
+      "Answer 1 explains everything",
+      mock as any,
+    );
+    expect(stack.turnCount).toBe(0);
+
+    await stack.flush(mock as any);
+    expect(stack.turnCount).toBe(1);
+    expect(stack.getSummary()).toContain("Forced summary.");
+  });
+
+  it("accumulates multiple batches into a stack", async () => {
+    const mock = createMockChatModel(["Summary 1", "Summary 2"]);
+    const stack = new ConversationStack(30, 2);
+
+    await stack.push("Question 1 details here", "Answer 1 details here", mock as any);
+    await stack.push("Question 2 details here", "Answer 2 details here", mock as any); // Batch 1 flush
+    await stack.push("Question 3 details here", "Answer 3 details here", mock as any);
+    await stack.push("Question 4 details here", "Answer 4 details here", mock as any); // Batch 2 flush
+
+    expect(stack.turnCount).toBe(2);
+    expect(mock.complete).toHaveBeenCalledTimes(2);
 
     const summary = stack.getSummary();
-    expect(summary).toContain("Turn 1");
-    expect(summary).toContain("Turn 2");
-    expect(summary).toContain("Turn 3");
+    expect(summary).toContain("1. Summary 1");
+    expect(summary).toContain("2. Summary 2");
   });
 
   it("limits stack size to maxTurns", async () => {
     const mock = createMockChatModel();
-    const stack = new ConversationStack(3); // max 3 turns
+    const stack = new ConversationStack(3, 1); // max 3 turns, batch size 1
 
     for (let i = 0; i < 5; i++) {
       await stack.push(`Question ${i}`, `Answer ${i}`, mock as any);
@@ -94,8 +122,7 @@ describe("ConversationStack", () => {
         throw new Error("API rate limit");
       }),
     };
-    const stack = new ConversationStack();
-
+    const stack = new ConversationStack(30, 1); // batch size 1 for immediate compression
     // Should not throw — use messages longer than 10 chars to pass trivial filter
     await stack.push(
       "Tell me about the memory system architecture",
@@ -125,7 +152,7 @@ describe("ConversationStack", () => {
       "User shared their name is Vova and they build AI bots.",
       "User explained they work at night and prefer dark themes.",
     ]);
-    const stack = new ConversationStack();
+    const stack = new ConversationStack(30, 1); // batch size 1 for immediate compression
 
     await stack.push(
       "Мене звати Вова, я будую АІ ботів",
@@ -142,7 +169,7 @@ describe("ConversationStack", () => {
 
   it("reset() clears all turns", async () => {
     const mock = createMockChatModel(["Some summary."]);
-    const stack = new ConversationStack();
+    const stack = new ConversationStack(30, 1); // batch size 1 for immediate compression
 
     await stack.push(
       "Tell me about architecture patterns",

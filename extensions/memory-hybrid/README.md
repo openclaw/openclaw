@@ -30,24 +30,25 @@ Standard RAG (Retrieval-Augmented Generation) systems use simple vector similari
 
 ## Features
 
-| Feature                          | memory-lancedb | **BrainClaw**      |
-| -------------------------------- | -------------- | ------------------ |
-| Vector search (LanceDB)          | ✅             | ✅                 |
-| Google Gemini (free!)            | ❌             | ✅                 |
-| OpenAI support                   | ✅             | ✅                 |
-| Knowledge Graph                  | ❌             | ✅                 |
-| AMHR (Associative Retrieval)     | ❌             | ✅                 |
-| Smart Capture (LLM)              | ❌             | ✅                 |
-| Hybrid Scoring (7-channel)       | ❌             | ✅                 |
-| Conversation Stack (Compression) | ❌             | ✅                 |
-| Memory Reflection / User Profile | ❌             | ✅                 |
-| Memory Consolidation             | ❌             | ✅                 |
-| Contradiction Resolution         | ❌             | ✅ (PHOENIX Logic) |
-| JSON-Mode API Optimization       | ❌             | ✅ (Gemma 3 Fix)   |
-| Working Memory Buffer            | ❌             | ✅                 |
-| JSONL Observability Tracer       | ❌             | ✅                 |
-| Prompt injection protection      | ✅             | ✅                 |
-| GDPR-compliant forget            | ✅             | ✅                 |
+| Feature                          | memory-lancedb | **BrainClaw**        |
+| -------------------------------- | -------------- | -------------------- |
+| Vector search (LanceDB)          | ✅             | ✅                   |
+| Google Gemini (free!)            | ❌             | ✅                   |
+| OpenAI support                   | ✅             | ✅                   |
+| Knowledge Graph                  | ❌             | ✅                   |
+| AMHR (Associative Retrieval)     | ❌             | ✅                   |
+| Smart Capture (LLM)              | ❌             | ✅                   |
+| Hybrid Scoring (7-channel)       | ❌             | ✅                   |
+| Conversation Stack (Compression) | ❌             | ✅                   |
+| Memory Reflection / User Profile | ❌             | ✅                   |
+| Memory Consolidation             | ❌             | ✅                   |
+| Contradiction Resolution         | ❌             | ✅ (PHOENIX Logic)   |
+| JSON-Mode API Optimization       | ❌             | ✅ (Gemma 3 Fix)     |
+| Working Memory Buffer            | ❌             | ✅                   |
+| JSONL Observability Tracer       | ❌             | ✅ (Deep Monitoring) |
+| Prompt injection protection      | ✅             | ✅                   |
+| GDPR-compliant forget            | ✅             | ✅                   |
+| **Batch Summarization**          | ❌             | ✅ (RPM Optimizer)   |
 
 ### 🧠 7-Channel Hybrid Recall Scoring
 
@@ -197,7 +198,44 @@ openclaw ltm graph          # Show knowledge graph stats
 openclaw ltm stats          # Show overall statistics
 openclaw ltm consolidate    # Merge similar memories
 openclaw ltm reflect        # Generate user profile
+
+# NEW: Real-time Observability Dashboard
+bun extensions/memory-hybrid/scripts/monitor.ts
 ```
+
+## 🛠️ Observability & Monitoring
+
+BrainClaw provides deep, non-blocking observability into every thought and recall.
+
+### 1. The Trace Log
+
+All critical events (Store, Recall, Summarize, Graph) are logged to:
+`~/.openclaw/memory/traces/thoughts.jsonl`
+
+### 2. The Real-time Monitor
+
+Run the dedicated dashboard to see the bot's "inner thoughts" as they happen:
+
+```bash
+bun extensions/memory-hybrid/scripts/monitor.ts
+```
+
+It provides:
+
+- **Recall Visualization**: Exact scores for all candidates.
+- **Batch Summarization Logs**: Highlights context compression events.
+- **Memory Storage**: Real-time feedback on importance and category extraction.
+
+## ⚙️ Advanced Features
+
+### 🧊 Dream Service (Background Maintenance)
+
+The `DreamService` runs periodic maintenance (Cleanup, Emotional Profiling, Proactive Questions).
+**SOTA Protection:** Includes atomic guards to prevent multiple instances from running even during plugin restarts, preserving your API quota.
+
+### ⛓️ Candidate Pool Preservation
+
+Unlike standard RAG, BrainClaw preserves a pool of **50-70 candidates** through the entire 7-channel re-ranking process. This prevents "late-stage" signals like recency or importance from being drowned out by early vector similarity truncation.
 
 ## Architecture
 

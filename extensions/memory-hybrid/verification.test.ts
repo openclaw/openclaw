@@ -54,7 +54,7 @@ describe("Verification of Critical Fixes", () => {
   });
 
   it("should retry on 429 errors in Embeddings (Fix #4)", async () => {
-    const embeddings = new Embeddings("fake-key", "gemini-embedding-001", "google");
+    const embeddings = new Embeddings("fake-key", "gemini-embedding-001", undefined);
 
     let callCount = 0;
     // Mock the global fetch
@@ -76,7 +76,7 @@ describe("Verification of Critical Fixes", () => {
 
   it("LRU cache should evict least-recently-USED, not oldest-inserted (Bug #1)", async () => {
     // Create embeddings with a tiny cache (maxCacheSize = 3, via private field override)
-    const embeddings = new Embeddings("fake-key", "gemini-embedding-001", "google");
+    const embeddings = new Embeddings("fake-key", "gemini-embedding-001", undefined);
     (embeddings as any).maxCacheSize = 3;
 
     let callCount = 0;
@@ -115,7 +115,7 @@ describe("Verification of Critical Fixes", () => {
   });
 
   it("should cache redundant embedding calls (Myelination)", async () => {
-    const embeddings = new Embeddings("fake-key", "gemini-embedding-001", "google");
+    const embeddings = new Embeddings("fake-key", "gemini-embedding-001", undefined);
 
     let callCount = 0;
     global.fetch = vi.fn().mockImplementation(async () => {

@@ -19,14 +19,13 @@
  * @module stack
  */
 
-import type { ChatModel } from "./chat.js";
-
-/** Minimum message length to be worth compressing (skip "ok", "👍", etc.) */
-const MIN_MESSAGE_LENGTH = 10;
+import { MIN_MESSAGE_LENGTH } from "./capture.js";
+import { type ChatModel } from "./chat.js";
+import { tracer } from "./tracer.js";
 
 /** A single compressed conversation turn */
 export interface CompressedTurn {
-  /** The compressed summary of this turn (~30 words) */
+  /** The compressed summary of this turn or batch (~30-60 words) */
   summary: string;
   /** Timestamp when this turn was compressed */
   timestamp: number;
@@ -36,34 +35,37 @@ export interface CompressedTurn {
  * ConversationStack accumulates compressed summaries of each conversation turn.
  *
  * Usage:
- *   const stack = new ConversationStack(30);
+ *   const stack = new ConversationStack(30, 3);
  *   await stack.push(userMsg, assistantMsg, chatModel);
- *   const context = stack.getContextBlock(); // → "<conversation-summary>...</conversation-summary>"
+ *   const context = stack.getContextBlock();
  */
 export class ConversationStack {
   private turns: CompressedTurn[] = [];
+  private pendingTurns: { user: string; assistant: string }[] = [];
 
   /**
    * @param maxTurns - Maximum number of compressed turns to keep (FIFO eviction).
-   *                   Default 30 turns × ~30 words = ~900 words max.
+   * @param batchSize - Number of turns to buffer before calling LLM for compression.
+   *                    Higher = fewer API calls (RPM optimization).
    */
-  constructor(private readonly maxTurns: number = 30) {}
+  constructor(
+    private readonly maxTurns: number = 30,
+    private readonly batchSize: number = 3,
+  ) {}
 
   /** Number of compressed turns currently in the stack */
   get turnCount(): number {
     return this.turns.length;
   }
 
-  /** Whether the stack has zero turns */
+  /** Whether the stack has zero turns (compressed or pending) */
   get isEmpty(): boolean {
-    return this.turns.length === 0;
+    return this.turns.length === 0 && this.pendingTurns.length === 0;
   }
 
   /**
-   * Compress a conversation turn (User + Assistant) and push it onto the stack.
-   *
-   * Skips trivial messages (< 10 chars) to save API quota.
-   * If LLM compression fails, falls back to truncated original text.
+   * Add a conversation turn (User + Assistant).
+   * Buffers the turn and only compresses when batchSize is reached.
    *
    * @param userMessage - The user's message
    * @param assistantMessage - The assistant's response
@@ -75,54 +77,90 @@ export class ConversationStack {
       return;
     }
 
-    let summary: string;
-
-    try {
-      const prompt = `Compress this conversation turn into ONE concise sentence (max 40 words). Preserve key facts, decisions, names, and emotions. Drop greetings and filler.
-
-USER: "${userMessage.slice(0, 2000)}"
-ASSISTANT: "${assistantMessage.slice(0, 1000)}"
-
-Return ONLY the compressed sentence, nothing else.`;
-
-      summary = await chatModel.complete([{ role: "user", content: prompt }], false);
-      summary = summary.trim().slice(0, 200); // Safety cap
-    } catch {
-      // Fallback: truncate original text if LLM fails
-      summary = `[U] ${userMessage.slice(0, 60)}... [A] ${assistantMessage.slice(0, 60)}...`;
-    }
-
-    this.turns.push({
-      summary,
-      timestamp: Date.now(),
+    this.pendingTurns.push({
+      user: userMessage.slice(0, 2000),
+      assistant: assistantMessage.slice(0, 1000),
     });
 
-    // FIFO eviction: remove oldest turns if we exceed maxTurns
-    while (this.turns.length > this.maxTurns) {
-      this.turns.shift();
+    if (this.pendingTurns.length >= this.batchSize) {
+      await this.flush(chatModel);
+    }
+  }
+
+  /**
+   * Compress all pending turns into a single summary block.
+   * This drastically reduces API RPM by consolidating multiple turns.
+   */
+  async flush(chatModel: ChatModel): Promise<void> {
+    if (this.pendingTurns.length === 0) return;
+
+    try {
+      const turnsText = this.pendingTurns
+        .map((t, i) => `TURN ${i + 1}:\nUSER: "${t.user}"\nASSISTANT: "${t.assistant}"`)
+        .join("\n\n");
+
+      const prompt = `Compress these ${this.pendingTurns.length} conversation turns into a few concise sentences (max 60 words total). 
+Preserve key facts, decisions, names, and emotional state. Drop greetings and filler.
+
+CONVERSATION:
+${turnsText}
+
+Return ONLY the compressed summary, nothing else.`;
+
+      let summary = await chatModel.complete([{ role: "user", content: prompt }], false);
+      summary = summary.trim().slice(0, 400); // Safety cap
+
+      tracer.traceSummary(this.pendingTurns.length, summary);
+
+      this.turns.push({
+        summary,
+        timestamp: Date.now(),
+      });
+
+      // FIFO eviction
+      while (this.turns.length > this.maxTurns) {
+        this.turns.shift();
+      }
+    } catch {
+      // Fallback: simple truncation of the last turn in batch
+      const last = this.pendingTurns[this.pendingTurns.length - 1];
+      const summary = `[U] ${last.user.slice(0, 60)}... [A] ${last.assistant.slice(0, 60)}...`;
+      this.turns.push({ summary, timestamp: Date.now() });
+    } finally {
+      this.pendingTurns = [];
     }
   }
 
   /**
    * Get all compressed summaries joined as a single string.
-   * Returns empty string if no turns are stored.
+   * Also includes pending (uncompressed) turns for full context.
    */
   getSummary(): string {
-    if (this.turns.length === 0) return "";
-    return this.turns.map((t, i) => `${i + 1}. ${t.summary}`).join("\n");
+    const compressed = this.turns.map((t, i) => `${i + 1}. ${t.summary}`).join("\n");
+
+    if (this.pendingTurns.length === 0) return compressed;
+
+    const pending = this.pendingTurns
+      .map((t, i) => `(Pending ${i + 1}) USER: ${t.user.slice(0, 100)}...`)
+      .join("\n");
+
+    return compressed ? `${compressed}\n\nRecent (uncompressed):\n${pending}` : pending;
   }
 
   /**
    * Get the stack formatted as a context block for injection into prompts.
-   * Wrapped in `<conversation-summary>` tags so the LLM knows it's metadata.
    */
   getContextBlock(): string {
-    if (this.turns.length === 0) return "";
-    return `<conversation-summary>\nCompressed history of the current conversation (${this.turns.length} turns):\n${this.getSummary()}\n</conversation-summary>`;
+    if (this.isEmpty) return "";
+
+    let text = "Compressed history of the current conversation:\n" + this.getSummary();
+
+    return `<conversation-summary>\n${text}\n</conversation-summary>`;
   }
 
-  /** Clear all turns (e.g., on session reset) */
+  /** Clear all turns and pending buffer */
   reset(): void {
     this.turns = [];
+    this.pendingTurns = [];
   }
 }

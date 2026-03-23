@@ -105,8 +105,8 @@ describe("LLM Smart Capture", () => {
 });
 
 describe("Context Formatters", () => {
-  test("formatRadarContext truncates to 50 items and uses summaries", () => {
-    const memories = Array.from({ length: 60 }).map((_, i) => ({
+  test("formatRadarContext truncates to 100 items and uses summaries", () => {
+    const memories = Array.from({ length: 110 }).map((_, i) => ({
       id: `id-${i}`,
       category: "fact" as any,
       text: "Long long fact text",
@@ -116,8 +116,8 @@ describe("Context Formatters", () => {
     const formatted = formatRadarContext(memories);
 
     expect(formatted).toContain("Summary 0");
-    expect(formatted).toContain("Summary 49");
-    expect(formatted).not.toContain("Summary 50"); // Enforces Top 50 truncation
+    expect(formatted).toContain("Summary 99");
+    expect(formatted).not.toContain("Summary 100"); // Enforces Top 100 truncation
   });
 
   test("formatRelevantMemoriesContext escapes malicious HTML brackets", () => {

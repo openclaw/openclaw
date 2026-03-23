@@ -332,14 +332,20 @@ describe("MemoryDB Error Handling", () => {
       const mockRow = { id, recallCount: 10, text: "test", vector: [] };
 
       (db as any).ensureInitialized = vi.fn().mockResolvedValue(undefined);
-      (db as any).table = { delete: vi.fn().mockResolvedValue(undefined) };
+      (db as any).table = {
+        delete: vi.fn().mockResolvedValue(undefined),
+        query: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnThis(),
+          toArray: vi.fn().mockResolvedValue([mockRow]),
+        }),
+      };
       (db as any).safeAdd = vi.fn().mockResolvedValue(undefined);
 
       db.incrementRecallCount([id]);
 
-      vi.spyOn(db, "getById").mockImplementation(async () => {
+      vi.spyOn(db, "getByIds").mockImplementation(async () => {
         db.incrementRecallCount([id]);
-        return mockRow as any;
+        return [mockRow] as any;
       });
 
       await db.flushRecallCounts();
@@ -353,9 +359,10 @@ describe("MemoryDB Error Handling", () => {
 
       (db as any).ensureInitialized = vi.fn().mockResolvedValue(undefined);
       const state = { deleted: false };
-      vi.spyOn(db, "getById").mockImplementation(async () => {
+
+      vi.spyOn(db, "getByIds").mockImplementation(async () => {
         await new Promise((r) => setTimeout(r, 20));
-        return state.deleted ? null : (mockRow as any);
+        return state.deleted ? [] : ([mockRow] as any);
       });
 
       (db as any).table = {
@@ -369,7 +376,7 @@ describe("MemoryDB Error Handling", () => {
       const flushPromise = db.flushRecallCounts();
 
       await new Promise((r) => setTimeout(r, 5));
-      await db.delete(id);
+      await (db as any).delete(id); // Use internal delete to trigger state change
       await flushPromise;
 
       expect((db as any).safeAdd).not.toHaveBeenCalled();

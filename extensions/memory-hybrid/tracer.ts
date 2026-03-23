@@ -42,7 +42,7 @@ export class MemoryTracer {
       details,
     };
 
-    // Fire and forget, but queue writes to avoid race conditions on the file descriptor
+    // Fire and forget, but queue writes to avoid race conditions
     this.writeQueue = this.writeQueue.then(async () => {
       try {
         await this.ensureDir();
@@ -53,8 +53,56 @@ export class MemoryTracer {
     });
   }
 
+  /* --- Typed Helpers for Deep Monitoring --- */
+
+  public traceRecall(
+    query: string,
+    results: Array<{ id: string; text: string; score: number }>,
+  ): void {
+    this.trace(
+      "memory_recall",
+      {
+        query: query.slice(0, 500),
+        resultCount: results.length,
+        topResults: results
+          .slice(0, 3)
+          .map((r) => ({ id: r.id, text: r.text.slice(0, 100), score: r.score })),
+      },
+      `Recalled ${results.length} memories for prompt context.`,
+    );
+  }
+
+  public traceStore(text: string, category: string, id: string): void {
+    this.trace(
+      "memory_store",
+      { id, category, text: text.slice(0, 500) },
+      `Stored new ${category} memory.`,
+    );
+  }
+
+  public traceSummary(batchSize: number, summary: string): void {
+    this.trace(
+      "conversation_summary",
+      { batchSize, summary: summary.slice(0, 500) },
+      `Compressed ${batchSize} turns into a rolling summary.`,
+    );
+  }
+
+  public traceGraph(nodes: number, edges: number): void {
+    this.trace(
+      "graph_update",
+      { nodes, edges },
+      `Updated knowledge graph with new entities/relationships.`,
+    );
+  }
+
+  public traceError(action: string, error: unknown): void {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    this.trace(action, { error: errorMsg }, `Error occurred during ${action}.`);
+  }
+
   /**
-   * Primarily for testing and clean teardowns to ensure all writes complete.
+   * Primarily for testing and clean teardowns.
    */
   public async flush(): Promise<void> {
     return this.writeQueue;

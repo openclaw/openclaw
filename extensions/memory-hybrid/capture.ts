@@ -15,7 +15,10 @@
 import type { ChatModel } from "./chat.js";
 import type { MemoryCategory } from "./config.js";
 
-export { DEFAULT_CAPTURE_MAX_CHARS } from "./config.js";
+export const DEFAULT_CAPTURE_MAX_CHARS = 1000;
+/** Minimum message length to be worth remembering or summarizing */
+export const MIN_MESSAGE_LENGTH = 10;
+
 import { tracer } from "./tracer.js";
 
 // ============================================================================
@@ -343,7 +346,7 @@ Return ONLY the summary text, nothing else.`;
 export function formatRadarContext(
   memories: Array<{ id: string; category: MemoryCategory; summary?: string | null; text: string }>,
 ): string {
-  const lines = memories.slice(0, 50).map((entry) => {
+  const lines = memories.slice(0, 100).map((entry) => {
     const content = entry.summary
       ? entry.summary
       : entry.text.length > 80

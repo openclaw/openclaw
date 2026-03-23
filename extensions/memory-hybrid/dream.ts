@@ -1,6 +1,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import type { ChatModel } from "./chat.js";
-import { clusterBySimilarity, mergeFacts } from "./consolidate.js";
+import { clusterBySimilarity, mergeFacts, mergeFactsBatch } from "./consolidate.js";
 import type { Embeddings } from "./embeddings.js";
 import type { GraphDB } from "./graph.js";
 import type { MemoryDB } from "./index.js";
@@ -29,6 +29,10 @@ export class DreamService {
   }
 
   public start(): void {
+    if (this.timer) {
+      this.api.logger.info("memory-hybrid: Dream Service is already running. Skipping start.");
+      return;
+    }
     this.api.logger.info("memory-hybrid: Dream Service initialized.");
     this.timer = setInterval(() => void this.tick(), LOOP_INTERVAL_MS);
   }
@@ -142,16 +146,17 @@ export class DreamService {
 
     // 2. High-threshold clustering (0.92+ for safety)
     const clusters = clusterBySimilarity(all, 0.92);
-    let mergedCount = 0;
+    const validClusters: Array<Array<{ id: string; text: string; category: any }>> = [];
 
     for (const cluster of clusters) {
       if (cluster.length < 2) continue;
 
-      // SAFETY: Check if they are in the same category to prevent "hallucinated joins"
-      const categories = new Set(cluster.map((c) => all.find((a) => a.id === c.id)?.category));
-      if (categories.size > 1) continue;
+      // SAFETY: Check if they are in the same category
+      const cats = cluster.map((c) => all.find((a) => a.id === c.id)?.category);
+      const uniqueCats = new Set(cats);
+      if (uniqueCats.size > 1) continue;
 
-      // SAFETY: Entity Check via Graph (Hallucination Guard)
+      // Entity Check (Hallucination Guard)
       const entitySets = cluster.map((item) => {
         const found = this.graph.findEdgesForTexts([item.text]);
         return new Set(found.flatMap((e) => [e.source, e.target]));
@@ -167,48 +172,44 @@ export class DreamService {
             if (setB.has(item)) hasOverlap = true;
           }
         }
-        // Refuse to merge if distinct isolated facts (e.g. "Ivan's pizza" vs "Vova's pizza")
         if (!hasOverlap) continue;
       }
 
-      const texts = cluster.map((c) => c.text);
-      const merged = await mergeFacts(texts, this.chat);
+      validClusters.push(cluster.map((c) => ({ ...c, category: cats[0] })));
+    }
 
-      if (merged) {
-        // Verification: ask model if this merge is safe (The "Double Check" pulse)
-        const checkPrompt = `Does this statement accurately capture ALL information from these points without adding new facts?
-Fact 1: ${texts[0]}
-Fact 2: ${texts[1]}
-Merged: ${merged}
-Reply ONLY with "YES" or "NO".`;
+    if (validClusters.length === 0) return;
 
-        const check = await this.chat.complete([{ role: "user", content: checkPrompt }], false);
-        if (!check.toUpperCase().includes("YES")) {
-          this.api.logger.warn(
-            `memory-hybrid: Consolidation rejected by self-check for: ${merged}`,
-          );
-          continue;
-        }
+    // 3. Batch Merge! (High TPM / Low RPM)
+    const clusterTexts = validClusters.map((c) => c.map((item) => item.text));
+    const mergedResults = await mergeFactsBatch(clusterTexts, this.chat);
 
-        // Store new, delete old
-        const vector = await this.embeddings.embed(merged);
-        await this.db.store({
-          text: merged,
-          importance: 0.8,
-          category: (all.find((a) => a.id === cluster[0].id)?.category as any) ?? "fact",
-          vector,
-          happenedAt: null,
-          validUntil: null,
-          summary: "Consolidated Memory",
-          emotionalTone: "neutral",
-          emotionScore: 0,
-        });
+    let mergedCount = 0;
+    for (let i = 0; i < validClusters.length; i++) {
+      const merged = mergedResults[i];
+      if (!merged) continue;
 
-        for (const item of cluster) {
-          await this.db.delete(item.id);
-        }
-        mergedCount++;
+      const cluster = validClusters[i];
+      const category = cluster[0].category;
+
+      // Store new, delete old
+      const vector = await this.embeddings.embed(merged);
+      await this.db.store({
+        text: merged,
+        importance: 0.8,
+        category: category ?? "fact",
+        vector,
+        happenedAt: null,
+        validUntil: null,
+        summary: "Consolidated Memory",
+        emotionalTone: "neutral",
+        emotionScore: 0,
+      });
+
+      for (const item of cluster) {
+        await this.db.delete(item.id);
       }
+      mergedCount++;
     }
 
     if (mergedCount > 0) {

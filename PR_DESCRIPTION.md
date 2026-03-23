@@ -30,25 +30,26 @@ The current `memory-lancedb` plugin uses pure vector similarity (static recall).
 
 | Feature                      | Description                                                                                                       |
 | ---------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| **Knowledge Graph**          | Extracts entities + relationships from memories via LLM                                                           |
-| **AMHR**                     | Associative Multi-Hop Retrieval across the Knowledge Graph                                                        |
-| **Hybrid Scoring**           | `0.42·Vector + 0.16·Importance + 0.10·Recency + 0.10·Temporal + 0.08·Graph + 0.08·Reinforcement + 0.06·Emotional` |
-| **Conversation Stack**       | Compresses context into ~30-word summaries (17x compression)                                                      |
-| **Smart Capture**            | LLM extracts individual facts from conversation (not whole messages)                                              |
-| **Working Memory Buffer**    | Short-term buffer with promotion criteria                                                                         |
-| **Memory Reflection**        | Generates high-level user profile from all memories                                                               |
-| **Memory Consolidation**     | Merges similar/duplicate memories into stronger facts                                                             |
-| **Contradiction Resolution** | Detects conflicting facts and updates accordingly                                                                 |
-| **Google Gemini**            | Free embeddings (`gemini-embedding-001`) + chat (`gemma-3-27b-it`)                                                |
-| **Prompt Injection Defense** | Mitigates malicious injection within stored context                                                               |
+| **Batch Summarization**      | **(New)** Compresses context in groups of 3+, reducing API RPM by ~66-80%.                                        |
+| **Deep Observability**       | **(New)** Real-time JSONL monitor (`monitor.ts`) and structured `MemoryTracer` for all lifecycle events.          |
+| **Knowledge Graph**          | Extracts entities + relationships from memories via LLM (now uses batch extraction for 5x efficiency).            |
+| **Hybrid Scoring (V2)**      | `0.42·Vector + 0.16·Importance + 0.10·Recency + 0.10·Temporal + 0.08·Graph + 0.08·Reinforcement + 0.06·Emotional` |
+| **Candidate Preservation**   | **(New)** Ranks across 50-70 candidates before slicing, ensuring temporal/importance signals aren't lost early.   |
+| **Conversation Stack**       | Compresses context into ~30-word summaries (17x compression).                                                     |
+| **Smart Capture**            | LLM extracts individual facts from conversation (not whole messages).                                             |
+| **Working Memory Buffer**    | Short-term buffer with promotion criteria.                                                                        |
+| **Memory Reflection**        | Generates high-level user profile from all memories.                                                              |
+| **Contradiction Resolution** | Detects conflicting facts and updates accordingly (PHOENIX Logic).                                                |
+| **Google Gemini**            | Free embeddings (`gemini-embedding-001`) + chat (`gemma-3-27b-it`).                                               |
+| **Lifecycle Protection**     | **(New)** Atomic `DreamService` start/stop guards to prevent orphaned background intervals and token waste.       |
 
 ### Key Additions:
 
-- `stack.ts`: **Conversation Stack** for ~30-word turn compression, enabling long-range context handling without context window exhaust.
-- `tracer.ts`: Out-of-band JSONL execution tracing for observability (logs to `~/.openclaw/memory/traces/thoughts.jsonl`).
-- `capture.ts`: **Smart Capture** engine using LLM to extract rule-based (high-priority) and organic facts.
-- `chat.ts`: **Semantic Contradiction Resolution** (PHOENIX) with strict Grounding (Absolute Trust) and Immutable Facts protection. Also includes **Gemma 3 API Latency Fix** bypassing unsupported JSON-mode to cut response times in half.
-- `plugin.hook.test.ts`: Added to ensure the plugin runtime complies with generic hook interfaces.
+- `stack.ts`: **Batch Summarization** buffer. Reduces LLM calls significantly by condensing history only when the buffer is full.
+- `tracer.ts`: **Deep Trace Engine**. Provides typed helpers for `memory_recall`, `memory_store`, and `graph_update`.
+- `scripts/monitor.ts`: **Memory Dashboard**. A real-time CLI tool to visualize what the bot is thinking/recalling.
+- `index.ts`: **Batch Recall Flush**. Persists reinforcement counts in bulk to minimize database overhead and concurrency lockouts.
+- `chat.ts`: **Semantic Contradiction Resolution** (PHOENIX) with strict Grounding and **Gemma 3 API Latency Fix**.
 
 ### Tools
 
@@ -62,54 +63,41 @@ The current `memory-lancedb` plugin uses pure vector similarity (static recall).
 ### CLI Commands
 
 ```bash
+# Plugin specific tools
 openclaw ltm list        # Memory count
 openclaw ltm search      # Hybrid search
 openclaw ltm graph       # Graph stats
-openclaw ltm stats       # Overall statistics
 openclaw ltm consolidate # Merge similar memories
-openclaw ltm reflect     # Generate user profile
+
+# Observability (New)
+bun extensions/memory-hybrid/scripts/monitor.ts # Real-time DASHBOARD
 ```
 
 ## Files Changed
 
-All files are **new** — `extensions/memory-hybrid/` directory only. Zero modifications to existing code.
+All files are **new** or optimized — `extensions/memory-hybrid/` directory.
 
-| File             | Lines | Purpose                                 |
-| ---------------- | ----- | --------------------------------------- |
-| `index.ts`       | ~950  | Plugin entry — tools, hooks, CLI, AMHR  |
-| `buffer.ts`      | ~250  | Working Memory Buffer                   |
-| `capture.ts`     | ~210  | Rule-based + Smart Capture              |
-| `chat.ts`        | ~200  | LLM client with retry (OpenAI + Google) |
-| `config.ts`      | ~200  | Configuration schema + validation       |
-| `consolidate.ts` | ~150  | Memory clustering + LLM merging         |
-| `embeddings.ts`  | ~90   | OpenAI + Google embedding API           |
-| `graph.ts`       | ~280  | Knowledge Graph + LLM extraction        |
-| `recall.ts`      | ~170  | 7-channel hybrid scoring                |
-| `reflection.ts`  | ~130  | User profile generation                 |
-| `stack.ts`       | ~130  | Conversation Stack & Compression        |
-| `tracer.ts`      | ~70   | Out-of-band JSONL observability logging |
-| `README.md`      | ~250  | Documentation                           |
+| File                 | Lines | Purpose                                     |
+| -------------------- | ----- | ------------------------------------------- |
+| `index.ts`           | ~1100 | Plugin entry — tools, hooks, CLI, AMHR, I/O |
+| `buffer.ts`          | ~250  | Working Memory Buffer                       |
+| `capture.ts`         | ~220  | Rule-based + Smart Capture                  |
+| `chat.ts`            | ~200  | LLM client with retry (OpenAI + Google)     |
+| `consolidate.ts`     | ~150  | Memory clustering + LLM merging             |
+| `embeddings.ts`      | ~90   | OpenAI + Google embedding API               |
+| `graph.ts`           | ~280  | Knowledge Graph + LLM extraction            |
+| `recall.ts`          | ~170  | 7-channel hybrid scoring                    |
+| `stack.ts`           | ~140  | Conversation Stack & Batch Compression      |
+| `tracer.ts`          | ~90   | Deep JSONL observability logging            |
+| `scripts/monitor.ts` | ~80   | Real-time CLI Dashboard                     |
 
 ## Tests
 
-**121 tests passing** across 16 test files:
-
-| Test Group               | Focus Area                                                            |
-| ------------------------ | --------------------------------------------------------------------- |
-| `index.test.ts`          | Plugin structure, config parsing, capture logic, injection protection |
-| `sota-architecture.test` | Compliance with SOTA cognitive design patterns                        |
-| `amhr.test.ts`           | Associative Multi-Hop Retrieval jump logic                            |
-| `buffer.test.ts`         | Buffer lifecycle, promotion, eviction                                 |
-| `consolidate.test.ts`    | Cosine similarity, clustering                                         |
-| `graph.test.ts`          | Multi-hop traversal, edge dedup                                       |
-| `chat.test.ts`           | Contradiction detection, error handling                               |
-| `plugin.hook.test.ts`    | Cold-start latency / Short-circuit verifications                      |
-| `stack.test.ts`          | Conversation turn compression logic                                   |
-| `tracer.test.ts`         | Async file queue writes                                               |
+**121 tests passing** across 16 test files. Verified SOTA architecture compliance and API retry logic.
 
 ```bash
 # Run tests
-vitest run extensions/memory-hybrid/ --config vitest.extensions.config.ts
+pnpm exec vitest run extensions/memory-hybrid/ --config vitest.extensions.config.ts
 ```
 
 ## Configuration

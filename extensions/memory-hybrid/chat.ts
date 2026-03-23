@@ -130,6 +130,12 @@ export class ChatModel {
           return doRequest(false);
         }
 
+        if (response.status === 429 || errorBody.includes("Quota exceeded")) {
+          console.error(
+            "\n\n🚨 [MEMORY-HYBRID] ФОРС-МАЖОР: ЛІМІТ ГОЛОГРАФІЧНОЇ ПАМ'ЯТІ (API QUOTA EXCEEDED)! 🚨\n\n",
+          );
+        }
+
         throw new Error(`Google Chat API error (${response.status}): ${sanitizedError}`);
       }
 

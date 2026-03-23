@@ -29,7 +29,7 @@ import { MEMORY_CATEGORIES, type MemoryCategory, memoryConfigSchema } from "./co
 import { clusterBySimilarity, mergeFacts } from "./consolidate.js";
 import { DreamService } from "./dream.js";
 import { Embeddings, vectorDimsForModel } from "./embeddings.js";
-import { GraphDB, extractGraphFromText } from "./graph.js";
+import { GraphDB, extractGraphFromText, extractGraphFromBatch } from "./graph.js";
 import { hybridScore, getGraphEnrichment, type MemoryEntry } from "./recall.js";
 import { generateReflection } from "./reflection.js";
 import { ConversationStack } from "./stack.js";
@@ -336,7 +336,9 @@ export class MemoryDB {
       };
     });
 
-    return mapped.filter((r) => r.score >= minScore).slice(0, limit);
+    // Return all candidates to let hybridScore perform final re-ranking and slicing.
+    // This ensures temporal/importance boosts across all 50-70 candidates.
+    return mapped.filter((r) => r.score >= minScore);
   }
 
   /**
@@ -398,9 +400,8 @@ export class MemoryDB {
       }
     }
 
-    return [...initialResults, ...associativeResults]
-      .sort((a, b) => b.score - a.score)
-      .slice(0, limit);
+    // Return all combined results to let hybridScore perform final re-ranking and slicing.
+    return [...initialResults, ...associativeResults].sort((a, b) => b.score - a.score);
   }
 
   async getById(id: string): Promise<MemoryEntry | null> {
@@ -518,66 +519,75 @@ export class MemoryDB {
     if (this.recallCountDeltas.size === 0) return 0;
     await this.ensureInitialized();
 
-    let flushed = 0;
-    // Snapshot only the current keys to avoid clearing new increments that arrive during await
+    // Snapshot deltas and clear the map for successfully processed entries
     const entriesToFlush = Array.from(this.recallCountDeltas.entries());
+    const ids = entriesToFlush.map(([id]) => id);
 
-    for (const [id, flushedDelta] of entriesToFlush) {
-      if (flushedDelta <= 0) {
-        this.recallCountDeltas.delete(id);
-        continue;
+    try {
+      // 1. Bulk fetch existing rows
+      const existingRows = await this.getByIds(ids);
+      if (existingRows.length === 0) {
+        this.recallCountDeltas.clear();
+        return 0;
       }
-      try {
-        validateId(id);
-        // Fetch fresh row to ensure we don't resurrect a deleted one
-        const row = await this.getById(id);
-        if (!row) {
-          // It was deleted externally — clear the delta and skip
-          this.recallCountDeltas.delete(id);
-          continue;
-        }
+
+      const updatedRows: Record<string, unknown>[] = [];
+      const successfullyFlushedIds: string[] = [];
+
+      // 2. Prepare updated rows
+      for (const row of existingRows) {
+        const id = row.id;
+        const delta = this.recallCountDeltas.get(id) ?? 0;
+        if (delta <= 0) continue;
 
         const updatedRow = {
           ...row,
-          recallCount: (row.recallCount ?? 0) + flushedDelta,
+          recallCount: (row.recallCount ?? 0) + delta,
         };
 
-        // CRITICAL: We MUST re-verify it still exists before re-inserting
-        // because another delete could have happened while we were prepping updatedRow.
-        // LanceDB doesn't have native atomic 'update', so we use delete(id) as a guard.
-        await this.table!.delete(`id = '${id}'`);
+        // Strip LanceDB internal fields
+        delete (updatedRow as any)._distance;
+        delete (updatedRow as any)["vector.isValid"];
 
-        // If it was already deleted by someone else, delete(id) is a no-op.
-        // But we just fetched 'row', so we are likely the only ones doing this flush.
-
-        try {
-          await this.safeAdd([updatedRow as unknown as Record<string, unknown>]);
-
-          // Only subtract what we actually flushed.
-          // If new increments arrived, they stay in the map.
-          const currentDelta = this.recallCountDeltas.get(id) ?? 0;
-          const remaining = currentDelta - flushedDelta;
-          if (remaining <= 0) {
-            this.recallCountDeltas.delete(id);
-          } else {
-            this.recallCountDeltas.set(id, remaining);
-          }
-
-          flushed++;
-        } catch (addErr) {
-          // Rollback plan...
-          await this.safeAdd([row as unknown as Record<string, unknown>]);
-          throw addErr;
-        }
-      } catch (error) {
-        console.warn(
-          `[memory-hybrid] flushRecallCounts failed for ${id}:`,
-          error instanceof Error ? error.message : String(error),
-        );
+        updatedRows.push(updatedRow as unknown as Record<string, unknown>);
+        successfullyFlushedIds.push(id);
       }
-    }
 
-    return flushed;
+      if (updatedRows.length === 0) return 0;
+
+      // 3. Batch Delete & Re-add (Atomic-ish)
+      const idList = successfullyFlushedIds.map((id) => `'${id}'`).join(", ");
+      await this.table!.delete(`id IN (${idList})`);
+      await this.safeAdd(updatedRows);
+
+      // 4. Update the deltas map (only subtract what we actually flushed)
+      for (const [id, countAtStart] of entriesToFlush) {
+        if (!successfullyFlushedIds.includes(id)) continue;
+
+        const currentDelta = this.recallCountDeltas.get(id) ?? 0;
+        const remaining = currentDelta - countAtStart;
+        if (remaining <= 0) {
+          this.recallCountDeltas.delete(id);
+        } else {
+          this.recallCountDeltas.set(id, remaining);
+        }
+      }
+
+      tracer.trace(
+        "flush_recall_counts",
+        { count: updatedRows.length },
+        `Persisted recall counts for ${updatedRows.length} memories.`,
+      );
+
+      return updatedRows.length;
+    } catch (error) {
+      console.warn(
+        `[memory-hybrid] flushRecallCounts batch failed:`,
+        error instanceof Error ? error.message : String(error),
+      );
+      // Fallback: we keep the deltas in the map to try again later
+      return 0;
+    }
   }
 
   /** Number of pending recall count deltas */
@@ -685,9 +695,10 @@ const memoryPlugin = {
 
           // Apply hybrid scoring
           const scored = hybridScore(rawResults, graphDB);
+          const finalScored = scored.slice(0, limit);
 
           // Build response text
-          let text = scored
+          let text = finalScored
             .map(
               (r, i) =>
                 `${i + 1}. [${r.entry.category}] ${r.entry.text} (${(r.finalScore * 100).toFixed(0)}%)`,
@@ -695,13 +706,13 @@ const memoryPlugin = {
             .join("\n");
 
           // Add graph enrichment
-          const graphInfo = getGraphEnrichment(scored, graphDB);
+          const graphInfo = getGraphEnrichment(finalScored, graphDB);
           if (graphInfo) {
             text += graphInfo;
           }
 
           // Strip vectors for serialization
-          const sanitized = scored.map((r) => ({
+          const sanitized = finalScored.map((r) => ({
             id: r.entry.id,
             text: r.entry.text,
             category: r.entry.category,
@@ -709,14 +720,23 @@ const memoryPlugin = {
             score: r.finalScore,
           }));
 
+          tracer.traceRecall(
+            query,
+            finalScored.map((s) => ({
+              id: s.entry.id,
+              text: s.entry.text,
+              score: s.finalScore,
+            })),
+          );
+
           return {
             content: [
               {
                 type: "text",
-                text: `Found ${scored.length} memories:\n\n${text}`,
+                text: `Found ${finalScored.length} memories:\n\n${text}`,
               },
             ],
-            details: { count: scored.length, memories: sanitized },
+            details: { count: finalScored.length, memories: sanitized },
           };
         },
       },
@@ -832,6 +852,8 @@ const memoryPlugin = {
             emotionScore: 0,
           });
 
+          tracer.traceStore(text, category, entry.id);
+
           // Knowledge Graph extraction (async, non-blocking)
           extractGraphFromText(text, chatModel)
             .then(async (graph) => {
@@ -841,6 +863,7 @@ const memoryPlugin = {
                     for (const node of graph.nodes) graphDB.addNode(node);
                     for (const edge of graph.edges) graphDB.addEdge(edge);
                   });
+                  tracer.traceGraph(graph.nodes.length, graph.edges.length);
                   api.logger.info(
                     `memory-hybrid: graph updated (+${graph.nodes.length} nodes, +${graph.edges.length} edges)`,
                   );
@@ -1365,21 +1388,27 @@ const memoryPlugin = {
           return;
 
         try {
+          // Dynamic Depth: Detect complex/sensitive topics to pull more memories
+          const isDeepTopic =
+            /trauma|childhood|fear|secret|life|history|травм|дитинств|страх|таємниц|життя|історія/i.test(
+              nPrompt,
+            );
+          const limit = isDeepTopic ? 30 : 5; // Expanded as requested (High TPM)
+
           // Single embed call for both recall injection AND reinforcement
           const vector = await embeddings.embed(event.prompt);
-          const rawResults = await db.searchWithAMHR(vector, 3, graphDB, 0.3);
+          const rawResults = await db.searchWithAMHR(vector, limit, graphDB, 0.3);
 
-          if (rawResults.length === 0) return;
-
-          // Apply hybrid scoring for better ranking
+          // Apply hybrid scoring
           const scored = hybridScore(rawResults, graphDB);
+          const finalScored = scored.slice(0, limit);
 
-          api.logger.info(`memory-hybrid: injecting ${scored.length} memories`);
+          api.logger.info(`memory-hybrid: injecting ${finalScored.length} memories`);
 
           // Stage 3: Use Radar (Star Map) instead of full text injection
           // This sends lightweight summaries + IDs instead of heavy full texts
           const radarContext = formatRadarContext(
-            scored.map((r) => ({
+            finalScored.map((r) => ({
               id: r.entry.id,
               category: r.entry.category as MemoryCategory,
               summary: r.entry.summary,
@@ -1388,7 +1417,7 @@ const memoryPlugin = {
           );
 
           // Add graph enrichment to context
-          const graphInfo = getGraphEnrichment(scored, graphDB);
+          const graphInfo = getGraphEnrichment(finalScored, graphDB);
           let context = radarContext;
           if (graphInfo) {
             context = context.replace("</star-map>", graphInfo + "\n</star-map>");
@@ -1398,6 +1427,15 @@ const memoryPlugin = {
           // Uses the SAME search results — no extra API call
           const ids = rawResults.map((r) => r.entry.id);
           db.incrementRecallCount(ids);
+
+          tracer.traceRecall(
+            event.prompt,
+            finalScored.map((s) => ({
+              id: s.entry.id,
+              text: s.entry.text,
+              score: s.finalScore,
+            })),
+          );
 
           return { prependContext: context };
         } catch (err) {
@@ -1411,7 +1449,17 @@ const memoryPlugin = {
     // ======================================================================
 
     if (cfg.autoCapture) {
-      api.on("agent_end", async (event) => {
+      api.on("agent_end", async (event, ctx) => {
+        // Skip memory capture for system/automated triggers to save quota (RPM)
+        if (
+          ctx?.trigger === "system" ||
+          ctx?.trigger === "heartbeat" ||
+          ctx?.trigger === "cron" ||
+          ctx?.trigger === "memory"
+        ) {
+          return;
+        }
+
         if (!event.success || !event.messages || event.messages.length === 0) {
           return;
         }
@@ -1484,16 +1532,19 @@ const memoryPlugin = {
               ? { shouldStore: false as const, facts: [] }
               : await smartCapture(lastUserMsg, lastAssistantMsg || undefined, chatModel);
 
-            if (result.shouldStore) {
+            if (result.shouldStore && result.facts.length > 0) {
+              const factsToProcess = result.facts.slice(0, 5);
+
+              // BATCH EMBEDDING: Get all vectors in one call!
+              api.logger.info(`memory-hybrid: batch embedding ${factsToProcess.length} facts`);
+              const vectors = await embeddings.embedBatch(factsToProcess.map((f) => f.text));
+
               let stored = 0;
-              // Limit concurrent fact extraction/storing to avoid 429
-              for (const fact of result.facts.slice(0, 5)) {
+              for (let i = 0; i < factsToProcess.length; i++) {
+                const fact = factsToProcess[i];
+                const vector = vectors[i];
+
                 try {
-                  // Pre-check for exact duplicate to save embed API call
-                  // (approx matching by text hash/prefix if we wanted to be super aggressive)
-
-                  const vector = await embeddings.embed(fact.text);
-
                   // If LLM flagged this as a correction, search broadly and force contradiction check
                   let skipStore = false;
                   if (fact.isCorrection) {
@@ -1521,8 +1572,8 @@ const memoryPlugin = {
 
                   if (skipStore) continue;
 
-                  const summary =
-                    fact.summary || (await generateMemorySummary(fact.text, chatModel));
+                  // USE SUMMARY FROM LLM (Smart Capture) wherever possible
+                  const summary = fact.summary || fact.text.slice(0, 150);
 
                   await db.store({
                     text: fact.text,
@@ -1535,28 +1586,8 @@ const memoryPlugin = {
                     emotionalTone: fact.emotionalTone ?? "neutral",
                     emotionScore: fact.emotionScore ?? 0,
                   });
+                  tracer.traceStore(fact.text, fact.category, "auto-capture");
                   stored++;
-
-                  // Graph extraction for each fact (THROTTLED)
-                  // We don't await extractGraph to keep UX snappy, but we catch errors
-                  extractGraphFromText(fact.text, chatModel)
-                    .then(async (graph) => {
-                      if (graph.nodes.length > 0 || graph.edges.length > 0) {
-                        try {
-                          await graphDB.modify(() => {
-                            for (const n of graph.nodes) graphDB.addNode(n);
-                            for (const e of graph.edges) graphDB.addEdge(e);
-                          });
-                        } catch (err) {
-                          api.logger.warn(`memory-hybrid: auto-capture graph fail: ${String(err)}`);
-                        }
-                      }
-                    })
-                    .catch(() => {});
-
-                  // Robust delay: 1s between facts.
-                  // Total 5 facts = 5s background work. Safe for typical 30 RPM limits.
-                  await new Promise((resolve) => setTimeout(resolve, 1500));
                 } catch (err) {
                   api.logger.warn(
                     `memory-hybrid: smart-capture fact skip: ${err instanceof Error ? err.message : String(err)}`,
@@ -1566,8 +1597,30 @@ const memoryPlugin = {
 
               if (stored > 0) {
                 api.logger.info(`memory-hybrid: smart-captured ${stored} facts`);
+
+                // BATCH GRAPH EXTRACTION: One call for all facts!
+                const factTexts = factsToProcess.map((f) => f.text);
+                extractGraphFromBatch(factTexts, chatModel)
+                  .then(async (graph) => {
+                    if (graph.nodes.length > 0 || graph.edges.length > 0) {
+                      try {
+                        await graphDB.modify(() => {
+                          for (const n of graph.nodes) graphDB.addNode(n);
+                          for (const e of graph.edges) graphDB.addEdge(e);
+                        });
+                        tracer.traceGraph(graph.nodes.length, graph.edges.length);
+                        api.logger.info(
+                          `memory-hybrid: batch graph updated (+${graph.nodes.length} nodes, +${graph.edges.length} edges)`,
+                        );
+                      } catch (err) {
+                        api.logger.warn(`memory-hybrid: batch-capture graph fail: ${String(err)}`);
+                      }
+                    }
+                  })
+                  .catch((err) => {
+                    api.logger.warn(`memory-hybrid: batch graph extraction fatal: ${String(err)}`);
+                  });
               }
-              // continue to maintenance...
             }
           }
 
