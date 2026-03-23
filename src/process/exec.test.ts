@@ -47,10 +47,10 @@ describe("runCommandWithTimeout", () => {
 
   it("kills command when no output timeout elapses", async () => {
     const result = await runCommandWithTimeout(
-      [process.execPath, "-e", "setTimeout(() => {}, 10)"],
+      [process.execPath, "-e", "setTimeout(() => {}, 250)"],
       {
-        timeoutMs: 30,
-        noOutputTimeoutMs: 4,
+        timeoutMs: 500,
+        noOutputTimeoutMs: 80,
       },
     );
 
