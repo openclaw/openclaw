@@ -36,9 +36,15 @@ const {
   class GatewayPlugin {
     options: unknown;
     gatewayInfo: unknown;
+    client: unknown;
+    ws: unknown;
+    isConnecting: boolean;
     constructor(options?: unknown, gatewayInfo?: unknown) {
       this.options = options;
       this.gatewayInfo = gatewayInfo;
+      this.client = undefined;
+      this.ws = undefined;
+      this.isConnecting = false;
     }
     async registerClient(client: unknown) {
       baseRegisterClientSpy(client);
@@ -354,5 +360,74 @@ describe("createDiscordGatewayPlugin", () => {
       url: "wss://gateway.discord.gg/?v=10",
       shards: 8,
     });
+  });
+
+  it("sets client reference before the async gateway-info fetch completes", async () => {
+    vi.useFakeTimers();
+    const runtime = createRuntime();
+    let fetchResolve: ((v: Response) => void) | undefined;
+    globalFetchMock.mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          fetchResolve = resolve;
+        }),
+    );
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: {},
+      runtime,
+    });
+
+    const clientArg = { options: { token: "token-race" } };
+    const registerPromise = (
+      plugin as { registerClient: (c: typeof clientArg) => Promise<void> }
+    ).registerClient(clientArg);
+
+    // Before the fetch resolves, client should already be set.
+    expect((plugin as unknown as { client: unknown }).client).toBe(clientArg);
+
+    // Now resolve the fetch so registerClient can finish.
+    fetchResolve!({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ url: "wss://gateway.discord.gg" }),
+    } as Response);
+    await registerPromise;
+  });
+
+  it("skips super.registerClient when an external connect() sets ws during fetch", async () => {
+    vi.useFakeTimers();
+    const runtime = createRuntime();
+    let fetchResolve: ((v: Response) => void) | undefined;
+    globalFetchMock.mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          fetchResolve = resolve;
+        }),
+    );
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: {},
+      runtime,
+    });
+
+    const clientArg = { options: { token: "token-race" } };
+    const registerPromise = (
+      plugin as { registerClient: (c: typeof clientArg) => Promise<void> }
+    ).registerClient(clientArg);
+
+    // Simulate the lifecycle timeout handler calling connect() externally,
+    // which sets ws on the gateway plugin.
+    (plugin as unknown as { ws: unknown }).ws = { readyState: 1 };
+
+    // Now resolve the fetch.
+    fetchResolve!({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ url: "wss://gateway.discord.gg" }),
+    } as Response);
+    await registerPromise;
+
+    // super.registerClient should NOT have been called because the guard
+    // detected an active ws, preventing it from tearing down the live connection.
+    expect(baseRegisterClientSpy).not.toHaveBeenCalled();
   });
 });
