@@ -1,7 +1,11 @@
 import { withProgress } from "../cli/progress.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
 import { probeGateway } from "../gateway/probe.js";
-import { discoverGatewayBeacons } from "../infra/bonjour-discovery.js";
+import {
+  discoverGatewayBeacons,
+  pickResolvedGatewayHost,
+  pickResolvedGatewayPort,
+} from "../infra/bonjour-discovery.js";
 import { resolveSshConfig } from "../infra/ssh-config.js";
 import { parseSshTarget, startSshPortForward } from "../infra/ssh-tunnel.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
@@ -111,12 +115,12 @@ export async function gatewayStatusCommand(
         const user = process.env.USER?.trim() || "";
         const candidates = discovery
           .map((b) => {
-            const host = b.tailnetDns || b.lanHost || b.host;
-            if (!host?.trim()) {
+            const host = pickResolvedGatewayHost(b);
+            if (!host) {
               return null;
             }
             const sshPort = typeof b.sshPort === "number" && b.sshPort > 0 ? b.sshPort : 22;
-            const base = user ? `${user}@${host.trim()}` : host.trim();
+            const base = user ? `${user}@${host}` : host;
             return sshPort !== 22 ? `${base}:${sshPort}` : base;
           })
           .filter((candidate): candidate is string =>
@@ -250,61 +254,55 @@ export async function gatewayStatusCommand(
   }
 
   if (opts.json) {
-    runtime.log(
-      JSON.stringify(
-        {
-          ok,
-          degraded,
-          ts: Date.now(),
-          durationMs: Date.now() - startedAt,
-          timeoutMs: overallTimeoutMs,
-          primaryTargetId: primary?.target.id ?? null,
-          warnings,
-          network,
-          discovery: {
-            timeoutMs: discoveryTimeoutMs,
-            count: discovery.length,
-            beacons: discovery.map((b) => ({
-              instanceName: b.instanceName,
-              displayName: b.displayName ?? null,
-              domain: b.domain ?? null,
-              host: b.host ?? null,
-              lanHost: b.lanHost ?? null,
-              tailnetDns: b.tailnetDns ?? null,
-              gatewayPort: b.gatewayPort ?? null,
-              sshPort: b.sshPort ?? null,
-              wsUrl: (() => {
-                const host = b.tailnetDns || b.lanHost || b.host;
-                const port = b.gatewayPort ?? 18789;
-                return host ? `ws://${host}:${port}` : null;
-              })(),
-            })),
-          },
-          targets: probed.map((p) => ({
-            id: p.target.id,
-            kind: p.target.kind,
-            url: p.target.url,
-            active: p.target.active,
-            tunnel: p.target.tunnel ?? null,
-            connect: {
-              ok: isProbeReachable(p.probe),
-              rpcOk: p.probe.ok,
-              scopeLimited: isScopeLimitedProbeFailure(p.probe),
-              latencyMs: p.probe.connectLatencyMs,
-              error: p.probe.error,
-              close: p.probe.close,
-            },
-            self: p.self,
-            config: p.configSummary,
-            health: p.probe.health,
-            summary: p.probe.status,
-            presence: p.probe.presence,
-          })),
+    writeRuntimeJson(runtime, {
+      ok,
+      degraded,
+      ts: Date.now(),
+      durationMs: Date.now() - startedAt,
+      timeoutMs: overallTimeoutMs,
+      primaryTargetId: primary?.target.id ?? null,
+      warnings,
+      network,
+      discovery: {
+        timeoutMs: discoveryTimeoutMs,
+        count: discovery.length,
+        beacons: discovery.map((b) => ({
+          instanceName: b.instanceName,
+          displayName: b.displayName ?? null,
+          domain: b.domain ?? null,
+          host: b.host ?? null,
+          lanHost: b.lanHost ?? null,
+          tailnetDns: b.tailnetDns ?? null,
+          gatewayPort: b.gatewayPort ?? null,
+          sshPort: b.sshPort ?? null,
+          wsUrl: (() => {
+            const host = pickResolvedGatewayHost(b);
+            const port = pickResolvedGatewayPort(b);
+            return host && port ? `ws://${host}:${port}` : null;
+          })(),
+        })),
+      },
+      targets: probed.map((p) => ({
+        id: p.target.id,
+        kind: p.target.kind,
+        url: p.target.url,
+        active: p.target.active,
+        tunnel: p.target.tunnel ?? null,
+        connect: {
+          ok: isProbeReachable(p.probe),
+          rpcOk: p.probe.ok,
+          scopeLimited: isScopeLimitedProbeFailure(p.probe),
+          latencyMs: p.probe.connectLatencyMs,
+          error: p.probe.error,
+          close: p.probe.close,
         },
-        null,
-        2,
-      ),
-    );
+        self: p.self,
+        config: p.configSummary,
+        health: p.probe.health,
+        summary: p.probe.status,
+        presence: p.probe.presence,
+      })),
+    });
     if (!ok) {
       runtime.exit(1);
     }
