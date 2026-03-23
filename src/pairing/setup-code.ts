@@ -22,6 +22,9 @@ export type PairingSetupPayload = {
   bootstrapToken: string;
 };
 
+const PAIRING_SETUP_BOOTSTRAP_ROLES = ["node"] as const;
+const PAIRING_SETUP_BOOTSTRAP_SCOPES: string[] = [];
+
 export type PairingSetupCommandResult = {
   code: number | null;
   stdout: string;
@@ -384,6 +387,8 @@ export async function resolvePairingSetupFromConfig(
       bootstrapToken: (
         await issueDeviceBootstrapToken({
           baseDir: options.pairingBaseDir,
+          roles: PAIRING_SETUP_BOOTSTRAP_ROLES,
+          scopes: PAIRING_SETUP_BOOTSTRAP_SCOPES,
         })
       ).token,
     },
