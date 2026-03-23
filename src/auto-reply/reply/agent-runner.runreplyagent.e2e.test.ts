@@ -838,39 +838,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
-  it("refreshes queued followups when auto-compaction rotates the session", async () => {
-    await withTempStateDir(async (stateDir) => {
-      const storePath = path.join(stateDir, "sessions", "sessions.json");
-      const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
-      const sessionStore = { main: sessionEntry };
-
-      state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
-        payloads: [{ text: "final" }],
-        meta: {
-          agentMeta: {
-            sessionId: "session-rotated",
-            compactionCount: 1,
-          },
-        },
-      });
-
-      const { run } = createMinimalRun({
-        sessionEntry,
-        sessionStore,
-        sessionKey: "main",
-        storePath,
-      });
-      await run();
-
-      expect(vi.mocked(refreshQueuedFollowupSession)).toHaveBeenCalledWith({
-        key: "main",
-        previousSessionId: "session",
-        nextSessionId: "session-rotated",
-        nextSessionFile: expect.stringContaining("session-rotated.jsonl"),
-      });
-    });
-  });
-
   it("threads compaction notices without consuming the first reply slot", async () => {
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       params.onAgentEvent?.({

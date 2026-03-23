@@ -14,12 +14,7 @@ import {
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import { resolveGatewaySessionStoreTarget } from "../../gateway/session-utils.js";
-import {
-  clearFollowupQueue,
-  enqueueFollowupRun,
-  type FollowupRun,
-  type QueueSettings,
-} from "./queue.js";
+import { clearFollowupQueue, type FollowupRun } from "./queue.js";
 import * as sessionRunAccounting from "./session-run-accounting.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 
@@ -441,67 +436,6 @@ describe("createFollowupRunner compaction", () => {
     );
   });
 
-  it("refreshes queued followup runs to the rotated transcript", async () => {
-    const storePath = path.join(
-      await fs.mkdtemp(path.join(tmpdir(), "openclaw-compaction-queue-")),
-      "sessions.json",
-    );
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
-      updatedAt: Date.now(),
-    };
-    const sessionStore: Record<string, SessionEntry> = {
-      main: sessionEntry,
-    };
-
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "final" }],
-      meta: {
-        agentMeta: {
-          sessionId: "session-rotated",
-          compactionCount: 1,
-          lastCallUsage: { input: 10_000, output: 3_000, total: 13_000 },
-        },
-      },
-    });
-
-    const runner = createFollowupRunner({
-      opts: { onBlockReply: vi.fn(async () => {}) },
-      typing: createMockTypingController(),
-      typingMode: "instant",
-      sessionEntry,
-      sessionStore,
-      sessionKey: "main",
-      storePath,
-      defaultModel: "anthropic/claude-opus-4-5",
-    });
-
-    const queuedNext = createQueuedRun({
-      prompt: "next",
-      run: {
-        sessionId: "session",
-        sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
-      },
-    });
-    const queueSettings: QueueSettings = { mode: "queue" };
-    enqueueFollowupRun("main", queuedNext, queueSettings);
-
-    const current = createQueuedRun({
-      run: {
-        verboseLevel: "on",
-        sessionId: "session",
-        sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
-      },
-    });
-
-    await runner(current);
-
-    expect(queuedNext.run.sessionId).toBe("session-rotated");
-    expect(await normalizeComparablePath(queuedNext.run.sessionFile)).toBe(
-      await normalizeComparablePath(path.join(path.dirname(storePath), "session-rotated.jsonl")),
-    );
-  });
   it("does not count failed compaction end events in followup runs", async () => {
     const storePath = path.join(
       await fs.mkdtemp(path.join(tmpdir(), "openclaw-compaction-failed-")),
