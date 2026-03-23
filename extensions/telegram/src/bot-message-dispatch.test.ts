@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { Bot } from "grammy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -98,6 +97,7 @@ let dispatchTelegramMessage: typeof import("./bot-message-dispatch.js").dispatch
 const telegramDepsForTest: TelegramBotDeps = {
   loadConfig: loadConfig as TelegramBotDeps["loadConfig"],
   resolveStorePath: resolveStorePath as TelegramBotDeps["resolveStorePath"],
+  loadSessionStore: loadSessionStore as TelegramBotDeps["loadSessionStore"],
   readChannelAllowFromStore:
     readChannelAllowFromStore as TelegramBotDeps["readChannelAllowFromStore"],
   upsertChannelPairingRequest:
@@ -109,6 +109,12 @@ const telegramDepsForTest: TelegramBotDeps = {
   listSkillCommandsForAgents:
     listSkillCommandsForAgents as TelegramBotDeps["listSkillCommandsForAgents"],
   wasSentByBot: wasSentByBot as TelegramBotDeps["wasSentByBot"],
+  createTelegramDraftStream:
+    createTelegramDraftStream as TelegramBotDeps["createTelegramDraftStream"],
+  deliverReplies: deliverReplies as TelegramBotDeps["deliverReplies"],
+  emitInternalMessageSentHook:
+    emitInternalMessageSentHook as TelegramBotDeps["emitInternalMessageSentHook"],
+  editMessageTelegram: editMessageTelegram as TelegramBotDeps["editMessageTelegram"],
 };
 
 describe("dispatchTelegramMessage draft streaming", () => {
@@ -211,8 +217,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
   function createBot(): Bot {
     return {
       api: {
-        sendMessage: vi.fn(),
-        editMessageText: vi.fn(),
+        sendMessage: vi.fn(async (_chatId, _text, params) => ({
+          message_id:
+            typeof params?.message_thread_id === "number" ? params.message_thread_id : 1001,
+        })),
+        editMessageText: vi.fn(async () => ({ message_id: 1001 })),
         deleteMessage: vi.fn().mockResolvedValue(true),
         editForumTopic: vi.fn().mockResolvedValue(true),
       },
