@@ -613,6 +613,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.pendingToolMediaUrls = [];
     state.pendingToolAudioAsVoice = false;
     state.deterministicApprovalPromptSent = false;
+    params.onCompactionRetryReset?.();
     resetAssistantMessageState(0);
   };
 

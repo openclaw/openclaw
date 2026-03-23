@@ -12,6 +12,7 @@ import {
   resolveTelegramReactionLevel,
 } from "../../../../extensions/telegram/api.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
+import type { ReplyPayload } from "../../../auto-reply/types.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
@@ -2560,6 +2561,8 @@ export async function runEmbeddedAttempt(
         });
       };
 
+      const toolResultPayloads: ReplyPayload[] = [];
+
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
         runId: params.runId,
@@ -2569,7 +2572,39 @@ export async function runEmbeddedAttempt(
         toolResultFormat: params.toolResultFormat,
         shouldEmitToolResult: params.shouldEmitToolResult,
         shouldEmitToolOutput: params.shouldEmitToolOutput,
-        onToolResult: params.onToolResult,
+        onToolResult: (payload) => {
+          const entry: ReplyPayload = {
+            ...payload,
+            text:
+              typeof payload.text === "string" && payload.text.trim() ? payload.text : undefined,
+            mediaUrl:
+              typeof payload.mediaUrl === "string" && payload.mediaUrl.trim()
+                ? payload.mediaUrl
+                : undefined,
+            mediaUrls:
+              Array.isArray(payload.mediaUrls) && payload.mediaUrls.length > 0
+                ? payload.mediaUrls
+                : undefined,
+          };
+          if (
+            entry.text !== undefined ||
+            entry.mediaUrl !== undefined ||
+            entry.mediaUrls !== undefined ||
+            entry.channelData !== undefined ||
+            entry.audioAsVoice === true ||
+            entry.replyToId !== undefined ||
+            entry.replyToTag !== undefined ||
+            entry.replyToCurrent !== undefined ||
+            entry.isError === true ||
+            entry.isReasoning === true
+          ) {
+            toolResultPayloads.push(entry);
+          }
+          return params.onToolResult?.(payload);
+        },
+        onCompactionRetryReset: () => {
+          toolResultPayloads.length = 0;
+        },
         onReasoningStream: params.onReasoningStream,
         onReasoningEnd: params.onReasoningEnd,
         onBlockReply: params.onBlockReply,
@@ -3205,6 +3240,7 @@ export async function runEmbeddedAttempt(
         messagesSnapshot,
         assistantTexts,
         toolMetas: toolMetasNormalized,
+        toolResultPayloads,
         lastAssistant,
         lastToolError: getLastToolError?.(),
         didSendViaMessagingTool: didSendViaMessagingTool(),
