@@ -7,6 +7,11 @@ on:
         description: Existing release tag to build macOS artifacts for (for example v2026.3.22 or v2026.3.22-beta.1)
         required: true
         type: string
+      preflight_only:
+        description: Run validation/build only and skip the gated publish job
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
   group: macos-release-${{ inputs.tag }}
@@ -104,6 +109,7 @@ jobs:
 
   publish_macos_release:
     needs: [preflight_macos_release]
+    if: ${{ !inputs.preflight_only }}
     runs-on: macos-latest
     environment: mac-release
     permissions:
