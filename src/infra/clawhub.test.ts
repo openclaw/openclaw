@@ -129,6 +129,25 @@ describe("clawhub helpers", () => {
     },
   );
 
+  it.runIf(process.platform === "darwin")(
+    "falls back to XDG_CONFIG_HOME on macOS when Application Support has no config",
+    async () => {
+      const fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-home-"));
+      const xdgRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-xdg-"));
+      const configPath = path.join(xdgRoot, "clawhub", "config.json");
+      const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+      process.env.XDG_CONFIG_HOME = xdgRoot;
+      try {
+        await fs.mkdir(path.dirname(configPath), { recursive: true });
+        await fs.writeFile(configPath, JSON.stringify({ token: "xdg-token-123" }), "utf8");
+
+        await expect(resolveClawHubAuthToken()).resolves.toBe("xdg-token-123");
+      } finally {
+        homedirSpy.mockRestore();
+      }
+    },
+  );
+
   it("injects resolved auth token into ClawHub requests", async () => {
     process.env.OPENCLAW_CLAWHUB_TOKEN = "env-token-123";
     const fetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
