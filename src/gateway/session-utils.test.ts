@@ -414,12 +414,12 @@ describe("resolveSessionModelRef", () => {
       sessionId: "s1",
       updatedAt: Date.now(),
       modelProvider: "openai-codex",
-      model: "gpt-5.3-codex",
+      model: "gpt-5.4",
       modelOverride: "claude-opus-4-6",
       providerOverride: "anthropic",
     });
 
-    expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.3-codex" });
+    expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.4" });
   });
 
   test("preserves openrouter provider when model contains vendor prefix", () => {
@@ -448,10 +448,10 @@ describe("resolveSessionModelRef", () => {
     const resolved = resolveSessionModelRef(cfg, {
       sessionId: "s2",
       updatedAt: Date.now(),
-      modelOverride: "openai-codex/gpt-5.3-codex",
+      modelOverride: "openai-codex/gpt-5.4",
     });
 
-    expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.3-codex" });
+    expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.4" });
   });
 
   test("falls back to resolved provider for unprefixed legacy runtime model", () => {
