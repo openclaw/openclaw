@@ -71,6 +71,21 @@ const ENV_INLINE_VALUE_PREFIXES = [
 const ENV_FLAG_OPTIONS = new Set(["-i", "--ignore-environment", "-0", "--null"]);
 const NICE_OPTIONS_WITH_VALUE = new Set(["-n", "--adjustment", "--priority"]);
 const STDBUF_OPTIONS_WITH_VALUE = new Set(["-i", "--input", "-o", "--output", "-e", "--error"]);
+const TIME_FLAG_OPTIONS = new Set([
+  "-a",
+  "--append",
+  "-h",
+  "--help",
+  "-l",
+  "-p",
+  "-q",
+  "--quiet",
+  "-v",
+  "--verbose",
+  "-V",
+  "--version",
+]);
+const TIME_OPTIONS_WITH_VALUE = new Set(["-f", "--format", "-o", "--output"]);
 const TIMEOUT_FLAG_OPTIONS = new Set(["--foreground", "--preserve-status", "-v", "--verbose"]);
 const TIMEOUT_OPTIONS_WITH_VALUE = new Set(["-k", "--kill-after", "-s", "--signal"]);
 
@@ -351,6 +366,20 @@ function unwrapStdbufInvocation(argv: string[]): string[] | null {
         return "invalid";
       }
       return lower.includes("=") ? "continue" : "consume-next";
+    },
+  });
+}
+
+function unwrapTimeInvocation(argv: string[]): string[] | null {
+  return unwrapDashOptionInvocation(argv, {
+    onFlag: (flag, lower) => {
+      if (TIME_FLAG_OPTIONS.has(flag)) {
+        return "continue";
+      }
+      if (TIME_OPTIONS_WITH_VALUE.has(flag)) {
+        return lower.includes("=") ? "continue" : "consume-next";
+      }
+      return "invalid";
     },
   });
 }
