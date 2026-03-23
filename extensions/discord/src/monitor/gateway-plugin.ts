@@ -264,6 +264,12 @@ function createGatewayPlugin(params: {
       // If an external caller (e.g. the lifecycle readiness-timeout handler)
       // already triggered connect() while we were fetching gateway metadata,
       // skip super.registerClient to avoid tearing down the live WebSocket.
+      // NOTE: `ws` and `isConnecting` are protected fields on Carbon's
+      // GatewayPlugin (see @buape/carbon GatewayPlugin.ts lines 49, 62).
+      // The type cast is intentional — if Carbon renames these fields the
+      // guard degrades to a no-op and super.registerClient runs, which may
+      // cause a brief reconnect but not a permanent hang (Fix #1 above
+      // already guarantees this.client is set).
       const gatewayState = this as unknown as { ws?: unknown; isConnecting?: boolean };
       if (gatewayState.ws || gatewayState.isConnecting) {
         return;
