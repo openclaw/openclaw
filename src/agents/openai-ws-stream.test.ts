@@ -640,11 +640,9 @@ describe("convertMessagesToInputItems", () => {
       userMsg("Also, one more thing"),
     ] as Parameters<typeof convertMessagesToInputItems>[0]);
 
-    // Consecutive but different — collapsed to last (this is acceptable;
-    // legitimate multi-sends are rare and the model sees the latest message)
+    // Different content — both preserved
     const userItems = items.filter((i) => "role" in i && i.role === "user");
-    expect(userItems).toHaveLength(1);
-    expect(userItems[0]).toMatchObject({ content: "Also, one more thing" });
+    expect(userItems).toHaveLength(2);
   });
 
   it("does not collapse user messages separated by assistant messages", () => {
