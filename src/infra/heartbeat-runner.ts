@@ -940,6 +940,7 @@ export function startHeartbeatRunner(opts: {
       return;
     }
     const delay = Math.max(0, nextDue - now);
+    log.debug("heartbeat: scheduling next wake", { delayMs: delay });
     state.timer = setTimeout(() => {
       state.timer = null;
       requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
@@ -996,18 +997,23 @@ export function startHeartbeatRunner(opts: {
 
   const run: HeartbeatWakeHandler = async (params) => {
     if (state.stopped) {
+      log.debug("heartbeat: run skipped (stopped)", { reason: params?.reason });
       return {
         status: "skipped",
         reason: "disabled",
       } satisfies HeartbeatRunResult;
     }
     if (!heartbeatsEnabled) {
+      log.debug("heartbeat: run skipped (heartbeats disabled globally)", {
+        reason: params?.reason,
+      });
       return {
         status: "skipped",
         reason: "disabled",
       } satisfies HeartbeatRunResult;
     }
     if (state.agents.size === 0) {
+      log.debug("heartbeat: run skipped (no agents configured)", { reason: params?.reason });
       return {
         status: "skipped",
         reason: "disabled",
@@ -1056,6 +1062,12 @@ export function startHeartbeatRunner(opts: {
 
     for (const agent of state.agents.values()) {
       if (isInterval && now < agent.nextDueMs) {
+        log.debug("heartbeat: agent not due yet", {
+          agentId: agent.agentId,
+          nextDueMs: agent.nextDueMs,
+          nowMs: now,
+          deltaMs: agent.nextDueMs - now,
+        });
         continue;
       }
 
@@ -1081,6 +1093,12 @@ export function startHeartbeatRunner(opts: {
         scheduleNext();
         return res;
       }
+      if (res.status === "skipped") {
+        log.debug("heartbeat: runOnce skipped", {
+          agentId: agent.agentId,
+          reason: res.reason,
+        });
+      }
       if (res.status !== "skipped" || res.reason !== "disabled") {
         advanceAgentSchedule(agent, now);
       }
@@ -1093,7 +1111,12 @@ export function startHeartbeatRunner(opts: {
     if (ran) {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
-    return { status: "skipped", reason: isInterval ? "not-due" : "disabled" };
+    const skipReason = isInterval ? "not-due" : "disabled";
+    log.debug("heartbeat: cycle completed without running", {
+      reason: skipReason,
+      agentCount: state.agents.size,
+    });
+    return { status: "skipped", reason: skipReason };
   };
 
   const wakeHandler: HeartbeatWakeHandler = async (params) =>
