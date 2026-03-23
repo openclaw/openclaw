@@ -236,9 +236,14 @@ function extractTokenFromClawHubConfig(value: unknown): string | undefined {
 
 function resolveClawHubConfigPath(): string {
   const explicit =
-    process.env.OPENCLAW_CLAWHUB_CONFIG_PATH?.trim() || process.env.CLAWHUB_CONFIG_PATH?.trim();
+    process.env.OPENCLAW_CLAWHUB_CONFIG_PATH?.trim() ||
+    process.env.CLAWHUB_CONFIG_PATH?.trim() ||
+    process.env.CLAWDHUB_CONFIG_PATH?.trim();
   if (explicit) {
     return explicit;
+  }
+  if (process.platform === "darwin") {
+    return path.join(os.homedir(), "Library", "Application Support", "clawhub", "config.json");
   }
   const xdgConfigHome = process.env.XDG_CONFIG_HOME?.trim();
   const configHome =
