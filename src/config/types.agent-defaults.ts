@@ -185,6 +185,13 @@ export type AgentDefaultsConfig = {
   };
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
+  /** System prompt customization. */
+  systemPrompt?: {
+    /** Override the default identity line ("You are a personal assistant running inside OpenClaw."). */
+    identityLine?: string;
+    /** Section names to skip from the system prompt (e.g. ["safety", "cliReference"]). Empty = all sections included. */
+    disabledSections?: string[];
+  };
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
   /** Default verbose level when no /verbose directive is present. */

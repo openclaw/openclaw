@@ -676,6 +676,143 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("## Reactions");
     expect(prompt).toContain("Reactions are enabled for Telegram in MINIMAL mode.");
   });
+
+  // --- identityLine and disabledSections ---
+
+  it("produces identical output with no identityLine/disabledSections (regression)", () => {
+    const withDefaults = buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw" });
+    const withEmptyOverrides = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      identityLine: undefined,
+      disabledSections: undefined,
+    });
+    const withEmptyArray = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      disabledSections: [],
+    });
+
+    expect(withEmptyOverrides).toBe(withDefaults);
+    expect(withEmptyArray).toBe(withDefaults);
+  });
+
+  it("replaces the identity line when identityLine is provided", () => {
+    const customLine = "You are Aria, an AI assistant.";
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      identityLine: customLine,
+    });
+
+    expect(prompt).toContain(customLine);
+    expect(prompt).not.toContain("You are a personal assistant running inside OpenClaw.");
+  });
+
+  it("uses identityLine in promptMode=none (returns just the custom line)", () => {
+    const customLine = "You are Aria, an AI assistant.";
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "none",
+      identityLine: customLine,
+    });
+
+    expect(prompt).toBe(customLine);
+  });
+
+  it("disabledSections=['safety'] omits the Safety section", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      disabledSections: ["safety"],
+    });
+
+    expect(prompt).not.toContain("## Safety");
+    expect(prompt).not.toContain("You have no independent goals");
+    // Other sections should still be present
+    expect(prompt).toContain("## OpenClaw CLI Quick Reference");
+  });
+
+  it("disabledSections=['cliReference'] omits the CLI Quick Reference section", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      disabledSections: ["cliReference"],
+    });
+
+    expect(prompt).not.toContain("## OpenClaw CLI Quick Reference");
+    expect(prompt).not.toContain("openclaw gateway restart");
+    // Safety should still be present
+    expect(prompt).toContain("## Safety");
+  });
+
+  it("disabledSections=['safety','cliReference'] omits both sections", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      disabledSections: ["safety", "cliReference"],
+    });
+
+    expect(prompt).not.toContain("## Safety");
+    expect(prompt).not.toContain("## OpenClaw CLI Quick Reference");
+  });
+
+  it("disabledSections=['nonexistent'] produces same output as no disabledSections", () => {
+    const baseline = buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw" });
+    const withUnknown = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      disabledSections: ["nonexistent"],
+    });
+
+    expect(withUnknown).toBe(baseline);
+  });
+
+  it("disabledSections=['selfUpdate'] omits the Self-Update section even with gateway tool", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["gateway", "exec"],
+      disabledSections: ["selfUpdate"],
+    });
+
+    expect(prompt).not.toContain("## OpenClaw Self-Update");
+    // Other sections still present
+    expect(prompt).toContain("## Safety");
+  });
+
+  it("disabledSections=['modelAliases'] omits Model Aliases section", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      modelAliasLines: ["- Opus: anthropic/claude-opus-4-5"],
+      disabledSections: ["modelAliases"],
+    });
+
+    expect(prompt).not.toContain("## Model Aliases");
+  });
+
+  it("disabledSections=['documentation'] omits Documentation section even with docsPath", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      docsPath: "/tmp/openclaw/docs",
+      disabledSections: ["documentation"],
+    });
+
+    expect(prompt).not.toContain("## Documentation");
+  });
+
+  it("disabledSections=['skills'] omits Skills section even with skillsPrompt", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      skillsPrompt:
+        "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
+      disabledSections: ["skills"],
+    });
+
+    expect(prompt).not.toContain("## Skills");
+  });
+
+  it("disabledSections=['memoryRecall'] omits Memory Recall section even with memory tools", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["memory_search", "memory_get"],
+      disabledSections: ["memoryRecall"],
+    });
+
+    expect(prompt).not.toContain("## Memory Recall");
+  });
 });
 
 describe("buildSubagentSystemPrompt", () => {

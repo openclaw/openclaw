@@ -173,6 +173,17 @@ function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readT
   ];
 }
 
+/**
+ * Returns true when the named section should be included in the system prompt.
+ * A section is disabled if disabledSections is defined and contains the name.
+ */
+function isSectionEnabled(name: string, disabledSections?: string[]): boolean {
+  if (!disabledSections || disabledSections.length === 0) {
+    return true;
+  }
+  return !disabledSections.includes(name);
+}
+
 export function buildAgentSystemPrompt(params: {
   workspaceDir: string;
   defaultThinkLevel?: ThinkLevel;
@@ -196,6 +207,10 @@ export function buildAgentSystemPrompt(params: {
   ttsHint?: string;
   /** Controls which hardcoded sections to include. Defaults to "full". */
   promptMode?: PromptMode;
+  /** Override the default identity line ("You are a personal assistant running inside OpenClaw."). */
+  identityLine?: string;
+  /** Section names to skip from the system prompt (e.g. ["safety", "cliReference"]). Empty = all sections included. */
+  disabledSections?: string[];
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
   runtimeInfo?: {
@@ -404,11 +419,12 @@ export function buildAgentSystemPrompt(params: {
 
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {
-    return "You are a personal assistant running inside OpenClaw.";
+    return params.identityLine ?? "You are a personal assistant running inside OpenClaw.";
   }
 
+  const disabledSections = params.disabledSections;
   const lines = [
-    "You are a personal assistant running inside OpenClaw.",
+    params.identityLine ?? "You are a personal assistant running inside OpenClaw.",
     "",
     "## Tooling",
     "Tool availability (filtered by policy):",
@@ -456,21 +472,27 @@ export function buildAgentSystemPrompt(params: {
     "Treat allow-once as single-command only: if another elevated command needs approval, request a fresh /approve and do not claim prior approval covered it.",
     "When approvals are required, preserve and show the full command/script exactly as provided (including chained operators like &&, ||, |, ;, or multiline shells) so the user can approve what will actually run.",
     "",
-    ...safetySection,
-    "## OpenClaw CLI Quick Reference",
-    "OpenClaw is controlled via subcommands. Do not invent commands.",
-    "To manage the Gateway daemon service (start/stop/restart):",
-    "- openclaw gateway status",
-    "- openclaw gateway start",
-    "- openclaw gateway stop",
-    "- openclaw gateway restart",
-    "If unsure, ask the user to run `openclaw help` (or `openclaw gateway --help`) and paste the output.",
-    "",
-    ...skillsSection,
-    ...memorySection,
-    // Skip self-update for subagent/none modes
-    hasGateway && !isMinimal ? "## OpenClaw Self-Update" : "",
-    hasGateway && !isMinimal
+    ...(isSectionEnabled("safety", disabledSections) ? safetySection : []),
+    ...(isSectionEnabled("cliReference", disabledSections)
+      ? [
+          "## OpenClaw CLI Quick Reference",
+          "OpenClaw is controlled via subcommands. Do not invent commands.",
+          "To manage the Gateway daemon service (start/stop/restart):",
+          "- openclaw gateway status",
+          "- openclaw gateway start",
+          "- openclaw gateway stop",
+          "- openclaw gateway restart",
+          "If unsure, ask the user to run `openclaw help` (or `openclaw gateway --help`) and paste the output.",
+          "",
+        ]
+      : []),
+    ...(isSectionEnabled("skills", disabledSections) ? skillsSection : []),
+    ...(isSectionEnabled("memoryRecall", disabledSections) ? memorySection : []),
+    // Skip self-update for subagent/none modes, and when disabled via disabledSections
+    hasGateway && !isMinimal && isSectionEnabled("selfUpdate", disabledSections)
+      ? "## OpenClaw Self-Update"
+      : "",
+    hasGateway && !isMinimal && isSectionEnabled("selfUpdate", disabledSections)
       ? [
           "Get Updates (self-update) is ONLY allowed when the user explicitly asks for it.",
           "Do not run config.apply or update.run unless the user explicitly requests an update or config change; if it's not explicit, ask first.",
@@ -479,19 +501,33 @@ export function buildAgentSystemPrompt(params: {
           "After restart, OpenClaw pings the last active session automatically.",
         ].join("\n")
       : "",
-    hasGateway && !isMinimal ? "" : "",
+    hasGateway && !isMinimal && isSectionEnabled("selfUpdate", disabledSections) ? "" : "",
     "",
-    // Skip model aliases for subagent/none modes
-    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
+    // Skip model aliases for subagent/none modes, and when disabled via disabledSections
+    params.modelAliasLines &&
+    params.modelAliasLines.length > 0 &&
+    !isMinimal &&
+    isSectionEnabled("modelAliases", disabledSections)
       ? "## Model Aliases"
       : "",
-    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
+    params.modelAliasLines &&
+    params.modelAliasLines.length > 0 &&
+    !isMinimal &&
+    isSectionEnabled("modelAliases", disabledSections)
       ? "Prefer aliases when specifying model overrides; full provider/model is also accepted."
       : "",
-    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
+    params.modelAliasLines &&
+    params.modelAliasLines.length > 0 &&
+    !isMinimal &&
+    isSectionEnabled("modelAliases", disabledSections)
       ? params.modelAliasLines.join("\n")
       : "",
-    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
+    params.modelAliasLines &&
+    params.modelAliasLines.length > 0 &&
+    !isMinimal &&
+    isSectionEnabled("modelAliases", disabledSections)
+      ? ""
+      : "",
     userTimezone
       ? "If you need the current date, time, or day of week, run session_status (📊 session_status)."
       : "",
@@ -500,7 +536,7 @@ export function buildAgentSystemPrompt(params: {
     workspaceGuidance,
     ...workspaceNotes,
     "",
-    ...docsSection,
+    ...(isSectionEnabled("documentation", disabledSections) ? docsSection : []),
     params.sandboxInfo?.enabled ? "## Sandbox" : "",
     params.sandboxInfo?.enabled
       ? [
