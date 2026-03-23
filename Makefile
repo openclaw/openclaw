@@ -28,7 +28,7 @@ build-tony:
 # Only rebuild Tony's sandbox — after editing Dockerfile.sandbox-tony (Step 4)
 # DOCKER_BUILDKIT=0 avoids "mount options is too long" on Docker Desktop (base has many layers)
 build-sandbox-tony:
-	DOCKER_BUILDKIT=0 docker build -f Dockerfile.sandbox-tony -t $(SANDBOX_TONY) .
+	DOCKER_BUILDKIT=1 docker build -f Dockerfile.sandbox-tony -t $(SANDBOX_TONY) .
 
 # Start gateway (first time or after down)
 up:

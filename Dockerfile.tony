@@ -1,10 +1,13 @@
+# syntax=docker/dockerfile:1.7
 ARG OPENCLAW_TONY_BASE_IMAGE=openclaw:local
 FROM ${OPENCLAW_TONY_BASE_IMAGE}
 USER root
 
 # ─── Core system tools + Docker CLI ──────────────────────────────────────────
 ARG OPENCLAW_DOCKER_GPG_FINGERPRINT="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,id=tony-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=tony-apt-lists,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
     openssh-client \
@@ -24,17 +27,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable\n' \
        "$(dpkg --print-architecture)" > /etc/apt/sources.list.d/docker.list \
   && apt-get update \
-  && apt-get install -y --no-install-recommends docker-ce-cli \
-  && apt-get clean \
-  && rm -rf /var/lib/apt/lists/*
+  && apt-get install -y --no-install-recommends docker-ce-cli
 
-# ─── Ruby, Python3, and gateway utilities ────────────────────────────────────
+# ─── Ruby, Python3, gateway utilities, and Homebrew prereqs ──────────────────
 # Ruby   — Deb kanban scripts (deb.rb, sprint-sync.sh etc.)
 # Python3 / pip — slither, utility scripts (Streetlife, Masta Killa)
 # jq     — JSON parsing in shell scripts
 # socat  — port forwarding / debug tunnels
 # make   — Makefile targets (make deb-status, make tests, etc.)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# procps, file — required by Homebrew installer
+RUN --mount=type=cache,id=tony-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=tony-apt-lists,target=/var/lib/apt/lists,sharing=locked \
+    apt-get install -y --no-install-recommends \
     ruby \
     ruby-dev \
     python3 \
@@ -43,21 +47,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     socat \
     make \
     build-essential \
-  && apt-get clean \
-  && rm -rf /var/lib/apt/lists/*
+    procps \
+    file
 
 # ─── Python packages (persistent across container restarts) ──────────────────
 # requests — memory-autosync.py, API calls
 # openai   — LLM extraction in memory pipeline
 ARG OPENCLAW_TONY_PIP_PACKAGES="requests openai"
-RUN pip3 install --break-system-packages ${OPENCLAW_TONY_PIP_PACKAGES}
+RUN --mount=type=cache,id=tony-pip-cache,target=/root/.cache/pip \
+    pip3 install --break-system-packages ${OPENCLAW_TONY_PIP_PACKAGES}
 
 # ─── Homebrew (Linuxbrew — skill installer, package management) ──────────────
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    procps \
-    file \
-  && apt-get clean \
-  && rm -rf /var/lib/apt/lists/*
 ENV NONINTERACTIVE=1
 RUN /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
   || true
@@ -67,8 +67,20 @@ ENV HOMEBREW_NO_AUTO_UPDATE=1
 # ─── acpx CLI (ACP runtime bridge) ───────────────────────────────────────────
 ARG OPENCLAW_ACPX_VERSION=0.1.15
 ARG OPENCLAW_TONY_NPM_PACKAGES="vercel"
-RUN npm install -g "acpx@${OPENCLAW_ACPX_VERSION}" ${OPENCLAW_TONY_NPM_PACKAGES} \
+RUN --mount=type=cache,id=tony-npm-cache,target=/root/.npm \
+    npm install -g "acpx@${OPENCLAW_ACPX_VERSION}" ${OPENCLAW_TONY_NPM_PACKAGES} \
   && acpx --version
+
+# ─── Plugin runtime deps (durable across rebuilds) ───────────────────────────
+# Some bundled plugins rely on peer/runtime packages not baked into openclaw:local.
+# Install them in the stock extension module root so enabling those plugins does
+# not require ad-hoc container patching.
+ARG OPENCLAW_TONY_PLUGIN_RUNTIME_DEPS="@pierre/diffs @opentelemetry/api @opentelemetry/exporter-logs-otlp-proto @opentelemetry/exporter-metrics-otlp-proto @opentelemetry/exporter-trace-otlp-proto @opentelemetry/resources @opentelemetry/sdk-logs @opentelemetry/sdk-metrics @opentelemetry/sdk-node @opentelemetry/sdk-trace-base @opentelemetry/semantic-conventions"
+RUN --mount=type=cache,id=tony-npm-cache,target=/root/.npm \
+    if [ -n "${OPENCLAW_TONY_PLUGIN_RUNTIME_DEPS}" ]; then \
+      npm install --prefix /app/dist/extensions ${OPENCLAW_TONY_PLUGIN_RUNTIME_DEPS}; \
+    fi
+
 # ─── kubectl ─────────────────────────────────────────────────────────────────
 ARG OPENCLAW_KUBECTL_VERSION=1.30.0
 RUN set -eux; \

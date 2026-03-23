@@ -13,6 +13,10 @@ import "./test-helpers/fast-core-tools.js";
 import { SESSIONS_SPAWN_FAILURE_BUDGET_LIMIT } from "./sessions-spawn-failure-guard.js";
 
 const callGatewayMock = getCallGatewayMock();
+const REGISTRY_LEAD_AGENT_ID = "lead-agent";
+const REGISTRY_MEMBER_AGENT_ID = "member-agent";
+const REGISTRY_TEAM_ID = "team-alpha";
+const REGISTRY_TEAM_CAPABILITY = "analysis";
 
 describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
   async function seedRegistryFixture(): Promise<void> {
@@ -25,20 +29,20 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
       sourcePath,
       [
         "agents:",
-        "  - id: bobby-digital",
-        "    name: Bobby Digital",
+        `  - id: ${REGISTRY_LEAD_AGENT_ID}`,
+        "    name: Lead Agent",
         "    specialty: Engineering",
-        "    triggers: [engineering, backend]",
-        "  - id: ghostface",
-        "    name: Ghostface",
+        `    triggers: [${REGISTRY_TEAM_ID}, ${REGISTRY_TEAM_CAPABILITY}]`,
+        `  - id: ${REGISTRY_MEMBER_AGENT_ID}`,
+        "    name: Member Agent",
         "    specialty: Backend",
-        "    triggers: [backend]",
+        `    triggers: [${REGISTRY_TEAM_CAPABILITY}]`,
         "teams:",
-        "  - id: engineering",
-        "    name: Engineering",
-        "    lead: bobby-digital",
+        `  - id: ${REGISTRY_TEAM_ID}`,
+        "    name: Team Alpha",
+        `    lead: ${REGISTRY_LEAD_AGENT_ID}`,
         "    route_via_lead: true",
-        "    members: [bobby-digital, ghostface]",
+        `    members: [${REGISTRY_LEAD_AGENT_ID}, ${REGISTRY_MEMBER_AGENT_ID}]`,
         "",
       ].join("\n"),
       "utf8",
@@ -121,9 +125,9 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     role?: string;
   }) {
     const tool = await getSessionsSpawnTool({
-      agentSessionKey: "agent:bobby-digital:main",
+      agentSessionKey: `agent:${REGISTRY_LEAD_AGENT_ID}:main`,
       agentChannel: "whatsapp",
-      requesterAgentIdOverride: "bobby-digital",
+      requesterAgentIdOverride: REGISTRY_LEAD_AGENT_ID,
     });
     return tool.execute(params.callId, {
       task: "route the work",
@@ -260,7 +264,7 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
 
     const scoutResult = await executeSpawnFromRequester({
       callId: "call-scout-specialist",
-      requesterAgentId: "method-man",
+      requesterAgentId: "unconfigured-helper",
       agentId: "scout",
     });
     expect(scoutResult.details).toMatchObject({
@@ -272,8 +276,8 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     callGatewayMock.mockClear();
     const blockedResult = await executeSpawnFromRequester({
       callId: "call-blocked-specialist",
-      requesterAgentId: "method-man",
-      agentId: "ghostface",
+      requesterAgentId: "unconfigured-helper",
+      agentId: "blocked-helper",
     });
     expect(blockedResult.details).toMatchObject({
       status: "forbidden",
@@ -574,17 +578,17 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
   it("resolves teamId + capability to the lead-selected specialist", async () => {
     await withStateDirEnv("sessions-spawn-team-selector-", async () => {
       await seedRegistryFixture();
-      const workspaces = await createReadyWorkspaces(["bobby-digital"]);
+      const workspaces = await createReadyWorkspaces([REGISTRY_LEAD_AGENT_ID]);
       setSessionsSpawnConfigOverride({
         session: { mainKey: "main", scope: "per-sender" },
         agents: {
           list: [
             {
-              id: "bobby-digital",
-              workspace: workspaces["bobby-digital"],
-              subagents: { allowAgents: ["bobby-digital"] },
+              id: REGISTRY_LEAD_AGENT_ID,
+              workspace: workspaces[REGISTRY_LEAD_AGENT_ID],
+              subagents: { allowAgents: [REGISTRY_LEAD_AGENT_ID] },
             },
-            { id: "ghostface" },
+            { id: REGISTRY_MEMBER_AGENT_ID },
           ],
         },
       });
@@ -592,29 +596,31 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
 
       const result = await executeTeamSpawn({
         callId: "call-team-capability",
-        teamId: "engineering",
-        capability: "backend",
+        teamId: REGISTRY_TEAM_ID,
+        capability: REGISTRY_TEAM_CAPABILITY,
       });
 
       expect((result.details as { status?: string }).status).toBe("accepted");
-      expect(getChildSessionKey()?.startsWith("agent:bobby-digital:subagent:")).toBe(true);
+      expect(getChildSessionKey()?.startsWith(`agent:${REGISTRY_LEAD_AGENT_ID}:subagent:`)).toBe(
+        true,
+      );
     });
   });
 
   it("resolves teamId + role alias the same way", async () => {
     await withStateDirEnv("sessions-spawn-team-role-", async () => {
       await seedRegistryFixture();
-      const workspaces = await createReadyWorkspaces(["bobby-digital"]);
+      const workspaces = await createReadyWorkspaces([REGISTRY_LEAD_AGENT_ID]);
       setSessionsSpawnConfigOverride({
         session: { mainKey: "main", scope: "per-sender" },
         agents: {
           list: [
             {
-              id: "bobby-digital",
-              workspace: workspaces["bobby-digital"],
-              subagents: { allowAgents: ["bobby-digital"] },
+              id: REGISTRY_LEAD_AGENT_ID,
+              workspace: workspaces[REGISTRY_LEAD_AGENT_ID],
+              subagents: { allowAgents: [REGISTRY_LEAD_AGENT_ID] },
             },
-            { id: "ghostface" },
+            { id: REGISTRY_MEMBER_AGENT_ID },
           ],
         },
       });
@@ -622,12 +628,14 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
 
       const result = await executeTeamSpawn({
         callId: "call-team-role",
-        teamId: "engineering",
-        role: "backend",
+        teamId: REGISTRY_TEAM_ID,
+        role: REGISTRY_TEAM_CAPABILITY,
       });
 
       expect((result.details as { status?: string }).status).toBe("accepted");
-      expect(getChildSessionKey()?.startsWith("agent:bobby-digital:subagent:")).toBe(true);
+      expect(getChildSessionKey()?.startsWith(`agent:${REGISTRY_LEAD_AGENT_ID}:subagent:`)).toBe(
+        true,
+      );
     });
   });
 });

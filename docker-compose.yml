@@ -19,6 +19,7 @@ services:
     volumes:
       - ${OPENCLAW_CONFIG_DIR:-../../..}:/home/node/.openclaw
       - ${OPENCLAW_SHARED_WORKSPACE_HOST:-../..}:/shared-workspace
+      - ${OPENCLAW_SHARED_WORKSPACE_HOST:-../..}:/workspace
       - ${OPENCLAW_SHARED_FILES_HOST:-../../../shared-files}:/shared-files
       - ${OPENCLAW_AGENT_HOME_TONY_HOST:-../../../workspace-tony}:/agent-homes/tony
       - ${OPENCLAW_AGENT_HOME_BOBBY_DIGITAL_HOST:-../../../workspace-bobby-digital}:/agent-homes/bobby-digital
@@ -89,6 +90,7 @@ services:
     volumes:
       - ${OPENCLAW_CONFIG_DIR:-../../..}:/home/node/.openclaw
       - ${OPENCLAW_SHARED_WORKSPACE_HOST:-../..}:/shared-workspace
+      - ${OPENCLAW_SHARED_WORKSPACE_HOST:-../..}:/workspace
       - ${OPENCLAW_SHARED_FILES_HOST:-../../../shared-files}:/shared-files
       - ${OPENCLAW_AGENT_HOME_TONY_HOST:-../../../workspace-tony}:/agent-homes/tony
       - ${OPENCLAW_AGENT_HOME_BOBBY_DIGITAL_HOST:-../../../workspace-bobby-digital}:/agent-homes/bobby-digital

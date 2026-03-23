@@ -1,3 +1,4 @@
+import path from "node:path";
 import { inspect } from "node:util";
 import {
   Client,
@@ -31,6 +32,7 @@ import {
 import type { OpenClawConfig, ReplyToMode } from "../../../../src/config/config.js";
 import { loadConfig } from "../../../../src/config/config.js";
 import { isDangerousNameMatchingEnabled } from "../../../../src/config/dangerous-name-matching.js";
+import { resolveStateDir } from "../../../../src/config/paths.js";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveOpenProviderRuntimeGroupPolicy,
@@ -61,6 +63,7 @@ import {
   createDiscordComponentUserSelect,
 } from "./agent-components.js";
 import { createDiscordAutoPresenceController } from "./auto-presence.js";
+import { shouldSkipDeploy, updateDeployCache } from "./command-deploy-cache.js";
 import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import { createExecApprovalButton, DiscordExecApprovalHandler } from "./exec-approvals.js";
 import { attachEarlyGatewayErrorGuard } from "./gateway-error-guard.js";
@@ -243,12 +246,32 @@ async function deployDiscordCommands(params: {
   enabled: boolean;
   accountId?: string;
   startupStartedAt?: number;
+  commandSpecs?: NativeCommandSpec[];
+  botId?: string;
+  cacheDir?: string;
+  forceDeployCommands?: boolean;
 }) {
   if (!params.enabled) {
     return;
   }
   const startupStartedAt = params.startupStartedAt ?? Date.now();
   const accountId = params.accountId ?? "default";
+
+  // Skip deploy if command definitions haven't changed since the last successful deploy.
+  if (
+    !params.forceDeployCommands &&
+    params.commandSpecs !== undefined &&
+    params.botId &&
+    params.cacheDir
+  ) {
+    const skip = await shouldSkipDeploy(params.commandSpecs, params.cacheDir, params.botId);
+    if (skip) {
+      params.runtime.log?.(
+        `discord: native command deploy skipped for ${accountId}; definitions unchanged since last deploy.`,
+      );
+      return;
+    }
+  }
   const maxAttempts = 3;
   const maxRetryDelayMs = 15_000;
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
@@ -303,6 +326,18 @@ async function deployDiscordCommands(params: {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
         await params.client.handleDeployRequest();
+        // Write cache on success. If the write fails, log and continue — the next
+        // restart will simply redeploy. Do NOT write cache in the daily-limit branch
+        // below; we can't confirm Discord has the latest commands in that case.
+        if (params.commandSpecs !== undefined && params.botId && params.cacheDir) {
+          await updateDeployCache(params.commandSpecs, params.cacheDir, params.botId).catch(
+            (cacheErr: unknown) => {
+              params.runtime.error?.(
+                `discord: failed to update command deploy cache for ${accountId}: ${formatErrorMessage(cacheErr)}`,
+              );
+            },
+          );
+        }
         return;
       } catch (err) {
         if (isDailyCreateLimit(err)) {
@@ -807,6 +842,10 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       enabled: nativeEnabled,
       accountId: account.accountId,
       startupStartedAt,
+      commandSpecs,
+      botId: applicationId,
+      cacheDir: path.join(resolveStateDir(), "discord-command-cache"),
+      forceDeployCommands: process.env.OPENCLAW_DISCORD_FORCE_DEPLOY_COMMANDS === "1",
     });
     logDiscordStartupPhase({
       runtime,

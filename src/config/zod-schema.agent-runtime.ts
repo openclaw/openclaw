@@ -859,6 +859,7 @@ export const AgentEntrySchema = z
           .optional(),
         escalation: SubagentEscalationSchema.optional(),
         thinking: z.string().optional(),
+        announceTimeoutMs: z.number().int().positive().optional(),
       })
       .strict()
       .optional(),

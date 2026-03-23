@@ -1,5 +1,6 @@
 .git
 .worktrees
+.claude/
 
 # Sensitive files – docker-setup.sh writes .env with OPENCLAW_GATEWAY_TOKEN
 # into the project root; keep it out of the build context.
@@ -36,6 +37,10 @@ coverage
 *.log
 tmp
 **/tmp
+
+# src/martina is gitignored (moved out to avoid merge conflicts) but must be
+# present in the Docker build context for the TypeScript build to succeed.
+!src/martina/
 
 # build artifacts
 dist
