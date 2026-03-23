@@ -219,6 +219,8 @@ export function buildAgentSystemPrompt(params: {
     channel: string;
   };
   memoryCitationsMode?: MemoryCitationsMode;
+  /** Policy feedback advisory hints to inject into the prompt (advisory/active mode). */
+  policyHintsSection?: string;
 }) {
   const acpEnabled = params.acpEnabled !== false;
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
@@ -599,6 +601,9 @@ export function buildAgentSystemPrompt(params: {
   }
   if (reasoningHint) {
     lines.push("## Reasoning Format", reasoningHint, "");
+  }
+  if (params.policyHintsSection) {
+    lines.push("## Policy Guidance", params.policyHintsSection, "");
   }
 
   const contextFiles = params.contextFiles ?? [];
