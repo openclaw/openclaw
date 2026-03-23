@@ -32,7 +32,7 @@ describe("session cost usage", () => {
         message: {
           role: "assistant",
           provider: "openai",
-          model: "gpt-5.2",
+          model: "gpt-5.4",
           usage: {
             input: 10,
             output: 20,
@@ -49,7 +49,7 @@ describe("session cost usage", () => {
         message: {
           role: "assistant",
           provider: "openai",
-          model: "gpt-5.2",
+          model: "gpt-5.4",
           usage: {
             input: 10,
             output: 10,
@@ -65,7 +65,7 @@ describe("session cost usage", () => {
         message: {
           role: "assistant",
           provider: "openai",
-          model: "gpt-5.2",
+          model: "gpt-5.4",
           usage: {
             input: 5,
             output: 5,
@@ -88,7 +88,7 @@ describe("session cost usage", () => {
           openai: {
             models: [
               {
-                id: "gpt-5.2",
+                id: "gpt-5.4",
                 cost: {
                   input: 1,
                   output: 2,
@@ -123,7 +123,7 @@ describe("session cost usage", () => {
         message: {
           role: "assistant",
           provider: "openai",
-          model: "gpt-5.2",
+          model: "gpt-5.4",
           usage: {
             input: 10,
             output: 20,
@@ -164,7 +164,7 @@ describe("session cost usage", () => {
         message: {
           role: "assistant",
           provider: "openai",
-          model: "gpt-5.2",
+          model: "gpt-5.4",
           stopReason: "error",
           content: [
             { type: "text", text: "Checking" },
@@ -200,7 +200,7 @@ describe("session cost usage", () => {
     expect(summary?.toolUsage?.uniqueTools).toBe(1);
     expect(summary?.toolUsage?.tools[0]?.name).toBe("weather");
     expect(summary?.modelUsage?.[0]?.provider).toBe("openai");
-    expect(summary?.modelUsage?.[0]?.model).toBe("gpt-5.2");
+    expect(summary?.modelUsage?.[0]?.model).toBe("gpt-5.4");
     expect(summary?.durationMs).toBe(5 * 60 * 1000);
     expect(summary?.latency?.count).toBe(1);
     expect(summary?.latency?.avgMs).toBe(5 * 60 * 1000);
@@ -208,7 +208,7 @@ describe("session cost usage", () => {
     expect(summary?.dailyLatency?.[0]?.date).toBe("2026-02-01");
     expect(summary?.dailyLatency?.[0]?.count).toBe(1);
     expect(summary?.dailyModelUsage?.[0]?.date).toBe("2026-02-01");
-    expect(summary?.dailyModelUsage?.[0]?.model).toBe("gpt-5.2");
+    expect(summary?.dailyModelUsage?.[0]?.model).toBe("gpt-5.4");
   });
 
   it("does not exclude sessions with mtime after endMs during discovery", async () => {
@@ -544,7 +544,7 @@ describe("session cost usage", () => {
         message: {
           role: "assistant",
           provider: "openai",
-          model: "gpt-5.2",
+          model: "gpt-5.4",
           usage: {
             input: 7,
             output: 11,
@@ -586,7 +586,7 @@ describe("session cost usage", () => {
           message: {
             role: "assistant",
             provider: "openai",
-            model: "gpt-5.2",
+            model: "gpt-5.4",
             usage: { input: 5, output: 3, totalTokens: 8, cost: { total: 0.001 } },
           },
         }),
@@ -702,7 +702,7 @@ example
         message: {
           role: "assistant",
           provider: "openai",
-          model: "gpt-5.2",
+          model: "gpt-5.4",
           usage: {
             input: idx,
             output: idx * 2,
