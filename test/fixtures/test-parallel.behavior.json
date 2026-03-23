@@ -16,12 +16,7 @@
     ]
   },
   "unit": {
-    "isolated": [
-      {
-        "file": "extensions/imessage/src/monitor.shutdown.unhandled-rejection.test.ts",
-        "reason": "Touches process-level unhandledRejection listeners."
-      }
-    ],
+    "isolated": [],
     "threadPinned": []
   }
 }
