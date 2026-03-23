@@ -134,13 +134,10 @@ export async function runExec(
     // for non-ASCII characters. We prepend "chcp 65001" to force UTF-8 mode,
     // which works correctly with our utf8 encoding option.
     // See: https://github.com/openclaw/openclaw/issues/50519
-    const cmdExeCommandLine = useCmdWrapper
-      ? `chcp 65001 > nul && ${buildCmdExeCommandLine(execCommand, execArgs)}`
-      : buildCmdExeCommandLine(execCommand, execArgs);
     const { stdout, stderr } = useCmdWrapper
       ? await execFileAsync(
           process.env.ComSpec ?? "cmd.exe",
-          ["/d", "/s", "/c", cmdExeCommandLine],
+          ["/d", "/s", "/c", `chcp 65001 > nul && ${buildCmdExeCommandLine(execCommand, execArgs)}`],
           { ...options, windowsVerbatimArguments: true },
         )
       : await execFileAsync(execCommand, execArgs, options);
