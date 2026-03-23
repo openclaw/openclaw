@@ -3,7 +3,7 @@
 // 自动打包部署脚本 (Node.js 版本)
 
 import { execSync } from "child_process";
-import { mkdirSync, rmSync, copyFileSync, cpSync } from "fs";
+import { mkdirSync, rmSync, copyFileSync, cpSync, readFileSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 
@@ -11,8 +11,25 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const WORK_DIR = resolve(__dirname, "..");
 
+// 从品牌配置文件中读取品牌名称
+function getBrandName() {
+  try {
+    const brandConfigPath = resolve(WORK_DIR, "ui", "src", "brand-config.ts");
+    const brandConfigContent = readFileSync(brandConfigPath, "utf8");
+    const match = brandConfigContent.match(/name:\s*["']([^"']+)["']/);
+    if (match && match[1]) {
+      return match[1].trim();
+    }
+    console.warn("无法从品牌配置文件中读取品牌名称，使用默认值 'JSClaw'");
+    return "JSClaw";
+  } catch (error) {
+    console.warn("读取品牌配置文件失败，使用默认值 'JSClaw':", error.message);
+    return "JSClaw";
+  }
+}
+
 // 品牌名称
-const BRAND_NAME = "JSClaw";
+const BRAND_NAME = getBrandName();
 
 // 输出目录
 const OUTPUT_DIR = resolve(WORK_DIR, "deploy");
