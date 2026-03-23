@@ -777,12 +777,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         )
       : undefined;
     const cfg = loadConfig();
+    const requesterSessionKey =
+      typeof p.requesterSessionKey === "string" && p.requesterSessionKey.trim()
+        ? p.requesterSessionKey.trim()
+        : undefined;
     const searchResult = await searchSessionsViaFts({
       cfg,
       query,
       limit,
-      requesterSessionKey: undefined,
-      sandboxed: false,
+      requesterSessionKey,
+      sandboxed: p.sandboxed === true,
       activeMinutes,
       kinds,
       requestedKeys,
@@ -813,12 +817,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         : 2000;
     const activeMinutes = p.scope === "recent" ? 60 * 24 * 14 : undefined;
     const cfg = loadConfig();
+    const requesterSessionKey =
+      typeof p.requesterSessionKey === "string" && p.requesterSessionKey.trim()
+        ? p.requesterSessionKey.trim()
+        : undefined;
     const searchResult = await searchSessionsViaFts({
       cfg,
       query,
       limit,
-      requesterSessionKey: undefined,
-      sandboxed: false,
+      requesterSessionKey,
+      sandboxed: p.sandboxed === true,
       activeMinutes,
     });
     if (!Array.isArray(searchResult.results) || searchResult.results.length === 0) {

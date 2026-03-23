@@ -10,7 +10,10 @@ const SessionsSearchToolSchema = Type.Object({
   kinds: Type.Optional(Type.Array(Type.String())),
 });
 
-export function createSessionsSearchTool(): AnyAgentTool {
+export function createSessionsSearchTool(opts?: {
+  agentSessionKey?: string;
+  sandboxed?: boolean;
+}): AnyAgentTool {
   return {
     label: "Session Search",
     name: "sessions_search",
@@ -49,6 +52,8 @@ export function createSessionsSearchTool(): AnyAgentTool {
           limit,
           activeMinutes,
           kinds: kinds && kinds.length > 0 ? kinds : undefined,
+          requesterSessionKey: opts?.agentSessionKey,
+          sandboxed: opts?.sandboxed === true,
         },
       });
 

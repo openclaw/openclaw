@@ -61,6 +61,7 @@ export async function createReplayRun(params: {
     status: "created",
     trajectory,
     stepIdx: 0,
+    toolCallCount: 0,
     createdAtMs: nowMs,
     updatedAtMs: nowMs,
     limits: resolveLimits(params.request),
@@ -102,7 +103,8 @@ export function stepReplayRun(params: { run: ReplayRunState; nowMs?: number }): 
   const stepToolCalls = run.trajectory.toolCalls.filter(
     (toolCall) => toolCall.stepIdx === currentStep,
   );
-  if (stepToolCalls.length > run.limits.maxToolCalls) {
+  const nextToolCallCount = run.toolCallCount + stepToolCalls.length;
+  if (nextToolCallCount > run.limits.maxToolCalls) {
     throw new ReplayControlError({
       code: "limit_exceeded",
       status: 400,
@@ -134,6 +136,7 @@ export function stepReplayRun(params: { run: ReplayRunState; nowMs?: number }): 
   });
 
   run.stepIdx += 1;
+  run.toolCallCount = nextToolCallCount;
   const totalSteps = Math.max(
     run.trajectory.messages.filter((message) => message.role === "assistant").length,
     Math.max(0, ...run.trajectory.toolCalls.map((toolCall) => toolCall.stepIdx + 1)),
@@ -169,7 +172,7 @@ export function toReplayRunStateResponse(run: ReplayRunState): ReplayRunsGetStat
     mode: run.mode,
     stepIdx: run.stepIdx,
     totalSteps,
-    toolCallCount: run.trajectory.toolCalls.length,
+    toolCallCount: run.toolCallCount,
     createdAtMs: run.createdAtMs,
     updatedAtMs: run.updatedAtMs,
   };

@@ -22,7 +22,10 @@ type SessionsRecallResult = {
   cached?: boolean;
 };
 
-export function createSessionsRecallTool(): AnyAgentTool {
+export function createSessionsRecallTool(opts?: {
+  agentSessionKey?: string;
+  sandboxed?: boolean;
+}): AnyAgentTool {
   return {
     label: "Session Recall",
     name: "sessions_recall",
@@ -48,6 +51,8 @@ export function createSessionsRecallTool(): AnyAgentTool {
           maxTokens,
           limit,
           scope,
+          requesterSessionKey: opts?.agentSessionKey,
+          sandboxed: opts?.sandboxed === true,
         },
       });
 

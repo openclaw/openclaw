@@ -223,6 +223,8 @@ export async function processGatewayAllowlist(
       const decision = await resolveApprovalDecisionOrUndefined({
         approvalId,
         preResolvedDecision,
+        sessionKey: params.notifySessionKey,
+        agentId: params.agentId,
         onFailure: () =>
           void sendExecApprovalFollowupResult(
             followupTarget,

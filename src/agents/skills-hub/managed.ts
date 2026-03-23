@@ -210,48 +210,67 @@ export async function updateManagedSkills(params: {
 
   for (const entry of lock.skills) {
     const skillDir = path.join(rootDir, entry.name);
-    const updateResult =
-      entry.source === "clawhub"
-        ? await installSkillFromClawHub({
-            workspaceDir: rootDir,
-            slug: entry.name,
-            version: entry.ref,
-            force: true,
-          })
-        : await updateFromGithub({ rootDir, lock: entry });
-    if (!updateResult.ok) {
-      results.push({
-        name: entry.name,
-        ok: false,
-        message: "error" in updateResult ? updateResult.error : "update failed",
+    const backupRoot = await fs.mkdtemp(path.join(rootDir, ".hub-update-backup-"));
+    const backupDir = path.join(backupRoot, entry.name);
+    const hadExistingSkill = await fs
+      .stat(skillDir)
+      .then((st) => st.isDirectory())
+      .catch(() => false);
+    if (hadExistingSkill) {
+      await fs.cp(skillDir, backupDir, { recursive: true });
+    }
+    try {
+      const updateResult =
+        entry.source === "clawhub"
+          ? await installSkillFromClawHub({
+              workspaceDir: rootDir,
+              slug: entry.name,
+              version: entry.ref,
+              force: true,
+            })
+          : await updateFromGithub({ rootDir, lock: entry });
+      if (!updateResult.ok) {
+        results.push({
+          name: entry.name,
+          ok: false,
+          message: "error" in updateResult ? updateResult.error : "update failed",
+        });
+        continue;
+      }
+      const summary = await scanDirectoryWithSummary(skillDir);
+      const policy = enforceManagedScanPolicy({
+        summary,
+        skillName: entry.name,
+        force: Boolean(params.force),
       });
-      continue;
+      if (!policy.ok) {
+        if (hadExistingSkill) {
+          await fs.rm(skillDir, { recursive: true, force: true }).catch(() => undefined);
+          await fs.cp(backupDir, skillDir, { recursive: true });
+        } else {
+          await fs.rm(skillDir, { recursive: true, force: true }).catch(() => undefined);
+        }
+        results.push({ name: entry.name, ok: false, message: policy.message });
+        continue;
+      }
+      const contentHash = await computeDirectoryContentHash(skillDir);
+      const skillMdHash = await computeSkillMarkdownHash(skillDir);
+      nextLock = upsertLockSkill(nextLock, {
+        ...entry,
+        contentHash,
+        ...(skillMdHash ? { skillMdHash } : {}),
+        scan: {
+          critical: summary.critical,
+          warn: summary.warn,
+          info: summary.info,
+          verdict: summarizeVerdict(summary),
+        },
+        installedAt: Date.now(),
+      });
+      results.push({ name: entry.name, ok: true, message: "updated" });
+    } finally {
+      await fs.rm(backupRoot, { recursive: true, force: true }).catch(() => undefined);
     }
-    const summary = await scanDirectoryWithSummary(skillDir);
-    const policy = enforceManagedScanPolicy({
-      summary,
-      skillName: entry.name,
-      force: Boolean(params.force),
-    });
-    if (!policy.ok) {
-      results.push({ name: entry.name, ok: false, message: policy.message });
-      continue;
-    }
-    const contentHash = await computeDirectoryContentHash(skillDir);
-    const skillMdHash = await computeSkillMarkdownHash(skillDir);
-    nextLock = upsertLockSkill(nextLock, {
-      ...entry,
-      contentHash,
-      ...(skillMdHash ? { skillMdHash } : {}),
-      scan: {
-        critical: summary.critical,
-        warn: summary.warn,
-        info: summary.info,
-        verdict: summarizeVerdict(summary),
-      },
-      installedAt: Date.now(),
-    });
-    results.push({ name: entry.name, ok: true, message: "updated" });
   }
 
   await writeHubLockfile(lockfilePath, nextLock);

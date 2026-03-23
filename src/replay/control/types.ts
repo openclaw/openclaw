@@ -33,6 +33,7 @@ export type ReplayRunState = {
   status: ReplayRunStatus;
   trajectory: TrajectoryV1;
   stepIdx: number;
+  toolCallCount: number;
   createdAtMs: number;
   updatedAtMs: number;
   closedAtMs?: number;

@@ -132,25 +132,30 @@ export async function registerExecApprovalRequest(
   return { id, expiresAtMs };
 }
 
-export async function waitForExecApprovalDecision(id: string): Promise<string | null> {
+export async function waitForExecApprovalDecision(params: {
+  id: string;
+  sessionKey?: string;
+  agentId?: string;
+}): Promise<string | null> {
   try {
     const decisionResult = await callGatewayTool<{ decision: string }>(
       "exec.approval.waitDecision",
       { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
-      { id },
+      { id: params.id },
     );
     const value = parseDecision(decisionResult).value;
     try {
       const cfg = loadConfig();
       await emitStandaloneResearchEvent({
         cfg,
-        runId: id,
-        sessionId: id,
-        agentId: "default",
+        runId: params.id,
+        sessionId: params.id,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId ?? "default",
         event: {
           kind: value && value.startsWith("allow") ? "approval.allow" : "approval.deny",
           payload: {
-            approvalId: id,
+            approvalId: params.id,
             decision: value ?? undefined,
             ...(value && value.startsWith("allow")
               ? {}
@@ -170,12 +175,13 @@ export async function waitForExecApprovalDecision(id: string): Promise<string | 
         const cfg = loadConfig();
         await emitStandaloneResearchEvent({
           cfg,
-          runId: id,
-          sessionId: id,
-          agentId: "default",
+          runId: params.id,
+          sessionId: params.id,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId ?? "default",
           event: {
             kind: "approval.deny",
-            payload: { approvalId: id, reason: "approval expired or not found" },
+            payload: { approvalId: params.id, reason: "approval expired or not found" },
           },
         });
       } catch {
@@ -190,11 +196,17 @@ export async function waitForExecApprovalDecision(id: string): Promise<string | 
 export async function resolveRegisteredExecApprovalDecision(params: {
   approvalId: string;
   preResolvedDecision: string | null | undefined;
+  sessionKey?: string;
+  agentId?: string;
 }): Promise<string | null> {
   if (params.preResolvedDecision !== undefined) {
     return params.preResolvedDecision ?? null;
   }
-  return await waitForExecApprovalDecision(params.approvalId);
+  return await waitForExecApprovalDecision({
+    id: params.approvalId,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+  });
 }
 
 export async function requestExecApprovalDecision(
@@ -204,7 +216,11 @@ export async function requestExecApprovalDecision(
   if (Object.hasOwn(registration, "finalDecision")) {
     return registration.finalDecision ?? null;
   }
-  return await waitForExecApprovalDecision(registration.id);
+  return await waitForExecApprovalDecision({
+    id: registration.id,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+  });
 }
 
 type HostExecApprovalParams = {

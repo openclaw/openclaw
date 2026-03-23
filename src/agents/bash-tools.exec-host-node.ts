@@ -282,6 +282,8 @@ export async function executeNodeHostCommand(
       const decision = await execHostShared.resolveApprovalDecisionOrUndefined({
         approvalId,
         preResolvedDecision,
+        sessionKey: runSessionKey,
+        agentId: runAgentId,
         onFailure: () =>
           void execHostShared.sendExecApprovalFollowupResult(
             followupTarget,

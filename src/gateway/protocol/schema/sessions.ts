@@ -32,6 +32,8 @@ export const SessionsSearchParamsSchema = Type.Object(
     activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
     kinds: Type.Optional(Type.Array(NonEmptyString)),
     keys: Type.Optional(Type.Array(NonEmptyString)),
+    requesterSessionKey: Type.Optional(NonEmptyString),
+    sandboxed: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -42,6 +44,8 @@ export const SessionsRecallParamsSchema = Type.Object(
     maxTokens: Type.Optional(Type.Integer({ minimum: 256, maximum: 4000 })),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
     scope: Type.Optional(Type.Union([Type.Literal("recent"), Type.Literal("all")])),
+    requesterSessionKey: Type.Optional(NonEmptyString),
+    sandboxed: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

@@ -68,4 +68,14 @@ describe("replay runner", () => {
     expect(() => stepReplayRun({ run })).toThrowError(ReplayControlError);
     expect(() => stepReplayRun({ run })).toThrow(/allowlisted/);
   });
+
+  it("enforces maxToolCalls across the whole run", async () => {
+    const trajectoryPath = await writeTrajectoryFixture();
+    const run = await createReplayRun({
+      runId: "run-3",
+      request: { trajectoryPath, mode: "recorded", maxToolCalls: 0 },
+    });
+    expect(() => stepReplayRun({ run })).toThrowError(ReplayControlError);
+    expect(() => stepReplayRun({ run })).toThrow(/Max tool calls exceeded/);
+  });
 });

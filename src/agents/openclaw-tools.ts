@@ -209,8 +209,14 @@ export function createOpenClawTools(
       config: resolvedConfig,
       callGateway: openClawToolsDeps.callGateway,
     }),
-    createSessionsSearchTool(),
-    createSessionsRecallTool(),
+    createSessionsSearchTool({
+      agentSessionKey: options?.agentSessionKey,
+      sandboxed: options?.sandboxed,
+    }),
+    createSessionsRecallTool({
+      agentSessionKey: options?.agentSessionKey,
+      sandboxed: options?.sandboxed,
+    }),
     createSkillsManageTool({
       workspaceDir,
       agentSessionKey: options?.agentSessionKey,
