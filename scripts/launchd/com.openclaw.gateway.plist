@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.openclaw.gateway</string>
+
+    <key>WorkingDirectory</key>
+    <string>__OPENCLAW_DIR__</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PNPM_PATH__</string>
+        <string>watchdog:run</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__PATH__</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/.openclaw/logs/launchd-stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.openclaw/logs/launchd-stderr.log</string>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>

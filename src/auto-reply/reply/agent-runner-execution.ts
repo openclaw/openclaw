@@ -122,7 +122,7 @@ export async function runAgentTurnWithFallback(params: {
           }
           text = stripped.text;
         }
-        if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+        if (isSilentReplyText(text, SILENT_REPLY_TOKEN) || text?.includes(SILENT_REPLY_TOKEN)) {
           return { skip: true };
         }
         if (!text) {

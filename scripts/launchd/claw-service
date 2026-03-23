@@ -1,0 +1,199 @@
+#!/bin/bash
+# OpenClaw launchd service manager
+
+LABEL="com.openclaw.gateway"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+STDOUT_LOG="$HOME/.openclaw/logs/launchd-stdout.log"
+STDERR_LOG="$HOME/.openclaw/logs/launchd-stderr.log"
+
+show_help() {
+  echo "OpenClaw launchd service manager"
+  echo ""
+  echo "[Usage] claw-service <command>"
+  echo ""
+  echo "Commands"
+  echo "  start     Load the plist and start the service"
+  echo "  stop      Stop the service and unload the plist"
+  echo "  restart   Stop, unload, reload, and start the service"
+  echo "  status    Show whether the service is running (default)"
+  echo "  logs      Print the last 50 lines of stdout and stderr"
+  echo "  tail      Stream logs in real time (stderr in red)"
+  echo "  install   Install or update from the openclaw repo"
+  echo "  uninstall Remove the plist and this script"
+  echo ""
+  echo "The plist is at $PLIST"
+  echo "Logs are written to $STDOUT_LOG"
+  echo "                 and $STDERR_LOG"
+}
+
+get_pid() {
+  launchctl list "$LABEL" 2>/dev/null | grep '"PID"' | sed 's/[^0-9]//g'
+}
+
+# Find the openclaw repo by checking common locations
+find_repo() {
+  local candidates=(
+    "$HOME/git/ai/openclaw"
+    "$HOME/git/openclaw"
+    "$HOME/openclaw"
+  )
+  for dir in "${candidates[@]}"; do
+    if [ -f "$dir/scripts/launchd/claw-service" ]; then
+      echo "$dir"
+      return 0
+    fi
+  done
+  return 1
+}
+
+do_install() {
+  local repo
+  repo=$(find_repo)
+  if [ -z "$repo" ]; then
+    echo "Could not find the openclaw repo."
+    echo "Checked ~/git/ai/openclaw, ~/git/openclaw, ~/openclaw"
+    exit 1
+  fi
+
+  local source_script="$repo/scripts/launchd/claw-service"
+  local source_plist="$repo/scripts/launchd/com.openclaw.gateway.plist"
+  local dest_script="/usr/local/bin/claw-service"
+  local dest_plist="$HOME/Library/LaunchAgents/$LABEL.plist"
+  local pnpm_path
+  pnpm_path=$(which pnpm 2>/dev/null)
+
+  if [ -z "$pnpm_path" ]; then
+    echo "pnpm not found in PATH"
+    exit 1
+  fi
+
+  # Stop existing service if running
+  if launchctl list "$LABEL" &>/dev/null; then
+    echo "Stopping existing service..."
+    launchctl stop "$LABEL" 2>/dev/null
+    launchctl unload "$dest_plist" 2>/dev/null
+    sleep 1
+  fi
+
+  # Install the script
+  echo "Installing claw-service to $dest_script"
+  sudo cp "$source_script" "$dest_script"
+  sudo chmod +x "$dest_script"
+
+  # Generate the plist from template
+  echo "Installing plist to $dest_plist"
+  mkdir -p "$HOME/Library/LaunchAgents"
+  mkdir -p "$HOME/.openclaw/logs"
+  sed \
+    -e "s|__OPENCLAW_DIR__|$repo|g" \
+    -e "s|__PNPM_PATH__|$pnpm_path|g" \
+    -e "s|__PATH__|$(echo "$PATH")|g" \
+    -e "s|__HOME__|$HOME|g" \
+    "$source_plist" > "$dest_plist"
+
+  # Load and start
+  echo "Loading plist..."
+  launchctl load "$dest_plist"
+  launchctl start "$LABEL"
+
+  echo ""
+  echo "Installed successfully"
+  echo "  Script  $dest_script"
+  echo "  Plist   $dest_plist"
+  echo "  Repo    $repo"
+  echo ""
+  echo "Run \"claw-service status\" to verify"
+}
+
+do_uninstall() {
+  local dest_script="/usr/local/bin/claw-service"
+  local dest_plist="$HOME/Library/LaunchAgents/$LABEL.plist"
+
+  if launchctl list "$LABEL" &>/dev/null; then
+    echo "Stopping service..."
+    launchctl stop "$LABEL" 2>/dev/null
+    launchctl unload "$dest_plist" 2>/dev/null
+  fi
+
+  if [ -f "$dest_plist" ]; then
+    echo "Removing $dest_plist"
+    rm "$dest_plist"
+  fi
+
+  if [ -f "$dest_script" ]; then
+    echo "Removing $dest_script"
+    sudo rm "$dest_script"
+  fi
+
+  echo "Uninstalled"
+}
+
+case "${1:-status}" in
+  start)
+    launchctl load "$PLIST" 2>/dev/null
+    launchctl start "$LABEL"
+    echo "OpenClaw service started"
+    ;;
+  stop)
+    launchctl stop "$LABEL"
+    launchctl unload "$PLIST" 2>/dev/null
+    echo "OpenClaw service stopped"
+    ;;
+  restart)
+    launchctl stop "$LABEL" 2>/dev/null
+    launchctl unload "$PLIST" 2>/dev/null
+    sleep 2
+    launchctl load "$PLIST"
+    launchctl start "$LABEL"
+    echo "OpenClaw service restarted"
+    ;;
+  status)
+    if launchctl list "$LABEL" &>/dev/null; then
+      PID=$(get_pid)
+      if [ -n "$PID" ]; then
+        echo "OpenClaw is running (PID $PID)"
+      else
+        echo "OpenClaw is loaded but not running"
+      fi
+    else
+      echo "OpenClaw is not loaded"
+    fi
+    ;;
+  logs)
+    echo "=== stdout ==="
+    tail -50 "$STDOUT_LOG" 2>/dev/null || echo "(no logs yet)"
+    echo ""
+    echo -e "\033[31m=== stderr ===\033[0m"
+    tail -50 "$STDERR_LOG" 2>/dev/null || echo "(no logs yet)"
+    ;;
+  tail)
+    tail -f "$STDOUT_LOG" "$STDERR_LOG" | while IFS= read -r line; do
+      if [[ "$line" == "==> $STDERR_LOG <=="* ]] || [[ "$line" == *"$STDERR_LOG"* && "$line" == "==> "* ]]; then
+        _CLAW_STDERR=1
+        echo -e "\033[31m$line\033[0m"
+      elif [[ "$line" == "==> $STDOUT_LOG <=="* ]] || [[ "$line" == *"$STDOUT_LOG"* && "$line" == "==> "* ]]; then
+        _CLAW_STDERR=0
+        echo "$line"
+      elif [[ "$_CLAW_STDERR" == "1" ]]; then
+        echo -e "\033[31m$line\033[0m"
+      else
+        echo "$line"
+      fi
+    done
+    ;;
+  install|update)
+    do_install
+    ;;
+  uninstall)
+    do_uninstall
+    ;;
+  help|--help|-h)
+    show_help
+    ;;
+  *)
+    echo "Unknown command \"$1\""
+    echo ""
+    show_help
+    exit 1
+    ;;
+esac

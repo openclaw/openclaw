@@ -36,6 +36,15 @@ export function normalizeReplyPayload(
 
   const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;
   let text = payload.text ?? undefined;
+  // Defense-in-depth: suppress any message containing the silent token anywhere,
+  // not just at the start/end (catches edge cases where regex matching fails).
+  if (text && text.includes(silentToken)) {
+    if (!hasMedia && !hasChannelData) {
+      opts.onSkip?.("silent");
+      return null;
+    }
+    text = "";
+  }
   if (text && isSilentReplyText(text, silentToken)) {
     if (!hasMedia && !hasChannelData) {
       opts.onSkip?.("silent");
