@@ -59,18 +59,6 @@ while reducing token usage.
 openclaw plugins install @martian-engineering/lossless-claw
 ```
 
-### Opik
-
-Official plugin that exports agent traces to Opik. Monitor agent behavior,
-cost, tokens, errors, and more.
-
-- **npm:** `@opik/opik-openclaw`
-- **repo:** [github.com/comet-ml/opik-openclaw](https://github.com/comet-ml/opik-openclaw)
-
-```bash
-openclaw plugins install @opik/opik-openclaw
-```
-
 ### OpenHer Persona Engine
 
 AI Being engine — not an assistant, not an agent, but a character that
@@ -89,6 +77,18 @@ weights × lived experience — no prompt describes who she is.
 
 ```bash
 openclaw plugins install @openher/openclaw-plugin
+```
+
+### Opik
+
+Official plugin that exports agent traces to Opik. Monitor agent behavior,
+cost, tokens, errors, and more.
+
+- **npm:** `@opik/opik-openclaw`
+- **repo:** [github.com/comet-ml/opik-openclaw](https://github.com/comet-ml/opik-openclaw)
+
+```bash
+openclaw plugins install @opik/opik-openclaw
 ```
 
 ### QQbot
