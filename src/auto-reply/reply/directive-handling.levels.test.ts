@@ -94,14 +94,28 @@ describe("resolveCurrentDirectiveLevels", () => {
     expect(result.currentReasoningLevel).toBe("stream");
   });
 
-  it("skips agent reasoningDefault when thinking is active", async () => {
-    const resolveDefaultThinkingLevel = vi.fn().mockResolvedValue("low");
+  it("applies agent reasoningDefault even when thinking is active", async () => {
+    const resolveDefaultThinkingLevel = vi.fn().mockResolvedValue("high");
 
     const result = await resolveCurrentDirectiveLevels({
       sessionEntry: {},
       agentEntry: {
         reasoningDefault: "stream",
       },
+      resolveDefaultThinkingLevel,
+    });
+
+    // reasoningDefault should work independently of thinking level
+    expect(result.currentThinkLevel).toBe("high");
+    expect(result.currentReasoningLevel).toBe("stream");
+  });
+
+  it("defaults reasoning to off when no agent default is set", async () => {
+    const resolveDefaultThinkingLevel = vi.fn().mockResolvedValue("low");
+
+    const result = await resolveCurrentDirectiveLevels({
+      sessionEntry: {},
+      agentEntry: {},
       resolveDefaultThinkingLevel,
     });
 
