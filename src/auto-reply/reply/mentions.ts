@@ -183,7 +183,8 @@ export function buildMentionRegexes(cfg: OpenClawConfig | undefined, agentId?: s
   });
   const shouldFailClosed =
     resolved.hadExplicitOverride &&
-    (!resolved.explicitOverrideWasArray || resolved.explicitOverrideItemCount > 0);
+    (!resolved.explicitOverrideWasArray ||
+      (resolved.explicitOverrideItemCount > 0 && patterns.length === 0));
   if (compiled.length > 0 || !shouldFailClosed) {
     return compiled;
   }

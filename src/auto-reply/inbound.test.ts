@@ -465,6 +465,15 @@ describe("mention helpers", () => {
     expect(matchesMentionPatterns("openclaw", regexes)).toBe(false);
   });
 
+  it("preserves empty regex sets for explicit string patterns rejected at compile time", () => {
+    const regexes = buildMentionRegexes({
+      messages: {
+        groupChat: { mentionPatterns: ["(invalid", "(a+)+$"] },
+      },
+    });
+    expect(regexes).toHaveLength(0);
+  });
+
   it("keeps explicit empty mention pattern overrides empty", () => {
     const regexes = buildMentionRegexes({
       messages: {
