@@ -56,6 +56,24 @@ function installPM2() {
   }
 }
 
+// 检查端口是否被占用
+function checkPort(port) {
+  console.log(`检查端口 ${port} 是否被占用...`);
+  try {
+    if (process.platform === "win32") {
+      // Windows平台
+      execSync(`netstat -ano | findstr :${port}`, { stdio: "ignore" });
+      return true; // 端口被占用
+    } else {
+      // Linux/macOS平台
+      execSync(`lsof -i :${port}`, { stdio: "ignore" });
+      return true; // 端口被占用
+    }
+  } catch (error) {
+    return false; // 端口未被占用
+  }
+}
+
 // 停止现有的服务
 function stopExistingServices() {
   console.log("正在停止现有服务...");
@@ -87,11 +105,36 @@ function checkDependencies() {
   return true;
 }
 
+// 检查服务是否已存在
+function checkServiceExists(serviceName) {
+  try {
+    const output = execSync("pm2 status", { stdio: "pipe" }).toString();
+    return output.includes(serviceName);
+  } catch (error) {
+    return false;
+  }
+}
+
 // 启动网关服务
 function startGateway() {
+  const serviceName = `${BRAND_NAME}-gateway`;
+
+  // 检查服务是否已存在
+  if (checkServiceExists(serviceName)) {
+    console.log(`服务 ${serviceName} 已存在，正在重启...`);
+    try {
+      execSync(`pm2 restart ${serviceName}`, { cwd: WORK_DIR, stdio: "inherit" });
+      console.log("网关服务重启成功");
+      return true;
+    } catch (error) {
+      console.error("网关服务重启失败:", error.message);
+      return false;
+    }
+  }
+
   console.log("正在启动网关服务...");
   try {
-    execSync(`pm2 start openclaw.mjs --name "${BRAND_NAME}-gateway" -- gateway`, {
+    execSync(`pm2 start openclaw.mjs --name "${serviceName}" -- gateway`, {
       cwd: WORK_DIR,
       stdio: "inherit",
     });
@@ -101,7 +144,7 @@ function startGateway() {
     console.error("网关服务启动失败:", error.message);
     // 查看详细日志
     try {
-      execSync(`pm2 logs ${BRAND_NAME}-gateway --lines 50`, { stdio: "inherit" });
+      execSync(`pm2 logs ${serviceName} --lines 50`, { stdio: "inherit" });
     } catch (logError) {
       console.error("查看日志失败:", logError.message);
     }
@@ -111,9 +154,24 @@ function startGateway() {
 
 // 启动Web UI
 function startDashboard() {
+  const serviceName = `${BRAND_NAME}-dashboard`;
+
+  // 检查服务是否已存在
+  if (checkServiceExists(serviceName)) {
+    console.log(`服务 ${serviceName} 已存在，正在重启...`);
+    try {
+      execSync(`pm2 restart ${serviceName}`, { cwd: WORK_DIR, stdio: "inherit" });
+      console.log("Web UI重启成功");
+      return true;
+    } catch (error) {
+      console.error("Web UI重启失败:", error.message);
+      return false;
+    }
+  }
+
   console.log("正在启动Web UI...");
   try {
-    execSync(`pm2 start openclaw.mjs --name "${BRAND_NAME}-dashboard" -- dashboard`, {
+    execSync(`pm2 start openclaw.mjs --name "${serviceName}" -- dashboard`, {
       cwd: WORK_DIR,
       stdio: "inherit",
     });
@@ -123,7 +181,7 @@ function startDashboard() {
     console.error("Web UI启动失败:", error.message);
     // 查看详细日志
     try {
-      execSync(`pm2 logs ${BRAND_NAME}-dashboard --lines 50`, { stdio: "inherit" });
+      execSync(`pm2 logs ${serviceName} --lines 50`, { stdio: "inherit" });
     } catch (logError) {
       console.error("查看日志失败:", logError.message);
     }
@@ -155,11 +213,25 @@ async function main() {
     process.exit(1);
   }
 
-  // 停止现有服务
-  stopExistingServices();
+  // 检查端口是否被占用
+  if (checkPort(18789)) {
+    console.warn("端口 18789 已被占用，可能需要停止其他服务");
+    // 尝试停止现有服务
+    stopExistingServices();
+    // 等待一段时间
+    console.log("等待端口释放...");
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+
+    // 再次检查端口
+    if (checkPort(18789)) {
+      console.error("端口 18789 仍然被占用，请手动释放后重试");
+      process.exit(1);
+    }
+  }
 
   // 启动网关服务
   if (!startGateway()) {
+    console.error("网关服务启动失败，部署终止");
     process.exit(1);
   }
 
@@ -169,6 +241,7 @@ async function main() {
 
   // 启动Web UI
   if (!startDashboard()) {
+    console.error("Web UI启动失败，部署终止");
     process.exit(1);
   }
 
