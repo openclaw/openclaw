@@ -1,13 +1,17 @@
-import { resolveLineAccount } from "openclaw/plugin-sdk/line";
+import {
+  createAllowFromSection,
+  createStandardChannelSetupStatus,
+  createTopLevelChannelDmPolicy,
+} from "openclaw/plugin-sdk/setup";
 import {
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
+  resolveLineAccount,
   setSetupChannelEnabled,
-  setTopLevelChannelDmPolicyWithAllowFrom,
   splitSetupEntries,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
-} from "openclaw/plugin-sdk/setup";
+} from "../runtime-api.js";
 import {
   isLineConfigured,
   listLineAccountIds,
@@ -35,38 +39,31 @@ const LINE_ALLOW_FROM_HELP_LINES = [
   `Docs: ${formatDocsLink("/channels/line", "channels/line")}`,
 ];
 
-const lineDmPolicy: ChannelSetupDmPolicy = {
+const lineDmPolicy: ChannelSetupDmPolicy = createTopLevelChannelDmPolicy({
   label: "LINE",
   channel,
   policyKey: "channels.line.dmPolicy",
   allowFromKey: "channels.line.allowFrom",
   getCurrent: (cfg) => cfg.channels?.line?.dmPolicy ?? "pairing",
-  setPolicy: (cfg, policy) =>
-    setTopLevelChannelDmPolicyWithAllowFrom({
-      cfg,
-      channel,
-      dmPolicy: policy,
-    }),
-};
+});
 
 export { lineSetupAdapter } from "./setup-core.js";
 
 export const lineSetupWizard: ChannelSetupWizard = {
   channel,
-  status: {
+  status: createStandardChannelSetupStatus({
+    channelLabel: "LINE",
     configuredLabel: "configured",
     unconfiguredLabel: "needs token + secret",
     configuredHint: "configured",
     unconfiguredHint: "needs token + secret",
     configuredScore: 1,
     unconfiguredScore: 0,
+    includeStatusLine: true,
     resolveConfigured: ({ cfg }) =>
       listLineAccountIds(cfg).some((accountId) => isLineConfigured(cfg, accountId)),
-    resolveStatusLines: ({ cfg, configured }) => [
-      `LINE: ${configured ? "configured" : "needs token + secret"}`,
-      `Accounts: ${listLineAccountIds(cfg).length || 0}`,
-    ],
-  },
+    resolveExtraStatusLines: ({ cfg }) => [`Accounts: ${listLineAccountIds(cfg).length || 0}`],
+  }),
   introNote: {
     title: "LINE Messaging API",
     lines: LINE_SETUP_HELP_LINES,
@@ -162,7 +159,7 @@ export const lineSetupWizard: ChannelSetupWizard = {
         }),
     },
   ],
-  allowFrom: {
+  allowFrom: createAllowFromSection({
     helpTitle: "LINE allowlist",
     helpLines: LINE_ALLOW_FROM_HELP_LINES,
     message: "LINE allowFrom (user id)",
@@ -171,15 +168,6 @@ export const lineSetupWizard: ChannelSetupWizard = {
       "LINE allowFrom requires raw user ids like U1234567890abcdef1234567890abcdef.",
     parseInputs: splitSetupEntries,
     parseId: parseLineAllowFromId,
-    resolveEntries: async ({ entries }) =>
-      entries.map((entry) => {
-        const id = parseLineAllowFromId(entry);
-        return {
-          input: entry,
-          resolved: Boolean(id),
-          id,
-        };
-      }),
     apply: ({ cfg, accountId, allowFrom }) =>
       patchLineAccountConfig({
         cfg,
@@ -187,7 +175,7 @@ export const lineSetupWizard: ChannelSetupWizard = {
         enabled: true,
         patch: { dmPolicy: "allowlist", allowFrom },
       }),
-  },
+  }),
   dmPolicy: lineDmPolicy,
   completionNote: {
     title: "LINE webhook",

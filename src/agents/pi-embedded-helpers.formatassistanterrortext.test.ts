@@ -4,7 +4,9 @@ import {
   BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
   formatAssistantErrorText,
+  getApiErrorPayloadFingerprint,
   formatRawAssistantErrorForUi,
+  isRawApiErrorPayload,
 } from "./pi-embedded-helpers.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
@@ -123,6 +125,27 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
   });
+
+  it("returns a connection-refused message for ECONNREFUSED failures", () => {
+    const msg = makeAssistantError("connect ECONNREFUSED 127.0.0.1:443 during upstream call");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM request failed: connection refused by the provider endpoint.",
+    );
+  });
+
+  it("returns a DNS-specific message for provider lookup failures", () => {
+    const msg = makeAssistantError("dial tcp: lookup api.example.com: no such host (ENOTFOUND)");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM request failed: DNS lookup for the provider endpoint failed.",
+    );
+  });
+
+  it("returns an interrupted-connection message for socket hang ups", () => {
+    const msg = makeAssistantError("socket hang up");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM request failed: network connection was interrupted.",
+    );
+  });
 });
 
 describe("formatRawAssistantErrorForUi", () => {
@@ -157,5 +180,16 @@ describe("formatRawAssistantErrorForUi", () => {
     expect(formatRawAssistantErrorForUi(htmlError)).toBe(
       "The AI service is temporarily unavailable (HTTP 521). Please try again in a moment.",
     );
+  });
+});
+
+describe("raw API error payload helpers", () => {
+  it("recognizes provider-prefixed JSON payloads for observation fingerprints", () => {
+    const raw =
+      'Ollama API error: {"type":"error","error":{"type":"server_error","message":"Boom"},"request_id":"req_123"}';
+
+    expect(isRawApiErrorPayload(raw)).toBe(true);
+    expect(getApiErrorPayloadFingerprint(raw)).toContain("server_error");
+    expect(getApiErrorPayloadFingerprint(raw)).toContain("req_123");
   });
 });

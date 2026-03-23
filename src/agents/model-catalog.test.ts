@@ -85,10 +85,10 @@ describe("loadModelCatalog", () => {
     }
   });
 
-  it("adds openai-codex/gpt-5.3-codex-spark when base gpt-5.3-codex exists", async () => {
+  it("adds openai-codex/gpt-5.3-codex-spark when base gpt-5.4 exists", async () => {
     mockPiDiscoveryModels([
       {
-        id: "gpt-5.3-codex",
+        id: "gpt-5.4",
         provider: "openai-codex",
         name: "GPT-5.3 Codex",
         reasoning: true,
@@ -182,7 +182,23 @@ describe("loadModelCatalog", () => {
         input: ["text", "image"],
       },
       {
-        id: "gpt-5.3-codex",
+        id: "gpt-5-mini",
+        provider: "openai",
+        name: "GPT-5 mini",
+        reasoning: true,
+        contextWindow: 400_000,
+        input: ["text", "image"],
+      },
+      {
+        id: "gpt-5-nano",
+        provider: "openai",
+        name: "GPT-5 nano",
+        reasoning: true,
+        contextWindow: 400_000,
+        input: ["text", "image"],
+      },
+      {
+        id: "gpt-5.4",
         provider: "openai-codex",
         name: "GPT-5.3 Codex",
         reasoning: true,
@@ -205,6 +221,20 @@ describe("loadModelCatalog", () => {
         provider: "openai",
         id: "gpt-5.4-pro",
         name: "gpt-5.4-pro",
+      }),
+    );
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.4-mini",
+        name: "gpt-5.4-mini",
+      }),
+    );
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.4-nano",
+        name: "gpt-5.4-nano",
       }),
     );
     expect(result).toContainEqual(

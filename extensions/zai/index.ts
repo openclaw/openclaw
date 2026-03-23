@@ -5,7 +5,7 @@ import {
   type ProviderAuthMethodNonInteractiveContext,
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
-} from "openclaw/plugin-sdk/core";
+} from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAuthProfileConfig,
   buildApiKeyCredential,
@@ -15,7 +15,7 @@ import {
   type SecretInput,
   upsertAuthProfile,
   validateApiKeyInput,
-} from "openclaw/plugin-sdk/provider-auth";
+} from "openclaw/plugin-sdk/provider-auth-api-key";
 import { DEFAULT_CONTEXT_TOKENS, normalizeModelCompat } from "openclaw/plugin-sdk/provider-models";
 import { createZaiToolStreamWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { fetchZaiUsage, resolveLegacyPiAgentAccessToken } from "openclaw/plugin-sdk/provider-usage";
