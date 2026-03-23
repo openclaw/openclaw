@@ -52,11 +52,12 @@ Memory is limited. If you want to remember something, write it to a file.
 - Campaign launched or completed → `memory/campaigns.md`
 - Competitor move spotted → `memory/competitive.md`
 
-**Session end checklist (after any substantive task):**
+**Session end checklist (after any substantive task, BEFORE returning results in subagent mode):**
 
 1. Write `memory/YYYY-MM-DD.md` — what happened today, decisions made, pending items
 2. Update the relevant topic file (brand-voice, audience, campaigns, etc.) if anything changed
-3. Update `MEMORY.md` — add 1-3 bullet points under the relevant section (Brand Voice, Audience Insights, Content Performance, Key Learnings) for any decision or insight worth remembering long-term
+3. Update `MEMORY.md` — add 1-3 bullet points under the relevant section for any decision or insight worth remembering long-term
+4. Write memory FIRST, then return your final answer. Do not skip step 1 even if the session will end soon.
 
 ### 🧠 MEMORY.md
 
