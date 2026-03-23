@@ -444,13 +444,13 @@ describe("gateway discover routing helpers", () => {
     expect(pickGatewayPort(beacon)).toBe(18789);
   });
 
-  it("falls back to TXT host/port when resolve data is missing", () => {
+  it("fails closed when resolve data is missing", () => {
     const beacon: GatewayBonjourBeacon = {
       instanceName: "Test",
       lanHost: "test-host.local",
       gatewayPort: 18789,
     };
-    expect(pickBeaconHost(beacon)).toBe("test-host.local");
-    expect(pickGatewayPort(beacon)).toBe(18789);
+    expect(pickBeaconHost(beacon)).toBeNull();
+    expect(pickGatewayPort(beacon)).toBeNull();
   });
 });
