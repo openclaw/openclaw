@@ -1,0 +1,116 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDoctorPrompter } from "./doctor-prompter.js";
+
+const confirmMock = vi.fn();
+const selectMock = vi.fn();
+
+vi.mock("@clack/prompts", () => ({
+  confirm: (options: unknown) => confirmMock(options),
+  select: (options: unknown) => selectMock(options),
+}));
+
+describe("createDoctorPrompter", () => {
+  const originalStdinIsTTY = process.stdin.isTTY;
+
+  afterEach(() => {
+    vi.resetAllMocks();
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: originalStdinIsTTY,
+      configurable: true,
+    });
+  });
+
+  it("auto-accepts repairs in non-interactive fix mode", async () => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: false,
+      configurable: true,
+    });
+
+    const prompter = createDoctorPrompter({
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+      options: {
+        repair: true,
+        nonInteractive: true,
+      },
+    });
+
+    await expect(
+      prompter.confirm({
+        message: "Apply general repair?",
+        initialValue: false,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      prompter.confirmRepair({
+        message: "Repair gateway service config?",
+        initialValue: false,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      prompter.confirmSkipInNonInteractive({
+        message: "Repair launch agent bootstrap?",
+        initialValue: false,
+      }),
+    ).resolves.toBe(true);
+    expect(confirmMock).not.toHaveBeenCalled();
+  });
+
+  it("requires --force for aggressive repairs in non-interactive fix mode", async () => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: false,
+      configurable: true,
+    });
+
+    const prompter = createDoctorPrompter({
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+      options: {
+        repair: true,
+        nonInteractive: true,
+      },
+    });
+
+    await expect(
+      prompter.confirmAggressive({
+        message: "Overwrite gateway service config?",
+        initialValue: true,
+      }),
+    ).resolves.toBe(false);
+    expect(confirmMock).not.toHaveBeenCalled();
+  });
+
+  it("auto-accepts aggressive repairs only with --force in non-interactive fix mode", async () => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: false,
+      configurable: true,
+    });
+
+    const prompter = createDoctorPrompter({
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+      options: {
+        repair: true,
+        force: true,
+        nonInteractive: true,
+      },
+    });
+
+    await expect(
+      prompter.confirmAggressive({
+        message: "Overwrite gateway service config?",
+        initialValue: false,
+      }),
+    ).resolves.toBe(true);
+    expect(confirmMock).not.toHaveBeenCalled();
+  });
+});
