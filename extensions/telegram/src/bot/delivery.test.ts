@@ -50,6 +50,10 @@ vi.resetModules();
 const { deliverReplies } = await import("./delivery.js");
 
 vi.mock("grammy", () => ({
+  API_CONSTANTS: {
+    DEFAULT_UPDATE_TYPES: ["message"],
+    ALL_UPDATE_TYPES: ["message"],
+  },
   InputFile: class {
     constructor(
       public buffer: Buffer,
