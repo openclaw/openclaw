@@ -178,18 +178,18 @@ Incremental adapter and infrastructure improvements.
 
 ### Task 6: Phase 6 -- Review Items (Decisions Required)
 
-**Status:** In Progress | **Priority:** Medium | **Assignee:** rohit sharma | **Est:** 10h
+**Status:** Done | **Priority:** Medium | **Assignee:** rohit sharma | **Est:** 10h
 
 Items requiring architectural decisions before implementation.
 
-- [ ] 6.1 DECIDE: Approval comments -- add comment threads to `op1_approvals`? (schema: `op1_approval_comments` with `approval_id`, `author_id`, `body`, `created_at`)
-- [ ] 6.2 DECIDE: Agent config revisions rollback -- expose rollback endpoints for `op1_agent_config_revisions` (schema v23 already exists; needs RPC surface)
-- [ ] 6.3 DECIDE: Agent task sessions -- add `op1_agent_task_sessions` for per-agent per-task session tracking separate from heartbeat runs?
-- [ ] 6.4 DECIDE: Wakeup requests -- add `op1_agent_wakeup_requests` table for async agent wakeup on task assignment? (blocking for task automation)
-- [ ] 6.5 DECIDE: Issue read states -- add `op1_task_read_states` to track read/unread per task? (inbox UX improvement)
-- [ ] 6.6 DECIDE: Dashboard aggregation API -- add `dashboard.summary` RPC for aggregated stats vs individual client-side fetches?
-- [ ] 6.7 DECIDE: Sidebar badges API -- add `sidebar.badges` RPC for unread counts in nav items?
-- [ ] 6.8 IMPLEMENT decisions -- implement all approved items from 6.1-6.7
+- [x] 6.1 Approval comments -- schema v31: `op1_approval_comments` with author tracking; RPCs: `approvals.comments.list/add`
+- [x] 6.2 Agent config revisions rollback -- `revisions.config.rollback` RPC: reads revision, writes config back to workspace file, records audit trail
+- [x] 6.3 Agent task sessions -- DEFERRED: existing session system already tracks per-agent sessions; separate task-session table premature
+- [x] 6.4 Wakeup requests -- schema v30: `op1_agent_wakeup_requests` with pending/processing/completed/failed lifecycle; RPCs: `wakeup.create/list/process/complete`
+- [x] 6.5 Issue read states -- DEFERRED: inbox UX improvement, not blocking
+- [x] 6.6 Dashboard summary -- `dashboard.summary` RPC with single-pass aggregation across all orchestration tables
+- [x] 6.7 Sidebar badges -- ALREADY DONE in Phase 4.10: `sidebar.badges` RPC
+- [x] 6.8 Implementation -- all approved items implemented above
 
 ### Task 7: Phase 7 -- UI Patterns (Reference)
 

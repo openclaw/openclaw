@@ -1,8 +1,35 @@
 import { randomUUID } from "node:crypto";
 import { getStateDb } from "../infra/state-db/index.js";
-import type { Approval, ApprovalStatus, ApprovalType, RequesterType } from "./types.js";
+import type {
+  Approval,
+  ApprovalComment,
+  ApprovalCommentAuthorType,
+  ApprovalStatus,
+  ApprovalType,
+  RequesterType,
+} from "./types.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+type ApprovalCommentRow = {
+  id: string;
+  approval_id: string;
+  author_id: string;
+  author_type: string;
+  body: string;
+  created_at: number;
+};
+
+function rowToApprovalComment(row: ApprovalCommentRow): ApprovalComment {
+  return {
+    id: row.id,
+    approvalId: row.approval_id,
+    authorId: row.author_id,
+    authorType: row.author_type as ApprovalCommentAuthorType,
+    body: row.body,
+    createdAt: row.created_at,
+  };
+}
 
 type ApprovalRow = {
   id: string;
@@ -156,4 +183,40 @@ export function updateApprovalPayload(id: string, payload: unknown): Approval {
   stmt.run(JSON.stringify(payload), now, id);
 
   return getApproval(id)!;
+}
+
+// ── Approval Comments ─────────────────────────────────────────────────────────
+
+export function addApprovalComment(params: {
+  approvalId: string;
+  authorId: string;
+  authorType?: ApprovalCommentAuthorType;
+  body: string;
+}): ApprovalComment {
+  const db = getStateDb();
+  const existing = getApproval(params.approvalId);
+  if (!existing) {
+    throw new Error(`Approval not found: ${params.approvalId}`);
+  }
+
+  const id = randomUUID();
+  const now = Math.floor(Date.now() / 1000);
+
+  db.prepare(`
+    INSERT INTO op1_approval_comments (id, approval_id, author_id, author_type, body, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(id, params.approvalId, params.authorId, params.authorType ?? "user", params.body, now);
+
+  const row = db
+    .prepare("SELECT * FROM op1_approval_comments WHERE id = ?")
+    .get(id) as unknown as ApprovalCommentRow;
+  return rowToApprovalComment(row);
+}
+
+export function listApprovalComments(approvalId: string): ApprovalComment[] {
+  const db = getStateDb();
+  const rows = db
+    .prepare("SELECT * FROM op1_approval_comments WHERE approval_id = ? ORDER BY created_at ASC")
+    .all(approvalId) as unknown as ApprovalCommentRow[];
+  return rows.map(rowToApprovalComment);
 }

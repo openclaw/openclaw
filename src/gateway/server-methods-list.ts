@@ -119,9 +119,12 @@ const BASE_METHODS = [
   "approvals.create",
   "approvals.updatePayload",
   "approvals.decide",
+  "approvals.comments.list",
+  "approvals.comments.add",
   "activityLogs.list",
   "revisions.config.list",
   "revisions.config.get",
+  "revisions.config.rollback",
   "node.rename",
   "node.list",
   "node.describe",
@@ -284,6 +287,13 @@ const BASE_METHODS = [
   "executionWorkspaces.operations.list",
   // Sidebar badges
   "sidebar.badges",
+  // Agent wakeup requests
+  "wakeup.create",
+  "wakeup.list",
+  "wakeup.process",
+  "wakeup.complete",
+  // Dashboard aggregation
+  "dashboard.summary",
 ];
 
 export function listGatewayMethods(): string[] {

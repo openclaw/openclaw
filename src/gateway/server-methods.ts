@@ -17,6 +17,7 @@ import { commandsHandlers } from "./server-methods/commands.js";
 import { configHandlers } from "./server-methods/config.js";
 import { connectHandlers } from "./server-methods/connect.js";
 import { cronHandlers } from "./server-methods/cron.js";
+import { dashboardHandlers } from "./server-methods/dashboard.js";
 import { deviceHandlers } from "./server-methods/devices.js";
 import { doctorHandlers } from "./server-methods/doctor.js";
 import { execApprovalsHandlers } from "./server-methods/exec-approvals.js";
@@ -53,6 +54,7 @@ import type { GatewayRequestHandlers, GatewayRequestOptions } from "./server-met
 import { updateHandlers } from "./server-methods/update.js";
 import { usageHandlers } from "./server-methods/usage.js";
 import { voicewakeHandlers } from "./server-methods/voicewake.js";
+import { wakeupHandlers } from "./server-methods/wakeup.js";
 import { webHandlers } from "./server-methods/web.js";
 import { wizardHandlers } from "./server-methods/wizard.js";
 import { workspacesHandlers } from "./server-methods/workspaces.js";
@@ -139,6 +141,8 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...metricsHandlers,
   ...executionWorkspacesHandlers,
   ...sidebarBadgesHandlers,
+  ...wakeupHandlers,
+  ...dashboardHandlers,
 };
 
 export async function handleGatewayRequest(

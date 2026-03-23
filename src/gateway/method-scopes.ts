@@ -162,6 +162,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "budgets.department.summary",
     "approvals.list",
     "approvals.get",
+    "approvals.comments.list",
     "activityLogs.list",
     "revisions.config.list",
     "revisions.config.get",
@@ -169,6 +170,8 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "executionWorkspaces.list",
     "executionWorkspaces.operations.list",
     "sidebar.badges",
+    "wakeup.list",
+    "dashboard.summary",
   ],
   [WRITE_SCOPE]: [
     "send",
@@ -307,10 +310,15 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "approvals.create",
     "approvals.updatePayload",
     "approvals.decide",
+    "approvals.comments.add",
+    "revisions.config.rollback",
     "executionWorkspaces.create",
     "executionWorkspaces.update",
     "executionWorkspaces.archive",
     "executionWorkspaces.operations.record",
+    "wakeup.create",
+    "wakeup.process",
+    "wakeup.complete",
   ],
 };
 

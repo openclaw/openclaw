@@ -153,3 +153,47 @@ export const AgentConfigRevisionsListReturnSchema = Type.Object({
   revisions: Type.Array(AgentConfigRevisionSchema),
 });
 export const AgentConfigRevisionsGetReturnSchema = AgentConfigRevisionSchema;
+
+// ── Approval Comments ────────────────────────────────────────────────────
+
+export const ApprovalCommentSchema = Type.Object(
+  {
+    id: Type.String(),
+    approvalId: Type.String(),
+    authorId: Type.String(),
+    authorType: Type.Union([Type.Literal("agent"), Type.Literal("user"), Type.Literal("system")]),
+    body: Type.String(),
+    createdAt: Type.Number(),
+  },
+  { $id: "ApprovalComment" },
+);
+
+export const ApprovalsCommentsListParamsSchema = Type.Object({
+  approvalId: Type.String(),
+});
+
+export const ApprovalsCommentsAddParamsSchema = Type.Object({
+  approvalId: Type.String(),
+  authorId: Type.String(),
+  authorType: Type.Optional(
+    Type.Union([Type.Literal("agent"), Type.Literal("user"), Type.Literal("system")]),
+  ),
+  body: Type.String(),
+});
+
+export const ApprovalsCommentsListReturnSchema = Type.Object({
+  comments: Type.Array(ApprovalCommentSchema),
+});
+export const ApprovalsCommentsAddReturnSchema = ApprovalCommentSchema;
+
+// ── Agent Config Revision Rollback ───────────────────────────────────────
+
+export const AgentConfigRevisionsRollbackParamsSchema = Type.Object({
+  revisionId: Type.String(),
+});
+
+export const AgentConfigRevisionsRollbackReturnSchema = Type.Object({
+  ok: Type.Boolean(),
+  revisionId: Type.String(),
+  agentId: Type.String(),
+});

@@ -1,7 +1,13 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { loadConfig } from "../../config/config.js";
+import { writeFileWithinRoot } from "../../infra/fs-safe.js";
 import { listActivityLogs } from "../../orchestration/activity-log-sqlite.js";
 import {
   getAgentConfigRevision,
   listAgentConfigRevisions,
+  createAgentConfigRevision,
 } from "../../orchestration/agent-config-revision-sqlite.js";
 import {
   requestApproval,
@@ -9,6 +15,8 @@ import {
   listApprovals,
   decideApproval,
   updateApprovalPayload,
+  addApprovalComment,
+  listApprovalComments,
 } from "../../orchestration/approval-store-sqlite.js";
 import type { ApprovalStatus, ApprovalType } from "../../orchestration/types.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
@@ -21,8 +29,20 @@ import type {
   ActivityLogsListParams,
   AgentConfigRevisionsListParams,
   AgentConfigRevisionsGetParams,
+  ApprovalsCommentsListParams,
+  ApprovalsCommentsAddParams,
+  AgentConfigRevisionsRollbackParams,
 } from "../protocol/schema/types.js";
 import type { GatewayRequestHandlers } from "./types.js";
+
+/** Parse the original filename from a changeNote like "Updated SOUL.md via gateway". */
+function parseFileNameFromChangeNote(changeNote: string | null): string | null {
+  if (!changeNote) {
+    return null;
+  }
+  const m = changeNote.match(/^(?:Updated|Created)\s+(\S+)\s+via gateway$/);
+  return m ? m[1] : null;
+}
 
 function storeErrorToShape(err: unknown) {
   const msg = err instanceof Error ? err.message : String(err);
@@ -156,6 +176,80 @@ export const approvalsHandlers: GatewayRequestHandlers = {
       }
       respond(true, revision);
     } catch (err) {
+      respond(false, undefined, storeErrorToShape(err));
+    }
+  },
+
+  // ── Agent Config Revision Rollback ─────────────────────────────────────────
+  "revisions.config.rollback": async ({ params, respond }) => {
+    try {
+      const p = params as unknown as AgentConfigRevisionsRollbackParams;
+      const revision = getAgentConfigRevision(p.revisionId);
+      if (!revision) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `Revision not found: ${p.revisionId}`),
+        );
+        return;
+      }
+
+      const cfg = loadConfig();
+      const workspaceDir = resolveAgentWorkspaceDir(cfg, revision.agentId);
+
+      // Resolve the target filename from changeNote; fall back to SOUL.md.
+      const fileName = parseFileNameFromChangeNote(revision.changeNote) ?? "SOUL.md";
+      const workspaceReal = await fs.realpath(workspaceDir).catch(() => path.resolve(workspaceDir));
+      const relativePath = fileName;
+
+      await writeFileWithinRoot({
+        rootDir: workspaceReal,
+        relativePath,
+        data: revision.configJson,
+        encoding: "utf8",
+      });
+
+      // Record the rollback itself as a new revision for auditability.
+      createAgentConfigRevision({
+        workspaceId: revision.workspaceId,
+        agentId: revision.agentId,
+        config: revision.configJson,
+        changedBy: "system",
+        changeNote: `Rolled back to revision ${revision.id} (${fileName})`,
+      });
+
+      respond(true, { ok: true, revisionId: revision.id, agentId: revision.agentId });
+    } catch (err) {
+      respond(false, undefined, storeErrorToShape(err));
+    }
+  },
+
+  // ── Approval Comments ──────────────────────────────────────────────────────
+  "approvals.comments.list": async ({ params, respond }) => {
+    try {
+      const p = params as unknown as ApprovalsCommentsListParams;
+      const comments = listApprovalComments(p.approvalId);
+      respond(true, { comments });
+    } catch (err) {
+      respond(false, undefined, storeErrorToShape(err));
+    }
+  },
+
+  "approvals.comments.add": async ({ params, respond }) => {
+    try {
+      const p = params as unknown as ApprovalsCommentsAddParams;
+      const comment = addApprovalComment({
+        approvalId: p.approvalId,
+        authorId: p.authorId,
+        authorType: p.authorType,
+        body: p.body,
+      });
+      respond(true, comment);
+    } catch (err: unknown) {
+      if (err instanceof Error && err.message.includes("not found")) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, err.message));
+        return;
+      }
       respond(false, undefined, storeErrorToShape(err));
     }
   },

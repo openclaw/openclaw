@@ -46,6 +46,7 @@ import {
 } from "./agents-models-skills.js";
 import {
   ApprovalSchema,
+  ApprovalCommentSchema,
   ActivityLogEntrySchema,
   AgentConfigRevisionSchema,
   ApprovalsListParamsSchema,
@@ -56,6 +57,9 @@ import {
   ActivityLogsListParamsSchema,
   AgentConfigRevisionsListParamsSchema,
   AgentConfigRevisionsGetParamsSchema,
+  ApprovalsCommentsListParamsSchema,
+  ApprovalsCommentsAddParamsSchema,
+  AgentConfigRevisionsRollbackParamsSchema,
   ApprovalsListReturnSchema,
   ApprovalsGetReturnSchema,
   ApprovalsCreateReturnSchema,
@@ -64,6 +68,9 @@ import {
   ActivityLogsListReturnSchema,
   AgentConfigRevisionsListReturnSchema,
   AgentConfigRevisionsGetReturnSchema,
+  ApprovalsCommentsListReturnSchema,
+  ApprovalsCommentsAddReturnSchema,
+  AgentConfigRevisionsRollbackReturnSchema,
 } from "./approvals-org.js";
 import {
   BudgetPolicySchema,
@@ -460,6 +467,7 @@ export const ProtocolSchemas = {
   BudgetIncidentsResolveReturn: BudgetIncidentsResolveReturnSchema,
   CostEventsListReturn: CostEventsListReturnSchema,
   Approval: ApprovalSchema,
+  ApprovalComment: ApprovalCommentSchema,
   ActivityLogEntry: ActivityLogEntrySchema,
   AgentConfigRevision: AgentConfigRevisionSchema,
   ApprovalsListParams: ApprovalsListParamsSchema,
@@ -470,6 +478,9 @@ export const ProtocolSchemas = {
   ActivityLogsListParams: ActivityLogsListParamsSchema,
   AgentConfigRevisionsListParams: AgentConfigRevisionsListParamsSchema,
   AgentConfigRevisionsGetParams: AgentConfigRevisionsGetParamsSchema,
+  ApprovalsCommentsListParams: ApprovalsCommentsListParamsSchema,
+  ApprovalsCommentsAddParams: ApprovalsCommentsAddParamsSchema,
+  AgentConfigRevisionsRollbackParams: AgentConfigRevisionsRollbackParamsSchema,
   ApprovalsListReturn: ApprovalsListReturnSchema,
   ApprovalsGetReturn: ApprovalsGetReturnSchema,
   ApprovalsCreateReturn: ApprovalsCreateReturnSchema,
@@ -478,6 +489,9 @@ export const ProtocolSchemas = {
   ActivityLogsListReturn: ActivityLogsListReturnSchema,
   AgentConfigRevisionsListReturn: AgentConfigRevisionsListReturnSchema,
   AgentConfigRevisionsGetReturn: AgentConfigRevisionsGetReturnSchema,
+  ApprovalsCommentsListReturn: ApprovalsCommentsListReturnSchema,
+  ApprovalsCommentsAddReturn: ApprovalsCommentsAddReturnSchema,
+  AgentConfigRevisionsRollbackReturn: AgentConfigRevisionsRollbackReturnSchema,
 } satisfies Record<string, TSchema>;
 
 export const PROTOCOL_VERSION = 3 as const;
