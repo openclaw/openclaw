@@ -5,6 +5,7 @@ import {
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode,
 } from "openclaw/plugin-sdk/infra-runtime";
+import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import {
   chunkMarkdownTextWithMode,
   resolveChunkMode,
@@ -12,7 +13,7 @@ import {
 } from "openclaw/plugin-sdk/reply-runtime";
 import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { loadWebMedia } from "../../whatsapp/src/media.js";
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
@@ -310,9 +311,7 @@ export async function sendMessageSlack(
   const chunks = markdownChunks.flatMap((markdown) =>
     markdownToSlackMrkdwnChunks(markdown, chunkLimit, { tableMode }),
   );
-  if (!chunks.length && trimmedMessage) {
-    chunks.push(trimmedMessage);
-  }
+  const resolvedChunks = resolveTextChunksWithFallback(trimmedMessage, chunks);
   const mediaMaxBytes =
     typeof account.config.mediaMaxMb === "number"
       ? account.config.mediaMaxMb * 1024 * 1024
@@ -320,7 +319,7 @@ export async function sendMessageSlack(
 
   let lastMessageId = "";
   if (opts.mediaUrl) {
-    const [firstChunk, ...rest] = chunks;
+    const [firstChunk, ...rest] = resolvedChunks;
     lastMessageId = await uploadSlackFile({
       client,
       channelId,
@@ -341,7 +340,7 @@ export async function sendMessageSlack(
       lastMessageId = response.ts ?? lastMessageId;
     }
   } else {
-    for (const chunk of chunks.length ? chunks : [""]) {
+    for (const chunk of resolvedChunks.length ? resolvedChunks : [""]) {
       const response = await postSlackMessageBestEffort({
         client,
         channelId,

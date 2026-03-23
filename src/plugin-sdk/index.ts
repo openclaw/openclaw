@@ -14,8 +14,25 @@ export type {
   ChannelMessageActionName,
   ChannelStatusIssue,
 } from "../channels/plugins/types.js";
+export type {
+  ChannelConfiguredBindingConversationRef,
+  ChannelConfiguredBindingMatch,
+  ChannelConfiguredBindingProvider,
+} from "../channels/plugins/types.adapters.js";
 export type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { ChannelSetupAdapter, ChannelSetupInput } from "../channels/plugins/types.js";
+export type {
+  ConfiguredBindingConversation,
+  ConfiguredBindingResolution,
+  CompiledConfiguredBinding,
+  StatefulBindingTargetDescriptor,
+} from "../channels/plugins/binding-types.js";
+export type {
+  StatefulBindingTargetDriver,
+  StatefulBindingTargetReadyResult,
+  StatefulBindingTargetResetResult,
+  StatefulBindingTargetSessionResult,
+} from "../channels/plugins/stateful-target-drivers.js";
 export type {
   ChannelSetupWizard,
   ChannelSetupWizardAllowFromEntry,
@@ -47,6 +64,18 @@ export type { HookEntry } from "../hooks/types.js";
 export type { ReplyPayload } from "../auto-reply/types.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export type { ContextEngineFactory } from "../context-engine/registry.js";
+export type { DiagnosticEventPayload } from "../infra/diagnostic-events.js";
+export type {
+  ContextEngine,
+  ContextEngineInfo,
+  ContextEngineMaintenanceResult,
+  ContextEngineRuntimeContext,
+  TranscriptRewriteReplacement,
+  TranscriptRewriteRequest,
+  TranscriptRewriteResult,
+} from "../context-engine/types.js";
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export { registerContextEngine } from "../context-engine/registry.js";
+export { delegateCompactionToRuntime } from "../context-engine/delegate.js";
+export { onDiagnosticEvent } from "../infra/diagnostic-events.js";

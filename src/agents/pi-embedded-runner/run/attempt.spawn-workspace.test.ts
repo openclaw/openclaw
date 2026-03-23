@@ -39,6 +39,8 @@ const hoisted = vi.hoisted(() => {
     contextFiles: [],
   }));
   const getGlobalHookRunnerMock = vi.fn<() => unknown>(() => undefined);
+  const initializeGlobalHookRunnerMock = vi.fn();
+  const runContextEngineMaintenanceMock = vi.fn(async (_params?: unknown) => undefined);
   const sessionManager = {
     getLeafEntry: vi.fn(() => null),
     branch: vi.fn(),
@@ -55,6 +57,8 @@ const hoisted = vi.hoisted(() => {
     acquireSessionWriteLockMock,
     resolveBootstrapContextForRunMock,
     getGlobalHookRunnerMock,
+    initializeGlobalHookRunnerMock,
+    runContextEngineMaintenanceMock,
     sessionManager,
   };
 });
@@ -94,6 +98,7 @@ vi.mock("../../pi-embedded-subscribe.js", () => ({
 
 vi.mock("../../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: hoisted.getGlobalHookRunnerMock,
+  initializeGlobalHookRunner: hoisted.initializeGlobalHookRunnerMock,
 }));
 
 vi.mock("../../../infra/machine-name.js", () => ({
@@ -121,6 +126,10 @@ vi.mock("../skills-runtime.js", () => ({
     shouldLoadSkillEntries: false,
     skillEntries: undefined,
   }),
+}));
+
+vi.mock("../context-engine-maintenance.js", () => ({
+  runContextEngineMaintenance: (params: unknown) => hoisted.runContextEngineMaintenanceMock(params),
 }));
 
 vi.mock("../../docs-path.js", () => ({
@@ -216,6 +225,16 @@ vi.mock("../../cache-trace.js", () => ({
   createCacheTrace: () => undefined,
 }));
 
+vi.mock("../../pi-tools.js", () => ({
+  createOpenClawCodingTools: () => [],
+  resolveToolLoopDetectionConfig: () => undefined,
+}));
+
+vi.mock("../../../image-generation/runtime.js", () => ({
+  generateImage: vi.fn(),
+  listRuntimeImageGenerationProviders: () => [],
+}));
+
 vi.mock("../../model-selection.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../model-selection.js")>();
 
@@ -287,6 +306,7 @@ function resetEmbeddedAttemptHarness(
     contextFiles: [],
   });
   hoisted.getGlobalHookRunnerMock.mockReset().mockReturnValue(undefined);
+  hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
   hoisted.sessionManager.branch.mockReset();
   hoisted.sessionManager.resetLeaf.mockReset();
@@ -346,10 +366,12 @@ function createDefaultEmbeddedSession(params?: {
 function createContextEngineBootstrapAndAssemble() {
   return {
     bootstrap: vi.fn(async (_params: { sessionKey?: string }) => ({ bootstrapped: true })),
-    assemble: vi.fn(async ({ messages }: { messages: AgentMessage[]; sessionKey?: string }) => ({
-      messages,
-      estimatedTokens: 1,
-    })),
+    assemble: vi.fn(
+      async ({ messages }: { messages: AgentMessage[]; sessionKey?: string; model?: string }) => ({
+        messages,
+        estimatedTokens: 1,
+      }),
+    ),
   };
 }
 
@@ -677,6 +699,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       sessionKey?: string;
       messages: AgentMessage[];
       tokenBudget?: number;
+      model?: string;
     }) => Promise<AssembleResult>;
     afterTurn?: (params: {
       sessionId: string;
@@ -783,6 +806,22 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expectCalledWithSessionKey(afterTurn, sessionKey);
   });
 
+  it("forwards modelId to assemble", async () => {
+    const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
+
+    const result = await runAttemptWithContextEngine({
+      bootstrap,
+      assemble,
+    });
+
+    expect(result.promptError).toBeNull();
+    expect(assemble).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "gpt-test",
+      }),
+    );
+  });
+
   it("forwards sessionKey to ingestBatch when afterTurn is absent", async () => {
     const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
     const ingestBatch = vi.fn(
@@ -819,5 +858,56 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         return params.sessionKey === sessionKey;
       }),
     ).toBe(true);
+  });
+
+  it("skips maintenance when afterTurn fails", async () => {
+    const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
+    const afterTurn = vi.fn(async () => {
+      throw new Error("afterTurn failed");
+    });
+
+    const result = await runAttemptWithContextEngine({
+      bootstrap,
+      assemble,
+      afterTurn,
+    });
+
+    expect(result.promptError).toBeNull();
+    expect(afterTurn).toHaveBeenCalled();
+    expect(hoisted.runContextEngineMaintenanceMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "turn" }),
+    );
+  });
+
+  it("runs startup maintenance for existing sessions even without bootstrap()", async () => {
+    const { assemble } = createContextEngineBootstrapAndAssemble();
+
+    const result = await runAttemptWithContextEngine({
+      assemble,
+    });
+
+    expect(result.promptError).toBeNull();
+    expect(hoisted.runContextEngineMaintenanceMock).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "bootstrap" }),
+    );
+  });
+
+  it("skips maintenance when ingestBatch fails", async () => {
+    const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
+    const ingestBatch = vi.fn(async () => {
+      throw new Error("ingestBatch failed");
+    });
+
+    const result = await runAttemptWithContextEngine({
+      bootstrap,
+      assemble,
+      ingestBatch,
+    });
+
+    expect(result.promptError).toBeNull();
+    expect(ingestBatch).toHaveBeenCalled();
+    expect(hoisted.runContextEngineMaintenanceMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "turn" }),
+    );
   });
 });

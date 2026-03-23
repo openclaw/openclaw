@@ -1,3 +1,4 @@
+import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { splitMediaFromOutput } from "../../media/parse.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import { isSilentReplyPrefixText, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -67,10 +68,7 @@ const parseChunk = (raw: string, options?: { silentToken?: string }): ParsedChun
 };
 
 const hasRenderableContent = (parsed: ReplyDirectiveParseResult): boolean =>
-  Boolean(parsed.text) ||
-  Boolean(parsed.mediaUrl) ||
-  (parsed.mediaUrls?.length ?? 0) > 0 ||
-  Boolean(parsed.audioAsVoice);
+  hasOutboundReplyContent(parsed) || Boolean(parsed.audioAsVoice);
 
 export function createStreamingDirectiveAccumulator() {
   let pendingTail = "";

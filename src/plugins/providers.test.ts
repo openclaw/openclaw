@@ -12,7 +12,7 @@ vi.mock("./manifest-registry.js", () => ({
 }));
 
 let resolveOwningPluginIdsForProvider: typeof import("./providers.js").resolveOwningPluginIdsForProvider;
-let resolvePluginProviders: typeof import("./providers.js").resolvePluginProviders;
+let resolvePluginProviders: typeof import("./providers.runtime.js").resolvePluginProviders;
 
 describe("resolvePluginProviders", () => {
   beforeEach(async () => {
@@ -32,8 +32,8 @@ describe("resolvePluginProviders", () => {
       ],
       diagnostics: [],
     });
-    ({ resolveOwningPluginIdsForProvider, resolvePluginProviders } =
-      await import("./providers.js"));
+    ({ resolveOwningPluginIdsForProvider } = await import("./providers.js"));
+    ({ resolvePluginProviders } = await import("./providers.runtime.js"));
   });
 
   it("forwards an explicit env to plugin loading", () => {
@@ -70,6 +70,11 @@ describe("resolvePluginProviders", () => {
         config: expect.objectContaining({
           plugins: expect.objectContaining({
             allow: expect.arrayContaining(["openrouter", "google", "kilocode", "moonshot"]),
+            entries: expect.objectContaining({
+              google: { enabled: true },
+              kilocode: { enabled: true },
+              moonshot: { enabled: true },
+            }),
           }),
         }),
         cache: false,
@@ -89,6 +94,10 @@ describe("resolvePluginProviders", () => {
           plugins: expect.objectContaining({
             enabled: true,
             allow: expect.arrayContaining(["google", "moonshot"]),
+            entries: expect.objectContaining({
+              google: { enabled: true },
+              moonshot: { enabled: true },
+            }),
           }),
         }),
         cache: false,

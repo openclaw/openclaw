@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
-import type { WizardPrompter } from "../../../src/wizard/prompts.js";
+import {
+  createPluginSetupWizardConfigure,
+  createQueuedWizardPrompter,
+  runSetupWizardConfigure,
+} from "../../../test/helpers/extensions/setup-wizard.js";
 import { whatsappPlugin } from "./channel.js";
 
 const loginWebMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -15,7 +18,7 @@ const resolveWhatsAppAuthDirMock = vi.hoisted(() =>
   })),
 );
 
-vi.mock("../../../src/channel-web.js", () => ({
+vi.mock("./login.js", () => ({
   loginWeb: loginWebMock,
 }));
 
@@ -28,54 +31,15 @@ vi.mock("../../../src/utils.js", async () => {
   };
 });
 
-vi.mock("./accounts.js", () => ({
-  listWhatsAppAccountIds: listWhatsAppAccountIdsMock,
-  resolveDefaultWhatsAppAccountId: resolveDefaultWhatsAppAccountIdMock,
-  resolveWhatsAppAuthDir: resolveWhatsAppAuthDirMock,
-}));
-
-function createPrompterHarness(params?: {
-  selectValues?: string[];
-  textValues?: string[];
-  confirmValues?: boolean[];
-}) {
-  const selectValues = [...(params?.selectValues ?? [])];
-  const textValues = [...(params?.textValues ?? [])];
-  const confirmValues = [...(params?.confirmValues ?? [])];
-
-  const intro = vi.fn(async () => undefined);
-  const outro = vi.fn(async () => undefined);
-  const note = vi.fn(async () => undefined);
-  const select = vi.fn(async () => selectValues.shift() ?? "");
-  const multiselect = vi.fn(async () => [] as string[]);
-  const text = vi.fn(async () => textValues.shift() ?? "");
-  const confirm = vi.fn(async () => confirmValues.shift() ?? false);
-  const progress = vi.fn(() => ({
-    update: vi.fn(),
-    stop: vi.fn(),
-  }));
-
+vi.mock("./accounts.js", async () => {
+  const actual = await vi.importActual<typeof import("./accounts.js")>("./accounts.js");
   return {
-    intro,
-    outro,
-    note,
-    select,
-    multiselect,
-    text,
-    confirm,
-    progress,
-    prompter: {
-      intro,
-      outro,
-      note,
-      select,
-      multiselect,
-      text,
-      confirm,
-      progress,
-    } as WizardPrompter,
+    ...actual,
+    listWhatsAppAccountIds: listWhatsAppAccountIdsMock,
+    resolveDefaultWhatsAppAccountId: resolveDefaultWhatsAppAccountIdMock,
+    resolveWhatsAppAuthDir: resolveWhatsAppAuthDirMock,
   };
-}
+});
 
 function createRuntime(): RuntimeEnv {
   return {
@@ -83,21 +47,19 @@ function createRuntime(): RuntimeEnv {
   } as unknown as RuntimeEnv;
 }
 
-const whatsappConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
-  plugin: whatsappPlugin,
-  wizard: whatsappPlugin.setupWizard!,
-});
+const whatsappConfigure = createPluginSetupWizardConfigure(whatsappPlugin);
 
 async function runConfigureWithHarness(params: {
-  harness: ReturnType<typeof createPrompterHarness>;
-  cfg?: Parameters<typeof whatsappConfigureAdapter.configure>[0]["cfg"];
+  harness: ReturnType<typeof createQueuedWizardPrompter>;
+  cfg?: Parameters<typeof whatsappConfigure>[0]["cfg"];
   runtime?: RuntimeEnv;
-  options?: Parameters<typeof whatsappConfigureAdapter.configure>[0]["options"];
-  accountOverrides?: Parameters<typeof whatsappConfigureAdapter.configure>[0]["accountOverrides"];
+  options?: Parameters<typeof whatsappConfigure>[0]["options"];
+  accountOverrides?: Parameters<typeof whatsappConfigure>[0]["accountOverrides"];
   shouldPromptAccountIds?: boolean;
   forceAllowFrom?: boolean;
 }) {
-  return await whatsappConfigureAdapter.configure({
+  return await runSetupWizardConfigure({
+    configure: whatsappConfigure,
     cfg: params.cfg ?? {},
     runtime: params.runtime ?? createRuntime(),
     prompter: params.harness.prompter,
@@ -109,7 +71,7 @@ async function runConfigureWithHarness(params: {
 }
 
 function createSeparatePhoneHarness(params: { selectValues: string[]; textValues?: string[] }) {
-  return createPrompterHarness({
+  return createQueuedWizardPrompter({
     confirmValues: [false],
     selectValues: params.selectValues,
     textValues: params.textValues,
@@ -138,7 +100,7 @@ describe("whatsapp setup wizard", () => {
   });
 
   it("applies owner allowlist when forceAllowFrom is enabled", async () => {
-    const harness = createPrompterHarness({
+    const harness = createQueuedWizardPrompter({
       confirmValues: [false],
       textValues: ["+1 (555) 555-0123"],
     });
@@ -184,7 +146,7 @@ describe("whatsapp setup wizard", () => {
 
   it("enables allowlist self-chat mode for personal-phone setup", async () => {
     pathExistsMock.mockResolvedValue(true);
-    const harness = createPrompterHarness({
+    const harness = createQueuedWizardPrompter({
       confirmValues: [false],
       selectValues: ["personal"],
       textValues: ["+1 (555) 111-2222"],
@@ -225,7 +187,7 @@ describe("whatsapp setup wizard", () => {
 
   it("runs WhatsApp login when not linked and user confirms linking", async () => {
     pathExistsMock.mockResolvedValue(false);
-    const harness = createPrompterHarness({
+    const harness = createQueuedWizardPrompter({
       confirmValues: [true],
       selectValues: ["separate", "disabled"],
     });

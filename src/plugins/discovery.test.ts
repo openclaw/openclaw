@@ -196,7 +196,7 @@ describe("discoverOpenClawPlugins", () => {
     expect(ids).toContain("voice-call");
   });
 
-  it("normalizes bundled provider package ids to canonical plugin ids", async () => {
+  it("strips provider suffixes from package-derived ids", async () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions", "ollama-provider-pack");
     mkdirSafe(path.join(globalExt, "src"));
@@ -394,6 +394,23 @@ describe("discoverOpenClawPlugins", () => {
 
     expect(result.candidates).toHaveLength(0);
     expectEscapesPackageDiagnostic(result.diagnostics);
+  });
+
+  it("skips missing package extension entries without escape diagnostics", async () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions", "missing-entry-pack");
+    mkdirSafe(globalExt);
+
+    writePluginPackageManifest({
+      packageDir: globalExt,
+      packageName: "@openclaw/missing-entry-pack",
+      extensions: ["./missing.ts"],
+    });
+
+    const result = await discoverWithStateDir(stateDir, {});
+
+    expect(result.candidates).toHaveLength(0);
+    expect(result.diagnostics).toEqual([]);
   });
 
   it("rejects package extension entries that escape via symlink", async () => {

@@ -43,6 +43,7 @@ function buildForwardCompatTemplate(params: {
   provider: string;
   api: "anthropic-messages" | "google-gemini-cli" | "openai-completions" | "openai-responses";
   baseUrl: string;
+  reasoning?: boolean;
   input?: readonly ["text"] | readonly ["text", "image"];
   cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
   contextWindow?: number;
@@ -54,7 +55,7 @@ function buildForwardCompatTemplate(params: {
     provider: params.provider,
     api: params.api,
     baseUrl: params.baseUrl,
-    reasoning: true,
+    reasoning: params.reasoning ?? true,
     input: params.input ?? (["text", "image"] as const),
     cost: params.cost ?? { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
     contextWindow: params.contextWindow ?? 200000,
@@ -752,8 +753,116 @@ describe("resolveModel", () => {
       api: "openai-responses",
       baseUrl: "https://proxy.example.com/v1",
     });
-    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
-      "X-Proxy-Auth": "token-123",
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toMatchObject(
+      {
+        "X-Proxy-Auth": "token-123",
+      },
+    );
+  });
+
+  it("applies configured overrides to github-copilot dynamic models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "github-copilot": {
+            baseUrl: "https://proxy.example.com/v1",
+            api: "openai-completions",
+            headers: { "X-Proxy-Auth": "token-123" },
+            models: [
+              {
+                ...makeModel("gpt-5.4-mini"),
+                reasoning: true,
+                input: ["text"],
+                contextWindow: 256000,
+                maxTokens: 32000,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("github-copilot", "gpt-5.4-mini", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "github-copilot",
+      id: "gpt-5.4-mini",
+      api: "openai-completions",
+      baseUrl: "https://proxy.example.com/v1",
+      reasoning: true,
+      input: ["text"],
+      contextWindow: 256000,
+      maxTokens: 32000,
+    });
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toMatchObject(
+      {
+        "X-Proxy-Auth": "token-123",
+      },
+    );
+  });
+
+  it("builds an openai fallback for gpt-5.4 mini from the gpt-5-mini template", () => {
+    mockDiscoveredModel({
+      provider: "openai",
+      modelId: "gpt-5-mini",
+      templateModel: buildForwardCompatTemplate({
+        id: "gpt-5-mini",
+        name: "GPT-5 mini",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 400_000,
+        maxTokens: 128_000,
+      }),
+    });
+
+    const result = resolveModel("openai", "gpt-5.4-mini", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.4-mini",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+    });
+  });
+
+  it("builds an openai fallback for gpt-5.4 nano from the gpt-5-nano template", () => {
+    mockDiscoveredModel({
+      provider: "openai",
+      modelId: "gpt-5-nano",
+      templateModel: buildForwardCompatTemplate({
+        id: "gpt-5-nano",
+        name: "GPT-5 nano",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 400_000,
+        maxTokens: 128_000,
+      }),
+    });
+
+    const result = resolveModel("openai", "gpt-5.4-nano", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.4-nano",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 400_000,
+      maxTokens: 128_000,
     });
   });
 

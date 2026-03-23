@@ -1,8 +1,8 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
-import { getMediaUnderstandingProvider } from "../../media-understanding/providers/index.js";
+import { getMediaUnderstandingProvider } from "../../media-understanding/provider-registry.js";
 import { buildProviderRegistry } from "../../media-understanding/runner.js";
-import { loadWebMedia } from "../../plugin-sdk/web-media.js";
+import { loadWebMedia } from "../../media/web-media.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import {
@@ -18,7 +18,11 @@ import {
   resolveMediaToolLocalRoots,
   resolvePromptAndModelOverride,
 } from "./media-tool-shared.js";
-import { hasAuthForProvider, resolveDefaultModelRef } from "./model-config.helpers.js";
+import {
+  buildToolModelConfigFromCandidates,
+  hasToolModelConfig,
+  resolveDefaultModelRef,
+} from "./model-config.helpers.js";
 import {
   createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,
@@ -68,89 +72,40 @@ export function resolveImageModelConfigForTool(params: {
   // because images are auto-injected into prompts (see attempt.ts detectAndLoadPromptImages).
   // The tool description is adjusted via modelHasVision to discourage redundant usage.
   const explicit = coerceImageModelConfig(params.cfg);
-  if (explicit.primary?.trim() || (explicit.fallbacks?.length ?? 0) > 0) {
+  if (hasToolModelConfig(explicit)) {
     return explicit;
   }
 
   const primary = resolveDefaultModelRef(params.cfg);
-  const openaiOk = hasAuthForProvider({
-    provider: "openai",
-    agentDir: params.agentDir,
-  });
-  const anthropicOk = hasAuthForProvider({
-    provider: "anthropic",
-    agentDir: params.agentDir,
-  });
-
-  const fallbacks: string[] = [];
-  const addFallback = (modelRef: string | null) => {
-    const ref = (modelRef ?? "").trim();
-    if (!ref) {
-      return;
-    }
-    if (fallbacks.includes(ref)) {
-      return;
-    }
-    fallbacks.push(ref);
-  };
 
   const providerVisionFromConfig = resolveProviderVisionModelFromConfig({
     cfg: params.cfg,
     provider: primary.provider,
   });
-  const providerOk = hasAuthForProvider({
-    provider: primary.provider,
+  const primaryCandidates = (() => {
+    if (isMinimaxVlmProvider(primary.provider)) {
+      return [`${primary.provider}/MiniMax-VL-01`];
+    }
+    if (providerVisionFromConfig) {
+      return [providerVisionFromConfig];
+    }
+    if (primary.provider === "zai") {
+      return ["zai/glm-4.6v"];
+    }
+    if (primary.provider === "openai") {
+      return ["openai/gpt-5-mini"];
+    }
+    if (primary.provider === "anthropic") {
+      return [ANTHROPIC_IMAGE_PRIMARY];
+    }
+    return [];
+  })();
+
+  return buildToolModelConfigFromCandidates({
+    explicit,
     agentDir: params.agentDir,
+    candidates: [...primaryCandidates, "openai/gpt-5-mini", ANTHROPIC_IMAGE_FALLBACK],
   });
-
-  let preferred: string | null = null;
-
-  // MiniMax users: always try the canonical vision model first when auth exists.
-  if (isMinimaxVlmProvider(primary.provider) && providerOk) {
-    preferred = `${primary.provider}/MiniMax-VL-01`;
-  } else if (providerOk && providerVisionFromConfig) {
-    preferred = providerVisionFromConfig;
-  } else if (primary.provider === "zai" && providerOk) {
-    preferred = "zai/glm-4.6v";
-  } else if (primary.provider === "openai" && openaiOk) {
-    preferred = "openai/gpt-5-mini";
-  } else if (primary.provider === "anthropic" && anthropicOk) {
-    preferred = ANTHROPIC_IMAGE_PRIMARY;
-  }
-
-  if (preferred?.trim()) {
-    if (openaiOk) {
-      addFallback("openai/gpt-5-mini");
-    }
-    if (anthropicOk) {
-      addFallback(ANTHROPIC_IMAGE_FALLBACK);
-    }
-    // Don't duplicate primary in fallbacks.
-    const pruned = fallbacks.filter((ref) => ref !== preferred);
-    return {
-      primary: preferred,
-      ...(pruned.length > 0 ? { fallbacks: pruned } : {}),
-    };
-  }
-
-  // Cross-provider fallback when we can't pair with the primary provider.
-  if (openaiOk) {
-    if (anthropicOk) {
-      addFallback(ANTHROPIC_IMAGE_FALLBACK);
-    }
-    return {
-      primary: "openai/gpt-5-mini",
-      ...(fallbacks.length ? { fallbacks } : {}),
-    };
-  }
-  if (anthropicOk) {
-    return {
-      primary: ANTHROPIC_IMAGE_PRIMARY,
-      fallbacks: [ANTHROPIC_IMAGE_FALLBACK],
-    };
-  }
-
-  return null;
 }
 
 function pickMaxBytes(cfg?: OpenClawConfig, maxBytesMb?: number): number | undefined {
@@ -279,7 +234,7 @@ export function createImageTool(options?: {
   const agentDir = options?.agentDir?.trim();
   if (!agentDir) {
     const explicit = coerceImageModelConfig(options?.config);
-    if (explicit.primary?.trim() || (explicit.fallbacks?.length ?? 0) > 0) {
+    if (hasToolModelConfig(explicit)) {
       throw new Error("createImageTool requires agentDir when enabled");
     }
     return null;

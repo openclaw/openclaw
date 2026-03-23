@@ -1,4 +1,10 @@
+import path from "node:path";
+import { createJiti } from "jiti";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  buildPluginLoaderJitiOptions,
+  resolvePluginSdkScopedAliasMap,
+} from "../../src/plugins/sdk-alias.ts";
 
 const setMatrixRuntimeMock = vi.hoisted(() => vi.fn());
 const registerChannelMock = vi.hoisted(() => vi.fn());
@@ -13,6 +19,21 @@ describe("matrix plugin registration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
+
+  it("loads the matrix runtime api through Jiti", () => {
+    const runtimeApiPath = path.join(process.cwd(), "extensions", "matrix", "runtime-api.ts");
+    const jiti = createJiti(import.meta.url, {
+      ...buildPluginLoaderJitiOptions(
+        resolvePluginSdkScopedAliasMap({ modulePath: runtimeApiPath }),
+      ),
+      tryNative: false,
+    });
+
+    expect(jiti(runtimeApiPath)).toMatchObject({
+      requiresExplicitMatrixDefaultAccount: expect.any(Function),
+      resolveMatrixDefaultOrOnlyAccountId: expect.any(Function),
+    });
+  }, 240_000);
 
   it("registers the channel without bootstrapping crypto runtime", () => {
     const runtime = {} as never;

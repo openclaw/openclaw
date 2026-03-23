@@ -17,6 +17,13 @@ function readPlan(args: string[], cwd = process.cwd()) {
   return JSON.parse(stdout) as ReturnType<typeof resolveExtensionTestPlan>;
 }
 
+function runScript(args: string[], cwd = process.cwd()) {
+  return execFileSync(process.execPath, [scriptPath, ...args], {
+    cwd,
+    encoding: "utf8",
+  });
+}
+
 describe("scripts/test-extension.mjs", () => {
   it("resolves channel-root extensions onto the channel vitest config", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "slack", cwd: process.cwd() });
@@ -39,9 +46,8 @@ describe("scripts/test-extension.mjs", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "line", cwd: process.cwd() });
 
     expect(plan.roots).toContain("extensions/line");
-    expect(plan.roots).toContain("src/line");
-    expect(plan.config).toBe("vitest.channels.config.ts");
-    expect(plan.testFiles.some((file) => file.startsWith("src/line/"))).toBe(true);
+    expect(plan.config).toBe("vitest.extensions.config.ts");
+    expect(plan.testFiles.some((file) => file.startsWith("extensions/line/"))).toBe(true);
   });
 
   it("infers the extension from the current working directory", () => {
@@ -71,5 +77,19 @@ describe("scripts/test-extension.mjs", () => {
     expect(extensionIds).toEqual(
       [...extensionIds].toSorted((left, right) => left.localeCompare(right)),
     );
+  });
+
+  it("dry-run still reports a plan for extensions without tests", () => {
+    const plan = readPlan(["copilot-proxy"]);
+
+    expect(plan.extensionId).toBe("copilot-proxy");
+    expect(plan.testFiles).toEqual([]);
+  });
+
+  it("treats extensions without tests as a no-op by default", () => {
+    const stdout = runScript(["copilot-proxy"]);
+
+    expect(stdout).toContain("No tests found for extensions/copilot-proxy.");
+    expect(stdout).toContain("Skipping.");
   });
 });

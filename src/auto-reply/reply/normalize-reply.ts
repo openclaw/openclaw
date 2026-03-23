@@ -1,5 +1,5 @@
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers.js";
-import { hasReplyChannelData, hasReplyContent } from "../../interactive/payload.js";
+import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   HEARTBEAT_TOKEN,
@@ -32,17 +32,18 @@ export function normalizeReplyPayload(
   payload: ReplyPayload,
   opts: NormalizeReplyOptions = {},
 ): ReplyPayload | null {
-  const hasChannelData = hasReplyChannelData(payload.channelData);
+  const hasContent = (text: string | undefined) =>
+    hasReplyPayloadContent(
+      {
+        ...payload,
+        text,
+      },
+      {
+        trimText: true,
+      },
+    );
   const trimmed = payload.text?.trim() ?? "";
-  if (
-    !hasReplyContent({
-      text: trimmed,
-      mediaUrl: payload.mediaUrl,
-      mediaUrls: payload.mediaUrls,
-      interactive: payload.interactive,
-      hasChannelData,
-    })
-  ) {
+  if (!hasContent(trimmed)) {
     opts.onSkip?.("empty");
     return null;
   }
@@ -50,14 +51,7 @@ export function normalizeReplyPayload(
   const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;
   let text = payload.text ?? undefined;
   if (text && isSilentReplyText(text, silentToken)) {
-    if (
-      !hasReplyContent({
-        mediaUrl: payload.mediaUrl,
-        mediaUrls: payload.mediaUrls,
-        interactive: payload.interactive,
-        hasChannelData,
-      })
-    ) {
+    if (!hasContent("")) {
       opts.onSkip?.("silent");
       return null;
     }
@@ -68,15 +62,7 @@ export function normalizeReplyPayload(
   // silent just like the exact-match path above.  (#30916, #30955)
   if (text && text.includes(silentToken) && !isSilentReplyText(text, silentToken)) {
     text = stripSilentToken(text, silentToken);
-    if (
-      !hasReplyContent({
-        text,
-        mediaUrl: payload.mediaUrl,
-        mediaUrls: payload.mediaUrls,
-        interactive: payload.interactive,
-        hasChannelData,
-      })
-    ) {
+    if (!hasContent(text)) {
       opts.onSkip?.("silent");
       return null;
     }
@@ -92,16 +78,7 @@ export function normalizeReplyPayload(
     if (stripped.didStrip) {
       opts.onHeartbeatStrip?.();
     }
-    if (
-      stripped.shouldSkip &&
-      !hasReplyContent({
-        text: stripped.text,
-        mediaUrl: payload.mediaUrl,
-        mediaUrls: payload.mediaUrls,
-        interactive: payload.interactive,
-        hasChannelData,
-      })
-    ) {
+    if (stripped.shouldSkip && !hasContent(stripped.text)) {
       opts.onSkip?.("heartbeat");
       return null;
     }
@@ -111,15 +88,7 @@ export function normalizeReplyPayload(
   if (text) {
     text = sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
   }
-  if (
-    !hasReplyContent({
-      text,
-      mediaUrl: payload.mediaUrl,
-      mediaUrls: payload.mediaUrls,
-      interactive: payload.interactive,
-      hasChannelData,
-    })
-  ) {
+  if (!hasContent(text)) {
     opts.onSkip?.("empty");
     return null;
   }

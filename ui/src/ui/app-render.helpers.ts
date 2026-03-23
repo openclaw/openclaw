@@ -487,7 +487,7 @@ export function renderChatMobileToggle(state: AppViewState) {
   `;
 }
 
-function switchChatSession(state: AppViewState, nextSessionKey: string) {
+export function switchChatSession(state: AppViewState, nextSessionKey: string) {
   state.sessionKey = nextSessionKey;
   state.chatMessage = "";
   state.chatStream = null;
@@ -857,6 +857,70 @@ export function resolveSessionOptionGroups(
         option.label = `${option.label} · ${option.scopeLabel}`;
       }
     }
+  }
+
+  const allOptions = Array.from(groups.values()).flatMap((group) =>
+    group.options.map((option) => ({ groupLabel: group.label, option })),
+  );
+  const labels = new Map(allOptions.map(({ option }) => [option, option.label]));
+  const countAssignedLabels = () => {
+    const counts = new Map<string, number>();
+    for (const { option } of allOptions) {
+      const label = labels.get(option) ?? option.label;
+      counts.set(label, (counts.get(label) ?? 0) + 1);
+    }
+    return counts;
+  };
+  const labelIncludesScopeLabel = (label: string, scopeLabel: string) => {
+    const trimmedScope = scopeLabel.trim();
+    if (!trimmedScope) {
+      return false;
+    }
+    return (
+      label === trimmedScope ||
+      label.endsWith(` · ${trimmedScope}`) ||
+      label.endsWith(` / ${trimmedScope}`)
+    );
+  };
+
+  const globalCounts = countAssignedLabels();
+  for (const { groupLabel, option } of allOptions) {
+    const currentLabel = labels.get(option) ?? option.label;
+    if ((globalCounts.get(currentLabel) ?? 0) <= 1) {
+      continue;
+    }
+    const scopedPrefix = `${groupLabel} / `;
+    if (currentLabel.startsWith(scopedPrefix)) {
+      continue;
+    }
+    // Keep the agent visible once the native select collapses to a single chosen label.
+    labels.set(option, `${groupLabel} / ${currentLabel}`);
+  }
+
+  const scopedCounts = countAssignedLabels();
+  for (const { option } of allOptions) {
+    const currentLabel = labels.get(option) ?? option.label;
+    if ((scopedCounts.get(currentLabel) ?? 0) <= 1) {
+      continue;
+    }
+    if (labelIncludesScopeLabel(currentLabel, option.scopeLabel)) {
+      continue;
+    }
+    labels.set(option, `${currentLabel} · ${option.scopeLabel}`);
+  }
+
+  const finalCounts = countAssignedLabels();
+  for (const { option } of allOptions) {
+    const currentLabel = labels.get(option) ?? option.label;
+    if ((finalCounts.get(currentLabel) ?? 0) <= 1) {
+      continue;
+    }
+    // Fall back to the full key only when every friendlier disambiguator still collides.
+    labels.set(option, `${currentLabel} · ${option.key}`);
+  }
+
+  for (const { option } of allOptions) {
+    option.label = labels.get(option) ?? option.label;
   }
 
   return Array.from(groups.values());

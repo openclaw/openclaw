@@ -31,7 +31,7 @@ describe("web monitor inbox", () => {
     const listener = await openMonitor(onMessage);
     const sock = getSock();
     sock.ev.emit("messages.upsert", upsert);
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setTimeout(resolve, 25));
     return { onMessage, listener, sock };
   }
 
@@ -104,6 +104,20 @@ describe("web monitor inbox", () => {
       expect.objectContaining({ status: 500, isLoggedOut: false }),
     );
     await listener.close();
+  });
+
+  it("detaches inbound listeners and closes the socket on close()", async () => {
+    const listener = await openMonitor(vi.fn());
+    const sock = getSock();
+
+    expect(sock.ev.listenerCount("messages.upsert")).toBeGreaterThan(0);
+    expect(sock.ev.listenerCount("connection.update")).toBeGreaterThan(0);
+
+    await listener.close();
+
+    expect(sock.ev.listenerCount("messages.upsert")).toBe(0);
+    expect(sock.ev.listenerCount("connection.update")).toBe(0);
+    expect(sock.ws.close).toHaveBeenCalledTimes(1);
   });
 
   it("logs inbound bodies to file", async () => {

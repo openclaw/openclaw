@@ -1,6 +1,6 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/telegram";
 import { vi } from "vitest";
+import type { OpenClawConfig, TelegramAccountConfig } from "../runtime-api.js";
 import type { RegisterTelegramNativeCommandsParams } from "./bot-native-commands.js";
 
 export type NativeCommandTestParams = RegisterTelegramNativeCommandsParams;
@@ -56,6 +56,7 @@ export function createNativeCommandTestParams(
       params.resolveTelegramGroupConfig ??
       ((_chatId, _messageThreadId) => ({ groupConfig: undefined, topicConfig: undefined })),
     shouldSkipUpdate: params.shouldSkipUpdate ?? (() => false),
+    telegramDeps: params.telegramDeps,
     opts: params.opts ?? { token: "token" },
   };
 }
