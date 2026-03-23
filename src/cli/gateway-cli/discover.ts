@@ -1,4 +1,8 @@
-import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
+import {
+  type GatewayBonjourBeacon,
+  pickResolvedGatewayHost,
+  pickResolvedGatewayPort,
+} from "../../infra/bonjour-discovery.js";
 import { colorize, theme } from "../../terminal/theme.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 
@@ -13,15 +17,14 @@ export function parseDiscoverTimeoutMs(raw: unknown, fallbackMs: number): number
 
 export function pickBeaconHost(beacon: GatewayBonjourBeacon): string | null {
   // Security: TXT records are unauthenticated. Prefer the resolved service endpoint (SRV/A/AAAA)
-  // over TXT-provided routing hints.
-  const host = beacon.host || beacon.tailnetDns || beacon.lanHost;
-  return host?.trim() ? host.trim() : null;
+  // and fail closed when discovery did not resolve a routable host.
+  return pickResolvedGatewayHost(beacon);
 }
 
-export function pickGatewayPort(beacon: GatewayBonjourBeacon): number {
+export function pickGatewayPort(beacon: GatewayBonjourBeacon): number | null {
   // Security: TXT records are unauthenticated. Prefer the resolved service port over TXT gatewayPort.
-  const port = beacon.port ?? beacon.gatewayPort ?? 18789;
-  return port > 0 ? port : 18789;
+  // Fail closed when discovery did not resolve a routable port.
+  return pickResolvedGatewayPort(beacon);
 }
 
 export function dedupeBeacons(beacons: GatewayBonjourBeacon[]): GatewayBonjourBeacon[] {
@@ -56,7 +59,7 @@ export function renderBeaconLines(beacon: GatewayBonjourBeacon, rich: boolean): 
   const host = pickBeaconHost(beacon);
   const gatewayPort = pickGatewayPort(beacon);
   const scheme = beacon.gatewayTls ? "wss" : "ws";
-  const wsUrl = host ? `${scheme}://${host}:${gatewayPort}` : null;
+  const wsUrl = host && gatewayPort ? `${scheme}://${host}:${gatewayPort}` : null;
 
   const lines = [`- ${title} ${domain}`];
 

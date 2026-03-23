@@ -1,7 +1,11 @@
 import { withProgress } from "../cli/progress.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
 import { probeGateway } from "../gateway/probe.js";
-import { discoverGatewayBeacons } from "../infra/bonjour-discovery.js";
+import {
+  discoverGatewayBeacons,
+  pickResolvedGatewayHost,
+  pickResolvedGatewayPort,
+} from "../infra/bonjour-discovery.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
@@ -123,12 +127,12 @@ export async function gatewayStatusCommand(
         const user = process.env.USER?.trim() || "";
         const candidates = discovery
           .map((b) => {
-            const host = b.tailnetDns || b.lanHost || b.host;
-            if (!host?.trim()) {
+            const host = pickResolvedGatewayHost(b);
+            if (!host) {
               return null;
             }
             const sshPort = typeof b.sshPort === "number" && b.sshPort > 0 ? b.sshPort : 22;
-            const base = user ? `${user}@${host.trim()}` : host.trim();
+            const base = user ? `${user}@${host}` : host;
             return sshPort !== 22 ? `${base}:${sshPort}` : base;
           })
           .filter((candidate): candidate is string => Boolean(candidate));
@@ -286,9 +290,9 @@ export async function gatewayStatusCommand(
           gatewayPort: b.gatewayPort ?? null,
           sshPort: b.sshPort ?? null,
           wsUrl: (() => {
-            const host = b.tailnetDns || b.lanHost || b.host;
-            const port = b.gatewayPort ?? 18789;
-            return host ? `ws://${host}:${port}` : null;
+            const host = pickResolvedGatewayHost(b);
+            const port = pickResolvedGatewayPort(b);
+            return host && port ? `ws://${host}:${port}` : null;
           })(),
         })),
       },
