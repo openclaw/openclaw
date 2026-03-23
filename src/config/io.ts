@@ -6,6 +6,8 @@ import { isDeepStrictEqual } from "node:util";
 import JSON5 from "json5";
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
 import { loadDotEnv } from "../infra/dotenv.js";
+import { withFileLock } from "../infra/file-lock.js";
+import type { FileLockOptions } from "../infra/file-lock.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
   loadShellEnvFallback,
@@ -84,6 +86,17 @@ const OPEN_DM_POLICY_ALLOW_FROM_RE =
   /^(?<policyPath>[a-z0-9_.-]+)\s*=\s*"open"\s+requires\s+(?<allowPath>[a-z0-9_.-]+)(?:\s+\(or\s+[a-z0-9_.-]+\))?\s+to include "\*"$/i;
 
 const CONFIG_AUDIT_LOG_FILENAME = "config-audit.jsonl";
+
+const CONFIG_WRITE_LOCK_OPTIONS: FileLockOptions = {
+  retries: {
+    retries: 15,
+    factor: 1.5,
+    minTimeout: 50,
+    maxTimeout: 5_000,
+    randomize: true,
+  },
+  stale: 30_000,
+};
 const loggedInvalidConfigs = new Set<string>();
 
 type ConfigWriteAuditResult = "rename" | "copy-fallback" | "failed";
@@ -1083,10 +1096,18 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     };
   }
 
-  async function writeConfigFile(cfg: OpenClawConfig, options: ConfigWriteOptions = {}) {
-    clearConfigCache();
+  /**
+   * Inner write path — must be called while already holding the config file
+   * lock (or in a context where concurrent access is otherwise excluded, such
+   * as tests with a single process).  Accepts a pre-read snapshot so callers
+   * can pass freshly-loaded state without a redundant disk read.
+   */
+  async function writeConfigFileUnderLock(
+    cfg: OpenClawConfig,
+    options: ConfigWriteOptions,
+    snapshot: ConfigFileSnapshot,
+  ): Promise<void> {
     let persistCandidate: unknown = cfg;
-    const { snapshot } = await readConfigFileSnapshotInternal();
     let envRefMap: Map<string, string> | null = null;
     let changedPaths: Set<string> | null = null;
     if (snapshot.valid && snapshot.exists) {
@@ -1130,24 +1151,12 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       deps.logger.warn(`Config warnings:\n${details}`);
     }
 
-    // Restore ${VAR} env var references that were resolved during config loading.
-    // Read the current file (pre-substitution) and restore any references whose
-    // resolved values match the incoming config — so we don't overwrite
-    // "${ANTHROPIC_API_KEY}" with "sk-ant-..." when the caller didn't change it.
-    //
-    // We use only the root file's parsed content (no $include resolution) to avoid
-    // pulling values from included files into the root config on write-back.
-    // Apply env restoration to validated.config (which has runtime defaults stripped
-    // per issue #6070) rather than the raw caller input.
     let cfgToWrite = validated.config;
     try {
       if (deps.fs.existsSync(configPath)) {
         const currentRaw = await deps.fs.promises.readFile(configPath, "utf-8");
         const parsedRes = parseConfigJson5(currentRaw, deps.json5);
         if (parsedRes.ok) {
-          // Use env snapshot from when config was loaded (if available) to avoid
-          // TOCTOU issues where env changes between load and write. Falls back to
-          // live env if no snapshot exists (e.g., first write before any load).
           const envForRestore = options.envSnapshotForRestore ?? deps.env;
           cfgToWrite = restoreEnvVarRefs(
             cfgToWrite,
@@ -1184,8 +1193,6 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         }
       }
     }
-    // Do NOT apply runtime defaults when writing — user config should only contain
-    // explicitly set values. Runtime defaults are applied when loading (issue #6070).
     const stampedOutputConfig = stampConfigVersion(outputConfig);
     const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
     const nextHash = hashConfigRaw(json);
@@ -1225,7 +1232,6 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       if (suspiciousReasons.length === 0) {
         return;
       }
-      // Tests often write minimal configs (missing meta, etc); keep output quiet unless requested.
       const isVitest = deps.env.VITEST === "true";
       const shouldLogInVitest = deps.env.OPENCLAW_TEST_CONFIG_WRITE_ANOMALY_LOG === "1";
       if (isVitest && !shouldLogInVitest) {
@@ -1304,7 +1310,6 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         await deps.fs.promises.rename(tmp, configPath);
       } catch (err) {
         const code = (err as { code?: string }).code;
-        // Windows doesn't reliably support atomic replace via rename when dest exists.
         if (code === "EPERM" || code === "EEXIST") {
           await deps.fs.promises.copyFile(tmp, configPath);
           await deps.fs.promises.chmod(configPath, 0o600).catch(() => {
@@ -1332,12 +1337,66 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     }
   }
 
+  /**
+   * Write a fully-computed config to disk, serialised via an advisory file
+   * lock to prevent torn-rename races between concurrent processes.
+   *
+   * Note: if `cfg` was pre-computed from a snapshot taken **before** this
+   * call, array-valued fields (e.g. `agents.list`) may still experience
+   * lost-update races when multiple writers run concurrently from the same
+   * base state.  Use `updateConfigFile` instead when the write depends on
+   * the current on-disk state.
+   */
+  async function writeConfigFile(cfg: OpenClawConfig, options: ConfigWriteOptions = {}) {
+    // Pre-create the config directory with hardened permissions (0700) before
+    // acquireFileLock touches it.  The lock helper calls fs.mkdir with default
+    // mode (0755), and a subsequent mkdir with mode:0700 is a no-op on an
+    // existing directory, so omitting this step on first write would leave the
+    // directory world-readable until the next process run.
+    await deps.fs.promises.mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
+    return withFileLock(configPath, CONFIG_WRITE_LOCK_OPTIONS, async () => {
+      clearConfigCache();
+      const { snapshot } = await readConfigFileSnapshotInternal();
+      await writeConfigFileUnderLock(cfg, options, snapshot);
+    });
+  }
+
+  /**
+   * Atomically read-modify-write the config file.
+   *
+   * The supplied `transform` receives the latest on-disk config (re-read
+   * inside the advisory file lock) and must return the desired next config.
+   * Because the read and the write both happen under the same lock, concurrent
+   * callers are fully serialised: each transform sees the committed result of
+   * every preceding write, including changes to array-valued fields such as
+   * `agents.list` that a pre-computed `cfg` argument would otherwise
+   * overwrite.
+   *
+   * Prefer this over `writeConfigFile` whenever the write logically depends
+   * on the current on-disk state — e.g. appending an agent, updating a
+   * binding, or any other read-modify-write pattern.
+   */
+  async function updateConfigFile(
+    transform: (current: OpenClawConfig) => OpenClawConfig | Promise<OpenClawConfig>,
+    options: ConfigWriteOptions = {},
+  ): Promise<void> {
+    // Same directory pre-creation as writeConfigFile — see comment there.
+    await deps.fs.promises.mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
+    return withFileLock(configPath, CONFIG_WRITE_LOCK_OPTIONS, async () => {
+      clearConfigCache();
+      const { snapshot } = await readConfigFileSnapshotInternal();
+      const cfg = await transform(snapshot.config);
+      await writeConfigFileUnderLock(cfg, options, snapshot);
+    });
+  }
+
   return {
     configPath,
     loadConfig,
     readConfigFileSnapshot,
     readConfigFileSnapshotForWrite,
     writeConfigFile,
+    updateConfigFile,
   };
 }
 
@@ -1502,6 +1561,26 @@ export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
 
 export async function readConfigFileSnapshotForWrite(): Promise<ReadConfigFileSnapshotForWriteResult> {
   return await createConfigIO().readConfigFileSnapshotForWrite();
+}
+
+export async function updateConfigFile(
+  transform: (current: OpenClawConfig) => OpenClawConfig | Promise<OpenClawConfig>,
+  options: ConfigWriteOptions = {},
+): Promise<void> {
+  const io = createConfigIO();
+  const hadRuntimeSnapshot = Boolean(runtimeConfigSnapshot);
+  // Delegate entirely to the IO layer — the transform receives the freshly-read
+  // on-disk config inside the advisory lock, and writeConfigFileUnderLock handles
+  // env-var reference restoration on its own.  The runtimeConfigSource overlay
+  // used by writeConfigFile is intentionally omitted here: it is only valid when
+  // the caller's config was derived from runtimeConfigSnapshot, which is not the
+  // case for a transform-based write.
+  await io.updateConfigFile(transform, options);
+  // If a runtime snapshot was active, invalidate it so subsequent loadConfig()
+  // calls re-read from disk instead of returning stale in-memory state.
+  if (hadRuntimeSnapshot) {
+    clearRuntimeConfigSnapshot();
+  }
 }
 
 export async function writeConfigFile(
