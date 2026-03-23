@@ -37,7 +37,6 @@ type DebounceBuffer<T> = {
   items: T[];
   timeout: ReturnType<typeof setTimeout> | null;
   debounceMs: number;
-  ready: Promise<void>;
   releaseReady: () => void;
   readyReleased: boolean;
   task: Promise<void>;
@@ -86,6 +85,27 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     return next;
   };
 
+  const enqueueReservedKeyTask = (key: string, task: () => Promise<void>) => {
+    let readyReleased = false;
+    let releaseReady!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      releaseReady = resolve;
+    });
+    return {
+      task: enqueueKeyTask(key, async () => {
+        await ready;
+        await task();
+      }),
+      release: () => {
+        if (readyReleased) {
+          return;
+        }
+        readyReleased = true;
+        releaseReady();
+      },
+    };
+  };
+
   const releaseBuffer = (buffer: DebounceBuffer<T>) => {
     if (buffer.readyReleased) {
       return;
@@ -132,13 +152,24 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     const canDebounce = debounceMs > 0 && (params.shouldDebounce?.(item) ?? true);
 
     if (!canDebounce || !key) {
-      if (key && buffers.has(key)) {
-        await flushKey(key);
-      }
       if (key) {
-        await enqueueKeyTask(key, async () => {
+        if (!buffers.has(key)) {
+          await enqueueKeyTask(key, async () => {
+            await runFlush([item]);
+          });
+          return;
+        }
+        // Reserve the keyed immediate slot before forcing the pending buffer
+        // to flush so fire-and-forget callers cannot be overtaken.
+        const reservedTask = enqueueReservedKeyTask(key, async () => {
           await runFlush([item]);
         });
+        try {
+          await flushKey(key);
+        } finally {
+          reservedTask.release();
+        }
+        await reservedTask.task;
       } else {
         await runFlush([item]);
       }
@@ -153,25 +184,21 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       return;
     }
 
-    let releaseReady!: () => void;
-    const buffer: DebounceBuffer<T> = {
-      items: [item],
-      timeout: null,
-      debounceMs,
-      ready: new Promise<void>((resolve) => {
-        releaseReady = resolve;
-      }),
-      releaseReady,
-      readyReleased: false,
-      task: Promise.resolve(),
-    };
-    buffer.task = enqueueKeyTask(key, async () => {
-      await buffer.ready;
+    let buffer!: DebounceBuffer<T>;
+    const reservedTask = enqueueReservedKeyTask(key, async () => {
       if (buffer.items.length === 0) {
         return;
       }
       await runFlush(buffer.items);
     });
+    buffer = {
+      items: [item],
+      timeout: null,
+      debounceMs,
+      releaseReady: reservedTask.release,
+      readyReleased: false,
+      task: reservedTask.task,
+    };
     buffers.set(key, buffer);
     scheduleFlush(key, buffer);
   };
