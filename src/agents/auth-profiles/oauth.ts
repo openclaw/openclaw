@@ -7,6 +7,10 @@ import {
 import { loadConfig, type OpenClawConfig } from "../../config/config.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { withFileLock } from "../../infra/file-lock.js";
+import {
+  formatProviderAuthProfileApiKeyWithPlugin,
+  refreshProviderOAuthCredentialWithPlugin,
+} from "../../plugins/provider-runtime.runtime.js";
 import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
 import { AUTH_STORE_LOCK_OPTIONS, log } from "./constants.js";
@@ -38,15 +42,6 @@ function listOAuthProviderIds(): string[] {
 }
 
 const OAUTH_PROVIDER_IDS = new Set<string>(listOAuthProviderIds());
-
-let providerRuntimePromise:
-  | Promise<typeof import("../../plugins/provider-runtime.runtime.js")>
-  | undefined;
-
-function loadProviderRuntime() {
-  providerRuntimePromise ??= import("../../plugins/provider-runtime.runtime.js");
-  return providerRuntimePromise;
-}
 
 const isOAuthProvider = (provider: string): provider is OAuthProvider =>
   OAUTH_PROVIDER_IDS.has(provider);
@@ -86,8 +81,7 @@ function isProfileConfigCompatible(params: {
 }
 
 async function buildOAuthApiKey(provider: string, credentials: OAuthCredential): Promise<string> {
-  const { formatProviderAuthProfileApiKeyWithPlugin } = await loadProviderRuntime();
-  const formatted = formatProviderAuthProfileApiKeyWithPlugin({
+  const formatted = await formatProviderAuthProfileApiKeyWithPlugin({
     provider,
     context: credentials,
   });
@@ -185,7 +179,6 @@ async function refreshOAuthTokenWithLock(params: {
       };
     }
 
-    const { refreshProviderOAuthCredentialWithPlugin } = await loadProviderRuntime();
     const pluginRefreshed = await refreshProviderOAuthCredentialWithPlugin({
       provider: cred.provider,
       context: cred,
