@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { ChannelMessageActionAdapter } from "../types.js";
 
@@ -199,15 +199,13 @@ async function expectSlackSendRejected(params: Record<string, unknown>, error: R
   expect(handleSlackAction).not.toHaveBeenCalled();
 }
 
-beforeAll(async () => {
+beforeEach(async () => {
+  vi.resetModules();
   ({ discordMessageActions } = await import("../../../../extensions/discord/runtime-api.js"));
   ({ handleDiscordMessageAction } = await import("./discord/handle-action.js"));
   ({ telegramMessageActions } = await import("../../../../extensions/telegram/runtime-api.js"));
   ({ signalMessageActions } = await import("../../../../extensions/signal/src/message-actions.js"));
   ({ createSlackActions } = await import("../../../../extensions/slack/src/channel-actions.js"));
-});
-
-beforeEach(() => {
   vi.clearAllMocks();
 });
 

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
@@ -42,13 +42,11 @@ let RawMemoryIndexManager: ManagerModule["MemoryIndexManager"];
 describe("memory manager cache hydration", () => {
   let workspaceDir = "";
 
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
     ({ closeAllMemoryIndexManagers, MemoryIndexManager: RawMemoryIndexManager } =
       await import("./manager.js"));
-  });
-
-  beforeEach(async () => {
     vi.clearAllMocks();
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-concurrent-"));
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });

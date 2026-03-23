@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { DEFAULT_OLLAMA_EMBEDDING_MODEL } from "./embeddings-ollama.js";
 import type {
@@ -68,11 +68,9 @@ describe("memory manager mistral provider wiring", () => {
   let indexPath = "";
   let manager: MemoryIndexManager | null = null;
 
-  beforeAll(async () => {
-    ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
-  });
-
   beforeEach(async () => {
+    vi.resetModules();
+    ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
     vi.clearAllMocks();
     createEmbeddingProviderMock.mockReset();
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-mistral-"));
