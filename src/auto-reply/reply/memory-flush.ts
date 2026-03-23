@@ -164,9 +164,7 @@ export function resolveMemoryFlushContextWindowTokens(params: {
   agentCfgContextTokens?: number;
 }): number {
   return (
-    lookupContextTokens(params.modelId, { allowAsyncLoad: false }) ??
-    params.agentCfgContextTokens ??
-    DEFAULT_CONTEXT_TOKENS
+    lookupContextTokens(params.modelId) ?? params.agentCfgContextTokens ?? DEFAULT_CONTEXT_TOKENS
   );
 }
 

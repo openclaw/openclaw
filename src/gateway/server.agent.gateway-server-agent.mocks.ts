@@ -14,10 +14,8 @@ export function setRegistry(registry: PluginRegistry) {
 }
 
 vi.mock("./server-plugins.js", async () => {
-  const actual = await vi.importActual<typeof import("./server-plugins.js")>("./server-plugins.js");
   const { setActivePluginRegistry } = await import("../plugins/runtime.js");
   return {
-    ...actual,
     loadGatewayPlugins: (params: { baseMethods: string[] }) => {
       setActivePluginRegistry(registryState.registry);
       return {
@@ -25,6 +23,7 @@ vi.mock("./server-plugins.js", async () => {
         gatewayMethods: params.baseMethods ?? [],
       };
     },
-    setFallbackGatewayContextResolver: vi.fn(),
+    // server.impl.ts sets a fallback context before dispatch; tests only need the symbol to exist.
+    setFallbackGatewayContext: vi.fn(),
   };
 });

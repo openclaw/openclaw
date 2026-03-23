@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 
-const LIVE = isLiveTestEnabled();
+const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
 const CDP_URL = process.env.OPENCLAW_LIVE_BROWSER_CDP_URL?.trim() || "";
 const describeLive = LIVE && CDP_URL ? describe : describe.skip;
 

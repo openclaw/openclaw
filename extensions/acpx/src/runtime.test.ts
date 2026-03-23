@@ -482,7 +482,7 @@ describe("AcpxRuntime", () => {
     await runtime.setConfigOption({
       handle,
       key: "model",
-      value: "openai-codex/gpt-5.4",
+      value: "openai-codex/gpt-5.3-codex",
     });
     const status = await runtime.getStatus({ handle });
     const ensuredSessionName = "agent:codex:acp:controls";

@@ -4,8 +4,8 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
-  prepareProviderExtraParams as prepareProviderExtraParamsRuntime,
-  wrapProviderStreamFn as wrapProviderStreamFnRuntime,
+  prepareProviderExtraParams,
+  wrapProviderStreamFn,
 } from "../../plugins/provider-runtime.js";
 import {
   createAnthropicBetaHeadersWrapper,
@@ -37,31 +37,6 @@ import {
   resolveOpenAIServiceTier,
 } from "./openai-stream-wrappers.js";
 import { createXaiFastModeWrapper } from "./xai-stream-wrappers.js";
-
-const defaultProviderRuntimeDeps = {
-  prepareProviderExtraParams: prepareProviderExtraParamsRuntime,
-  wrapProviderStreamFn: wrapProviderStreamFnRuntime,
-};
-
-const providerRuntimeDeps = {
-  ...defaultProviderRuntimeDeps,
-};
-
-export const __testing = {
-  setProviderRuntimeDepsForTest(
-    deps: Partial<typeof defaultProviderRuntimeDeps> | undefined,
-  ): void {
-    providerRuntimeDeps.prepareProviderExtraParams =
-      deps?.prepareProviderExtraParams ?? defaultProviderRuntimeDeps.prepareProviderExtraParams;
-    providerRuntimeDeps.wrapProviderStreamFn =
-      deps?.wrapProviderStreamFn ?? defaultProviderRuntimeDeps.wrapProviderStreamFn;
-  },
-  resetProviderRuntimeDepsForTest(): void {
-    providerRuntimeDeps.prepareProviderExtraParams =
-      defaultProviderRuntimeDeps.prepareProviderExtraParams;
-    providerRuntimeDeps.wrapProviderStreamFn = defaultProviderRuntimeDeps.wrapProviderStreamFn;
-  },
-};
 
 /**
  * Resolve provider-specific extra params from model config.
@@ -231,7 +206,7 @@ export function applyExtraParamsToAgent(
       : undefined;
   const merged = Object.assign({}, resolvedExtraParams, override);
   const effectiveExtraParams =
-    providerRuntimeDeps.prepareProviderExtraParams({
+    prepareProviderExtraParams({
       provider,
       config: cfg,
       context: {
@@ -282,7 +257,7 @@ export function applyExtraParamsToAgent(
     workspaceDir,
   });
   const providerStreamBase = agent.streamFn;
-  const pluginWrappedStreamFn = providerRuntimeDeps.wrapProviderStreamFn({
+  const pluginWrappedStreamFn = wrapProviderStreamFn({
     provider,
     config: cfg,
     context: {

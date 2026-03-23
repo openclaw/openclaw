@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { STATE_DIR } from "../../../src/config/paths.js";
@@ -27,16 +28,12 @@ vi.mock("openclaw/plugin-sdk/command-auth", async (importOriginal) => {
 vi.mock("./bot/delivery.js", () => ({
   deliverReplies: deliveryMocks.deliverReplies,
 }));
-vi.mock("./bot/delivery.replies.js", () => ({
-  deliverReplies: deliveryMocks.deliverReplies,
-}));
 
-let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
+import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
   createCommandBot,
   createNativeCommandTestParams as createNativeCommandTestParamsBase,
   createPrivateCommandContext,
-  deliverReplies as registeredDeliverReplies,
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
 
@@ -81,15 +78,11 @@ function createNativeCommandTestParams(
 }
 
 describe("registerTelegramNativeCommands", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ registerTelegramNativeCommands } = await import("./bot-native-commands.js"));
+  beforeEach(() => {
     skillCommandMocks.listSkillCommandsForAgents.mockClear();
     skillCommandMocks.listSkillCommandsForAgents.mockReturnValue([]);
     deliveryMocks.deliverReplies.mockClear();
     deliveryMocks.deliverReplies.mockResolvedValue({ delivered: true });
-    registeredDeliverReplies.mockClear();
-    registeredDeliverReplies.mockResolvedValue({ delivered: true });
     resetPluginCommandMocks();
   });
 
@@ -270,11 +263,9 @@ describe("registerTelegramNativeCommands", () => {
     expect(handler).toBeTruthy();
     await handler?.(createPrivateCommandContext());
 
-    expect(registeredDeliverReplies).toHaveBeenCalledWith(
+    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining([
-          expect.stringMatching(/[\\/]\.openclaw[\\/]workspace-work$/),
-        ]),
+        mediaLocalRoots: expect.arrayContaining([path.join(STATE_DIR, "workspace-work")]),
       }),
     );
     expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
@@ -324,7 +315,7 @@ describe("registerTelegramNativeCommands", () => {
     expect(handler).toBeTruthy();
     await handler?.(createPrivateCommandContext());
 
-    expect(registeredDeliverReplies).toHaveBeenCalledWith(
+    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         silent: true,
         replies: [expect.objectContaining({ isError: true })],

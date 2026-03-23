@@ -74,16 +74,6 @@ type LineWebhookContext = Parameters<typeof import("./bot-handlers.js").handleLi
 
 const createRuntime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
 
-function buildDefaultLineMessageContext() {
-  return {
-    ctxPayload: { From: "line:group:group-1" },
-    replyToken: "reply-token",
-    route: { agentId: "default" },
-    isGroup: true,
-    accountId: "default",
-  };
-}
-
 function createReplayMessageEvent(params: {
   messageId: string;
   groupId: string;
@@ -210,15 +200,14 @@ async function startInflightReplayDuplicate(params: {
 
 describe("handleLineWebhookEvents", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ handleLineWebhookEvents, createLineWebhookReplayCache } = await import("./bot-handlers.js"));
   });
 
   beforeEach(() => {
-    buildLineMessageContextMock.mockReset().mockResolvedValue(buildDefaultLineMessageContext());
-    buildLinePostbackContextMock.mockReset().mockResolvedValue(null as unknown);
-    readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-    upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "CODE", created: true });
+    buildLineMessageContextMock.mockClear();
+    buildLinePostbackContextMock.mockClear();
+    readAllowFromStoreMock.mockClear();
+    upsertPairingRequestMock.mockClear();
   });
 
   it("blocks group messages when groupPolicy is disabled", async () => {
@@ -584,11 +573,10 @@ describe("handleLineWebhookEvents", () => {
       isRedelivery: true,
     });
     const { firstRun, secondRun } = await startInflightReplayDuplicate({ event, processMessage });
-    const firstFailure = expect(firstRun).rejects.toThrow("transient inflight failure");
-    const secondFailure = expect(secondRun).rejects.toThrow("transient inflight failure");
     rejectFirst?.(new Error("transient inflight failure"));
 
-    await Promise.all([firstFailure, secondFailure]);
+    await expect(firstRun).rejects.toThrow("transient inflight failure");
+    await expect(secondRun).rejects.toThrow("transient inflight failure");
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 

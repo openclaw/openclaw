@@ -8,7 +8,6 @@ import type {
 } from "../plugins/types.js";
 import { resolveBundledPluginWebSearchProviders } from "../plugins/web-search-providers.js";
 import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
-import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { secretRefKey } from "./ref-contract.js";
 import { resolveSecretRefValues } from "./resolve.js";
@@ -298,28 +297,26 @@ export async function resolveRuntimeWebTools(params: {
   const rawProvider =
     typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
   const configuredBundledPluginId = resolveBundledWebSearchPluginId(rawProvider);
-  const providers = sortWebSearchProvidersForAutoDetect(
-    search
-      ? configuredBundledPluginId
+  const providers = search
+    ? configuredBundledPluginId
+      ? resolveBundledPluginWebSearchProviders({
+          config: params.sourceConfig,
+          env: { ...process.env, ...params.context.env },
+          bundledAllowlistCompat: true,
+          onlyPluginIds: [configuredBundledPluginId],
+        })
+      : !hasCustomWebSearchPluginRisk(params.sourceConfig)
         ? resolveBundledPluginWebSearchProviders({
             config: params.sourceConfig,
             env: { ...process.env, ...params.context.env },
             bundledAllowlistCompat: true,
-            onlyPluginIds: [configuredBundledPluginId],
           })
-        : !hasCustomWebSearchPluginRisk(params.sourceConfig)
-          ? resolveBundledPluginWebSearchProviders({
-              config: params.sourceConfig,
-              env: { ...process.env, ...params.context.env },
-              bundledAllowlistCompat: true,
-            })
-          : resolvePluginWebSearchProviders({
-              config: params.sourceConfig,
-              env: { ...process.env, ...params.context.env },
-              bundledAllowlistCompat: true,
-            })
-      : [],
-  );
+        : resolvePluginWebSearchProviders({
+            config: params.sourceConfig,
+            env: { ...process.env, ...params.context.env },
+            bundledAllowlistCompat: true,
+          })
+    : [];
 
   const searchMetadata: RuntimeWebSearchMetadata = {
     providerSource: "none",

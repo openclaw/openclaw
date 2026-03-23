@@ -66,9 +66,7 @@ describe("resolveAccount", () => {
     expect(account.accountId).toBe("default");
     expect(account.enabled).toBe(true);
     expect(account.webhookPath).toBe("/webhook/synology");
-    expect(account.webhookPathSource).toBe("default");
     expect(account.dangerouslyAllowNameMatching).toBe(false);
-    expect(account.dangerouslyAllowInheritedWebhookPath).toBe(false);
     expect(account.dmPolicy).toBe("allowlist");
     expect(account.rateLimitPerMinute).toBe(30);
     expect(account.botName).toBe("OpenClaw");
@@ -169,7 +167,7 @@ describe("resolveAccount", () => {
     };
     const account = resolveAccount(cfg, "work");
     expect(account.webhookPath).toBe("/webhook/shared");
-    expect(account.webhookPathSource).toBe("inherited-base");
+    expect(account.hasExplicitWebhookPath).toBe(false);
     expect(account.dangerouslyAllowInheritedWebhookPath).toBe(false);
   });
 
@@ -188,7 +186,7 @@ describe("resolveAccount", () => {
     };
     const account = resolveAccount(cfg, "work");
     expect(account.webhookPath).toBe("/webhook/shared");
-    expect(account.webhookPathSource).toBe("inherited-base");
+    expect(account.hasExplicitWebhookPath).toBe(false);
     expect(account.dangerouslyAllowInheritedWebhookPath).toBe(true);
   });
 

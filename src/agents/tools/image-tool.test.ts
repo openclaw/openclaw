@@ -88,10 +88,8 @@ const ONE_PIXEL_JPEG_B64 = "QUJDRA==";
 
 async function withTempWorkspacePng(
   cb: (args: { workspaceDir: string; imagePath: string }) => Promise<void>,
-  options?: { parentDir?: string },
 ) {
-  const parentDir = options?.parentDir ?? os.tmpdir();
-  const workspaceParent = await fs.mkdtemp(path.join(parentDir, "openclaw-workspace-image-"));
+  const workspaceParent = await fs.mkdtemp(path.join(process.cwd(), ".openclaw-workspace-image-"));
   try {
     const workspaceDir = path.join(workspaceParent, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
@@ -302,14 +300,6 @@ const moonshotProvider = {
 
 function installImageUnderstandingProviderStubs(...providers: MediaUnderstandingProvider[]) {
   imageProviderHarness.setProviders(providers);
-  __testing.setProviderDepsForTest({
-    buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
-      imageProviderHarness.buildProviderRegistry(overrides),
-    getMediaUnderstandingProvider: (
-      id: string,
-      registry: Map<string, MediaUnderstandingProvider>,
-    ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
-  });
 }
 
 function makeModelDefinition(id: string, input: Array<"text" | "image">): ModelDefinitionConfig {
@@ -418,7 +408,6 @@ describe("image tool implicit imageModel config", () => {
 
   afterEach(() => {
     imageProviderHarness.reset();
-    __testing.setProviderDepsForTest();
   });
 
   it("stays disabled without auth when no pairing is possible", async () => {
@@ -726,13 +715,13 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
-  it("allows workspace images via createOpenClawCodingTools when workspace root is explicit", async () => {
-    await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
+  it("allows workspace images via createOpenClawCodingTools default workspace root", async () => {
+    await withTempWorkspacePng(async ({ imagePath }) => {
       const fetch = stubMinimaxOkFetch();
       await withTempAgentDir(async (agentDir) => {
         const cfg = createMinimaxImageConfig();
 
-        const tools = createOpenClawCodingTools({ config: cfg, agentDir, workspaceDir });
+        const tools = createOpenClawCodingTools({ config: cfg, agentDir });
         const tool = requireImageTool(tools.find((candidate) => candidate.name === "image"));
 
         await expectImageToolExecOk(tool, imagePath);
@@ -869,7 +858,6 @@ describe("image tool MiniMax VLM routing", () => {
 
   afterEach(() => {
     imageProviderHarness.reset();
-    __testing.setProviderDepsForTest();
   });
 
   async function createMinimaxVlmFixture(baseResp: { status_code: number; status_msg: string }) {

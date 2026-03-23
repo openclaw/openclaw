@@ -1,6 +1,5 @@
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   addSubagentRunForTests,
   listSubagentRunsForRequester,
@@ -25,7 +24,6 @@ vi.mock("../config/config.js", async (importOriginal) => {
       tools: {
         // Keep sessions tools permissive in this suite; dedicated visibility tests cover defaults.
         sessions: { visibility: "all" },
-        agentToAgent: { enabled: true },
       },
     }),
     resolveGatewayPort: () => 18789,
@@ -33,23 +31,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 import "./test-helpers/fast-core-tools.js";
-import { __testing as openClawToolsTesting, createOpenClawTools } from "./openclaw-tools.js";
-import { __testing as subagentControlTesting } from "./subagent-control.js";
-import { __testing as agentStepTesting } from "./tools/agent-step.js";
-import { __testing as sessionsResolutionTesting } from "./tools/sessions-resolution.js";
-import { __testing as sessionsSendA2ATesting } from "./tools/sessions-send-tool.a2a.js";
-
-const TEST_CONFIG = {
-  session: {
-    mainKey: "main",
-    scope: "per-sender",
-    agentToAgent: { maxPingPongTurns: 2 },
-  },
-  tools: {
-    sessions: { visibility: "all" },
-    agentToAgent: { enabled: true },
-  },
-} as OpenClawConfig;
+import { createOpenClawTools } from "./openclaw-tools.js";
 
 const waitForCalls = async (getCount: () => number, count: number, timeoutMs = 2000) => {
   await vi.waitFor(
@@ -69,22 +51,6 @@ describe("sessions tools", () => {
 
   beforeEach(() => {
     callGatewayMock.mockClear();
-    openClawToolsTesting.setDepsForTest({
-      callGateway: (opts: unknown) => callGatewayMock(opts),
-      config: TEST_CONFIG,
-    });
-    agentStepTesting.setDepsForTest({
-      callGateway: (opts: unknown) => callGatewayMock(opts),
-    });
-    sessionsResolutionTesting.setDepsForTest({
-      callGateway: (opts: unknown) => callGatewayMock(opts),
-    });
-    sessionsSendA2ATesting.setDepsForTest({
-      callGateway: (opts: unknown) => callGatewayMock(opts),
-    });
-    subagentControlTesting.setDepsForTest({
-      callGateway: (opts: unknown) => callGatewayMock(opts),
-    });
   });
 
   it("uses number (not integer) in tool schemas for Gemini compatibility", () => {

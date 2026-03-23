@@ -380,15 +380,8 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
     this._cancelRetryTimer();
     if (this.ws) {
       this.ws.removeAllListeners();
-      try {
-        if (this.ws.readyState === WebSocket.OPEN) {
-          this.ws.close(1000, "Client closed");
-        } else if (this.ws.readyState === WebSocket.CONNECTING) {
-          // ws can still throw here while the handshake is in-flight.
-          this.ws.terminate();
-        }
-      } catch {
-        // Best-effort close during setup/teardown.
+      if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
+        this.ws.close(1000, "Client closed");
       }
       this.ws = null;
     }

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectAugmentedCodexCatalog,
   expectCodexBuiltInSuppression,
@@ -19,6 +19,17 @@ const resolveNonBundledProviderPluginIdsMock = vi.fn<ResolveNonBundledProviderPl
 const resolveOwningPluginIdsForProviderMock = vi.fn<ResolveOwningPluginIdsForProvider>(
   (_) => undefined as string[] | undefined,
 );
+
+vi.mock("./providers.js", () => ({
+  resolveNonBundledProviderPluginIds: (params: unknown) =>
+    resolveNonBundledProviderPluginIdsMock(params as never),
+  resolveOwningPluginIdsForProvider: (params: unknown) =>
+    resolveOwningPluginIdsForProviderMock(params as never),
+}));
+
+vi.mock("./providers.runtime.js", () => ({
+  resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
+}));
 
 let augmentModelCatalogWithProviderPlugins: typeof import("./provider-runtime.js").augmentModelCatalogWithProviderPlugins;
 let buildProviderAuthDoctorHintWithPlugin: typeof import("./provider-runtime.js").buildProviderAuthDoctorHintWithPlugin;
@@ -57,17 +68,7 @@ const MODEL: ProviderRuntimeModel = {
 };
 
 describe("provider-runtime", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.doMock("./providers.js", () => ({
-      resolveNonBundledProviderPluginIds: (params: unknown) =>
-        resolveNonBundledProviderPluginIdsMock(params as never),
-      resolveOwningPluginIdsForProvider: (params: unknown) =>
-        resolveOwningPluginIdsForProviderMock(params as never),
-    }));
-    vi.doMock("./providers.runtime.js", () => ({
-      resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
-    }));
+  beforeAll(async () => {
     ({
       augmentModelCatalogWithProviderPlugins,
       buildProviderAuthDoctorHintWithPlugin,
@@ -92,6 +93,9 @@ describe("provider-runtime", () => {
       runProviderDynamicModel,
       wrapProviderStreamFn,
     } = await import("./provider-runtime.js"));
+  });
+
+  beforeEach(() => {
     resetProviderRuntimeHookCacheForTest();
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue([]);
@@ -474,7 +478,7 @@ describe("provider-runtime", () => {
             { provider: "openai", id: "gpt-5.2-pro", name: "GPT-5.2 Pro" },
             { provider: "openai", id: "gpt-5-mini", name: "GPT-5 mini" },
             { provider: "openai", id: "gpt-5-nano", name: "GPT-5 nano" },
-            { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.4" },
+            { provider: "openai-codex", id: "gpt-5.3-codex", name: "GPT-5.3 Codex" },
           ],
         },
       }),

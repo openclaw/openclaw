@@ -472,8 +472,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   }
   params.message = message;
   const gifPlayback = readBooleanParam(params, "gifPlayback") ?? false;
-  const forceDocument =
-    readBooleanParam(params, "forceDocument") ?? readBooleanParam(params, "asDocument") ?? false;
+  const forceDocument = readBooleanParam(params, "forceDocument") ?? false;
   const bestEffort = readBooleanParam(params, "bestEffort");
   const silent = readBooleanParam(params, "silent");
 

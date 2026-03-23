@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { QWEN_OAUTH_MARKER } from "../../agents/model-auth-markers.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
@@ -113,8 +113,7 @@ function runCatalog(params: {
 }
 
 describe("provider discovery contract", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     vi.doMock("openclaw/plugin-sdk/agent-runtime", async () => {
       // Import the direct source module, not the mocked subpath, so bundled
       // provider helpers still see the full agent-runtime surface.
@@ -202,6 +201,9 @@ describe("provider discovery contract", () => {
       registerProviders(cloudflareAiGatewayPlugin),
       "cloudflare-ai-gateway",
     );
+  });
+
+  beforeEach(() => {
     setRuntimeAuthStore();
   });
 

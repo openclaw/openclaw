@@ -47,7 +47,6 @@ import {
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.js";
-import { readLatestAssistantReply } from "./tools/agent-step.js";
 import { sanitizeTextContent, extractAssistantText } from "./tools/sessions-helpers.js";
 import { isAnnounceSkip } from "./tools/sessions-send-helpers.js";
 
@@ -392,12 +391,7 @@ async function readSubagentOutput(
     params: { sessionKey, limit: 100 },
   });
   const messages = Array.isArray(history?.messages) ? history.messages : [];
-  const selected = selectSubagentOutputText(summarizeSubagentOutputHistory(messages), outcome);
-  if (selected?.trim()) {
-    return selected;
-  }
-  const latestAssistant = await readLatestAssistantReply({ sessionKey, limit: 100 });
-  return latestAssistant?.trim() ? latestAssistant : undefined;
+  return selectSubagentOutputText(summarizeSubagentOutputHistory(messages), outcome);
 }
 
 async function readLatestSubagentOutputWithRetry(params: {
@@ -1420,6 +1414,16 @@ export async function runSubagentAnnounceFlow(params: {
 
       if (!reply?.trim() && fallbackReply && !fallbackIsSilent) {
         reply = fallbackReply;
+      }
+
+      if (
+        !expectsCompletionMessage &&
+        !reply?.trim() &&
+        childSessionId &&
+        isEmbeddedPiRunActive(childSessionId)
+      ) {
+        shouldDeleteChildSession = false;
+        return false;
       }
 
       if (isAnnounceSkip(reply) || isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {

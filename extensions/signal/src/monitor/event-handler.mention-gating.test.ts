@@ -1,7 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../../../../src/auto-reply/templating.js";
 import { buildDispatchInboundCaptureMock } from "../../../../src/channels/plugins/contracts/inbound-testkit.js";
 import type { OpenClawConfig } from "../../../../src/config/types.js";
+import {
+  createBaseSignalEventHandlerDeps,
+  createSignalReceiveEvent,
+} from "./event-handler.test-harness.js";
 
 type SignalMsgContext = Pick<MsgContext, "Body" | "WasMentioned"> & {
   Body?: string;
@@ -14,17 +18,15 @@ function getCapturedCtx() {
   return capturedCtx as SignalMsgContext;
 }
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+vi.mock("../../../../src/auto-reply/dispatch.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../src/auto-reply/dispatch.js")>();
   return buildDispatchInboundCaptureMock(actual, (ctx) => {
     capturedCtx = ctx as SignalMsgContext;
   });
 });
 
-let createBaseSignalEventHandlerDeps: typeof import("./event-handler.test-harness.js").createBaseSignalEventHandlerDeps;
-let createSignalReceiveEvent: typeof import("./event-handler.test-harness.js").createSignalReceiveEvent;
-let createSignalEventHandler: typeof import("./event-handler.js").createSignalEventHandler;
-let renderSignalMentions: typeof import("./mentions.js").renderSignalMentions;
+import { createSignalEventHandler } from "./event-handler.js";
+import { renderSignalMentions } from "./mentions.js";
 
 type GroupEventOpts = {
   message?: string;
@@ -100,16 +102,8 @@ async function expectSkippedGroupHistory(opts: GroupEventOpts, expectedBody: str
 }
 
 describe("signal mention gating", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    capturedCtx = undefined;
-    ({ createBaseSignalEventHandlerDeps, createSignalReceiveEvent } =
-      await import("./event-handler.test-harness.js"));
-    ({ createSignalEventHandler } = await import("./event-handler.js"));
-    ({ renderSignalMentions } = await import("./mentions.js"));
-  });
-
   it("drops group messages without mention when requireMention is configured", async () => {
+    capturedCtx = undefined;
     const handler = createMentionHandler({ requireMention: true });
 
     await handler(makeGroupEvent({ message: "hello everyone" }));
@@ -117,6 +111,7 @@ describe("signal mention gating", () => {
   });
 
   it("allows group messages with mention when requireMention is configured", async () => {
+    capturedCtx = undefined;
     const handler = createMentionHandler({ requireMention: true });
 
     await handler(makeGroupEvent({ message: "hey @bot what's up" }));
@@ -125,6 +120,7 @@ describe("signal mention gating", () => {
   });
 
   it("sets WasMentioned=false for group messages without mention when requireMention is off", async () => {
+    capturedCtx = undefined;
     const handler = createMentionHandler({ requireMention: false });
 
     await handler(makeGroupEvent({ message: "hello everyone" }));
@@ -133,6 +129,7 @@ describe("signal mention gating", () => {
   });
 
   it("records pending history for skipped group messages", async () => {
+    capturedCtx = undefined;
     const { handler, groupHistories } = createMentionGatedHistoryHandler();
     await handler(makeGroupEvent({ message: "hello from alice" }));
     expect(capturedCtx).toBeUndefined();
@@ -150,6 +147,7 @@ describe("signal mention gating", () => {
   });
 
   it("normalizes mixed-case parameterized attachment MIME in skipped pending history", async () => {
+    capturedCtx = undefined;
     const groupHistories = new Map();
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
@@ -174,6 +172,7 @@ describe("signal mention gating", () => {
   });
 
   it("summarizes multiple skipped attachments with stable file count wording", async () => {
+    capturedCtx = undefined;
     const groupHistories = new Map();
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
@@ -205,6 +204,7 @@ describe("signal mention gating", () => {
   });
 
   it("bypasses mention gating for authorized control commands", async () => {
+    capturedCtx = undefined;
     const handler = createMentionHandler({ requireMention: true });
 
     await handler(makeGroupEvent({ message: "/help" }));
@@ -212,6 +212,7 @@ describe("signal mention gating", () => {
   });
 
   it("hydrates mention placeholders before trimming so offsets stay aligned", async () => {
+    capturedCtx = undefined;
     const handler = createMentionHandler({ requireMention: false });
 
     const placeholder = "\uFFFC";
@@ -236,6 +237,7 @@ describe("signal mention gating", () => {
   });
 
   it("counts mention metadata replacements toward requireMention gating", async () => {
+    capturedCtx = undefined;
     const handler = createMentionHandler({
       requireMention: true,
       mentionPattern: "@123e4567",
