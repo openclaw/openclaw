@@ -70,6 +70,64 @@ export function SessionBadges({
   agentRole,
   agentDepartment,
 }: SessionBadgesProps) {
+  return (
+    <SessionBadgesInner
+      models={models}
+      agentEmoji={agentEmoji}
+      agentName={agentName}
+      agentRole={agentRole}
+      agentDepartment={agentDepartment}
+      showModel
+      showHeaderBadges
+    />
+  );
+}
+
+/**
+ * Header badges only: agent identity, session kind/channel, project selector,
+ * channel binding selector. Excludes the model selector.
+ */
+export function SessionHeaderBadges({
+  models,
+  agentEmoji,
+  agentName,
+  agentRole,
+  agentDepartment,
+}: SessionBadgesProps) {
+  return (
+    <SessionBadgesInner
+      models={models}
+      agentEmoji={agentEmoji}
+      agentName={agentName}
+      agentRole={agentRole}
+      agentDepartment={agentDepartment}
+      showModel={false}
+      showHeaderBadges
+    />
+  );
+}
+
+/**
+ * Model selector badge only. Intended for placement near the chat input.
+ */
+export function ModelBadge({ models }: Pick<SessionBadgesProps, "models">) {
+  return <SessionBadgesInner models={models} showModel showHeaderBadges={false} />;
+}
+
+type SessionBadgesInnerProps = SessionBadgesProps & {
+  showModel: boolean;
+  showHeaderBadges: boolean;
+};
+
+function SessionBadgesInner({
+  models,
+  agentEmoji,
+  agentName,
+  agentRole,
+  agentDepartment,
+  showModel,
+  showHeaderBadges,
+}: SessionBadgesInnerProps) {
   const { sendRpc } = useGateway();
   const { toast } = useToast();
   const isConnected = useGatewayStore((s) => s.connectionStatus === "connected");
@@ -516,71 +574,76 @@ export function SessionBadges({
     <>
       {/* Badge row */}
       <div className="flex items-center gap-1.5 flex-wrap text-[10px] font-mono text-muted-foreground min-w-0">
-        {/* Agent identity chip */}
-        {agentEmoji && agentName && (
+        {/* Header-only badges: agent identity, session kind, project, channel binding */}
+        {showHeaderBadges && (
           <>
-            <span className="flex items-center gap-1 shrink-0 px-1.5 py-0.5 rounded-md bg-primary/5 border border-primary/10 text-primary/70">
-              <span>{agentEmoji}</span>
-              <span className="font-medium">{agentName}</span>
-            </span>
-            <Separator orientation="vertical" className="h-3" />
-          </>
-        )}
-
-        {/* Agent department / role chips */}
-        {agentDepartment && (
-          <span className="hidden md:flex items-center shrink-0 px-1.5 py-0.5 rounded-md bg-muted/50 border border-border/40 text-muted-foreground/70">
-            {agentDepartment}
-          </span>
-        )}
-        {agentRole && (
-          <span className="hidden md:flex items-center shrink-0 px-1.5 py-0.5 rounded-md bg-muted/50 border border-border/40 text-muted-foreground/70">
-            {agentRole}
-          </span>
-        )}
-
-        {/* Session kind / channel chip */}
-        {(sessionKind || sessionChannel) && (
-          <>
-            <span className="flex items-center gap-1 shrink-0 px-1.5 py-0.5 rounded-md bg-muted/50 border border-border/40">
-              {sessionChannel ? (
-                <>
-                  <Zap className="h-2.5 w-2.5" />
-                  {sessionChannel}
-                </>
-              ) : (
-                sessionKind
-              )}
-            </span>
-            <Separator orientation="vertical" className="h-3" />
-          </>
-        )}
-
-        {/* Project chip */}
-        <button
-          ref={projectSelectorRef}
-          onClick={() => setProjectSelectorOpen((prev) => !prev)}
-          className={cn(
-            "flex items-center gap-1 shrink-0 px-1.5 py-0.5 rounded-md transition-colors cursor-pointer",
-            projectName
-              ? "bg-chart-2/10 border border-chart-2/20 text-chart-2/80 hover:bg-chart-2/20"
-              : "bg-muted/50 border border-border/40 text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted",
-          )}
-        >
-          <FolderOpen className="h-2.5 w-2.5" />
-          <span className="truncate max-w-[120px]">{projectName ?? "Project"}</span>
-          <ChevronDown
-            className={cn(
-              "h-2 w-2 shrink-0 opacity-50 transition-transform",
-              projectSelectorOpen && "rotate-180",
+            {/* Agent identity chip */}
+            {agentEmoji && agentName && (
+              <>
+                <span className="flex items-center gap-1 shrink-0 px-1.5 py-0.5 rounded-md bg-primary/5 border border-primary/10 text-primary/70">
+                  <span>{agentEmoji}</span>
+                  <span className="font-medium">{agentName}</span>
+                </span>
+                <Separator orientation="vertical" className="h-3" />
+              </>
             )}
-          />
-        </button>
+
+            {/* Agent department / role chips */}
+            {agentDepartment && (
+              <span className="hidden md:flex items-center shrink-0 px-1.5 py-0.5 rounded-md bg-muted/50 border border-border/40 text-muted-foreground/70">
+                {agentDepartment}
+              </span>
+            )}
+            {agentRole && (
+              <span className="hidden md:flex items-center shrink-0 px-1.5 py-0.5 rounded-md bg-muted/50 border border-border/40 text-muted-foreground/70">
+                {agentRole}
+              </span>
+            )}
+
+            {/* Session kind / channel chip */}
+            {(sessionKind || sessionChannel) && (
+              <>
+                <span className="flex items-center gap-1 shrink-0 px-1.5 py-0.5 rounded-md bg-muted/50 border border-border/40">
+                  {sessionChannel ? (
+                    <>
+                      <Zap className="h-2.5 w-2.5" />
+                      {sessionChannel}
+                    </>
+                  ) : (
+                    sessionKind
+                  )}
+                </span>
+                <Separator orientation="vertical" className="h-3" />
+              </>
+            )}
+
+            {/* Project chip */}
+            <button
+              ref={projectSelectorRef}
+              onClick={() => setProjectSelectorOpen((prev) => !prev)}
+              className={cn(
+                "flex items-center gap-1 shrink-0 px-1.5 py-0.5 rounded-md transition-colors cursor-pointer",
+                projectName
+                  ? "bg-chart-2/10 border border-chart-2/20 text-chart-2/80 hover:bg-chart-2/20"
+                  : "bg-muted/50 border border-border/40 text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted",
+              )}
+            >
+              <FolderOpen className="h-2.5 w-2.5" />
+              <span className="truncate max-w-[120px]">{projectName ?? "Project"}</span>
+              <ChevronDown
+                className={cn(
+                  "h-2 w-2 shrink-0 opacity-50 transition-transform",
+                  projectSelectorOpen && "rotate-180",
+                )}
+              />
+            </button>
+          </>
+        )}
 
         {/* Model chip */}
-        {displayModel && (
+        {showModel && displayModel && (
           <>
-            <Separator orientation="vertical" className="h-3" />
+            {showHeaderBadges && <Separator orientation="vertical" className="h-3" />}
             <button
               ref={modelSelectorRef}
               onClick={() => setModelSelectorOpen((prev) => !prev)}
@@ -600,31 +663,33 @@ export function SessionBadges({
           </>
         )}
 
-        {/* Channel binding chip */}
-        <>
-          <Separator orientation="vertical" className="h-3" />
-          <button
-            ref={channelSelectorRef}
-            onClick={() => setChannelSelectorOpen((prev) => !prev)}
-            className={cn(
-              "flex items-center gap-1 shrink-0 px-1.5 py-0.5 rounded-md transition-colors cursor-pointer",
-              boundChannel
-                ? "bg-chart-5/10 border border-chart-5/20 text-chart-5/80 hover:bg-chart-5/20"
-                : "bg-muted/50 border border-border/40 text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted",
-            )}
-          >
-            <Send className="h-2.5 w-2.5" />
-            <span className="truncate max-w-[120px]">
-              {boundChannel ? `→ ${boundChannel.label}` : "Deliver"}
-            </span>
-            <ChevronDown
+        {/* Channel binding chip — header only */}
+        {showHeaderBadges && (
+          <>
+            <Separator orientation="vertical" className="h-3" />
+            <button
+              ref={channelSelectorRef}
+              onClick={() => setChannelSelectorOpen((prev) => !prev)}
               className={cn(
-                "h-2 w-2 shrink-0 opacity-50 transition-transform",
-                channelSelectorOpen && "rotate-180",
+                "flex items-center gap-1 shrink-0 px-1.5 py-0.5 rounded-md transition-colors cursor-pointer",
+                boundChannel
+                  ? "bg-chart-5/10 border border-chart-5/20 text-chart-5/80 hover:bg-chart-5/20"
+                  : "bg-muted/50 border border-border/40 text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted",
               )}
-            />
-          </button>
-        </>
+            >
+              <Send className="h-2.5 w-2.5" />
+              <span className="truncate max-w-[120px]">
+                {boundChannel ? `→ ${boundChannel.label}` : "Deliver"}
+              </span>
+              <ChevronDown
+                className={cn(
+                  "h-2 w-2 shrink-0 opacity-50 transition-transform",
+                  channelSelectorOpen && "rotate-180",
+                )}
+              />
+            </button>
+          </>
+        )}
       </div>
 
       {/* Project selector dropdown — portalled to body */}

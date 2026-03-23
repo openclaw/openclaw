@@ -20,7 +20,7 @@ import {
 import { useRef, useState, useMemo, useCallback, useEffect } from "react";
 import { AutocompleteMenu, useAutocomplete } from "@/components/chat/autocomplete-menu";
 import { AnimatedPlaceholder } from "@/components/chat/chat-messages";
-import { SessionBadges } from "@/components/chat/session-badges";
+import { ModelBadge } from "@/components/chat/session-badges";
 import { type ToolDisplayMode } from "@/components/chat/tool-call-card";
 import { Button } from "@/components/ui/button";
 import {
@@ -105,10 +105,6 @@ export function ChatInput({
   setToolDisplayMode,
   models,
   badgeModels,
-  agentEmoji,
-  agentName,
-  agentRole,
-  agentDepartment,
 }: ChatInputProps) {
   const { sendRpc } = useGateway();
   const { toast } = useToast();
@@ -636,20 +632,7 @@ export function ChatInput({
       <div className="mx-auto max-w-4xl relative">
         {/* Badge row + session status bar */}
         <div className="flex items-center justify-between gap-3 mb-1.5 min-w-0">
-          {/* Left: interactive session badges (model, project, channel, agent) */}
-          {badgeModels && badgeModels.length > 0 ? (
-            <SessionBadges
-              models={badgeModels}
-              agentEmoji={agentEmoji}
-              agentName={agentName}
-              agentRole={agentRole}
-              agentDepartment={agentDepartment}
-            />
-          ) : (
-            <div />
-          )}
-
-          {/* Right: connection + context window */}
+          {/* Left: connection + context window */}
           <div className="flex items-center gap-3 text-[10px] font-mono text-muted-foreground/60 hover:text-muted-foreground transition-colors duration-300 shrink-0">
             <span className="flex items-center gap-1.5">
               <span
@@ -684,6 +667,9 @@ export function ChatInput({
               </>
             )}
           </div>
+
+          {/* Right: model selector badge */}
+          {badgeModels && badgeModels.length > 0 ? <ModelBadge models={badgeModels} /> : <div />}
         </div>
 
         {/* Hidden file input for Paperclip button */}

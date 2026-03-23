@@ -2,6 +2,7 @@ import { Check, Minimize2, Archive, Pencil, Search, Copy } from "lucide-react";
 import { useRef, useState, useMemo, useCallback, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { formatSessionTitle } from "@/components/chat/chat-sidebar";
+import { SessionHeaderBadges } from "@/components/chat/session-badges";
 import { type ModelEntry } from "@/components/ui/custom/status/model-selector";
 import { useToast } from "@/components/ui/custom/toast";
 import { Separator } from "@/components/ui/separator";
@@ -164,9 +165,14 @@ export type ChatHeaderProps = {
 };
 
 export function ChatHeader({
+  models,
   loadSessions,
   loadHistory,
   switchSession,
+  agentEmoji,
+  agentName,
+  agentRole,
+  agentDepartment,
   onRenameSession,
   onToggleSearch,
   isSearchOpen,
@@ -418,6 +424,19 @@ export function ChatHeader({
       {headerPortal &&
         createPortal(
           <div className="flex items-center gap-2 text-xs font-mono text-muted-foreground min-w-0">
+            {/* Session context badges: agent, session kind, project, channel */}
+            {models && models.length > 0 && (
+              <>
+                <SessionHeaderBadges
+                  models={models}
+                  agentEmoji={agentEmoji}
+                  agentName={agentName}
+                  agentRole={agentRole}
+                  agentDepartment={agentDepartment}
+                />
+                <Separator orientation="vertical" className="h-3.5" />
+              </>
+            )}
             <div className="flex items-center gap-2">
               {/* Search button */}
               {onToggleSearch && (
