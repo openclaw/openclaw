@@ -26,6 +26,7 @@ import type {
   PluginHookAgentContext,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforePromptBuildResult,
+  PluginHookToolInfo,
 } from "../../../plugins/types.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
@@ -1732,6 +1733,18 @@ export async function runEmbeddedAttempt(
     let abortSessionForYield: (() => void) | null = null;
     let queueYieldInterruptForSession: (() => void) | null = null;
     let yieldAbortSettled: Promise<void> | null = null;
+    let beforeToolCallPrompt = params.prompt;
+    let beforeToolCallSystemPrompt: string | undefined;
+    let beforeToolCallTools: PluginHookToolInfo[] = [];
+    let beforeToolCallMessagesProvider: () => AgentMessage[] = () => [];
+    const beforeToolCallContext = {
+      provider: params.provider,
+      model: params.modelId,
+      getPrompt: () => beforeToolCallPrompt,
+      getSystemPrompt: () => beforeToolCallSystemPrompt,
+      getMessages: () => beforeToolCallMessagesProvider(),
+      getTools: () => beforeToolCallTools,
+    };
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
     const toolsRaw = params.disableTools
@@ -1773,6 +1786,7 @@ export async function runEmbeddedAttempt(
           modelCompat: params.model.compat,
           modelContextWindowTokens: params.model.contextWindow,
           modelAuthMode: resolveModelAuthMode(params.model.provider, params.config),
+          beforeToolCallContext,
           currentChannelId: params.currentChannelId,
           currentThreadTs: params.currentThreadTs,
           currentMessageId: params.currentMessageId,
@@ -1997,6 +2011,7 @@ export async function runEmbeddedAttempt(
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
     let systemPromptText = systemPromptOverride();
+    beforeToolCallSystemPrompt = systemPromptText;
 
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
@@ -2035,6 +2050,8 @@ export async function runEmbeddedAttempt(
         allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
         allowedToolNames,
       });
+      beforeToolCallMessagesProvider = () =>
+        (sessionManager?.buildSessionContext().messages as AgentMessage[]) ?? [];
       trackSessionManagerAccess(params.sessionFile);
 
       if (hadSessionFile && (params.contextEngine?.bootstrap || params.contextEngine?.maintain)) {
@@ -2125,6 +2142,7 @@ export async function runEmbeddedAttempt(
               clientToolCallDetected = { name: toolName, params: toolParams };
             },
             {
+              ...beforeToolCallContext,
               agentId: sessionAgentId,
               sessionKey: sandboxSessionKey,
               sessionId: params.sessionId,
@@ -2135,6 +2153,13 @@ export async function runEmbeddedAttempt(
         : [];
 
       const allCustomTools = [...customTools, ...clientToolDefs];
+      beforeToolCallTools = [...builtInTools, ...allCustomTools].map((tool) => ({
+        name: typeof tool.name === "string" && tool.name.trim().length > 0 ? tool.name : "tool",
+        ...(typeof tool.description === "string" && tool.description.trim().length > 0
+          ? { description: tool.description }
+          : {}),
+        ...(tool.parameters !== undefined ? { parameters: tool.parameters } : {}),
+      }));
 
       ({ session } = await createAgentSession({
         cwd: resolvedWorkspace,
@@ -2154,6 +2179,7 @@ export async function runEmbeddedAttempt(
         throw new Error("Embedded agent session missing");
       }
       const activeSession = session;
+      beforeToolCallMessagesProvider = () => activeSession.messages;
       abortSessionForYield = () => {
         yieldAbortSettled = Promise.resolve(activeSession.abort());
       };
@@ -2728,6 +2754,8 @@ export async function runEmbeddedAttempt(
           }
         }
 
+        beforeToolCallPrompt = effectivePrompt;
+        beforeToolCallSystemPrompt = systemPromptText;
         log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);
         cacheTrace?.recordStage("prompt:before", {
           prompt: effectivePrompt,

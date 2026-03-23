@@ -21,7 +21,10 @@ import type { ModelAuthMode } from "./model-auth.js";
 import { hasNativeWebSearchTool } from "./model-compat.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
-import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
+import {
+  wrapToolWithBeforeToolCallHook,
+  type HookContext as BeforeToolCallHookContext,
+} from "./pi-tools.before-tool-call.js";
 import {
   isToolAllowedByPolicies,
   resolveEffectiveToolPolicy,
@@ -275,6 +278,14 @@ export function createOpenClawCodingTools(options?: {
   senderIsOwner?: boolean;
   /** Callback invoked when sessions_yield tool is called. */
   onYield?: (message: string) => Promise<void> | void;
+  /**
+   * Additional context injected into before_tool_call hook payloads.
+   * Tool identity/session fields are filled by createOpenClawCodingTools.
+   */
+  beforeToolCallContext?: Omit<
+    BeforeToolCallHookContext,
+    "agentId" | "sessionKey" | "sessionId" | "runId" | "loopDetection"
+  >;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -610,6 +621,7 @@ export function createOpenClawCodingTools(options?: {
   );
   const withHooks = normalized.map((tool) =>
     wrapToolWithBeforeToolCallHook(tool, {
+      ...options?.beforeToolCallContext,
       agentId,
       sessionKey: options?.sessionKey,
       sessionId: options?.sessionId,

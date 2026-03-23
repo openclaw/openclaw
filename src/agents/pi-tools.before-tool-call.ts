@@ -1,7 +1,9 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { PluginHookToolInfo } from "../plugins/types.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
 import { normalizeToolName } from "./tool-policy.js";
@@ -14,6 +16,12 @@ export type HookContext = {
   sessionId?: string;
   runId?: string;
   loopDetection?: ToolLoopDetectionConfig;
+  provider?: string;
+  model?: string;
+  getPrompt?: () => string | undefined;
+  getSystemPrompt?: () => string | undefined;
+  getMessages?: () => AgentMessage[];
+  getTools?: () => PluginHookToolInfo[];
 };
 
 type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
@@ -166,6 +174,12 @@ export async function runBeforeToolCallHook(args: {
         params: normalizedParams,
         ...(args.ctx?.runId ? { runId: args.ctx.runId } : {}),
         ...(args.toolCallId ? { toolCallId: args.toolCallId } : {}),
+        ...(args.ctx?.provider ? { provider: args.ctx.provider } : {}),
+        ...(args.ctx?.model ? { model: args.ctx.model } : {}),
+        ...(args.ctx?.getPrompt ? { prompt: args.ctx.getPrompt() } : {}),
+        ...(args.ctx?.getSystemPrompt ? { systemPrompt: args.ctx.getSystemPrompt() } : {}),
+        ...(args.ctx?.getMessages ? { messages: args.ctx.getMessages() } : {}),
+        ...(args.ctx?.getTools ? { tools: args.ctx.getTools() } : {}),
       },
       toolContext,
     );
