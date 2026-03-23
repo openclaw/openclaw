@@ -9,6 +9,7 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { loadEnabledClaudeBundleCommands } from "../../plugins/bundle-commands.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolveSandboxPath } from "../sandbox-paths.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
@@ -929,6 +930,41 @@ export function buildWorkspaceSkillCommandSpecs(
       skillName: rawName,
       description,
       ...(dispatch ? { dispatch } : {}),
+    });
+  }
+
+  const bundleCommands = loadEnabledClaudeBundleCommands({
+    workspaceDir,
+    cfg: opts?.config,
+  });
+  for (const entry of bundleCommands) {
+    const base = sanitizeSkillCommandName(entry.rawName);
+    if (base !== entry.rawName) {
+      debugSkillCommandOnce(
+        `bundle-sanitize:${entry.rawName}:${base}`,
+        `Sanitized bundle command name "${entry.rawName}" to "/${base}".`,
+        { rawName: entry.rawName, sanitized: `/${base}` },
+      );
+    }
+    const unique = resolveUniqueSkillCommandName(base, used);
+    if (unique !== base) {
+      debugSkillCommandOnce(
+        `bundle-dedupe:${entry.rawName}:${unique}`,
+        `De-duplicated bundle command name for "${entry.rawName}" to "/${unique}".`,
+        { rawName: entry.rawName, deduped: `/${unique}` },
+      );
+    }
+    used.add(unique.toLowerCase());
+    const description =
+      entry.description.length > SKILL_COMMAND_DESCRIPTION_MAX_LENGTH
+        ? entry.description.slice(0, SKILL_COMMAND_DESCRIPTION_MAX_LENGTH - 1) + "…"
+        : entry.description;
+    specs.push({
+      name: unique,
+      skillName: entry.rawName,
+      description,
+      promptTemplate: entry.promptTemplate,
+      sourceFilePath: entry.sourceFilePath,
     });
   }
   return specs;

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -15,10 +15,12 @@ import {
   whatsappChunkConfig,
 } from "./deliver.test-helpers.js";
 
-const { deliverOutboundPayloads } = await import("./deliver.js");
+type DeliverModule = typeof import("./deliver.js");
+
+let deliverOutboundPayloads: DeliverModule["deliverOutboundPayloads"];
 
 async function runChunkedWhatsAppDelivery(params?: {
-  mirror?: Parameters<typeof deliverOutboundPayloads>[0]["mirror"];
+  mirror?: Parameters<DeliverModule["deliverOutboundPayloads"]>[0]["mirror"];
 }) {
   return await runChunkedWhatsAppDeliveryHelper({
     deliverOutboundPayloads,
@@ -75,6 +77,10 @@ function expectSuccessfulWhatsAppInternalHookPayload(
 }
 
 describe("deliverOutboundPayloads lifecycle", () => {
+  beforeAll(async () => {
+    ({ deliverOutboundPayloads } = await import("./deliver.js"));
+  });
+
   beforeEach(() => {
     resetDeliverTestState();
     resetDeliverTestMocks({ includeSessionMocks: true });

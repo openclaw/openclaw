@@ -1,8 +1,18 @@
 import { Type } from "@sinclair/typebox";
-import { optionalStringEnum } from "../../../src/agents/schema/typebox.js";
-import { jsonResult, readNumberParam, readStringParam } from "../../../src/agents/tools/common.js";
-import type { OpenClawPluginApi } from "../../../src/plugins/types.js";
+import { jsonResult, readNumberParam, readStringParam } from "openclaw/plugin-sdk/agent-runtime";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import { runFirecrawlScrape } from "./firecrawl-client.js";
+
+function optionalStringEnum<const T extends readonly string[]>(
+  values: T,
+  options?: { description?: string },
+) {
+  return Type.Optional(
+    Type.Union(values.map((value) => Type.Literal(value)) as never, {
+      description: options?.description,
+    }),
+  );
+}
 
 const FirecrawlScrapeToolSchema = Type.Object(
   {

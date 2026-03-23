@@ -1,15 +1,14 @@
+import { buildQwenPortalProvider, QWEN_PORTAL_BASE_URL } from "./provider-catalog.js";
 import {
   buildOauthProviderAuthResult,
-  emptyPluginConfigSchema,
-  type OpenClawPluginApi,
+  definePluginEntry,
+  ensureAuthProfileStore,
+  listProfilesForProvider,
+  QWEN_OAUTH_MARKER,
+  refreshQwenPortalCredentials,
   type ProviderAuthContext,
   type ProviderCatalogContext,
-} from "openclaw/plugin-sdk/qwen-portal-auth";
-import { ensureAuthProfileStore, listProfilesForProvider } from "../../src/agents/auth-profiles.js";
-import { QWEN_OAUTH_MARKER } from "../../src/agents/model-auth-markers.js";
-import { refreshQwenPortalCredentials } from "../../src/providers/qwen-portal-oauth.js";
-import { loginQwenPortalOAuth } from "./oauth.js";
-import { buildQwenPortalProvider, QWEN_PORTAL_BASE_URL } from "./provider-catalog.js";
+} from "./runtime-api.js";
 
 const PROVIDER_ID = "qwen-portal";
 const PROVIDER_LABEL = "Qwen";
@@ -55,12 +54,11 @@ function resolveCatalog(ctx: ProviderCatalogContext) {
   };
 }
 
-const qwenPortalPlugin = {
+export default definePluginEntry({
   id: "qwen-portal-auth",
   name: "Qwen OAuth",
   description: "OAuth flow for Qwen (free-tier) models",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: PROVIDER_LABEL,
@@ -79,6 +77,7 @@ const qwenPortalPlugin = {
           run: async (ctx: ProviderAuthContext) => {
             const progress = ctx.prompter.progress("Starting Qwen OAuth…");
             try {
+              const { loginQwenPortalOAuth } = await import("./oauth.runtime.js");
               const result = await loginQwenPortalOAuth({
                 openUrl: ctx.openUrl,
                 note: ctx.prompter.note,
@@ -146,6 +145,4 @@ const qwenPortalPlugin = {
       }),
     });
   },
-};
-
-export default qwenPortalPlugin;
+});

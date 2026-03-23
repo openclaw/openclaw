@@ -6,11 +6,45 @@ import {
 import { DISCORD_THREAD_BINDING_CHANNEL } from "../../../channels/thread-bindings-policy.js";
 import { resolveConversationIdFromTargets } from "../../../infra/outbound/conversation-id.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
-import { buildFeishuConversationId } from "../../../plugin-sdk/feishu.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import type { HandleCommandsParams } from "../commands-types.js";
 import { parseDiscordParentChannelFromSessionKey } from "../discord-parent-channel.js";
+import {
+  resolveMatrixConversationId,
+  resolveMatrixParentConversationId,
+} from "../matrix-context.js";
 import { resolveTelegramConversationId } from "../telegram-context.js";
+
+type FeishuGroupSessionScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
+
+function buildFeishuConversationId(params: {
+  chatId: string;
+  scope: FeishuGroupSessionScope;
+  senderOpenId?: string;
+  topicId?: string;
+}): string {
+  const chatId = normalizeConversationText(params.chatId) ?? "unknown";
+  const senderOpenId = normalizeConversationText(params.senderOpenId);
+  const topicId = normalizeConversationText(params.topicId);
+
+  switch (params.scope) {
+    case "group_sender":
+      return senderOpenId ? `${chatId}:sender:${senderOpenId}` : chatId;
+    case "group_topic":
+      return topicId ? `${chatId}:topic:${topicId}` : chatId;
+    case "group_topic_sender":
+      if (topicId && senderOpenId) {
+        return `${chatId}:topic:${topicId}:sender:${senderOpenId}`;
+      }
+      if (topicId) {
+        return `${chatId}:topic:${topicId}`;
+      }
+      return senderOpenId ? `${chatId}:sender:${senderOpenId}` : chatId;
+    case "group":
+    default:
+      return chatId;
+  }
+}
 
 function parseFeishuTargetId(raw: unknown): string | undefined {
   const target = normalizeConversationText(raw);
@@ -131,6 +165,18 @@ export function resolveAcpCommandThreadId(params: HandleCommandsParams): string 
 
 export function resolveAcpCommandConversationId(params: HandleCommandsParams): string | undefined {
   const channel = resolveAcpCommandChannel(params);
+  if (channel === "matrix") {
+    return resolveMatrixConversationId({
+      ctx: {
+        MessageThreadId: params.ctx.MessageThreadId,
+        OriginatingTo: params.ctx.OriginatingTo,
+        To: params.ctx.To,
+      },
+      command: {
+        to: params.command.to,
+      },
+    });
+  }
   if (channel === "telegram") {
     const telegramConversationId = resolveTelegramConversationId({
       ctx: {
@@ -201,6 +247,18 @@ export function resolveAcpCommandParentConversationId(
   params: HandleCommandsParams,
 ): string | undefined {
   const channel = resolveAcpCommandChannel(params);
+  if (channel === "matrix") {
+    return resolveMatrixParentConversationId({
+      ctx: {
+        MessageThreadId: params.ctx.MessageThreadId,
+        OriginatingTo: params.ctx.OriginatingTo,
+        To: params.ctx.To,
+      },
+      command: {
+        to: params.command.to,
+      },
+    });
+  }
   if (channel === "telegram") {
     return (
       parseTelegramChatIdFromTarget(params.ctx.OriginatingTo) ??

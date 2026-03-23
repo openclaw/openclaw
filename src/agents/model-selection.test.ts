@@ -112,7 +112,8 @@ describe("model-selection", () => {
       expect(normalizeProviderId("z-ai")).toBe("zai");
       expect(normalizeProviderId("OpenCode-Zen")).toBe("opencode");
       expect(normalizeProviderId("qwen")).toBe("qwen-portal");
-      expect(normalizeProviderId("kimi-code")).toBe("kimi-coding");
+      expect(normalizeProviderId("kimi-code")).toBe("kimi");
+      expect(normalizeProviderId("kimi-coding")).toBe("kimi");
       expect(normalizeProviderId("bedrock")).toBe("amazon-bedrock");
       expect(normalizeProviderId("aws-bedrock")).toBe("amazon-bedrock");
       expect(normalizeProviderId("amazon-bedrock")).toBe("amazon-bedrock");
@@ -192,6 +193,15 @@ describe("model-selection", () => {
         variants: ["google/gemini-3.1-flash-lite", "gemini-3.1-flash-lite"],
         defaultProvider: "google",
         expected: { provider: "google", model: "gemini-3.1-flash-lite-preview" },
+      },
+      {
+        name: "normalizes deprecated xai grok 4.20 beta ids",
+        variants: [
+          "xai/grok-4.20-experimental-beta-0304-reasoning",
+          "grok-4.20-experimental-beta-0304-reasoning",
+        ],
+        defaultProvider: "xai",
+        expected: { provider: "xai", model: "grok-4.20-reasoning" },
       },
       {
         name: "keeps OpenAI codex refs on the openai provider",

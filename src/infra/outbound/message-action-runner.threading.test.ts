@@ -1,78 +1,38 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
-  installMessageActionRunnerTestRegistry,
-  resetMessageActionRunnerTestRegistry,
-  slackConfig,
-  telegramConfig,
-} from "./message-action-runner.test-helpers.js";
+  prepareOutboundMirrorRoute,
+  resolveAndApplyOutboundThreadId,
+} from "./message-action-threading.js";
 
-const mocks = vi.hoisted(() => ({
-  executeSendAction: vi.fn(),
-  recordSessionMetaFromInbound: vi.fn(async () => ({ ok: true })),
-}));
+const ensureOutboundSessionEntry = vi.fn(async () => undefined);
+const resolveOutboundSessionRoute = vi.fn();
 
-vi.mock("./outbound-send-service.js", async () => {
-  const actual = await vi.importActual<typeof import("./outbound-send-service.js")>(
-    "./outbound-send-service.js",
-  );
-  return {
-    ...actual,
-    executeSendAction: mocks.executeSendAction,
-  };
-});
+const slackConfig = {
+  channels: {
+    slack: {
+      botToken: "xoxb-test",
+    },
+  },
+} as OpenClawConfig;
 
-vi.mock("../../config/sessions.js", async () => {
-  const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
-    "../../config/sessions.js",
-  );
-  return {
-    ...actual,
-    recordSessionMetaFromInbound: mocks.recordSessionMetaFromInbound,
-  };
-});
-
-import { runMessageAction } from "./message-action-runner.js";
-
-async function runThreadingAction(params: {
-  cfg: typeof slackConfig;
-  actionParams: Record<string, unknown>;
-  toolContext?: Record<string, unknown>;
-}) {
-  await runMessageAction({
-    cfg: params.cfg,
-    action: "send",
-    params: params.actionParams as never,
-    toolContext: params.toolContext as never,
-    agentId: "main",
-  });
-  return mocks.executeSendAction.mock.calls[0]?.[0] as {
-    threadId?: string;
-    replyToId?: string;
-    ctx?: { agentId?: string; mirror?: { sessionKey?: string }; params?: Record<string, unknown> };
-  };
-}
-
-function mockHandledSendAction() {
-  mocks.executeSendAction.mockResolvedValue({
-    handledBy: "plugin",
-    payload: {},
-  });
-}
+const telegramConfig = {
+  channels: {
+    telegram: {
+      botToken: "telegram-test",
+    },
+  },
+} as OpenClawConfig;
 
 const defaultTelegramToolContext = {
   currentChannelId: "telegram:123",
   currentThreadTs: "42",
 } as const;
 
-describe("runMessageAction threading auto-injection", () => {
+describe("message action threading helpers", () => {
   beforeEach(() => {
-    installMessageActionRunnerTestRegistry();
-  });
-
-  afterEach(() => {
-    resetMessageActionRunnerTestRegistry();
-    mocks.executeSendAction.mockClear();
-    mocks.recordSessionMetaFromInbound.mockClear();
+    ensureOutboundSessionEntry.mockClear();
+    resolveOutboundSessionRoute.mockReset();
   });
 
   it.each([
@@ -88,25 +48,42 @@ describe("runMessageAction threading auto-injection", () => {
       threadTs: "333.444",
       expectedSessionKey: "agent:main:slack:channel:c123:thread:333.444",
     },
-  ] as const)("auto-threads slack using $name", async (testCase) => {
-    mockHandledSendAction();
+  ] as const)("prepares outbound routes for slack using $name", async (testCase) => {
+    const actionParams: Record<string, unknown> = {
+      channel: "slack",
+      target: testCase.target,
+      message: "hi",
+    };
+    resolveOutboundSessionRoute.mockResolvedValue({
+      sessionKey: testCase.expectedSessionKey,
+      baseSessionKey: "base",
+      peer: { id: "peer", kind: "channel" },
+      chatType: "channel",
+      from: "from",
+      to: testCase.target,
+      threadId: testCase.threadTs,
+    });
 
-    const call = await runThreadingAction({
+    const result = await prepareOutboundMirrorRoute({
       cfg: slackConfig,
-      actionParams: {
-        channel: "slack",
-        target: testCase.target,
-        message: "hi",
-      },
+      channel: "slack",
+      to: testCase.target,
+      actionParams,
       toolContext: {
         currentChannelId: "C123",
         currentThreadTs: testCase.threadTs,
         replyToMode: "all",
       },
+      agentId: "main",
+      resolveAutoThreadId: ({ toolContext }) => toolContext?.currentThreadTs,
+      resolveOutboundSessionRoute,
+      ensureOutboundSessionEntry,
     });
 
-    expect(call?.ctx?.agentId).toBe("main");
-    expect(call?.ctx?.mirror?.sessionKey).toBe(testCase.expectedSessionKey);
+    expect(result.outboundRoute?.sessionKey).toBe(testCase.expectedSessionKey);
+    expect(actionParams.__sessionKey).toBe(testCase.expectedSessionKey);
+    expect(actionParams.__agentId).toBe("main");
+    expect(ensureOutboundSessionEntry).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -125,58 +102,66 @@ describe("runMessageAction threading auto-injection", () => {
       target: "telegram:999",
       expectedThreadId: undefined,
     },
-  ] as const)("telegram auto-threading: $name", async (testCase) => {
-    mockHandledSendAction();
+  ] as const)("telegram auto-threading: $name", (testCase) => {
+    const actionParams: Record<string, unknown> = {
+      channel: "telegram",
+      target: testCase.target,
+      message: "hi",
+    };
 
-    const call = await runThreadingAction({
+    const resolved = resolveAndApplyOutboundThreadId(actionParams, {
       cfg: telegramConfig,
-      actionParams: {
-        channel: "telegram",
-        target: testCase.target,
-        message: "hi",
-      },
+      to: testCase.target,
       toolContext: defaultTelegramToolContext,
+      resolveAutoThreadId: ({ to, toolContext }) =>
+        to.includes("123") ? toolContext?.currentThreadTs : undefined,
     });
 
-    expect(call?.ctx?.params?.threadId).toBe(testCase.expectedThreadId);
-    if (testCase.expectedThreadId !== undefined) {
-      expect(call?.threadId).toBe(testCase.expectedThreadId);
-    }
+    expect(actionParams.threadId).toBe(testCase.expectedThreadId);
+    expect(resolved).toBe(testCase.expectedThreadId);
   });
 
-  it("uses explicit telegram threadId when provided", async () => {
-    mockHandledSendAction();
+  it("uses explicit telegram threadId when provided", () => {
+    const actionParams: Record<string, unknown> = {
+      channel: "telegram",
+      target: "telegram:123",
+      message: "hi",
+      threadId: "999",
+    };
 
-    const call = await runThreadingAction({
+    const resolved = resolveAndApplyOutboundThreadId(actionParams, {
       cfg: telegramConfig,
-      actionParams: {
-        channel: "telegram",
-        target: "telegram:123",
-        message: "hi",
-        threadId: "999",
-      },
+      to: "telegram:123",
       toolContext: defaultTelegramToolContext,
+      resolveAutoThreadId: () => "42",
     });
 
-    expect(call?.threadId).toBe("999");
-    expect(call?.ctx?.params?.threadId).toBe("999");
+    expect(actionParams.threadId).toBe("999");
+    expect(resolved).toBe("999");
   });
 
-  it("threads explicit replyTo through executeSendAction", async () => {
-    mockHandledSendAction();
+  it("passes explicit replyTo into auto-thread resolution", () => {
+    const resolveAutoThreadId = vi.fn(() => "thread-777");
+    const actionParams: Record<string, unknown> = {
+      channel: "telegram",
+      target: "telegram:123",
+      message: "hi",
+      replyTo: "777",
+    };
 
-    const call = await runThreadingAction({
+    const resolved = resolveAndApplyOutboundThreadId(actionParams, {
       cfg: telegramConfig,
-      actionParams: {
-        channel: "telegram",
-        target: "telegram:123",
-        message: "hi",
-        replyTo: "777",
-      },
+      to: "telegram:123",
       toolContext: defaultTelegramToolContext,
+      resolveAutoThreadId,
     });
 
-    expect(call?.replyToId).toBe("777");
-    expect(call?.ctx?.params?.replyTo).toBe("777");
+    expect(resolveAutoThreadId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToId: "777",
+      }),
+    );
+    expect(resolved).toBe("thread-777");
+    expect(actionParams.threadId).toBe("thread-777");
   });
 });

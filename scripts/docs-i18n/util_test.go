@@ -31,6 +31,15 @@ func TestDocsPiModelUsesProviderDefault(t *testing.T) {
 	}
 }
 
+func TestDocsPiModelKeepsOpenAIDefaultAtGPT54(t *testing.T) {
+	t.Setenv(envDocsI18nProvider, "openai")
+	t.Setenv(envDocsI18nModel, "")
+
+	if got := docsPiModel(); got != defaultOpenAIModel {
+		t.Fatalf("expected OpenAI default model %q, got %q", defaultOpenAIModel, got)
+	}
+}
+
 func TestDocsPiModelPrefersExplicitOverride(t *testing.T) {
 	t.Setenv(envDocsI18nProvider, "openai")
 	t.Setenv(envDocsI18nModel, "gpt-5.2")

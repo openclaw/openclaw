@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   MOONSHOT_BASE_URL as MOONSHOT_AI_BASE_URL,
   MOONSHOT_CN_BASE_URL,
-} from "../commands/onboard-auth.models.js";
+} from "../plugins/provider-model-definitions.js";
 import { captureEnv } from "../test-utils/env.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
 import { applyNativeStreamingUsageCompat } from "./models-config.providers.js";
@@ -31,8 +31,8 @@ describe("moonshot implicit provider (#33637)", () => {
                 reasoning: false,
                 input: ["text", "image"],
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 256000,
-                maxTokens: 8192,
+                contextWindow: 262144,
+                maxTokens: 262144,
               },
             ],
           },
@@ -80,6 +80,14 @@ describe("moonshot implicit provider (#33637)", () => {
       const providers = await resolveImplicitProvidersForTest({ agentDir });
       expect(providers?.moonshot).toBeDefined();
       expect(providers?.moonshot?.baseUrl).toBe(MOONSHOT_AI_BASE_URL);
+      expect(providers?.moonshot?.models).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "kimi-k2.5", input: ["text", "image"] }),
+          expect.objectContaining({ id: "kimi-k2-thinking", reasoning: true }),
+          expect.objectContaining({ id: "kimi-k2-thinking-turbo", reasoning: true }),
+          expect.objectContaining({ id: "kimi-k2-turbo", reasoning: false }),
+        ]),
+      );
       expect(providers?.moonshot?.models?.[0]?.compat?.supportsUsageInStreaming).toBeUndefined();
     } finally {
       envSnapshot.restore();

@@ -67,10 +67,15 @@ const configSessionsMocks = vi.hoisted(() => ({
 const readSessionUpdatedAt = configSessionsMocks.readSessionUpdatedAt;
 const resolveStorePath = configSessionsMocks.resolveStorePath;
 
-vi.mock("../send.js", () => ({
-  reactMessageDiscord: sendMocks.reactMessageDiscord,
-  removeReactionDiscord: sendMocks.removeReactionDiscord,
-}));
+vi.mock("../send.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../send.js")>();
+  return {
+    ...actual,
+    addRoleDiscord: vi.fn(),
+    reactMessageDiscord: sendMocks.reactMessageDiscord,
+    removeReactionDiscord: sendMocks.removeReactionDiscord,
+  };
+});
 
 vi.mock("../send.messages.js", () => ({
   editMessageDiscord: deliveryMocks.editMessageDiscord,
@@ -530,6 +535,12 @@ describe("processDiscordMessage draft streaming", () => {
   it("accepts streaming=true alias for partial preview mode", async () => {
     await runSingleChunkFinalScenario({ streaming: true, maxLinesPerMessage: 5 });
     expectSinglePreviewEdit();
+  });
+
+  it("keeps preview streaming off by default when streaming is unset", async () => {
+    await runSingleChunkFinalScenario({ maxLinesPerMessage: 5 });
+    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to standard send when final needs multiple chunks", async () => {

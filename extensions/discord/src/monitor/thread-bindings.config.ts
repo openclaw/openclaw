@@ -1,10 +1,10 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   resolveThreadBindingIdleTimeoutMs,
   resolveThreadBindingMaxAgeMs,
   resolveThreadBindingsEnabled,
-} from "../../../../src/channels/thread-bindings-policy.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import { normalizeAccountId } from "../../../../src/routing/session-key.js";
+} from "openclaw/plugin-sdk/conversation-runtime";
+import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 
 export {
   resolveThreadBindingIdleTimeoutMs,
