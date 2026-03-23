@@ -696,6 +696,49 @@ describe("chat view", () => {
     expect(container.textContent).not.toContain("Stop");
   });
 
+  it("shows a focus-mode new session action", () => {
+    const container = document.createElement("div");
+    const onCreateSession = vi.fn();
+    render(
+      renderChat(
+        createProps({
+          focusMode: true,
+          canCreateSession: true,
+          onCreateSession,
+        }),
+      ),
+      container,
+    );
+
+    const newSessionButton = container.querySelector<HTMLButtonElement>(
+      'button[title="New chat session"]',
+    );
+    expect(newSessionButton).not.toBeNull();
+
+    newSessionButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onCreateSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables the focus-mode new session action when creation is unavailable", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          focusMode: true,
+          canCreateSession: false,
+          onCreateSession: () => undefined,
+        }),
+      ),
+      container,
+    );
+
+    const newSessionButton = container.querySelector<HTMLButtonElement>(
+      'button[title="New chat session"]',
+    );
+    expect(newSessionButton).not.toBeNull();
+    expect(newSessionButton?.disabled).toBe(true);
+  });
+
   it("shows sender labels from sanitized gateway messages instead of generic You", () => {
     const container = document.createElement("div");
     render(
@@ -1090,6 +1133,37 @@ describe("chat view", () => {
       expect(state.chatAttachments).toEqual([
         { id: "a1", mimeType: "image/png", dataUrl: "data:image/png;base64,AAA=" },
       ]);
+      expect(state.newChatSessionPending).toBe(false);
+      expect(request).not.toHaveBeenCalledWith("chat.history", {
+        sessionKey: "new-session",
+        limit: 200,
+      });
+      expect(request.mock.calls.map(([method]) => method)).toContain("sessions.list");
+    });
+  });
+
+  it("does not auto-switch if the chat already has queued items", async () => {
+    await withPromptStub(async () => {
+      const { state, request } = createChatHeaderState();
+      state.chatQueue = [
+        {
+          id: "queued-1",
+          text: "queued prompt",
+          createdAt: Date.now(),
+        },
+      ];
+      const container = document.createElement("div");
+      render(renderChatSessionSelect(state), container);
+
+      const newChatButton = container.querySelector<HTMLButtonElement>(".chat-controls__new-chat");
+      expect(newChatButton).not.toBeNull();
+
+      newChatButton!.click();
+      await flushTasks();
+
+      expect(state.sessionKey).toBe("main");
+      expect(state.chatQueue).toHaveLength(1);
+      expect(state.chatQueue[0]?.text).toBe("queued prompt");
       expect(state.newChatSessionPending).toBe(false);
       expect(request).not.toHaveBeenCalledWith("chat.history", {
         sessionKey: "new-session",

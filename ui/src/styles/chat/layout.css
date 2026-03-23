@@ -67,12 +67,17 @@
   margin-top: 0 !important;
 }
 
-/* Focus mode exit button */
-.chat-focus-exit {
+/* Focus mode floating actions */
+.chat-focus-actions {
   position: absolute;
   top: 12px;
   right: 12px;
   z-index: 100;
+  display: flex;
+  gap: 8px;
+}
+
+.chat-focus-action {
   width: 32px;
   height: 32px;
   border-radius: 50%;
@@ -92,13 +97,18 @@
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
-.chat-focus-exit:hover {
+.chat-focus-action:hover {
   background: var(--panel-strong);
   color: var(--text);
   border-color: var(--accent);
 }
 
-.chat-focus-exit svg {
+.chat-focus-action:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.chat-focus-action svg {
   width: 16px;
   height: 16px;
   stroke: currentColor;

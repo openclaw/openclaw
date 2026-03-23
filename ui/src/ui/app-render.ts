@@ -5,6 +5,7 @@ import { getSafeLocalStorage } from "../local-storage.ts";
 import { refreshChatAvatar, resolveActiveChatAgentId } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
+  createNewChatSession,
   renderChatControls,
   renderChatMobileToggle,
   renderChatSessionSelect,
@@ -1436,6 +1437,9 @@ export function renderApp(state: AppViewState) {
                 canAbort: Boolean(state.chatRunId),
                 onAbort: () => void state.handleAbortChat(),
                 onQueueRemove: (id) => state.removeQueuedMessage(id),
+                canCreateSession:
+                  state.connected && !state.chatRunId && !state.newChatSessionPending,
+                onCreateSession: () => void createNewChatSession(state),
                 onClearHistory: async () => {
                   if (!state.client || !state.connected) {
                     return;

@@ -82,6 +82,48 @@ describe("loadSessions", () => {
       includeUnknown: true,
     });
   });
+
+  it("preserves a queued unfiltered refresh when a later plain reload is queued", async () => {
+    const resolvers: Array<(value: unknown) => void> = [];
+    const request = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const state = createState(request, {
+      sessionsFilterActive: "45",
+      sessionsFilterLimit: "120",
+      sessionsIncludeGlobal: false,
+      sessionsIncludeUnknown: false,
+    });
+
+    const firstLoad = loadSessions(state);
+    expect(state.sessionsLoading).toBe(true);
+
+    const queuedFullReload = loadSessions(state, {
+      activeMinutes: 0,
+      limit: 0,
+      includeGlobal: true,
+      includeUnknown: true,
+    });
+    const queuedPlainReload = loadSessions(state);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    resolvers[0]?.({ ts: 1, path: "", count: 0, defaults: null, sessions: [] });
+    await Promise.resolve();
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+    });
+
+    resolvers[1]?.({ ts: 2, path: "", count: 1, defaults: null, sessions: [] });
+    await Promise.all([firstLoad, queuedFullReload, queuedPlainReload]);
+
+    expect(state.sessionsLoading).toBe(false);
+  });
 });
 
 describe("deleteSessionsAndRefresh", () => {

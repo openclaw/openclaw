@@ -25,6 +25,22 @@ type SessionsTrackedState = SessionsState & {
   __queuedSessionsReload?: SessionsReloadOverrides | null;
 };
 
+function mergeSessionsReloadOverrides(
+  existing: SessionsReloadOverrides | null | undefined,
+  incoming: SessionsReloadOverrides | undefined,
+): SessionsReloadOverrides {
+  return {
+    ...(existing?.activeMinutes !== undefined ? { activeMinutes: existing.activeMinutes } : {}),
+    ...(existing?.limit !== undefined ? { limit: existing.limit } : {}),
+    ...(existing?.includeGlobal !== undefined ? { includeGlobal: existing.includeGlobal } : {}),
+    ...(existing?.includeUnknown !== undefined ? { includeUnknown: existing.includeUnknown } : {}),
+    ...(incoming?.activeMinutes !== undefined ? { activeMinutes: incoming.activeMinutes } : {}),
+    ...(incoming?.limit !== undefined ? { limit: incoming.limit } : {}),
+    ...(incoming?.includeGlobal !== undefined ? { includeGlobal: incoming.includeGlobal } : {}),
+    ...(incoming?.includeUnknown !== undefined ? { includeUnknown: incoming.includeUnknown } : {}),
+  };
+}
+
 export async function subscribeSessions(state: SessionsState) {
   if (!state.client || !state.connected) {
     return;
@@ -42,7 +58,10 @@ export async function loadSessions(state: SessionsState, overrides?: SessionsRel
     return;
   }
   if (state.sessionsLoading) {
-    trackedState.__queuedSessionsReload = overrides ?? {};
+    trackedState.__queuedSessionsReload = mergeSessionsReloadOverrides(
+      trackedState.__queuedSessionsReload,
+      overrides,
+    );
     return;
   }
   state.sessionsLoading = true;

@@ -567,7 +567,7 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
   void refreshSessionOptions(state);
 }
 
-async function createNewChatSession(state: AppViewState) {
+export async function createNewChatSession(state: AppViewState) {
   const client = (state as unknown as OpenClawApp).client;
   if (!client || !state.connected) {
     return;
@@ -588,6 +588,7 @@ async function createNewChatSession(state: AppViewState) {
   const activityVersionAtStart = state.chatActivityVersion;
   const startedWithComposerContent =
     composerSnapshot.message.trim().length > 0 || composerSnapshot.attachments.length > 0;
+  const startedWithQueuedItems = state.chatQueue.length > 0;
   state.newChatSessionPending = true;
   state.lastError = null;
   try {
@@ -601,6 +602,7 @@ async function createNewChatSession(state: AppViewState) {
       const safeToAutoSwitch =
         state.sessionKey === originSessionKey &&
         !startedWithComposerContent &&
+        !startedWithQueuedItems &&
         composerUnchanged &&
         chatActivityUnchanged;
       if (safeToAutoSwitch) {

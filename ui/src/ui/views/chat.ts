@@ -94,6 +94,8 @@ export type ChatProps = {
   onSend: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
+  canCreateSession?: boolean;
+  onCreateSession?: () => void;
   onClearHistory?: () => void;
   agentsList: {
     agents: Array<{ id: string; name?: string; identity?: { name?: string; avatarUrl?: string } }>;
@@ -1119,15 +1121,33 @@ export function renderChat(props: ChatProps) {
       ${
         props.focusMode
           ? html`
-            <button
-              class="chat-focus-exit"
-              type="button"
-              @click=${props.onToggleFocusMode}
-              aria-label="Exit focus mode"
-              title="Exit focus mode"
-            >
-              ${icons.x}
-            </button>
+            <div class="chat-focus-actions">
+              ${
+                props.onCreateSession
+                  ? html`
+                      <button
+                        class="chat-focus-action chat-focus-action--new-session"
+                        type="button"
+                        @click=${props.onCreateSession}
+                        aria-label="New chat session"
+                        title="New chat session"
+                        ?disabled=${props.canCreateSession === false}
+                      >
+                        ${icons.plus}
+                      </button>
+                    `
+                  : nothing
+              }
+              <button
+                class="chat-focus-action chat-focus-exit"
+                type="button"
+                @click=${props.onToggleFocusMode}
+                aria-label="Exit focus mode"
+                title="Exit focus mode"
+              >
+                ${icons.x}
+              </button>
+            </div>
           `
           : nothing
       }
