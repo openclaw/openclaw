@@ -1809,7 +1809,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         skillsSnapshot: undefined,
         senderIsOwner: true,
         provider: "openai-codex",
-        modelId: "gpt-5.3-codex",
+        modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
         extraSystemPrompt: "extra",
@@ -1821,7 +1821,7 @@ describe("buildAfterTurnRuntimeContext", () => {
 
     expect(legacy).toMatchObject({
       provider: "openai-codex",
-      model: "gpt-5.3-codex",
+      model: "gpt-5.4",
     });
   });
 
@@ -1845,7 +1845,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         skillsSnapshot: undefined,
         senderIsOwner: true,
         provider: "openai-codex",
-        modelId: "gpt-5.3-codex",
+        modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
         extraSystemPrompt: "extra",
@@ -1859,7 +1859,7 @@ describe("buildAfterTurnRuntimeContext", () => {
     // compactEmbeddedPiSessionDirect does it centrally for both auto + manual paths.
     expect(legacy).toMatchObject({
       provider: "openai-codex",
-      model: "gpt-5.3-codex",
+      model: "gpt-5.4",
     });
   });
   it("includes resolved auth profile fields for context-engine afterTurn compaction", () => {
@@ -1874,7 +1874,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         skillsSnapshot: undefined,
         senderIsOwner: true,
         provider: "openai-codex",
-        modelId: "gpt-5.3-codex",
+        modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
         extraSystemPrompt: "extra",
@@ -1887,7 +1887,7 @@ describe("buildAfterTurnRuntimeContext", () => {
     expect(legacy).toMatchObject({
       authProfileId: "openai:p1",
       provider: "openai-codex",
-      model: "gpt-5.3-codex",
+      model: "gpt-5.4",
       workspaceDir: "/tmp/workspace",
       agentDir: "/tmp/agent",
     });
@@ -1909,7 +1909,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         senderIsOwner: true,
         senderId: "user-123",
         provider: "openai-codex",
-        modelId: "gpt-5.3-codex",
+        modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
         extraSystemPrompt: "extra",
