@@ -188,6 +188,12 @@ export async function runAgentTurnWithFallback(params: {
       const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
         let text = payload.text;
         const reply = resolveSendableOutboundReplyParts(payload);
+        if (params.followupRun.run.silentExpected) {
+          if (!text) {
+            return reply.hasMedia ? { text: undefined, skip: false } : { skip: true };
+          }
+          return { skip: true };
+        }
         if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
           const stripped = stripHeartbeatToken(text, {
             mode: "message",

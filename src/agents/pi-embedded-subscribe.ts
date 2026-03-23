@@ -2,6 +2,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
@@ -105,6 +106,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const pendingMessagingTargets = state.pendingMessagingTargets;
   const replyDirectiveAccumulator = createStreamingDirectiveAccumulator();
   const partialReplyDirectiveAccumulator = createStreamingDirectiveAccumulator();
+  const shouldAllowSilentTurnText = (text: string | undefined) =>
+    Boolean(text && isSilentReplyText(text, SILENT_REPLY_TOKEN));
   const emitBlockReplySafely = (
     payload: Parameters<NonNullable<SubscribeEmbeddedPiSessionParams["onBlockReply"]>>[0],
   ) => {
@@ -172,6 +175,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
 
   const pushAssistantText = (text: string) => {
     if (!text) {
+      return;
+    }
+    if (params.silentExpected && !shouldAllowSilentTurnText(text)) {
       return;
     }
     if (shouldSkipAssistantText(text)) {
@@ -487,7 +493,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   };
 
   const emitBlockChunk = (text: string) => {
-    if (state.suppressBlockChunks) {
+    if (state.suppressBlockChunks || params.silentExpected) {
       return;
     }
     // Strip <think> and <final> blocks across chunk boundaries to avoid leaking reasoning.
@@ -513,8 +519,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     }
 
     state.lastBlockReplyText = chunk;
-    assistantTexts.push(chunk);
-    rememberAssistantText(chunk);
+    pushAssistantText(chunk);
     if (!params.onBlockReply) {
       return;
     }

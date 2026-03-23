@@ -24,6 +24,7 @@ type AgentRunParams = {
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
+  silentExpected?: boolean;
 };
 
 type EmbeddedRunParams = {
@@ -32,6 +33,7 @@ type EmbeddedRunParams = {
   memoryFlushWritePath?: string;
   sessionId?: string;
   sessionFile?: string;
+  silentExpected?: boolean;
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   onAgentEvent?: (evt: { stream?: string; data?: { phase?: string; willRetry?: boolean } }) => void;
@@ -491,6 +493,28 @@ describe("runReplyAgent typing (heartbeat)", () => {
       }
       expect(typing.startTypingLoop).not.toHaveBeenCalled();
     }
+  });
+
+  it("suppresses narrated silent-turn partials, block replies, and final payloads", async () => {
+    const onPartialReply = vi.fn();
+    const onBlockReply = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      expect(params.silentExpected).toBe(true);
+      await params.onPartialReply?.({ text: "I am trying to send NO_REPLY now." });
+      await params.onBlockReply?.({ text: "I am trying to send NO_REPLY now." });
+      return { payloads: [{ text: "I am trying to send NO_REPLY now." }], meta: {} };
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: false, onPartialReply, onBlockReply },
+      blockStreamingEnabled: true,
+      runOverrides: { silentExpected: true },
+    });
+    const res = await run();
+
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(res).toBeUndefined();
   });
 
   it("does not start typing on assistant message start without prior text in message mode", async () => {
@@ -1894,6 +1918,7 @@ describe("runReplyAgent memory flush", () => {
       expect(flushCall?.extraSystemPrompt).toContain("NO_REPLY");
       expect(flushCall?.extraSystemPrompt).toContain("memory/YYYY-MM-DD.md");
       expect(flushCall?.extraSystemPrompt).toContain("MEMORY.md");
+      expect(flushCall?.silentExpected).toBe(true);
       expect(calls[1]?.prompt).toBe("hello");
     });
   });
