@@ -341,10 +341,19 @@ export async function recoverPendingDeliveries(opts: {
   let skippedMaxRetries = 0;
   let deferredBackoff = 0;
 
-  for (const entry of pending) {
+  for (let i = 0; i < pending.length; i++) {
+    const entry = pending[i];
     const now = Date.now();
     if (now >= deadline) {
       opts.log.warn(`Recovery time budget exceeded — remaining entries deferred to next startup`);
+      // Increment retryCount for all remaining entries so that entries which
+      // are consistently deferred by the time budget eventually reach
+      // MAX_RETRIES and are pruned rather than looping forever.
+      await Promise.allSettled(
+        pending
+          .slice(i)
+          .map((e) => failDelivery(e.id, "recovery time budget exceeded", opts.stateDir)),
+      );
       break;
     }
     if (entry.retryCount >= MAX_RETRIES) {
