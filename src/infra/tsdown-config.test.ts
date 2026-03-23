@@ -40,6 +40,9 @@ describe("tsdown config", () => {
         "plugin-sdk/compat",
         "plugin-sdk/index",
         "extensions/openai/index",
+        "extensions/matrix/index",
+        "extensions/msteams/index",
+        "extensions/whatsapp/index",
         "bundled/boot-md/handler",
       ]),
     );

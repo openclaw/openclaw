@@ -9,6 +9,7 @@ import {
   type BundledExtension,
   type ExtensionPackageJson as PackageJson,
 } from "./lib/bundled-extension-manifest.ts";
+import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { listPluginSdkDistArtifacts } from "./lib/plugin-sdk-entries.mjs";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 
@@ -21,9 +22,11 @@ const requiredPathGroups = [
   ["dist/index.js", "dist/index.mjs"],
   ["dist/entry.js", "dist/entry.mjs"],
   ...listPluginSdkDistArtifacts(),
+  ...listBundledPluginPackArtifacts(),
   "dist/plugin-sdk/compat.js",
   "dist/plugin-sdk/root-alias.cjs",
   "dist/build-info.json",
+  "dist/control-ui/index.html",
 ];
 const forbiddenPrefixes = ["dist-runtime/", "dist/OpenClaw.app/"];
 // 2026.3.12 ballooned to ~213.6 MiB unpacked and correlated with low-memory
@@ -85,7 +88,7 @@ export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
         forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) ||
         (/node_modules\//.test(path) && !isAllowedBundledPluginNodeModulesPath(path)),
     )
-    .toSorted();
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 function formatMiB(bytes: number): string {
@@ -303,7 +306,7 @@ async function main() {
       }
       return paths.has(group) ? [] : [group];
     })
-    .toSorted();
+    .toSorted((left, right) => left.localeCompare(right));
   const forbidden = collectForbiddenPackPaths(paths);
   const sizeErrors = collectPackUnpackedSizeErrors(results);
 
