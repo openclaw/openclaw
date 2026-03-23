@@ -1,3 +1,4 @@
+import { SsrFBlockedError } from "openclaw/plugin-sdk/compat";
 import { describe, expect, it, vi } from "vitest";
 import { createTinyFishTool } from "./tinyfish-tool.js";
 
@@ -19,6 +20,10 @@ function createApi(pluginConfig: Record<string, unknown> = {}) {
     runtime: {} as never,
     logger: noopLogger,
   } as never;
+}
+
+function allowPublicHostname() {
+  return vi.fn(async () => ({ hostname: "example.com" }) as never);
 }
 
 function sseResponse(events: string[]) {
@@ -54,6 +59,7 @@ describe("tinyfish automation tool", () => {
     const tool = createTinyFishTool(createApi({ apiKey: "config-key" }), {
       fetchWithGuard,
       env: {},
+      resolveHostname: allowPublicHostname(),
     });
 
     const result = (await tool.execute("tool-1", {
@@ -110,6 +116,7 @@ describe("tinyfish automation tool", () => {
       env: {
         TINYFISH_API_KEY: "env-key",
       },
+      resolveHostname: allowPublicHostname(),
     });
 
     await tool.execute("tool-1", {
@@ -140,6 +147,7 @@ describe("tinyfish automation tool", () => {
     const tool = createTinyFishTool(createApi({ apiKey: "config-key" }), {
       fetchWithGuard: vi.fn(),
       env: {},
+      resolveHostname: vi.fn(),
     });
 
     await expect(
@@ -148,6 +156,25 @@ describe("tinyfish automation tool", () => {
         goal: "Open the page",
       }),
     ).rejects.toThrow(/embedded credentials/);
+  });
+
+  it("rejects non-public target URLs before forwarding to TinyFish", async () => {
+    const fetchWithGuard = vi.fn();
+    const tool = createTinyFishTool(createApi({ apiKey: "config-key" }), {
+      fetchWithGuard,
+      env: {},
+      resolveHostname: vi.fn(async () => {
+        throw new SsrFBlockedError("blocked");
+      }),
+    });
+
+    await expect(
+      tool.execute("tool-1", {
+        url: "http://127.0.0.1/private",
+        goal: "Open the page",
+      }),
+    ).rejects.toThrow(/public website/);
+    expect(fetchWithGuard).not.toHaveBeenCalled();
   });
 
   it("succeeds when TinyFish omits the streaming URL event", async () => {
@@ -163,6 +190,7 @@ describe("tinyfish automation tool", () => {
     const tool = createTinyFishTool(createApi({ apiKey: "config-key" }), {
       fetchWithGuard,
       env: {},
+      resolveHostname: allowPublicHostname(),
     });
 
     const result = (await tool.execute("tool-1", {
@@ -194,6 +222,7 @@ describe("tinyfish automation tool", () => {
     const tool = createTinyFishTool(createApi({ apiKey: "config-key" }), {
       fetchWithGuard,
       env: {},
+      resolveHostname: allowPublicHostname(),
     });
 
     const result = (await tool.execute("tool-1", {
@@ -226,6 +255,7 @@ describe("tinyfish automation tool", () => {
     const tool = createTinyFishTool(createApi({ apiKey: "config-key" }), {
       fetchWithGuard,
       env: {},
+      resolveHostname: allowPublicHostname(),
     });
 
     await expect(
@@ -251,21 +281,74 @@ describe("tinyfish automation tool", () => {
     const tool = createTinyFishTool(createApi({ apiKey: "config-key" }), {
       fetchWithGuard,
       env: {},
+      resolveHostname: allowPublicHostname(),
     });
 
-    await expect(
-      tool.execute("tool-1", {
+    let thrown: Error | undefined;
+    try {
+      await tool.execute("tool-1", {
         url: "https://example.com",
         goal: "Extract the table",
-      }),
-    ).rejects.toThrow(new RegExp(`x{${2048}}`));
+      });
+    } catch (error) {
+      thrown = error as Error;
+    }
 
-    await expect(
+    expect(thrown).toBeInstanceOf(Error);
+    expect(String(thrown)).toMatch(new RegExp(`x{${2048}}`));
+    expect(String(thrown)).not.toMatch(new RegExp(`x{2500}`));
+  });
+
+  it("returns immediately after COMPLETE without waiting for EOF", async () => {
+    let cancelCalled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(
+            'data: {"type":"STARTED","run_id":"run-5"}\n\n' +
+              'data: {"type":"COMPLETE","run_id":"run-5","status":"COMPLETED","result":{"ok":true}}\n\n' +
+              ": heartbeat\n\n",
+          ),
+        );
+      },
+      cancel() {
+        cancelCalled = true;
+      },
+    });
+
+    const fetchWithGuard = vi.fn(async () => ({
+      response: new Response(stream, {
+        status: 200,
+        headers: {
+          "content-type": "text/event-stream",
+        },
+      }),
+      finalUrl: "https://agent.tinyfish.ai/v1/automation/run-sse",
+      release: async () => {},
+    }));
+
+    const tool = createTinyFishTool(createApi({ apiKey: "config-key" }), {
+      fetchWithGuard,
+      env: {},
+      resolveHostname: allowPublicHostname(),
+    });
+
+    const result = (await Promise.race([
       tool.execute("tool-1", {
         url: "https://example.com",
         goal: "Extract the table",
       }),
-    ).rejects.not.toThrow(new RegExp(`x{2500}`));
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error("Timed out waiting for TinyFish COMPLETE")), 250);
+      }),
+    ])) as { details: Record<string, unknown> };
+
+    expect(result.details).toMatchObject({
+      run_id: "run-5",
+      status: "COMPLETED",
+      result: { ok: true },
+    });
+    expect(cancelCalled).toBe(true);
   });
 
   it("fails cleanly when the stream ends without COMPLETE", async () => {
@@ -278,6 +361,7 @@ describe("tinyfish automation tool", () => {
     const tool = createTinyFishTool(createApi({ apiKey: "config-key" }), {
       fetchWithGuard,
       env: {},
+      resolveHostname: allowPublicHostname(),
     });
 
     await expect(

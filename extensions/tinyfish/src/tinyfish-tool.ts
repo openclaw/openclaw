@@ -3,6 +3,8 @@ import {
   fetchWithSsrFGuard,
   jsonResult,
   readStringParam,
+  resolvePinnedHostname,
+  SsrFBlockedError,
   ToolInputError,
   type OpenClawPluginApi,
 } from "openclaw/plugin-sdk/compat";
@@ -56,10 +58,12 @@ type TinyFishSseEvent = Record<string, unknown> & {
 };
 
 type GuardedFetch = typeof fetchWithSsrFGuard;
+type ResolveHostname = typeof resolvePinnedHostname;
 
 type TinyFishToolDeps = {
   env?: NodeJS.ProcessEnv;
   fetchWithGuard?: GuardedFetch;
+  resolveHostname?: ResolveHostname;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -121,6 +125,24 @@ function validateTargetUrl(rawUrl: string): string {
     throw new ToolInputError("url must not include embedded credentials");
   }
   return parsed.toString();
+}
+
+async function assertPublicTargetUrl(
+  rawUrl: string,
+  resolveHostname: ResolveHostname,
+): Promise<void> {
+  const parsed = new URL(rawUrl);
+  if (parsed.hostname === "") {
+    throw new ToolInputError("url must target a public website");
+  }
+  try {
+    await resolveHostname(parsed.hostname);
+  } catch (error) {
+    if (error instanceof SsrFBlockedError) {
+      throw new ToolInputError("url must target a public website");
+    }
+    throw error;
+  }
 }
 
 function readBrowserProfile(params: Record<string, unknown>): TinyFishBrowserProfile | undefined {
@@ -248,6 +270,7 @@ async function parseRunStream(
   let runId: string | undefined;
   let streamingUrl: string | undefined;
   let completeEvent: TinyFishSseEvent | null = null;
+  let completeReceived = false;
 
   const handleEvent = (event: TinyFishSseEvent) => {
     const type = readOptionalString(event.type);
@@ -266,6 +289,7 @@ async function parseRunStream(
     }
     if (type === "COMPLETE") {
       completeEvent = event;
+      completeReceived = true;
       runId = readOptionalString(event.run_id) ?? runId;
       streamingUrl =
         readOptionalString(event.streaming_url) ?? streamingUrl ?? readOptionalString(event.url);
@@ -286,20 +310,26 @@ async function parseRunStream(
         const event = parseEventBlock(block);
         if (event) {
           handleEvent(event);
+          if (completeReceived) {
+            break;
+          }
         }
         match = /\r?\n\r?\n/.exec(buffer);
       }
 
-      if (done) {
+      if (done || completeReceived) {
         break;
       }
     }
   } finally {
+    if (completeReceived) {
+      await reader.cancel().catch(() => {});
+    }
     reader.releaseLock();
   }
 
   const finalBlock = buffer.trim();
-  if (finalBlock) {
+  if (!completeReceived && finalBlock) {
     const event = parseEventBlock(finalBlock);
     if (event) {
       handleEvent(event);
@@ -370,6 +400,9 @@ async function runTinyFishAutomation(
   const config = resolveTinyFishConfig(api.pluginConfig, env);
   const endpoint = buildRunEndpoint(config.baseUrl);
   const fetchWithGuard = deps.fetchWithGuard ?? fetchWithSsrFGuard;
+  const resolveHostname = deps.resolveHostname ?? resolvePinnedHostname;
+
+  await assertPublicTargetUrl(params.url, resolveHostname);
 
   const requestBody: Record<string, unknown> = {
     url: params.url,

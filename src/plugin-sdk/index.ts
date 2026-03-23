@@ -445,6 +445,7 @@ export {
   isBlockedHostname,
   isBlockedHostnameOrIp,
   isPrivateIpAddress,
+  resolvePinnedHostname,
 } from "../infra/net/ssrf.js";
 export type { LookupFn, SsrFPolicy } from "../infra/net/ssrf.js";
 export {
