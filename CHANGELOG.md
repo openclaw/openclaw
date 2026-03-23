@@ -40,6 +40,7 @@ Docs: https://docs.openclaw.ai
 - ClawHub/macOS: read the local ClawHub login from the macOS Application Support path and still honor XDG config on macOS, so skill browsing uses the logged-in token on both default and XDG-style setups. Fixes #52949. Thanks @scoootscooob.
 - Discord/commands: return an explicit unauthorized reply for privileged native slash commands instead of falling through to Discord's misleading generic completion when auth gates reject the sender. Fixes #53041. Thanks @scoootscooob.
 - Models/OpenAI Codex OAuth: bootstrap the env-configured HTTP/HTTPS proxy dispatcher on the stored-credential refresh path before token renewal runs, so expired Codex OAuth profiles can refresh successfully in proxy-required environments instead of locking users out after the first token expiry.
+- Plugins/memory-lancedb: bootstrap LanceDB into plugin runtime state on first use when the bundled npm install does not already have it, so `plugins.slots.memory="memory-lancedb"` works again after global npm installs without moving LanceDB into OpenClaw core dependencies. Fixes #26100.
 
 ## 2026.3.22
 
