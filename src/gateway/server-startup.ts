@@ -40,7 +40,7 @@ export async function startGatewaySidecars(params: {
   defaultWorkspaceDir: string;
   deps: CliDeps;
   startChannels: () => Promise<void>;
-  log: { warn: (msg: string) => void };
+  log: { info: (msg: string) => void; warn: (msg: string) => void };
   logHooks: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
