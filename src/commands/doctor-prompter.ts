@@ -1,4 +1,5 @@
 import { confirm, select } from "@clack/prompts";
+import { isTruthyEnvValue } from "../infra/env.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { stylePromptHint, stylePromptMessage } from "../terminal/prompt-style.js";
 import { guardCancel } from "./onboard-helpers.js";
@@ -33,6 +34,7 @@ export function createDoctorPrompter(params: {
   const shouldForce = params.options.force === true;
   const isTty = Boolean(process.stdin.isTTY);
   const nonInteractive = requestedNonInteractive || (!isTty && !yes);
+  const updateInProgress = isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS);
 
   const canPrompt = isTty && !yes && !nonInteractive;
   const confirmDefault = async (p: Parameters<typeof confirm>[0]) => {
@@ -78,7 +80,12 @@ export function createDoctorPrompter(params: {
         params.runtime,
       );
     },
-    confirmSkipInNonInteractive: confirmDefault,
+    confirmSkipInNonInteractive: async (p) => {
+      if (updateInProgress && nonInteractive) {
+        return false;
+      }
+      return confirmDefault(p);
+    },
     select: async <T>(p: Parameters<typeof select>[0], fallback: T) => {
       if (!canPrompt || shouldRepair) {
         return fallback;
