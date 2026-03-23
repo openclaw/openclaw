@@ -194,7 +194,7 @@ async function runKimiSearch(params: {
         }
 
         const validToolCalls = toolCalls.filter(
-            (toolCall) => toolCall.id?.trim() && toolCall.function?.name?.trim(),
+          (toolCall) => toolCall.id?.trim() && toolCall.function?.name?.trim(),
         );
 
         if (validToolCalls.length !== toolCalls.length || validToolCalls.length === 0) {
