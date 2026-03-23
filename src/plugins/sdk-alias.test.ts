@@ -400,7 +400,11 @@ describe("plugin sdk alias helpers", () => {
         modulePath: "/tmp/tsx-cache/openclaw-loader.js",
       }),
     );
-    expect(subpaths).toEqual([]);
+    // The cwd points to a non-openclaw fixture, but the loader's import.meta.url
+    // fallback resolves from the real repo. Verify no subpaths come from the fixture.
+    for (const sp of subpaths) {
+      expect(sp).not.toContain("moltbot");
+    }
   });
 
   it("derives plugin-sdk subpaths via cwd fallback when trusted root indicator is cli-entry export", () => {
@@ -461,6 +465,31 @@ describe("plugin sdk alias helpers", () => {
     );
   });
 
+  it("resolves plugin-sdk aliases for extensions outside the openclaw package tree", () => {
+    // Simulate the global-install scenario: openclaw is at /usr/lib/node_modules/openclaw
+    // while the third-party extension lives at /workspace/extensions/my-plugin/index.js.
+    // The extension path shares no ancestor with the openclaw package root, so module-path
+    // based lookups all fail. The loader should fall back to its own import.meta.url location
+    // (which is always inside the openclaw package) to resolve the plugin-sdk alias.
+    const externalDir = makeTempDir();
+    const externalPluginEntry = path.join(externalDir, "extensions", "my-plugin", "index.js");
+    fs.mkdirSync(path.dirname(externalPluginEntry), { recursive: true });
+    fs.writeFileSync(externalPluginEntry, "module.exports = {};\n", "utf-8");
+
+    // cwd is also outside the openclaw tree, simulating a real gateway environment
+    const unrelatedCwd = makeTempDir();
+    const aliases = withCwd(unrelatedCwd, () =>
+      withEnv({ NODE_ENV: undefined }, () => buildPluginLoaderAliasMap(externalPluginEntry)),
+    );
+
+    // The fallback to import.meta.url (this repo's sdk-alias.ts) should resolve the alias
+    expect(aliases["openclaw/plugin-sdk"]).toBeDefined();
+    expect(fs.existsSync(aliases["openclaw/plugin-sdk"]!)).toBe(true);
+    // extension-api also uses resolveLoaderPackageRoot which needs the same fallback
+    expect(aliases["openclaw/extension-api"]).toBeDefined();
+    expect(fs.existsSync(aliases["openclaw/extension-api"]!)).toBe(true);
+  });
+
   it("does not resolve plugin-sdk alias files from cwd fallback when package root is not an OpenClaw root", () => {
     const fixture = createPluginSdkAliasFixture({
       srcFile: "channel-runtime.ts",
@@ -479,7 +508,11 @@ describe("plugin sdk alias helpers", () => {
         env: { NODE_ENV: undefined },
       }),
     );
-    expect(resolved).toBeNull();
+    // The cwd points to a non-openclaw fixture; the loader's import.meta.url
+    // fallback may still resolve from the real repo. Verify it never comes from the fixture.
+    if (resolved) {
+      expect(resolved).not.toContain(fixture.root);
+    }
   });
 
   it("configures the plugin loader jiti boundary to prefer native dist modules", () => {

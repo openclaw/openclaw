@@ -99,11 +99,24 @@ export function resolveLoaderPackageRoot(
   }
   const argv1 = params.argv1 ?? process.argv[1];
   const moduleUrl = params.moduleUrl ?? (params.modulePath ? undefined : import.meta.url);
-  return resolveOpenClawPackageRootSync({
-    cwd,
-    ...(argv1 ? { argv1 } : {}),
-    ...(moduleUrl ? { moduleUrl } : {}),
-  });
+  return (
+    resolveOpenClawPackageRootSync({
+      cwd,
+      ...(argv1 ? { argv1 } : {}),
+      ...(moduleUrl ? { moduleUrl } : {}),
+    }) ?? resolveLoaderSelfPackageRoot()
+  );
+}
+
+// Cached: import.meta.url never changes, so resolve at most once.
+let cachedLoaderSelfRoot: string | null | undefined;
+
+function resolveLoaderSelfPackageRoot(): string | null {
+  if (cachedLoaderSelfRoot !== undefined) {
+    return cachedLoaderSelfRoot;
+  }
+  cachedLoaderSelfRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url }) ?? null;
+  return cachedLoaderSelfRoot;
 }
 
 function resolveLoaderPluginSdkPackageRoot(
@@ -119,12 +132,14 @@ function resolveLoaderPluginSdkPackageRoot(
           ...(params.moduleUrl ? { moduleUrl: params.moduleUrl } : {}),
         })
       : null;
+  // Last resort: resolve from this module's own location (always inside the openclaw package).
   return (
     fromCwd ??
     fromExplicitHints ??
     findNearestPluginSdkPackageRoot(path.dirname(params.modulePath)) ??
     (params.cwd ? findNearestPluginSdkPackageRoot(params.cwd) : null) ??
-    findNearestPluginSdkPackageRoot(process.cwd())
+    findNearestPluginSdkPackageRoot(process.cwd()) ??
+    resolveLoaderSelfPackageRoot()
   );
 }
 
