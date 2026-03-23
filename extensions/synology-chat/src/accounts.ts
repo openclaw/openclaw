@@ -9,6 +9,7 @@ import {
   resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
+import { resolveDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import type { SynologyChatChannelConfig, ResolvedSynologyChatAccount } from "./types.js";
 
 /** Extract the channel config from the full OpenClaw config object. */
@@ -65,6 +66,8 @@ export function resolveAccount(
 ): ResolvedSynologyChatAccount {
   const channelCfg = getChannelConfig(cfg) ?? {};
   const id = accountId || DEFAULT_ACCOUNT_ID;
+  const accountOverrides =
+    id === DEFAULT_ACCOUNT_ID ? undefined : (channelCfg.accounts?.[id] ?? undefined);
   const merged = resolveMergedAccountConfig<Record<string, unknown> & SynologyChatChannelConfig>({
     channelConfig: channelCfg as Record<string, unknown> & SynologyChatChannelConfig,
     accounts: channelCfg.accounts as
@@ -89,7 +92,10 @@ export function resolveAccount(
     incomingUrl: merged.incomingUrl ?? envIncomingUrl,
     nasHost: merged.nasHost ?? envNasHost,
     webhookPath: merged.webhookPath ?? "/webhook/synology",
-    dangerouslyAllowNameMatching: merged.dangerouslyAllowNameMatching ?? false,
+    dangerouslyAllowNameMatching: resolveDangerousNameMatchingEnabled({
+      providerConfig: channelCfg,
+      accountConfig: accountOverrides,
+    }),
     dmPolicy: merged.dmPolicy ?? "allowlist",
     allowedUserIds: parseAllowedUserIds(merged.allowedUserIds ?? envAllowedUserIds),
     rateLimitPerMinute: merged.rateLimitPerMinute ?? envRateLimitValue,

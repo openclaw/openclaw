@@ -11,6 +11,11 @@ export type ProviderDangerousNameMatchingScope = {
   dangerousFlagPath: string;
 };
 
+export type DangerousNameMatchingResolverInput = {
+  providerConfig?: DangerousNameMatchingConfig | null | undefined;
+  accountConfig?: DangerousNameMatchingConfig | null | undefined;
+};
+
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -26,6 +31,15 @@ export function isDangerousNameMatchingEnabled(
   config: DangerousNameMatchingConfig | null | undefined,
 ): boolean {
   return config?.dangerouslyAllowNameMatching === true;
+}
+
+export function resolveDangerousNameMatchingEnabled(
+  input: DangerousNameMatchingResolverInput,
+): boolean {
+  if (typeof input.accountConfig?.dangerouslyAllowNameMatching === "boolean") {
+    return input.accountConfig.dangerouslyAllowNameMatching;
+  }
+  return isDangerousNameMatchingEnabled(input.providerConfig);
 }
 
 export function collectProviderDangerousNameMatchingScopes(
