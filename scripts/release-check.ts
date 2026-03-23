@@ -80,6 +80,18 @@ function runPackDry(): PackResult[] {
   return JSON.parse(raw) as PackResult[];
 }
 
+export function collectMissingPackPaths(paths: Iterable<string>): string[] {
+  const available = new Set(paths);
+  return requiredPathGroups
+    .flatMap((group) => {
+      if (Array.isArray(group)) {
+        return group.some((path) => available.has(path)) ? [] : [group.join(" or ")];
+      }
+      return available.has(group) ? [] : [group];
+    })
+    .toSorted();
+}
+
 export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
   const isAllowedBundledPluginNodeModulesPath = (path: string) =>
     /^dist\/extensions\/[^/]+\/node_modules\//.test(path);

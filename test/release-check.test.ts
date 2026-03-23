@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import { listPluginSdkDistArtifacts } from "../scripts/lib/plugin-sdk-entries.mjs";
 import {
   collectAppcastSparkleVersionErrors,
@@ -17,6 +18,7 @@ function makePackResult(filename: string, unpackedSize: number) {
 }
 
 const requiredPluginSdkPackPaths = [...listPluginSdkDistArtifacts(), "dist/plugin-sdk/compat.js"];
+const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
 
 describe("collectAppcastSparkleVersionErrors", () => {
   it("accepts legacy 9-digit calver builds before lane-floor cutover", () => {
@@ -149,30 +151,7 @@ describe("collectMissingPackPaths", () => {
         "dist/index.js",
         "dist/entry.js",
         "dist/control-ui/index.html",
-        "dist/extensions/acpx/openclaw.plugin.json",
-        "dist/extensions/acpx/package.json",
-        "dist/extensions/diagnostics-otel/openclaw.plugin.json",
-        "dist/extensions/diagnostics-otel/package.json",
-        "dist/extensions/diffs/openclaw.plugin.json",
-        "dist/extensions/diffs/package.json",
-        "dist/extensions/googlechat/openclaw.plugin.json",
-        "dist/extensions/googlechat/package.json",
-        "dist/extensions/matrix/openclaw.plugin.json",
-        "dist/extensions/matrix/package.json",
-        "dist/extensions/memory-lancedb/openclaw.plugin.json",
-        "dist/extensions/memory-lancedb/package.json",
-        "dist/extensions/msteams/openclaw.plugin.json",
-        "dist/extensions/msteams/package.json",
-        "dist/extensions/nostr/openclaw.plugin.json",
-        "dist/extensions/nostr/package.json",
-        "dist/extensions/tlon/openclaw.plugin.json",
-        "dist/extensions/tlon/package.json",
-        "dist/extensions/twitch/openclaw.plugin.json",
-        "dist/extensions/twitch/package.json",
-        "dist/extensions/whatsapp/openclaw.plugin.json",
-        "dist/extensions/whatsapp/package.json",
-        "dist/extensions/zalouser/openclaw.plugin.json",
-        "dist/extensions/zalouser/package.json",
+        ...requiredBundledPluginPackPaths,
         ...requiredPluginSdkPackPaths,
         "dist/plugin-sdk/root-alias.cjs",
         "dist/build-info.json",
