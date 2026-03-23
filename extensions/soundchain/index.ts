@@ -1,17 +1,9 @@
 import { Type } from "@sinclair/typebox";
-import type {
-  AnyAgentTool,
-  OpenClawPluginApi,
-  OpenClawPluginToolFactory,
-} from "./runtime-api.js";
+import type { AnyAgentTool, OpenClawPluginApi, OpenClawPluginToolFactory } from "./runtime-api.js";
+// Raw plugin object — definePluginEntry not exported in openclaw 2026.3.13
 import { createSoundChainApi, type SoundChainApi, type SoundChainConfig } from "./src/api.js";
 import { soundchainChannelPlugin } from "./src/channel.js";
-import {
-  runPipeline,
-  quickDiagnose,
-  deepDiagnose,
-  PIPELINE_STAGES,
-} from "./src/phil-jackson.js";
+import { runPipeline, quickDiagnose, deepDiagnose, PIPELINE_STAGES } from "./src/phil-jackson.js";
 import { setSoundChainRuntime } from "./src/runtime.js";
 import {
   createWarRoomClient,
@@ -357,6 +349,7 @@ const plugin = {
     "SoundChain War Room — Phil Jackson Triangle diagnostic pipeline (7 Ollama models), specialist agents, fleet nodes, music API + OGUN streaming rewards. Build. Diagnose. Ship.",
 
   register(api: OpenClawPluginApi) {
+    console.log("[SoundChain] register() called — registering tools + channel");
     // Store runtime for inbound message forwarding (mirrors Nostr pattern)
     setSoundChainRuntime(api.runtime);
 
@@ -387,7 +380,18 @@ const plugin = {
     const wrClient = createWarRoomClient(wrConfig);
 
     // --- Music tools (SoundChain Agent REST API) ---
-    const musicTools = [
+    // Register all music tools in a single call with explicit names
+    // so the gateway exposes them to the agent session.
+    const musicToolNames = [
+      "soundchain_search",
+      "soundchain_radio",
+      "soundchain_play",
+      "soundchain_stats",
+      "soundchain_trending",
+      "soundchain_discover",
+      "soundchain_leaderboard",
+    ];
+    const musicToolFactories = [
       createSearchTool,
       createRadioTool,
       createPlayTool,
@@ -397,83 +401,69 @@ const plugin = {
       createLeaderboardTool,
     ];
 
-    for (const createTool of musicTools) {
-      api.registerTool(
-        ((ctx) => {
-          if (ctx.sandboxed) return null;
-          return createTool(scApi);
-        }) as OpenClawPluginToolFactory,
-        { optional: true },
-      );
-    }
-
-    // --- War Room infrastructure tools ---
-    const infrastructureTools = [
-      createWarRoomHealthTool,
-      createOllamaDirectTool,
-      createWarRoomTaskTool,
-    ];
-
-    for (const createTool of infrastructureTools) {
-      api.registerTool(
-        ((ctx) => {
-          if (ctx.sandboxed) return null;
-          return createTool(wrClient);
-        }) as OpenClawPluginToolFactory,
-        { optional: true },
-      );
-    }
-
-    // --- Phil Jackson Triangle diagnostic tools ---
-    const diagnosticTools = [createDiagnoseTool, createSpecialistTool];
-
-    for (const createTool of diagnosticTools) {
-      api.registerTool(
-        ((ctx) => {
-          if (ctx.sandboxed) return null;
-          return createTool(wrClient);
-        }) as OpenClawPluginToolFactory,
-        { optional: true },
-      );
-    }
-
-    // --- Roster (no client needed) ---
     api.registerTool(
       ((ctx) => {
         if (ctx.sandboxed) return null;
-        return createPipelineInfoTool();
+        const tools = musicToolFactories.map((f) => f(scApi));
+        return tools;
       }) as OpenClawPluginToolFactory,
-      { optional: true },
+      { names: musicToolNames },
+    );
+
+    // --- War Room + Diagnostic + Roster tools ---
+    api.registerTool(
+      ((ctx) => {
+        if (ctx.sandboxed) return null;
+        return [
+          createWarRoomHealthTool(wrClient),
+          createOllamaDirectTool(wrClient),
+          createWarRoomTaskTool(wrClient),
+          createDiagnoseTool(wrClient),
+          createSpecialistTool(wrClient),
+          createPipelineInfoTool(),
+        ];
+      }) as OpenClawPluginToolFactory,
+      {
+        names: [
+          "warroom_health",
+          "warroom_ollama",
+          "warroom_task",
+          "warroom_diagnose",
+          "warroom_specialist",
+          "warroom_roster",
+        ],
+      },
     );
 
     // --- Codebase Summarizer Tool ---
-    // Fetches the live skill.md from soundchain.io for any agent to understand
-    // the full SoundChain platform capabilities, API endpoints, and architecture.
     api.registerTool(
       ((ctx) => {
         if (ctx.sandboxed) return null;
         return {
-        name: "soundchain_platform_docs" as const,
-        description: "Fetch SoundChain platform documentation (skill.md) — API endpoints, architecture, and agent gateway capabilities.",
-        parameters: Type.Object({}),
-        label: "SoundChain Discovery",
-        async execute() {
-          try {
-            const res = await fetch("https://soundchain.io/skill.md", { signal: AbortSignal.timeout(15_000) });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const text = await res.text();
-            return json({
-              platform: "SoundChain",
-              skillVersion: "2.0",
-              content: text.slice(0, 12000),
-            });
-          } catch (err) {
-            return json({ error: "Failed to fetch skill.md", message: String(err) });
-          }
-        },
-      };
+          name: "soundchain_platform_docs" as const,
+          description:
+            "Fetch SoundChain platform documentation (skill.md) — API endpoints, architecture, and agent gateway capabilities.",
+          parameters: Type.Object({}),
+          label: "SoundChain Discovery",
+          async execute() {
+            try {
+              const res = await fetch("https://soundchain.io/skill.md", {
+                signal: AbortSignal.timeout(15_000),
+              });
+              if (!res.ok) throw new Error(`HTTP ${res.status}`);
+              const text = await res.text();
+              return json({
+                platform: "SoundChain",
+                skillVersion: "2.0",
+                content: text.slice(0, 12000),
+              });
+            } catch (err) {
+              return json({ error: "Failed to fetch skill.md", message: String(err) });
+            }
+          },
+        };
       }) as OpenClawPluginToolFactory,
-      { optional: true },
+      { names: ["soundchain_platform_docs"] },
     );
 
     // --- SoundChain messaging channel ---
