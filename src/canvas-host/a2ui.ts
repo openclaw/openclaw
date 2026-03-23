@@ -2,23 +2,40 @@ import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
 import { detectMime } from "../media/mime.js";
+import { resolveFileWithinRoot } from "./file-resolver.js";
 
-export const A2UI_PATH = "/__clawdbot__/a2ui";
-export const CANVAS_HOST_PATH = "/__clawdbot__/canvas";
-export const CANVAS_WS_PATH = "/__clawdbot/ws";
+export const A2UI_PATH = "/__openclaw__/a2ui";
+
+export const CANVAS_HOST_PATH = "/__openclaw__/canvas";
+
+export const CANVAS_WS_PATH = "/__openclaw__/ws";
 
 let cachedA2uiRootReal: string | null | undefined;
 let resolvingA2uiRoot: Promise<string | null> | null = null;
+let cachedA2uiResolvedAtMs = 0;
+const A2UI_ROOT_RETRY_NULL_AFTER_MS = 10_000;
 
 async function resolveA2uiRoot(): Promise<string | null> {
   const here = path.dirname(fileURLToPath(import.meta.url));
+  const entryDir = process.argv[1] ? path.dirname(path.resolve(process.argv[1])) : null;
   const candidates = [
-    // Running from source (bun) or dist (tsc + copied assets).
+    // Running from source (bun) or dist/canvas-host chunk.
     path.resolve(here, "a2ui"),
+    // Running from dist root chunk (common launchd path).
+    path.resolve(here, "canvas-host/a2ui"),
+    path.resolve(here, "../canvas-host/a2ui"),
+    // Entry path fallbacks (helps when cwd is not the repo root).
+    ...(entryDir
+      ? [
+          path.resolve(entryDir, "a2ui"),
+          path.resolve(entryDir, "canvas-host/a2ui"),
+          path.resolve(entryDir, "../canvas-host/a2ui"),
+        ]
+      : []),
     // Running from dist without copied assets (fallback to source).
     path.resolve(here, "../../src/canvas-host/a2ui"),
+    path.resolve(here, "../src/canvas-host/a2ui"),
     // Running from repo root.
     path.resolve(process.cwd(), "src/canvas-host/a2ui"),
     path.resolve(process.cwd(), "dist/canvas-host/a2ui"),
@@ -42,52 +59,23 @@ async function resolveA2uiRoot(): Promise<string | null> {
 }
 
 async function resolveA2uiRootReal(): Promise<string | null> {
-  if (cachedA2uiRootReal !== undefined) return cachedA2uiRootReal;
+  const nowMs = Date.now();
+  if (
+    cachedA2uiRootReal !== undefined &&
+    (cachedA2uiRootReal !== null || nowMs - cachedA2uiResolvedAtMs < A2UI_ROOT_RETRY_NULL_AFTER_MS)
+  ) {
+    return cachedA2uiRootReal;
+  }
   if (!resolvingA2uiRoot) {
     resolvingA2uiRoot = (async () => {
       const root = await resolveA2uiRoot();
       cachedA2uiRootReal = root ? await fs.realpath(root) : null;
+      cachedA2uiResolvedAtMs = Date.now();
+      resolvingA2uiRoot = null;
       return cachedA2uiRootReal;
     })();
   }
   return resolvingA2uiRoot;
-}
-
-function normalizeUrlPath(rawPath: string): string {
-  const decoded = decodeURIComponent(rawPath || "/");
-  const normalized = path.posix.normalize(decoded);
-  return normalized.startsWith("/") ? normalized : `/${normalized}`;
-}
-
-async function resolveA2uiFilePath(rootReal: string, urlPath: string) {
-  const normalized = normalizeUrlPath(urlPath);
-  const rel = normalized.replace(/^\/+/, "");
-  if (rel.split("/").some((p) => p === "..")) return null;
-
-  let candidate = path.join(rootReal, rel);
-  if (normalized.endsWith("/")) {
-    candidate = path.join(candidate, "index.html");
-  }
-
-  try {
-    const st = await fs.stat(candidate);
-    if (st.isDirectory()) {
-      candidate = path.join(candidate, "index.html");
-    }
-  } catch {
-    // ignore
-  }
-
-  const rootPrefix = rootReal.endsWith(path.sep) ? rootReal : `${rootReal}${path.sep}`;
-  try {
-    const lstat = await fs.lstat(candidate);
-    if (lstat.isSymbolicLink()) return null;
-    const real = await fs.realpath(candidate);
-    if (!real.startsWith(rootPrefix)) return null;
-    return real;
-  } catch {
-    return null;
-  }
 }
 
 export function injectCanvasLiveReload(html: string): string {
@@ -96,22 +84,24 @@ export function injectCanvasLiveReload(html: string): string {
 (() => {
   // Cross-platform action bridge helper.
   // Works on:
-  // - iOS: window.webkit.messageHandlers.clawdbotCanvasA2UIAction.postMessage(...)
-  // - Android: window.clawdbotCanvasA2UIAction.postMessage(...)
-  const actionHandlerName = "clawdbotCanvasA2UIAction";
+  // - iOS: window.webkit.messageHandlers.openclawCanvasA2UIAction.postMessage(...)
+  // - Android: window.openclawCanvasA2UIAction.postMessage(...)
+  const handlerNames = ["openclawCanvasA2UIAction"];
   function postToNode(payload) {
     try {
       const raw = typeof payload === "string" ? payload : JSON.stringify(payload);
-      const iosHandler = globalThis.webkit?.messageHandlers?.[actionHandlerName];
-      if (iosHandler && typeof iosHandler.postMessage === "function") {
-        iosHandler.postMessage(raw);
-        return true;
-      }
-      const androidHandler = globalThis[actionHandlerName];
-      if (androidHandler && typeof androidHandler.postMessage === "function") {
-        // Important: call as a method on the interface object (binding matters on Android WebView).
-        androidHandler.postMessage(raw);
-        return true;
+      for (const name of handlerNames) {
+        const iosHandler = globalThis.webkit?.messageHandlers?.[name];
+        if (iosHandler && typeof iosHandler.postMessage === "function") {
+          iosHandler.postMessage(raw);
+          return true;
+        }
+        const androidHandler = globalThis[name];
+        if (androidHandler && typeof androidHandler.postMessage === "function") {
+          // Important: call as a method on the interface object (binding matters on Android WebView).
+          androidHandler.postMessage(raw);
+          return true;
+        }
       }
     } catch {}
     return false;
@@ -123,15 +113,17 @@ export function injectCanvasLiveReload(html: string): string {
     const action = { ...userAction, id };
     return postToNode({ userAction: action });
   }
-  globalThis.Clawdbot = globalThis.Clawdbot ?? {};
-  globalThis.Clawdbot.postMessage = postToNode;
-  globalThis.Clawdbot.sendUserAction = sendUserAction;
-  globalThis.clawdbotPostMessage = postToNode;
-  globalThis.clawdbotSendUserAction = sendUserAction;
+  globalThis.OpenClaw = globalThis.OpenClaw ?? {};
+  globalThis.OpenClaw.postMessage = postToNode;
+  globalThis.OpenClaw.sendUserAction = sendUserAction;
+  globalThis.openclawPostMessage = postToNode;
+  globalThis.openclawSendUserAction = sendUserAction;
 
   try {
+    const cap = new URLSearchParams(location.search).get("oc_cap");
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(proto + "://" + location.host + ${JSON.stringify(CANVAS_WS_PATH)});
+    const capQuery = cap ? "?oc_cap=" + encodeURIComponent(cap) : "";
+    const ws = new WebSocket(proto + "://" + location.host + ${JSON.stringify(CANVAS_WS_PATH)} + capQuery);
     ws.onmessage = (ev) => {
       if (String(ev.data || "") === "reload") location.reload();
     };
@@ -152,10 +144,14 @@ export async function handleA2uiHttpRequest(
   res: ServerResponse,
 ): Promise<boolean> {
   const urlRaw = req.url;
-  if (!urlRaw) return false;
+  if (!urlRaw) {
+    return false;
+  }
 
   const url = new URL(urlRaw, "http://localhost");
-  if (url.pathname !== A2UI_PATH && !url.pathname.startsWith(`${A2UI_PATH}/`)) {
+  const basePath =
+    url.pathname === A2UI_PATH || url.pathname.startsWith(`${A2UI_PATH}/`) ? A2UI_PATH : undefined;
+  if (!basePath) {
     return false;
   }
 
@@ -174,30 +170,40 @@ export async function handleA2uiHttpRequest(
     return true;
   }
 
-  const rel = url.pathname.slice(A2UI_PATH.length);
-  const filePath = await resolveA2uiFilePath(a2uiRootReal, rel || "/");
-  if (!filePath) {
+  const rel = url.pathname.slice(basePath.length);
+  const result = await resolveFileWithinRoot(a2uiRootReal, rel || "/");
+  if (!result) {
     res.statusCode = 404;
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.end("not found");
     return true;
   }
 
-  const lower = filePath.toLowerCase();
-  const mime =
-    lower.endsWith(".html") || lower.endsWith(".htm")
-      ? "text/html"
-      : ((await detectMime({ filePath })) ?? "application/octet-stream");
-  res.setHeader("Cache-Control", "no-store");
+  try {
+    const lower = result.realPath.toLowerCase();
+    const mime =
+      lower.endsWith(".html") || lower.endsWith(".htm")
+        ? "text/html"
+        : ((await detectMime({ filePath: result.realPath })) ?? "application/octet-stream");
+    res.setHeader("Cache-Control", "no-store");
 
-  if (mime === "text/html") {
-    const html = await fs.readFile(filePath, "utf8");
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.end(injectCanvasLiveReload(html));
+    if (req.method === "HEAD") {
+      res.setHeader("Content-Type", mime === "text/html" ? "text/html; charset=utf-8" : mime);
+      res.end();
+      return true;
+    }
+
+    if (mime === "text/html") {
+      const buf = await result.handle.readFile({ encoding: "utf8" });
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.end(injectCanvasLiveReload(buf));
+      return true;
+    }
+
+    res.setHeader("Content-Type", mime);
+    res.end(await result.handle.readFile());
     return true;
+  } finally {
+    await result.handle.close().catch(() => {});
   }
-
-  res.setHeader("Content-Type", mime);
-  res.end(await fs.readFile(filePath));
-  return true;
 }

@@ -1,9 +1,9 @@
+import os from "node:os";
 import path from "node:path";
-
-import { STATE_DIR_CLAWDBOT } from "../config/paths.js";
+import { resolveStateDir } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
-import type { SubagentRunRecord } from "./subagent-registry.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export type PersistedSubagentRegistryVersion = 1 | 2;
 
@@ -30,25 +30,46 @@ type LegacySubagentRunRecord = PersistedSubagentRunRecord & {
   requesterAccountId?: unknown;
 };
 
+function resolveSubagentStateDir(env: NodeJS.ProcessEnv = process.env): string {
+  const explicit = env.OPENCLAW_STATE_DIR?.trim();
+  if (explicit) {
+    return resolveStateDir(env);
+  }
+  if (env.VITEST || env.NODE_ENV === "test") {
+    return path.join(os.tmpdir(), "openclaw-test-state", String(process.pid));
+  }
+  return resolveStateDir(env);
+}
+
 export function resolveSubagentRegistryPath(): string {
-  return path.join(STATE_DIR_CLAWDBOT, "subagents", "runs.json");
+  return path.join(resolveSubagentStateDir(process.env), "subagents", "runs.json");
 }
 
 export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
   const pathname = resolveSubagentRegistryPath();
   const raw = loadJsonFile(pathname);
-  if (!raw || typeof raw !== "object") return new Map();
+  if (!raw || typeof raw !== "object") {
+    return new Map();
+  }
   const record = raw as Partial<PersistedSubagentRegistry>;
-  if (record.version !== 1 && record.version !== 2) return new Map();
+  if (record.version !== 1 && record.version !== 2) {
+    return new Map();
+  }
   const runsRaw = record.runs;
-  if (!runsRaw || typeof runsRaw !== "object") return new Map();
+  if (!runsRaw || typeof runsRaw !== "object") {
+    return new Map();
+  }
   const out = new Map<string, SubagentRunRecord>();
   const isLegacy = record.version === 1;
   let migrated = false;
   for (const [runId, entry] of Object.entries(runsRaw)) {
-    if (!entry || typeof entry !== "object") continue;
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
     const typed = entry as LegacySubagentRunRecord;
-    if (!typed.runId || typeof typed.runId !== "string") continue;
+    if (!typed.runId || typeof typed.runId !== "string") {
+      continue;
+    }
     const legacyCompletedAt =
       isLegacy && typeof typed.announceCompletedAt === "number"
         ? typed.announceCompletedAt
@@ -80,8 +101,11 @@ export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
       requesterOrigin,
       cleanupCompletedAt,
       cleanupHandled,
+      spawnMode: typed.spawnMode === "session" ? "session" : "run",
     });
-    if (isLegacy) migrated = true;
+    if (isLegacy) {
+      migrated = true;
+    }
   }
   if (migrated) {
     try {

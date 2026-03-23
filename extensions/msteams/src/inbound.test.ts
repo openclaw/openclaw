@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import {
   normalizeMSTeamsConversationId,
   parseMSTeamsActivityTimestamp,
@@ -36,7 +35,10 @@ describe("msteams inbound", () => {
 
     it("parses string timestamps", () => {
       const ts = parseMSTeamsActivityTimestamp("2024-01-01T00:00:00.000Z");
-      expect(ts?.toISOString()).toBe("2024-01-01T00:00:00.000Z");
+      if (!ts) {
+        throw new Error("expected MSTeams timestamp parser to return a Date");
+      }
+      expect(ts.toISOString()).toBe("2024-01-01T00:00:00.000Z");
     });
 
     it("passes through Date instances", () => {

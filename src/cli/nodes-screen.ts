@@ -1,8 +1,6 @@
-import { randomUUID } from "node:crypto";
-import * as os from "node:os";
 import * as path from "node:path";
-
 import { writeBase64ToFile } from "./nodes-camera.js";
+import { asRecord, asString, resolveTempPathParts } from "./nodes-media-utils.js";
 
 export type ScreenRecordPayload = {
   format: string;
@@ -12,14 +10,6 @@ export type ScreenRecordPayload = {
   screenIndex?: number;
   hasAudio?: boolean;
 };
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-}
-
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
 
 export function parseScreenRecordPayload(value: unknown): ScreenRecordPayload {
   const obj = asRecord(value);
@@ -39,10 +29,8 @@ export function parseScreenRecordPayload(value: unknown): ScreenRecordPayload {
 }
 
 export function screenRecordTempPath(opts: { ext: string; tmpDir?: string; id?: string }) {
-  const tmpDir = opts.tmpDir ?? os.tmpdir();
-  const id = opts.id ?? randomUUID();
-  const ext = opts.ext.startsWith(".") ? opts.ext : `.${opts.ext}`;
-  return path.join(tmpDir, `clawdbot-screen-record-${id}${ext}`);
+  const { tmpDir, id, ext } = resolveTempPathParts(opts);
+  return path.join(tmpDir, `openclaw-screen-record-${id}${ext}`);
 }
 
 export async function writeScreenRecordToFile(filePath: string, base64: string) {

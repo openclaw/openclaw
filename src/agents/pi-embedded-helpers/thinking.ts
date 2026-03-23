@@ -3,7 +3,9 @@ import { normalizeThinkLevel, type ThinkLevel } from "../../auto-reply/thinking.
 function extractSupportedValues(raw: string): string[] {
   const match =
     raw.match(/supported values are:\s*([^\n.]+)/i) ?? raw.match(/supported values:\s*([^\n.]+)/i);
-  if (!match?.[1]) return [];
+  if (!match?.[1]) {
+    return [];
+  }
   const fragment = match[1];
   const quoted = Array.from(fragment.matchAll(/['"]([^'"]+)['"]/g)).map((entry) =>
     entry[1]?.trim(),
@@ -22,13 +24,29 @@ export function pickFallbackThinkingLevel(params: {
   attempted: Set<ThinkLevel>;
 }): ThinkLevel | undefined {
   const raw = params.message?.trim();
-  if (!raw) return undefined;
+  if (!raw) {
+    return undefined;
+  }
   const supported = extractSupportedValues(raw);
-  if (supported.length === 0) return undefined;
+  if (supported.length === 0) {
+    // When the error clearly indicates the thinking level is unsupported but doesn't
+    // list supported values (e.g. OpenAI's "think value \"low\" is not supported for
+    // this model"), fall back to "off" to allow the request to succeed.
+    // This commonly happens during model fallback when switching from Anthropic
+    // (which supports thinking levels) to providers that don't.
+    if (/not supported/i.test(raw) && !params.attempted.has("off")) {
+      return "off";
+    }
+    return undefined;
+  }
   for (const entry of supported) {
     const normalized = normalizeThinkLevel(entry);
-    if (!normalized) continue;
-    if (params.attempted.has(normalized)) continue;
+    if (!normalized) {
+      continue;
+    }
+    if (params.attempted.has(normalized)) {
+      continue;
+    }
     return normalized;
   }
   return undefined;

@@ -29,13 +29,19 @@ export async function waitForTransportReady(params: WaitForTransportReadyParams)
   let lastError: string | null = null;
 
   while (true) {
-    if (params.abortSignal?.aborted) return;
+    if (params.abortSignal?.aborted) {
+      return;
+    }
     const res = await params.check();
-    if (res.ok) return;
+    if (res.ok) {
+      return;
+    }
     lastError = res.error ?? null;
 
     const now = Date.now();
-    if (now >= deadline) break;
+    if (now >= deadline) {
+      break;
+    }
     if (now >= nextLogAt) {
       const elapsedMs = now - started;
       params.runtime.error?.(
@@ -47,7 +53,9 @@ export async function waitForTransportReady(params: WaitForTransportReadyParams)
     try {
       await sleepWithAbort(pollIntervalMs, params.abortSignal);
     } catch (err) {
-      if (params.abortSignal?.aborted) return;
+      if (params.abortSignal?.aborted) {
+        return;
+      }
       throw err;
     }
   }

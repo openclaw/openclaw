@@ -1,12 +1,17 @@
 import { getMSTeamsRuntime } from "../runtime.js";
+import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import {
   extractInlineImageCandidates,
   inferPlaceholder,
   isDownloadableAttachment,
   isRecord,
   isUrlAllowed,
+  type MSTeamsAttachmentFetchPolicy,
   normalizeContentType,
-  resolveAllowedHosts,
+  resolveMediaSsrfPolicy,
+  resolveAttachmentFetchPolicy,
+  resolveRequestUrl,
+  safeFetchWithPolicy,
 } from "./shared.js";
 import type {
   MSTeamsAccessTokenProvider,
@@ -26,10 +31,14 @@ function resolveDownloadCandidate(att: MSTeamsAttachmentLike): DownloadCandidate
   const name = typeof att.name === "string" ? att.name.trim() : "";
 
   if (contentType === "application/vnd.microsoft.teams.file.download.info") {
-    if (!isRecord(att.content)) return null;
+    if (!isRecord(att.content)) {
+      return null;
+    }
     const downloadUrl =
       typeof att.content.downloadUrl === "string" ? att.content.downloadUrl.trim() : "";
-    if (!downloadUrl) return null;
+    if (!downloadUrl) {
+      return null;
+    }
 
     const fileType = typeof att.content.fileType === "string" ? att.content.fileType.trim() : "";
     const uniqueId = typeof att.content.uniqueId === "string" ? att.content.uniqueId.trim() : "";
@@ -49,7 +58,9 @@ function resolveDownloadCandidate(att: MSTeamsAttachmentLike): DownloadCandidate
   }
 
   const contentUrl = typeof att.contentUrl === "string" ? att.contentUrl.trim() : "";
-  if (!contentUrl) return null;
+  if (!contentUrl) {
+    return null;
+  }
 
   return {
     url: contentUrl,
@@ -75,25 +86,63 @@ function scopeCandidatesForUrl(url: string): string[] {
   }
 }
 
+function isRedirectStatus(status: number): boolean {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
 async function fetchWithAuthFallback(params: {
   url: string;
   tokenProvider?: MSTeamsAccessTokenProvider;
   fetchFn?: typeof fetch;
+  requestInit?: RequestInit;
+  policy: MSTeamsAttachmentFetchPolicy;
 }): Promise<Response> {
-  const fetchFn = params.fetchFn ?? fetch;
-  const firstAttempt = await fetchFn(params.url);
-  if (firstAttempt.ok) return firstAttempt;
-  if (!params.tokenProvider) return firstAttempt;
-  if (firstAttempt.status !== 401 && firstAttempt.status !== 403) return firstAttempt;
+  const firstAttempt = await safeFetchWithPolicy({
+    url: params.url,
+    policy: params.policy,
+    fetchFn: params.fetchFn,
+    requestInit: params.requestInit,
+  });
+  if (firstAttempt.ok) {
+    return firstAttempt;
+  }
+  if (!params.tokenProvider) {
+    return firstAttempt;
+  }
+  if (firstAttempt.status !== 401 && firstAttempt.status !== 403) {
+    return firstAttempt;
+  }
+  if (!isUrlAllowed(params.url, params.policy.authAllowHosts)) {
+    return firstAttempt;
+  }
 
   const scopes = scopeCandidatesForUrl(params.url);
+  const fetchFn = params.fetchFn ?? fetch;
   for (const scope of scopes) {
     try {
       const token = await params.tokenProvider.getAccessToken(scope);
-      const res = await fetchFn(params.url, {
-        headers: { Authorization: `Bearer ${token}` },
+      const authHeaders = new Headers(params.requestInit?.headers);
+      authHeaders.set("Authorization", `Bearer ${token}`);
+      const authAttempt = await safeFetchWithPolicy({
+        url: params.url,
+        policy: params.policy,
+        fetchFn,
+        requestInit: {
+          ...params.requestInit,
+          headers: authHeaders,
+        },
       });
-      if (res.ok) return res;
+      if (authAttempt.ok) {
+        return authAttempt;
+      }
+      if (isRedirectStatus(authAttempt.status)) {
+        // Redirects in guarded fetch mode must propagate to the outer guard.
+        return authAttempt;
+      }
+      if (authAttempt.status !== 401 && authAttempt.status !== 403) {
+        // Preserve scope fallback semantics for non-auth failures.
+        continue;
+      }
     } catch {
       // Try the next scope.
     }
@@ -111,13 +160,21 @@ export async function downloadMSTeamsAttachments(params: {
   maxBytes: number;
   tokenProvider?: MSTeamsAccessTokenProvider;
   allowHosts?: string[];
+  authAllowHosts?: string[];
   fetchFn?: typeof fetch;
   /** When true, embeds original filename in stored path for later extraction. */
   preserveFilenames?: boolean;
 }): Promise<MSTeamsInboundMedia[]> {
   const list = Array.isArray(params.attachments) ? params.attachments : [];
-  if (list.length === 0) return [];
-  const allowHosts = resolveAllowedHosts(params.allowHosts);
+  if (list.length === 0) {
+    return [];
+  }
+  const policy = resolveAttachmentFetchPolicy({
+    allowHosts: params.allowHosts,
+    authAllowHosts: params.authAllowHosts,
+  });
+  const allowHosts = policy.allowHosts;
+  const ssrfPolicy = resolveMediaSsrfPolicy(allowHosts);
 
   // Download ANY downloadable attachment (not just images)
   const downloadable = list.filter(isDownloadableAttachment);
@@ -130,8 +187,12 @@ export async function downloadMSTeamsAttachments(params: {
   const seenUrls = new Set<string>();
   for (const inline of inlineCandidates) {
     if (inline.kind === "url") {
-      if (!isUrlAllowed(inline.url, allowHosts)) continue;
-      if (seenUrls.has(inline.url)) continue;
+      if (!isUrlAllowed(inline.url, allowHosts)) {
+        continue;
+      }
+      if (seenUrls.has(inline.url)) {
+        continue;
+      }
       seenUrls.add(inline.url);
       candidates.push({
         url: inline.url,
@@ -141,12 +202,18 @@ export async function downloadMSTeamsAttachments(params: {
       });
     }
   }
-  if (candidates.length === 0 && inlineCandidates.length === 0) return [];
+  if (candidates.length === 0 && inlineCandidates.length === 0) {
+    return [];
+  }
 
   const out: MSTeamsInboundMedia[] = [];
   for (const inline of inlineCandidates) {
-    if (inline.kind !== "data") continue;
-    if (inline.data.byteLength > params.maxBytes) continue;
+    if (inline.kind !== "data") {
+      continue;
+    }
+    if (inline.data.byteLength > params.maxBytes) {
+      continue;
+    }
     try {
       // Data inline candidates (base64 data URLs) don't have original filenames
       const saved = await getMSTeamsRuntime().channel.media.saveMediaBuffer(
@@ -165,34 +232,28 @@ export async function downloadMSTeamsAttachments(params: {
     }
   }
   for (const candidate of candidates) {
-    if (!isUrlAllowed(candidate.url, allowHosts)) continue;
+    if (!isUrlAllowed(candidate.url, allowHosts)) {
+      continue;
+    }
     try {
-      const res = await fetchWithAuthFallback({
+      const media = await downloadAndStoreMSTeamsRemoteMedia({
         url: candidate.url,
-        tokenProvider: params.tokenProvider,
-        fetchFn: params.fetchFn,
-      });
-      if (!res.ok) continue;
-      const buffer = Buffer.from(await res.arrayBuffer());
-      if (buffer.byteLength > params.maxBytes) continue;
-      const mime = await getMSTeamsRuntime().media.detectMime({
-        buffer,
-        headerMime: res.headers.get("content-type"),
-        filePath: candidate.fileHint ?? candidate.url,
-      });
-      const originalFilename = params.preserveFilenames ? candidate.fileHint : undefined;
-      const saved = await getMSTeamsRuntime().channel.media.saveMediaBuffer(
-        buffer,
-        mime ?? candidate.contentTypeHint,
-        "inbound",
-        params.maxBytes,
-        originalFilename,
-      );
-      out.push({
-        path: saved.path,
-        contentType: saved.contentType,
+        filePathHint: candidate.fileHint ?? candidate.url,
+        maxBytes: params.maxBytes,
+        contentTypeHint: candidate.contentTypeHint,
         placeholder: candidate.placeholder,
+        preserveFilenames: params.preserveFilenames,
+        ssrfPolicy,
+        fetchImpl: (input, init) =>
+          fetchWithAuthFallback({
+            url: resolveRequestUrl(input),
+            tokenProvider: params.tokenProvider,
+            fetchFn: params.fetchFn,
+            requestInit: init,
+            policy,
+          }),
       });
+      out.push(media);
     } catch {
       // Ignore download failures and continue with next candidate.
     }

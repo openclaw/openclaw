@@ -4,6 +4,7 @@ import {
   formatRemainingShort,
 } from "../agents/auth-health.js";
 import {
+  type AuthCredentialReasonCode,
   CLAUDE_CLI_PROFILE_ID,
   CODEX_CLI_PROFILE_ID,
   ensureAuthProfileStore,
@@ -11,15 +12,21 @@ import {
   resolveApiKeyForProfile,
   resolveProfileUnusableUntilForDisplay,
 } from "../agents/auth-profiles.js";
-import type { ClawdbotConfig } from "../config/config.js";
-import { note } from "../terminal/note.js";
+import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { resolvePluginProviders } from "../plugins/providers.runtime.js";
+import { note } from "../terminal/note.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import {
+  buildProviderAuthRecoveryHint,
+  resolveProviderAuthLoginCommand,
+} from "./provider-auth-guidance.js";
 
 export async function maybeRepairAnthropicOAuthProfileId(
-  cfg: ClawdbotConfig,
+  cfg: OpenClawConfig,
   prompter: DoctorPrompter,
-): Promise<ClawdbotConfig> {
+): Promise<OpenClawConfig> {
   const store = ensureAuthProfileStore();
   const repair = repairOAuthProfileIdMismatch({
     cfg,
@@ -27,43 +34,235 @@ export async function maybeRepairAnthropicOAuthProfileId(
     provider: "anthropic",
     legacyProfileId: "anthropic:default",
   });
-  if (!repair.migrated || repair.changes.length === 0) return cfg;
+  if (!repair.migrated || repair.changes.length === 0) {
+    return cfg;
+  }
 
   note(repair.changes.map((c) => `- ${c}`).join("\n"), "Auth profiles");
   const apply = await prompter.confirm({
     message: "Update Anthropic OAuth profile id in config now?",
     initialValue: true,
   });
-  if (!apply) return cfg;
+  if (!apply) {
+    return cfg;
+  }
   return repair.config;
+}
+
+function pruneAuthOrder(
+  order: Record<string, string[]> | undefined,
+  profileIds: Set<string>,
+): { next: Record<string, string[]> | undefined; changed: boolean } {
+  if (!order) {
+    return { next: order, changed: false };
+  }
+  let changed = false;
+  const next: Record<string, string[]> = {};
+  for (const [provider, list] of Object.entries(order)) {
+    const filtered = list.filter((id) => !profileIds.has(id));
+    if (filtered.length !== list.length) {
+      changed = true;
+    }
+    if (filtered.length > 0) {
+      next[provider] = filtered;
+    }
+  }
+  return { next: Object.keys(next).length > 0 ? next : undefined, changed };
+}
+
+function pruneAuthProfiles(
+  cfg: OpenClawConfig,
+  profileIds: Set<string>,
+): { next: OpenClawConfig; changed: boolean } {
+  const profiles = cfg.auth?.profiles;
+  const order = cfg.auth?.order;
+  const nextProfiles = profiles ? { ...profiles } : undefined;
+  let changed = false;
+
+  if (nextProfiles) {
+    for (const id of profileIds) {
+      if (id in nextProfiles) {
+        delete nextProfiles[id];
+        changed = true;
+      }
+    }
+  }
+
+  const prunedOrder = pruneAuthOrder(order, profileIds);
+  if (prunedOrder.changed) {
+    changed = true;
+  }
+
+  if (!changed) {
+    return { next: cfg, changed: false };
+  }
+
+  const nextAuth =
+    nextProfiles || prunedOrder.next
+      ? {
+          ...cfg.auth,
+          profiles: nextProfiles && Object.keys(nextProfiles).length > 0 ? nextProfiles : undefined,
+          order: prunedOrder.next,
+        }
+      : undefined;
+
+  return {
+    next: {
+      ...cfg,
+      auth: nextAuth,
+    },
+    changed: true,
+  };
+}
+
+export async function maybeRemoveDeprecatedCliAuthProfiles(
+  cfg: OpenClawConfig,
+  prompter: DoctorPrompter,
+): Promise<OpenClawConfig> {
+  const store = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
+  const providers = resolvePluginProviders({
+    config: cfg,
+    env: process.env,
+    bundledProviderAllowlistCompat: true,
+    bundledProviderVitestCompat: true,
+  });
+  const deprecatedEntries = providers.flatMap((provider) =>
+    (provider.deprecatedProfileIds ?? [])
+      .filter((profileId) => store.profiles[profileId] || cfg.auth?.profiles?.[profileId])
+      .map((profileId) => ({
+        profileId,
+        providerId: provider.id,
+        providerLabel: provider.label,
+      })),
+  );
+  const deprecated = new Set(deprecatedEntries.map((entry) => entry.profileId));
+
+  if (deprecated.size === 0) {
+    return cfg;
+  }
+
+  const lines = ["Deprecated external CLI auth profiles detected (no longer supported):"];
+  for (const entry of deprecatedEntries) {
+    const authCommand =
+      resolveProviderAuthLoginCommand({
+        provider: entry.providerId,
+        config: cfg,
+        env: process.env,
+      }) ?? formatCliCommand("openclaw configure");
+    lines.push(`- ${entry.profileId} (${entry.providerLabel}): use ${authCommand}`);
+  }
+  note(lines.join("\n"), "Auth profiles");
+
+  const shouldRemove = await prompter.confirmRepair({
+    message: "Remove deprecated CLI auth profiles now?",
+    initialValue: true,
+  });
+  if (!shouldRemove) {
+    return cfg;
+  }
+
+  await updateAuthProfileStoreWithLock({
+    updater: (nextStore) => {
+      let mutated = false;
+      for (const id of deprecated) {
+        if (nextStore.profiles[id]) {
+          delete nextStore.profiles[id];
+          mutated = true;
+        }
+        if (nextStore.usageStats?.[id]) {
+          delete nextStore.usageStats[id];
+          mutated = true;
+        }
+      }
+      if (nextStore.order) {
+        for (const [provider, list] of Object.entries(nextStore.order)) {
+          const filtered = list.filter((id) => !deprecated.has(id));
+          if (filtered.length !== list.length) {
+            mutated = true;
+            if (filtered.length > 0) {
+              nextStore.order[provider] = filtered;
+            } else {
+              delete nextStore.order[provider];
+            }
+          }
+        }
+      }
+      if (nextStore.lastGood) {
+        for (const [provider, profileId] of Object.entries(nextStore.lastGood)) {
+          if (deprecated.has(profileId)) {
+            delete nextStore.lastGood[provider];
+            mutated = true;
+          }
+        }
+      }
+      return mutated;
+    },
+  });
+
+  const pruned = pruneAuthProfiles(cfg, deprecated);
+  if (pruned.changed) {
+    note(
+      Array.from(deprecated.values())
+        .map((id) => `- removed ${id} from config`)
+        .join("\n"),
+      "Doctor changes",
+    );
+  }
+  return pruned.next;
 }
 
 type AuthIssue = {
   profileId: string;
   provider: string;
   status: string;
+  reasonCode?: AuthCredentialReasonCode;
   remainingMs?: number;
 };
 
+export function resolveUnusableProfileHint(params: {
+  kind: "cooldown" | "disabled";
+  reason?: string;
+}): string {
+  if (params.kind === "disabled") {
+    if (params.reason === "billing") {
+      return "Top up credits (provider billing) or switch provider.";
+    }
+    if (params.reason === "auth_permanent" || params.reason === "auth") {
+      return "Refresh or replace credentials, then retry.";
+    }
+  }
+  return "Wait for cooldown or switch provider.";
+}
+
 function formatAuthIssueHint(issue: AuthIssue): string | null {
+  if (issue.reasonCode === "invalid_expires") {
+    return "Invalid token expires metadata. Set a future Unix ms timestamp or remove expires.";
+  }
   if (issue.provider === "anthropic" && issue.profileId === CLAUDE_CLI_PROFILE_ID) {
-    return "Run `claude setup-token` on the gateway host.";
+    return `Deprecated profile. ${buildProviderAuthRecoveryHint({
+      provider: "anthropic",
+    })}`;
   }
   if (issue.provider === "openai-codex" && issue.profileId === CODEX_CLI_PROFILE_ID) {
-    return `Run \`codex login\` (or \`${formatCliCommand("clawdbot configure")}\` → OpenAI Codex OAuth).`;
+    return `Deprecated profile. ${buildProviderAuthRecoveryHint({
+      provider: "openai-codex",
+    })}`;
   }
-  return `Re-auth via \`${formatCliCommand("clawdbot configure")}\` or \`${formatCliCommand("clawdbot onboard")}\`.`;
+  return buildProviderAuthRecoveryHint({
+    provider: issue.provider,
+  }).replace(/^Run /, "Re-auth via ");
 }
 
 function formatAuthIssueLine(issue: AuthIssue): string {
   const remaining =
     issue.remainingMs !== undefined ? ` (${formatRemainingShort(issue.remainingMs)})` : "";
   const hint = formatAuthIssueHint(issue);
-  return `- ${issue.profileId}: ${issue.status}${remaining}${hint ? ` — ${hint}` : ""}`;
+  const reason = issue.reasonCode ? ` [${issue.reasonCode}]` : "";
+  return `- ${issue.profileId}: ${issue.status}${reason}${remaining}${hint ? ` — ${hint}` : ""}`;
 }
 
 export async function noteAuthProfileHealth(params: {
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   prompter: DoctorPrompter;
   allowKeychainPrompt: boolean;
 }): Promise<void> {
@@ -75,16 +274,19 @@ export async function noteAuthProfileHealth(params: {
     const out: string[] = [];
     for (const profileId of Object.keys(store.usageStats ?? {})) {
       const until = resolveProfileUnusableUntilForDisplay(store, profileId);
-      if (!until || now >= until) continue;
+      if (!until || now >= until) {
+        continue;
+      }
       const stats = store.usageStats?.[profileId];
       const remaining = formatRemainingShort(until - now);
-      const kind =
-        typeof stats?.disabledUntil === "number" && now < stats.disabledUntil
-          ? `disabled${stats.disabledReason ? `:${stats.disabledReason}` : ""}`
-          : "cooldown";
-      const hint = kind.startsWith("disabled:billing")
-        ? "Top up credits (provider billing) or switch provider."
-        : "Wait for cooldown or switch provider.";
+      const disabledActive = typeof stats?.disabledUntil === "number" && now < stats.disabledUntil;
+      const kind = disabledActive
+        ? `disabled${stats.disabledReason ? `:${stats.disabledReason}` : ""}`
+        : "cooldown";
+      const hint = resolveUnusableProfileHint({
+        kind: disabledActive ? "disabled" : "cooldown",
+        reason: stats?.disabledReason,
+      });
       out.push(`- ${profileId}: ${kind} (${remaining})${hint ? ` — ${hint}` : ""}`);
     }
     return out;
@@ -110,7 +312,9 @@ export async function noteAuthProfileHealth(params: {
     );
 
   let issues = findIssues();
-  if (issues.length === 0) return;
+  if (issues.length === 0) {
+    return;
+  }
 
   const shouldRefresh = await params.prompter.confirmRepair({
     message: "Refresh expiring OAuth tokens now? (static tokens need re-auth)",
@@ -155,6 +359,7 @@ export async function noteAuthProfileHealth(params: {
             profileId: issue.profileId,
             provider: issue.provider,
             status: issue.status,
+            reasonCode: issue.reasonCode,
             remainingMs: issue.remainingMs,
           }),
         )

@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
   type ChannelId,
@@ -51,14 +51,16 @@ export function resolvePairingChannel(raw: unknown): ChannelId {
 export async function notifyPairingApproved(params: {
   channelId: ChannelId;
   id: string;
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   runtime?: RuntimeEnv;
   /** Extension channels can pass their adapter directly to bypass registry lookup. */
   pairingAdapter?: ChannelPairingAdapter;
 }): Promise<void> {
   // Extensions may provide adapter directly to bypass ESM module isolation
   const adapter = params.pairingAdapter ?? requirePairingAdapter(params.channelId);
-  if (!adapter.notifyApproval) return;
+  if (!adapter.notifyApproval) {
+    return;
+  }
   await adapter.notifyApproval({
     cfg: params.cfg,
     id: params.id,

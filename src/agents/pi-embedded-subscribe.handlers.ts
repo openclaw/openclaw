@@ -42,7 +42,10 @@ export function createEmbeddedPiSessionEventHandler(ctx: EmbeddedPiSubscribeCont
         handleToolExecutionUpdate(ctx, evt as never);
         return;
       case "tool_execution_end":
-        handleToolExecutionEnd(ctx, evt as never);
+        // Async handler - best-effort, non-blocking
+        handleToolExecutionEnd(ctx, evt as never).catch((err) => {
+          ctx.log.debug(`tool_execution_end handler failed: ${String(err)}`);
+        });
         return;
       case "agent_start":
         handleAgentStart(ctx);

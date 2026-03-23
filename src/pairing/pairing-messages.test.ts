@@ -1,9 +1,25 @@
-import { describe, expect, it } from "vitest";
-
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import { buildPairingReply } from "./pairing-messages.js";
 
 describe("buildPairingReply", () => {
+  let envSnapshot: ReturnType<typeof captureEnv>;
+
+  beforeEach(() => {
+    envSnapshot = captureEnv(["OPENCLAW_PROFILE"]);
+    process.env.OPENCLAW_PROFILE = "isolated";
+  });
+
+  afterEach(() => {
+    envSnapshot.restore();
+  });
+
   const cases = [
+    {
+      channel: "telegram",
+      idLine: "Your Telegram user id: 42",
+      code: "QRS678",
+    },
     {
       channel: "discord",
       idLine: "Your Discord user id: 1",
@@ -36,7 +52,11 @@ describe("buildPairingReply", () => {
       const text = buildPairingReply(testCase);
       expect(text).toContain(testCase.idLine);
       expect(text).toContain(`Pairing code: ${testCase.code}`);
-      expect(text).toContain(`clawdbot pairing approve ${testCase.channel} <code>`);
+      // CLI commands should respect OPENCLAW_PROFILE when set (most tests run with isolated profile)
+      const commandRe = new RegExp(
+        `(?:openclaw|openclaw) --profile isolated pairing approve ${testCase.channel} ${testCase.code}`,
+      );
+      expect(text).toMatch(commandRe);
     });
   }
 });

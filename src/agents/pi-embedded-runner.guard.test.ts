@@ -1,7 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
 
@@ -15,9 +14,10 @@ function assistantToolCall(id: string): AgentMessage {
 describe("guardSessionManager integration", () => {
   it("persists synthetic toolResult before subsequent assistant message", () => {
     const sm = guardSessionManager(SessionManager.inMemory());
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
 
-    sm.appendMessage(assistantToolCall("call_1"));
-    sm.appendMessage({
+    appendMessage(assistantToolCall("call_1"));
+    appendMessage({
       role: "assistant",
       content: [{ type: "text", text: "followup" }],
     } as AgentMessage);

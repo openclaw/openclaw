@@ -49,14 +49,30 @@ export function profileToContent(profile: NostrProfile): ProfileContent {
 
   const content: ProfileContent = {};
 
-  if (validated.name !== undefined) content.name = validated.name;
-  if (validated.displayName !== undefined) content.display_name = validated.displayName;
-  if (validated.about !== undefined) content.about = validated.about;
-  if (validated.picture !== undefined) content.picture = validated.picture;
-  if (validated.banner !== undefined) content.banner = validated.banner;
-  if (validated.website !== undefined) content.website = validated.website;
-  if (validated.nip05 !== undefined) content.nip05 = validated.nip05;
-  if (validated.lud16 !== undefined) content.lud16 = validated.lud16;
+  if (validated.name !== undefined) {
+    content.name = validated.name;
+  }
+  if (validated.displayName !== undefined) {
+    content.display_name = validated.displayName;
+  }
+  if (validated.about !== undefined) {
+    content.about = validated.about;
+  }
+  if (validated.picture !== undefined) {
+    content.picture = validated.picture;
+  }
+  if (validated.banner !== undefined) {
+    content.banner = validated.banner;
+  }
+  if (validated.website !== undefined) {
+    content.website = validated.website;
+  }
+  if (validated.nip05 !== undefined) {
+    content.nip05 = validated.nip05;
+  }
+  if (validated.lud16 !== undefined) {
+    content.lud16 = validated.lud16;
+  }
 
   return content;
 }
@@ -68,14 +84,30 @@ export function profileToContent(profile: NostrProfile): ProfileContent {
 export function contentToProfile(content: ProfileContent): NostrProfile {
   const profile: NostrProfile = {};
 
-  if (content.name !== undefined) profile.name = content.name;
-  if (content.display_name !== undefined) profile.displayName = content.display_name;
-  if (content.about !== undefined) profile.about = content.about;
-  if (content.picture !== undefined) profile.picture = content.picture;
-  if (content.banner !== undefined) profile.banner = content.banner;
-  if (content.website !== undefined) profile.website = content.website;
-  if (content.nip05 !== undefined) profile.nip05 = content.nip05;
-  if (content.lud16 !== undefined) profile.lud16 = content.lud16;
+  if (content.name !== undefined) {
+    profile.name = content.name;
+  }
+  if (content.display_name !== undefined) {
+    profile.displayName = content.display_name;
+  }
+  if (content.about !== undefined) {
+    profile.about = content.about;
+  }
+  if (content.picture !== undefined) {
+    profile.picture = content.picture;
+  }
+  if (content.banner !== undefined) {
+    profile.banner = content.banner;
+  }
+  if (content.website !== undefined) {
+    profile.website = content.website;
+  }
+  if (content.nip05 !== undefined) {
+    profile.nip05 = content.nip05;
+  }
+  if (content.lud16 !== undefined) {
+    profile.lud16 = content.lud16;
+  }
 
   return profile;
 }
@@ -95,7 +127,7 @@ export function contentToProfile(content: ProfileContent): NostrProfile {
 export function createProfileEvent(
   sk: Uint8Array,
   profile: NostrProfile,
-  lastPublishedAt?: number
+  lastPublishedAt?: number,
 ): Event {
   const content = profileToContent(profile);
   const contentJson = JSON.stringify(content);
@@ -111,7 +143,7 @@ export function createProfileEvent(
       tags: [],
       created_at: createdAt,
     },
-    sk
+    sk,
   );
 
   return event;
@@ -138,7 +170,7 @@ const RELAY_PUBLISH_TIMEOUT_MS = 5000;
 export async function publishProfileEvent(
   pool: SimplePool,
   relays: string[],
-  event: Event
+  event: Event,
 ): Promise<ProfilePublishResult> {
   const successes: string[] = [];
   const failures: Array<{ relay: string; error: string }> = [];
@@ -150,6 +182,7 @@ export async function publishProfileEvent(
         setTimeout(() => reject(new Error("timeout")), RELAY_PUBLISH_TIMEOUT_MS);
       });
 
+      // oxlint-disable-next-line typescript/no-floating-promises
       await Promise.race([pool.publish([relay], event), timeoutPromise]);
 
       successes.push(relay);
@@ -184,7 +217,7 @@ export async function publishProfile(
   sk: Uint8Array,
   relays: string[],
   profile: NostrProfile,
-  lastPublishedAt?: number
+  lastPublishedAt?: number,
 ): Promise<ProfilePublishResult> {
   const event = createProfileEvent(sk, profile, lastPublishedAt);
   return publishProfileEvent(pool, relays, event);
@@ -220,7 +253,9 @@ export function validateProfile(profile: unknown): {
  */
 export function sanitizeProfileForDisplay(profile: NostrProfile): NostrProfile {
   const escapeHtml = (str: string | undefined): string | undefined => {
-    if (str === undefined) return undefined;
+    if (str === undefined) {
+      return undefined;
+    }
     return str
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")

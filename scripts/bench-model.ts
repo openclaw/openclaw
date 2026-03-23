@@ -13,26 +13,33 @@ type RunResult = {
   usage?: Usage;
 };
 
-const DEFAULT_PROMPT =
-  "Reply with a single word: ok. No punctuation or extra text.";
+const DEFAULT_PROMPT = "Reply with a single word: ok. No punctuation or extra text.";
 const DEFAULT_RUNS = 10;
 
 function parseArg(flag: string): string | undefined {
   const idx = process.argv.indexOf(flag);
-  if (idx === -1) return undefined;
+  if (idx === -1) {
+    return undefined;
+  }
   return process.argv[idx + 1];
 }
 
 function parseRuns(raw: string | undefined): number {
-  if (!raw) return DEFAULT_RUNS;
+  if (!raw) {
+    return DEFAULT_RUNS;
+  }
   const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_RUNS;
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_RUNS;
+  }
   return Math.floor(parsed);
 }
 
 function median(values: number[]): number {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
+  if (values.length === 0) {
+    return 0;
+  }
+  const sorted = [...values].toSorted((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   if (sorted.length % 2 === 0) {
     return Math.round((sorted[mid - 1] + sorted[mid]) / 2);
@@ -42,6 +49,7 @@ function median(values: number[]): number {
 
 async function runModel(opts: {
   label: string;
+  // oxlint-disable-next-line typescript/no-explicit-any
   model: Model<any>;
   apiKey: string;
   runs: number;
@@ -65,9 +73,7 @@ async function runModel(opts: {
     );
     const durationMs = Date.now() - started;
     results.push({ durationMs, usage: res.usage });
-    console.log(
-      `${opts.label} run ${i + 1}/${opts.runs}: ${durationMs}ms`,
-    );
+    console.log(`${opts.label} run ${i + 1}/${opts.runs}: ${durationMs}ms`);
   }
   return results;
 }
@@ -85,10 +91,8 @@ async function main(): Promise<void> {
     throw new Error("Missing MINIMAX_API_KEY in environment.");
   }
 
-  const minimaxBaseUrl =
-    process.env.MINIMAX_BASE_URL?.trim() || "https://api.minimax.io/v1";
-  const minimaxModelId =
-    process.env.MINIMAX_MODEL?.trim() || "MiniMax-M2.1";
+  const minimaxBaseUrl = process.env.MINIMAX_BASE_URL?.trim() || "https://api.minimax.io/v1";
+  const minimaxModelId = process.env.MINIMAX_MODEL?.trim() || "MiniMax-M2.1";
 
   const minimaxModel: Model<"openai-completions"> = {
     id: minimaxModelId,
@@ -102,7 +106,7 @@ async function main(): Promise<void> {
     contextWindow: 200000,
     maxTokens: 8192,
   };
-  const opusModel = getModel("anthropic", "claude-opus-4-5");
+  const opusModel = getModel("anthropic", "claude-opus-4-6");
 
   console.log(`Prompt: ${prompt}`);
   console.log(`Runs: ${runs}`);
@@ -135,9 +139,7 @@ async function main(): Promise<void> {
   console.log("");
   console.log("Summary (ms):");
   for (const row of summary) {
-    console.log(
-      `${row.label.padEnd(7)} median=${row.med} min=${row.min} max=${row.max}`,
-    );
+    console.log(`${row.label.padEnd(7)} median=${row.med} min=${row.min} max=${row.max}`);
   }
 }
 

@@ -5,7 +5,6 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const binDir = path.join(root, "bin");
-const scriptPath = path.join(root, "scripts", "docs-list.js");
 const binPath = path.join(binDir, "docs-list");
 
 fs.mkdirSync(binDir, { recursive: true });

@@ -16,3 +16,9 @@ declare module "node-edge-tts" {
     ttsPromise(text: string, outputPath: string): Promise<void>;
   }
 }
+
+declare module "node-edge-tts/dist/drm.js" {
+  export const CHROMIUM_FULL_VERSION: string;
+  export const TRUSTED_CLIENT_TOKEN: string;
+  export function generateSecMsGecToken(): string;
+}

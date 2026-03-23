@@ -1,12 +1,39 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": [
-    "unicorn",
-    "typescript",
-    "oxc"
-  ],
+  "plugins": ["unicorn", "typescript", "oxc"],
   "categories": {
-    "correctness": "error"
+    "correctness": "error",
+    "perf": "error",
+    "suspicious": "error"
   },
-  "ignorePatterns": ["src/canvas-host/a2ui/a2ui.bundle.js"]
+  "rules": {
+    "curly": "error",
+    "eslint-plugin-unicorn/prefer-array-find": "off",
+    "eslint/no-await-in-loop": "off",
+    "eslint/no-new": "off",
+    "eslint/no-shadow": "off",
+    "eslint/no-unmodified-loop-condition": "off",
+    "oxc/no-accumulating-spread": "off",
+    "oxc/no-async-endpoint-handlers": "off",
+    "oxc/no-map-spread": "off",
+    "typescript/no-explicit-any": "error",
+    "typescript/no-extraneous-class": "off",
+    "typescript/no-unsafe-type-assertion": "off",
+    "unicorn/consistent-function-scoping": "off",
+    "unicorn/require-post-message-target-origin": "off"
+  },
+  "ignorePatterns": [
+    "assets/",
+    "dist/",
+    "docs/_layouts/",
+    "extensions/",
+    "node_modules/",
+    "patches/",
+    "pnpm-lock.yaml",
+    "skills/",
+    "src/auto-reply/reply/export-html/template.js",
+    "src/canvas-host/a2ui/a2ui.bundle.js",
+    "Swabble/",
+    "vendor/"
+  ]
 }

@@ -22,7 +22,9 @@ type OpenAIResponseStreamEvent =
 function extractLastUserText(input: unknown[]): string {
   for (let i = input.length - 1; i >= 0; i -= 1) {
     const item = input[i] as Record<string, unknown> | undefined;
-    if (!item || item.role !== "user") continue;
+    if (!item || item.role !== "user") {
+      continue;
+    }
     const content = item.content;
     if (Array.isArray(content)) {
       const text = content
@@ -36,7 +38,9 @@ function extractLastUserText(input: unknown[]): string {
         .map((c) => c.text)
         .join("\n")
         .trim();
-      if (text) return text;
+      if (text) {
+        return text;
+      }
     }
   }
   return "";
@@ -45,7 +49,9 @@ function extractLastUserText(input: unknown[]): string {
 function extractToolOutput(input: unknown[]): string {
   for (const itemRaw of input) {
     const item = itemRaw as Record<string, unknown> | undefined;
-    if (!item || item.type !== "function_call_output") continue;
+    if (!item || item.type !== "function_call_output") {
+      continue;
+    }
     return typeof item.output === "string" ? item.output : "";
   }
   return "";
@@ -128,19 +134,22 @@ async function* fakeOpenAIResponsesStream(
 }
 
 function decodeBodyText(body: unknown): string {
-  if (!body) return "";
-  if (typeof body === "string") return body;
-  if (body instanceof Uint8Array) return Buffer.from(body).toString("utf8");
-  if (body instanceof ArrayBuffer) return Buffer.from(new Uint8Array(body)).toString("utf8");
+  if (!body) {
+    return "";
+  }
+  if (typeof body === "string") {
+    return body;
+  }
+  if (body instanceof Uint8Array) {
+    return Buffer.from(body).toString("utf8");
+  }
+  if (body instanceof ArrayBuffer) {
+    return Buffer.from(new Uint8Array(body)).toString("utf8");
+  }
   return "";
 }
 
-async function buildOpenAIResponsesSse(params: OpenAIResponsesParams): Promise<Response> {
-  const events: OpenAIResponseStreamEvent[] = [];
-  for await (const event of fakeOpenAIResponsesStream(params)) {
-    events.push(event);
-  }
-
+function buildSseResponse(events: unknown[]): Response {
   const sse = `${events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("")}data: [DONE]\n\n`;
   const encoder = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({
@@ -153,6 +162,46 @@ async function buildOpenAIResponsesSse(params: OpenAIResponsesParams): Promise<R
     status: 200,
     headers: { "content-type": "text/event-stream" },
   });
+}
+
+export function buildOpenAIResponsesTextSse(text: string): Response {
+  return buildSseResponse([
+    {
+      type: "response.output_item.added",
+      item: {
+        type: "message",
+        id: "msg_test_1",
+        role: "assistant",
+        content: [],
+        status: "in_progress",
+      },
+    },
+    {
+      type: "response.output_item.done",
+      item: {
+        type: "message",
+        id: "msg_test_1",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text, annotations: [] }],
+      },
+    },
+    {
+      type: "response.completed",
+      response: {
+        status: "completed",
+        usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 },
+      },
+    },
+  ]);
+}
+
+async function buildOpenAIResponsesSse(params: OpenAIResponsesParams): Promise<Response> {
+  const events: OpenAIResponseStreamEvent[] = [];
+  for await (const event of fakeOpenAIResponsesStream(params)) {
+    events.push(event);
+  }
+  return buildSseResponse(events);
 }
 
 export function installOpenAiResponsesMock(params?: { baseUrl?: string }) {

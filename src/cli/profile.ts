@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-
+import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { isValidProfileName } from "./profile-utils.js";
 
 export type CliProfileParseResult =
@@ -24,7 +24,9 @@ function takeValue(
 }
 
 export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
-  if (argv.length < 2) return { ok: true, profile: null, argv };
+  if (argv.length < 2) {
+    return { ok: true, profile: null, argv };
+  }
 
   const out: string[] = argv.slice(0, 2);
   let profile: string | null = null;
@@ -34,7 +36,9 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
   const args = argv.slice(2);
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
-    if (arg === undefined) continue;
+    if (arg === undefined) {
+      continue;
+    }
 
     if (sawCommand) {
       out.push(arg);
@@ -56,8 +60,12 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
       }
       const next = args[i + 1];
       const { value, consumedNext } = takeValue(arg, next);
-      if (consumedNext) i += 1;
-      if (!value) return { ok: false, error: "--profile requires a value" };
+      if (consumedNext) {
+        i += 1;
+      }
+      if (!value) {
+        return { ok: false, error: "--profile requires a value" };
+      }
       if (!isValidProfileName(value)) {
         return {
           ok: false,
@@ -80,9 +88,13 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
   return { ok: true, profile, argv: out };
 }
 
-function resolveProfileStateDir(profile: string, homedir: () => string): string {
+function resolveProfileStateDir(
+  profile: string,
+  env: Record<string, string | undefined>,
+  homedir: () => string,
+): string {
   const suffix = profile.toLowerCase() === "default" ? "" : `-${profile}`;
-  return path.join(homedir(), `.clawdbot${suffix}`);
+  return path.join(resolveRequiredHomeDir(env as NodeJS.ProcessEnv, homedir), `.openclaw${suffix}`);
 }
 
 export function applyCliProfileEnv(params: {
@@ -93,19 +105,23 @@ export function applyCliProfileEnv(params: {
   const env = params.env ?? (process.env as Record<string, string | undefined>);
   const homedir = params.homedir ?? os.homedir;
   const profile = params.profile.trim();
-  if (!profile) return;
-
-  // Convenience only: fill defaults, never override explicit env values.
-  env.CLAWDBOT_PROFILE = profile;
-
-  const stateDir = env.CLAWDBOT_STATE_DIR?.trim() || resolveProfileStateDir(profile, homedir);
-  if (!env.CLAWDBOT_STATE_DIR?.trim()) env.CLAWDBOT_STATE_DIR = stateDir;
-
-  if (!env.CLAWDBOT_CONFIG_PATH?.trim()) {
-    env.CLAWDBOT_CONFIG_PATH = path.join(stateDir, "clawdbot.json");
+  if (!profile) {
+    return;
   }
 
-  if (profile === "dev" && !env.CLAWDBOT_GATEWAY_PORT?.trim()) {
-    env.CLAWDBOT_GATEWAY_PORT = "19001";
+  // Convenience only: fill defaults, never override explicit env values.
+  env.OPENCLAW_PROFILE = profile;
+
+  const stateDir = env.OPENCLAW_STATE_DIR?.trim() || resolveProfileStateDir(profile, env, homedir);
+  if (!env.OPENCLAW_STATE_DIR?.trim()) {
+    env.OPENCLAW_STATE_DIR = stateDir;
+  }
+
+  if (!env.OPENCLAW_CONFIG_PATH?.trim()) {
+    env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
+  }
+
+  if (profile === "dev" && !env.OPENCLAW_GATEWAY_PORT?.trim()) {
+    env.OPENCLAW_GATEWAY_PORT = "19001";
   }
 }

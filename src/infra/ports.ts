@@ -1,10 +1,11 @@
-import net from "node:net";
 import { danger, info, shouldLogVerbose, warn } from "../globals.js";
 import { logDebug } from "../logger.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import { isErrno } from "./errors.js";
 import { formatPortDiagnostics } from "./ports-format.js";
 import { inspectPortUsage } from "./ports-inspect.js";
+import { tryListenOnPort } from "./ports-probe.js";
 import type { PortListener, PortListenerKind, PortUsage, PortUsageStatus } from "./ports-types.js";
 
 class PortInUseError extends Error {
@@ -19,32 +20,21 @@ class PortInUseError extends Error {
   }
 }
 
-function isErrno(err: unknown): err is NodeJS.ErrnoException {
-  return Boolean(err && typeof err === "object" && "code" in err);
-}
-
 export async function describePortOwner(port: number): Promise<string | undefined> {
   const diagnostics = await inspectPortUsage(port);
-  if (diagnostics.listeners.length === 0) return undefined;
+  if (diagnostics.listeners.length === 0) {
+    return undefined;
+  }
   return formatPortDiagnostics(diagnostics).join("\n");
 }
 
 export async function ensurePortAvailable(port: number): Promise<void> {
   // Detect EADDRINUSE early with a friendly message.
   try {
-    await new Promise<void>((resolve, reject) => {
-      const tester = net
-        .createServer()
-        .once("error", (err) => reject(err))
-        .once("listening", () => {
-          tester.close(() => resolve());
-        })
-        .listen(port);
-    });
+    await tryListenOnPort({ port });
   } catch (err) {
     if (isErrno(err) && err.code === "EADDRINUSE") {
-      const details = await describePortOwner(port);
-      throw new PortInUseError(port, details);
+      throw new PortInUseError(port);
     }
     throw err;
   }
@@ -58,15 +48,18 @@ export async function handlePortError(
 ): Promise<never> {
   // Uniform messaging for EADDRINUSE with optional owner details.
   if (err instanceof PortInUseError || (isErrno(err) && err.code === "EADDRINUSE")) {
-    const details = err instanceof PortInUseError ? err.details : await describePortOwner(port);
+    const details =
+      err instanceof PortInUseError
+        ? (err.details ?? (await describePortOwner(port)))
+        : await describePortOwner(port);
     runtime.error(danger(`${context} failed: port ${port} is already in use.`));
     if (details) {
       runtime.error(info("Port listener details:"));
       runtime.error(details);
-      if (/clawdbot|src\/index\.ts|dist\/index\.js/.test(details)) {
+      if (/openclaw|src\/index\.ts|dist\/index\.js/.test(details)) {
         runtime.error(
           warn(
-            "It looks like another clawdbot instance is already running. Stop it or pick a different port.",
+            "It looks like another OpenClaw instance is already running. Stop it or pick a different port.",
           ),
         );
       }
@@ -80,10 +73,15 @@ export async function handlePortError(
   if (shouldLogVerbose()) {
     const stdout = (err as { stdout?: string })?.stdout;
     const stderr = (err as { stderr?: string })?.stderr;
-    if (stdout?.trim()) logDebug(`stdout: ${stdout.trim()}`);
-    if (stderr?.trim()) logDebug(`stderr: ${stderr.trim()}`);
+    if (stdout?.trim()) {
+      logDebug(`stdout: ${stdout.trim()}`);
+    }
+    if (stderr?.trim()) {
+      logDebug(`stderr: ${stderr.trim()}`);
+    }
   }
-  return runtime.exit(1);
+  runtime.exit(1);
+  throw new Error("unreachable");
 }
 
 export { PortInUseError };

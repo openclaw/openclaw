@@ -1,30 +1,31 @@
 ---
-summary: "Integrated browser control server + action commands"
+summary: "Integrated browser control service + action commands"
 read_when:
   - Adding agent-controlled browser automation
-  - Debugging why clawd is interfering with your own Chrome
+  - Debugging why openclaw is interfering with your own Chrome
   - Implementing browser settings + lifecycle in the macOS app
+title: "Browser (OpenClaw-managed)"
 ---
 
-# Browser (clawd-managed)
+# Browser (openclaw-managed)
 
-Clawdbot can run a **dedicated Chrome/Brave/Edge/Chromium profile** that the agent controls.
+OpenClaw can run a **dedicated Chrome/Brave/Edge/Chromium profile** that the agent controls.
 It is isolated from your personal browser and is managed through a small local
-control server.
+control service inside the Gateway (loopback only).
 
 Beginner view:
+
 - Think of it as a **separate, agent-only browser**.
-- The `clawd` profile does **not** touch your personal browser profile.
+- The `openclaw` profile does **not** touch your personal browser profile.
 - The agent can **open tabs, read pages, click, and type** in a safe lane.
-- The default `chrome` profile uses the **system default Chromium browser** via the
-  extension relay; switch to `clawd` for the isolated managed browser.
+- The built-in `user` profile attaches to your real signed-in Chrome session via Chrome MCP.
 
 ## What you get
 
-- A separate browser profile named **clawd** (orange accent by default).
+- A separate browser profile named **openclaw** (orange accent by default).
 - Deterministic tab control (list/open/focus/close).
 - Agent actions (click/type/drag/select), snapshots, screenshots, PDFs.
-- Optional multi-profile support (`clawd`, `work`, `remote`, ...).
+- Optional multi-profile support (`openclaw`, `work`, `remote`, ...).
 
 This browser is **not** your daily driver. It is a safe, isolated surface for
 agent automation and verification.
@@ -32,73 +33,106 @@ agent automation and verification.
 ## Quick start
 
 ```bash
-clawdbot browser --browser-profile clawd status
-clawdbot browser --browser-profile clawd start
-clawdbot browser --browser-profile clawd open https://example.com
-clawdbot browser --browser-profile clawd snapshot
+openclaw browser --browser-profile openclaw status
+openclaw browser --browser-profile openclaw start
+openclaw browser --browser-profile openclaw open https://example.com
+openclaw browser --browser-profile openclaw snapshot
 ```
 
 If you get “Browser disabled”, enable it in config (see below) and restart the
 Gateway.
 
-## Profiles: `clawd` vs `chrome`
+## Profiles: `openclaw` vs `user`
 
-- `clawd`: managed, isolated browser (no extension required).
-- `chrome`: extension relay to your **system browser** (requires the Clawdbot
-  extension to be attached to a tab).
+- `openclaw`: managed, isolated browser (no extension required).
+- `user`: built-in Chrome MCP attach profile for your **real signed-in Chrome**
+  session.
 
-Set `browser.defaultProfile: "clawd"` if you want managed mode by default.
+For agent browser tool calls:
+
+- Default: use the isolated `openclaw` browser.
+- Prefer `profile="user"` when existing logged-in sessions matter and the user
+  is at the computer to click/approve any attach prompt.
+- `profile` is the explicit override when you want a specific browser mode.
+
+Set `browser.defaultProfile: "openclaw"` if you want managed mode by default.
 
 ## Configuration
 
-Browser settings live in `~/.clawdbot/clawdbot.json`.
+Browser settings live in `~/.openclaw/openclaw.json`.
 
 ```json5
 {
   browser: {
-    enabled: true,                    // default: true
-    controlUrl: "http://127.0.0.1:18791",
-    cdpUrl: "http://127.0.0.1:18792", // defaults to controlUrl + 1
-    remoteCdpTimeoutMs: 1500,         // remote CDP HTTP timeout (ms)
+    enabled: true, // default: true
+    ssrfPolicy: {
+      dangerouslyAllowPrivateNetwork: true, // default trusted-network mode
+      // allowPrivateNetwork: true, // legacy alias
+      // hostnameAllowlist: ["*.example.com", "example.com"],
+      // allowedHostnames: ["localhost"],
+    },
+    // cdpUrl: "http://127.0.0.1:18792", // legacy single-profile override
+    remoteCdpTimeoutMs: 1500, // remote CDP HTTP timeout (ms)
     remoteCdpHandshakeTimeoutMs: 3000, // remote CDP WebSocket handshake timeout (ms)
-    defaultProfile: "chrome",
+    defaultProfile: "openclaw",
     color: "#FF4500",
     headless: false,
     noSandbox: false,
     attachOnly: false,
     executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
     profiles: {
-      clawd: { cdpPort: 18800, color: "#FF4500" },
+      openclaw: { cdpPort: 18800, color: "#FF4500" },
       work: { cdpPort: 18801, color: "#0066CC" },
-      remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" }
-    }
-  }
+      user: {
+        driver: "existing-session",
+        attachOnly: true,
+        color: "#00AA00",
+      },
+      brave: {
+        driver: "existing-session",
+        attachOnly: true,
+        userDataDir: "~/Library/Application Support/BraveSoftware/Brave-Browser",
+        color: "#FB542B",
+      },
+      remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" },
+    },
+  },
 }
 ```
 
 Notes:
-- `controlUrl` defaults to `http://127.0.0.1:18791`.
-- If you override the Gateway port (`gateway.port` or `CLAWDBOT_GATEWAY_PORT`),
-  the default browser ports shift to stay in the same “family” (control = gateway + 2).
-- `cdpUrl` defaults to `controlUrl + 1` when unset.
+
+- The browser control service binds to loopback on a port derived from `gateway.port`
+  (default: `18791`, which is gateway + 2).
+- If you override the Gateway port (`gateway.port` or `OPENCLAW_GATEWAY_PORT`),
+  the derived browser ports shift to stay in the same “family”.
+- `cdpUrl` defaults to the managed local CDP port when unset.
 - `remoteCdpTimeoutMs` applies to remote (non-loopback) CDP reachability checks.
 - `remoteCdpHandshakeTimeoutMs` applies to remote CDP WebSocket reachability checks.
+- Browser navigation/open-tab is SSRF-guarded before navigation and best-effort re-checked on final `http(s)` URL after navigation.
+- In strict SSRF mode, remote CDP endpoint discovery/probes (`cdpUrl`, including `/json/version` lookups) are checked too.
+- `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` defaults to `true` (trusted-network model). Set it to `false` for strict public-only browsing.
+- `browser.ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias for compatibility.
 - `attachOnly: true` means “never launch a local browser; only attach if it is already running.”
 - `color` + per-profile `color` tint the browser UI so you can see which profile is active.
-- Default profile is `chrome` (extension relay). Use `defaultProfile: "clawd"` for the managed browser.
+- Default profile is `openclaw` (OpenClaw-managed standalone browser). Use `defaultProfile: "user"` to opt into the signed-in user browser.
 - Auto-detect order: system default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
-- Local `clawd` profiles auto-assign `cdpPort`/`cdpUrl` — set those only for remote CDP.
+- Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl` — set those only for remote CDP.
+- `driver: "existing-session"` uses Chrome DevTools MCP instead of raw CDP. Do
+  not set `cdpUrl` for that driver.
+- Set `browser.profiles.<name>.userDataDir` when an existing-session profile
+  should attach to a non-default Chromium user profile such as Brave or Edge.
 
 ## Use Brave (or another Chromium-based browser)
 
 If your **system default** browser is Chromium-based (Chrome/Brave/Edge/etc),
-Clawdbot uses it automatically. Set `browser.executablePath` to override
+OpenClaw uses it automatically. Set `browser.executablePath` to override
 auto-detection:
 
 CLI example:
 
 ```bash
-clawdbot config set browser.executablePath "/usr/bin/google-chrome"
+openclaw config set browser.executablePath "/usr/bin/google-chrome"
 ```
 
 ```json5
@@ -126,66 +160,44 @@ clawdbot config set browser.executablePath "/usr/bin/google-chrome"
 
 ## Local vs remote control
 
-- **Local control (default):** `controlUrl` is loopback (`127.0.0.1`/`localhost`).
-  The Gateway starts the control server and can launch a local browser.
-- **Remote control:** `controlUrl` is non-loopback. The Gateway **does not** start
-  a local server; it assumes you are pointing at an existing server elsewhere.
+- **Local control (default):** the Gateway starts the loopback control service and can launch a local browser.
+- **Remote control (node host):** run a node host on the machine that has the browser; the Gateway proxies browser actions to it.
 - **Remote CDP:** set `browser.profiles.<name>.cdpUrl` (or `browser.cdpUrl`) to
-  attach to a remote Chromium-based browser. In this case, Clawdbot will not launch a local browser.
-
-## Remote browser (control server)
-
-You can run the **browser control server** on another machine and point your
-Gateway at it with a remote `controlUrl`. This lets the agent drive a browser
-outside the host (lab box, VM, remote desktop, etc.).
-
-Key points:
-- The **control server** speaks to Chromium-based browsers (Chrome/Brave/Edge/Chromium) via **CDP**.
-- The **Gateway** only needs the HTTP control URL.
-- Profiles are resolved on the **control server** side.
-
-Example:
-```json5
-{
-  browser: {
-    enabled: true,
-    controlUrl: "http://10.0.0.42:18791",
-    defaultProfile: "work"
-  }
-}
-```
-
-Use `profiles.<name>.cdpUrl` for **remote CDP** if you want the Gateway to talk
-directly to a Chromium-based browser instance without a remote control server.
+  attach to a remote Chromium-based browser. In this case, OpenClaw will not launch a local browser.
 
 Remote CDP URLs can include auth:
+
 - Query tokens (e.g., `https://provider.example?token=<token>`)
 - HTTP Basic auth (e.g., `https://user:pass@provider.example`)
 
-Clawdbot preserves the auth when calling `/json/*` endpoints and when connecting
+OpenClaw preserves the auth when calling `/json/*` endpoints and when connecting
 to the CDP WebSocket. Prefer environment variables or secrets managers for
 tokens instead of committing them to config files.
 
-### Node browser proxy (zero-config default)
+## Node browser proxy (zero-config default)
 
-If you run a **node host** on the machine that has your browser, Clawdbot can
-auto-route browser tool calls to that node without any custom `controlUrl`
-setup. This is the default path for remote gateways.
+If you run a **node host** on the machine that has your browser, OpenClaw can
+auto-route browser tool calls to that node without any extra browser config.
+This is the default path for remote gateways.
 
 Notes:
+
 - The node host exposes its local browser control server via a **proxy command**.
 - Profiles come from the node’s own `browser.profiles` config (same as local).
+- `nodeHost.browserProxy.allowProfiles` is optional. Leave it empty for the legacy/default behavior: all configured profiles remain reachable through the proxy, including profile create/delete routes.
+- If you set `nodeHost.browserProxy.allowProfiles`, OpenClaw treats it as a least-privilege boundary: only allowlisted profiles can be targeted, and persistent profile create/delete routes are blocked on the proxy surface.
 - Disable if you don’t want it:
   - On the node: `nodeHost.browserProxy.enabled=false`
   - On the gateway: `gateway.nodes.browser.mode="off"`
 
-### Browserless (hosted remote CDP)
+## Browserless (hosted remote CDP)
 
 [Browserless](https://browserless.io) is a hosted Chromium service that exposes
-CDP endpoints over HTTPS. You can point a Clawdbot browser profile at a
+CDP endpoints over HTTPS. You can point an OpenClaw browser profile at a
 Browserless region endpoint and authenticate with your API key.
 
 Example:
+
 ```json5
 {
   browser: {
@@ -196,172 +208,200 @@ Example:
     profiles: {
       browserless: {
         cdpUrl: "https://production-sfo.browserless.io?token=<BROWSERLESS_API_KEY>",
-        color: "#00AA00"
-      }
-    }
-  }
+        color: "#00AA00",
+      },
+    },
+  },
 }
 ```
 
 Notes:
+
 - Replace `<BROWSERLESS_API_KEY>` with your real Browserless token.
 - Choose the region endpoint that matches your Browserless account (see their docs).
 
-### Running the control server on the browser machine
+## Direct WebSocket CDP providers
 
-Run a standalone browser control server (recommended when your Gateway is remote):
+Some hosted browser services expose a **direct WebSocket** endpoint rather than
+the standard HTTP-based CDP discovery (`/json/version`). OpenClaw supports both:
 
-```bash
-# on the machine that runs Chrome/Brave/Edge
-clawdbot browser serve --bind <browser-host> --port 18791 --token <token>
-```
+- **HTTP(S) endpoints** (e.g. Browserless) — OpenClaw calls `/json/version` to
+  discover the WebSocket debugger URL, then connects.
+- **WebSocket endpoints** (`ws://` / `wss://`) — OpenClaw connects directly,
+  skipping `/json/version`. Use this for services like
+  [Browserbase](https://www.browserbase.com) or any provider that hands you a
+  WebSocket URL.
 
-Then point your Gateway at it:
+### Browserbase
 
-```json5
-{
-  browser: {
-    enabled: true,
-    controlUrl: "http://<browser-host>:18791",
-
-    // Option A (recommended): keep token in env on the Gateway
-    // (avoid writing secrets into config files)
-    // controlToken: "<token>"
-  }
-}
-```
-
-And set the auth token in the Gateway environment:
-
-```bash
-export CLAWDBOT_BROWSER_CONTROL_TOKEN="<token>"
-```
-
-Option B: store the token in the Gateway config instead (same shared token):
+[Browserbase](https://www.browserbase.com) is a cloud platform for running
+headless browsers with built-in CAPTCHA solving, stealth mode, and residential
+proxies.
 
 ```json5
 {
   browser: {
     enabled: true,
-    controlUrl: "http://<browser-host>:18791",
-    controlToken: "<token>"
-  }
+    defaultProfile: "browserbase",
+    remoteCdpTimeoutMs: 3000,
+    remoteCdpHandshakeTimeoutMs: 5000,
+    profiles: {
+      browserbase: {
+        cdpUrl: "wss://connect.browserbase.com?apiKey=<BROWSERBASE_API_KEY>",
+        color: "#F97316",
+      },
+    },
+  },
 }
 ```
+
+Notes:
+
+- [Sign up](https://www.browserbase.com/sign-up) and copy your **API Key**
+  from the [Overview dashboard](https://www.browserbase.com/overview).
+- Replace `<BROWSERBASE_API_KEY>` with your real Browserbase API key.
+- Browserbase auto-creates a browser session on WebSocket connect, so no
+  manual session creation step is needed.
+- The free tier allows one concurrent session and one browser hour per month.
+  See [pricing](https://www.browserbase.com/pricing) for paid plan limits.
+- See the [Browserbase docs](https://docs.browserbase.com) for full API
+  reference, SDK guides, and integration examples.
 
 ## Security
 
-This section covers the **browser control server** (`browser.controlUrl`) used for agent browser automation.
-
 Key ideas:
-- Treat the browser control server like an admin API: **private network only**.
-- Use **token auth** always when the server is reachable off-machine.
-- Prefer **Tailnet-only** connectivity over LAN exposure.
 
-### Tokens (what is shared with what?)
+- Browser control is loopback-only; access flows through the Gateway’s auth or node pairing.
+- If browser control is enabled and no auth is configured, OpenClaw auto-generates `gateway.auth.token` on startup and persists it to config.
+- Keep the Gateway and any node hosts on a private network (Tailscale); avoid public exposure.
+- Treat remote CDP URLs/tokens as secrets; prefer env vars or a secrets manager.
 
-- `browser.controlToken` / `CLAWDBOT_BROWSER_CONTROL_TOKEN` is **only** for authenticating browser control HTTP requests to `browser.controlUrl`.
-- It is **not** the Gateway token (`gateway.auth.token`) and **not** a node pairing token.
-- You *can* reuse the same string value, but it’s better to keep them separate to reduce blast radius.
+Remote CDP tips:
 
-### Binding (don’t expose to your LAN by accident)
-
-Recommended:
-- Keep `clawdbot browser serve` bound to loopback (`127.0.0.1`) and publish it via Tailscale.
-- Or bind to a Tailnet IP only (never `0.0.0.0`) and require a token.
-
-Avoid:
-- `--bind 0.0.0.0` (LAN-visible). Even with token auth, traffic is plain HTTP unless you also add TLS.
-
-### TLS / HTTPS (recommended approach: terminate in front)
-
-Best practice here: keep `clawdbot browser serve` on HTTP and terminate TLS in front.
-
-If you’re already using Tailscale, you have two good options:
-
-1) **Tailnet-only, still HTTP** (transport is encrypted by Tailscale):
-- Keep `controlUrl` as `http://…` but ensure it’s only reachable over your tailnet.
-
-2) **Serve HTTPS via Tailscale** (nice UX: `https://…` URL):
-
-```bash
-# on the browser machine
-clawdbot browser serve --bind 127.0.0.1 --port 18791 --token <token>
-tailscale serve https / http://127.0.0.1:18791
-```
-
-Then set your Gateway config `browser.controlUrl` to the HTTPS URL (MagicDNS/ts.net) and keep using the same token.
-
-Notes:
-- Do **not** use Tailscale Funnel for this unless you explicitly want to make the endpoint public.
-- For Tailnet setup/background, see [Gateway web surfaces](/web/index) and the [Gateway CLI](/cli/gateway).
+- Prefer encrypted endpoints (HTTPS or WSS) and short-lived tokens where possible.
+- Avoid embedding long-lived tokens directly in config files.
 
 ## Profiles (multi-browser)
 
-Clawdbot supports multiple named profiles (routing configs). Profiles can be:
-- **clawd-managed**: a dedicated Chromium-based browser instance with its own user data directory + CDP port
+OpenClaw supports multiple named profiles (routing configs). Profiles can be:
+
+- **openclaw-managed**: a dedicated Chromium-based browser instance with its own user data directory + CDP port
 - **remote**: an explicit CDP URL (Chromium-based browser running elsewhere)
-- **extension relay**: your existing Chrome tab(s) via the local relay + Chrome extension
+- **existing session**: your existing Chrome profile via Chrome DevTools MCP auto-connect
 
 Defaults:
-- The `clawd` profile is auto-created if missing.
-- The `chrome` profile is built-in for the Chrome extension relay (points at `http://127.0.0.1:18792` by default).
+
+- The `openclaw` profile is auto-created if missing.
+- The `user` profile is built-in for Chrome MCP existing-session attach.
+- Existing-session profiles are opt-in beyond `user`; create them with `--driver existing-session`.
 - Local CDP ports allocate from **18800–18899** by default.
 - Deleting a profile moves its local data directory to Trash.
 
 All control endpoints accept `?profile=<name>`; the CLI uses `--browser-profile`.
 
-## Chrome extension relay (use your existing Chrome)
+## Existing-session via Chrome DevTools MCP
 
-Clawdbot can also drive **your existing Chrome tabs** (no separate “clawd” Chrome instance) via a local CDP relay + a Chrome extension.
+OpenClaw can also attach to a running Chromium-based browser profile through the
+official Chrome DevTools MCP server. This reuses the tabs and login state
+already open in that browser profile.
 
-Full guide: [Chrome extension](/tools/chrome-extension)
+Official background and setup references:
 
-Flow:
-- You run a **browser control server** (Gateway on the same machine, or `clawdbot browser serve`).
-- A local **relay server** listens at a loopback `cdpUrl` (default: `http://127.0.0.1:18792`).
-- You click the **Clawdbot Browser Relay** extension icon on a tab to attach (it does not auto-attach).
-- The agent controls that tab via the normal `browser` tool, by selecting the right profile.
+- [Chrome for Developers: Use Chrome DevTools MCP with your browser session](https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session)
+- [Chrome DevTools MCP README](https://github.com/ChromeDevTools/chrome-devtools-mcp)
 
-If the Gateway runs on the same machine as Chrome (default setup), you usually **do not** need `clawdbot browser serve`.
-Use `browser serve` only when the Gateway runs elsewhere (remote mode).
+Built-in profile:
 
-### Sandboxed sessions
+- `user`
 
-If the agent session is sandboxed, the `browser` tool may default to `target="sandbox"` (sandbox browser).
-Chrome extension relay takeover requires host browser control, so either:
-- run the session unsandboxed, or
-- set `agents.defaults.sandbox.browser.allowHostControl: true` and use `target="host"` when calling the tool.
+Optional: create your own custom existing-session profile if you want a
+different name, color, or browser data directory.
 
-### Setup
+Default behavior:
 
-1) Load the extension (dev/unpacked):
+- The built-in `user` profile uses Chrome MCP auto-connect, which targets the
+  default local Google Chrome profile.
 
-```bash
-clawdbot browser extension install
+Use `userDataDir` for Brave, Edge, Chromium, or a non-default Chrome profile:
+
+```json5
+{
+  browser: {
+    profiles: {
+      brave: {
+        driver: "existing-session",
+        attachOnly: true,
+        userDataDir: "~/Library/Application Support/BraveSoftware/Brave-Browser",
+        color: "#FB542B",
+      },
+    },
+  },
+}
 ```
 
-- Chrome → `chrome://extensions` → enable “Developer mode”
-- “Load unpacked” → select the directory printed by `clawdbot browser extension path`
-- Pin the extension, then click it on the tab you want to control (badge shows `ON`).
+Then in the matching browser:
 
-2) Use it:
-- CLI: `clawdbot browser --browser-profile chrome tabs`
-- Agent tool: `browser` with `profile="chrome"`
+1. Open that browser's inspect page for remote debugging.
+2. Enable remote debugging.
+3. Keep the browser running and approve the connection prompt when OpenClaw attaches.
 
-Optional: if you want a different name or relay port, create your own profile:
+Common inspect pages:
+
+- Chrome: `chrome://inspect/#remote-debugging`
+- Brave: `brave://inspect/#remote-debugging`
+- Edge: `edge://inspect/#remote-debugging`
+
+Live attach smoke test:
 
 ```bash
-clawdbot browser create-profile \
-  --name my-chrome \
-  --driver extension \
-  --cdp-url http://127.0.0.1:18792 \
-  --color "#00AA00"
+openclaw browser --browser-profile user start
+openclaw browser --browser-profile user status
+openclaw browser --browser-profile user tabs
+openclaw browser --browser-profile user snapshot --format ai
 ```
+
+What success looks like:
+
+- `status` shows `driver: existing-session`
+- `status` shows `transport: chrome-mcp`
+- `status` shows `running: true`
+- `tabs` lists your already-open browser tabs
+- `snapshot` returns refs from the selected live tab
+
+What to check if attach does not work:
+
+- the target Chromium-based browser is version `144+`
+- remote debugging is enabled in that browser's inspect page
+- the browser showed and you accepted the attach consent prompt
+- `openclaw doctor` migrates old extension-based browser config and checks that
+  Chrome is installed locally for default auto-connect profiles, but it cannot
+  enable browser-side remote debugging for you
+
+Agent use:
+
+- Use `profile="user"` when you need the user’s logged-in browser state.
+- If you use a custom existing-session profile, pass that explicit profile name.
+- Only choose this mode when the user is at the computer to approve the attach
+  prompt.
+- the Gateway or node host can spawn `npx chrome-devtools-mcp@latest --autoConnect`
 
 Notes:
-- This mode relies on Playwright-on-CDP for most operations (screenshots/snapshots/actions).
-- Detach by clicking the extension icon again.
+
+- This path is higher-risk than the isolated `openclaw` profile because it can
+  act inside your signed-in browser session.
+- OpenClaw does not launch the browser for this driver; it attaches to an
+  existing session only.
+- OpenClaw uses the official Chrome DevTools MCP `--autoConnect` flow here. If
+  `userDataDir` is set, OpenClaw passes it through to target that explicit
+  Chromium user data directory.
+- Existing-session screenshots support page captures and `--ref` element
+  captures from snapshots, but not CSS `--element` selectors.
+- Existing-session `wait --url` supports exact, substring, and glob patterns
+  like other browser drivers. `wait --load networkidle` is not supported yet.
+- Some features still require the managed browser path, such as PDF export and
+  download interception.
+- Existing-session is host-local. If Chrome lives on a different machine or a
+  different network namespace, use remote CDP or a node host instead.
 
 ## Isolation guarantees
 
@@ -371,7 +411,8 @@ Notes:
 
 ## Browser selection
 
-When launching locally, Clawdbot picks the first available:
+When launching locally, OpenClaw picks the first available:
+
 1. Chrome
 2. Brave
 3. Edge
@@ -381,14 +422,14 @@ When launching locally, Clawdbot picks the first available:
 You can override with `browser.executablePath`.
 
 Platforms:
+
 - macOS: checks `/Applications` and `~/Applications`.
 - Linux: looks for `google-chrome`, `brave`, `microsoft-edge`, `chromium`, etc.
 - Windows: checks common install locations.
 
 ## Control API (optional)
 
-If you want to integrate directly, the browser control server exposes a small
-HTTP API:
+For local integrations only, the Gateway exposes a small loopback HTTP API:
 
 - Status/start/stop: `GET /`, `POST /start`, `POST /stop`
 - Tabs: `GET /tabs`, `POST /tabs/open`, `POST /tabs/focus`, `DELETE /tabs/:targetId`
@@ -405,20 +446,39 @@ HTTP API:
 
 All endpoints accept `?profile=<name>`.
 
+If gateway auth is configured, browser HTTP routes require auth too:
+
+- `Authorization: Bearer <gateway token>`
+- `x-openclaw-password: <gateway password>` or HTTP Basic auth with that password
+
 ### Playwright requirement
 
 Some features (navigate/act/AI snapshot/role snapshot, element screenshots, PDF) require
 Playwright. If Playwright isn’t installed, those endpoints return a clear 501
-error. ARIA snapshots and basic screenshots still work for clawd-managed Chrome.
-For the Chrome extension relay driver, ARIA snapshots and screenshots require Playwright.
+error. ARIA snapshots and basic screenshots still work for openclaw-managed Chrome.
 
 If you see `Playwright is not available in this gateway build`, install the full
 Playwright package (not `playwright-core`) and restart the gateway, or reinstall
-Clawdbot with browser support.
+OpenClaw with browser support.
+
+#### Docker Playwright install
+
+If your Gateway runs in Docker, avoid `npx playwright` (npm override conflicts).
+Use the bundled CLI instead:
+
+```bash
+docker compose run --rm openclaw-cli \
+  node /app/node_modules/playwright-core/cli.js install chromium
+```
+
+To persist browser downloads, set `PLAYWRIGHT_BROWSERS_PATH` (for example,
+`/home/node/.cache/ms-playwright`) and make sure `/home/node` is persisted via
+`OPENCLAW_HOME_VOLUME` or a bind mount. See [Docker](/install/docker).
 
 ## How it works (internal)
 
 High-level flow:
+
 - A small **control server** accepts HTTP requests.
 - It connects to Chromium-based browsers (Chrome/Brave/Edge/Chromium) via **CDP**.
 - For advanced actions (click/type/snapshot/PDF), it uses **Playwright** on top
@@ -434,86 +494,96 @@ All commands accept `--browser-profile <name>` to target a specific profile.
 All commands also accept `--json` for machine-readable output (stable payloads).
 
 Basics:
-- `clawdbot browser status`
-- `clawdbot browser start`
-- `clawdbot browser stop`
-- `clawdbot browser tabs`
-- `clawdbot browser tab`
-- `clawdbot browser tab new`
-- `clawdbot browser tab select 2`
-- `clawdbot browser tab close 2`
-- `clawdbot browser open https://example.com`
-- `clawdbot browser focus abcd1234`
-- `clawdbot browser close abcd1234`
+
+- `openclaw browser status`
+- `openclaw browser start`
+- `openclaw browser stop`
+- `openclaw browser tabs`
+- `openclaw browser tab`
+- `openclaw browser tab new`
+- `openclaw browser tab select 2`
+- `openclaw browser tab close 2`
+- `openclaw browser open https://example.com`
+- `openclaw browser focus abcd1234`
+- `openclaw browser close abcd1234`
 
 Inspection:
-- `clawdbot browser screenshot`
-- `clawdbot browser screenshot --full-page`
-- `clawdbot browser screenshot --ref 12`
-- `clawdbot browser screenshot --ref e12`
-- `clawdbot browser snapshot`
-- `clawdbot browser snapshot --format aria --limit 200`
-- `clawdbot browser snapshot --interactive --compact --depth 6`
-- `clawdbot browser snapshot --efficient`
-- `clawdbot browser snapshot --labels`
-- `clawdbot browser snapshot --selector "#main" --interactive`
-- `clawdbot browser snapshot --frame "iframe#main" --interactive`
-- `clawdbot browser console --level error`
-- `clawdbot browser errors --clear`
-- `clawdbot browser requests --filter api --clear`
-- `clawdbot browser pdf`
-- `clawdbot browser responsebody "**/api" --max-chars 5000`
+
+- `openclaw browser screenshot`
+- `openclaw browser screenshot --full-page`
+- `openclaw browser screenshot --ref 12`
+- `openclaw browser screenshot --ref e12`
+- `openclaw browser snapshot`
+- `openclaw browser snapshot --format aria --limit 200`
+- `openclaw browser snapshot --interactive --compact --depth 6`
+- `openclaw browser snapshot --efficient`
+- `openclaw browser snapshot --labels`
+- `openclaw browser snapshot --selector "#main" --interactive`
+- `openclaw browser snapshot --frame "iframe#main" --interactive`
+- `openclaw browser console --level error`
+- `openclaw browser errors --clear`
+- `openclaw browser requests --filter api --clear`
+- `openclaw browser pdf`
+- `openclaw browser responsebody "**/api" --max-chars 5000`
 
 Actions:
-- `clawdbot browser navigate https://example.com`
-- `clawdbot browser resize 1280 720`
-- `clawdbot browser click 12 --double`
-- `clawdbot browser click e12 --double`
-- `clawdbot browser type 23 "hello" --submit`
-- `clawdbot browser press Enter`
-- `clawdbot browser hover 44`
-- `clawdbot browser scrollintoview e12`
-- `clawdbot browser drag 10 11`
-- `clawdbot browser select 9 OptionA OptionB`
-- `clawdbot browser download e12 /tmp/report.pdf`
-- `clawdbot browser waitfordownload /tmp/report.pdf`
-- `clawdbot browser upload /tmp/file.pdf`
-- `clawdbot browser fill --fields '[{"ref":"1","type":"text","value":"Ada"}]'`
-- `clawdbot browser dialog --accept`
-- `clawdbot browser wait --text "Done"`
-- `clawdbot browser wait "#main" --url "**/dash" --load networkidle --fn "window.ready===true"`
-- `clawdbot browser evaluate --fn '(el) => el.textContent' --ref 7`
-- `clawdbot browser highlight e12`
-- `clawdbot browser trace start`
-- `clawdbot browser trace stop`
+
+- `openclaw browser navigate https://example.com`
+- `openclaw browser resize 1280 720`
+- `openclaw browser click 12 --double`
+- `openclaw browser click e12 --double`
+- `openclaw browser type 23 "hello" --submit`
+- `openclaw browser press Enter`
+- `openclaw browser hover 44`
+- `openclaw browser scrollintoview e12`
+- `openclaw browser drag 10 11`
+- `openclaw browser select 9 OptionA OptionB`
+- `openclaw browser download e12 report.pdf`
+- `openclaw browser waitfordownload report.pdf`
+- `openclaw browser upload /tmp/openclaw/uploads/file.pdf`
+- `openclaw browser fill --fields '[{"ref":"1","type":"text","value":"Ada"}]'`
+- `openclaw browser dialog --accept`
+- `openclaw browser wait --text "Done"`
+- `openclaw browser wait "#main" --url "**/dash" --load networkidle --fn "window.ready===true"`
+- `openclaw browser evaluate --fn '(el) => el.textContent' --ref 7`
+- `openclaw browser highlight e12`
+- `openclaw browser trace start`
+- `openclaw browser trace stop`
 
 State:
-- `clawdbot browser cookies`
-- `clawdbot browser cookies set session abc123 --url "https://example.com"`
-- `clawdbot browser cookies clear`
-- `clawdbot browser storage local get`
-- `clawdbot browser storage local set theme dark`
-- `clawdbot browser storage session clear`
-- `clawdbot browser set offline on`
-- `clawdbot browser set headers --json '{"X-Debug":"1"}'`
-- `clawdbot browser set credentials user pass`
-- `clawdbot browser set credentials --clear`
-- `clawdbot browser set geo 37.7749 -122.4194 --origin "https://example.com"`
-- `clawdbot browser set geo --clear`
-- `clawdbot browser set media dark`
-- `clawdbot browser set timezone America/New_York`
-- `clawdbot browser set locale en-US`
-- `clawdbot browser set device "iPhone 14"`
+
+- `openclaw browser cookies`
+- `openclaw browser cookies set session abc123 --url "https://example.com"`
+- `openclaw browser cookies clear`
+- `openclaw browser storage local get`
+- `openclaw browser storage local set theme dark`
+- `openclaw browser storage session clear`
+- `openclaw browser set offline on`
+- `openclaw browser set headers --headers-json '{"X-Debug":"1"}'`
+- `openclaw browser set credentials user pass`
+- `openclaw browser set credentials --clear`
+- `openclaw browser set geo 37.7749 -122.4194 --origin "https://example.com"`
+- `openclaw browser set geo --clear`
+- `openclaw browser set media dark`
+- `openclaw browser set timezone America/New_York`
+- `openclaw browser set locale en-US`
+- `openclaw browser set device "iPhone 14"`
 
 Notes:
+
 - `upload` and `dialog` are **arming** calls; run them before the click/press
   that triggers the chooser/dialog.
+- Download and trace output paths are constrained to OpenClaw temp roots:
+  - traces: `/tmp/openclaw` (fallback: `${os.tmpdir()}/openclaw`)
+  - downloads: `/tmp/openclaw/downloads` (fallback: `${os.tmpdir()}/openclaw/downloads`)
+- Upload paths are constrained to an OpenClaw temp uploads root:
+  - uploads: `/tmp/openclaw/uploads` (fallback: `${os.tmpdir()}/openclaw/uploads`)
 - `upload` can also set file inputs directly via `--input-ref` or `--element`.
 - `snapshot`:
   - `--format ai` (default when Playwright is installed): returns an AI snapshot with numeric refs (`aria-ref="<n>"`).
   - `--format aria`: returns the accessibility tree (no refs; inspection only).
   - `--efficient` (or `--mode efficient`): compact role snapshot preset (interactive + compact + depth + lower maxChars).
-  - Config default (tool/CLI only): set `browser.snapshotDefaults.mode: "efficient"` to use efficient snapshots when the caller does not pass a mode (see [Gateway configuration](/gateway/configuration#browser-clawd-managed-browser)).
+  - Config default (tool/CLI only): set `browser.snapshotDefaults.mode: "efficient"` to use efficient snapshots when the caller does not pass a mode (see [Gateway configuration](/gateway/configuration-reference#browser)).
   - Role snapshot options (`--interactive`, `--compact`, `--depth`, `--selector`) force a role-based snapshot with refs like `ref=e12`.
   - `--frame "<iframe selector>"` scopes role snapshots to an iframe (pairs with role refs like `e12`).
   - `--interactive` outputs a flat, easy-to-pick list of interactive elements (best for driving actions).
@@ -523,20 +593,21 @@ Notes:
 
 ## Snapshots and refs
 
-Clawdbot supports two “snapshot” styles:
+OpenClaw supports two “snapshot” styles:
 
-- **AI snapshot (numeric refs)**: `clawdbot browser snapshot` (default; `--format ai`)
+- **AI snapshot (numeric refs)**: `openclaw browser snapshot` (default; `--format ai`)
   - Output: a text snapshot that includes numeric refs.
-  - Actions: `clawdbot browser click 12`, `clawdbot browser type 23 "hello"`.
+  - Actions: `openclaw browser click 12`, `openclaw browser type 23 "hello"`.
   - Internally, the ref is resolved via Playwright’s `aria-ref`.
 
-- **Role snapshot (role refs like `e12`)**: `clawdbot browser snapshot --interactive` (or `--compact`, `--depth`, `--selector`, `--frame`)
+- **Role snapshot (role refs like `e12`)**: `openclaw browser snapshot --interactive` (or `--compact`, `--depth`, `--selector`, `--frame`)
   - Output: a role-based list/tree with `[ref=e12]` (and optional `[nth=1]`).
-  - Actions: `clawdbot browser click e12`, `clawdbot browser highlight e12`.
+  - Actions: `openclaw browser click e12`, `openclaw browser highlight e12`.
   - Internally, the ref is resolved via `getByRole(...)` (plus `nth()` for duplicates).
   - Add `--labels` to include a viewport screenshot with overlayed `e12` labels.
 
 Ref behavior:
+
 - Refs are **not stable across navigations**; if something fails, re-run `snapshot` and use a fresh ref.
 - If the role snapshot was taken with `--frame`, role refs are scoped to that iframe until the next role snapshot.
 
@@ -545,18 +616,18 @@ Ref behavior:
 You can wait on more than just time/text:
 
 - Wait for URL (globs supported by Playwright):
-  - `clawdbot browser wait --url "**/dash"`
+  - `openclaw browser wait --url "**/dash"`
 - Wait for load state:
-  - `clawdbot browser wait --load networkidle`
+  - `openclaw browser wait --load networkidle`
 - Wait for a JS predicate:
-  - `clawdbot browser wait --fn "window.ready===true"`
+  - `openclaw browser wait --fn "window.ready===true"`
 - Wait for a selector to become visible:
-  - `clawdbot browser wait "#main"`
+  - `openclaw browser wait "#main"`
 
 These can be combined:
 
 ```bash
-clawdbot browser wait "#main" \
+openclaw browser wait "#main" \
   --url "**/dash" \
   --load networkidle \
   --fn "window.ready===true" \
@@ -567,16 +638,16 @@ clawdbot browser wait "#main" \
 
 When an action fails (e.g. “not visible”, “strict mode violation”, “covered”):
 
-1. `clawdbot browser snapshot --interactive`
+1. `openclaw browser snapshot --interactive`
 2. Use `click <ref>` / `type <ref>` (prefer role refs in interactive mode)
-3. If it still fails: `clawdbot browser highlight <ref>` to see what Playwright is targeting
+3. If it still fails: `openclaw browser highlight <ref>` to see what Playwright is targeting
 4. If the page behaves oddly:
-   - `clawdbot browser errors --clear`
-   - `clawdbot browser requests --filter api --clear`
+   - `openclaw browser errors --clear`
+   - `openclaw browser requests --filter api --clear`
 5. For deep debugging: record a trace:
-   - `clawdbot browser trace start`
+   - `openclaw browser trace start`
    - reproduce the issue
-   - `clawdbot browser trace stop` (prints `TRACE:<path>`)
+   - `openclaw browser trace stop` (prints `TRACE:<path>`)
 
 ## JSON output
 
@@ -585,10 +656,10 @@ When an action fails (e.g. “not visible”, “strict mode violation”, “co
 Examples:
 
 ```bash
-clawdbot browser status --json
-clawdbot browser snapshot --interactive --json
-clawdbot browser requests --filter api --json
-clawdbot browser cookies --json
+openclaw browser status --json
+openclaw browser snapshot --interactive --json
+openclaw browser requests --filter api --json
+openclaw browser cookies --json
 ```
 
 Role snapshots in JSON include `refs` plus a small `stats` block (lines/chars/refs/interactive) so tools can reason about payload size and density.
@@ -600,7 +671,7 @@ These are useful for “make the site behave like X” workflows:
 - Cookies: `cookies`, `cookies set`, `cookies clear`
 - Storage: `storage local|session get|set|clear`
 - Offline: `set offline on|off`
-- Headers: `set headers --json '{"X-Debug":"1"}'` (or `--clear`)
+- Headers: `set headers --headers-json '{"X-Debug":"1"}'` (legacy `set headers --json '{"X-Debug":"1"}'` remains supported)
 - HTTP basic auth: `set credentials user pass` (or `--clear`)
 - Geolocation: `set geo <lat> <lon> --origin "https://example.com"` (or `--clear`)
 - Media: `set media dark|light|no-preference|none`
@@ -611,32 +682,52 @@ These are useful for “make the site behave like X” workflows:
 
 ## Security & privacy
 
-- The clawd browser profile may contain logged-in sessions; treat it as sensitive.
+- The openclaw browser profile may contain logged-in sessions; treat it as sensitive.
+- `browser act kind=evaluate` / `openclaw browser evaluate` and `wait --fn`
+  execute arbitrary JavaScript in the page context. Prompt injection can steer
+  this. Disable it with `browser.evaluateEnabled=false` if you do not need it.
 - For logins and anti-bot notes (X/Twitter, etc.), see [Browser login + X/Twitter posting](/tools/browser-login).
-- Keep control URLs loopback-only unless you intentionally expose the server.
+- Keep the Gateway/node host private (loopback or tailnet-only).
 - Remote CDP endpoints are powerful; tunnel and protect them.
+
+Strict-mode example (block private/internal destinations by default):
+
+```json5
+{
+  browser: {
+    ssrfPolicy: {
+      dangerouslyAllowPrivateNetwork: false,
+      hostnameAllowlist: ["*.example.com", "example.com"],
+      allowedHostnames: ["localhost"], // optional exact allow
+    },
+  },
+}
+```
 
 ## Troubleshooting
 
 For Linux-specific issues (especially snap Chromium), see
 [Browser troubleshooting](/tools/browser-linux-troubleshooting).
 
+For WSL2 Gateway + Windows Chrome split-host setups, see
+[WSL2 + Windows + remote Chrome CDP troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting).
+
 ## Agent tools + how control works
 
 The agent gets **one tool** for browser automation:
+
 - `browser` — status/start/stop/tabs/open/focus/close/snapshot/screenshot/navigate/act
 
 How it maps:
+
 - `browser snapshot` returns a stable UI tree (AI or ARIA).
 - `browser act` uses the snapshot `ref` IDs to click/type/drag/select.
 - `browser screenshot` captures pixels (full page or element).
 - `browser` accepts:
-  - `profile` to choose a named browser profile (host or remote control server).
-  - `target` (`sandbox` | `host` | `custom`) to select where the browser lives.
-  - `controlUrl` sets `target: "custom"` implicitly (remote control server).
+  - `profile` to choose a named browser profile (openclaw, chrome, or remote CDP).
+  - `target` (`sandbox` | `host` | `node`) to select where the browser lives.
   - In sandboxed sessions, `target: "host"` requires `agents.defaults.sandbox.browser.allowHostControl=true`.
   - If `target` is omitted: sandboxed sessions default to `sandbox`, non-sandbox sessions default to `host`.
-  - Sandbox allowlists can restrict `target: "custom"` to specific URLs/hosts/ports.
-  - Defaults: allowlists unset (no restriction), and sandbox host control is disabled.
+  - If a browser-capable node is connected, the tool may auto-route to it unless you pin `target="host"` or `target="node"`.
 
 This keeps the agent deterministic and avoids brittle selectors.

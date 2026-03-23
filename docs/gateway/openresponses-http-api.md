@@ -3,10 +3,12 @@ summary: "Expose an OpenResponses-compatible /v1/responses HTTP endpoint from th
 read_when:
   - Integrating clients that speak the OpenResponses API
   - You want item-based inputs, client tool calls, or SSE events
+title: "OpenResponses API"
 ---
+
 # OpenResponses API (HTTP)
 
-Clawdbot’s Gateway can serve an OpenResponses-compatible `POST /v1/responses` endpoint.
+OpenClaw’s Gateway can serve an OpenResponses-compatible `POST /v1/responses` endpoint.
 
 This endpoint is **disabled by default**. Enable it in config first.
 
@@ -14,63 +16,18 @@ This endpoint is **disabled by default**. Enable it in config first.
 - Same port as the Gateway (WS + HTTP multiplex): `http://<gateway-host>:<port>/v1/responses`
 
 Under the hood, requests are executed as a normal Gateway agent run (same codepath as
-`clawdbot agent`), so routing/permissions/config match your Gateway.
+`openclaw agent`), so routing/permissions/config match your Gateway.
 
-## Authentication
+## Authentication, security, and routing
 
-Uses the Gateway auth configuration. Send a bearer token:
+Operational behavior matches [OpenAI Chat Completions](/gateway/openai-http-api):
 
-- `Authorization: Bearer <token>`
+- use `Authorization: Bearer <token>` with the normal Gateway auth config
+- treat the endpoint as full operator access for the gateway instance
+- select agents with `model: "openclaw:<agentId>"`, `model: "agent:<agentId>"`, or `x-openclaw-agent-id`
+- use `x-openclaw-session-key` for explicit session routing
 
-Notes:
-- When `gateway.auth.mode="token"`, use `gateway.auth.token` (or `CLAWDBOT_GATEWAY_TOKEN`).
-- When `gateway.auth.mode="password"`, use `gateway.auth.password` (or `CLAWDBOT_GATEWAY_PASSWORD`).
-
-## Choosing an agent
-
-No custom headers required: encode the agent id in the OpenResponses `model` field:
-
-- `model: "clawdbot:<agentId>"` (example: `"clawdbot:main"`, `"clawdbot:beta"`)
-- `model: "agent:<agentId>"` (alias)
-
-Or target a specific Clawdbot agent by header:
-
-- `x-clawdbot-agent-id: <agentId>` (default: `main`)
-
-Advanced:
-- `x-clawdbot-session-key: <sessionKey>` to fully control session routing.
-
-## Enabling the endpoint
-
-Set `gateway.http.endpoints.responses.enabled` to `true`:
-
-```json5
-{
-  gateway: {
-    http: {
-      endpoints: {
-        responses: { enabled: true }
-      }
-    }
-  }
-}
-```
-
-## Disabling the endpoint
-
-Set `gateway.http.endpoints.responses.enabled` to `false`:
-
-```json5
-{
-  gateway: {
-    http: {
-      endpoints: {
-        responses: { enabled: false }
-      }
-    }
-  }
-}
-```
+Enable or disable this endpoint with `gateway.http.endpoints.responses.enabled`.
 
 ## Session behavior
 
@@ -103,6 +60,7 @@ Accepted but **currently ignored**:
 ## Items (input)
 
 ### `message`
+
 Roles: `system`, `developer`, `user`, `assistant`.
 
 - `system` and `developer` are appended to the system prompt.
@@ -143,7 +101,7 @@ Supports base64 or URL sources:
 }
 ```
 
-Allowed MIME types (current): `image/jpeg`, `image/png`, `image/gif`, `image/webp`.
+Allowed MIME types (current): `image/jpeg`, `image/png`, `image/gif`, `image/webp`, `image/heic`, `image/heif`.
 Max size (current): 10MB.
 
 ## Files (`input_file`)
@@ -168,6 +126,7 @@ Allowed MIME types (current): `text/plain`, `text/markdown`, `text/html`, `text/
 Max size (current): 5MB.
 
 Current behavior:
+
 - File content is decoded and added to the **system prompt**, not the user message,
   so it stays ephemeral (not persisted in session history).
 - PDFs are parsed for text. If little text is found, the first pages are rasterized
@@ -177,9 +136,16 @@ PDF parsing uses the Node-friendly `pdfjs-dist` legacy build (no worker). The mo
 PDF.js build expects browser workers/DOM globals, so it is not used in the Gateway.
 
 URL fetch defaults:
+
 - `files.allowUrl`: `true`
 - `images.allowUrl`: `true`
+- `maxUrlParts`: `8` (total URL-based `input_file` + `input_image` parts per request)
 - Requests are guarded (DNS resolution, private IP blocking, redirect caps, timeouts).
+- Optional hostname allowlists are supported per input type (`files.urlAllowlist`, `images.urlAllowlist`).
+  - Exact host: `"cdn.example.com"`
+  - Wildcard subdomains: `"*.assets.example.com"` (does not match apex)
+  - Empty or omitted allowlists mean no hostname allowlist restriction.
+- To disable URL-based fetches entirely, set `files.allowUrl: false` and/or `images.allowUrl: false`.
 
 ## File + image limits (config)
 
@@ -193,9 +159,18 @@ Defaults can be tuned under `gateway.http.endpoints.responses`:
         responses: {
           enabled: true,
           maxBodyBytes: 20000000,
+          maxUrlParts: 8,
           files: {
             allowUrl: true,
-            allowedMimes: ["text/plain", "text/markdown", "text/html", "text/csv", "application/json", "application/pdf"],
+            urlAllowlist: ["cdn.example.com", "*.assets.example.com"],
+            allowedMimes: [
+              "text/plain",
+              "text/markdown",
+              "text/html",
+              "text/csv",
+              "application/json",
+              "application/pdf",
+            ],
             maxBytes: 5242880,
             maxChars: 200000,
             maxRedirects: 3,
@@ -203,25 +178,35 @@ Defaults can be tuned under `gateway.http.endpoints.responses`:
             pdf: {
               maxPages: 4,
               maxPixels: 4000000,
-              minTextChars: 200
-            }
+              minTextChars: 200,
+            },
           },
           images: {
             allowUrl: true,
-            allowedMimes: ["image/jpeg", "image/png", "image/gif", "image/webp"],
+            urlAllowlist: ["images.example.com"],
+            allowedMimes: [
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "image/heic",
+              "image/heif",
+            ],
             maxBytes: 10485760,
             maxRedirects: 3,
-            timeoutMs: 10000
-          }
-        }
-      }
-    }
-  }
+            timeoutMs: 10000,
+          },
+        },
+      },
+    },
+  },
 }
 ```
 
 Defaults when omitted:
+
 - `maxBodyBytes`: 20MB
+- `maxUrlParts`: 8
 - `files.maxBytes`: 5MB
 - `files.maxChars`: 200k
 - `files.maxRedirects`: 3
@@ -232,6 +217,14 @@ Defaults when omitted:
 - `images.maxBytes`: 10MB
 - `images.maxRedirects`: 3
 - `images.timeoutMs`: 10s
+- HEIC/HEIF `input_image` sources are accepted and normalized to JPEG before provider delivery.
+
+Security note:
+
+- URL allowlists are enforced before fetch and on redirect hops.
+- Allowlisting a hostname does not bypass private/internal IP blocking.
+- For internet-exposed gateways, apply network egress controls in addition to app-level guards.
+  See [Security](/gateway/security).
 
 ## Streaming (SSE)
 
@@ -242,6 +235,7 @@ Set `stream: true` to receive Server-Sent Events (SSE):
 - Stream ends with `data: [DONE]`
 
 Event types currently emitted:
+
 - `response.created`
 - `response.in_progress`
 - `response.output_item.added`
@@ -266,6 +260,7 @@ Errors use a JSON object like:
 ```
 
 Common cases:
+
 - `401` missing/invalid auth
 - `400` invalid request body
 - `405` wrong method
@@ -273,25 +268,27 @@ Common cases:
 ## Examples
 
 Non-streaming:
+
 ```bash
 curl -sS http://127.0.0.1:18789/v1/responses \
   -H 'Authorization: Bearer YOUR_TOKEN' \
   -H 'Content-Type: application/json' \
-  -H 'x-clawdbot-agent-id: main' \
+  -H 'x-openclaw-agent-id: main' \
   -d '{
-    "model": "clawdbot",
+    "model": "openclaw",
     "input": "hi"
   }'
 ```
 
 Streaming:
+
 ```bash
 curl -N http://127.0.0.1:18789/v1/responses \
   -H 'Authorization: Bearer YOUR_TOKEN' \
   -H 'Content-Type: application/json' \
-  -H 'x-clawdbot-agent-id: main' \
+  -H 'x-openclaw-agent-id: main' \
   -d '{
-    "model": "clawdbot",
+    "model": "openclaw",
     "stream": true,
     "input": "hi"
   }'

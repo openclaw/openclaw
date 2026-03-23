@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import net from "node:net";
-
+import { isErrno } from "./errors.js";
 import { ensurePortAvailable } from "./ports.js";
 
 export type SshParsedTarget = {
@@ -18,13 +18,11 @@ export type SshTunnel = {
   stop: () => Promise<void>;
 };
 
-function isErrno(err: unknown): err is NodeJS.ErrnoException {
-  return Boolean(err && typeof err === "object" && "code" in err);
-}
-
 export function parseSshTarget(raw: string): SshParsedTarget | null {
   const trimmed = raw.trim().replace(/^ssh\s+/, "");
-  if (!trimmed) return null;
+  if (!trimmed) {
+    return null;
+  }
 
   const [userPart, hostPart] = trimmed.includes("@")
     ? ((): [string | undefined, string] => {
@@ -40,11 +38,23 @@ export function parseSshTarget(raw: string): SshParsedTarget | null {
     const host = hostPart.slice(0, colonIdx).trim();
     const portRaw = hostPart.slice(colonIdx + 1).trim();
     const port = Number.parseInt(portRaw, 10);
-    if (!host || !Number.isFinite(port) || port <= 0) return null;
+    if (!host || !Number.isFinite(port) || port <= 0) {
+      return null;
+    }
+    // Security: Reject hostnames starting with '-' to prevent argument injection
+    if (host.startsWith("-")) {
+      return null;
+    }
     return { user: userPart, host, port };
   }
 
-  if (!hostPart) return null;
+  if (!hostPart) {
+    return null;
+  }
+  // Security: Reject hostnames starting with '-' to prevent argument injection
+  if (hostPart.startsWith("-")) {
+    return null;
+  }
   return { user: userPart, host: hostPart, port: 22 };
 }
 
@@ -82,7 +92,9 @@ async function canConnectLocal(port: number): Promise<boolean> {
 async function waitForLocalListener(port: number, timeoutMs: number): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
-    if (await canConnectLocal(port)) return;
+    if (await canConnectLocal(port)) {
+      return;
+    }
     await new Promise((r) => setTimeout(r, 50));
   }
   throw new Error(`ssh tunnel did not start listening on localhost:${port}`);
@@ -96,7 +108,9 @@ export async function startSshPortForward(opts: {
   timeoutMs: number;
 }): Promise<SshTunnel> {
   const parsed = parseSshTarget(opts.target);
-  if (!parsed) throw new Error(`invalid SSH target: ${opts.target}`);
+  if (!parsed) {
+    throw new Error(`invalid SSH target: ${opts.target}`);
+  }
 
   let localPort = opts.localPortPreferred;
   try {
@@ -121,7 +135,7 @@ export async function startSshPortForward(opts: {
     "-o",
     "BatchMode=yes",
     "-o",
-    "StrictHostKeyChecking=accept-new",
+    "StrictHostKeyChecking=yes",
     "-o",
     "UpdateHostKeys=yes",
     "-o",
@@ -134,7 +148,8 @@ export async function startSshPortForward(opts: {
   if (opts.identity?.trim()) {
     args.push("-i", opts.identity.trim());
   }
-  args.push(userHost);
+  // Security: Use '--' to prevent userHost from being interpreted as an option
+  args.push("--", userHost);
 
   const stderr: string[] = [];
   const child = spawn("/usr/bin/ssh", args, {
@@ -150,7 +165,9 @@ export async function startSshPortForward(opts: {
   });
 
   const stop = async () => {
-    if (child.killed) return;
+    if (child.killed) {
+      return;
+    }
     child.kill("SIGTERM");
     await new Promise<void>((resolve) => {
       const t = setTimeout(() => {
@@ -179,7 +196,7 @@ export async function startSshPortForward(opts: {
   } catch (err) {
     await stop();
     const suffix = stderr.length > 0 ? `\n${stderr.join("\n")}` : "";
-    throw new Error(`${err instanceof Error ? err.message : String(err)}${suffix}`);
+    throw new Error(`${err instanceof Error ? err.message : String(err)}${suffix}`, { cause: err });
   }
 
   return {

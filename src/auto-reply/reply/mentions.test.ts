@@ -1,45 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { matchesMentionWithExplicit } from "./mentions.js";
+import { stripStructuralPrefixes } from "./mentions.js";
 
-describe("matchesMentionWithExplicit", () => {
-  const mentionRegexes = [/\bclawd\b/i];
-
-  it("prefers explicit mentions when other mentions are present", () => {
-    const result = matchesMentionWithExplicit({
-      text: "@clawd hello",
-      mentionRegexes,
-      explicit: {
-        hasAnyMention: true,
-        isExplicitlyMentioned: false,
-        canResolveExplicit: true,
-      },
-    });
-    expect(result).toBe(false);
+describe("stripStructuralPrefixes", () => {
+  it("returns empty string for undefined input at runtime", () => {
+    expect(stripStructuralPrefixes(undefined as unknown as string)).toBe("");
   });
 
-  it("returns true when explicitly mentioned even if regexes do not match", () => {
-    const result = matchesMentionWithExplicit({
-      text: "<@123456>",
-      mentionRegexes: [],
-      explicit: {
-        hasAnyMention: true,
-        isExplicitlyMentioned: true,
-        canResolveExplicit: true,
-      },
-    });
-    expect(result).toBe(true);
+  it("returns empty string for empty input", () => {
+    expect(stripStructuralPrefixes("")).toBe("");
   });
 
-  it("falls back to regex matching when explicit mention cannot be resolved", () => {
-    const result = matchesMentionWithExplicit({
-      text: "clawd please",
-      mentionRegexes,
-      explicit: {
-        hasAnyMention: true,
-        isExplicitlyMentioned: false,
-        canResolveExplicit: false,
-      },
-    });
-    expect(result).toBe(true);
+  it("strips sender prefix labels", () => {
+    expect(stripStructuralPrefixes("John: hello")).toBe("hello");
+  });
+
+  it("passes through plain text", () => {
+    expect(stripStructuralPrefixes("just a message")).toBe("just a message");
   });
 });

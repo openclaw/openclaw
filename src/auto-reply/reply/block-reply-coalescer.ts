@@ -1,3 +1,4 @@
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "../types.js";
 import type { BlockStreamingCoalescing } from "./block-streaming.js";
 
@@ -18,6 +19,7 @@ export function createBlockReplyCoalescer(params: {
   const maxChars = Math.max(minChars, Math.floor(config.maxChars));
   const idleMs = Math.max(0, Math.floor(config.idleMs));
   const joiner = config.joiner ?? "";
+  const flushOnEnqueue = config.flushOnEnqueue === true;
 
   let bufferText = "";
   let bufferReplyToId: ReplyPayload["replyToId"];
@@ -25,7 +27,9 @@ export function createBlockReplyCoalescer(params: {
   let idleTimer: NodeJS.Timeout | undefined;
 
   const clearIdleTimer = () => {
-    if (!idleTimer) return;
+    if (!idleTimer) {
+      return;
+    }
     clearTimeout(idleTimer);
     idleTimer = undefined;
   };
@@ -37,7 +41,9 @@ export function createBlockReplyCoalescer(params: {
   };
 
   const scheduleIdleFlush = () => {
-    if (idleMs <= 0) return;
+    if (idleMs <= 0) {
+      return;
+    }
     clearIdleTimer();
     idleTimer = setTimeout(() => {
       void flush({ force: false });
@@ -50,8 +56,10 @@ export function createBlockReplyCoalescer(params: {
       resetBuffer();
       return;
     }
-    if (!bufferText) return;
-    if (!options?.force && bufferText.length < minChars) {
+    if (!bufferText) {
+      return;
+    }
+    if (!options?.force && !flushOnEnqueue && bufferText.length < minChars) {
       scheduleIdleFlush();
       return;
     }
@@ -65,21 +73,41 @@ export function createBlockReplyCoalescer(params: {
   };
 
   const enqueue = (payload: ReplyPayload) => {
-    if (shouldAbort()) return;
-    const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-    const text = payload.text ?? "";
-    const hasText = text.trim().length > 0;
+    if (shouldAbort()) {
+      return;
+    }
+    const reply = resolveSendableOutboundReplyParts(payload);
+    const hasMedia = reply.hasMedia;
+    const text = reply.text;
+    const hasText = reply.hasText;
     if (hasMedia) {
       void flush({ force: true });
       void onFlush(payload);
       return;
     }
-    if (!hasText) return;
+    if (!hasText) {
+      return;
+    }
 
-    if (
+    // When flushOnEnqueue is set, treat each enqueued payload as its own outbound block
+    // and flush immediately instead of waiting for coalescing thresholds.
+    if (flushOnEnqueue) {
+      if (bufferText) {
+        void flush({ force: true });
+      }
+      bufferReplyToId = payload.replyToId;
+      bufferAudioAsVoice = payload.audioAsVoice;
+      bufferText = text;
+      void flush({ force: true });
+      return;
+    }
+
+    const replyToConflict = Boolean(
       bufferText &&
-      (bufferReplyToId !== payload.replyToId || bufferAudioAsVoice !== payload.audioAsVoice)
-    ) {
+      payload.replyToId &&
+      (!bufferReplyToId || bufferReplyToId !== payload.replyToId),
+    );
+    if (bufferText && (replyToConflict || bufferAudioAsVoice !== payload.audioAsVoice)) {
       void flush({ force: true });
     }
 

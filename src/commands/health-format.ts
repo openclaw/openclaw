@@ -2,7 +2,9 @@ import { colorize, isRich, theme } from "../terminal/theme.js";
 
 const formatKv = (line: string, rich: boolean) => {
   const idx = line.indexOf(": ");
-  if (idx <= 0) return colorize(rich, theme.muted, line);
+  if (idx <= 0) {
+    return colorize(rich, theme.muted, line);
+  }
   const key = line.slice(0, idx);
   const value = line.slice(idx + 2);
 
@@ -21,7 +23,9 @@ export function formatHealthCheckFailure(err: unknown, opts: { rich?: boolean } 
   const raw = String(err);
   const message = err instanceof Error ? err.message : raw;
 
-  if (!rich) return `Health check failed: ${raw}`;
+  if (!rich) {
+    return `Health check failed: ${raw}`;
+  }
 
   const lines = message
     .split("\n")

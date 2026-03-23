@@ -1,16 +1,6 @@
-import type { CDPSession, Page } from "playwright-core";
 import { devices as playwrightDevices } from "playwright-core";
-
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
-
-async function withCdpSession<T>(page: Page, fn: (session: CDPSession) => Promise<T>): Promise<T> {
-  const session = await page.context().newCDPSession(page);
-  try {
-    return await fn(session);
-  } finally {
-    await session.detach().catch(() => {});
-  }
-}
+import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
 
 export async function setOfflineViaPlaywright(opts: {
   cdpUrl: string;
@@ -47,7 +37,9 @@ export async function setHttpCredentialsViaPlaywright(opts: {
   }
   const username = String(opts.username ?? "");
   const password = String(opts.password ?? "");
-  if (!username) throw new Error("username is required (or set clear=true)");
+  if (!username) {
+    throw new Error("username is required (or set clear=true)");
+  }
   await page.context().setHTTPCredentials({ username, password });
 }
 
@@ -108,16 +100,23 @@ export async function setLocaleViaPlaywright(opts: {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   const locale = String(opts.locale ?? "").trim();
-  if (!locale) throw new Error("locale is required");
-  await withCdpSession(page, async (session) => {
-    try {
-      await session.send("Emulation.setLocaleOverride", { locale });
-    } catch (err) {
-      if (String(err).includes("Another locale override is already in effect")) {
-        return;
+  if (!locale) {
+    throw new Error("locale is required");
+  }
+  await withPageScopedCdpClient({
+    cdpUrl: opts.cdpUrl,
+    page,
+    targetId: opts.targetId,
+    fn: async (send) => {
+      try {
+        await send("Emulation.setLocaleOverride", { locale });
+      } catch (err) {
+        if (String(err).includes("Another locale override is already in effect")) {
+          return;
+        }
+        throw err;
       }
-      throw err;
-    }
+    },
   });
 }
 
@@ -129,16 +128,27 @@ export async function setTimezoneViaPlaywright(opts: {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   const timezoneId = String(opts.timezoneId ?? "").trim();
-  if (!timezoneId) throw new Error("timezoneId is required");
-  await withCdpSession(page, async (session) => {
-    try {
-      await session.send("Emulation.setTimezoneOverride", { timezoneId });
-    } catch (err) {
-      const msg = String(err);
-      if (msg.includes("Timezone override is already in effect")) return;
-      if (msg.includes("Invalid timezone")) throw new Error(`Invalid timezone ID: ${timezoneId}`);
-      throw err;
-    }
+  if (!timezoneId) {
+    throw new Error("timezoneId is required");
+  }
+  await withPageScopedCdpClient({
+    cdpUrl: opts.cdpUrl,
+    page,
+    targetId: opts.targetId,
+    fn: async (send) => {
+      try {
+        await send("Emulation.setTimezoneOverride", { timezoneId });
+      } catch (err) {
+        const msg = String(err);
+        if (msg.includes("Timezone override is already in effect")) {
+          return;
+        }
+        if (msg.includes("Invalid timezone")) {
+          throw new Error(`Invalid timezone ID: ${timezoneId}`, { cause: err });
+        }
+        throw err;
+      }
+    },
   });
 }
 
@@ -150,7 +160,9 @@ export async function setDeviceViaPlaywright(opts: {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   const name = String(opts.name ?? "").trim();
-  if (!name) throw new Error("device name is required");
+  if (!name) {
+    throw new Error("device name is required");
+  }
   const descriptor = (playwrightDevices as Record<string, unknown>)[name] as
     | {
         userAgent?: string;
@@ -172,27 +184,32 @@ export async function setDeviceViaPlaywright(opts: {
     });
   }
 
-  await withCdpSession(page, async (session) => {
-    if (descriptor.userAgent || descriptor.locale) {
-      await session.send("Emulation.setUserAgentOverride", {
-        userAgent: descriptor.userAgent ?? "",
-        acceptLanguage: descriptor.locale ?? undefined,
-      });
-    }
-    if (descriptor.viewport) {
-      await session.send("Emulation.setDeviceMetricsOverride", {
-        mobile: Boolean(descriptor.isMobile),
-        width: descriptor.viewport.width,
-        height: descriptor.viewport.height,
-        deviceScaleFactor: descriptor.deviceScaleFactor ?? 1,
-        screenWidth: descriptor.viewport.width,
-        screenHeight: descriptor.viewport.height,
-      });
-    }
-    if (descriptor.hasTouch) {
-      await session.send("Emulation.setTouchEmulationEnabled", {
-        enabled: true,
-      });
-    }
+  await withPageScopedCdpClient({
+    cdpUrl: opts.cdpUrl,
+    page,
+    targetId: opts.targetId,
+    fn: async (send) => {
+      if (descriptor.userAgent || descriptor.locale) {
+        await send("Emulation.setUserAgentOverride", {
+          userAgent: descriptor.userAgent ?? "",
+          acceptLanguage: descriptor.locale ?? undefined,
+        });
+      }
+      if (descriptor.viewport) {
+        await send("Emulation.setDeviceMetricsOverride", {
+          mobile: Boolean(descriptor.isMobile),
+          width: descriptor.viewport.width,
+          height: descriptor.viewport.height,
+          deviceScaleFactor: descriptor.deviceScaleFactor ?? 1,
+          screenWidth: descriptor.viewport.width,
+          screenHeight: descriptor.viewport.height,
+        });
+      }
+      if (descriptor.hasTouch) {
+        await send("Emulation.setTouchEmulationEnabled", {
+          enabled: true,
+        });
+      }
+    },
   });
 }

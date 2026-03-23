@@ -1,6 +1,10 @@
 import path from "node:path";
-
+import { formatErrorMessage } from "../infra/errors.js";
+import { fetchWithSsrFGuard, withStrictGuardedFetchMode } from "../infra/net/fetch-guard.js";
+import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { detectMime, extensionForMime } from "./mime.js";
+import { readResponseTextSnippet, readResponseWithLimit } from "./read-response-with-limit.js";
 
 type FetchMediaResult = {
   buffer: Buffer;
@@ -13,8 +17,8 @@ export type MediaFetchErrorCode = "max_bytes" | "http_error" | "fetch_failed";
 export class MediaFetchError extends Error {
   readonly code: MediaFetchErrorCode;
 
-  constructor(code: MediaFetchErrorCode, message: string) {
-    super(message);
+  constructor(code: MediaFetchErrorCode, message: string, options?: { cause?: unknown }) {
+    super(message, options);
     this.code = code;
     this.name = "MediaFetchError";
   }
@@ -22,11 +26,24 @@ export class MediaFetchError extends Error {
 
 export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
+export type FetchDispatcherAttempt = {
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+  lookupFn?: LookupFn;
+};
+
 type FetchMediaOptions = {
   url: string;
   fetchImpl?: FetchLike;
+  requestInit?: RequestInit;
   filePathHint?: string;
   maxBytes?: number;
+  maxRedirects?: number;
+  /** Abort if the response body stops yielding data for this long (ms). */
+  readIdleTimeoutMs?: number;
+  ssrfPolicy?: SsrFPolicy;
+  lookupFn?: LookupFn;
+  dispatcherAttempts?: FetchDispatcherAttempt[];
+  shouldRetryFetchError?: (error: unknown) => boolean;
 };
 
 function stripQuotes(value: string): string {
@@ -34,7 +51,9 @@ function stripQuotes(value: string): string {
 }
 
 function parseContentDispositionFileName(header?: string | null): string | undefined {
-  if (!header) return undefined;
+  if (!header) {
+    return undefined;
+  }
   const starMatch = /filename\*\s*=\s*([^;]+)/i.exec(header);
   if (starMatch?.[1]) {
     const cleaned = stripQuotes(starMatch[1].trim());
@@ -46,141 +65,204 @@ function parseContentDispositionFileName(header?: string | null): string | undef
     }
   }
   const match = /filename\s*=\s*([^;]+)/i.exec(header);
-  if (match?.[1]) return path.basename(stripQuotes(match[1].trim()));
+  if (match?.[1]) {
+    return path.basename(stripQuotes(match[1].trim()));
+  }
   return undefined;
 }
 
-async function readErrorBodySnippet(res: Response, maxChars = 200): Promise<string | undefined> {
+async function readErrorBodySnippet(
+  res: Response,
+  opts?: {
+    maxChars?: number;
+    chunkTimeoutMs?: number;
+  },
+): Promise<string | undefined> {
   try {
-    const text = await res.text();
-    if (!text) return undefined;
-    const collapsed = text.replace(/\s+/g, " ").trim();
-    if (!collapsed) return undefined;
-    if (collapsed.length <= maxChars) return collapsed;
-    return `${collapsed.slice(0, maxChars)}…`;
+    return await readResponseTextSnippet(res, {
+      maxBytes: 8 * 1024,
+      maxChars: opts?.maxChars,
+      chunkTimeoutMs: opts?.chunkTimeoutMs,
+    });
   } catch {
     return undefined;
   }
 }
 
+function redactMediaUrl(url: string): string {
+  return redactSensitiveText(url);
+}
+
 export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<FetchMediaResult> {
-  const { url, fetchImpl, filePathHint, maxBytes } = options;
-  const fetcher: FetchLike | undefined = fetchImpl ?? globalThis.fetch;
-  if (!fetcher) {
-    throw new Error("fetch is not available");
-  }
+  const {
+    url,
+    fetchImpl,
+    requestInit,
+    filePathHint,
+    maxBytes,
+    maxRedirects,
+    readIdleTimeoutMs,
+    ssrfPolicy,
+    lookupFn,
+    dispatcherAttempts,
+    shouldRetryFetchError,
+  } = options;
+  const sourceUrl = redactMediaUrl(url);
 
   let res: Response;
+  let finalUrl = url;
+  let release: (() => Promise<void>) | null = null;
+  const attempts =
+    dispatcherAttempts && dispatcherAttempts.length > 0
+      ? dispatcherAttempts
+      : [{ dispatcherPolicy: undefined, lookupFn }];
+  const runGuardedFetch = async (attempt: FetchDispatcherAttempt) =>
+    await fetchWithSsrFGuard(
+      withStrictGuardedFetchMode({
+        url,
+        fetchImpl,
+        init: requestInit,
+        maxRedirects,
+        policy: ssrfPolicy,
+        lookupFn: attempt.lookupFn ?? lookupFn,
+        dispatcherPolicy: attempt.dispatcherPolicy,
+      }),
+    );
   try {
-    res = await fetcher(url);
-  } catch (err) {
-    throw new MediaFetchError("fetch_failed", `Failed to fetch media from ${url}: ${String(err)}`);
-  }
-
-  if (!res.ok) {
-    const statusText = res.statusText ? ` ${res.statusText}` : "";
-    const redirected = res.url && res.url !== url ? ` (redirected to ${res.url})` : "";
-    let detail = `HTTP ${res.status}${statusText}`;
-    if (!res.body) {
-      detail = `HTTP ${res.status}${statusText}; empty response body`;
-    } else {
-      const snippet = await readErrorBodySnippet(res);
-      if (snippet) detail += `; body: ${snippet}`;
+    let result!: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
+    const attemptErrors: unknown[] = [];
+    for (let i = 0; i < attempts.length; i += 1) {
+      try {
+        result = await runGuardedFetch(attempts[i]);
+        break;
+      } catch (err) {
+        if (
+          typeof shouldRetryFetchError !== "function" ||
+          !shouldRetryFetchError(err) ||
+          i === attempts.length - 1
+        ) {
+          if (attemptErrors.length > 0) {
+            const combined = new Error(
+              `Primary fetch failed and fallback fetch also failed for ${sourceUrl}`,
+              { cause: err },
+            );
+            (
+              combined as Error & {
+                primaryError?: unknown;
+                attemptErrors?: unknown[];
+              }
+            ).primaryError = attemptErrors[0];
+            (combined as Error & { attemptErrors?: unknown[] }).attemptErrors = [
+              ...attemptErrors,
+              err,
+            ];
+            throw combined;
+          }
+          throw err;
+        }
+        attemptErrors.push(err);
+      }
     }
+    res = result.response;
+    finalUrl = result.finalUrl;
+    release = result.release;
+  } catch (err) {
     throw new MediaFetchError(
-      "http_error",
-      `Failed to fetch media from ${url}${redirected}: ${detail}`,
+      "fetch_failed",
+      `Failed to fetch media from ${sourceUrl}: ${formatErrorMessage(err)}`,
+      {
+        cause: err,
+      },
     );
   }
 
-  const contentLength = res.headers.get("content-length");
-  if (maxBytes && contentLength) {
-    const length = Number(contentLength);
-    if (Number.isFinite(length) && length > maxBytes) {
-      throw new MediaFetchError(
-        "max_bytes",
-        `Failed to fetch media from ${url}: content length ${length} exceeds maxBytes ${maxBytes}`,
-      );
-    }
-  }
-
-  const buffer = maxBytes
-    ? await readResponseWithLimit(res, maxBytes)
-    : Buffer.from(await res.arrayBuffer());
-  let fileNameFromUrl: string | undefined;
   try {
-    const parsed = new URL(url);
-    const base = path.basename(parsed.pathname);
-    fileNameFromUrl = base || undefined;
-  } catch {
-    // ignore parse errors; leave undefined
-  }
-
-  const headerFileName = parseContentDispositionFileName(res.headers.get("content-disposition"));
-  let fileName =
-    headerFileName || fileNameFromUrl || (filePathHint ? path.basename(filePathHint) : undefined);
-
-  const filePathForMime =
-    headerFileName && path.extname(headerFileName) ? headerFileName : (filePathHint ?? url);
-  const contentType = await detectMime({
-    buffer,
-    headerMime: res.headers.get("content-type"),
-    filePath: filePathForMime,
-  });
-  if (fileName && !path.extname(fileName) && contentType) {
-    const ext = extensionForMime(contentType);
-    if (ext) fileName = `${fileName}${ext}`;
-  }
-
-  return {
-    buffer,
-    contentType: contentType ?? undefined,
-    fileName,
-  };
-}
-
-async function readResponseWithLimit(res: Response, maxBytes: number): Promise<Buffer> {
-  const body = res.body;
-  if (!body || typeof body.getReader !== "function") {
-    const fallback = Buffer.from(await res.arrayBuffer());
-    if (fallback.length > maxBytes) {
-      throw new MediaFetchError(
-        "max_bytes",
-        `Failed to fetch media from ${res.url || "response"}: payload exceeds maxBytes ${maxBytes}`,
-      );
-    }
-    return fallback;
-  }
-
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value?.length) {
-        total += value.length;
-        if (total > maxBytes) {
-          try {
-            await reader.cancel();
-          } catch {}
-          throw new MediaFetchError(
-            "max_bytes",
-            `Failed to fetch media from ${res.url || "response"}: payload exceeds maxBytes ${maxBytes}`,
-          );
+    if (!res.ok) {
+      const statusText = res.statusText ? ` ${res.statusText}` : "";
+      const redirected = finalUrl !== url ? ` (redirected to ${redactMediaUrl(finalUrl)})` : "";
+      let detail = `HTTP ${res.status}${statusText}`;
+      if (!res.body) {
+        detail = `HTTP ${res.status}${statusText}; empty response body`;
+      } else {
+        const snippet = await readErrorBodySnippet(res, { chunkTimeoutMs: readIdleTimeoutMs });
+        if (snippet) {
+          detail += `; body: ${snippet}`;
         }
-        chunks.push(value);
+      }
+      throw new MediaFetchError(
+        "http_error",
+        `Failed to fetch media from ${sourceUrl}${redirected}: ${redactSensitiveText(detail)}`,
+      );
+    }
+
+    const contentLength = res.headers.get("content-length");
+    if (maxBytes && contentLength) {
+      const length = Number(contentLength);
+      if (Number.isFinite(length) && length > maxBytes) {
+        throw new MediaFetchError(
+          "max_bytes",
+          `Failed to fetch media from ${sourceUrl}: content length ${length} exceeds maxBytes ${maxBytes}`,
+        );
       }
     }
-  } finally {
-    try {
-      reader.releaseLock();
-    } catch {}
-  }
 
-  return Buffer.concat(
-    chunks.map((chunk) => Buffer.from(chunk)),
-    total,
-  );
+    let buffer: Buffer;
+    try {
+      buffer = maxBytes
+        ? await readResponseWithLimit(res, maxBytes, {
+            onOverflow: ({ maxBytes, res }) =>
+              new MediaFetchError(
+                "max_bytes",
+                `Failed to fetch media from ${redactMediaUrl(res.url || url)}: payload exceeds maxBytes ${maxBytes}`,
+              ),
+            chunkTimeoutMs: readIdleTimeoutMs,
+          })
+        : Buffer.from(await res.arrayBuffer());
+    } catch (err) {
+      if (err instanceof MediaFetchError) {
+        throw err;
+      }
+      throw new MediaFetchError(
+        "fetch_failed",
+        `Failed to fetch media from ${redactMediaUrl(res.url || url)}: ${formatErrorMessage(err)}`,
+        { cause: err },
+      );
+    }
+    let fileNameFromUrl: string | undefined;
+    try {
+      const parsed = new URL(finalUrl);
+      const base = path.basename(parsed.pathname);
+      fileNameFromUrl = base || undefined;
+    } catch {
+      // ignore parse errors; leave undefined
+    }
+
+    const headerFileName = parseContentDispositionFileName(res.headers.get("content-disposition"));
+    let fileName =
+      headerFileName || fileNameFromUrl || (filePathHint ? path.basename(filePathHint) : undefined);
+
+    const filePathForMime =
+      headerFileName && path.extname(headerFileName) ? headerFileName : (filePathHint ?? finalUrl);
+    const contentType = await detectMime({
+      buffer,
+      headerMime: res.headers.get("content-type"),
+      filePath: filePathForMime,
+    });
+    if (fileName && !path.extname(fileName) && contentType) {
+      const ext = extensionForMime(contentType);
+      if (ext) {
+        fileName = `${fileName}${ext}`;
+      }
+    }
+
+    return {
+      buffer,
+      contentType: contentType ?? undefined,
+      fileName,
+    };
+  } finally {
+    if (release) {
+      await release();
+    }
+  }
 }

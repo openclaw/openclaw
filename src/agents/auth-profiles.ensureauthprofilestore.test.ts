@@ -1,14 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
-import { AUTH_STORE_VERSION, CODEX_CLI_PROFILE_ID } from "./auth-profiles/constants.js";
-import { withTempHome } from "../../test/helpers/temp-home.js";
+import { AUTH_STORE_VERSION, log } from "./auth-profiles/constants.js";
 
 describe("ensureAuthProfileStore", () => {
   it("migrates legacy auth.json and deletes it (PR #368)", () => {
-    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-auth-profiles-"));
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-profiles-"));
     try {
       const legacyPath = path.join(agentDir, "auth.json");
       fs.writeFileSync(
@@ -49,8 +48,8 @@ describe("ensureAuthProfileStore", () => {
   });
 
   it("merges main auth profiles into agent store and keeps agent overrides", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-auth-merge-"));
-    const previousAgentDir = process.env.CLAWDBOT_AGENT_DIR;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-merge-"));
+    const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
     const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
     try {
       const mainDir = path.join(root, "main-agent");
@@ -58,7 +57,7 @@ describe("ensureAuthProfileStore", () => {
       fs.mkdirSync(mainDir, { recursive: true });
       fs.mkdirSync(agentDir, { recursive: true });
 
-      process.env.CLAWDBOT_AGENT_DIR = mainDir;
+      process.env.OPENCLAW_AGENT_DIR = mainDir;
       process.env.PI_CODING_AGENT_DIR = mainDir;
 
       const mainStore = {
@@ -111,9 +110,9 @@ describe("ensureAuthProfileStore", () => {
       });
     } finally {
       if (previousAgentDir === undefined) {
-        delete process.env.CLAWDBOT_AGENT_DIR;
+        delete process.env.OPENCLAW_AGENT_DIR;
       } else {
-        process.env.CLAWDBOT_AGENT_DIR = previousAgentDir;
+        process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
       }
       if (previousPiAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;
@@ -124,79 +123,155 @@ describe("ensureAuthProfileStore", () => {
     }
   });
 
-  it("drops codex-cli from merged store when a custom openai-codex profile matches", async () => {
-    await withTempHome(async (tempHome) => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-auth-dedup-merge-"));
-      const previousAgentDir = process.env.CLAWDBOT_AGENT_DIR;
-      const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+  it("normalizes auth-profiles credential aliases with canonical-field precedence", () => {
+    const cases = [
+      {
+        name: "mode/apiKey aliases map to type/key",
+        profile: {
+          provider: "anthropic",
+          mode: "api_key",
+          apiKey: "sk-ant-alias", // pragma: allowlist secret
+        },
+        expected: {
+          type: "api_key",
+          key: "sk-ant-alias",
+        },
+      },
+      {
+        name: "canonical type overrides conflicting mode alias",
+        profile: {
+          provider: "anthropic",
+          type: "api_key",
+          mode: "token",
+          key: "sk-ant-canonical",
+        },
+        expected: {
+          type: "api_key",
+          key: "sk-ant-canonical",
+        },
+      },
+      {
+        name: "canonical key overrides conflicting apiKey alias",
+        profile: {
+          provider: "anthropic",
+          type: "api_key",
+          key: "sk-ant-canonical",
+          apiKey: "sk-ant-alias", // pragma: allowlist secret
+        },
+        expected: {
+          type: "api_key",
+          key: "sk-ant-canonical",
+        },
+      },
+      {
+        name: "canonical profile shape remains unchanged",
+        profile: {
+          provider: "anthropic",
+          type: "api_key",
+          key: "sk-ant-direct",
+        },
+        expected: {
+          type: "api_key",
+          key: "sk-ant-direct",
+        },
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-alias-"));
       try {
-        const mainDir = path.join(root, "main-agent");
-        const agentDir = path.join(root, "agent-x");
-        fs.mkdirSync(mainDir, { recursive: true });
-        fs.mkdirSync(agentDir, { recursive: true });
-
-        process.env.CLAWDBOT_AGENT_DIR = mainDir;
-        process.env.PI_CODING_AGENT_DIR = mainDir;
-        process.env.HOME = tempHome;
-
-        fs.writeFileSync(
-          path.join(mainDir, "auth-profiles.json"),
-          `${JSON.stringify(
-            {
-              version: AUTH_STORE_VERSION,
-              profiles: {
-                [CODEX_CLI_PROFILE_ID]: {
-                  type: "oauth",
-                  provider: "openai-codex",
-                  access: "shared-access-token",
-                  refresh: "shared-refresh-token",
-                  expires: Date.now() + 3600000,
-                },
-              },
-            },
-            null,
-            2,
-          )}\n`,
-          "utf8",
-        );
-
+        const storeData = {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            "anthropic:work": testCase.profile,
+          },
+        };
         fs.writeFileSync(
           path.join(agentDir, "auth-profiles.json"),
-          `${JSON.stringify(
-            {
-              version: AUTH_STORE_VERSION,
-              profiles: {
-                "openai-codex:my-custom-profile": {
-                  type: "oauth",
-                  provider: "openai-codex",
-                  access: "shared-access-token",
-                  refresh: "shared-refresh-token",
-                  expires: Date.now() + 3600000,
-                },
-              },
-            },
-            null,
-            2,
-          )}\n`,
+          `${JSON.stringify(storeData, null, 2)}\n`,
           "utf8",
         );
 
         const store = ensureAuthProfileStore(agentDir);
-        expect(store.profiles[CODEX_CLI_PROFILE_ID]).toBeUndefined();
-        expect(store.profiles["openai-codex:my-custom-profile"]).toBeDefined();
+        expect(store.profiles["anthropic:work"], testCase.name).toMatchObject(testCase.expected);
       } finally {
-        if (previousAgentDir === undefined) {
-          delete process.env.CLAWDBOT_AGENT_DIR;
-        } else {
-          process.env.CLAWDBOT_AGENT_DIR = previousAgentDir;
-        }
-        if (previousPiAgentDir === undefined) {
-          delete process.env.PI_CODING_AGENT_DIR;
-        } else {
-          process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
-        }
-        fs.rmSync(root, { recursive: true, force: true });
+        fs.rmSync(agentDir, { recursive: true, force: true });
       }
-    });
+    }
+  });
+
+  it("normalizes mode/apiKey aliases while migrating legacy auth.json", () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-legacy-alias-"));
+    try {
+      fs.writeFileSync(
+        path.join(agentDir, "auth.json"),
+        `${JSON.stringify(
+          {
+            anthropic: {
+              provider: "anthropic",
+              mode: "api_key",
+              apiKey: "sk-ant-legacy", // pragma: allowlist secret
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      const store = ensureAuthProfileStore(agentDir);
+      expect(store.profiles["anthropic:default"]).toMatchObject({
+        type: "api_key",
+        provider: "anthropic",
+        key: "sk-ant-legacy",
+      });
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("logs one warning with aggregated reasons for rejected auth-profiles entries", () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-invalid-"));
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    try {
+      const invalidStore = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "anthropic:missing-type": {
+            provider: "anthropic",
+          },
+          "openai:missing-provider": {
+            type: "api_key",
+            key: "sk-openai",
+          },
+          "qwen:not-object": "broken",
+        },
+      };
+      fs.writeFileSync(
+        path.join(agentDir, "auth-profiles.json"),
+        `${JSON.stringify(invalidStore, null, 2)}\n`,
+        "utf8",
+      );
+
+      const store = ensureAuthProfileStore(agentDir);
+      expect(store.profiles).toEqual({});
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy).toHaveBeenCalledWith(
+        "ignored invalid auth profile entries during store load",
+        {
+          source: "auth-profiles.json",
+          dropped: 3,
+          reasons: {
+            invalid_type: 1,
+            missing_provider: 1,
+            non_object: 1,
+          },
+          keys: ["anthropic:missing-type", "openai:missing-provider", "qwen:not-object"],
+        },
+      );
+    } finally {
+      warnSpy.mockRestore();
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
   });
 });

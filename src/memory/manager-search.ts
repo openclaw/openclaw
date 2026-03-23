@@ -1,5 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-
 import { truncateUtf16Safe } from "../utils.js";
 import { cosineSimilarity, parseEmbedding } from "./internal.js";
 
@@ -29,7 +28,9 @@ export async function searchVector(params: {
   sourceFilterVec: { sql: string; params: SearchSource[] };
   sourceFilterChunks: { sql: string; params: SearchSource[] };
 }): Promise<SearchRowResult[]> {
-  if (params.queryVec.length === 0 || params.limit <= 0) return [];
+  if (params.queryVec.length === 0 || params.limit <= 0) {
+    return [];
+  }
   if (await params.ensureVectorReady(params.queryVec.length)) {
     const rows = params.db
       .prepare(
@@ -79,7 +80,7 @@ export async function searchVector(params: {
     }))
     .filter((entry) => Number.isFinite(entry.score));
   return scored
-    .sort((a, b) => b.score - a.score)
+    .toSorted((a, b) => b.score - a.score)
     .slice(0, params.limit)
     .map((entry) => ({
       id: entry.chunk.id,
@@ -135,7 +136,7 @@ export function listChunks(params: {
 export async function searchKeyword(params: {
   db: DatabaseSync;
   ftsTable: string;
-  providerModel: string;
+  providerModel: string | undefined;
   query: string;
   limit: number;
   snippetMaxChars: number;
@@ -143,20 +144,28 @@ export async function searchKeyword(params: {
   buildFtsQuery: (raw: string) => string | null;
   bm25RankToScore: (rank: number) => number;
 }): Promise<Array<SearchRowResult & { textScore: number }>> {
-  if (params.limit <= 0) return [];
+  if (params.limit <= 0) {
+    return [];
+  }
   const ftsQuery = params.buildFtsQuery(params.query);
-  if (!ftsQuery) return [];
+  if (!ftsQuery) {
+    return [];
+  }
+
+  // When providerModel is undefined (FTS-only mode), search all models
+  const modelClause = params.providerModel ? " AND model = ?" : "";
+  const modelParams = params.providerModel ? [params.providerModel] : [];
 
   const rows = params.db
     .prepare(
       `SELECT id, path, source, start_line, end_line, text,\n` +
         `       bm25(${params.ftsTable}) AS rank\n` +
         `  FROM ${params.ftsTable}\n` +
-        ` WHERE ${params.ftsTable} MATCH ? AND model = ?${params.sourceFilter.sql}\n` +
+        ` WHERE ${params.ftsTable} MATCH ?${modelClause}${params.sourceFilter.sql}\n` +
         ` ORDER BY rank ASC\n` +
         ` LIMIT ?`,
     )
-    .all(ftsQuery, params.providerModel, ...params.sourceFilter.params, params.limit) as Array<{
+    .all(ftsQuery, ...modelParams, ...params.sourceFilter.params, params.limit) as Array<{
     id: string;
     path: string;
     source: SearchSource;

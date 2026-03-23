@@ -1,100 +1,6 @@
-import fs from "node:fs/promises";
-import { describe, expect, it, vi } from "vitest";
-import type { ClawdbotConfig } from "../config/config.js";
-import { ensureClawdbotModelsJson } from "./models-config.js";
+import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { getDmHistoryLimitFromSessionKey } from "./pi-embedded-runner.js";
-
-vi.mock("@mariozechner/pi-ai", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
-  return {
-    ...actual,
-    streamSimple: (model: { api: string; provider: string; id: string }) => {
-      if (model.id === "mock-error") {
-        throw new Error("boom");
-      }
-      const stream = new actual.AssistantMessageEventStream();
-      queueMicrotask(() => {
-        stream.push({
-          type: "done",
-          reason: "stop",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "ok" }],
-            stopReason: "stop",
-            api: model.api,
-            provider: model.provider,
-            model: model.id,
-            usage: {
-              input: 1,
-              output: 1,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 2,
-              cost: {
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                total: 0,
-              },
-            },
-            timestamp: Date.now(),
-          },
-        });
-      });
-      return stream;
-    },
-  };
-});
-
-const _makeOpenAiConfig = (modelIds: string[]) =>
-  ({
-    models: {
-      providers: {
-        openai: {
-          api: "openai-responses",
-          apiKey: "sk-test",
-          baseUrl: "https://example.com",
-          models: modelIds.map((id) => ({
-            id,
-            name: `Mock ${id}`,
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 16_000,
-            maxTokens: 2048,
-          })),
-        },
-      },
-    },
-  }) satisfies ClawdbotConfig;
-
-const _ensureModels = (cfg: ClawdbotConfig, agentDir: string) =>
-  ensureClawdbotModelsJson(cfg, agentDir);
-
-const _textFromContent = (content: unknown) => {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content) && content[0]?.type === "text") {
-    return (content[0] as { text?: string }).text;
-  }
-  return undefined;
-};
-
-const _readSessionMessages = async (sessionFile: string) => {
-  const raw = await fs.readFile(sessionFile, "utf-8");
-  return raw
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map(
-      (line) =>
-        JSON.parse(line) as {
-          type?: string;
-          message?: { role?: string; content?: unknown };
-        },
-    )
-    .filter((entry) => entry.type === "message")
-    .map((entry) => entry.message as { role?: string; content?: unknown });
-};
 
 describe("getDmHistoryLimitFromSessionKey", () => {
   it("falls back to provider default when per-DM not set", () => {
@@ -105,7 +11,7 @@ describe("getDmHistoryLimitFromSessionKey", () => {
           dms: { "456": { historyLimit: 5 } },
         },
       },
-    } as ClawdbotConfig;
+    } as OpenClawConfig;
     expect(getDmHistoryLimitFromSessionKey("telegram:dm:123", config)).toBe(15);
   });
   it("returns per-DM override for agent-prefixed keys", () => {
@@ -116,7 +22,7 @@ describe("getDmHistoryLimitFromSessionKey", () => {
           dms: { "789": { historyLimit: 3 } },
         },
       },
-    } as ClawdbotConfig;
+    } as OpenClawConfig;
     expect(getDmHistoryLimitFromSessionKey("agent:main:telegram:dm:789", config)).toBe(3);
   });
   it("handles userId with colons (e.g., email)", () => {
@@ -127,7 +33,7 @@ describe("getDmHistoryLimitFromSessionKey", () => {
           dms: { "user@example.com": { historyLimit: 7 } },
         },
       },
-    } as ClawdbotConfig;
+    } as OpenClawConfig;
     expect(getDmHistoryLimitFromSessionKey("msteams:dm:user@example.com", config)).toBe(7);
   });
   it("returns undefined when per-DM historyLimit is not set", () => {
@@ -137,7 +43,7 @@ describe("getDmHistoryLimitFromSessionKey", () => {
           dms: { "123": {} },
         },
       },
-    } as ClawdbotConfig;
+    } as OpenClawConfig;
     expect(getDmHistoryLimitFromSessionKey("telegram:dm:123", config)).toBeUndefined();
   });
   it("returns 0 when per-DM historyLimit is explicitly 0 (unlimited)", () => {
@@ -148,7 +54,7 @@ describe("getDmHistoryLimitFromSessionKey", () => {
           dms: { "123": { historyLimit: 0 } },
         },
       },
-    } as ClawdbotConfig;
+    } as OpenClawConfig;
     expect(getDmHistoryLimitFromSessionKey("telegram:dm:123", config)).toBe(0);
   });
 });

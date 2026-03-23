@@ -31,10 +31,11 @@ export function buildTeamsFileInfoCard(file: DriveItemProperties): {
   // Extract unique ID from eTag (remove quotes, braces, and version suffix)
   // Example eTag formats: "{GUID},version" or "\"{GUID},version\""
   const rawETag = file.eTag;
-  const uniqueId = rawETag
-    .replace(/^["']|["']$/g, "") // Remove outer quotes
-    .replace(/[{}]/g, "") // Remove curly braces
-    .split(",")[0] ?? rawETag; // Take the GUID part before comma
+  const uniqueId =
+    rawETag
+      .replace(/^["']|["']$/g, "") // Remove outer quotes
+      .replace(/[{}]/g, "") // Remove curly braces
+      .split(",")[0] ?? rawETag; // Take the GUID part before comma
 
   // Extract file extension from filename
   const lastDot = file.name.lastIndexOf(".");

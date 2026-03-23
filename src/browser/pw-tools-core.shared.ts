@@ -23,8 +23,25 @@ export function requireRef(value: unknown): string {
   const raw = typeof value === "string" ? value.trim() : "";
   const roleRef = raw ? parseRoleRef(raw) : null;
   const ref = roleRef ?? (raw.startsWith("@") ? raw.slice(1) : raw);
-  if (!ref) throw new Error("ref is required");
+  if (!ref) {
+    throw new Error("ref is required");
+  }
   return ref;
+}
+
+export function requireRefOrSelector(
+  ref: string | undefined,
+  selector: string | undefined,
+): { ref?: string; selector?: string } {
+  const trimmedRef = typeof ref === "string" ? ref.trim() : "";
+  const trimmedSelector = typeof selector === "string" ? selector.trim() : "";
+  if (!trimmedRef && !trimmedSelector) {
+    throw new Error("ref or selector is required");
+  }
+  return {
+    ref: trimmedRef || undefined,
+    selector: trimmedSelector || undefined,
+  };
 }
 
 export function normalizeTimeoutMs(timeoutMs: number | undefined, fallback: number) {

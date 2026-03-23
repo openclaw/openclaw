@@ -1,6 +1,5 @@
-import { describe, expect, it } from "vitest";
-
-import { generateUUID } from "./uuid";
+import { describe, expect, it, vi } from "vitest";
+import { generateUUID } from "./uuid.ts";
 
 describe("generateUUID", () => {
   it("uses crypto.randomUUID when available", () => {
@@ -17,7 +16,11 @@ describe("generateUUID", () => {
   it("falls back to crypto.getRandomValues", () => {
     const id = generateUUID({
       getRandomValues: (bytes) => {
-        for (let i = 0; i < bytes.length; i++) bytes[i] = i;
+        // @ts-expect-error
+        for (let i = 0; i < bytes.length; i++) {
+          // @ts-expect-error
+          bytes[i] = i;
+        }
         return bytes;
       },
     });
@@ -26,7 +29,13 @@ describe("generateUUID", () => {
   });
 
   it("still returns a v4 UUID when crypto is missing", () => {
-    const id = generateUUID(null);
-    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const id = generateUUID(null);
+      expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+      expect(warnSpy).toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });

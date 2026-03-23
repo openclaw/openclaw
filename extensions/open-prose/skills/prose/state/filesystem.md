@@ -104,12 +104,13 @@ The execution state file shows the program's current position using **annotated 
 **Only the VM writes this file.** Subagents never modify `state.md`.
 
 The format shows:
+
 - **Full history** of executed code with inline annotations
 - **Current position** clearly marked with status
 - **~5-10 lines ahead** of current position (what's coming next)
 - **Index** of all bindings and agents with file paths
 
-```markdown
+````markdown
 # Execution State
 
 run: 20260115-143052-a7b3c9
@@ -144,6 +145,7 @@ resume: captain                              # [...next...]
   prompt: "Review the synthesis"
   context: synthesis
 ```
+````
 
 ## Active Constructs
 
@@ -162,26 +164,27 @@ resume: captain                              # [...next...]
 
 ### Bindings
 
-| Name | Kind | Path | Execution ID |
-|------|------|------|--------------|
-| research | let | bindings/research.md | (root) |
-| a | let | bindings/a.md | (root) |
-| result | let | bindings/result__43.md | 43 |
+| Name     | Kind | Path                     | Execution ID |
+| -------- | ---- | ------------------------ | ------------ |
+| research | let  | bindings/research.md     | (root)       |
+| a        | let  | bindings/a.md            | (root)       |
+| result   | let  | bindings/result\_\_43.md | 43           |
 
 ### Agents
 
-| Name | Scope | Path |
-|------|-------|------|
+| Name    | Scope     | Path            |
+| ------- | --------- | --------------- |
 | captain | execution | agents/captain/ |
 
 ## Call Stack
 
-| execution_id | block | depth | status |
-|--------------|-------|-------|--------|
-| 43 | process | 3 | executing |
-| 42 | process | 2 | waiting |
-| 41 | process | 1 | waiting |
-```
+| execution_id | block   | depth | status    |
+| ------------ | ------- | ----- | --------- |
+| 43           | process | 3     | executing |
+| 42           | process | 2     | waiting   |
+| 41           | process | 1     | waiting   |
+
+````
 
 **Status annotations:**
 
@@ -209,14 +212,15 @@ source:
 ```prose
 let research = session: researcher
   prompt: "Research AI safety"
-```
+````
 
 ---
 
 AI safety research covers several key areas including alignment,
 robustness, and interpretability. The field has grown significantly
 since 2020 with major contributions from...
-```
+
+````
 
 **Structure:**
 - Header with binding name
@@ -240,7 +244,7 @@ Sessions without explicit output capture still produce results:
 
 ```prose
 session "Analyze the codebase"   # No `let x = ...` capture
-```
+````
 
 These get auto-generated names with an `anon_` prefix:
 
@@ -259,25 +263,29 @@ When a binding is created inside a block invocation, it's scoped to that executi
 **Naming convention:** `{name}__{execution_id}.md`
 
 Examples:
+
 - `bindings/result__43.md` — binding `result` in execution_id 43
 - `bindings/parts__44.md` — binding `parts` in execution_id 44
 
 **File format with execution scope:**
 
-```markdown
+````markdown
 # result
 
 kind: let
 execution_id: 43
 
 source:
+
 ```prose
 let result = session "Process chunk"
 ```
+````
 
 ---
 
 Processed chunk into 3 sub-parts...
+
 ```
 
 **Scope resolution:** The VM resolves variable references by checking:
@@ -291,15 +299,17 @@ The first match wins.
 **Example directory for recursive calls:**
 
 ```
+
 bindings/
-├── data.md              # Root scope input
-├── result__1.md         # First process() invocation
-├── parts__1.md          # Parts from first invocation
-├── result__2.md         # Recursive call (depth 2)
-├── parts__2.md          # Parts from depth 2
-├── result__3.md         # Recursive call (depth 3)
+├── data.md # Root scope input
+├── result**1.md # First process() invocation
+├── parts**1.md # Parts from first invocation
+├── result**2.md # Recursive call (depth 2)
+├── parts**2.md # Parts from depth 2
+├── result\_\_3.md # Recursive call (depth 3)
 └── ...
-```
+
+````
 
 ---
 
@@ -326,7 +336,7 @@ Architecture uses Express + PostgreSQL. Test coverage target is 80%.
 
 - Rate limiting not yet implemented on login endpoint
 - Need to verify OAuth flow works with new token format
-```
+````
 
 #### `agents/{name}/{name}-NNN.md` (Segments)
 
@@ -350,11 +360,11 @@ prompt: "Review the research findings"
 
 ## Who Writes What
 
-| File | Written By |
-|------|------------|
-| `state.md` | VM only |
-| `bindings/{name}.md` | Subagent |
-| `agents/{name}/memory.md` | Persistent agent |
+| File                          | Written By       |
+| ----------------------------- | ---------------- |
+| `state.md`                    | VM only          |
+| `bindings/{name}.md`          | Subagent         |
+| `agents/{name}/memory.md`     | Persistent agent |
 | `agents/{name}/{name}-NNN.md` | Persistent agent |
 
 The VM orchestrates; subagents write their own outputs directly to the filesystem. **The VM never holds full binding values—it tracks file paths.**
@@ -367,7 +377,7 @@ When the VM spawns a session, it tells the subagent where to write output.
 
 ### For Regular Sessions
 
-```
+````
 When you complete this task, write your output to:
   .prose/runs/20260115-143052-a7b3c9/bindings/research.md
 
@@ -380,24 +390,27 @@ source:
 ```prose
 let research = session: researcher
   prompt: "Research AI safety"
-```
+````
 
 ---
 
 [Your output here]
+
 ```
 
 ### For Persistent Agents (resume:)
 
 ```
+
 Your memory is at:
-  .prose/runs/20260115-143052-a7b3c9/agents/captain/memory.md
+.prose/runs/20260115-143052-a7b3c9/agents/captain/memory.md
 
 Read it first to understand your prior context. When done, update it
 with your compacted state following the guidelines in primitives/session.md.
 
 Also write your segment record to:
-  .prose/runs/20260115-143052-a7b3c9/agents/captain/captain-003.md
+.prose/runs/20260115-143052-a7b3c9/agents/captain/captain-003.md
+
 ```
 
 ### What Subagents Return to the VM
@@ -406,17 +419,21 @@ After writing output, the subagent returns a **confirmation message**—not the 
 
 **Root scope (outside block invocations):**
 ```
+
 Binding written: research
 Location: .prose/runs/20260115-143052-a7b3c9/bindings/research.md
 Summary: AI safety research covering alignment, robustness, and interpretability with 15 citations.
+
 ```
 
 **Inside block invocation (include execution_id):**
 ```
+
 Binding written: result
-Location: .prose/runs/20260115-143052-a7b3c9/bindings/result__43.md
+Location: .prose/runs/20260115-143052-a7b3c9/bindings/result\_\_43.md
 Execution ID: 43
 Summary: Processed chunk into 3 sub-parts for recursive processing.
+
 ```
 
 The VM records the location and continues. It does NOT read the file—it passes the reference to subsequent sessions that need the context.
@@ -428,16 +445,18 @@ The VM records the location and continues. It does NOT read the file—it passes
 Imported programs use the **same unified structure recursively**:
 
 ```
+
 .prose/runs/{id}/imports/{handle}--{slug}/
 ├── program.prose
 ├── state.md
 ├── bindings/
-│   └── {name}.md
-├── imports/                    # Nested imports go here
-│   └── {handle2}--{slug2}/
-│       └── ...
+│ └── {name}.md
+├── imports/ # Nested imports go here
+│ └── {handle2}--{slug2}/
+│ └── ...
 └── agents/
-    └── {name}/
+└── {name}/
+
 ```
 
 This allows unlimited nesting depth while maintaining consistent structure at every level.
@@ -476,3 +495,4 @@ If execution is interrupted, resume by:
 3. Continuing from the marked position
 
 The `state.md` file contains everything needed to understand where execution stopped and what has been accomplished.
+```

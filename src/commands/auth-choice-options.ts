@@ -1,243 +1,120 @@
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import { CLAUDE_CLI_PROFILE_ID, CODEX_CLI_PROFILE_ID } from "../agents/auth-profiles.js";
-import { colorize, isRich, theme } from "../terminal/theme.js";
-import type { AuthChoice } from "./onboard-types.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { resolveManifestProviderAuthChoices } from "../plugins/provider-auth-choices.js";
+import { resolveProviderWizardOptions } from "../plugins/provider-wizard.js";
+import {
+  CORE_AUTH_CHOICE_OPTIONS,
+  type AuthChoiceGroup,
+  type AuthChoiceOption,
+  formatStaticAuthChoiceChoicesForCli,
+} from "./auth-choice-options.static.js";
+import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
 
-export type AuthChoiceOption = {
-  value: AuthChoice;
-  label: string;
-  hint?: string;
-};
+const DEFAULT_AUTH_CHOICE_ONBOARDING_SCOPE = "text-inference" as const;
 
-export type AuthChoiceGroupId =
-  | "openai"
-  | "anthropic"
-  | "google"
-  | "copilot"
-  | "openrouter"
-  | "ai-gateway"
-  | "moonshot"
-  | "zai"
-  | "opencode-zen"
-  | "minimax"
-  | "synthetic"
-  | "venice"
-  | "qwen";
+function includesOnboardingScope(
+  onboardingScopes: readonly ("text-inference" | "image-generation")[] | undefined,
+  scope: "text-inference" | "image-generation",
+): boolean {
+  return onboardingScopes
+    ? onboardingScopes.includes(scope)
+    : scope === DEFAULT_AUTH_CHOICE_ONBOARDING_SCOPE;
+}
 
-export type AuthChoiceGroup = {
-  value: AuthChoiceGroupId;
-  label: string;
-  hint?: string;
-  options: AuthChoiceOption[];
-};
+function compareOptionLabels(a: AuthChoiceOption, b: AuthChoiceOption): number {
+  return a.label.localeCompare(b.label);
+}
 
-const AUTH_CHOICE_GROUP_DEFS: {
-  value: AuthChoiceGroupId;
-  label: string;
-  hint?: string;
-  choices: AuthChoice[];
-}[] = [
-  {
-    value: "openai",
-    label: "OpenAI",
-    hint: "Codex OAuth + API key",
-    choices: ["codex-cli", "openai-codex", "openai-api-key"],
-  },
-  {
-    value: "anthropic",
-    label: "Anthropic",
-    hint: "Claude Code CLI + API key",
-    choices: ["token", "claude-cli", "apiKey"],
-  },
-  {
-    value: "minimax",
-    label: "MiniMax",
-    hint: "M2.1 (recommended)",
-    choices: ["minimax-api", "minimax-api-lightning"],
-  },
-  {
-    value: "qwen",
-    label: "Qwen",
-    hint: "OAuth",
-    choices: ["qwen-portal"],
-  },
-  {
-    value: "synthetic",
-    label: "Synthetic",
-    hint: "Anthropic-compatible (multi-model)",
-    choices: ["synthetic-api-key"],
-  },
-  {
-    value: "venice",
-    label: "Venice AI",
-    hint: "Privacy-focused (uncensored models)",
-    choices: ["venice-api-key"],
-  },
-  {
-    value: "google",
-    label: "Google",
-    hint: "Gemini API key + OAuth",
-    choices: ["gemini-api-key", "google-antigravity", "google-gemini-cli"],
-  },
-  {
-    value: "copilot",
-    label: "Copilot",
-    hint: "GitHub + local proxy",
-    choices: ["github-copilot", "copilot-proxy"],
-  },
-  {
-    value: "openrouter",
-    label: "OpenRouter",
-    hint: "API key",
-    choices: ["openrouter-api-key"],
-  },
-  {
-    value: "ai-gateway",
-    label: "Vercel AI Gateway",
-    hint: "API key",
-    choices: ["ai-gateway-api-key"],
-  },
-  {
-    value: "moonshot",
-    label: "Moonshot AI",
-    hint: "Kimi K2 + Kimi Code",
-    choices: ["moonshot-api-key", "kimi-code-api-key"],
-  },
-  {
-    value: "zai",
-    label: "Z.AI (GLM 4.7)",
-    hint: "API key",
-    choices: ["zai-api-key"],
-  },
-  {
-    value: "opencode-zen",
-    label: "OpenCode Zen",
-    hint: "API key",
-    choices: ["opencode-zen"],
-  },
-];
+function compareGroupLabels(a: AuthChoiceGroup, b: AuthChoiceGroup): number {
+  return a.label.localeCompare(b.label);
+}
 
-function formatOAuthHint(expires?: number, opts?: { allowStale?: boolean }): string {
-  const rich = isRich();
-  if (!expires) {
-    return colorize(rich, theme.muted, "token unavailable");
-  }
-  const now = Date.now();
-  const remaining = expires - now;
-  if (remaining <= 0) {
-    if (opts?.allowStale) {
-      return colorize(rich, theme.warn, "token present · refresh on use");
-    }
-    return colorize(rich, theme.error, "token expired");
-  }
-  const minutes = Math.round(remaining / (60 * 1000));
-  const duration =
-    minutes >= 120
-      ? `${Math.round(minutes / 60)}h`
-      : minutes >= 60
-        ? "1h"
-        : `${Math.max(minutes, 1)}m`;
-  const label = `token ok · expires in ${duration}`;
-  if (minutes <= 10) {
-    return colorize(rich, theme.warn, label);
-  }
-  return colorize(rich, theme.success, label);
+function resolveManifestProviderChoiceOptions(params?: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): AuthChoiceOption[] {
+  return resolveManifestProviderAuthChoices(params ?? {})
+    .filter((choice) =>
+      includesOnboardingScope(choice.onboardingScopes, DEFAULT_AUTH_CHOICE_ONBOARDING_SCOPE),
+    )
+    .map((choice) => ({
+      value: choice.choiceId as AuthChoice,
+      label: choice.choiceLabel,
+      ...(choice.choiceHint ? { hint: choice.choiceHint } : {}),
+      ...(choice.groupId ? { groupId: choice.groupId as AuthChoiceGroupId } : {}),
+      ...(choice.groupLabel ? { groupLabel: choice.groupLabel } : {}),
+      ...(choice.groupHint ? { groupHint: choice.groupHint } : {}),
+    }));
+}
+
+function resolveRuntimeFallbackProviderChoiceOptions(params?: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): AuthChoiceOption[] {
+  return resolveProviderWizardOptions(params ?? {})
+    .filter((option) =>
+      includesOnboardingScope(option.onboardingScopes, DEFAULT_AUTH_CHOICE_ONBOARDING_SCOPE),
+    )
+    .map((option) => ({
+      value: option.value as AuthChoice,
+      label: option.label,
+      ...(option.hint ? { hint: option.hint } : {}),
+      groupId: option.groupId as AuthChoiceGroupId,
+      groupLabel: option.groupLabel,
+      ...(option.groupHint ? { groupHint: option.groupHint } : {}),
+    }));
+}
+
+export function formatAuthChoiceChoicesForCli(params?: {
+  includeSkip?: boolean;
+  includeLegacyAliases?: boolean;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): string {
+  const values = [
+    ...formatStaticAuthChoiceChoicesForCli(params).split("|"),
+    ...resolveManifestProviderChoiceOptions(params).map((option) => option.value),
+  ];
+
+  return [...new Set(values)].join("|");
 }
 
 export function buildAuthChoiceOptions(params: {
   store: AuthProfileStore;
   includeSkip: boolean;
-  includeClaudeCliIfMissing?: boolean;
-  platform?: NodeJS.Platform;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
 }): AuthChoiceOption[] {
-  const options: AuthChoiceOption[] = [];
-  const platform = params.platform ?? process.platform;
-
-  const codexCli = params.store.profiles[CODEX_CLI_PROFILE_ID];
-  if (codexCli?.type === "oauth") {
-    options.push({
-      value: "codex-cli",
-      label: "OpenAI Codex OAuth (Codex CLI)",
-      hint: formatOAuthHint(codexCli.expires, { allowStale: true }),
-    });
+  void params.store;
+  const optionByValue = new Map<AuthChoice, AuthChoiceOption>();
+  for (const option of CORE_AUTH_CHOICE_OPTIONS) {
+    optionByValue.set(option.value, option);
+  }
+  for (const option of resolveManifestProviderChoiceOptions({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  })) {
+    optionByValue.set(option.value, option);
+  }
+  for (const option of resolveRuntimeFallbackProviderChoiceOptions({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  })) {
+    if (!optionByValue.has(option.value)) {
+      optionByValue.set(option.value, option);
+    }
   }
 
-  const claudeCli = params.store.profiles[CLAUDE_CLI_PROFILE_ID];
-  if (claudeCli?.type === "oauth" || claudeCli?.type === "token") {
-    options.push({
-      value: "claude-cli",
-      label: "Anthropic token (Claude Code CLI)",
-      hint: `reuses existing Claude Code auth · ${formatOAuthHint(claudeCli.expires)}`,
-    });
-  } else if (params.includeClaudeCliIfMissing && platform === "darwin") {
-    options.push({
-      value: "claude-cli",
-      label: "Anthropic token (Claude Code CLI)",
-      hint: "reuses existing Claude Code auth · requires Keychain access",
-    });
-  }
+  const options: AuthChoiceOption[] = Array.from(optionByValue.values()).toSorted(
+    compareOptionLabels,
+  );
 
-  options.push({
-    value: "token",
-    label: "Anthropic token (paste setup-token)",
-    hint: "run `claude setup-token` elsewhere, then paste the token here",
-  });
-
-  options.push({
-    value: "openai-codex",
-    label: "OpenAI Codex (ChatGPT OAuth)",
-  });
-  options.push({ value: "chutes", label: "Chutes (OAuth)" });
-  options.push({ value: "openai-api-key", label: "OpenAI API key" });
-  options.push({ value: "openrouter-api-key", label: "OpenRouter API key" });
-  options.push({
-    value: "ai-gateway-api-key",
-    label: "Vercel AI Gateway API key",
-  });
-  options.push({ value: "moonshot-api-key", label: "Moonshot AI API key" });
-  options.push({ value: "kimi-code-api-key", label: "Kimi Code API key" });
-  options.push({ value: "synthetic-api-key", label: "Synthetic API key" });
-  options.push({
-    value: "venice-api-key",
-    label: "Venice AI API key",
-    hint: "Privacy-focused inference (uncensored models)",
-  });
-  options.push({
-    value: "github-copilot",
-    label: "GitHub Copilot (GitHub device login)",
-    hint: "Uses GitHub device flow",
-  });
-  options.push({ value: "gemini-api-key", label: "Google Gemini API key" });
-  options.push({
-    value: "google-antigravity",
-    label: "Google Antigravity OAuth",
-    hint: "Uses the bundled Antigravity auth plugin",
-  });
-  options.push({
-    value: "google-gemini-cli",
-    label: "Google Gemini CLI OAuth",
-    hint: "Uses the bundled Gemini CLI auth plugin",
-  });
-  options.push({ value: "zai-api-key", label: "Z.AI (GLM 4.7) API key" });
-  options.push({ value: "qwen-portal", label: "Qwen OAuth" });
-  options.push({
-    value: "copilot-proxy",
-    label: "Copilot Proxy (local)",
-    hint: "Local proxy for VS Code Copilot models",
-  });
-  options.push({ value: "apiKey", label: "Anthropic API key" });
-  // Token flow is currently Anthropic-only; use CLI for advanced providers.
-  options.push({
-    value: "opencode-zen",
-    label: "OpenCode Zen (multi-model proxy)",
-    hint: "Claude, GPT, Gemini via opencode.ai/zen",
-  });
-  options.push({ value: "minimax-api", label: "MiniMax M2.1" });
-  options.push({
-    value: "minimax-api-lightning",
-    label: "MiniMax M2.1 Lightning",
-    hint: "Faster, higher output cost",
-  });
   if (params.includeSkip) {
     options.push({ value: "skip", label: "Skip for now" });
   }
@@ -248,8 +125,9 @@ export function buildAuthChoiceOptions(params: {
 export function buildAuthChoiceGroups(params: {
   store: AuthProfileStore;
   includeSkip: boolean;
-  includeClaudeCliIfMissing?: boolean;
-  platform?: NodeJS.Platform;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
 }): {
   groups: AuthChoiceGroup[];
   skipOption?: AuthChoiceOption;
@@ -258,16 +136,30 @@ export function buildAuthChoiceGroups(params: {
     ...params,
     includeSkip: false,
   });
-  const optionByValue = new Map<AuthChoice, AuthChoiceOption>(
-    options.map((opt) => [opt.value, opt]),
-  );
+  const groupsById = new Map<AuthChoiceGroupId, AuthChoiceGroup>();
 
-  const groups = AUTH_CHOICE_GROUP_DEFS.map((group) => ({
-    ...group,
-    options: group.choices
-      .map((choice) => optionByValue.get(choice))
-      .filter((opt): opt is AuthChoiceOption => Boolean(opt)),
-  }));
+  for (const option of options) {
+    if (!option.groupId || !option.groupLabel) {
+      continue;
+    }
+    const existing = groupsById.get(option.groupId);
+    if (existing) {
+      existing.options.push(option);
+      continue;
+    }
+    groupsById.set(option.groupId, {
+      value: option.groupId,
+      label: option.groupLabel,
+      ...(option.groupHint ? { hint: option.groupHint } : {}),
+      options: [option],
+    });
+  }
+  const groups = Array.from(groupsById.values())
+    .map((group) => ({
+      ...group,
+      options: [...group.options].toSorted(compareOptionLabels),
+    }))
+    .toSorted(compareGroupLabels);
 
   const skipOption = params.includeSkip
     ? ({ value: "skip", label: "Skip for now" } satisfies AuthChoiceOption)

@@ -7,7 +7,9 @@ const MAX_JOB_TTL_MS = 3 * 60 * 60 * 1000; // 3 hours
 const DEFAULT_PENDING_OUTPUT_CHARS = 30_000;
 
 function clampTtl(value: number | undefined) {
-  if (!value || Number.isNaN(value)) return DEFAULT_JOB_TTL_MS;
+  if (!value || Number.isNaN(value)) {
+    return DEFAULT_JOB_TTL_MS;
+  }
   return Math.min(Math.max(value, MIN_JOB_TTL_MS), MAX_JOB_TTL_MS);
 }
 
@@ -18,6 +20,8 @@ export type ProcessStatus = "running" | "completed" | "failed" | "killed";
 export type SessionStdin = {
   write: (data: string, cb?: (err?: Error | null) => void) => void;
   end: () => void;
+  // When backed by a real Node stream (child.stdin), this exists; for PTY wrappers it may not.
+  destroy?: () => void;
   destroyed?: boolean;
 };
 
@@ -27,6 +31,7 @@ export interface ProcessSession {
   scopeKey?: string;
   sessionKey?: string;
   notifyOnExit?: boolean;
+  notifyOnExitEmptySuccess?: boolean;
   exitNotified?: boolean;
   child?: ChildProcessWithoutNullStreams;
   stdin?: SessionStdin;
@@ -155,7 +160,41 @@ export function markBackgrounded(session: ProcessSession) {
 
 function moveToFinished(session: ProcessSession, status: ProcessStatus) {
   runningSessions.delete(session.id);
-  if (!session.backgrounded) return;
+
+  // Clean up child process stdio streams to prevent FD leaks
+  if (session.child) {
+    // Destroy stdio streams to release file descriptors
+    session.child.stdin?.destroy?.();
+    session.child.stdout?.destroy?.();
+    session.child.stderr?.destroy?.();
+
+    // Remove all event listeners to prevent memory leaks
+    session.child.removeAllListeners();
+
+    // Clear the reference
+    delete session.child;
+  }
+
+  // Clean up stdin wrapper - call destroy if available, otherwise just remove reference
+  if (session.stdin) {
+    // Try to call destroy/end method if exists
+    if (typeof session.stdin.destroy === "function") {
+      session.stdin.destroy();
+    } else if (typeof session.stdin.end === "function") {
+      session.stdin.end();
+    }
+    // Only set flag if writable
+    try {
+      (session.stdin as { destroyed?: boolean }).destroyed = true;
+    } catch {
+      // Ignore if read-only
+    }
+    delete session.stdin;
+  }
+
+  if (!session.backgrounded) {
+    return;
+  }
   finishedSessions.set(session.id, {
     id: session.id,
     command: session.command,
@@ -174,18 +213,24 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
 }
 
 export function tail(text: string, max = 2000) {
-  if (text.length <= max) return text;
+  if (text.length <= max) {
+    return text;
+  }
   return text.slice(text.length - max);
 }
 
 function sumPendingChars(buffer: string[]) {
   let total = 0;
-  for (const chunk of buffer) total += chunk.length;
+  for (const chunk of buffer) {
+    total += chunk.length;
+  }
   return total;
 }
 
 function capPendingBuffer(buffer: string[], pendingChars: number, cap: number) {
-  if (pendingChars <= cap) return pendingChars;
+  if (pendingChars <= cap) {
+    return pendingChars;
+  }
   const last = buffer.at(-1);
   if (last && last.length >= cap) {
     buffer.length = 0;
@@ -205,7 +250,9 @@ function capPendingBuffer(buffer: string[], pendingChars: number, cap: number) {
 }
 
 export function trimWithCap(text: string, max: number) {
-  if (text.length <= max) return text;
+  if (text.length <= max) {
+    return text;
+  }
   return text.slice(text.length - max);
 }
 
@@ -228,7 +275,9 @@ export function resetProcessRegistryForTests() {
 }
 
 export function setJobTtlMs(value?: number) {
-  if (value === undefined || Number.isNaN(value)) return;
+  if (value === undefined || Number.isNaN(value)) {
+    return;
+  }
   jobTtlMs = clampTtl(value);
   stopSweeper();
   startSweeper();
@@ -244,13 +293,17 @@ function pruneFinishedSessions() {
 }
 
 function startSweeper() {
-  if (sweeper) return;
+  if (sweeper) {
+    return;
+  }
   sweeper = setInterval(pruneFinishedSessions, Math.max(30_000, jobTtlMs / 6));
   sweeper.unref?.();
 }
 
 function stopSweeper() {
-  if (!sweeper) return;
+  if (!sweeper) {
+    return;
+  }
   clearInterval(sweeper);
   sweeper = null;
 }

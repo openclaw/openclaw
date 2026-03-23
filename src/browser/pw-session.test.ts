@@ -1,6 +1,5 @@
 import type { Page } from "playwright-core";
 import { describe, expect, it, vi } from "vitest";
-
 import {
   ensurePageState,
   refLocator,
