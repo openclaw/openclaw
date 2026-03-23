@@ -4,7 +4,6 @@ import {
   DEFAULT_SEARCH_COUNT,
   enablePluginInConfig,
   getScopedCredentialValue,
-  MAX_SEARCH_COUNT,
   mergeScopedSearchConfig,
   normalizeToIsoDate,
   readCachedSearchPayload,
@@ -14,7 +13,6 @@ import {
   readStringParam,
   resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
-  resolveSearchCount,
   resolveSearchTimeoutSeconds,
   resolveSiteName,
   setProviderWebSearchPluginConfigValue,
@@ -28,8 +26,9 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 
 const EXA_SEARCH_ENDPOINT = "https://api.exa.ai/search";
-const EXA_SEARCH_TYPES = ["auto", "keyword", "neural"] as const;
+const EXA_SEARCH_TYPES = ["auto", "neural", "fast", "deep", "deep-reasoning", "instant"] as const;
 const EXA_FRESHNESS_VALUES = ["day", "week", "month", "year"] as const;
+const EXA_MAX_SEARCH_COUNT = 100;
 
 type ExaConfig = {
   apiKey?: string;
@@ -38,9 +37,21 @@ type ExaConfig = {
 type ExaSearchType = (typeof EXA_SEARCH_TYPES)[number];
 type ExaFreshness = (typeof EXA_FRESHNESS_VALUES)[number];
 
+type ExaTextContentsOption = boolean | { maxCharacters?: number };
+type ExaHighlightsContentsOption =
+  | boolean
+  | {
+      maxCharacters?: number;
+      query?: string;
+      numSentences?: number;
+      highlightsPerUrl?: number;
+    };
+type ExaSummaryContentsOption = boolean | { query?: string };
+
 type ExaContentsArgs = {
-  highlights?: boolean;
-  text?: boolean;
+  highlights?: ExaHighlightsContentsOption;
+  text?: ExaTextContentsOption;
+  summary?: ExaSummaryContentsOption;
 };
 
 type ExaSearchResult = {
@@ -48,6 +59,8 @@ type ExaSearchResult = {
   url?: unknown;
   publishedDate?: unknown;
   highlights?: unknown;
+  highlightScores?: unknown;
+  summary?: unknown;
   text?: unknown;
 };
 
@@ -98,7 +111,183 @@ function resolveExaDescription(result: ExaSearchResult): string {
       return highlightText;
     }
   }
+  if (typeof result.summary === "string" && result.summary.trim()) {
+    return result.summary.trim();
+  }
   return typeof result.text === "string" ? result.text.trim() : "";
+}
+
+function parsePositiveInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+function invalidContentsPayload(message: string) {
+  return {
+    error: "invalid_contents",
+    message,
+    docs: "https://docs.openclaw.ai/tools/web",
+  };
+}
+
+function isErrorPayload(value: unknown): value is { error: string; message: string; docs: string } {
+  return Boolean(
+    value && typeof value === "object" && "error" in value && "message" in value && "docs" in value,
+  );
+}
+
+function resolveExaSearchCount(value: unknown, fallback: number): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(1, Math.min(EXA_MAX_SEARCH_COUNT, Math.floor(parsed)));
+}
+
+function parseExaContents(
+  rawContents: unknown,
+): { value?: ExaContentsArgs } | { error: string; message: string; docs: string } {
+  if (rawContents === undefined) {
+    return { value: undefined };
+  }
+  if (!rawContents || typeof rawContents !== "object" || Array.isArray(rawContents)) {
+    return invalidContentsPayload(
+      "contents must be an object with optional text, highlights, and summary fields.",
+    );
+  }
+
+  const raw = rawContents as Record<string, unknown>;
+  const allowedKeys = new Set(["text", "highlights", "summary"]);
+  for (const key of Object.keys(raw)) {
+    if (!allowedKeys.has(key)) {
+      return invalidContentsPayload(
+        `contents has unknown field "${key}". Only "text", "highlights", and "summary" are allowed.`,
+      );
+    }
+  }
+
+  const parsed: ExaContentsArgs = {};
+
+  const parseText = (
+    value: unknown,
+  ): ExaTextContentsOption | { error: string; message: string; docs: string } => {
+    if (typeof value === "boolean") {
+      return value;
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return invalidContentsPayload("contents.text must be a boolean or an object.");
+    }
+    const obj = value as Record<string, unknown>;
+    for (const key of Object.keys(obj)) {
+      if (key !== "maxCharacters") {
+        return invalidContentsPayload(
+          `contents.text has unknown field "${key}". Only "maxCharacters" is allowed.`,
+        );
+      }
+    }
+    if ("maxCharacters" in obj && parsePositiveInteger(obj.maxCharacters) === undefined) {
+      return invalidContentsPayload("contents.text.maxCharacters must be a positive integer.");
+    }
+    return {
+      ...(parsePositiveInteger(obj.maxCharacters)
+        ? { maxCharacters: parsePositiveInteger(obj.maxCharacters) }
+        : {}),
+    };
+  };
+
+  const parseHighlights = (
+    value: unknown,
+  ): ExaHighlightsContentsOption | { error: string; message: string; docs: string } => {
+    if (typeof value === "boolean") {
+      return value;
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return invalidContentsPayload("contents.highlights must be a boolean or an object.");
+    }
+    const obj = value as Record<string, unknown>;
+    const allowed = new Set(["maxCharacters", "query", "numSentences", "highlightsPerUrl"]);
+    for (const key of Object.keys(obj)) {
+      if (!allowed.has(key)) {
+        return invalidContentsPayload(
+          `contents.highlights has unknown field "${key}". Allowed fields are "maxCharacters", "query", "numSentences", and "highlightsPerUrl".`,
+        );
+      }
+    }
+    if ("maxCharacters" in obj && parsePositiveInteger(obj.maxCharacters) === undefined) {
+      return invalidContentsPayload(
+        "contents.highlights.maxCharacters must be a positive integer.",
+      );
+    }
+    if ("numSentences" in obj && parsePositiveInteger(obj.numSentences) === undefined) {
+      return invalidContentsPayload("contents.highlights.numSentences must be a positive integer.");
+    }
+    if ("highlightsPerUrl" in obj && parsePositiveInteger(obj.highlightsPerUrl) === undefined) {
+      return invalidContentsPayload(
+        "contents.highlights.highlightsPerUrl must be a positive integer.",
+      );
+    }
+    if ("query" in obj && typeof obj.query !== "string") {
+      return invalidContentsPayload("contents.highlights.query must be a string.");
+    }
+    return {
+      ...(parsePositiveInteger(obj.maxCharacters)
+        ? { maxCharacters: parsePositiveInteger(obj.maxCharacters) }
+        : {}),
+      ...(typeof obj.query === "string" ? { query: obj.query } : {}),
+      ...(parsePositiveInteger(obj.numSentences)
+        ? { numSentences: parsePositiveInteger(obj.numSentences) }
+        : {}),
+      ...(parsePositiveInteger(obj.highlightsPerUrl)
+        ? { highlightsPerUrl: parsePositiveInteger(obj.highlightsPerUrl) }
+        : {}),
+    };
+  };
+
+  const parseSummary = (
+    value: unknown,
+  ): ExaSummaryContentsOption | { error: string; message: string; docs: string } => {
+    if (typeof value === "boolean") {
+      return value;
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return invalidContentsPayload("contents.summary must be a boolean or an object.");
+    }
+    const obj = value as Record<string, unknown>;
+    for (const key of Object.keys(obj)) {
+      if (key !== "query") {
+        return invalidContentsPayload(
+          `contents.summary has unknown field "${key}". Only "query" is allowed.`,
+        );
+      }
+    }
+    if ("query" in obj && typeof obj.query !== "string") {
+      return invalidContentsPayload("contents.summary.query must be a string.");
+    }
+    return typeof obj.query === "string" ? { query: obj.query } : {};
+  };
+
+  if ("text" in raw) {
+    const parsedText = parseText(raw.text);
+    if (isErrorPayload(parsedText)) {
+      return parsedText;
+    }
+    parsed.text = parsedText;
+  }
+  if ("highlights" in raw) {
+    const parsedHighlights = parseHighlights(raw.highlights);
+    if (isErrorPayload(parsedHighlights)) {
+      return parsedHighlights;
+    }
+    parsed.highlights = parsedHighlights;
+  }
+  if ("summary" in raw) {
+    const parsedSummary = parseSummary(raw.summary);
+    if (isErrorPayload(parsedSummary)) {
+      return parsedSummary;
+    }
+    parsed.summary = parsedSummary;
+  }
+
+  return { value: parsed };
 }
 
 function normalizeExaResults(payload: unknown): ExaSearchResult[] {
@@ -200,9 +389,9 @@ function createExaSchema() {
       query: Type.String({ description: "Search query string." }),
       count: Type.Optional(
         Type.Number({
-          description: "Number of results to return (1-10).",
+          description: "Number of results to return (1-100, subject to Exa search-type limits).",
           minimum: 1,
-          maximum: MAX_SEARCH_COUNT,
+          maximum: EXA_MAX_SEARCH_COUNT,
         }),
       ),
       freshness: optionalStringEnum(
@@ -221,15 +410,27 @@ function createExaSchema() {
       ),
       type: optionalStringEnum(
         EXA_SEARCH_TYPES,
-        'Exa search mode: "auto", "keyword", or "neural".',
+        'Exa search mode: "auto", "neural", "fast", "deep", "deep-reasoning", or "instant".',
       ),
       contents: Type.Optional(
         Type.Object(
           {
             highlights: Type.Optional(
-              Type.Boolean({ description: "Include Exa highlights in results." }),
+              Type.Unsafe<ExaHighlightsContentsOption>({
+                description:
+                  "Highlights config: true, or an object with maxCharacters, query, numSentences, or highlightsPerUrl.",
+              }),
             ),
-            text: Type.Optional(Type.Boolean({ description: "Include full text in results." })),
+            text: Type.Optional(
+              Type.Unsafe<ExaTextContentsOption>({
+                description: "Text config: true, or an object with maxCharacters.",
+              }),
+            ),
+            summary: Type.Optional(
+              Type.Unsafe<ExaSummaryContentsOption>({
+                description: "Summary config: true, or an object with query.",
+              }),
+            ),
           },
           { additionalProperties: false },
         ),
@@ -265,8 +466,9 @@ function createExaToolDefinition(
 
       const query = readStringParam(params, "query", { required: true });
       const rawType = readStringParam(params, "type");
-      const type: ExaSearchType =
-        rawType === "keyword" || rawType === "neural" || rawType === "auto" ? rawType : "auto";
+      const type: ExaSearchType = EXA_SEARCH_TYPES.includes(rawType as ExaSearchType)
+        ? (rawType as ExaSearchType)
+        : "auto";
       const count =
         readNumberParam(params, "count", { integer: true }) ??
         searchConfig?.maxResults ??
@@ -318,22 +520,26 @@ function createExaToolDefinition(
         };
       }
 
-      const rawContents = params.contents;
+      const parsedContents = parseExaContents(params.contents);
+      if (isErrorPayload(parsedContents)) {
+        return parsedContents;
+      }
       const contents =
-        rawContents && typeof rawContents === "object" && !Array.isArray(rawContents)
-          ? (rawContents as ExaContentsArgs)
+        parsedContents.value && Object.keys(parsedContents.value).length > 0
+          ? parsedContents.value
           : undefined;
 
       const cacheKey = buildSearchCacheKey([
         "exa",
         type,
         query,
-        resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+        resolveExaSearchCount(count, DEFAULT_SEARCH_COUNT),
         freshness,
         dateAfter,
         dateBefore,
-        contents?.highlights,
-        contents?.text,
+        contents?.highlights ? JSON.stringify(contents.highlights) : undefined,
+        contents?.text ? JSON.stringify(contents.text) : undefined,
+        contents?.summary ? JSON.stringify(contents.summary) : undefined,
       ]);
       const cached = readCachedSearchPayload(cacheKey);
       if (cached) {
@@ -344,7 +550,7 @@ function createExaToolDefinition(
       const results = await runExaSearch({
         apiKey,
         query,
-        count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+        count: resolveExaSearchCount(count, DEFAULT_SEARCH_COUNT),
         freshness,
         dateAfter,
         dateBefore,
@@ -368,6 +574,12 @@ function createExaToolDefinition(
           const title = typeof entry.title === "string" ? entry.title : "";
           const url = typeof entry.url === "string" ? entry.url : "";
           const description = resolveExaDescription(entry);
+          const summary = typeof entry.summary === "string" ? entry.summary.trim() : "";
+          const highlightScores = Array.isArray(entry.highlightScores)
+            ? entry.highlightScores.filter(
+                (score): score is number => typeof score === "number" && Number.isFinite(score),
+              )
+            : [];
           const published =
             typeof entry.publishedDate === "string" && entry.publishedDate
               ? entry.publishedDate
@@ -378,6 +590,8 @@ function createExaToolDefinition(
             description: description ? wrapWebContent(description, "web_search") : "",
             published,
             siteName: resolveSiteName(url) || undefined,
+            ...(summary ? { summary: wrapWebContent(summary, "web_search") } : {}),
+            ...(highlightScores.length > 0 ? { highlightScores } : {}),
           };
         }),
       };
@@ -423,8 +637,11 @@ export function createExaWebSearchProvider(): WebSearchProviderPlugin {
 
 export const __testing = {
   normalizeExaResults,
+  normalizeExaFreshness,
+  parseExaContents,
   resolveExaApiKey,
   resolveExaConfig,
   resolveExaDescription,
+  resolveExaSearchCount,
   resolveFreshnessStartDate,
 } as const;
