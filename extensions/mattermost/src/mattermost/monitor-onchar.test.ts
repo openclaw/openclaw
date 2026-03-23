@@ -8,7 +8,7 @@ describe("mattermost monitor onchar", () => {
   });
 
   it("trims configured prefixes and preserves order", () => {
-    expect(resolveOncharPrefixes(["  ?? ", " !", " /bot "] )).toEqual(["??", "!", "/bot"]);
+    expect(resolveOncharPrefixes(["  ?? ", " !", " /bot "])).toEqual(["??", "!", "/bot"]);
   });
 
   it("strips the first matching prefix after leading whitespace", () => {
