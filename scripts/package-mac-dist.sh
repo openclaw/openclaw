@@ -36,6 +36,7 @@ DSYM_ZIP="$ROOT_DIR/dist/OpenClaw-$VERSION.dSYM.zip"
 SKIP_NOTARIZE="${SKIP_NOTARIZE:-0}"
 NOTARIZE=1
 SKIP_DSYM="${SKIP_DSYM:-0}"
+SKIP_DMG="${SKIP_DMG:-0}"
 
 if [[ "$SKIP_NOTARIZE" == "1" ]]; then
   NOTARIZE=0
@@ -53,15 +54,19 @@ echo "📦 Zip: $ZIP"
 rm -f "$ZIP"
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
 
-echo "💿 DMG: $DMG"
-"$ROOT_DIR/scripts/create-dmg.sh" "$APP" "$DMG"
+if [[ "$SKIP_DMG" != "1" ]]; then
+  echo "💿 DMG: $DMG"
+  "$ROOT_DIR/scripts/create-dmg.sh" "$APP" "$DMG"
 
-if [[ "$NOTARIZE" == "1" ]]; then
-  if [[ -n "${SIGN_IDENTITY:-}" ]]; then
-    echo "🔏 Signing DMG: $DMG"
-    /usr/bin/codesign --force --sign "$SIGN_IDENTITY" --timestamp "$DMG"
+  if [[ "$NOTARIZE" == "1" ]]; then
+    if [[ -n "${SIGN_IDENTITY:-}" ]]; then
+      echo "🔏 Signing DMG: $DMG"
+      /usr/bin/codesign --force --sign "$SIGN_IDENTITY" --timestamp "$DMG"
+    fi
+    "$ROOT_DIR/scripts/notarize-mac-artifact.sh" "$DMG"
   fi
-  "$ROOT_DIR/scripts/notarize-mac-artifact.sh" "$DMG"
+else
+  echo "💿 Skipping DMG (SKIP_DMG=1)"
 fi
 
 if [[ "$SKIP_DSYM" != "1" ]]; then
