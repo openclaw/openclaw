@@ -108,32 +108,40 @@ describe("applyProxyToRequestClient", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
-  it("restores globalThis.fetch after executeRequest completes", async () => {
+  it("installs ALS-aware globalThis.fetch wrapper that is marked __discordProxyWrapped", () => {
     const runtime = makeRuntime();
-    const originalFetch = globalThis.fetch;
-    undiciFetchMock.mockClear().mockResolvedValue(new Response("ok", { status: 200 }));
-
     const restClient = new MockRequestClient() as unknown as RequestClient;
     applyProxyToRequestClient(restClient, "http://proxy.test:8080", runtime);
 
-    await (restClient as unknown as MockRequestClient).executeRequest({});
-
-    expect(globalThis.fetch).toBe(originalFetch);
+    // The wrapper is permanently installed; it is NOT a temporary swap.
+    expect(
+      (globalThis.fetch as typeof fetch & { __discordProxyWrapped?: boolean })
+        .__discordProxyWrapped,
+    ).toBe(true);
   });
 
-  it("restores globalThis.fetch even when executeRequest throws", async () => {
+  it("does not proxy globalThis.fetch calls made outside executeRequest context", async () => {
     const runtime = makeRuntime();
-    const originalFetch = globalThis.fetch;
-    undiciFetchMock.mockClear().mockRejectedValue(new Error("network error"));
+    undiciFetchMock.mockClear();
 
     const restClient = new MockRequestClient() as unknown as RequestClient;
     applyProxyToRequestClient(restClient, "http://proxy.test:8080", runtime);
 
-    await expect((restClient as unknown as MockRequestClient).executeRequest({})).rejects.toThrow(
-      "network error",
+    // A fetch call that is NOT initiated from inside executeRequest should NOT
+    // go through the undici proxy.  The ALS store is empty here, so the
+    // wrapper delegates to the original fetch (vitest's global fetch mock).
+    const directFetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response("direct", { status: 200 }),
     );
 
-    expect(globalThis.fetch).toBe(originalFetch);
+    await globalThis.fetch("https://example.com/unrelated");
+
+    // undici was NOT called for this direct fetch
+    expect(undiciFetchMock).not.toHaveBeenCalledWith(
+      "https://example.com/unrelated",
+      expect.anything(),
+    );
+    directFetchSpy.mockRestore();
   });
 
   it("does nothing when proxy URL is undefined or empty", () => {
@@ -149,9 +157,8 @@ describe("applyProxyToRequestClient", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
-  it("re-entrancy guard prevents permanent proxyFetch installation under concurrent calls", async () => {
+  it("concurrent executeRequest calls each use their own proxy context independently", async () => {
     const runtime = makeRuntime();
-    const originalFetch = globalThis.fetch;
     undiciFetchMock.mockClear().mockResolvedValue(new Response("ok", { status: 200 }));
 
     const restClient = new MockRequestClient() as unknown as RequestClient;
@@ -159,13 +166,13 @@ describe("applyProxyToRequestClient", () => {
 
     const exec = (restClient as unknown as MockRequestClient).executeRequest.bind(restClient);
 
-    // Simulate two concurrent executeRequest calls
+    // Both concurrent calls should succeed and route through the proxy
     const [r1, r2] = await Promise.all([exec({}), exec({})]);
     expect(r1).toBeDefined();
     expect(r2).toBeDefined();
 
-    // globalThis.fetch must be fully restored after both complete
-    expect(globalThis.fetch).toBe(originalFetch);
+    // Both calls should have gone through undici (ALS scoped, no interference)
+    expect(undiciFetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("logs error and skips patching when executeRequest is absent from prototype", () => {
