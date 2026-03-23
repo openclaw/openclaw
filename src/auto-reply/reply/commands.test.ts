@@ -142,6 +142,8 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
+  vi.useRealTimers();
+  vi.clearAllTimers();
   setDefaultChannelPluginRegistryForTests();
   readConfigFileSnapshotMock.mockImplementation(async () => {
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
