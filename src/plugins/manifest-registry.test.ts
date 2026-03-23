@@ -503,6 +503,23 @@ describe("loadPluginManifestRegistry", () => {
     );
   });
 
+  it("accepts media-understanding-style id hints without warning", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "groq", configSchema: { type: "object" } });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "groq-media-understanding",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+    ]);
+
+    expect(registry.diagnostics.some((diag) => diag.message.includes("plugin id mismatch"))).toBe(
+      false,
+    );
+  });
+
   it("still warns for unrelated id hint mismatches", () => {
     const dir = makeTempDir();
     writeManifest(dir, { id: "openai", configSchema: { type: "object" } });
