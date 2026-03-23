@@ -29,7 +29,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   logVerbose: () => {},
 }));
 
-import { downloadLineMedia } from "./download.js";
+let downloadLineMedia: typeof import("./download.js").downloadLineMedia;
 
 async function* chunks(parts: Buffer[]): AsyncGenerator<Buffer> {
   for (const part of parts) {
@@ -38,8 +38,11 @@ async function* chunks(parts: Buffer[]): AsyncGenerator<Buffer> {
 }
 
 describe("downloadLineMedia", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+  beforeEach(async () => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+    getMessageContentMock.mockReset();
+    ({ downloadLineMedia } = await import("./download.js"));
   });
 
   it("does not derive temp file path from external messageId", async () => {
