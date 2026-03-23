@@ -248,9 +248,9 @@ export function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string):
   if (!botOpenId) {
     return false;
   }
-  if ((event.message.content ?? "").includes("@_all")) {
-    return true;
-  }
+  // IMPORTANT: Feishu group broadcast mentions (@所有人 / @_all) should not count as
+  // an explicit bot mention for requireMention gating. Otherwise any group-wide
+  // broadcast can bypass per-agent mention targeting (for example mentionPatterns).
   const mentions = event.message.mentions ?? [];
   if (mentions.length > 0) {
     return mentions.some((mention) => mention.id.open_id === botOpenId);
