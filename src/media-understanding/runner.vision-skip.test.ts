@@ -2,11 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 
-let buildProviderRegistry: typeof import("./runner.js").buildProviderRegistry;
-let createMediaAttachmentCache: typeof import("./runner.js").createMediaAttachmentCache;
-let normalizeMediaAttachments: typeof import("./runner.js").normalizeMediaAttachments;
-let runCapability: typeof import("./runner.js").runCapability;
-
 const catalog = [
   {
     id: "gpt-4.1",
@@ -27,6 +22,11 @@ vi.mock("../agents/model-catalog.js", async () => {
     loadModelCatalog,
   };
 });
+
+let buildProviderRegistry: typeof import("./runner.js").buildProviderRegistry;
+let createMediaAttachmentCache: typeof import("./runner.js").createMediaAttachmentCache;
+let normalizeMediaAttachments: typeof import("./runner.js").normalizeMediaAttachments;
+let runCapability: typeof import("./runner.js").runCapability;
 
 describe("runCapability image skip", () => {
   beforeEach(async () => {
