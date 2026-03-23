@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as modelAuth from "../../agents/model-auth.js";
 import { buildFalImageGenerationProvider } from "../../../extensions/fal/image-generation-provider.js";
+import * as modelAuth from "../../agents/model-auth.js";
 
 function expectFalJsonPost(
   fetchMock: ReturnType<typeof vi.fn>,
