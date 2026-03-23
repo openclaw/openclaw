@@ -8,7 +8,7 @@ const hookMocks = vi.hoisted(() => ({
   runner: {
     hasHooks: vi.fn(() => false),
     runBeforeToolCall: vi.fn(async () => {}),
-    runAfterToolCall: vi.fn(async () => {}),
+    runAfterToolCallVoid: vi.fn(async () => {}),
   },
 }));
 
@@ -65,11 +65,11 @@ describe("after_tool_call hook wiring", () => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
     hookMocks.runner.runBeforeToolCall.mockClear();
     hookMocks.runner.runBeforeToolCall.mockResolvedValue(undefined);
-    hookMocks.runner.runAfterToolCall.mockClear();
-    hookMocks.runner.runAfterToolCall.mockResolvedValue(undefined);
+    hookMocks.runner.runAfterToolCallVoid.mockClear();
+    hookMocks.runner.runAfterToolCallVoid.mockResolvedValue(undefined);
   });
 
-  it("calls runAfterToolCall in handleToolExecutionEnd when hook is registered", async () => {
+  it("calls runAfterToolCallVoid in handleToolExecutionEnd when hook is registered", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
 
     const ctx = createToolHandlerCtx({
@@ -100,10 +100,11 @@ describe("after_tool_call hook wiring", () => {
       } as never,
     );
 
-    expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
+    expect(hookMocks.runner.runAfterToolCallVoid).toHaveBeenCalledTimes(1);
     expect(hookMocks.runner.runBeforeToolCall).not.toHaveBeenCalled();
 
-    const firstCall = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock.calls[0];
+    const firstCall = (hookMocks.runner.runAfterToolCallVoid as ReturnType<typeof vi.fn>).mock
+      .calls[0];
     expect(firstCall).toBeDefined();
     const event = firstCall?.[0] as
       | {
@@ -170,9 +171,10 @@ describe("after_tool_call hook wiring", () => {
       } as never,
     );
 
-    expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
+    expect(hookMocks.runner.runAfterToolCallVoid).toHaveBeenCalledTimes(1);
 
-    const firstCall = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock.calls[0];
+    const firstCall = (hookMocks.runner.runAfterToolCallVoid as ReturnType<typeof vi.fn>).mock
+      .calls[0];
     expect(firstCall).toBeDefined();
     const event = firstCall?.[0] as { error?: unknown } | undefined;
     expect(event).toBeDefined();
@@ -186,7 +188,7 @@ describe("after_tool_call hook wiring", () => {
     expect(context?.agentId).toBeUndefined();
   });
 
-  it("does not call runAfterToolCall when no hooks registered", async () => {
+  it("does not call runAfterToolCallVoid when no hooks registered", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
 
     const ctx = createToolHandlerCtx({ runId: "r" });
@@ -202,7 +204,7 @@ describe("after_tool_call hook wiring", () => {
       } as never,
     );
 
-    expect(hookMocks.runner.runAfterToolCall).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runAfterToolCallVoid).not.toHaveBeenCalled();
   });
 
   it("keeps start args isolated per run when toolCallId collides", async () => {
@@ -262,10 +264,10 @@ describe("after_tool_call hook wiring", () => {
       } as never,
     );
 
-    expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(2);
+    expect(hookMocks.runner.runAfterToolCallVoid).toHaveBeenCalledTimes(2);
 
-    const callA = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock.calls[0];
-    const callB = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock.calls[1];
+    const callA = (hookMocks.runner.runAfterToolCallVoid as ReturnType<typeof vi.fn>).mock.calls[0];
+    const callB = (hookMocks.runner.runAfterToolCallVoid as ReturnType<typeof vi.fn>).mock.calls[1];
     const eventA = callA?.[0] as { params?: unknown; runId?: string } | undefined;
     const eventB = callB?.[0] as { params?: unknown; runId?: string } | undefined;
 
