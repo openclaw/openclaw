@@ -7,17 +7,44 @@ vi.mock("../pi-model-discovery.js", () => ({
 
 import type { OpenRouterModelCapabilities } from "./openrouter-model-capabilities.js";
 
-const mockGetOpenRouterModelCapabilities = vi.fn<
-  (modelId: string) => OpenRouterModelCapabilities | undefined
->(() => undefined);
-const mockLoadOpenRouterModelCapabilities = vi.fn<(modelId: string) => Promise<void>>(
-  async () => {},
-);
+const {
+  mockOpenRouterCapabilities,
+  mockGetOpenRouterModelCapabilities,
+  mockLoadOpenRouterModelCapabilities,
+  mockResolveProviderRuntimePlugin,
+  mockPrepareProviderDynamicModel,
+  mockNormalizeProviderResolvedModelWithPlugin,
+} = vi.hoisted(() => {
+  const capabilities = new Map<string, OpenRouterModelCapabilities>();
+  return {
+    mockOpenRouterCapabilities: capabilities,
+    mockGetOpenRouterModelCapabilities: vi.fn((modelId: string) =>
+      capabilities.get(modelId),
+    ) as unknown,
+    mockLoadOpenRouterModelCapabilities: vi.fn(async (_modelId: string) => {}) as unknown,
+    mockResolveProviderRuntimePlugin: vi.fn((_params: unknown) => undefined) as unknown,
+    mockPrepareProviderDynamicModel: vi.fn(async (_params: unknown) => {}) as unknown,
+    mockNormalizeProviderResolvedModelWithPlugin: vi.fn((_params: unknown) => undefined) as unknown,
+  };
+});
+
 vi.mock("./openrouter-model-capabilities.js", () => ({
   getOpenRouterModelCapabilities: (modelId: string) => mockGetOpenRouterModelCapabilities(modelId),
   loadOpenRouterModelCapabilities: (modelId: string) =>
     mockLoadOpenRouterModelCapabilities(modelId),
 }));
+
+vi.mock("../../plugins/provider-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../plugins/provider-runtime.js")>();
+  return {
+    ...actual,
+    resolveProviderRuntimePlugin: (params: unknown) =>
+      mockResolveProviderRuntimePlugin(params as Record<string, unknown>),
+    prepareProviderDynamicModel: (params: unknown) => mockPrepareProviderDynamicModel(params),
+    normalizeProviderResolvedModelWithPlugin: (params: unknown) =>
+      mockNormalizeProviderResolvedModelWithPlugin(params),
+  };
+});
 
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildInlineProviderModels, resolveModel, resolveModelAsync } from "./model.js";
@@ -31,10 +58,64 @@ import {
 
 beforeEach(() => {
   resetMockDiscoverModels();
-  mockGetOpenRouterModelCapabilities.mockReset();
-  mockGetOpenRouterModelCapabilities.mockReturnValue(undefined);
-  mockLoadOpenRouterModelCapabilities.mockReset();
-  mockLoadOpenRouterModelCapabilities.mockResolvedValue();
+  mockGetOpenRouterModelCapabilities.mockClear();
+  mockLoadOpenRouterModelCapabilities.mockClear();
+  mockResolveProviderRuntimePlugin.mockReset();
+  mockResolveProviderRuntimePlugin.mockReturnValue(undefined);
+  mockPrepareProviderDynamicModel.mockReset();
+  mockNormalizeProviderResolvedModelWithPlugin.mockImplementation(
+    (params: { context: { provider: string; model: unknown; config?: unknown } }) => {
+      const { provider, model, config } = params.context;
+      const normProvider = provider.trim().toLowerCase();
+      const isCodex = normProvider === "openai-codex" || normProvider === "google-antigravity";
+      const isOpenRouter = normProvider === "openrouter";
+
+      if (isCodex) {
+        const providers = config?.models?.providers ?? {};
+        const configEntry = Object.entries(providers).find(
+          ([k]) => k.trim().toLowerCase() === normProvider,
+        )?.[1];
+        const configApi = configEntry?.api;
+
+        const isOpenAIBase = (u?: string) =>
+          /^https?:\/\/api\.openai\.com(?:\/v1)?\/?$/i.test(u || "");
+        const isOpenAICodexBase = (u?: string) =>
+          /^https?:\/\/chatgpt\.com\/backend-api\/?$/i.test(u || "");
+        const useCodexTransport =
+          !model.baseUrl || isOpenAIBase(model.baseUrl) || isOpenAICodexBase(model.baseUrl);
+
+        if (
+          useCodexTransport &&
+          model.api === "openai-completions" &&
+          configApi !== "openai-completions"
+        ) {
+          const isSpark = model.id?.includes("spark");
+          const isGpt54 = model.id === "gpt-5.4";
+          return {
+            ...model,
+            api: "openai-codex-responses",
+            baseUrl: "https://chatgpt.com/backend-api",
+            reasoning: true,
+            input: isSpark ? ["text"] : ["text", "image"],
+            contextWindow: isGpt54 ? 1_050_000 : isSpark ? 128_000 : 272000,
+            maxTokens: 128000,
+            cost: isSpark
+              ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+              : { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+          };
+        }
+      }
+      if (isOpenRouter) {
+        if (model.api === "openai-completions") {
+          return {
+            ...model,
+            api: "openai-responses",
+          };
+        }
+      }
+      return undefined;
+    },
+  );
 });
 
 function buildForwardCompatTemplate(params: {
@@ -436,6 +517,33 @@ describe("resolveModel", () => {
   });
 
   it("uses OpenRouter API capabilities for unknown models when cache is populated", () => {
+    mockResolveProviderRuntimePlugin.mockImplementation((params: unknown) => {
+      if (params.provider === "openrouter") {
+        return {
+          id: "openrouter",
+          resolveDynamicModel: (ctx: { modelId: string }) => {
+            const capabilities =
+              [...mockOpenRouterCapabilities.values()].find(
+                (c) => c.name.includes("Healer") || c.name.includes("Gemini"),
+              ) || [...mockOpenRouterCapabilities.values()][0];
+            return {
+              id: ctx.modelId,
+              name: capabilities?.name ?? ctx.modelId,
+              api: "openai-completions",
+              provider: "openrouter",
+              baseUrl: "https://openrouter.ai/api/v1",
+              reasoning: capabilities?.reasoning ?? false,
+              input: capabilities?.input ?? ["text"],
+              cost: capabilities?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: capabilities?.contextWindow ?? 200000,
+              maxTokens: capabilities?.maxTokens ?? 8192,
+            };
+          },
+        };
+      }
+      return undefined;
+    });
+
     mockGetOpenRouterModelCapabilities.mockReturnValue({
       name: "Healer Alpha",
       input: ["text", "image"],
@@ -474,17 +582,57 @@ describe("resolveModel", () => {
   });
 
   it("preloads OpenRouter capabilities before first async resolve of an unknown model", async () => {
-    mockLoadOpenRouterModelCapabilities.mockImplementation(async (modelId) => {
-      if (modelId === "google/gemini-3.1-flash-image-preview") {
-        mockGetOpenRouterModelCapabilities.mockReturnValue({
-          name: "Google: Nano Banana 2 (Gemini 3.1 Flash Image Preview)",
-          input: ["text", "image"],
-          reasoning: true,
-          contextWindow: 65536,
-          maxTokens: 65536,
-          cost: { input: 0.5, output: 3, cacheRead: 0, cacheWrite: 0 },
-        });
+    mockResolveProviderRuntimePlugin.mockImplementation((params: unknown) => {
+      if (params.provider === "openrouter") {
+        return {
+          id: "openrouter",
+          prepareDynamicModel: async (ctx: unknown) => {
+            await mockLoadOpenRouterModelCapabilities(ctx.modelId);
+          },
+          resolveDynamicModel: (ctx: { modelId: string }) => {
+            const caps = mockGetOpenRouterModelCapabilities(ctx.modelId);
+            return {
+              id: ctx.modelId,
+              name: caps?.name ?? ctx.modelId,
+              api: "openai-completions",
+              provider: "openrouter",
+              baseUrl: "https://openrouter.ai/api/v1",
+              reasoning:
+                caps?.reasoning ??
+                (ctx.modelId.toLowerCase().includes("healer") ||
+                  ctx.modelId.toLowerCase().includes("gemini")),
+              input:
+                caps?.input ??
+                (ctx.modelId.toLowerCase().includes("healer") ||
+                ctx.modelId.toLowerCase().includes("gemini")
+                  ? ["text", "image"]
+                  : ["text"]),
+              cost: caps?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow:
+                caps?.contextWindow ??
+                (ctx.modelId.toLowerCase().includes("healer") ? 262144 : 200000),
+              maxTokens:
+                caps?.maxTokens ??
+                (ctx.modelId.toLowerCase().includes("healer") ||
+                ctx.modelId.toLowerCase().includes("gemini")
+                  ? 65536
+                  : 8192),
+            };
+          },
+        };
       }
+      return undefined;
+    });
+
+    mockPrepareProviderDynamicModel.mockImplementation(async (params: unknown) => {
+      const plugin = mockResolveProviderRuntimePlugin(params) as Record<string, unknown>;
+      if (plugin?.prepareDynamicModel) {
+        await (plugin.prepareDynamicModel as (p: unknown) => Promise<void>)(params);
+      }
+    });
+
+    mockLoadOpenRouterModelCapabilities.mockImplementation(async (_modelId: unknown) => {
+      // No-op for now
     });
 
     const result = await resolveModelAsync(
@@ -1267,7 +1415,7 @@ describe("resolveModel", () => {
 
     const result = resolveModel("kimi", "kimi-code", "/tmp/agent", cfg);
     expect(result.error).toBeUndefined();
-    expect(result.model?.id).toBe("kimi-for-coding");
+    expect(result.model?.id).toBe("kimi-code");
     expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
       "User-Agent": "custom-kimi-client/1.0",
       "X-Kimi-Tenant": "tenant-a",

@@ -14,6 +14,8 @@ import {
   resolveAnthropicFastMode,
   resolveAnthropicBetas,
   resolveCacheRetention,
+  isAnthropicBedrockModel,
+  createBedrockNoCacheWrapper,
 } from "./anthropic-stream-wrappers.js";
 import { log } from "./logger.js";
 import { createMinimaxFastModeWrapper } from "./minimax-stream-wrappers.js";
@@ -28,6 +30,8 @@ import {
   createOpenAIFastModeWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIServiceTierWrapper,
+  createOpenAIDefaultTransportWrapper,
+  createCodexDefaultTransportWrapper,
   resolveOpenAIFastMode,
   resolveOpenAIServiceTier,
 } from "./openai-stream-wrappers.js";
@@ -114,14 +118,9 @@ function createStreamFnWithExtraParams(
   log.debug(`creating streamFn wrapper with params: ${JSON.stringify(streamParams)}`);
 
   const underlying = baseStreamFn ?? streamSimple;
-  const wrappedStreamFn: StreamFn = (model, context, options) => {
-    return underlying(model, context, {
-      ...streamParams,
-      ...options,
-    });
+  return (model, context, options) => {
+    return underlying(model, context, { ...streamParams, ...options });
   };
-
-  return wrappedStreamFn;
 }
 
 function resolveAliasedParamValue(
@@ -199,7 +198,7 @@ export function applyExtraParamsToAgent(
           Object.entries(extraParamsOverride).filter(([, value]) => value !== undefined),
         )
       : undefined;
-  const merged = Object.assign({}, resolvedExtraParams, override);
+  const merged: Record<string, unknown> = Object.assign({}, resolvedExtraParams, override);
   const effectiveExtraParams =
     prepareProviderExtraParams({
       provider,
@@ -213,19 +212,30 @@ export function applyExtraParamsToAgent(
       },
     }) ?? merged;
 
-  const wrappedStreamFn = createStreamFnWithExtraParams(
-    agent.streamFn,
-    effectiveExtraParams,
-    provider,
-  );
+  if (provider === "google") {
+    const thinkingBudget = Number(effectiveExtraParams?.thinkingBudget);
+    if (!Number.isNaN(thinkingBudget) && thinkingBudget < 0) {
+      log.debug(`removing invalid negative Google thinkingBudget for ${provider}/${modelId}`);
+      delete effectiveExtraParams.thinkingBudget;
+    }
 
-  if (wrappedStreamFn) {
-    log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);
-    agent.streamFn = wrappedStreamFn;
+    const googleThinkingLevel = thinkingLevel === "high" ? "HIGH" : undefined;
+    if (googleThinkingLevel) {
+      const nextEffective = effectiveExtraParams ?? {};
+      const thinkingConfig: Record<string, unknown> = {
+        includeThoughts: true,
+        ...(nextEffective.thinkingConfig as Record<string, unknown>),
+        thinkingLevel: googleThinkingLevel,
+      };
+      if (typeof nextEffective.thinkingBudget === "number" && nextEffective.thinkingBudget > 0) {
+        thinkingConfig.thinkingBudget = nextEffective.thinkingBudget;
+      }
+      effectiveExtraParams.thinkingConfig = thinkingConfig;
+    }
   }
 
   const anthropicBetas = resolveAnthropicBetas(effectiveExtraParams, provider, modelId);
-  if (anthropicBetas?.length) {
+  if (anthropicBetas && anthropicBetas.length > 0) {
     log.debug(
       `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
     );
@@ -260,6 +270,17 @@ export function applyExtraParamsToAgent(
   const providerWrapperHandled =
     pluginWrappedStreamFn !== undefined && pluginWrappedStreamFn !== providerStreamBase;
 
+  const anthropicFastMode = resolveAnthropicFastMode(effectiveExtraParams);
+  if (anthropicFastMode !== undefined) {
+    log.debug(`applying Anthropic fast mode=${anthropicFastMode} for ${provider}/${modelId}`);
+    agent.streamFn = createAnthropicFastModeWrapper(agent.streamFn, anthropicFastMode);
+  }
+
+  if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
+    log.debug(`disabling Bedrock prompt caching for non-Anthropic model: ${provider}/${modelId}`);
+    agent.streamFn = createBedrockNoCacheWrapper(agent.streamFn);
+  }
+
   if (!providerWrapperHandled && shouldApplyMoonshotPayloadCompat({ provider, modelId })) {
     // Preserve the legacy Moonshot compatibility path when no plugin wrapper
     // actually handled the stream function. This covers tests/disabled plugins
@@ -269,12 +290,6 @@ export function applyExtraParamsToAgent(
       thinkingLevel,
     });
     agent.streamFn = createMoonshotThinkingWrapper(agent.streamFn, thinkingType);
-  }
-
-  const anthropicFastMode = resolveAnthropicFastMode(effectiveExtraParams);
-  if (anthropicFastMode !== undefined) {
-    log.debug(`applying Anthropic fast mode=${anthropicFastMode} for ${provider}/${modelId}`);
-    agent.streamFn = createAnthropicFastModeWrapper(agent.streamFn, anthropicFastMode);
   }
 
   if (typeof effectiveExtraParams?.fastMode === "boolean") {
@@ -294,8 +309,27 @@ export function applyExtraParamsToAgent(
 
   const openAIServiceTier = resolveOpenAIServiceTier(effectiveExtraParams);
   if (openAIServiceTier) {
-    log.debug(`applying OpenAI service_tier=${openAIServiceTier} for ${provider}/${modelId}`);
+    log.debug(`applying OpenAI service tier=${openAIServiceTier} for ${provider}/${modelId}`);
     agent.streamFn = createOpenAIServiceTierWrapper(agent.streamFn, openAIServiceTier);
+  }
+
+  if (provider === "openai") {
+    agent.streamFn = createOpenAIDefaultTransportWrapper(agent.streamFn);
+  }
+  if (provider === "openai-codex") {
+    agent.streamFn = createCodexDefaultTransportWrapper(agent.streamFn);
+  }
+
+  // Apply general extra params wrapper last so it can correctly respect runtime overrides
+  // that might have been "spoiled" by default values in inner provider-specific wrappers.
+  const wrappedStreamFn = createStreamFnWithExtraParams(
+    agent.streamFn,
+    effectiveExtraParams,
+    provider,
+  );
+  if (wrappedStreamFn) {
+    log.debug(`applying extraParams wrapper to agent streamFn for ${provider}/${modelId}`);
+    agent.streamFn = wrappedStreamFn;
   }
 
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.

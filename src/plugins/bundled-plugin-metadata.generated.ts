@@ -2478,6 +2478,64 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "searxng",
+    idHint: "searxng-plugin",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/searxng-plugin",
+    packageVersion: "2026.3.22",
+    packageDescription: "OpenClaw SearXNG plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "searxng",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          webSearch: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              apiKey: {
+                type: ["string", "object"],
+              },
+              baseUrl: {
+                type: "string",
+              },
+              allowPrivateNetwork: {
+                type: "boolean",
+              },
+            },
+          },
+        },
+      },
+      providerAuthEnvVars: {
+        searxng: ["SEARXNG_API_KEY"],
+      },
+      uiHints: {
+        "webSearch.apiKey": {
+          label: "SearXNG API Key",
+          help: "Optional SearXNG API key (only if your instance requires it).",
+          sensitive: true,
+        },
+        "webSearch.baseUrl": {
+          label: "SearXNG Base URL",
+          help: "The URL of your SearXNG instance (e.g., http://localhost:8080).",
+          placeholder: "http://localhost:8080",
+        },
+        "webSearch.allowPrivateNetwork": {
+          label: "Allow Local Network Access",
+          help: "Set this to true if your SearXNG server is on a local or private IP network.",
+          placeholder: "false",
+        },
+      },
+    },
+  },
+  {
     dirName: "sglang",
     idHint: "sglang",
     source: {

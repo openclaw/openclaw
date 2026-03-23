@@ -5124,6 +5124,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                     ],
                   },
+                  allowPrivateNetwork: {
+                    type: "boolean",
+                  },
                   brave: {
                     type: "object",
                     properties: {
@@ -5594,6 +5597,156 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                       model: {
                         type: "string",
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                  tavily: {
+                    type: "object",
+                    properties: {
+                      apiKey: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            oneOf: [
+                              {
+                                type: "object",
+                                properties: {
+                                  source: {
+                                    type: "string",
+                                    const: "env",
+                                  },
+                                  provider: {
+                                    type: "string",
+                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                  },
+                                  id: {
+                                    type: "string",
+                                    pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                  },
+                                },
+                                required: ["source", "provider", "id"],
+                                additionalProperties: false,
+                              },
+                              {
+                                type: "object",
+                                properties: {
+                                  source: {
+                                    type: "string",
+                                    const: "file",
+                                  },
+                                  provider: {
+                                    type: "string",
+                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                  },
+                                  id: {
+                                    type: "string",
+                                  },
+                                },
+                                required: ["source", "provider", "id"],
+                                additionalProperties: false,
+                              },
+                              {
+                                type: "object",
+                                properties: {
+                                  source: {
+                                    type: "string",
+                                    const: "exec",
+                                  },
+                                  provider: {
+                                    type: "string",
+                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                  },
+                                  id: {
+                                    type: "string",
+                                  },
+                                },
+                                required: ["source", "provider", "id"],
+                                additionalProperties: false,
+                              },
+                            ],
+                          },
+                        ],
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                  searxng: {
+                    type: "object",
+                    properties: {
+                      baseUrl: {
+                        type: "string",
+                      },
+                      apiKey: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            oneOf: [
+                              {
+                                type: "object",
+                                properties: {
+                                  source: {
+                                    type: "string",
+                                    const: "env",
+                                  },
+                                  provider: {
+                                    type: "string",
+                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                  },
+                                  id: {
+                                    type: "string",
+                                    pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                  },
+                                },
+                                required: ["source", "provider", "id"],
+                                additionalProperties: false,
+                              },
+                              {
+                                type: "object",
+                                properties: {
+                                  source: {
+                                    type: "string",
+                                    const: "file",
+                                  },
+                                  provider: {
+                                    type: "string",
+                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                  },
+                                  id: {
+                                    type: "string",
+                                  },
+                                },
+                                required: ["source", "provider", "id"],
+                                additionalProperties: false,
+                              },
+                              {
+                                type: "object",
+                                properties: {
+                                  source: {
+                                    type: "string",
+                                    const: "exec",
+                                  },
+                                  provider: {
+                                    type: "string",
+                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                  },
+                                  id: {
+                                    type: "string",
+                                  },
+                                },
+                                required: ["source", "provider", "id"],
+                                additionalProperties: false,
+                              },
+                            ],
+                          },
+                        ],
+                      },
+                      allowPrivateNetwork: {
+                        type: "boolean",
                       },
                     },
                     additionalProperties: false,
@@ -16174,6 +16327,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       tags: ["security", "auth", "tools"],
     },
     "tools.web.search.perplexity.apiKey": {
+      sensitive: true,
+      tags: ["security", "auth", "tools"],
+    },
+    "tools.web.search.tavily.apiKey": {
+      sensitive: true,
+      tags: ["security", "auth", "tools"],
+    },
+    "tools.web.search.searxng.apiKey": {
       sensitive: true,
       tags: ["security", "auth", "tools"],
     },

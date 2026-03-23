@@ -1,5 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
+import { streamSimple } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 
 const resolveProviderCapabilitiesWithPluginMock = vi.fn(
@@ -24,14 +25,29 @@ vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
     createOpenRouterWrapper,
     isProxyReasoningUnsupported,
   } = await import("./pi-embedded-runner/proxy-stream-wrappers.js");
+  const { createOpenAIDefaultTransportWrapper, createCodexDefaultTransportWrapper } =
+    await import("./pi-embedded-runner/openai-stream-wrappers.js");
 
   return {
     ...actual,
     prepareProviderExtraParams: (params: {
       provider: string;
-      context: { extraParams?: Record<string, unknown> };
+      context: {
+        extraParams?: Record<string, unknown>;
+        thinkingLevel?: import("../auto-reply/thinking.js").ThinkLevel;
+      };
     }) => {
-      if (params.provider !== "openai-codex") {
+      if (params.provider === "google" || params.provider === "atproxy") {
+        const extraParams = { ...params.context.extraParams };
+        if (extraParams.thinking === true || params.context.thinkingLevel === "high") {
+          extraParams.thinkingLevel = "HIGH";
+        }
+        if (typeof extraParams.thinkingBudget === "number" && extraParams.thinkingBudget < 0) {
+          delete extraParams.thinkingBudget;
+        }
+        return extraParams;
+      }
+      if (params.provider !== "openai-codex" && params.provider !== "openai") {
         return undefined;
       }
       const transport = params.context.extraParams?.transport;
@@ -52,6 +68,65 @@ vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
         streamFn?: StreamFn;
       };
     }) => {
+      if (params.provider === "google" || params.provider === "atproxy") {
+        const underlying = params.context.streamFn ?? streamSimple;
+        return (
+          model: unknown,
+          context: unknown,
+          options: {
+            onPayload?: (payload: unknown, model: unknown) => void;
+            [key: string]: unknown;
+          },
+        ) => {
+          const originalOnPayload = options.onPayload;
+          const wrappedOptions = {
+            ...options,
+            onPayload: (payload: unknown, m: unknown) => {
+              const extraParams = params.context.extraParams;
+              if (payload && typeof payload === "object") {
+                const thinkingConfig: Record<string, unknown> = {
+                  includeThoughts: true,
+                  ...(((payload as Record<string, unknown>).config as Record<string, unknown>)
+                    ?.thinkingConfig as Record<string, unknown>),
+                };
+                if (
+                  extraParams?.thinkingLevel === "HIGH" ||
+                  params.context.thinkingLevel === "high"
+                ) {
+                  thinkingConfig.thinkingLevel = "HIGH";
+                }
+                if (
+                  typeof extraParams?.thinkingBudget === "number" &&
+                  extraParams.thinkingBudget > 0
+                ) {
+                  thinkingConfig.thinkingBudget = extraParams.thinkingBudget;
+                } else if (
+                  typeof thinkingConfig.thinkingBudget === "number" &&
+                  thinkingConfig.thinkingBudget < 0
+                ) {
+                  delete thinkingConfig.thinkingBudget;
+                }
+                (payload as Record<string, unknown>).config = {
+                  ...((payload as Record<string, unknown>).config as Record<string, unknown>),
+                  thinkingConfig,
+                };
+              }
+              return originalOnPayload?.(payload, m);
+            },
+          };
+          return (underlying as (m: unknown, c: unknown, o: unknown) => unknown)(
+            model,
+            context,
+            wrappedOptions,
+          );
+        };
+      }
+      if (params.provider === "openai-codex") {
+        return createCodexDefaultTransportWrapper(params.context.streamFn);
+      }
+      if (params.provider === "openai") {
+        return createOpenAIDefaultTransportWrapper(params.context.streamFn);
+      }
       if (params.provider !== "openrouter") {
         return params.context.streamFn;
       }
@@ -310,10 +385,10 @@ describe("applyExtraParamsToAgent", () => {
     return payload;
   }
 
-  function runResolvedModelIdCase(params: {
+  function runResolvedModelIdCase<T extends string>(params: {
     applyProvider: string;
     applyModelId: string;
-    model: Model<"anthropic-messages">;
+    model: Model<T>;
     cfg?: Record<string, unknown>;
     extraParamsOverride?: Record<string, unknown>;
   }): string {
@@ -1240,6 +1315,7 @@ describe("applyExtraParamsToAgent", () => {
       thinkingConfig: {
         includeThoughts: true,
         thinkingBudget: 2048,
+        thinkingLevel: "HIGH",
       },
     });
   });
