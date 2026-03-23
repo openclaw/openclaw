@@ -62,12 +62,14 @@ type Logger = {
   info?: (message: string) => void;
 };
 
+const VALID_SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+
 function normalizeSlug(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed || trimmed.includes("/") || trimmed.includes("\\") || trimmed.includes("..")) {
+  const slug = raw.trim().toLowerCase();
+  if (!slug || !VALID_SLUG_PATTERN.test(slug)) {
     throw new Error(`Invalid skill slug: ${raw}`);
   }
-  return trimmed;
+  return slug;
 }
 
 function resolveSkillInstallDir(workspaceDir: string, slug: string): string {
