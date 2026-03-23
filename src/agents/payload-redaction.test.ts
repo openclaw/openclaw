@@ -63,7 +63,7 @@ describe("payload-redaction", () => {
       expect(result.endpoint).toBe("https://api.example.com");
     });
 
-    it("should redact bearerToken field", () => {
+    it("should redact bearerToken and refreshToken fields", () => {
       const input = {
         bearerToken: "secret-bearer",
         refreshToken: "refresh-123",
