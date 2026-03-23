@@ -118,7 +118,6 @@
   "status-helpers",
   "speech",
   "state-paths",
-  "temp-path",
   "telegram",
   "telegram-core",
   "thread-ownership",
