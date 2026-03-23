@@ -46,6 +46,20 @@ file messages via any DingTalk client.
 openclaw plugins install @largezhou/ddingtalk
 ```
 
+### LobsterMail
+
+Email channel plugin for OpenClaw — gives your agent a real email address as a
+first-class messaging surface. Send and receive email through the standard
+`message` tool, with webhook-based inbound delivery, HMAC signature
+verification, and LLM-safe content formatting.
+
+- **npm:** `@lobsterkit/lobstermail`
+- **repo:** [github.com/lobster-kit/lobsterkit-mail](https://github.com/lobster-kit/lobsterkit-mail)
+
+```bash
+openclaw plugins install @lobsterkit/lobstermail
+```
+
 ### Lossless Claw (LCM)
 
 Lossless Context Management plugin for OpenClaw. DAG-based conversation
