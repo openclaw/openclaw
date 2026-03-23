@@ -3,6 +3,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  mockExtractMessageContent,
+  mockGetContentType,
+  mockIsJidGroup,
+  mockNormalizeMessageContent,
+} from "../../../test/mocks/baileys.js";
+
+type MockMessageInput = Parameters<typeof mockNormalizeMessageContent>[0];
 
 const readAllowFromStoreMock = vi.fn().mockResolvedValue([]);
 const upsertPairingRequestMock = vi.fn().mockResolvedValue({ code: "PAIRCODE", created: true });
@@ -71,7 +79,14 @@ vi.mock("@whiskeysockets/baileys", async (importOriginal) => {
   ]);
   return {
     ...actual,
+    DisconnectReason: actual.DisconnectReason ?? { loggedOut: 401 },
     downloadMediaMessage: vi.fn().mockResolvedValue(jpegBuffer),
+    extractMessageContent: vi.fn((message: MockMessageInput) => mockExtractMessageContent(message)),
+    getContentType: vi.fn((message: MockMessageInput) => mockGetContentType(message)),
+    isJidGroup: vi.fn((jid: string | undefined | null) => mockIsJidGroup(jid)),
+    normalizeMessageContent: vi.fn((message: MockMessageInput) =>
+      mockNormalizeMessageContent(message),
+    ),
   };
 });
 
