@@ -610,6 +610,47 @@ describe("applyCustomApiConfig", () => {
     expect(model?.reasoning).toBe(false);
   });
 
+  it("keeps text-only default for gpt-52-style model IDs", () => {
+    const result = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "openai-gpt-52",
+      compatibility: "openai",
+      apiKey: "key123",
+      providerId: "custom",
+    });
+    const model = result.config.models?.providers?.custom?.models?.find(
+      (m) => m.id === "openai-gpt-52",
+    );
+    expect(model?.input).toEqual(["text"]);
+  });
+
+  it("defaults non-azure gpt-4.1 and o-series custom models to text+image input", () => {
+    const gpt41 = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "gpt-4.1-mini",
+      compatibility: "openai",
+      apiKey: "key123",
+      providerId: "custom",
+    });
+    const o1 = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "o1-mini",
+      compatibility: "openai",
+      apiKey: "key123",
+      providerId: "custom",
+    });
+
+    expect(
+      gpt41.config.models?.providers?.custom?.models?.find((m) => m.id === "gpt-4.1-mini")?.input,
+    ).toEqual(["text", "image"]);
+    expect(
+      o1.config.models?.providers?.custom?.models?.find((m) => m.id === "o1-mini")?.input,
+    ).toEqual(["text", "image"]);
+  });
+
   it("re-onboard upgrades text-only input for likely vision models when model still looks auto-generated", () => {
     const result = applyCustomApiConfig({
       config: {

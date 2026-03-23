@@ -56,9 +56,14 @@ function isAzureUrl(baseUrl: string): boolean {
 function isLikelyVisionModel(modelId: string): boolean {
   const id = modelId.toLowerCase();
   return (
-    id.includes("claude") ||
+    id.includes("claude-3") ||
+    id.includes("claude-sonnet") ||
+    id.includes("claude-haiku") ||
+    id.includes("claude-opus") ||
     id.includes("gpt-4o") ||
-    id.includes("gpt-5") ||
+    id.includes("gpt-4.1") ||
+    /(^|[^a-z0-9])gpt-5($|[-._])/i.test(id) ||
+    /(^|[^a-z0-9])o(1|3)($|[-._])/i.test(id) ||
     id.includes("gemini") ||
     id.includes("qwen-vl") ||
     id.includes("vision") ||
