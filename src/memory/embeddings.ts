@@ -1,7 +1,7 @@
 import fsSync from "node:fs";
 import type { Llama, LlamaEmbeddingContext, LlamaModel } from "node-llama-cpp";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
-import { normalizeProviderId } from "../agents/model-selection.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -232,9 +232,8 @@ function getPluginEmbeddingProvidersSync(
       const normalizedId = normalizeProviderId(p.id);
 
       // Resolve provider config baseUrl/headers, merging with remote settings
-      // Try original ID first, then normalized ID (handles alias normalization)
-      const providers = options.config.models?.providers ?? {};
-      const providerConfig = providers[p.id] ?? providers[normalizedId];
+      // Use normalized lookup to handle alias normalization (e.g., "z.ai" -> "zai")
+      const providerConfig = findNormalizedProviderValue(options.config.models?.providers, p.id);
       const providerHeaders = providerConfig?.headers;
       const sanitizedHeaders: Record<string, string> = {};
       if (providerHeaders) {

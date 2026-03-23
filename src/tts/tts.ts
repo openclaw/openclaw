@@ -607,8 +607,8 @@ function resolveTtsProviderBaseUrl(
   return providerConfig?.baseUrl;
 }
 
-// TTS_PROVIDERS - edge and microsoft are aliases, use edge as canonical
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge", "microsoft"] as const;
+// TTS_PROVIDERS - edge and microsoft are aliases, edge is canonical
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider, cfg?: OpenClawConfig): TtsProvider[] {
   const normalizedPrimary = normalizeSpeechProviderId(primary) ?? primary;
