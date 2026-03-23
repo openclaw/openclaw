@@ -1121,6 +1121,40 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("Context: 49k/200k");
   });
 
+  it("keeps provider-aware lookup for non-fallback runtime slash ids", () => {
+    MODEL_CONTEXT_TOKEN_CACHE.clear();
+
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            openai: {
+              models: [{ id: "gpt-4o", contextWindow: 777_000 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "openai/gpt-4o",
+      },
+      sessionEntry: {
+        sessionId: "sess-runtime-slash-id-direct",
+        updatedAt: 0,
+        model: "openai/gpt-4o",
+        totalTokens: 49_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      activeModelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Context: 49k/777k");
+    expect(normalized).not.toContain("Context: 49k/200k");
+  });
+
   it("keeps provider-aware lookup for bare transcript model ids", async () => {
     await withTempHome(
       async (dir) => {

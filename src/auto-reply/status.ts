@@ -469,11 +469,17 @@ export function buildStatusMessage(args: StatusArgs): string {
         String(entry?.fallbackNoticeActiveModel ?? "")
           .trim()
           .toLowerCase();
+    const runtimeMatchesSelectedModel =
+      runtimeModelRaw.toLowerCase() === (modelRefs.selected.label || "unknown").toLowerCase();
     // Legacy fallback sessions can persist provider-qualified runtime ids
     // without a separate modelProvider field. Preserve provider-aware lookup
-    // when the stored slash id is also the active fallback target; otherwise
-    // keep the raw model-only lookup for OpenRouter-style slash ids.
-    if (fallbackMatchesRuntimeModel && embeddedProvider === activeProvider.toLowerCase()) {
+    // when the stored slash id is the selected model or the active fallback
+    // target; otherwise keep the raw model-only lookup for OpenRouter-style
+    // slash ids.
+    if (
+      (fallbackMatchesRuntimeModel || runtimeMatchesSelectedModel) &&
+      embeddedProvider === activeProvider.toLowerCase()
+    ) {
       contextLookupProvider = activeProvider;
       contextLookupModel = activeModel;
     } else {
