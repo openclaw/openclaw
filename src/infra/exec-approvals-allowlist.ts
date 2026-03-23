@@ -449,7 +449,7 @@ function resolveShellWrapperPositionalArgvCandidatePath(params: {
   if (inlineMatch.valueTokenIndex === null || !inlineMatch.command) {
     return undefined;
   }
-  if (!/(?:^|[^\\$])\$(?:0|\{0\})/.test(inlineMatch.command)) {
+  if (!isDirectShellPositionalCarrierInvocation(inlineMatch.command)) {
     return undefined;
   }
 
@@ -463,6 +463,23 @@ function resolveShellWrapperPositionalArgvCandidatePath(params: {
 
   const resolution = resolveCommandResolutionFromArgv([carriedExecutable], params.cwd, params.env);
   return resolveAllowlistCandidatePath(resolution, params.cwd);
+}
+
+function isDirectShellPositionalCarrierInvocation(command: string): boolean {
+  const trimmed = command.trim();
+  if (trimmed.length === 0) {
+    return false;
+  }
+
+  // Keep carrier matching strict: only allow direct `$0` execution with positional arguments.
+  // This prevents payloads like `echo blocked; $0 "$1"` from satisfying allowlist checks.
+  const shellWhitespace = String.raw`[^\S\r\n]+`;
+  const positionalZero = String.raw`(?:\$(?:0|\{0\})|"\$(?:0|\{0\})")`;
+  const positionalArg = String.raw`(?:\$(?:[@*]|[1-9]|\{[@*1-9]\})|"\$(?:[@*]|[1-9]|\{[@*1-9]\})")`;
+  return new RegExp(
+    `^(?:exec${shellWhitespace}(?:--${shellWhitespace})?)?${positionalZero}(?:${shellWhitespace}${positionalArg})*$`,
+    "u",
+  ).test(trimmed);
 }
 
 function collectAllowAlwaysPatterns(params: {
