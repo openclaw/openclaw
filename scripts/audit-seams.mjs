@@ -526,7 +526,7 @@ function describeSeamKinds(relativePath, source) {
   }
   if (
     relativePath.startsWith("extensions/") &&
-    /(outbound-adapter|reply-delivery|send|delivery|messenger|channel(?:\.runtime)?)\.ts$/.test(
+    /(outbound|outbound-adapter|reply-delivery|send|delivery|messenger|channel(?:\.runtime)?)\.ts$/.test(
       relativePath,
     ) &&
     (/sendMedia\b/.test(source) || /\bmediaUrl\b|\bmediaUrls\b|filename|audioAsVoice/.test(source))
@@ -543,20 +543,24 @@ function describeSeamKinds(relativePath, source) {
   return [...new Set(seamKinds)].toSorted(compareStrings);
 }
 
-function buildTestIndex(testFiles) {
-  return testFiles.map((filePath) => {
-    const relativePath = normalizePath(filePath);
-    const stem = stemFromRelativePath(relativePath)
-      .replace(/\.test$/, "")
-      .replace(/\.spec$/, "");
-    const baseName = path.basename(stem);
-    return {
-      filePath,
-      relativePath,
-      stem,
-      baseName,
-    };
-  });
+async function buildTestIndex(testFiles) {
+  return Promise.all(
+    testFiles.map(async (filePath) => {
+      const relativePath = normalizePath(filePath);
+      const stem = stemFromRelativePath(relativePath)
+        .replace(/\.test$/, "")
+        .replace(/\.spec$/, "");
+      const baseName = path.basename(stem);
+      const source = await fs.readFile(filePath, "utf8");
+      return {
+        filePath,
+        relativePath,
+        stem,
+        baseName,
+        source,
+      };
+    }),
+  );
 }
 
 function splitNameTokens(name) {
@@ -566,16 +570,22 @@ function splitNameTokens(name) {
     .filter(Boolean);
 }
 
+function escapeForRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function matchQualityRank(quality) {
   switch (quality) {
     case "exact-stem":
       return 0;
     case "path-nearby":
       return 1;
-    case "dir-token":
+    case "direct-import":
       return 2;
-    default:
+    case "dir-token":
       return 3;
+    default:
+      return 4;
   }
 }
 
@@ -594,6 +604,18 @@ function findRelatedTests(relativePath, testIndex) {
       return [{ file: entry.relativePath, matchQuality: "path-nearby" }];
     }
     const entryDir = path.dirname(entry.relativePath).split(path.sep).join("/");
+    const importPath =
+      path.posix.relative(entryDir, stem) === path.basename(stem)
+        ? `./${path.basename(stem)}`
+        : path.posix.relative(entryDir, stem).startsWith(".")
+          ? path.posix.relative(entryDir, stem)
+          : `./${path.posix.relative(entryDir, stem)}`;
+    const directImportPattern = new RegExp(
+      `["'\`]${escapeForRegExp(importPath)}(?:\\.[^"'\\\`]+)?["'\`]`,
+    );
+    if (directImportPattern.test(entry.source)) {
+      return [{ file: entry.relativePath, matchQuality: "direct-import" }];
+    }
     if (entryDir === normalizedDir && baseTokens.size > 0) {
       const entryTokens = splitNameTokens(entry.baseName);
       const sharedToken = entryTokens.find((token) => baseTokens.has(token));
@@ -660,7 +682,7 @@ async function buildSeamTestInventory() {
   ]
     .filter((filePath) => /\.(test|spec)\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(filePath))
     .toSorted((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
-  const testIndex = buildTestIndex(testFiles);
+  const testIndex = await buildTestIndex(testFiles);
   const inventory = [];
 
   for (const filePath of productionFiles) {
