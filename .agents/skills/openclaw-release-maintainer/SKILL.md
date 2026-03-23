@@ -69,8 +69,8 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
 
 ## Check all relevant release builds
 
-- Always validate the core npm release path before creating the tag.
-- Default core release checks:
+- Always validate the OpenClaw npm release path before creating the tag.
+- Default release checks:
   - `pnpm check`
   - `pnpm build`
   - `node --import tsx scripts/release-check.ts`
@@ -85,9 +85,9 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
 
 ## Use the right auth flow
 
-- Core `openclaw` publish uses GitHub trusted publishing.
+- OpenClaw publish uses GitHub trusted publishing.
 - The publish run must be started manually with `workflow_dispatch`.
-- Both core release workflows accept `preflight_only=true` to run CI
+- Both release workflows accept `preflight_only=true` to run CI
   validation/build steps without entering the gated publish job.
 - npm preflight and macOS preflight must both pass before any publish run
   starts.
@@ -99,7 +99,7 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
   mac workflow and then update `appcast.xml` on `main`.
 - `.github/workflows/macos-release.yml` still requires the `mac-release`
   environment approval.
-- Do not use `NPM_TOKEN` or the plugin OTP flow for core releases.
+- Do not use `NPM_TOKEN` or the plugin OTP flow for OpenClaw releases.
 - `@openclaw/*` plugin publishes use a separate maintainer-only flow.
 - Only publish plugins that already exist on npm; bundled disk-tree-only plugins stay unpublished.
 
