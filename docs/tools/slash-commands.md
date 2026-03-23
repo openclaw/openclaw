@@ -62,7 +62,7 @@ They run immediately, are stripped before the model sees the message, and the re
 - `commands.bashForegroundMs` (default `2000`) controls how long bash waits before switching to background mode (`0` backgrounds immediately).
 - `commands.config` (default `false`) enables `/config` (reads/writes `openclaw.json`).
 - `commands.mcp` (default `false`) enables `/mcp` (reads/writes OpenClaw-managed MCP config under `mcp.servers`).
-- `commands.plugins` (default `false`) enables `/plugins` (plugin discovery/status plus enable/disable toggles).
+- `commands.plugins` (default `false`) enables `/plugins` (plugin discovery/status plus install + enable/disable controls).
 - `commands.debug` (default `false`) enables `/debug` (runtime-only overrides).
 - `commands.allowFrom` (optional) sets a per-provider allowlist for command authorization. When configured, it is the
   only authorization source for commands and directives (channel allowlists/pairing and `commands.useAccessGroups`
@@ -95,8 +95,9 @@ Text + native (when enabled):
 - `/tell <id|#> <message>` (alias for `/steer`)
 - `/config show|get|set|unset` (persist config to disk, owner-only; requires `commands.config: true`)
 - `/mcp show|get|set|unset` (manage OpenClaw MCP server config, owner-only; requires `commands.mcp: true`)
-- `/plugins list|show|get|enable|disable` (inspect discovered plugins and toggle enablement, owner-only for writes; requires `commands.plugins: true`)
+- `/plugins list|show|get|install|enable|disable` (inspect discovered plugins, install new ones, and toggle enablement; owner-only for writes; requires `commands.plugins: true`)
   - `/plugin` is an alias for `/plugins`.
+  - `/plugin install <spec>` accepts the same plugin specs as `openclaw plugins install`: local path/archive, npm package, or `clawhub:<pkg>`.
   - Enable/disable writes still reply with a restart hint. On a watched foreground gateway, OpenClaw may perform that restart automatically right after the write.
 - `/debug show|set|unset|reset` (runtime overrides, owner-only; requires `commands.debug: true`)
 - `/usage off|tokens|full|cost` (per-response usage footer or local cost summary)

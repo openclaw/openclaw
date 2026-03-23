@@ -1,3 +1,12 @@
+import fs from "node:fs";
+import { buildNpmInstallRecordFields } from "../../cli/npm-resolution.js";
+import {
+  buildPreferredClawHubSpec,
+  createPluginInstallLogger,
+  decidePreferredClawHubFallback,
+  resolveFileNpmSpecToLocalPath,
+} from "../../cli/plugins-command-helpers.js";
+import { persistPluginInstall } from "../../cli/plugins-install-persist.js";
 import {
   readConfigFileSnapshot,
   validateConfigObjectWithPlugins,
@@ -5,6 +14,11 @@ import {
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import { resolveArchiveKind } from "../../infra/archive.js";
+import { parseClawHubPluginSpec } from "../../infra/clawhub.js";
+import { installPluginFromClawHub } from "../../plugins/clawhub.js";
+import { installPluginFromNpmSpec, installPluginFromPath } from "../../plugins/install.js";
+import { clearPluginManifestRegistryCache } from "../../plugins/manifest-registry.js";
 import type { PluginRecord } from "../../plugins/registry.js";
 import {
   buildAllPluginInspectReports,
@@ -14,6 +28,7 @@ import {
   type PluginStatusReport,
 } from "../../plugins/status.js";
 import { setPluginEnabledInConfig } from "../../plugins/toggle-config.js";
+import { resolveUserPath } from "../../utils.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
   rejectNonOwnerCommand,
@@ -121,6 +136,142 @@ function findPlugin(report: PluginStatusReport, rawName: string): PluginRecord |
   );
 }
 
+function looksLikeLocalPluginInstallSpec(raw: string): boolean {
+  return (
+    raw.startsWith(".") ||
+    raw.startsWith("~") ||
+    raw.startsWith("/") ||
+    raw.endsWith(".ts") ||
+    raw.endsWith(".js") ||
+    raw.endsWith(".mjs") ||
+    raw.endsWith(".cjs") ||
+    raw.endsWith(".tgz") ||
+    raw.endsWith(".tar.gz") ||
+    raw.endsWith(".tar") ||
+    raw.endsWith(".zip")
+  );
+}
+
+async function installPluginFromPluginsCommand(params: {
+  raw: string;
+  config: OpenClawConfig;
+}): Promise<{ ok: true; pluginId: string } | { ok: false; error: string }> {
+  const fileSpec = resolveFileNpmSpecToLocalPath(params.raw);
+  if (fileSpec && !fileSpec.ok) {
+    return { ok: false, error: fileSpec.error };
+  }
+  const normalized = fileSpec && fileSpec.ok ? fileSpec.path : params.raw;
+  const resolved = resolveUserPath(normalized);
+
+  if (fs.existsSync(resolved)) {
+    const result = await installPluginFromPath({
+      path: resolved,
+      logger: createPluginInstallLogger(),
+    });
+    if (!result.ok) {
+      return { ok: false, error: result.error };
+    }
+    clearPluginManifestRegistryCache();
+    const source: "archive" | "path" = resolveArchiveKind(resolved) ? "archive" : "path";
+    await persistPluginInstall({
+      config: params.config,
+      pluginId: result.pluginId,
+      install: {
+        source,
+        sourcePath: resolved,
+        installPath: result.targetDir,
+        version: result.version,
+      },
+    });
+    return { ok: true, pluginId: result.pluginId };
+  }
+
+  if (looksLikeLocalPluginInstallSpec(params.raw)) {
+    return { ok: false, error: `Path not found: ${resolved}` };
+  }
+
+  const clawhubSpec = parseClawHubPluginSpec(params.raw);
+  if (clawhubSpec) {
+    const result = await installPluginFromClawHub({
+      spec: params.raw,
+      logger: createPluginInstallLogger(),
+    });
+    if (!result.ok) {
+      return { ok: false, error: result.error };
+    }
+    clearPluginManifestRegistryCache();
+    await persistPluginInstall({
+      config: params.config,
+      pluginId: result.pluginId,
+      install: {
+        source: "clawhub",
+        spec: params.raw,
+        installPath: result.targetDir,
+        version: result.version,
+        integrity: result.clawhub.integrity,
+        resolvedAt: result.clawhub.resolvedAt,
+        clawhubUrl: result.clawhub.clawhubUrl,
+        clawhubPackage: result.clawhub.clawhubPackage,
+        clawhubFamily: result.clawhub.clawhubFamily,
+        clawhubChannel: result.clawhub.clawhubChannel,
+      },
+    });
+    return { ok: true, pluginId: result.pluginId };
+  }
+
+  const preferredClawHubSpec = buildPreferredClawHubSpec(params.raw);
+  if (preferredClawHubSpec) {
+    const clawhubResult = await installPluginFromClawHub({
+      spec: preferredClawHubSpec,
+      logger: createPluginInstallLogger(),
+    });
+    if (clawhubResult.ok) {
+      clearPluginManifestRegistryCache();
+      await persistPluginInstall({
+        config: params.config,
+        pluginId: clawhubResult.pluginId,
+        install: {
+          source: "clawhub",
+          spec: preferredClawHubSpec,
+          installPath: clawhubResult.targetDir,
+          version: clawhubResult.version,
+          integrity: clawhubResult.clawhub.integrity,
+          resolvedAt: clawhubResult.clawhub.resolvedAt,
+          clawhubUrl: clawhubResult.clawhub.clawhubUrl,
+          clawhubPackage: clawhubResult.clawhub.clawhubPackage,
+          clawhubFamily: clawhubResult.clawhub.clawhubFamily,
+          clawhubChannel: clawhubResult.clawhub.clawhubChannel,
+        },
+      });
+      return { ok: true, pluginId: clawhubResult.pluginId };
+    }
+    if (decidePreferredClawHubFallback(clawhubResult) !== "fallback_to_npm") {
+      return { ok: false, error: clawhubResult.error };
+    }
+  }
+
+  const result = await installPluginFromNpmSpec({
+    spec: params.raw,
+    logger: createPluginInstallLogger(),
+  });
+  if (!result.ok) {
+    return { ok: false, error: result.error };
+  }
+  clearPluginManifestRegistryCache();
+  const installRecord = buildNpmInstallRecordFields({
+    spec: params.raw,
+    installPath: result.targetDir,
+    version: result.version,
+    resolution: result.npmResolution,
+  });
+  await persistPluginInstall({
+    config: params.config,
+    pluginId: result.pluginId,
+    install: installRecord,
+  });
+  return { ok: true, pluginId: result.pluginId };
+}
+
 async function loadPluginCommandState(workspaceDir: string): Promise<
   | {
       ok: true;
@@ -226,6 +377,7 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
       reply: {
         text: renderJsonBlock(`🔌 Plugin "${payload.inspect.plugin.id}"`, {
           ...payload.inspect,
+          compatibilityWarnings: payload.compatibilityWarnings,
           install: payload.install,
         }),
       },
@@ -235,10 +387,29 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
   const missingAdminScope = requireGatewayClientScopeForInternalChannel(params, {
     label: "/plugins write",
     allowedScopes: ["operator.admin"],
-    missingText: "❌ /plugins enable|disable requires operator.admin for gateway clients.",
+    missingText: "❌ /plugins install|enable|disable requires operator.admin for gateway clients.",
   });
   if (missingAdminScope) {
     return missingAdminScope;
+  }
+
+  if (pluginsCommand.action === "install") {
+    const installed = await installPluginFromPluginsCommand({
+      raw: pluginsCommand.spec,
+      config: structuredClone(loaded.config),
+    });
+    if (!installed.ok) {
+      return {
+        shouldContinue: false,
+        reply: { text: `⚠️ ${installed.error}` },
+      };
+    }
+    return {
+      shouldContinue: false,
+      reply: {
+        text: `🔌 Installed plugin "${installed.pluginId}". Restart the gateway to load plugins.`,
+      },
+    };
   }
 
   const plugin = findPlugin(loaded.report, pluginsCommand.name);
