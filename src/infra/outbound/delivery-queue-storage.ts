@@ -13,6 +13,8 @@ export type QueuedDeliveryPayload = {
   channel: Exclude<OutboundChannel, "none">;
   to: string;
   accountId?: string;
+  /** Session key for future orphan-detection (not yet used in recovery). */
+  sessionId?: string;
   /**
    * Original payloads before plugin hooks. On recovery, hooks re-run on these
    * payloads — this is intentional since hooks are stateless transforms and
@@ -134,6 +136,7 @@ export async function enqueueDelivery(
     channel: params.channel,
     to: params.to,
     accountId: params.accountId,
+    sessionId: params.sessionId,
     payloads: params.payloads,
     threadId: params.threadId,
     replyToId: params.replyToId,

@@ -492,6 +492,7 @@ export async function deliverOutboundPayloads(
         channel,
         to,
         accountId: params.accountId,
+        sessionId: params.session?.key,
         payloads,
         threadId: params.threadId,
         replyToId: params.replyToId,
@@ -523,14 +524,18 @@ export async function deliverOutboundPayloads(
       if (hadPartialFailure) {
         await failDelivery(queueId, "partial delivery failure (bestEffort)").catch(() => {});
       } else {
-        await ackDelivery(queueId).catch(() => {}); // Best-effort cleanup.
+        await ackDelivery(queueId).catch((err) => {
+          log.warn(`Failed to ack delivery ${queueId}: ${String(err)}`);
+        });
       }
     }
     return results;
   } catch (err) {
     if (queueId) {
       if (isAbortError(err)) {
-        await ackDelivery(queueId).catch(() => {});
+        await ackDelivery(queueId).catch((ackErr) => {
+          log.warn(`Failed to ack delivery ${queueId} after abort: ${String(ackErr)}`);
+        });
       } else {
         await failDelivery(queueId, err instanceof Error ? err.message : String(err)).catch(
           () => {},

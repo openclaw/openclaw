@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   enqueueDelivery,
+  DEFAULT_MAX_AGE_MS,
   loadPendingDeliveries,
   MAX_RETRIES,
   recoverPendingDeliveries,
@@ -27,10 +28,12 @@ describe("delivery-queue recovery", () => {
     deliver,
     log = createRecoveryLog(),
     maxRecoveryMs,
+    maxAgeMs,
   }: {
     deliver: ReturnType<typeof vi.fn>;
     log?: ReturnType<typeof createRecoveryLog>;
     maxRecoveryMs?: number;
+    maxAgeMs?: number;
   }) => {
     const result = await recoverPendingDeliveries({
       deliver: asDeliverFn(deliver),
@@ -38,6 +41,7 @@ describe("delivery-queue recovery", () => {
       cfg: baseCfg,
       stateDir: tmpDir(),
       ...(maxRecoveryMs === undefined ? {} : { maxRecoveryMs }),
+      ...(maxAgeMs === undefined ? {} : { maxAgeMs }),
     });
     return { result, log };
   };
@@ -53,6 +57,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      expiredAge: 0,
     });
 
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
@@ -167,6 +172,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      expiredAge: 0,
     });
 
     const remaining = await loadPendingDeliveries(tmpDir());
@@ -194,6 +200,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 1,
+      expiredAge: 0,
     });
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(1);
     expect(log.info).toHaveBeenCalledWith(expect.stringContaining("not ready for retry yet"));
@@ -225,6 +232,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 1,
+      expiredAge: 0,
     });
     expect(deliver).toHaveBeenCalledTimes(1);
     expect(deliver).toHaveBeenCalledWith(
@@ -254,6 +262,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 1,
+      expiredAge: 0,
     });
     expect(firstDeliver).not.toHaveBeenCalled();
 
@@ -265,6 +274,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      expiredAge: 0,
     });
     expect(secondDeliver).toHaveBeenCalledTimes(1);
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
@@ -281,7 +291,88 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      expiredAge: 0,
     });
     expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("expires entries older than DEFAULT_MAX_AGE_MS and moves them to failed/", async () => {
+    const id = await enqueueDelivery(
+      { channel: "whatsapp", to: "+1", payloads: [{ text: "stale" }] },
+      tmpDir(),
+    );
+    // Set enqueuedAt to 25 hours ago (beyond 24h TTL)
+    setQueuedEntryState(tmpDir(), id, {
+      retryCount: 0,
+      enqueuedAt: Date.now() - DEFAULT_MAX_AGE_MS - 3_600_000,
+    });
+
+    const deliver = vi.fn().mockResolvedValue([]);
+    const log = createRecoveryLog();
+    const { result } = await runRecovery({ deliver, log });
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result.expiredAge).toBe(1);
+    expect(result.recovered).toBe(0);
+
+    const failedDir = path.join(tmpDir(), "delivery-queue", "failed");
+    expect(fs.existsSync(path.join(failedDir, `${id}.json`))).toBe(true);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("expired"));
+  });
+
+  it("retries entries younger than DEFAULT_MAX_AGE_MS normally", async () => {
+    const id = await enqueueDelivery(
+      { channel: "whatsapp", to: "+1", payloads: [{ text: "fresh" }] },
+      tmpDir(),
+    );
+    // Set enqueuedAt to 1 hour ago (well within 24h TTL)
+    setQueuedEntryState(tmpDir(), id, { retryCount: 0, enqueuedAt: Date.now() - 3_600_000 });
+
+    const deliver = vi.fn().mockResolvedValue([]);
+    const { result } = await runRecovery({ deliver });
+
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(result.recovered).toBe(1);
+    expect(result.expiredAge).toBe(0);
+  });
+
+  it("respects custom maxAgeMs override", async () => {
+    const id = await enqueueDelivery(
+      { channel: "telegram", to: "99", payloads: [{ text: "custom-ttl" }] },
+      tmpDir(),
+    );
+    // Set enqueuedAt to 2 hours ago
+    setQueuedEntryState(tmpDir(), id, { retryCount: 0, enqueuedAt: Date.now() - 7_200_000 });
+
+    const deliver = vi.fn().mockResolvedValue([]);
+    const { result } = await runRecovery({ deliver, maxAgeMs: 3_600_000 }); // 1h TTL
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result.expiredAge).toBe(1);
+
+    const failedDir = path.join(tmpDir(), "delivery-queue", "failed");
+    expect(fs.existsSync(path.join(failedDir, `${id}.json`))).toBe(true);
+  });
+
+  it("counts expiredAge in RecoverySummary alongside other counters", async () => {
+    const expiredId = await enqueueDelivery(
+      { channel: "whatsapp", to: "+1", payloads: [{ text: "expired" }] },
+      tmpDir(),
+    );
+    const freshId = await enqueueDelivery(
+      { channel: "telegram", to: "2", payloads: [{ text: "fresh" }] },
+      tmpDir(),
+    );
+    setQueuedEntryState(tmpDir(), expiredId, {
+      retryCount: 0,
+      enqueuedAt: Date.now() - DEFAULT_MAX_AGE_MS - 3_600_000,
+    });
+    setQueuedEntryState(tmpDir(), freshId, { retryCount: 0, enqueuedAt: Date.now() - 1_000 });
+
+    const deliver = vi.fn().mockResolvedValue([]);
+    const { result } = await runRecovery({ deliver });
+
+    expect(result.expiredAge).toBe(1);
+    expect(result.recovered).toBe(1);
   });
 });

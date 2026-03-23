@@ -88,6 +88,35 @@ describe("delivery-queue storage", () => {
       expect(fs.existsSync(path.join(queueDir, `${id}.delivered`))).toBe(false);
     });
 
+    it("persists sessionId when provided", async () => {
+      const id = await enqueueDelivery(
+        {
+          channel: "whatsapp",
+          to: "+1555",
+          payloads: [{ text: "with-session" }],
+          sessionId: "agent:main:abc123",
+        },
+        tmpDir(),
+      );
+
+      const entry = readQueuedEntry(tmpDir(), id);
+      expect(entry.sessionId).toBe("agent:main:abc123");
+    });
+
+    it("omits sessionId when not provided (backward compat)", async () => {
+      const id = await enqueueDelivery(
+        {
+          channel: "whatsapp",
+          to: "+1555",
+          payloads: [{ text: "no-session" }],
+        },
+        tmpDir(),
+      );
+
+      const entry = readQueuedEntry(tmpDir(), id);
+      expect(entry.sessionId).toBeUndefined();
+    });
+
     it("loadPendingDeliveries cleans up stale .delivered markers without replaying", async () => {
       const id = await enqueueDelivery(
         { channel: "telegram", to: "99", payloads: [{ text: "stale" }] },

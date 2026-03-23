@@ -8,11 +8,15 @@ import {
   type QueuedDeliveryPayload,
 } from "./delivery-queue-storage.js";
 
+/** Maximum age (in ms) before a pending delivery entry is considered expired. Default: 24 hours. */
+export const DEFAULT_MAX_AGE_MS = 86_400_000;
+
 export type RecoverySummary = {
   recovered: number;
   failed: number;
   skippedMaxRetries: number;
   deferredBackoff: number;
+  expiredAge: number;
 };
 
 export type DeliverFn = (
@@ -57,6 +61,7 @@ function createEmptyRecoverySummary(): RecoverySummary {
     failed: 0,
     skippedMaxRetries: 0,
     deferredBackoff: 0,
+    expiredAge: 0,
   };
 }
 
@@ -150,6 +155,8 @@ export async function recoverPendingDeliveries(opts: {
   stateDir?: string;
   /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to next startup. Default: 60 000. */
   maxRecoveryMs?: number;
+  /** Maximum age in ms before a pending entry is expired. Default: 24 hours. */
+  maxAgeMs?: number;
 }): Promise<RecoverySummary> {
   const pending = await loadPendingDeliveries(opts.stateDir);
   if (pending.length === 0) {
@@ -161,6 +168,7 @@ export async function recoverPendingDeliveries(opts: {
 
   const deadline = Date.now() + (opts.maxRecoveryMs ?? 60_000);
   const summary = createEmptyRecoverySummary();
+  const maxAge = opts.maxAgeMs ?? DEFAULT_MAX_AGE_MS;
 
   for (let i = 0; i < pending.length; i++) {
     const entry = pending[i];
@@ -176,6 +184,16 @@ export async function recoverPendingDeliveries(opts: {
       );
       await moveEntryToFailedWithLogging(entry.id, opts.log, opts.stateDir);
       summary.skippedMaxRetries += 1;
+      continue;
+    }
+
+    const ageMs = now - entry.enqueuedAt;
+    if (ageMs > maxAge) {
+      opts.log.warn(
+        `Delivery ${entry.id} expired (age: ${Math.round(ageMs / 3_600_000)}h, max: ${Math.round(maxAge / 3_600_000)}h) — moving to failed/`,
+      );
+      await moveEntryToFailedWithLogging(entry.id, opts.log, opts.stateDir);
+      summary.expiredAge += 1;
       continue;
     }
 
@@ -212,7 +230,7 @@ export async function recoverPendingDeliveries(opts: {
   }
 
   opts.log.info(
-    `Delivery recovery complete: ${summary.recovered} recovered, ${summary.failed} failed, ${summary.skippedMaxRetries} skipped (max retries), ${summary.deferredBackoff} deferred (backoff)`,
+    `Delivery recovery complete: ${summary.recovered} recovered, ${summary.failed} failed, ${summary.skippedMaxRetries} skipped (max retries), ${summary.deferredBackoff} deferred (backoff), ${summary.expiredAge} expired (age)`,
   );
   return summary;
 }
