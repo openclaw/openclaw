@@ -68,7 +68,11 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     try {
       await params.onFlush(items);
     } catch (err) {
-      params.onError?.(err, items);
+      try {
+        params.onError?.(err, items);
+      } catch {
+        // Keep the keyed chain alive even if the error handler fails.
+      }
     }
   };
 
@@ -153,23 +157,27 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
 
     if (!canDebounce || !key) {
       if (key) {
-        if (!buffers.has(key)) {
+        if (buffers.has(key)) {
+          // Reserve the keyed immediate slot before forcing the pending buffer
+          // to flush so fire-and-forget callers cannot be overtaken.
+          const reservedTask = enqueueReservedKeyTask(key, async () => {
+            await runFlush([item]);
+          });
+          try {
+            await flushKey(key);
+          } finally {
+            reservedTask.release();
+          }
+          await reservedTask.task;
+          return;
+        }
+        if (keyChains.has(key)) {
           await enqueueKeyTask(key, async () => {
             await runFlush([item]);
           });
           return;
         }
-        // Reserve the keyed immediate slot before forcing the pending buffer
-        // to flush so fire-and-forget callers cannot be overtaken.
-        const reservedTask = enqueueReservedKeyTask(key, async () => {
-          await runFlush([item]);
-        });
-        try {
-          await flushKey(key);
-        } finally {
-          reservedTask.release();
-        }
-        await reservedTask.task;
+        await runFlush([item]);
       } else {
         await runFlush([item]);
       }

@@ -233,7 +233,14 @@ export async function runReplyAgent(params: {
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
-    enqueueFollowupRun(queueKey, followupRun, resolvedQueue, "message-id", queuedRunFollowupTurn);
+    enqueueFollowupRun(
+      queueKey,
+      followupRun,
+      resolvedQueue,
+      "message-id",
+      queuedRunFollowupTurn,
+      false,
+    );
     await touchActiveSessionEntry();
     typing.cleanup();
     return undefined;
