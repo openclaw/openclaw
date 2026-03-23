@@ -8,8 +8,6 @@ import {
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
 } from "../agents/model-selection.js";
-import { ensureOpenClawModelsJson } from "../agents/models-config.js";
-import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
 import type { CliDeps } from "../cli/deps.js";
@@ -50,6 +48,14 @@ async function prewarmConfiguredPrimaryModel(params: {
   });
   const agentDir = resolveOpenClawAgentDir();
   try {
+    // Lazy-load the provider-runtime graph only when a primary model warmup is
+    // actually needed. On servers without an explicit primary model (the common
+    // case on ≤2 GB RAM hosts), this avoids loading ~400 LOC of provider-runtime
+    // plus its transitive closure at every gateway startup.
+    const [{ ensureOpenClawModelsJson }, { resolveModelAsync }] = await Promise.all([
+      import("../agents/models-config.js"),
+      import("../agents/pi-embedded-runner/model.js"),
+    ]);
     await ensureOpenClawModelsJson(params.cfg, agentDir);
     const resolved = await resolveModelAsync(provider, model, agentDir, params.cfg, {
       retryTransientProviderRuntimeMiss: true,
