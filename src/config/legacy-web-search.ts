@@ -197,10 +197,10 @@ function normalizeLegacyWebSearchConfigRecord<T extends JsonRecord>(
 
   const legacyBraveConfig = copyLegacyProviderConfig(search, "brave");
   const braveConfig = legacyBraveConfig ?? {};
-  if (hasOwnKey(search, "apiKey")) {
+  if (hasOwnKey(search, "apiKey") && !hasOwnKey(braveConfig, "apiKey")) {
     braveConfig.apiKey = search.apiKey;
   }
-  if (hasOwnKey(search, "baseUrl")) {
+  if (hasOwnKey(search, "baseUrl") && !hasOwnKey(braveConfig, "baseUrl")) {
     braveConfig.baseUrl = search.baseUrl;
   }
   if (Object.keys(braveConfig).length > 0) {

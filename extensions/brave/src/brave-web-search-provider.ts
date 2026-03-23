@@ -435,10 +435,11 @@ function missingBraveKeyPayload() {
 }
 
 function invalidBraveBaseUrlPayload(baseUrl: string) {
+  const hasUnresolvedPlaceholder = /\$\{[^}]+\}/.test(baseUrl);
   return {
     error: "invalid_brave_base_url",
     message:
-      `Brave webSearch.baseUrl must be an absolute http(s) URL, got "${baseUrl}". ` +
+      `Brave webSearch.baseUrl must be an absolute http(s) URL${hasUnresolvedPlaceholder ? " without unresolved ${...} placeholders" : ""}. ` +
       "Use a value like https://proxy.example.com or https://proxy.example.com/resolver/v1/.",
     docs: "https://docs.openclaw.ai/tools/web",
   };
