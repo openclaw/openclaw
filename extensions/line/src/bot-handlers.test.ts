@@ -5,11 +5,15 @@ import type { LineAccountConfig } from "./types.js";
 
 // Avoid pulling in globals/pairing/media dependencies; this suite only asserts
 // allowlist/groupPolicy gating and message-context wiring.
-vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
-  danger: (text: string) => text,
-  logVerbose: () => {},
-  shouldLogVerbose: () => false,
-}));
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    danger: (text: string) => text,
+    logVerbose: () => {},
+    shouldLogVerbose: () => false,
+  };
+});
 
 const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
   readAllowFromStoreMock: vi.fn(async () => [] as string[]),
@@ -700,10 +704,7 @@ describe("handleLineWebhookEvents", () => {
 
   it("records unmentioned group messages as pending history", async () => {
     const processMessage = vi.fn();
-    const groupHistories = new Map<
-      string,
-      HistoryEntry[]
-    >();
+    const groupHistories = new Map<string, HistoryEntry[]>();
     const event = createTestMessageEvent({
       message: { id: "m-hist-1", type: "text", text: "hello history", quoteToken: "q-hist-1" },
       timestamp: 1700000000000,
