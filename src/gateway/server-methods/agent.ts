@@ -799,6 +799,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         startedAt: cachedGatewaySnapshot.startedAt,
         endedAt: cachedGatewaySnapshot.endedAt,
         error: cachedGatewaySnapshot.error,
+        result: cachedGatewaySnapshot.result,
       });
       return;
     }
@@ -853,6 +854,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       startedAt: snapshot.startedAt,
       endedAt: snapshot.endedAt,
       error: snapshot.error,
+      result: "result" in snapshot ? snapshot.result : undefined,
     });
   },
 };
