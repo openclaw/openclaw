@@ -285,7 +285,11 @@ describe("subagent registry lifecycle error grace", () => {
 
   function readFirstAnnounceOutcome() {
     const first = getAgentCalls()[0];
-    const event = first?.params?.internalEvents?.[0];
+    const internalEvents = first?.params?.internalEvents;
+    const event =
+      Array.isArray(internalEvents) && internalEvents[0] && typeof internalEvents[0] === "object"
+        ? (internalEvents[0] as { status?: string; statusLabel?: string })
+        : undefined;
     return {
       status: event?.status,
       error: event?.statusLabel,
@@ -302,15 +306,32 @@ describe("subagent registry lifecycle error grace", () => {
   }
 
   function getAgentCalls() {
-    return callGatewayMock.mock.calls
+    return (callGatewayMock.mock.calls as [GatewayRequest][])
       .map(([request]) => request)
-      .filter((request) => request.method === "agent");
+      .filter((request): request is GatewayRequest => request.method === "agent");
   }
 
   function getAgentResultsForChildSession(childSessionKey: string): string[] {
     return getAgentCalls()
-      .filter((request) => request.params?.inputProvenance?.sourceSessionKey === childSessionKey)
-      .map((request) => request.params?.internalEvents?.[0]?.result ?? "");
+      .filter((request) => {
+        const inputProvenance = request.params?.inputProvenance;
+        if (!inputProvenance || typeof inputProvenance !== "object") {
+          return false;
+        }
+        return (
+          (inputProvenance as { sourceSessionKey?: unknown }).sourceSessionKey === childSessionKey
+        );
+      })
+      .map((request) => {
+        const internalEvents = request.params?.internalEvents;
+        const event =
+          Array.isArray(internalEvents) &&
+          internalEvents[0] &&
+          typeof internalEvents[0] === "object"
+            ? (internalEvents[0] as { result?: string })
+            : undefined;
+        return event?.result ?? "";
+      });
   }
 
   it("ignores transient lifecycle errors when run retries and then ends successfully", async () => {
