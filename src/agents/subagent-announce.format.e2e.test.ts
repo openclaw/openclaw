@@ -1202,6 +1202,70 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.threadId).toBe("42");
   });
 
+  it("routes bound completion announce delivery for telegram forum topics using canonical binding ids", async () => {
+    sendSpy.mockClear();
+    agentSpy.mockClear();
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-telegram-topic-bound",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-telegram-topic-bound",
+        lastChannel: "telegram",
+        lastTo: "123",
+        lastThreadId: 42,
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+    });
+    registerSessionBindingAdapter({
+      channel: "telegram",
+      accountId: "default",
+      listBySession: (targetSessionKey: string) =>
+        targetSessionKey === "agent:main:subagent:test"
+          ? [
+              {
+                bindingId: "telegram:default:123:topic:42",
+                targetSessionKey,
+                targetKind: "subagent",
+                conversation: {
+                  channel: "telegram",
+                  accountId: "default",
+                  conversationId: "123:topic:42",
+                },
+                status: "active",
+                boundAt: Date.now(),
+              },
+            ]
+          : [],
+      resolveByConversation: () => null,
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-telegram-topic-bound",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "telegram",
+        to: "telegram:123",
+        threadId: 42,
+      },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      spawnMode: "session",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.channel).toBe("telegram");
+    expect(call?.params?.to).toBe("123");
+    expect(call?.params?.threadId).toBe("42");
+  });
+
   it("uses hook-provided thread target across requester thread variants", async () => {
     const cases = [
       {

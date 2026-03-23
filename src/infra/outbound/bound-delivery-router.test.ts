@@ -127,6 +127,46 @@ describe("bound delivery router", () => {
     expect(route.binding?.conversation.conversationId).toBe("thread-2");
   });
 
+  it("matches telegram topic bindings via canonical conversation ids", () => {
+    registerSessionBindingAdapter({
+      channel: "telegram",
+      accountId: "runtime",
+      listBySession: (requestedSessionKey) =>
+        requestedSessionKey === TARGET_SESSION_KEY
+          ? [
+              {
+                bindingId: "telegram:runtime:-100123:topic:42",
+                targetSessionKey: TARGET_SESSION_KEY,
+                targetKind: "subagent",
+                conversation: {
+                  channel: "telegram",
+                  accountId: "runtime",
+                  conversationId: "-100123:topic:42",
+                },
+                status: "active",
+                boundAt: 1,
+              },
+            ]
+          : [],
+      resolveByConversation: () => null,
+    });
+
+    const route = createBoundDeliveryRouter().resolveDestination({
+      eventKind: "task_completion",
+      targetSessionKey: TARGET_SESSION_KEY,
+      requester: {
+        channel: "telegram",
+        accountId: "runtime",
+        conversationId: "-100123:topic:42",
+      },
+      failClosed: true,
+    });
+
+    expect(route.mode).toBe("bound");
+    expect(route.reason).toBe("requester-match");
+    expect(route.binding?.conversation.conversationId).toBe("-100123:topic:42");
+  });
+
   it("falls back for invalid requester conversation values", () => {
     registerDiscordSessionBindings(TARGET_SESSION_KEY, [
       createDiscordBinding(TARGET_SESSION_KEY, "thread-1", 1),
