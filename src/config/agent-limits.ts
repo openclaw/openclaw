@@ -30,8 +30,7 @@ export function resolveAgentLane(cfg?: OpenClawConfig, agentId?: string): string
     return undefined;
   }
   const entry = cfg.agents.list.find((a) => a.id === agentId);
-  const lane = (entry as Record<string, unknown> | undefined)?.lane;
-  return typeof lane === "string" && lane.trim() ? lane.trim() : undefined;
+  return typeof entry?.lane === "string" && entry.lane.trim() ? entry.lane.trim() : undefined;
 }
 
 /**
@@ -46,7 +45,7 @@ export function resolveAgentLaneConcurrency(
     return undefined;
   }
   const entry = cfg.agents.list.find((a) => a.id === agentId);
-  const raw = (entry as Record<string, unknown> | undefined)?.laneConcurrency;
+  const raw = entry?.laneConcurrency;
   if (typeof raw === "number" && Number.isFinite(raw)) {
     return Math.max(1, Math.floor(raw));
   }

@@ -93,6 +93,10 @@ export type AgentConfig = {
   tools?: AgentToolsConfig;
   /** Optional runtime descriptor for this agent. */
   runtime?: AgentRuntimeConfig;
+  /** Custom global queue lane for this agent's inbound runs (default: "main"). */
+  lane?: string;
+  /** Concurrency cap for this agent's custom lane. */
+  laneConcurrency?: number;
 };
 
 export type AgentsConfig = {
