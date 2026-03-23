@@ -1,9 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath, URL } from "node:url";
-import { SafeOpenError, readLocalFileSafely } from "openclaw/plugin-sdk/infra-runtime";
+import {
+  SafeOpenError,
+  readLocalFileSafely,
+  assertNoWindowsNetworkPath,
+  safeFileURLToPath,
+} from "openclaw/plugin-sdk/infra-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/infra-runtime";
-import { type MediaKind, maxBytesForKind } from "openclaw/plugin-sdk/media-runtime";
+import {
+  assertLocalMediaAllowed,
+  getDefaultLocalRoots,
+  LocalMediaAccessError,
+  type LocalMediaAccessErrorCode,
+  type MediaKind,
+  maxBytesForKind,
+} from "openclaw/plugin-sdk/media-runtime";
 import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import {
   convertHeicToJpeg,
@@ -11,10 +22,12 @@ import {
   optimizeImageToPng,
   resizeToJpeg,
 } from "openclaw/plugin-sdk/media-runtime";
-import { getDefaultMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { detectMime, extensionForMime, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
+
+export { getDefaultLocalRoots, LocalMediaAccessError };
+export type { LocalMediaAccessErrorCode };
 
 export type WebMediaResult = {
   buffer: Buffer;
@@ -53,128 +66,6 @@ function resolveWebMediaOptions(params: {
       ? (params.maxBytesOrOptions.optimizeImages ?? true)
       : false,
   };
-}
-
-function isWindowsNetworkPath(filePath: string): boolean {
-  if (process.platform !== "win32") {
-    return false;
-  }
-  const normalized = filePath.replace(/\//g, "\\");
-  return normalized.startsWith("\\\\?\\UNC\\") || normalized.startsWith("\\\\");
-}
-
-function assertNoWindowsNetworkPath(filePath: string, label = "Path"): void {
-  if (isWindowsNetworkPath(filePath)) {
-    throw new Error(`${label} cannot use Windows network paths: ${filePath}`);
-  }
-}
-
-function safeFileURLToPath(fileUrl: string): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(fileUrl);
-  } catch {
-    throw new Error(`Invalid file:// URL: ${fileUrl}`);
-  }
-  if (parsed.protocol !== "file:") {
-    throw new Error(`Invalid file:// URL: ${fileUrl}`);
-  }
-  if (parsed.hostname !== "" && parsed.hostname.toLowerCase() !== "localhost") {
-    throw new Error(`file:// URLs with remote hosts are not allowed: ${fileUrl}`);
-  }
-  const filePath = fileURLToPath(parsed);
-  assertNoWindowsNetworkPath(filePath, "Local file URL");
-  return filePath;
-}
-
-export type LocalMediaAccessErrorCode =
-  | "path-not-allowed"
-  | "invalid-root"
-  | "invalid-file-url"
-  | "network-path-not-allowed"
-  | "unsafe-bypass"
-  | "not-found"
-  | "invalid-path"
-  | "not-file";
-
-export class LocalMediaAccessError extends Error {
-  code: LocalMediaAccessErrorCode;
-
-  constructor(code: LocalMediaAccessErrorCode, message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.code = code;
-    this.name = "LocalMediaAccessError";
-  }
-}
-
-export function getDefaultLocalRoots(): readonly string[] {
-  return getDefaultMediaLocalRoots();
-}
-
-async function assertLocalMediaAllowed(
-  mediaPath: string,
-  localRoots: readonly string[] | "any" | undefined,
-): Promise<void> {
-  if (localRoots === "any") {
-    return;
-  }
-  try {
-    assertNoWindowsNetworkPath(mediaPath, "Local media path");
-  } catch (err) {
-    throw new LocalMediaAccessError("network-path-not-allowed", (err as Error).message, {
-      cause: err,
-    });
-  }
-  const roots = localRoots ?? getDefaultLocalRoots();
-  // Resolve symlinks so a symlink under /tmp pointing to /etc/passwd is caught.
-  let resolved: string;
-  try {
-    resolved = await fs.realpath(mediaPath);
-  } catch {
-    resolved = path.resolve(mediaPath);
-  }
-
-  // Hardening: the default allowlist includes the OpenClaw temp dir, and tests/CI may
-  // override the state dir into tmp. Avoid accidentally allowing per-agent
-  // `workspace-*` state roots via the temp-root prefix match; require explicit
-  // localRoots for those.
-  if (localRoots === undefined) {
-    const workspaceRoot = roots.find((root) => path.basename(root) === "workspace");
-    if (workspaceRoot) {
-      const stateDir = path.dirname(workspaceRoot);
-      const rel = path.relative(stateDir, resolved);
-      if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
-        const firstSegment = rel.split(path.sep)[0] ?? "";
-        if (firstSegment.startsWith("workspace-")) {
-          throw new LocalMediaAccessError(
-            "path-not-allowed",
-            `Local media path is not under an allowed directory: ${mediaPath}`,
-          );
-        }
-      }
-    }
-  }
-  for (const root of roots) {
-    let resolvedRoot: string;
-    try {
-      resolvedRoot = await fs.realpath(root);
-    } catch {
-      resolvedRoot = path.resolve(root);
-    }
-    if (resolvedRoot === path.parse(resolvedRoot).root) {
-      throw new LocalMediaAccessError(
-        "invalid-root",
-        `Invalid localRoots entry (refuses filesystem root): ${root}. Pass a narrower directory.`,
-      );
-    }
-    if (resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep)) {
-      return;
-    }
-  }
-  throw new LocalMediaAccessError(
-    "path-not-allowed",
-    `Local media path is not under an allowed directory: ${mediaPath}`,
-  );
 }
 
 const HEIC_MIME_RE = /^image\/hei[cf]$/i;

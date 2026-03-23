@@ -1,3 +1,4 @@
+import path from "node:path";
 import { fileURLToPath, URL } from "node:url";
 
 function isLocalFileUrlHost(hostname: string): boolean {
@@ -34,4 +35,30 @@ export function safeFileURLToPath(fileUrl: string): string {
   const filePath = fileURLToPath(parsed);
   assertNoWindowsNetworkPath(filePath, "Local file URL");
   return filePath;
+}
+
+export function trySafeFileURLToPath(fileUrl: string): string | undefined {
+  try {
+    return safeFileURLToPath(fileUrl);
+  } catch {
+    return undefined;
+  }
+}
+
+export function basenameFromMediaSource(source?: string): string | undefined {
+  if (!source) {
+    return undefined;
+  }
+  if (source.startsWith("file://")) {
+    const filePath = trySafeFileURLToPath(source);
+    return filePath ? path.basename(filePath) || undefined : undefined;
+  }
+  if (/^https?:\/\//i.test(source)) {
+    try {
+      return path.basename(new URL(source).pathname) || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return path.basename(source) || undefined;
 }
