@@ -272,6 +272,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/network discovery: guard LAN, tailnet, and pairing interface enumeration so WSL2 and restricted hosts degrade to missing-address fallbacks instead of crashing on `uv_interface_addresses` errors. (#44180, #47590)
 - Gateway/bonjour: suppress the non-fatal `@homebridge/ciao` IPv4-loss assertion during interface churn so WiFi/VPN/sleep-wake changes no longer take down the gateway. (#38628, #47159, #52431)
 - Browser/launch: stop forcing an extra blank tab on browser launch so managed browser startup no longer opens an unwanted empty page. (#52451) Thanks @rogerdigital.
+- ACP/Codex session replay: preserve hidden assistant thinking when loading or rebinding existing ACP sessions so stored thought chunks do not replay into visible assistant text. Thanks @vincentkoc.
 
 ### Breaking
 
