@@ -13,6 +13,13 @@ class A2UIHandler(
   private val getNodeCanvasHostUrl: () -> String?,
   private val getOperatorCanvasHostUrl: () -> String?,
 ) {
+  fun isTrustedCanvasActionUrl(rawUrl: String?): Boolean {
+    return CanvasActionTrust.isTrustedCanvasActionUrl(
+      rawUrl = rawUrl,
+      trustedA2uiUrls = listOfNotNull(resolveA2uiHostUrl()),
+    )
+  }
+
   fun resolveA2uiHostUrl(): String? {
     val nodeRaw = getNodeCanvasHostUrl()?.trim().orEmpty()
     val operatorRaw = getOperatorCanvasHostUrl()?.trim().orEmpty()
