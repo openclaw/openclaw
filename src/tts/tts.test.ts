@@ -935,7 +935,7 @@ describe("tts", () => {
       const config = tts.resolveTtsConfigForAccount(cfg, "telegram", "my-bot");
       expect(config.edge.voice).toBe("en-US-JennyNeural");
       expect(config.edge.lang).toBe("zh-CN");
-      expect(config.provider).toBe("edge");
+      expect(config.provider).toBe("microsoft");
     });
 
     it("returns global config for non-existent channel/account", () => {
