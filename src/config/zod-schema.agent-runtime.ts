@@ -11,6 +11,10 @@ import {
   ToolsMediaSchema,
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
+import {
+  ContextPruningSchema,
+  CompactionSchema,
+} from "./zod-schema.agent-defaults.js";
 
 export const HeartbeatSchema = z
   .object({
@@ -773,6 +777,8 @@ export const AgentEntrySchema = z
       .optional(),
     reasoningDefault: z.enum(["on", "off", "stream"]).optional(),
     fastModeDefault: z.boolean().optional(),
+    compaction: CompactionSchema,
+    contextPruning: ContextPruningSchema,
     skills: z.array(z.string()).optional(),
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),

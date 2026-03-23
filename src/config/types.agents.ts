@@ -1,5 +1,9 @@
 import type { ChatType } from "../channels/chat-type.js";
-import type { AgentDefaultsConfig } from "./types.agent-defaults.js";
+import type {
+  AgentDefaultsConfig,
+  AgentCompactionConfig,
+  AgentContextPruningConfig,
+} from "./types.agent-defaults.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
 import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { GroupChatConfig } from "./types.messages.js";
@@ -71,6 +75,10 @@ export type AgentConfig = {
   reasoningDefault?: "on" | "off" | "stream";
   /** Optional per-agent default for fast mode. */
   fastModeDefault?: boolean;
+  /** Optional per-agent compaction settings (overrides agents.defaults.compaction). */
+  compaction?: AgentCompactionConfig;
+  /** Optional per-agent context pruning settings (overrides agents.defaults.contextPruning). */
+  contextPruning?: AgentContextPruningConfig;
   /** Optional allowlist of skills for this agent (omit = all skills; empty = none). */
   skills?: string[];
   memorySearch?: MemorySearchConfig;
