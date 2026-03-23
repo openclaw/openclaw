@@ -48,7 +48,6 @@ import { readPostCompactionContext } from "./post-compaction-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { enqueueFollowupRun } from "./queue/enqueue.js";
 import type { FollowupRun, QueueSettings } from "./queue/types.js";
-import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -67,6 +66,9 @@ let agentRunnerMemoryRuntimePromise: Promise<
 let usageCostRuntimePromise: Promise<typeof import("./usage-cost.runtime.js")> | null = null;
 let contextTokensRuntimePromise: Promise<
   typeof import("../../agents/context-tokens.runtime.js")
+> | null = null;
+let replyMediaPathsRuntimePromise: Promise<
+  typeof import("./reply-media-paths.runtime.js")
 > | null = null;
 
 function loadPiEmbeddedQueueRuntime() {
@@ -92,6 +94,11 @@ function loadUsageCostRuntime() {
 function loadContextTokensRuntime() {
   contextTokensRuntimePromise ??= import("../../agents/context-tokens.runtime.js");
   return contextTokensRuntimePromise;
+}
+
+function loadReplyMediaPathsRuntime() {
+  replyMediaPathsRuntimePromise ??= import("./reply-media-paths.runtime.js");
+  return replyMediaPathsRuntimePromise;
 }
 
 export async function runReplyAgent(params: {
@@ -189,6 +196,7 @@ export async function runReplyAgent(params: {
   );
   const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
   const cfg = followupRun.run.config;
+  const { createReplyMediaPathNormalizer } = await loadReplyMediaPathsRuntime();
   const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
     cfg,
     sessionKey,
