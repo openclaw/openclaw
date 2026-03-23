@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/voice-call",
-  "version": "2026.3.22",
+  "version": "2026.3.23",
   "description": "OpenClaw voice-call plugin",
   "type": "module",
   "dependencies": {
@@ -8,9 +8,6 @@
     "commander": "^14.0.3",
     "ws": "^8.20.0",
     "zod": "^4.3.6"
-  },
-  "devDependencies": {
-    "openclaw": "workspace:*"
   },
   "peerDependencies": {
     "openclaw": ">=2026.3.22"

@@ -1,14 +1,11 @@
 {
   "name": "@openclaw/mattermost",
-  "version": "2026.3.22",
+  "version": "2026.3.23",
   "description": "OpenClaw Mattermost channel plugin",
   "type": "module",
   "dependencies": {
     "ws": "^8.20.0",
     "zod": "^4.3.6"
-  },
-  "devDependencies": {
-    "openclaw": "workspace:*"
   },
   "peerDependencies": {
     "openclaw": ">=2026.3.22"

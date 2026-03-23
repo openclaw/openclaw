@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/matrix",
-  "version": "2026.3.22",
+  "version": "2026.3.23",
   "description": "OpenClaw Matrix channel plugin",
   "type": "module",
   "dependencies": {
@@ -10,9 +10,6 @@
     "matrix-js-sdk": "41.2.0-rc.0",
     "music-metadata": "^11.11.2",
     "zod": "^4.3.6"
-  },
-  "devDependencies": {
-    "openclaw": "workspace:*"
   },
   "peerDependencies": {
     "openclaw": ">=2026.3.22"

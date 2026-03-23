@@ -1,13 +1,10 @@
 {
   "name": "@openclaw/nextcloud-talk",
-  "version": "2026.3.22",
+  "version": "2026.3.23",
   "description": "OpenClaw Nextcloud Talk channel plugin",
   "type": "module",
   "dependencies": {
     "zod": "^4.3.6"
-  },
-  "devDependencies": {
-    "openclaw": "workspace:*"
   },
   "peerDependencies": {
     "openclaw": ">=2026.3.22"
