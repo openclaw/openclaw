@@ -13,6 +13,15 @@ const LIVE = isLiveTestEnabled(["BYTEPLUS_LIVE_TEST"]);
 
 const describeLive = LIVE && BYTEPLUS_KEY ? describe : describe.skip;
 
+function isBytePlusSubscriptionError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("coding plan subscription") ||
+    lower.includes("subscription has expired") ||
+    (lower.includes("subscription") && lower.includes("renewal"))
+  );
+}
+
 describeLive("byteplus coding plan live", () => {
   it("returns assistant text", async () => {
     const model: Model<"openai-completions"> = {
@@ -35,6 +44,15 @@ describeLive("byteplus coding plan live", () => {
       },
       { apiKey: BYTEPLUS_KEY, maxTokens: 64 },
     );
+
+    if (res.stopReason === "error") {
+      const message = res.errorMessage ?? "";
+      if (isBytePlusSubscriptionError(message)) {
+        expect(message.toLowerCase()).toContain("subscription");
+        return;
+      }
+      throw new Error(message || "byteplus returned error with no message");
+    }
 
     const text = extractNonEmptyAssistantText(res.content);
     expect(text.length).toBeGreaterThan(0);

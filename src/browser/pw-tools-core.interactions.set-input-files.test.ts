@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let page: Record<string, unknown> | null = null;
 let locator: Record<string, unknown> | null = null;
@@ -54,11 +54,9 @@ function seedSingleLocatorPage(): { setInputFiles: ReturnType<typeof vi.fn> } {
 }
 
 describe("setInputFilesViaPlaywright", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ setInputFilesViaPlaywright } = await import("./pw-tools-core.interactions.js"));
-  });
-
-  beforeEach(() => {
     vi.clearAllMocks();
     page = null;
     locator = null;

@@ -7,6 +7,7 @@ export const BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   chutes: ["CHUTES_API_KEY", "CHUTES_OAUTH_TOKEN"],
   "cloudflare-ai-gateway": ["CLOUDFLARE_AI_GATEWAY_API_KEY"],
   "eternal-ai": ["ETERNAL_AI_API_KEY"],
+  deepseek: ["DEEPSEEK_API_KEY"],
   exa: ["EXA_API_KEY"],
   fal: ["FAL_KEY"],
   firecrawl: ["FIRECRAWL_API_KEY"],

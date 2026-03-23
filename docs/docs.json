@@ -1183,6 +1183,7 @@
                   "providers/cloudflare-ai-gateway",
                   "providers/claude-max-api-proxy",
                   "providers/deepgram",
+                  "providers/deepseek",
                   "providers/github-copilot",
                   "providers/google",
                   "providers/groq",
