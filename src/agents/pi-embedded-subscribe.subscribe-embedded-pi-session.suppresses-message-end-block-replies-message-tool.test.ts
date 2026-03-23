@@ -123,30 +123,32 @@ describe("subscribeEmbeddedPiSession", () => {
   it("does not suppress message_end replies when message tool sent to a different target", async () => {
     const { emit, onBlockReply } = createBlockReplyHarness("message_end");
 
-    const messageText = "Done - I replied in Juan chat.";
+    const messageText = "Done - I replied in a different thread.";
     await emitMessageToolLifecycle({
       emit,
       toolCallId: "tool-message-other-chat",
-      to: "any;+;c9e1c78203f74195b1db32e57529fb6a",
+      to: "+14155590123",
       message: messageText,
       result: "ok",
     });
     emitAssistantMessageEnd(emit, messageText);
+    await Promise.resolve();
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
   });
   it("does not suppress text_end block replies when message tool sent to a different target", async () => {
     const { emit, onBlockReply } = createBlockReplyHarness("text_end");
 
-    const messageText = "Done - I replied in Juan chat.";
+    const messageText = "Done - I replied in a different thread.";
     await emitMessageToolLifecycle({
       emit,
       toolCallId: "tool-message-other-chat-text-end",
-      to: "any;+;c9e1c78203f74195b1db32e57529fb6a",
+      to: "+14155590123",
       message: messageText,
       result: "ok",
     });
     emitAssistantTextEndBlock(emit, messageText);
+    await Promise.resolve();
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
   });
