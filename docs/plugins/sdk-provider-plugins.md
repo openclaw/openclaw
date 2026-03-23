@@ -185,6 +185,13 @@ API key auth, and dynamic model resolution.
     });
     ```
 
+    If your auth flow also needs to patch `models.providers.*`, aliases, and
+    the agent default model during onboarding, use the preset helpers from
+    `openclaw/plugin-sdk/provider-onboard`. The narrowest helpers are
+    `createDefaultModelPresetAppliers(...)`,
+    `createDefaultModelsPresetAppliers(...)`, and
+    `createModelCatalogPresetAppliers(...)`.
+
   </Step>
 
   <Step title="Add dynamic model resolution">

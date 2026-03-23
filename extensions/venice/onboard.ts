@@ -5,27 +5,27 @@ import {
   VENICE_MODEL_CATALOG,
 } from "openclaw/plugin-sdk/provider-models";
 import {
-  applyProviderConfigWithModelCatalogPreset,
+  createModelCatalogPresetAppliers,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 
 export { VENICE_DEFAULT_MODEL_REF };
 
-function applyVenicePreset(cfg: OpenClawConfig, primaryModelRef?: string): OpenClawConfig {
-  return applyProviderConfigWithModelCatalogPreset(cfg, {
+const venicePresetAppliers = createModelCatalogPresetAppliers({
+  primaryModelRef: VENICE_DEFAULT_MODEL_REF,
+  resolveParams: (_cfg: OpenClawConfig) => ({
     providerId: "venice",
     api: "openai-completions",
     baseUrl: VENICE_BASE_URL,
     catalogModels: VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition),
     aliases: [{ modelRef: VENICE_DEFAULT_MODEL_REF, alias: "Kimi K2.5" }],
-    primaryModelRef,
-  });
-}
+  }),
+});
 
 export function applyVeniceProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return applyVenicePreset(cfg);
+  return venicePresetAppliers.applyProviderConfig(cfg);
 }
 
 export function applyVeniceConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return applyVenicePreset(cfg, VENICE_DEFAULT_MODEL_REF);
+  return venicePresetAppliers.applyConfig(cfg);
 }
