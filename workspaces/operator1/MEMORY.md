@@ -42,22 +42,32 @@
 
 ## Key Lessons
 
-1. **Email checking** — never use browser; use MCP tools only
-2. **Verbosity** — user prefers short responses
-3. **Skills check** — use `openclaw skills list` CLI, not filesystem search
-4. **QMD PATH** — must be set in `.env`, not shell config
-5. **Memory isolation** — sub-agents have separate memory contexts
-6. **Progress reporting** — use `message()`, not `sessions_send()`
-7. **Project scaffolding** — `projects.add` only registers; scaffold RPC needed separately
-8. **Telegram images** — copy to workspace before processing
-9. **NotebookLM** — use `infographic` type for visuals; `mind_map` is JSON-only
-10. **Dirty git blocks gateway** — uncommitted changes prevent gateway restart; MCP tools can fail with module import errors
+1. **MCP configuration** — native MCP in OpenClaw, configured at `~/.openclaw/mcp/servers.yaml` (NOT mcporter port method)
+2. **Email checking** — never use browser; use MCP tools only
+3. **Verbosity** — user prefers short responses
+4. **Skills check** — use `openclaw skills list` CLI, not filesystem search
+5. **QMD PATH** — must be set in `.env`, not shell config
+6. **Memory isolation** — sub-agents have separate memory contexts
+7. **Progress reporting** — use `message()`, not `sessions_send()`
+8. **Project scaffolding** — `projects.add` only registers; scaffold RPC needed separately
+9. **Telegram images** — copy to workspace before processing
+10. **NotebookLM** — use `infographic` type for visuals; `mind_map` is JSON-only
+11. **Dirty git blocks gateway** — uncommitted changes prevent gateway restart; MCP tools can fail with module import errors
+12. **QMD search mode** — default is `search` (FTS/BM25), not `vsearch` (vector); configurable via `agents.*.memorySearch.qmd.searchMode`
 
 _Details archived in `memory/archive-2026-q1.md`_
 
 ---
 
 ## Pending
+
+### Active Blockers (Mar 23)
+
+- [ ] **Interstellar email auth** — broken since Mar 21
+- [ ] **LinkedIn InMail** — Jonathan Jowett, awaiting review since Mar 21
+- [x] ~~MCP tools down~~ — ✅ Fixed (gateway restart Mar 23)
+
+### Backlog
 
 - [ ] **Task delegation polling** — Main agent polls sub-agents during heartbeats; timeout triggers follow-up
 - [ ] Personal life management approach decision
@@ -67,4 +77,4 @@ _Details archived in `memory/archive-2026-q1.md`_
 
 ---
 
-_Last updated: 2026-03-22_
+_Last updated: 2026-03-23_

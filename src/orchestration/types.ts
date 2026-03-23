@@ -147,6 +147,7 @@ export interface BudgetIncident {
 export type ApprovalType = "agent_hire" | "budget_override" | "config_change";
 export type ApprovalStatus = "pending" | "revision_requested" | "approved" | "rejected";
 export type RequesterType = "agent" | "user" | "system";
+export type ApprovalCommentAuthorType = "agent" | "user" | "system";
 
 export interface Approval {
   id: string;
@@ -161,6 +162,15 @@ export interface Approval {
   decidedAt: number | null;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface ApprovalComment {
+  id: string;
+  approvalId: string;
+  authorId: string;
+  authorType: ApprovalCommentAuthorType;
+  body: string;
+  createdAt: number;
 }
 
 export interface ActivityLogEntry {
@@ -258,6 +268,22 @@ export interface AgentConfigRevision {
   changedBy: string | null;
   changeNote: string | null;
   createdAt: number;
+}
+
+// ── Agent Wakeup Requests (v30) ──────────────────────────────────────────────
+
+export type WakeupRequestStatus = "pending" | "processing" | "completed" | "failed";
+
+export interface WakeupRequest {
+  id: string;
+  workspaceId: string;
+  agentId: string;
+  taskId: string | null;
+  reason: string;
+  status: WakeupRequestStatus;
+  payloadJson: string | null;
+  createdAt: number;
+  processedAt: number | null;
 }
 
 // ── Finance Events (v29) ─────────────────────────────────────────────────────
