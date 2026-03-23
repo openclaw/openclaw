@@ -717,6 +717,7 @@ export const dispatchTelegramMessage = async ({
                   logVerbose(
                     `telegram: media delivery failed (suppressed-reasoning path): ${String(mediaErr)}`,
                   );
+                  deliveryState.markNonSilentFailure();
                   const previewMsgId = answerLane.stream?.messageId();
                   if (typeof previewMsgId === "number") {
                     try {
@@ -756,6 +757,7 @@ export const dispatchTelegramMessage = async ({
                 await sendPayload(payload);
               } catch (mediaErr) {
                 logVerbose(`telegram: media delivery failed: ${String(mediaErr)}`);
+                deliveryState.markNonSilentFailure();
                 const previewMsgId = answerLane.stream?.messageId();
                 if (typeof previewMsgId === "number") {
                   try {
