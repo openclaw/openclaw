@@ -506,21 +506,21 @@ export function ChatInput({
 
       setReplyTo({ seq: msg.seq, role: msg.role, preview });
 
-      const quoteBlock = `> [Re: #${msg.seq}] ${preview}\n\n`;
-      setInputValue((prev) => {
-        const stripped = prev.replace(/^> \[Re: #\d+\][\s\S]*?\n\n/, "");
-        return quoteBlock + stripped;
-      });
-
-      setTimeout(() => document.querySelector<HTMLTextAreaElement>("textarea")?.focus(), 0);
+      // Don't put quote text in textarea — the reply chip handles the visual.
+      // Just focus the textarea for the user to type their message.
+      setTimeout(() => {
+        const ta = document.querySelector<HTMLTextAreaElement>("textarea");
+        if (ta) {
+          ta.focus();
+        }
+      }, 0);
     },
     [setInputValue],
   );
 
   const clearReply = useCallback(() => {
     setReplyTo(null);
-    setInputValue((prev) => prev.replace(/^> \[Re: #\d+\][\s\S]*?\n\n/, ""));
-  }, [setInputValue]);
+  }, []);
 
   const addAttachments = useCallback(async (files: File[]) => {
     const imageFiles = files.filter((f) => f.type.startsWith("image/"));
@@ -597,11 +597,15 @@ export function ChatInput({
       return;
     }
 
+    // Prepend reply quote if replying to a message
+    const replyPrefix = replyTo ? `> [Re: #${replyTo.seq}] ${replyTo.preview}\n\n` : "";
+    const fullText = replyPrefix + inputValue;
+
     try {
       if (hasAttachments) {
         const contentBlocks: Array<unknown> = [];
         if (hasText) {
-          contentBlocks.push({ type: "text", text: inputValue });
+          contentBlocks.push({ type: "text", text: fullText });
         }
         for (const att of attachments) {
           const base64 = extractBase64(att.preview);
@@ -616,7 +620,7 @@ export function ChatInput({
         }
         await sendMessage(contentBlocks);
       } else {
-        await sendMessage(inputValue);
+        await sendMessage(fullText);
       }
       useChatStore.getState().clearDraft(activeSessionKey);
       setReplyTo(null);
