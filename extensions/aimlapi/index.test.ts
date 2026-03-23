@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createCapturedPluginRegistration } from "../../src/plugins/captured-registration.js";
 import { registerSingleProviderPlugin } from "../../test/helpers/extensions/plugin-registration.js";
 import aimlapiPlugin from "./index.js";
+import { __testing as aimlapiWebSearchTesting } from "./src/aimlapi-web-search-provider.js";
 
 describe("AIMLAPI provider plugin", () => {
   it("normalizes tool schemas before sending the payload", async () => {
@@ -324,6 +325,34 @@ describe("AIMLAPI provider plugin", () => {
       credentialPath: "plugins.entries.aimlapi.config.webSearch.apiKey",
       envVars: ["AIMLAPI_API_KEY"],
       autoDetectOrder: 15,
+    });
+  });
+
+  it("merges plugin web-search config with legacy AIMLAPI fallback fields", () => {
+    const config = {
+      plugins: {
+        entries: {
+          aimlapi: {
+            config: {
+              webSearch: {
+                apiKey: "plugin-key",
+              },
+            },
+          },
+        },
+      },
+    };
+    const searchConfig = {
+      aimlapi: {
+        baseUrl: "https://legacy.example/v1",
+        model: "perplexity/sonar",
+      },
+    };
+
+    expect(aimlapiWebSearchTesting.resolveAimlapiConfig(config, searchConfig)).toEqual({
+      apiKey: "plugin-key",
+      baseUrl: "https://legacy.example/v1",
+      model: "perplexity/sonar",
     });
   });
 

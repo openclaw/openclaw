@@ -60,13 +60,18 @@ function resolveAimlapiConfig(
   searchConfig?: SearchConfigRecord,
 ): AimlapiConfig {
   const pluginConfig = resolveProviderWebSearchPluginConfig(config, "aimlapi");
-  if (pluginConfig) {
-    return pluginConfig as AimlapiConfig;
-  }
   const scoped = (searchConfig as Record<string, unknown> | undefined)?.aimlapi;
-  return scoped && typeof scoped === "object" && !Array.isArray(scoped)
-    ? (scoped as AimlapiConfig)
-    : {};
+  const legacyConfig =
+    scoped && typeof scoped === "object" && !Array.isArray(scoped)
+      ? (scoped as AimlapiConfig)
+      : undefined;
+  if (!pluginConfig && !legacyConfig) {
+    return {};
+  }
+  return {
+    ...legacyConfig,
+    ...(pluginConfig as AimlapiConfig | undefined),
+  };
 }
 
 function resolveAimlapiApiKey(aimlapi?: AimlapiConfig): string | undefined {
@@ -380,6 +385,7 @@ export function createAimlapiWebSearchProvider(): WebSearchProviderPlugin {
 }
 
 export const __testing = {
+  resolveAimlapiConfig,
   resolveAimlapiApiKey,
   resolveAimlapiBaseUrl,
   resolveAimlapiModel,
