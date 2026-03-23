@@ -4,6 +4,7 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/infra-runtim
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getMessageContentMock = vi.hoisted(() => vi.fn());
+let downloadLineMedia: typeof import("./download.js").downloadLineMedia;
 
 vi.mock("@line/bot-sdk", () => ({
   messagingApi: {
@@ -29,8 +30,6 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   logVerbose: () => {},
 }));
 
-import { downloadLineMedia } from "./download.js";
-
 async function* chunks(parts: Buffer[]): AsyncGenerator<Buffer> {
   for (const part of parts) {
     yield part;
@@ -38,8 +37,11 @@ async function* chunks(parts: Buffer[]): AsyncGenerator<Buffer> {
 }
 
 describe("downloadLineMedia", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    getMessageContentMock.mockReset();
     vi.clearAllMocks();
+    ({ downloadLineMedia } = await import("./download.js"));
   });
 
   it("does not derive temp file path from external messageId", async () => {
