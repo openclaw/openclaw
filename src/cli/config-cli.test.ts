@@ -39,12 +39,13 @@ vi.mock("../runtime.js", async (importOriginal) => {
   return {
     ...actual,
     defaultRuntime: {
+      ...actual.defaultRuntime,
       log: (...args: unknown[]) => mockLog(...args),
       error: (...args: unknown[]) => mockError(...args),
+      exit: (code: number) => mockExit(code),
       writeStdout: (value: string) => mockLog(value.endsWith("\n") ? value.slice(0, -1) : value),
       writeJson: (value: unknown, space = 2) =>
         mockLog(JSON.stringify(value, null, space > 0 ? space : undefined)),
-      exit: (code: number) => mockExit(code),
     },
   };
 });
