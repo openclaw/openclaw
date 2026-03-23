@@ -311,14 +311,48 @@ type NpmPackResult = {
   files?: NpmPackFileEntry[];
 };
 
+type ExecFailure = Error & {
+  stderr?: string | Buffer;
+  stdout?: string | Buffer;
+};
+
+function toTrimmedUtf8(value: string | Buffer | undefined): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (Buffer.isBuffer(value)) {
+    return value.toString("utf8").trim();
+  }
+  return "";
+}
+
+function describeExecFailure(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return String(error);
+  }
+  const withStreams = error as ExecFailure;
+  const details: string[] = [error.message];
+  const stderr = toTrimmedUtf8(withStreams.stderr);
+  const stdout = toTrimmedUtf8(withStreams.stdout);
+  if (stderr) {
+    details.push(`stderr: ${stderr}`);
+  }
+  if (stdout) {
+    details.push(`stdout: ${stdout}`);
+  }
+  return details.join(" | ");
+}
+
 function collectPackedTarballErrors(): string[] {
   const errors: string[] = [];
   let stdout = "";
   try {
     stdout = runNpmCommand(["pack", "--json", "--dry-run"]);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    errors.push(`Failed to inspect npm tarball contents via \`npm pack --json --dry-run\`: ${message}`);
+    const message = describeExecFailure(error);
+    errors.push(
+      `Failed to inspect npm tarball contents via \`npm pack --json --dry-run\`: ${message}`,
+    );
     return errors;
   }
 
