@@ -134,8 +134,11 @@ export function createEventHandlers(context: EventHandlerContext) {
   }) => {
     noteFinalizedRun(params.runId);
     clearActiveRunIfMatch(params.runId);
-    if (params.wasActiveRun || shouldClearOrphanedActivityStatus()) {
+    if (params.wasActiveRun) {
       setActivityStatus(params.status);
+    } else if (shouldClearOrphanedActivityStatus()) {
+      // Orphan path only dismisses stuck busy UI; do not surface error from a non-active run.
+      setActivityStatus("idle");
     }
     void refreshSessionInfo?.();
   };
@@ -148,8 +151,10 @@ export function createEventHandlers(context: EventHandlerContext) {
     streamAssembler.drop(params.runId);
     sessionRuns.delete(params.runId);
     clearActiveRunIfMatch(params.runId);
-    if (params.wasActiveRun || shouldClearOrphanedActivityStatus()) {
+    if (params.wasActiveRun) {
       setActivityStatus(params.status);
+    } else if (shouldClearOrphanedActivityStatus()) {
+      setActivityStatus("idle");
     }
     void refreshSessionInfo?.();
   };
