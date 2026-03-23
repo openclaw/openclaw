@@ -25,6 +25,7 @@ import { randomUUID } from "node:crypto";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type {
   AssistantMessage,
+  AssistantMessageEvent,
   Context,
   Message,
   StopReason,
@@ -67,6 +68,85 @@ interface WsSession {
 
 /** Module-level registry: sessionId → WsSession */
 const wsRegistry = new Map<string, WsSession>();
+
+type AssistantMessageEventStreamLike = AsyncIterable<AssistantMessageEvent> & {
+  push(event: AssistantMessageEvent): void;
+  end(result?: AssistantMessage): void;
+  result(): Promise<AssistantMessage>;
+};
+
+class LocalAssistantMessageEventStream implements AssistantMessageEventStreamLike {
+  private readonly queue: AssistantMessageEvent[] = [];
+  private readonly waiting: Array<(value: IteratorResult<AssistantMessageEvent>) => void> = [];
+  private done = false;
+  private readonly finalResultPromise: Promise<AssistantMessage>;
+  private resolveFinalResult!: (result: AssistantMessage) => void;
+
+  constructor() {
+    this.finalResultPromise = new Promise((resolve) => {
+      this.resolveFinalResult = resolve;
+    });
+  }
+
+  push(event: AssistantMessageEvent): void {
+    if (this.done) {
+      return;
+    }
+    if (event.type === "done") {
+      this.done = true;
+      this.resolveFinalResult(event.message);
+    } else if (event.type === "error") {
+      this.done = true;
+      this.resolveFinalResult(event.error);
+    }
+    const waiter = this.waiting.shift();
+    if (waiter) {
+      waiter({ value: event, done: false });
+      return;
+    }
+    this.queue.push(event);
+  }
+
+  end(result?: AssistantMessage): void {
+    this.done = true;
+    if (result) {
+      this.resolveFinalResult(result);
+    }
+    while (this.waiting.length > 0) {
+      const waiter = this.waiting.shift();
+      waiter?.({ value: undefined as AssistantMessageEvent, done: true });
+    }
+  }
+
+  async *[Symbol.asyncIterator](): AsyncIterator<AssistantMessageEvent> {
+    while (true) {
+      if (this.queue.length > 0) {
+        yield this.queue.shift()!;
+        continue;
+      }
+      if (this.done) {
+        return;
+      }
+      const result = await new Promise<IteratorResult<AssistantMessageEvent>>((resolve) => {
+        this.waiting.push(resolve);
+      });
+      if (result.done) {
+        return;
+      }
+      yield result.value;
+    }
+  }
+
+  result(): Promise<AssistantMessage> {
+    return this.finalResultPromise;
+  }
+}
+
+function createEventStream(): AssistantMessageEventStreamLike {
+  return typeof createAssistantMessageEventStream === "function"
+    ? createAssistantMessageEventStream()
+    : new LocalAssistantMessageEventStream();
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public registry helpers
@@ -604,7 +684,7 @@ export function createOpenAIWebSocketStreamFn(
   opts: OpenAIWebSocketStreamOptions = {},
 ): StreamFn {
   return (model, context, options) => {
-    const eventStream = createAssistantMessageEventStream();
+    const eventStream = createEventStream();
 
     const run = async () => {
       const transport = resolveWsTransport(options);
@@ -938,7 +1018,7 @@ async function fallbackToHttp(
   model: Parameters<StreamFn>[0],
   context: Parameters<StreamFn>[1],
   options: Parameters<StreamFn>[2],
-  eventStream: ReturnType<typeof createAssistantMessageEventStream>,
+  eventStream: AssistantMessageEventStreamLike,
   signal?: AbortSignal,
 ): Promise<void> {
   const mergedOptions = signal ? { ...options, signal } : options;

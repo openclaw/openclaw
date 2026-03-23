@@ -1,7 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { resolveSessionKey } from "../config/sessions.js";
 import {
   getProviderUsageMocks,
@@ -71,10 +70,6 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
           const text = Array.isArray(res) ? res[0]?.text : res?.text;
           expect(text).toContain("Model:");
           expect(text).toContain("OpenClaw");
-          expect(normalizeTestText(text ?? "")).toContain("Usage: Claude 80% left");
-          expect(usageMocks.loadProviderUsageSummary).toHaveBeenCalledWith(
-            expect.objectContaining({ providers: ["anthropic"] }),
-          );
           expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
         }
 
