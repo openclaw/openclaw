@@ -208,7 +208,11 @@ export async function loadCostUsageSummary(params?: {
   const files = (
     await Promise.all(
       entries
-        .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+        .filter(
+          (entry) =>
+            entry.isFile() &&
+            (entry.name.endsWith(".jsonl") || entry.name.match(/\.jsonl\.reset\.\d+$/)),
+        )
         .map(async (entry) => {
           const filePath = path.join(sessionsDir, entry.name);
           const stats = await fs.promises.stat(filePath).catch(() => null);
