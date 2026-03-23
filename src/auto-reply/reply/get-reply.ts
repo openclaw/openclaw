@@ -239,12 +239,6 @@ export async function getReplyFromConfig(
 
   const finalized = finalizeInboundContext(ctx);
 
-  emitPreAgentMessageHooks({
-    ctx: finalized,
-    cfg,
-    isFastTestEnv,
-  });
-
   const commandAuthorized = finalized.CommandAuthorized;
   resolveCommandAuthorization({
     ctx: finalized,
@@ -432,6 +426,12 @@ export async function getReplyFromConfig(
     });
     logIngressStage("link-understanding", `applied=${appliedLinkUnderstanding ? "1" : "0"}`);
   }
+
+  emitPreAgentMessageHooks({
+    ctx: finalized,
+    cfg,
+    isFastTestEnv,
+  });
 
   const directiveResult = await resolveReplyDirectives({
     ctx: finalized,
