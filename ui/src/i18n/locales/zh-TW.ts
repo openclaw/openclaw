@@ -107,8 +107,7 @@ export const zh_TW: TranslationMap = {
     },
     auth: {
       required: "此閘道需要驗證。請新增權杖或密碼，然後點擊「連線」。",
-      failed:
-        "驗證失敗。請使用 {command} 重新複製含權杖的 URL，或更新權杖後點擊「連線」。",
+      failed: "驗證失敗。請使用 {command} 重新複製含權杖的 URL，或更新權杖後點擊「連線」。",
     },
     pairing: {
       hint: "此裝置需要閘道主機的配對核准。",
@@ -220,8 +219,7 @@ export const zh_TW: TranslationMap = {
     },
     empty: {
       title: "先選擇日期範圍",
-      subtitle:
-        "載入用量資料以比較費用、檢視工作階段，並在儀表板中深入查看時間軸。",
+      subtitle: "載入用量資料以比較費用、檢視工作階段，並在儀表板中深入查看時間軸。",
       hint: "選擇日期範圍後點擊「重新整理」以載入用量。",
       noData: "無資料",
       featureOverview: "總覽卡片",
@@ -504,13 +502,11 @@ export const zh_TW: TranslationMap = {
       payloadKind: "要執行什麼？",
       systemEvent: "發送訊息至主時間軸",
       agentTurn: "執行助手任務（獨立）",
-      systemEventHelp:
-        "將文字發送至閘道主時間軸（適合提醒/觸發）。",
+      systemEventHelp: "將文字發送至閘道主時間軸（適合提醒/觸發）。",
       agentTurnHelp: "使用你的提示詞在獨立工作階段中啟動一次助手執行。",
       timeoutSeconds: "逾時（秒）",
       timeoutPlaceholder: "選填，例如 90",
-      timeoutHelp:
-        "選填。留空則使用閘道預設的逾時行為。",
+      timeoutHelp: "選填。留空則使用閘道預設的逾時行為。",
       mainTimelineMessage: "主時間軸訊息",
       assistantTaskPrompt: "助手任務提示詞",
       deliverySection: "發送",
@@ -529,8 +525,7 @@ export const zh_TW: TranslationMap = {
       toPlaceholder: "+1555... 或 chat id",
       toHelp: "選填的收件者覆寫（chat id、電話或使用者 id）。",
       advanced: "進階",
-      advancedHelp:
-        "發送保證、排程抖動與模型控制的選填覆寫。",
+      advancedHelp: "發送保證、排程抖動與模型控制的選填覆寫。",
       deleteAfterRun: "執行後刪除",
       deleteAfterRunHelp: "適合一次性提醒，執行後自動清理。",
       clearAgentOverride: "清除 Agent 覆寫",
