@@ -118,16 +118,20 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("./session.js", () => ({
-  createWaSocket: vi.fn().mockImplementation(async () => {
-    if (!sessionState.sock) {
-      throw new Error("mock WhatsApp socket not initialized");
-    }
-    return sessionState.sock;
-  }),
-  waitForWaConnection: vi.fn().mockResolvedValue(undefined),
-  getStatusCode: vi.fn(() => 500),
-}));
+vi.mock("./session.js", async () => {
+  const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
+  return {
+    ...actual,
+    createWaSocket: vi.fn().mockImplementation(async () => {
+      if (!sessionState.sock) {
+        throw new Error("mock WhatsApp socket not initialized");
+      }
+      return sessionState.sock;
+    }),
+    waitForWaConnection: vi.fn().mockResolvedValue(undefined),
+    getStatusCode: vi.fn(() => 500),
+  };
+});
 
 export function getSock(): MockSock {
   if (!sessionState.sock) {
