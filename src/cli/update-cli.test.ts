@@ -25,12 +25,6 @@ const formatPortDiagnostics = vi.fn();
 const pathExists = vi.fn();
 const syncPluginsForUpdateChannel = vi.fn();
 const updateNpmInstalledPlugins = vi.fn();
-const runtimeLog = vi.fn();
-const runtimeError = vi.fn();
-const runtimeExit = vi.fn();
-const runtimeWriteJson = vi.fn((value: unknown, space = 2) =>
-  runtimeLog(JSON.stringify(value, null, space > 0 ? space : undefined)),
-);
 
 vi.mock("@clack/prompts", () => ({
   confirm,
@@ -135,17 +129,22 @@ vi.mock("./daemon-cli.js", () => ({
 }));
 
 // Mock the runtime
-vi.mock("../runtime.js", () => ({
-  defaultRuntime: {
-    log: runtimeLog,
-    error: runtimeError,
-    exit: runtimeExit,
-    writeStdout: vi.fn((value: string) =>
-      runtimeLog(value.endsWith("\n") ? value.slice(0, -1) : value),
-    ),
-    writeJson: runtimeWriteJson,
-  },
-}));
+vi.mock("../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime.js")>();
+  const log = vi.fn();
+  return {
+    ...actual,
+    defaultRuntime: {
+      ...actual.defaultRuntime,
+      log,
+      error: vi.fn(),
+      writeStdout: (value: string) => log(value.endsWith("\n") ? value.slice(0, -1) : value),
+      writeJson: (value: unknown, space = 2) =>
+        log(JSON.stringify(value, null, space > 0 ? space : undefined)),
+      exit: vi.fn(),
+    },
+  };
+});
 
 const { runGatewayUpdate } = await import("../infra/update-runner.js");
 const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");

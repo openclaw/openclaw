@@ -8,8 +8,6 @@ export const runtimeLogs: string[] = [];
 type LifecycleRuntimeHarness = OutputRuntimeEnv & {
   error: MockFn<OutputRuntimeEnv["error"]>;
   exit: MockFn<OutputRuntimeEnv["exit"]>;
-  writeStdout: MockFn<(value: string) => void>;
-  writeJson: MockFn<(value: unknown, space?: number) => void>;
 };
 
 type LifecycleServiceHarness = GatewayService & {
@@ -26,15 +24,15 @@ export const defaultRuntime: LifecycleRuntimeHarness = {
   log: (...args: unknown[]) => {
     runtimeLogs.push(args.map((arg) => String(arg)).join(" "));
   },
+  writeStdout: (value: string) => {
+    runtimeLogs.push(value.endsWith("\n") ? value.slice(0, -1) : value);
+  },
+  writeJson: (value: unknown, space = 2) => {
+    runtimeLogs.push(JSON.stringify(value, null, space > 0 ? space : undefined));
+  },
   error: vi.fn(),
   exit: vi.fn((code: number) => {
     throw new Error(`__exit__:${code}`);
-  }),
-  writeStdout: vi.fn((value: string) => {
-    runtimeLogs.push(value.endsWith("\n") ? value.slice(0, -1) : value);
-  }),
-  writeJson: vi.fn((value: unknown, space = 2) => {
-    runtimeLogs.push(JSON.stringify(value, null, space > 0 ? space : undefined));
   }),
 };
 

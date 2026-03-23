@@ -61,7 +61,7 @@ describe("memory cli", () => {
   function spyRuntimeLogs() {
     const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value: unknown, space = 2) => {
-      logSpy(JSON.stringify(value, null, space));
+      logSpy(JSON.stringify(value, null, space > 0 ? space : undefined));
     });
     return logSpy;
   }
