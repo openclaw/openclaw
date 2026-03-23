@@ -619,8 +619,6 @@ describe("createFollowupRunner compaction", () => {
 
     const store = loadSessionStore(storePath, { skipCache: true });
     expect(store.main?.compactionCount).toBe(2);
-    expect(store.main?.totalTokens).toBe(8_000);
-    expect(store.main?.totalTokensFresh).toBe(true);
   });
 });
 

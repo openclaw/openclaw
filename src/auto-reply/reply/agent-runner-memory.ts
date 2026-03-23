@@ -35,7 +35,6 @@ import {
 import {
   DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
   hasAlreadyFlushedForCurrentCompaction,
-  computeContextHash,
   resolveMemoryFlushContextWindowTokens,
   resolveMemoryFlushRelativePathForRun,
   resolveMemoryFlushPromptForRun,
@@ -43,8 +42,8 @@ import {
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
-import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
+import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 export function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
@@ -342,6 +341,15 @@ export async function runPreflightCompactionIfNeeded(params: {
   const softThresholdTokens =
     resolveMemoryFlushSettings(params.cfg)?.softThresholdTokens ?? DEFAULT_MEMORY_FLUSH_SOFT_TOKENS;
   const freshPersistedTokens = resolveFreshSessionTotalTokens(entry);
+  const persistedTotalTokens = entry.totalTokens;
+  const hasPersistedTotalTokens =
+    typeof persistedTotalTokens === "number" &&
+    Number.isFinite(persistedTotalTokens) &&
+    persistedTotalTokens > 0;
+  const shouldUseTranscriptFallback = entry.totalTokensFresh === false || !hasPersistedTotalTokens;
+  if (!shouldUseTranscriptFallback) {
+    return entry ?? params.sessionEntry;
+  }
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
     params.promptForEstimate ?? params.followupRun.prompt,
   );
@@ -421,9 +429,9 @@ export async function runPreflightCompactionIfNeeded(params: {
     ownerNumbers: params.followupRun.run.ownerNumbers,
   });
 
-  if (!result.ok || !result.compacted) {
+  if (!result?.ok || !result.compacted) {
     logVerbose(
-      `preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${result.reason ?? "not_compacted"}`,
+      `preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${result?.reason ?? "not_compacted"}`,
     );
     return entry ?? params.sessionEntry;
   }

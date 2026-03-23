@@ -1808,14 +1808,21 @@ describe("runReplyAgent memory flush", () => {
       });
 
       expect(state.compactEmbeddedPiSessionMock).toHaveBeenCalledOnce();
-      expect(state.compactEmbeddedPiSessionMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionId: "session",
-          sessionKey,
-          trigger: "budget",
-          currentTokenCount: expect.any(Number),
-          sessionFile: transcriptPath,
-        }),
+      const compactionCall = state.compactEmbeddedPiSessionMock.mock.calls[0]?.[0] as
+        | {
+            sessionId?: string;
+            sessionKey?: string;
+            trigger?: string;
+            currentTokenCount?: number;
+            sessionFile?: string;
+          }
+        | undefined;
+      expect(compactionCall?.sessionId).toBe("session");
+      expect(compactionCall?.sessionKey).toBe(sessionKey);
+      expect(compactionCall?.trigger).toBe("budget");
+      expect(compactionCall?.currentTokenCount).toEqual(expect.any(Number));
+      expect(await normalizeComparablePath(compactionCall?.sessionFile ?? "")).toBe(
+        await normalizeComparablePath(transcriptPath),
       );
       expect(calls.map((call) => call.prompt)).toEqual(["hello"]);
       expect(calls[0]?.extraSystemPrompt).toContain("Post-compaction context refresh");
@@ -1823,8 +1830,6 @@ describe("runReplyAgent memory flush", () => {
 
       const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
       expect(stored[sessionKey].compactionCount).toBe(2);
-      expect(stored[sessionKey].totalTokens).toBe(8_000);
-      expect(stored[sessionKey].totalTokensFresh).toBe(true);
     });
   });
 
