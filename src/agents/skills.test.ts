@@ -544,4 +544,42 @@ describe("applySkillEnvOverrides", () => {
       }
     });
   });
+
+  it("blocks gateway token skill env overrides even when declared", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "gateway-token-skill");
+    await writeSkill({
+      dir: skillDir,
+      name: "gateway-token-skill",
+      description: "Needs env",
+      metadata:
+        '{"openclaw":{"requires":{"env":["OPENCLAW_GATEWAY_TOKEN"]},"primaryEnv":"OPENCLAW_GATEWAY_TOKEN"}}',
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
+
+    withClearedEnv(["OPENCLAW_GATEWAY_TOKEN"], () => {
+      const restore = applySkillEnvOverrides({
+        skills: entries,
+        config: {
+          skills: {
+            entries: {
+              "gateway-token-skill": {
+                env: {
+                  OPENCLAW_GATEWAY_TOKEN: "gw-token",
+                },
+              },
+            },
+          },
+        },
+      });
+
+      try {
+        expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+      } finally {
+        restore();
+        expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+      }
+    });
+  });
 });

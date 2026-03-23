@@ -6,8 +6,8 @@ import {
 } from "../../config/config.js";
 import * as skillsModule from "../skills.js";
 import type { SkillSnapshot } from "../skills.js";
-
-const { resolveEmbeddedRunSkillEntries } = await import("./skills-runtime.js");
+const { resolveEmbeddedRunSkillEntries, syncCurrentSkillEnvToSandbox } =
+  await import("./skills-runtime.js");
 
 describe("resolveEmbeddedRunSkillEntries", () => {
   const loadWorkspaceSkillEntriesSpy = vi.spyOn(skillsModule, "loadWorkspaceSkillEntries");
@@ -98,5 +98,29 @@ describe("resolveEmbeddedRunSkillEntries", () => {
       skillEntries: [],
     });
     expect(loadWorkspaceSkillEntriesSpy).not.toHaveBeenCalled();
+  });
+
+  it("syncs current skill env values into sandbox exec env", () => {
+    const sandbox = {
+      docker: { env: { LANG: "C.UTF-8" } },
+      backend: { env: { LANG: "C.UTF-8" } },
+    };
+
+    syncCurrentSkillEnvToSandbox({
+      sandbox,
+      envKeys: new Set(["OPENAI_API_KEY", "MISSING_KEY"]),
+      env: {
+        OPENAI_API_KEY: "sk-test",
+      },
+    });
+
+    expect(sandbox.docker.env).toEqual({
+      LANG: "C.UTF-8",
+      OPENAI_API_KEY: "sk-test",
+    });
+    expect(sandbox.backend.env).toEqual({
+      LANG: "C.UTF-8",
+      OPENAI_API_KEY: "sk-test",
+    });
   });
 });

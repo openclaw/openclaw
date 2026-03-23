@@ -2,6 +2,11 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { loadWorkspaceSkillEntries, type SkillEntry, type SkillSnapshot } from "../skills.js";
 import { resolveSkillRuntimeConfig } from "../skills/runtime-config.js";
 
+export type SandboxSkillEnvTarget = {
+  docker: { env?: Record<string, string> };
+  backend?: { env?: Record<string, string> };
+};
+
 export function resolveEmbeddedRunSkillEntries(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -18,4 +23,37 @@ export function resolveEmbeddedRunSkillEntries(params: {
       ? loadWorkspaceSkillEntries(params.workspaceDir, { config })
       : [],
   };
+}
+
+export function syncCurrentSkillEnvToSandbox(params: {
+  sandbox?: SandboxSkillEnvTarget | null;
+  envKeys?: ReadonlySet<string>;
+  env?: NodeJS.ProcessEnv;
+}) {
+  if (!params.sandbox || !params.envKeys || params.envKeys.size === 0) {
+    return;
+  }
+
+  const envSource = params.env ?? process.env;
+  const skillEnv: Record<string, string> = {};
+  for (const key of params.envKeys) {
+    const value = envSource[key];
+    if (typeof value === "string") {
+      skillEnv[key] = value;
+    }
+  }
+  if (Object.keys(skillEnv).length === 0) {
+    return;
+  }
+
+  params.sandbox.docker.env = {
+    ...params.sandbox.docker.env,
+    ...skillEnv,
+  };
+  if (params.sandbox.backend) {
+    params.sandbox.backend.env = {
+      ...params.sandbox.backend.env,
+      ...skillEnv,
+    };
+  }
 }

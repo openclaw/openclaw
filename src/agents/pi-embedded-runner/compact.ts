@@ -104,7 +104,7 @@ import { buildModelAliasLines, resolveModelAsync } from "./model.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
 import { truncateSessionAfterCompaction } from "./session-truncation.js";
-import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
+import { resolveEmbeddedRunSkillEntries, syncCurrentSkillEnvToSandbox } from "./skills-runtime.js";
 import {
   applySystemPromptOverrideToSession,
   buildEmbeddedSystemPrompt,
@@ -769,6 +769,10 @@ export async function compactEmbeddedPiSessionDirect(
           skills: skillEntries ?? [],
           config: params.config,
         });
+    syncCurrentSkillEnvToSandbox({
+      sandbox,
+      envKeys: allowedSensitiveKeys,
+    });
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: params.skillsSnapshot,
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
