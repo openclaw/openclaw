@@ -239,10 +239,20 @@ const logRunner = (message, deps) => {
   deps.stderr.write(`[openclaw] ${message}\n`);
 };
 
+const resolveRuntimeCwd = (deps) => {
+  const runtimeCwd = deps.env.OPENCLAW_RUNNER_RUNTIME_CWD;
+  if (typeof runtimeCwd === "string" && runtimeCwd.trim()) {
+    return runtimeCwd;
+  }
+  return deps.cwd;
+};
+
 const runOpenClaw = async (deps) => {
+  const childEnv = { ...deps.env };
+  delete childEnv.OPENCLAW_RUNNER_RUNTIME_CWD;
   const nodeProcess = deps.spawn(deps.execPath, ["openclaw.mjs", ...deps.args], {
-    cwd: deps.cwd,
-    env: deps.env,
+    cwd: resolveRuntimeCwd(deps),
+    env: childEnv,
     stdio: "inherit",
   });
   const res = await new Promise((resolve) => {

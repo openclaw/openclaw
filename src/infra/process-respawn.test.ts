@@ -239,15 +239,21 @@ describe("restartGatewayProcessWithFreshPid", () => {
         value === runNodePath || value === sourceEntryPath || value === tsconfigPath,
     );
     spawnMock.mockReturnValue({ pid: 5151, unref: vi.fn() });
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue("/tmp/openclaw-runtime");
 
     const result = restartGatewayProcessWithFreshPid();
+    cwdSpy.mockRestore();
 
     expect(result).toEqual({ mode: "spawned", pid: 5151 });
     expect(spawnMock).toHaveBeenCalledWith(
       process.execPath,
       ["--trace-warnings", runNodePath, "--dev", "gateway"],
       expect.objectContaining({
+        cwd: rootPath,
         detached: true,
+        env: expect.objectContaining({
+          OPENCLAW_RUNNER_RUNTIME_CWD: "/tmp/openclaw-runtime",
+        }),
         stdio: "inherit",
       }),
     );

@@ -7,6 +7,7 @@ import { triggerOpenClawRestart } from "./restart.js";
 import { detectRespawnSupervisor } from "./supervisor-markers.js";
 
 type RespawnMode = "spawned" | "supervised" | "disabled" | "failed";
+const OPENCLAW_RUNNER_RUNTIME_CWD = "OPENCLAW_RUNNER_RUNTIME_CWD";
 
 export type GatewayRespawnResult = {
   mode: RespawnMode;
@@ -104,16 +105,39 @@ function resolvePnpmStableEntrypointFromArgv1(argv1: string): string | null {
   return resolveStablePackageEntrypoint(stableRoot, argv1);
 }
 
-function resolveStableRespawnArgs(): string[] {
+function buildSourceTreeRespawnPlan(packageRoot: string): {
+  args: string[];
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+} {
+  return {
+    args: [
+      ...process.execArgv,
+      path.join(packageRoot, "scripts", "run-node.mjs"),
+      ...process.argv.slice(2),
+    ],
+    cwd: packageRoot,
+    env: {
+      ...process.env,
+      [OPENCLAW_RUNNER_RUNTIME_CWD]: process.cwd(),
+    },
+  };
+}
+
+function resolveStableRespawnPlan(): {
+  args: string[];
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+} {
   const currentArgs = [...process.execArgv, ...process.argv.slice(1)];
   const argv1 = process.argv[1]?.trim();
   if (!argv1 || looksLikeDevEntrypoint(argv1)) {
-    return currentArgs;
+    return { args: currentArgs };
   }
 
   const pnpmEntrypoint = resolvePnpmStableEntrypointFromArgv1(argv1);
   if (pnpmEntrypoint) {
-    return [...process.execArgv, pnpmEntrypoint, ...process.argv.slice(2)];
+    return { args: [...process.execArgv, pnpmEntrypoint, ...process.argv.slice(2)] };
   }
 
   const packageRoot = resolveOpenClawPackageRootSync({
@@ -121,15 +145,20 @@ function resolveStableRespawnArgs(): string[] {
     cwd: process.cwd(),
   });
   if (!packageRoot) {
-    return currentArgs;
+    return { args: currentArgs };
+  }
+
+  const sourceTreeEntrypoint = resolveStableSourceTreeEntrypoint(packageRoot);
+  if (sourceTreeEntrypoint) {
+    return buildSourceTreeRespawnPlan(packageRoot);
   }
 
   const stableEntrypoint = resolveStablePackageEntrypoint(packageRoot, argv1);
   if (!stableEntrypoint) {
-    return currentArgs;
+    return { args: currentArgs };
   }
 
-  return [...process.execArgv, stableEntrypoint, ...process.argv.slice(2)];
+  return { args: [...process.execArgv, stableEntrypoint, ...process.argv.slice(2)] };
 }
 
 /**
@@ -184,9 +213,10 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
   }
 
   try {
-    const args = resolveStableRespawnArgs();
-    const child = spawn(process.execPath, args, {
-      env: process.env,
+    const plan = resolveStableRespawnPlan();
+    const child = spawn(process.execPath, plan.args, {
+      cwd: plan.cwd,
+      env: plan.env ?? process.env,
       detached: true,
       stdio: "inherit",
     });

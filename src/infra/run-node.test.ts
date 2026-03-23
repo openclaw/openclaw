@@ -165,6 +165,60 @@ describe("run-node script", () => {
     });
   });
 
+  it("preserves runtime cwd overrides while building from the package root", async () => {
+    await withTempDir(async (tmp) => {
+      await writeRuntimePostBuildScaffold(tmp);
+
+      const spawnCalls: Array<{
+        cmd: string;
+        args: string[];
+        cwd: string | undefined;
+        env: NodeJS.ProcessEnv | undefined;
+      }> = [];
+      const spawn = (
+        cmd: string,
+        args: string[],
+        options?: { cwd?: string; env?: NodeJS.ProcessEnv },
+      ) => {
+        spawnCalls.push({
+          cmd,
+          args,
+          cwd: options?.cwd,
+          env: options?.env,
+        });
+        return createExitedProcess(0);
+      };
+
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["gateway"],
+        env: {
+          ...process.env,
+          OPENCLAW_FORCE_BUILD: "1",
+          OPENCLAW_RUNNER_LOG: "0",
+          OPENCLAW_RUNNER_RUNTIME_CWD: "/tmp/openclaw-runtime",
+        },
+        spawn,
+        execPath: process.execPath,
+        platform: process.platform,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toHaveLength(2);
+      expect(spawnCalls[0]).toMatchObject({
+        cmd: process.execPath,
+        args: ["scripts/tsdown-build.mjs", "--no-clean"],
+        cwd: tmp,
+      });
+      expect(spawnCalls[1]).toMatchObject({
+        cmd: process.execPath,
+        args: ["openclaw.mjs", "gateway"],
+        cwd: "/tmp/openclaw-runtime",
+      });
+      expect(spawnCalls[1]?.env?.OPENCLAW_RUNNER_RUNTIME_CWD).toBeUndefined();
+    });
+  });
+
   it("skips rebuilding when dist is current and the source tree is clean", async () => {
     await withTempDir(async (tmp) => {
       const srcPath = path.join(tmp, "src", "index.ts");
