@@ -51,6 +51,7 @@ const createTelegramBot = (opts: Parameters<typeof createTelegramBotBase>[0]) =>
   });
 
 const loadConfig = getLoadConfigMock();
+const loadWebMedia = getLoadWebMediaMock();
 const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
 const upsertChannelPairingRequest = getUpsertChannelPairingRequestMock();
 
@@ -1259,7 +1260,6 @@ describe("createTelegramBot", () => {
   });
 
   it("sends GIF replies as animations", async () => {
-    const loadWebMedia = getLoadWebMediaMock();
     replySpy.mockResolvedValueOnce({
       text: "caption",
       mediaUrl: "https://example.com/fun",
@@ -1269,7 +1269,6 @@ describe("createTelegramBot", () => {
       contentType: "image/gif",
       fileName: "fun.gif",
     });
-
     createTelegramBot({ token: "tok" });
     const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
 
@@ -1292,6 +1291,8 @@ describe("createTelegramBot", () => {
       reply_to_message_id: undefined,
     });
     expect(sendPhotoSpy).not.toHaveBeenCalled();
+    expect(loadWebMedia).toHaveBeenCalledTimes(1);
+    expect(loadWebMedia.mock.calls[0]?.[0]).toBe("https://example.com/fun");
   });
 
   function resetHarnessSpies() {
