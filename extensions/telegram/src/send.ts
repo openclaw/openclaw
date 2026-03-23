@@ -43,6 +43,7 @@ import {
 } from "./targets.js";
 import { resolveTelegramVoiceSend } from "./voice.js";
 
+type Sharp = typeof import("sharp");
 type TelegramApi = Bot["api"];
 export type TelegramApiOverride = Partial<TelegramApi>;
 const InputFileCtor: typeof grammy.InputFile =
@@ -788,6 +789,45 @@ export async function sendMessageTelegram(
   const sendChunkedText = async (rawText: string, context: string) =>
     await sendTelegramTextChunks(buildChunkedTextPlan(rawText, context), context);
 
+  /**
+   * Validates photo dimensions against Telegram Bot API requirements.
+   * Falls back to sending as document if dimensions are invalid.
+   * 
+   * Telegram photo requirements (as of 2026-03):
+   * - Sum of width + height must not exceed 10,000px
+   * - Both dimensions must be at least 1px (practically minimum ~10x10)
+   * 
+   * @param buffer - Image buffer to validate
+   * @param verbose - Whether to log validation warnings
+   * @returns true if valid for sendPhoto, false if should use sendDocument instead
+   */
+  async function validatePhotoDimensions(
+    buffer: Buffer,
+    verbose?: boolean,
+  ): Promise<boolean> {
+    try {
+      // Dynamic import for sharp (CommonJS module in ESM context)
+      const mod = (await import("sharp")) as unknown as { default?: Sharp };
+      const sharp = mod.default ?? (mod as unknown as Sharp);
+      const instance = sharp(buffer);
+      const metadata = await instance.metadata();
+      const width = metadata.width ?? 0;
+      const height = metadata.height ?? 0;
+
+      if (width + height > 10000) {
+        sendLogger.warn(
+          `Photo dimensions (${width}x${height}) exceed Telegram limit (sum > 10,000px). Sending as document instead.`,
+        );
+        return false;
+      }
+      return true;
+    } catch (err) {
+      // If we can't read dimensions, let Telegram handle it (backward compatible)
+      logVerbose(`Failed to validate photo dimensions: ${formatErrorMessage(err)}`);
+      return true;
+    }
+  }
+
   if (mediaUrl) {
     const media = await loadWebMedia(
       mediaUrl,
@@ -802,6 +842,15 @@ export async function sendMessageTelegram(
       contentType: media.contentType,
       fileName: media.fileName,
     });
+    
+    // Validate photo dimensions before attempting sendPhoto
+    let forceDocumentDueToInvalidDimensions = false;
+    if (kind === "image" && !isGif && !opts.forceDocument) {
+      const isValidPhoto = await validatePhotoDimensions(media.buffer, opts.verbose);
+      if (!isValidPhoto) {
+        forceDocumentDueToInvalidDimensions = true;
+      }
+    }
     const isVideoNote = kind === "video" && opts.asVideoNote === true;
     const fileName =
       media.fileName ?? (isGif ? "animation.gif" : inferFilename(kind ?? "document")) ?? "file";
@@ -858,7 +907,7 @@ export async function sendMessageTelegram(
             ) as Promise<TelegramMessageLike>,
         };
       }
-      if (kind === "image" && !opts.forceDocument) {
+      if (kind === "image" && !opts.forceDocument && !forceDocumentDueToInvalidDimensions) {
         return {
           label: "photo",
           sender: (effectiveParams: Record<string, unknown> | undefined) =>
