@@ -727,15 +727,29 @@ export async function runProviderEntry(params: {
 
   // Get auth for all providers (built-in and plugins)
   // Require API key for built-in, allow plugins without keys (local engines)
-  // Check if plugin actually implements this specific handler (not inherited from built-in)
+  // Check if plugin actually implements this specific handler AND declares the capability
   const videoPluginEntry =
     pluginRegistry?.providers.find(
-      (e: { provider: { id: string; routingCapabilities?: unknown; describeVideo?: unknown } }) =>
-        normalizeMediaProviderId(e.provider.id) === providerId && e.provider.describeVideo,
+      (e: { provider: { id: string; routingCapabilities?: unknown; describeVideo?: unknown } }) => {
+        const caps = e.provider.routingCapabilities;
+        const capabilitiesArray = Array.isArray(caps) ? caps : [];
+        return (
+          normalizeMediaProviderId(e.provider.id) === providerId &&
+          capabilitiesArray.includes("video") &&
+          e.provider.describeVideo
+        );
+      },
     ) ??
     pluginRegistry?.mediaUnderstandingProviders.find(
-      (e: { provider: { id: string; routingCapabilities?: unknown; describeVideo?: unknown } }) =>
-        normalizeMediaProviderId(e.provider.id) === providerId && e.provider.describeVideo,
+      (e: { provider: { id: string; routingCapabilities?: unknown; describeVideo?: unknown } }) => {
+        const caps = e.provider.routingCapabilities;
+        const capabilitiesArray = Array.isArray(caps) ? caps : [];
+        return (
+          normalizeMediaProviderId(e.provider.id) === providerId &&
+          capabilitiesArray.includes("video") &&
+          e.provider.describeVideo
+        );
+      },
     );
   const pluginImplementsVideo = !!videoPluginEntry;
   const videoAuth = await resolveProviderExecutionContext({
