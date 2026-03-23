@@ -479,10 +479,22 @@ export async function createEmbeddingProvider(
 
     // Built-ins failed or unavailable - try custom plugins as fallback
     // Only reach here if all built-ins failed
+    // Iterate through custom plugins and try each one until we find a viable one
     for (const cp of customPlugins) {
-      // Return the plugin provider directly - let first real call surface errors
-      return { provider: cp.provider, requestedProvider };
+      try {
+        const apiKey = await resolveApiKeyForProvider({
+          cfg: options.config,
+          provider: cp.id,
+          agentDir: options.agentDir,
+        });
+        if (apiKey) {
+          return { provider: cp.provider, requestedProvider };
+        }
+      } catch {
+        // No API key for this plugin - try next one
+      }
     }
+    // All custom plugins failed or have no API key - fall through to return null
 
     // All failed - return null for FTS-only mode
     return {

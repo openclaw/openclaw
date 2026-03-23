@@ -10,8 +10,6 @@ import {
   resolveMemorySlotDecision,
 } from "../plugins/config-state.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
-import type { PluginRecord } from "../plugins/registry.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import {
   hasAvatarUriScheme,
@@ -535,20 +533,8 @@ function validateConfigObjectWithPluginsBase(
       return;
     }
     const normalizedProvider = normalizeProviderId(provider);
-    // Check if this is a loaded plugin embedding provider first
-    const pluginRegistry = getActivePluginRegistry();
-    const isLoadedPlugin = pluginRegistry?.providers.some((entry) => {
-      const caps = entry.provider.routingCapabilities;
-      const capabilitiesArray = Array.isArray(caps) ? caps : [];
-      return (
-        normalizeProviderId(entry.provider.id) === normalizedProvider &&
-        capabilitiesArray.includes("embedding")
-      );
-    });
-    if (isLoadedPlugin) {
-      return; // Known loaded plugin with embedding capability - validate at runtime
-    }
     // Check manifest registry for any enabled plugin that provides this provider ID
+    // This validates against the config being validated, not in-memory state
     const manifestRegistry = loadPluginManifestRegistry({ config });
     const isAvailableEnabledPlugin = manifestRegistry.plugins.some((plugin) => {
       if (!plugin.providers.some((p) => normalizeProviderId(p) === normalizedProvider)) {
@@ -578,20 +564,8 @@ function validateConfigObjectWithPluginsBase(
       return;
     }
     const normalizedFallback = normalizeProviderId(fallback);
-    // Check if this is a loaded plugin embedding provider first
-    const pluginRegistry = getActivePluginRegistry();
-    const isLoadedPlugin = pluginRegistry?.providers.some((entry) => {
-      const caps = entry.provider.routingCapabilities;
-      const capabilitiesArray = Array.isArray(caps) ? caps : [];
-      return (
-        normalizeProviderId(entry.provider.id) === normalizedFallback &&
-        capabilitiesArray.includes("embedding")
-      );
-    });
-    if (isLoadedPlugin) {
-      return; // Known loaded plugin with embedding capability - validate at runtime
-    }
-    // Check manifest registry for any enabled plugin that provides this provider ID
+    // Check manifest registry for any enabled plugin that provides this fallback
+    // This validates against the config being validated, not in-memory state
     const manifestRegistry = loadPluginManifestRegistry({ config });
     const isAvailableEnabledPlugin = manifestRegistry.plugins.some((plugin) => {
       if (!plugin.providers.some((p) => normalizeProviderId(p) === normalizedFallback)) {
