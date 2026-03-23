@@ -105,13 +105,12 @@ export async function dashboardCommand(
       opened = await openUrl(dashboardUrl);
     }
     if (!opened) {
-      // Pass the token to the SSH hint only when clipboard failed — in that
-      // scenario the hint is the user's only path to the authenticated URL.
-      // When clipboard succeeded the tokenized URL is already available there.
+      // Never pass the token to the SSH hint — the hint is logged via
+      // runtime.log which flows into console-captured log files readable
+      // by operator.read-scoped devices via logs.tail.
       hint = formatControlUiSshHint({
         port,
         basePath,
-        token: !copied && includeTokenInUrl ? token || undefined : undefined,
       });
     }
   } else {
