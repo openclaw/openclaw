@@ -1,6 +1,5 @@
 import {
-  applyAgentDefaultModelPrimary,
-  applyProviderConfigWithDefaultModel,
+  createDefaultModelPresetAppliers,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 import {
@@ -12,49 +11,37 @@ import {
 export const MOONSHOT_CN_BASE_URL = "https://api.moonshot.cn/v1";
 export const MOONSHOT_DEFAULT_MODEL_REF = `moonshot/${MOONSHOT_DEFAULT_MODEL_ID}`;
 
+const moonshotPresetAppliers = createDefaultModelPresetAppliers<[string]>({
+  primaryModelRef: MOONSHOT_DEFAULT_MODEL_REF,
+  resolveParams: (_cfg: OpenClawConfig, baseUrl: string) => {
+    const defaultModel = buildMoonshotProvider().models[0];
+    if (!defaultModel) {
+      return null;
+    }
+
+    return {
+      providerId: "moonshot",
+      api: "openai-completions",
+      baseUrl,
+      defaultModel,
+      defaultModelId: MOONSHOT_DEFAULT_MODEL_ID,
+      aliases: [{ modelRef: MOONSHOT_DEFAULT_MODEL_REF, alias: "Kimi" }],
+    };
+  },
+});
+
 export function applyMoonshotProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return applyMoonshotProviderConfigWithBaseUrl(cfg, MOONSHOT_BASE_URL);
+  return moonshotPresetAppliers.applyProviderConfig(cfg, MOONSHOT_BASE_URL);
 }
 
 export function applyMoonshotProviderConfigCn(cfg: OpenClawConfig): OpenClawConfig {
-  return applyMoonshotProviderConfigWithBaseUrl(cfg, MOONSHOT_CN_BASE_URL);
-}
-
-function applyMoonshotProviderConfigWithBaseUrl(
-  cfg: OpenClawConfig,
-  baseUrl: string,
-): OpenClawConfig {
-  const models = { ...cfg.agents?.defaults?.models };
-  models[MOONSHOT_DEFAULT_MODEL_REF] = {
-    ...models[MOONSHOT_DEFAULT_MODEL_REF],
-    alias: models[MOONSHOT_DEFAULT_MODEL_REF]?.alias ?? "Kimi",
-  };
-
-  const defaultModel = buildMoonshotProvider().models[0];
-  if (!defaultModel) {
-    return cfg;
-  }
-
-  return applyProviderConfigWithDefaultModel(cfg, {
-    agentModels: models,
-    providerId: "moonshot",
-    api: "openai-completions",
-    baseUrl,
-    defaultModel,
-    defaultModelId: MOONSHOT_DEFAULT_MODEL_ID,
-  });
+  return moonshotPresetAppliers.applyProviderConfig(cfg, MOONSHOT_CN_BASE_URL);
 }
 
 export function applyMoonshotConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return applyAgentDefaultModelPrimary(
-    applyMoonshotProviderConfig(cfg),
-    MOONSHOT_DEFAULT_MODEL_REF,
-  );
+  return moonshotPresetAppliers.applyConfig(cfg, MOONSHOT_BASE_URL);
 }
 
 export function applyMoonshotConfigCn(cfg: OpenClawConfig): OpenClawConfig {
-  return applyAgentDefaultModelPrimary(
-    applyMoonshotProviderConfigCn(cfg),
-    MOONSHOT_DEFAULT_MODEL_REF,
-  );
+  return moonshotPresetAppliers.applyConfig(cfg, MOONSHOT_CN_BASE_URL);
 }

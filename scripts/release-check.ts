@@ -6,7 +6,6 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   collectBundledExtensionManifestErrors,
-  normalizeBundledExtensionMetadata,
   type BundledExtension,
   type ExtensionPackageJson as PackageJson,
 } from "./lib/bundled-extension-manifest.ts";
@@ -22,6 +21,7 @@ const requiredPathGroups = [
   ["dist/index.js", "dist/index.mjs"],
   ["dist/entry.js", "dist/entry.mjs"],
   ...listPluginSdkDistArtifacts(),
+  "dist/plugin-sdk/compat.js",
   "dist/plugin-sdk/root-alias.cjs",
   "dist/build-info.json",
 ];
@@ -33,45 +33,6 @@ const npmPackUnpackedSizeBudgetBytes = 160 * 1024 * 1024;
 const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
-
-export function collectBundledExtensionRootDependencyGapErrors(params: {
-  rootPackage: PackageJson;
-  extensions: BundledExtension[];
-}): string[] {
-  const rootDeps = {
-    ...params.rootPackage.dependencies,
-    ...params.rootPackage.optionalDependencies,
-  };
-  const errors: string[] = [];
-
-  for (const extension of normalizeBundledExtensionMetadata(params.extensions)) {
-    if (!extension.npmSpec) {
-      continue;
-    }
-
-    const missing = Object.keys(extension.packageJson.dependencies ?? {})
-      .filter((dep) => dep !== "openclaw" && !rootDeps[dep])
-      .toSorted();
-    const allowlisted = extension.rootDependencyMirrorAllowlist.toSorted();
-    if (missing.join("\n") !== allowlisted.join("\n")) {
-      const unexpected = missing.filter((dep) => !allowlisted.includes(dep));
-      const resolved = allowlisted.filter((dep) => !missing.includes(dep));
-      const parts = [
-        `bundled extension '${extension.id}' root dependency mirror drift`,
-        `missing in root package: ${missing.length > 0 ? missing.join(", ") : "(none)"}`,
-      ];
-      if (unexpected.length > 0) {
-        parts.push(`new gaps: ${unexpected.join(", ")}`);
-      }
-      if (resolved.length > 0) {
-        parts.push(`remove stale allowlist entries: ${resolved.join(", ")}`);
-      }
-      errors.push(parts.join(" | "));
-    }
-  }
-
-  return errors;
-}
 
 function collectBundledExtensions(): BundledExtension[] {
   const extensionsDir = resolve("extensions");
@@ -94,24 +55,12 @@ function collectBundledExtensions(): BundledExtension[] {
   });
 }
 
-function checkBundledExtensionRootDependencyMirrors() {
-  const rootPackage = JSON.parse(readFileSync(resolve("package.json"), "utf8")) as PackageJson;
+function checkBundledExtensionMetadata() {
   const extensions = collectBundledExtensions();
   const manifestErrors = collectBundledExtensionManifestErrors(extensions);
   if (manifestErrors.length > 0) {
     console.error("release-check: bundled extension manifest validation failed:");
     for (const error of manifestErrors) {
-      console.error(`  - ${error}`);
-    }
-    process.exit(1);
-  }
-  const errors = collectBundledExtensionRootDependencyGapErrors({
-    rootPackage,
-    extensions,
-  });
-  if (errors.length > 0) {
-    console.error("release-check: bundled extension root dependency mirror validation failed:");
-    for (const error of errors) {
       console.error(`  - ${error}`);
     }
     process.exit(1);
@@ -128,11 +77,13 @@ function runPackDry(): PackResult[] {
 }
 
 export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
+  const isAllowedBundledPluginNodeModulesPath = (path: string) =>
+    /^dist\/extensions\/[^/]+\/node_modules\//.test(path);
   return [...paths]
     .filter(
       (path) =>
         forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) ||
-        /(^|\/)node_modules\//.test(path),
+        (/node_modules\//.test(path) && !isAllowedBundledPluginNodeModulesPath(path)),
     )
     .toSorted();
 }
@@ -278,6 +229,7 @@ const requiredPluginSdkExports = [
   "resolveChannelMediaMaxBytes",
   "warnMissingProviderGroupPolicyFallbackOnce",
   "emptyPluginConfigSchema",
+  "onDiagnosticEvent",
   "normalizePluginHttpPath",
   "registerPluginHttpRoute",
   "DEFAULT_ACCOUNT_ID",
@@ -338,7 +290,7 @@ async function checkPluginSdkExports() {
 async function main() {
   checkAppcastSparkleVersions();
   await checkPluginSdkExports();
-  checkBundledExtensionRootDependencyMirrors();
+  checkBundledExtensionMetadata();
 
   const results = runPackDry();
   const files = results.flatMap((entry) => entry.files ?? []);

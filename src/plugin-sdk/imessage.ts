@@ -42,5 +42,12 @@ export {
 export { IMessageConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
-export { collectStatusIssuesFromLastError } from "./status-helpers.js";
-export { sendMessageIMessage } from "../../extensions/imessage/runtime-api.js";
+export {
+  buildComputedAccountStatusSnapshot,
+  collectStatusIssuesFromLastError,
+} from "./status-helpers.js";
+export {
+  monitorIMessageProvider,
+  probeIMessage,
+  sendMessageIMessage,
+} from "../../extensions/imessage/runtime-api.js";

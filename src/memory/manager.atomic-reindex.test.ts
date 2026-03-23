@@ -9,6 +9,7 @@ let shouldFail = false;
 
 type EmbeddingTestMocksModule = typeof import("./embedding.test-mocks.js");
 type TestManagerHelpersModule = typeof import("./test-manager-helpers.js");
+type MemoryIndexModule = typeof import("./index.js");
 
 describe("memory manager atomic reindex", () => {
   let fixtureRoot = "";
@@ -19,17 +20,18 @@ describe("memory manager atomic reindex", () => {
   let embedBatch: ReturnType<EmbeddingTestMocksModule["getEmbedBatchMock"]>;
   let resetEmbeddingMocks: EmbeddingTestMocksModule["resetEmbeddingMocks"];
   let getRequiredMemoryIndexManager: TestManagerHelpersModule["getRequiredMemoryIndexManager"];
+  let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-atomic-"));
-  });
-
-  beforeEach(async () => {
-    vi.resetModules();
     const embeddingMocks = await import("./embedding.test-mocks.js");
     embedBatch = embeddingMocks.getEmbedBatchMock();
     resetEmbeddingMocks = embeddingMocks.resetEmbeddingMocks;
     ({ getRequiredMemoryIndexManager } = await import("./test-manager-helpers.js"));
+    ({ closeAllMemorySearchManagers } = await import("./index.js"));
+  });
+
+  beforeEach(async () => {
     vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
     resetEmbeddingMocks();
     shouldFail = false;
@@ -51,6 +53,8 @@ describe("memory manager atomic reindex", () => {
       await manager.close();
       manager = null;
     }
+    await closeAllMemorySearchManagers();
+    vi.unstubAllEnvs();
   });
 
   afterAll(async () => {

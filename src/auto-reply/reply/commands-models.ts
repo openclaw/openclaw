@@ -1,3 +1,10 @@
+import {
+  buildModelsKeyboard,
+  buildProviderKeyboard,
+  calculateTotalPages,
+  getModelsPageSize,
+  type ProviderInfo,
+} from "../../../extensions/telegram/api.js";
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
@@ -10,13 +17,6 @@ import {
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import {
-  buildModelsKeyboard,
-  buildProviderKeyboard,
-  calculateTotalPages,
-  getModelsPageSize,
-  type ProviderInfo,
-} from "../../plugin-sdk/telegram.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";

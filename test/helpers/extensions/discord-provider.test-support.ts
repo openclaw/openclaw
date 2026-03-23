@@ -1,7 +1,7 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/discord";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { Mock } from "vitest";
 import { expect, vi } from "vitest";
+import type { OpenClawConfig } from "../../../extensions/discord/src/runtime-api.js";
 
 export type NativeCommandSpecMock = {
   name: string;
@@ -319,6 +319,16 @@ vi.mock("openclaw/plugin-sdk/acp-runtime", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/command-auth", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/command-auth")>(
+    "openclaw/plugin-sdk/command-auth",
+  );
+  return {
+    ...actual,
+    listNativeCommandSpecsForConfig: listNativeCommandSpecsForConfigMock,
+    listSkillCommandsForAgents: listSkillCommandsForAgentsMock,
+  };
+});
 vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/reply-runtime")>(
     "openclaw/plugin-sdk/reply-runtime",
@@ -326,8 +336,6 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
   return {
     ...actual,
     resolveTextChunkLimit: () => 2000,
-    listNativeCommandSpecsForConfig: listNativeCommandSpecsForConfigMock,
-    listSkillCommandsForAgents: listSkillCommandsForAgentsMock,
   };
 });
 
@@ -473,4 +481,5 @@ vi.mock("../../../extensions/discord/src/monitor/thread-bindings.js", () => ({
   createNoopThreadBindingManager: createNoopThreadBindingManagerMock,
   createThreadBindingManager: createThreadBindingManagerMock,
   reconcileAcpThreadBindingsOnStartup: reconcileAcpThreadBindingsOnStartupMock,
+  resolveThreadBindingIdleTimeoutMs: vi.fn(() => 24 * 60 * 60 * 1000),
 }));

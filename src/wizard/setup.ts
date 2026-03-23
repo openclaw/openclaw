@@ -306,7 +306,7 @@ export async function runSetupWizard(
 
   const localPort = resolveGatewayPort(baseConfig);
   const localUrl = `ws://127.0.0.1:${localPort}`;
-  let localGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN ?? process.env.CLAWDBOT_GATEWAY_TOKEN;
+  let localGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
   try {
     const resolvedGatewayToken = await resolveSetupSecretInputString({
       config: baseConfig,
@@ -326,8 +326,7 @@ export async function runSetupWizard(
       "Gateway auth",
     );
   }
-  let localGatewayPassword =
-    process.env.OPENCLAW_GATEWAY_PASSWORD ?? process.env.CLAWDBOT_GATEWAY_PASSWORD;
+  let localGatewayPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
   try {
     const resolvedGatewayPassword = await resolveSetupSecretInputString({
       config: baseConfig,
@@ -482,11 +481,14 @@ export async function runSetupWizard(
     }
   }
 
-  if (authChoiceFromPrompt && authChoice !== "custom-api-key") {
+  const shouldPromptModelSelection =
+    authChoice !== "custom-api-key" && (authChoiceFromPrompt || authChoice === "ollama");
+  if (shouldPromptModelSelection) {
     const modelSelection = await promptDefaultModel({
       config: nextConfig,
       prompter,
-      allowKeep: true,
+      // For ollama, don't allow "keep current" since we may need to download the selected model
+      allowKeep: authChoice !== "ollama",
       ignoreAllowlist: true,
       includeProviderPluginSetups: true,
       preferredProvider: await resolvePreferredProviderForAuthChoice({

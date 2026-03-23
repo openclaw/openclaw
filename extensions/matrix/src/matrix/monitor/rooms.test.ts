@@ -13,7 +13,6 @@ describe("resolveMatrixRoomConfig", () => {
       rooms,
       roomId: "!room:example.org",
       aliases: [],
-      name: "Project Room",
     });
     expect(byId.allowed).toBe(true);
     expect(byId.matchKey).toBe("!room:example.org");
@@ -22,7 +21,6 @@ describe("resolveMatrixRoomConfig", () => {
       rooms,
       roomId: "!other:example.org",
       aliases: ["#alias:example.org"],
-      name: "Other Room",
     });
     expect(byAlias.allowed).toBe(true);
     expect(byAlias.matchKey).toBe("#alias:example.org");
@@ -31,7 +29,6 @@ describe("resolveMatrixRoomConfig", () => {
       rooms: { "Project Room": { allow: true } },
       roomId: "!different:example.org",
       aliases: [],
-      name: "Project Room",
     });
     expect(byName.allowed).toBe(false);
     expect(byName.config).toBeUndefined();

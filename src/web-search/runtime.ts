@@ -5,10 +5,9 @@ import type {
   PluginWebSearchProviderEntry,
   WebSearchProviderToolDefinition,
 } from "../plugins/types.js";
-import {
-  resolvePluginWebSearchProviders,
-  resolveRuntimeWebSearchProviders,
-} from "../plugins/web-search-providers.js";
+import { resolveBundledPluginWebSearchProviders } from "../plugins/web-search-providers.js";
+import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
+import { resolveRuntimeWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 
@@ -61,14 +60,27 @@ function readProviderEnvValue(envVars: string[]): string | undefined {
   return undefined;
 }
 
+function providerRequiresCredential(
+  provider: Pick<PluginWebSearchProviderEntry, "requiresCredential">,
+): boolean {
+  return provider.requiresCredential !== false;
+}
+
 function hasEntryCredential(
   provider: Pick<
     PluginWebSearchProviderEntry,
-    "credentialPath" | "envVars" | "getConfiguredCredentialValue" | "getCredentialValue"
+    | "credentialPath"
+    | "envVars"
+    | "getConfiguredCredentialValue"
+    | "getCredentialValue"
+    | "requiresCredential"
   >,
   config: OpenClawConfig | undefined,
   search: WebSearchConfig | undefined,
 ): boolean {
+  if (!providerRequiresCredential(provider)) {
+    return true;
+  }
   const rawValue =
     provider.getConfiguredCredentialValue?.(config) ??
     provider.getCredentialValue(search as Record<string, unknown> | undefined);
@@ -90,6 +102,15 @@ export function listWebSearchProviders(params?: {
   });
 }
 
+export function listConfiguredWebSearchProviders(params?: {
+  config?: OpenClawConfig;
+}): PluginWebSearchProviderEntry[] {
+  return resolvePluginWebSearchProviders({
+    config: params?.config,
+    bundledAllowlistCompat: true,
+  });
+}
+
 export function resolveWebSearchProviderId(params: {
   search?: WebSearchConfig;
   config?: OpenClawConfig;
@@ -97,7 +118,7 @@ export function resolveWebSearchProviderId(params: {
 }): string {
   const providers =
     params.providers ??
-    resolvePluginWebSearchProviders({
+    resolveBundledPluginWebSearchProviders({
       config: params.config,
       bundledAllowlistCompat: true,
     });
@@ -114,7 +135,12 @@ export function resolveWebSearchProviderId(params: {
   }
 
   if (!raw) {
+    let keylessFallbackProviderId = "";
     for (const provider of providers) {
+      if (!providerRequiresCredential(provider)) {
+        keylessFallbackProviderId ||= provider.id;
+        continue;
+      }
       if (!hasEntryCredential(provider, params.config, params.search)) {
         continue;
       }
@@ -122,6 +148,12 @@ export function resolveWebSearchProviderId(params: {
         `web_search: no provider configured, auto-detected "${provider.id}" from available API keys`,
       );
       return provider.id;
+    }
+    if (keylessFallbackProviderId) {
+      logVerbose(
+        `web_search: no provider configured and no credentials found, falling back to keyless provider "${keylessFallbackProviderId}"`,
+      );
+      return keylessFallbackProviderId;
     }
   }
 
@@ -142,7 +174,7 @@ export function resolveWebSearchDefinition(
           config: options?.config,
           bundledAllowlistCompat: true,
         })
-      : resolvePluginWebSearchProviders({
+      : resolveBundledPluginWebSearchProviders({
           config: options?.config,
           bundledAllowlistCompat: true,
         })

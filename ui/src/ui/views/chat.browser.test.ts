@@ -247,4 +247,22 @@ describe("chat context notice", () => {
     expect(detail).not.toContain("250");
     expect(detail).toContain("200k");
   });
+
+  it("falls back to default notice colors when theme vars are not hex", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    document.documentElement.style.setProperty("--warn", "rgb(1, 2, 3)");
+    document.documentElement.style.setProperty("--danger", "tomato");
+    render(renderChat(createProps()), container);
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+    const notice = container.querySelector<HTMLElement>(".context-notice");
+    expect(notice).not.toBeNull();
+    expect(notice?.style.getPropertyValue("--ctx-color")).toContain("rgb(");
+    expect(notice?.style.getPropertyValue("--ctx-color")).not.toContain("NaN");
+    expect(notice?.style.getPropertyValue("--ctx-bg")).not.toContain("NaN");
+
+    document.documentElement.style.removeProperty("--warn");
+    document.documentElement.style.removeProperty("--danger");
+  });
 });

@@ -1,9 +1,14 @@
 import { completeSimple, type AssistantMessage } from "@mariozechner/pi-ai";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildElevenLabsSpeechProvider } from "../../extensions/elevenlabs/speech-provider.ts";
+import { buildMicrosoftSpeechProvider } from "../../extensions/microsoft/speech-provider.ts";
+import { buildOpenAISpeechProvider } from "../../extensions/openai/speech-provider.ts";
 import { ensureCustomApiRegistered } from "../agents/custom-api-registry.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { withEnv } from "../test-utils/env.js";
 import * as tts from "./tts.js";
 
@@ -15,10 +20,16 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
   };
 });
 
-vi.mock("@mariozechner/pi-ai/oauth", () => ({
-  getOAuthProviders: () => [],
-  getOAuthApiKey: vi.fn(async () => null),
-}));
+vi.mock("@mariozechner/pi-ai/oauth", async () => {
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
+    "@mariozechner/pi-ai/oauth",
+  );
+  return {
+    ...actual,
+    getOAuthProviders: () => [],
+    getOAuthApiKey: vi.fn(async () => null),
+  };
+});
 
 function createResolvedModel(provider: string, modelId: string, api = "openai-completions") {
   return {
@@ -118,6 +129,13 @@ function createOpenAiTelephonyCfg(model: "tts-1" | "gpt-4o-mini-tts"): OpenClawC
 
 describe("tts", () => {
   beforeEach(() => {
+    const registry = createEmptyPluginRegistry();
+    registry.speechProviders = [
+      { pluginId: "openai", provider: buildOpenAISpeechProvider(), source: "test" },
+      { pluginId: "microsoft", provider: buildMicrosoftSpeechProvider(), source: "test" },
+      { pluginId: "elevenlabs", provider: buildElevenLabsSpeechProvider(), source: "test" },
+    ];
+    setActivePluginRegistry(registry, "tts-test");
     vi.clearAllMocks();
     vi.mocked(completeSimple).mockResolvedValue(
       mockAssistantMessage([{ type: "text", text: "Summary" }]),
@@ -213,7 +231,7 @@ describe("tts", () => {
   });
 
   describe("resolveOutputFormat", () => {
-    it("selects opus for voice-bubble channels (telegram/feishu/whatsapp) and mp3 for others", () => {
+    it("selects opus for voice-bubble channels (telegram/feishu/whatsapp/matrix) and mp3 for others", () => {
       const cases = [
         {
           channel: "telegram",
@@ -235,6 +253,15 @@ describe("tts", () => {
         },
         {
           channel: "whatsapp",
+          expected: {
+            openai: "opus",
+            elevenlabs: "opus_48000_64",
+            extension: ".opus",
+            voiceCompatible: true,
+          },
+        },
+        {
+          channel: "matrix",
           expected: {
             openai: "opus",
             elevenlabs: "opus_48000_64",
@@ -374,8 +401,7 @@ describe("tts", () => {
       messages: { tts: {} },
     };
 
-    beforeEach(async () => {
-      vi.resetModules();
+    beforeAll(async () => {
       ({ completeSimple: completeSimpleForTest } = await import("@mariozechner/pi-ai"));
       ({ getApiKeyForModel: getApiKeyForModelForTest } = await import("../agents/model-auth.js"));
       ({ resolveModelAsync: resolveModelAsyncForTest } =
@@ -385,6 +411,9 @@ describe("tts", () => {
       const ttsModule = await import("./tts.js");
       summarizeTextForTest = ttsModule._test.summarizeText;
       resolveTtsConfigForTest = ttsModule.resolveTtsConfig;
+    });
+
+    beforeEach(() => {
       vi.mocked(completeSimpleForTest).mockResolvedValue(
         mockAssistantMessage([{ type: "text", text: "Summary" }]),
       );

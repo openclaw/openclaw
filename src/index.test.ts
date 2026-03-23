@@ -1,11 +1,8 @@
 import fs from "node:fs";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { applyTemplate, runLegacyCliEntry } from "./index.js";
 
 describe("legacy root entry", () => {
-  afterEach(() => {
-    vi.resetModules();
-  });
-
   it("routes the package root export to the pure library entry", () => {
     const packageJson = JSON.parse(
       fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"),
@@ -18,9 +15,8 @@ describe("legacy root entry", () => {
     expect(packageJson.exports?.["."]).toBe("./dist/index.js");
   });
 
-  it("does not run CLI bootstrap when imported as a library dependency", async () => {
-    const mod = await import("./index.js");
-
-    expect(typeof mod.runLegacyCliEntry).toBe("function");
+  it("does not run CLI bootstrap when imported as a library dependency", () => {
+    expect(typeof applyTemplate).toBe("function");
+    expect(typeof runLegacyCliEntry).toBe("function");
   });
 });

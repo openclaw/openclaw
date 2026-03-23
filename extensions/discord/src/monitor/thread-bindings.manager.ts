@@ -1,10 +1,11 @@
 import { Routes } from "discord-api-types/v10";
-import { resolveThreadBindingConversationIdFromBindingId } from "openclaw/plugin-sdk/channel-runtime";
 import { getRuntimeConfigSnapshot, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   registerSessionBindingAdapter,
+  resolveThreadBindingConversationIdFromBindingId,
   unregisterSessionBindingAdapter,
   type BindingTargetKind,
+  type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
@@ -556,6 +557,7 @@ export function createThreadBindingManager(
       unregisterSessionBindingAdapter({
         channel: "discord",
         accountId,
+        adapter: sessionBindingAdapter,
       });
       forgetThreadBindingToken(accountId);
     },
@@ -572,7 +574,7 @@ export function createThreadBindingManager(
     }
   }
 
-  registerSessionBindingAdapter({
+  const sessionBindingAdapter: SessionBindingAdapter = {
     channel: "discord",
     accountId,
     capabilities: {
@@ -682,7 +684,9 @@ export function createThreadBindingManager(
       });
       return removed ? [toSessionBindingRecord(removed, { idleTimeoutMs, maxAgeMs })] : [];
     },
-  });
+  };
+
+  registerSessionBindingAdapter(sessionBindingAdapter);
 
   registerManager(manager);
   return manager;
