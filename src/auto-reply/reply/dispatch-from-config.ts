@@ -521,14 +521,15 @@ export async function dispatchReplyFromConfig(params: {
           ctx.Provider ??
           "unknown";
         const effectiveSessionKey = sessionStoreEntry.sessionKey ?? sessionKey ?? "";
+        const policyAgentId = resolveSessionAgentId({ sessionKey: effectiveSessionKey, config: cfg });
         const hints = await bridge.getPolicyHintsSafe({
-          agentId,
+          agentId: policyAgentId,
           sessionKey: effectiveSessionKey,
           channelId: typeof channel === "string" ? channel : "unknown",
         });
         if (hints.recommendation === "suppress" && hints.mode === "active") {
           bridge.logPolicyAction({
-            agentId,
+            agentId: policyAgentId,
             sessionKey: effectiveSessionKey,
             actionType: "suppressed",
             channelId: typeof channel === "string" ? channel : "unknown",
