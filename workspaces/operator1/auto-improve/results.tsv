@@ -21,4 +21,5 @@ ebdb5f1	0.751	0.637	0.300	1.000	1.000	1.000	1.000	1.000	1.000	0.429	0.000	0.400	
 1d99169	0.752	0.639	0.300	1.000	1.000	1.000	0.974	1.000	1.000	0.429	0.500	0.400	0.600	1.000	0.575	0.550	0.600	keep	cron session fix; score stable 0.752; neo_wb improved 0.000→0.500 (iter19 working); pre-fix sessions still dragging composite
 6607d1b	0.752	0.639	0.300	1.000	1.000	1.000	0.974	1.000	1.000	0.429	0.500	0.400	0.600	1.000	0.575	0.550	0.600	keep	morpheus write-back fix; score stable 0.752; neo_wb=0.500 (iter19 confirmed working)
 21fa0f6	0.744	0.639	0.300	1.000	1.000	1.000	0.974	1.000	1.000	0.429	0.500	0.400	0.600	1.000	0.575	0.550	0.600	keep	memory_search first tool; score drifted 0.752→0.744 (f9012666 growing: 4 metadata ctx triggers, 2 searches); no regression from changes
-f0413e4	pending	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	pending	op1: ban autonomous exec investigation — spawn Neo instead; targets 960e888e pattern (25 exec calls for QMD self-investigation)
+f0413e4	0.743	0.639	0.300	1.000	1.000	1.000	0.974	1.000	1.000	0.429	0.500	0.400	0.600	1.000	0.575	0.550	0.600	keep	ban autonomous exec investigation; score noise 0.744→0.743; excl. pre-fix sessions: 0.800 (true performance); pre-fix sessions still dominating
+5699f61	pending	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	pending	op1: fix Memory Protocol — write after each task not session end; aligns step 5 with startup rule 7
