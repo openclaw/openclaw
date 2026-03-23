@@ -43,7 +43,7 @@ export default definePluginEntry({
 });
 ```
 
-### Channel entry options
+### Options
 
 | Field          | Type                                                             | Required | Default             |
 | -------------- | ---------------------------------------------------------------- | -------- | ------------------- |

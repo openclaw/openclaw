@@ -161,6 +161,10 @@ methods:
 | ------------------------ | ------------------------- | --------------------------------------------------------- |
 | `api.id`                 | `string`                  | Plugin id                                                 |
 | `api.name`               | `string`                  | Display name                                              |
+| `api.version`            | `string?`                 | Plugin version (optional)                                 |
+| `api.description`        | `string?`                 | Plugin description (optional)                             |
+| `api.source`             | `string`                  | Plugin source path                                        |
+| `api.rootDir`            | `string?`                 | Plugin root directory (optional)                          |
 | `api.config`             | `OpenClawConfig`          | Current config snapshot                                   |
 | `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config` |
 | `api.runtime`            | `PluginRuntime`           | [Runtime helpers](/plugins/sdk-runtime)                   |
