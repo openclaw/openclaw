@@ -41,6 +41,32 @@ workspace and seed the bootstrap files if they are missing.
 Sandbox seed copies only accept regular in-workspace files; symlink/hardlink
 aliases that resolve outside the source workspace are ignored.
 
+### Sharing context files across agents with symlinks
+
+In multi-agent deployments you can share a common `AGENTS.md` or `USER.md`
+across agents by symlinking them into each agent workspace:
+
+```bash
+ln -s /home/clawd/shared/AGENTS.md ~/.openclaw/workspace-myagent/AGENTS.md
+```
+
+By default, symlinks that resolve outside the workspace are rejected for
+security. Enable them explicitly with
+`agents.defaults.workspaceConfig.allowedExternalPaths`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      workspaceConfig: { allowedExternalPaths: ["/home/clawd/shared/"] },
+    },
+  },
+}
+```
+
+See [`agents.defaults.workspaceConfig.allowedExternalPaths`](/gateway/configuration-reference#agentsdefaultsworkspaceconfigallowedexternalpaths)
+for full details and security model.
+
 If you already manage the workspace files yourself, you can disable bootstrap
 file creation:
 
