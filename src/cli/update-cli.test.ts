@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 const confirm = vi.fn();
 const select = vi.fn();
@@ -25,6 +26,7 @@ const formatPortDiagnostics = vi.fn();
 const pathExists = vi.fn();
 const syncPluginsForUpdateChannel = vi.fn();
 const updateNpmInstalledPlugins = vi.fn();
+const { defaultRuntime: runtimeCapture, resetRuntimeCapture } = createCliRuntimeCapture();
 
 vi.mock("@clack/prompts", () => ({
   confirm,
@@ -129,22 +131,9 @@ vi.mock("./daemon-cli.js", () => ({
 }));
 
 // Mock the runtime
-vi.mock("../runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../runtime.js")>();
-  const log = vi.fn();
-  return {
-    ...actual,
-    defaultRuntime: {
-      ...actual.defaultRuntime,
-      log,
-      error: vi.fn(),
-      writeStdout: (value: string) => log(value.endsWith("\n") ? value.slice(0, -1) : value),
-      writeJson: (value: unknown, space = 2) =>
-        log(JSON.stringify(value, null, space > 0 ? space : undefined)),
-      exit: vi.fn(),
-    },
-  };
-});
+vi.mock("../runtime.js", () => ({
+  defaultRuntime: runtimeCapture,
+}));
 
 const { runGatewayUpdate } = await import("../infra/update-runner.js");
 const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
@@ -298,6 +287,8 @@ describe("update-cli", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetRuntimeCapture();
+    vi.mocked(defaultRuntime.exit).mockImplementation(() => {});
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(process.cwd());
     vi.mocked(readConfigFileSnapshot).mockResolvedValue(baseSnapshot);
     vi.mocked(fetchNpmTagVersion).mockResolvedValue({
