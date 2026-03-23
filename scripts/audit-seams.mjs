@@ -46,11 +46,17 @@ function isCodeFile(fileName) {
   return /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(fileName);
 }
 
-function isProductionLikeFile(relativePath) {
+function isTestLikePath(relativePath) {
   return (
-    !/(^|\/)(__tests__|fixtures)\//.test(relativePath) &&
-    !/\.(test|spec)\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(relativePath)
+    /(^|\/)(__tests__|fixtures|test-utils|test-fixtures)\//.test(relativePath) ||
+    /(?:^|\/)[^/]*(?:[.-](?:test|spec))(?:[.-][^/]+)?\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(
+      relativePath,
+    )
   );
+}
+
+function isProductionLikeFile(relativePath) {
+  return !isTestLikePath(relativePath);
 }
 
 async function walkCodeFiles(rootDir) {
@@ -533,6 +539,21 @@ function buildTestIndex(testFiles) {
   });
 }
 
+function matchQualityRank(quality) {
+  switch (quality) {
+    case "exact-stem":
+      return 0;
+    case "path-nearby":
+      return 1;
+    case "dir-basename":
+      return 2;
+    case "source-echo":
+      return 3;
+    default:
+      return 4;
+  }
+}
+
 function findRelatedTests(relativePath, testIndex, source) {
   const stem = stemFromRelativePath(relativePath);
   const baseName = path.basename(stem);
@@ -540,32 +561,48 @@ function findRelatedTests(relativePath, testIndex, source) {
   const normalizedDir = dirName.split(path.sep).join("/");
   const pathSuffix = `${normalizedDir}/${baseName}`;
 
-  const matches = testIndex.filter((entry) => {
+  const matches = testIndex.flatMap((entry) => {
     if (entry.stem === stem) {
-      return true;
+      return [{ file: entry.relativePath, matchQuality: "exact-stem" }];
     }
     if (entry.relativePath.includes(pathSuffix)) {
-      return true;
+      return [{ file: entry.relativePath, matchQuality: "path-nearby" }];
     }
     const entryDir = path.dirname(entry.relativePath).split(path.sep).join("/");
     if (entryDir === normalizedDir && entry.baseName.includes(baseName)) {
-      return true;
+      return [{ file: entry.relativePath, matchQuality: "dir-basename" }];
     }
-    return (
-      baseName.length >= 12 && source.includes(baseName) && entry.relativePath.includes(baseName)
-    );
+    if (baseName.length >= 12 && source.includes(baseName) && entry.relativePath.includes(baseName)) {
+      return [{ file: entry.relativePath, matchQuality: "source-echo" }];
+    }
+    return [];
   });
 
-  return [...new Set(matches.map((entry) => entry.relativePath))].toSorted(compareStrings);
+  const byFile = new Map();
+  for (const match of matches) {
+    const existing = byFile.get(match.file);
+    if (!existing || matchQualityRank(match.matchQuality) < matchQualityRank(existing.matchQuality)) {
+      byFile.set(match.file, match);
+    }
+  }
+
+  return [...byFile.values()].toSorted((left, right) => {
+    return (
+      matchQualityRank(left.matchQuality) - matchQualityRank(right.matchQuality) ||
+      left.file.localeCompare(right.file)
+    );
+  });
 }
 
-function determineSeamTestStatus(seamKinds, relatedTests) {
-  if (relatedTests.length === 0) {
+function determineSeamTestStatus(seamKinds, relatedTestMatches) {
+  if (relatedTestMatches.length === 0) {
     return {
       status: "gap",
       reason: "No nearby test file references this seam candidate.",
     };
   }
+
+  const bestMatch = relatedTestMatches[0]?.matchQuality ?? "unknown";
   if (
     seamKinds.includes("reply-delivery-media") ||
     seamKinds.includes("streaming-media-handoff") ||
@@ -574,12 +611,13 @@ function determineSeamTestStatus(seamKinds, relatedTests) {
     return {
       status: "partial",
       reason:
-        "Nearby tests exist, but this inventory does not prove cross-layer seam coverage end to end.",
+        `Nearby tests exist (best match: ${bestMatch}), but this inventory does not prove cross-layer seam coverage end to end.`,
     };
   }
   return {
-    status: "covered-nearby",
-    reason: "Nearby test files exist for this seam candidate.",
+    status: "heuristic-nearby",
+    reason:
+      `Nearby tests exist (best match: ${bestMatch}), but this remains a filename/path heuristic rather than proof of seam assertions.`,
   };
 }
 
@@ -605,12 +643,13 @@ async function buildSeamTestInventory() {
     if (seamKinds.length === 0) {
       continue;
     }
-    const relatedTests = findRelatedTests(relativePath, testIndex, source);
-    const status = determineSeamTestStatus(seamKinds, relatedTests);
+    const relatedTestMatches = findRelatedTests(relativePath, testIndex, source);
+    const status = determineSeamTestStatus(seamKinds, relatedTestMatches);
     inventory.push({
       file: relativePath,
       seamKinds,
-      relatedTests,
+      relatedTests: relatedTestMatches.map((entry) => entry.file),
+      relatedTestMatches,
       status: status.status,
       reason: status.reason,
     });
