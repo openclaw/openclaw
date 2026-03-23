@@ -1,27 +1,16 @@
 import { ReadableStream } from "node:stream/web";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { VoyageBatchOutputLine, VoyageBatchRequest } from "./batch-voyage.js";
+import { setTimeout as nativeSleep } from "node:timers/promises";
+import { describe, expect, it, vi } from "vitest";
+import {
+  runVoyageEmbeddingBatches,
+  type VoyageBatchOutputLine,
+  type VoyageBatchRequest,
+} from "./batch-voyage.js";
 import type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
-import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 
-// Mock internal.js if needed, but runWithConcurrency is simple enough to keep real.
-// We DO need to mock retryAsync to avoid actual delays/retries logic complicating tests
-vi.mock("../infra/retry.js", () => ({
-  retryAsync: async <T>(fn: () => Promise<T>) => fn(),
-}));
+const realNow = Date.now.bind(Date);
 
 describe("runVoyageEmbeddingBatches", () => {
-  let runVoyageEmbeddingBatches: typeof import("./batch-voyage.js").runVoyageEmbeddingBatches;
-
-  beforeAll(async () => {
-    ({ runVoyageEmbeddingBatches } = await import("./batch-voyage.js"));
-  });
-
-  afterEach(() => {
-    vi.resetAllMocks();
-    vi.unstubAllGlobals();
-  });
-
   const mockClient: VoyageEmbeddingClient = {
     baseUrl: "https://api.voyageai.com/v1",
     headers: { Authorization: "Bearer test-key" },
@@ -34,39 +23,6 @@ describe("runVoyageEmbeddingBatches", () => {
   ];
 
   it("successfully submits batch, waits, and streams results", async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    mockPublicPinnedHostname();
-
-    // Sequence of fetch calls:
-    // 1. Upload file
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ id: "file-123" }),
-    });
-
-    // 2. Create batch
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ id: "batch-abc", status: "pending" }),
-    });
-
-    // 3. Poll status (pending) - Optional depending on wait loop, let's say it finishes immediately for this test
-    // Actually the code does: initial check (if completed) -> wait loop.
-    // If create returns "pending", it enters waitForVoyageBatch.
-    // waitForVoyageBatch fetches status.
-
-    // 3. Poll status (completed)
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        id: "batch-abc",
-        status: "completed",
-        output_file_id: "file-out-999",
-      }),
-    });
-
-    // 4. Download content (Streaming)
     const outputLines: VoyageBatchOutputLine[] = [
       {
         custom_id: "req-1",
@@ -77,6 +33,9 @@ describe("runVoyageEmbeddingBatches", () => {
         response: { status_code: 200, body: { data: [{ embedding: [0.2, 0.2] }] } },
       },
     ];
+    const withRemoteHttpResponse = vi.fn();
+    const postJsonWithRetry = vi.fn();
+    const uploadBatchJsonlFile = vi.fn();
 
     // Create a stream that emits the NDJSON lines
     const stream = new ReadableStream({
@@ -86,10 +45,50 @@ describe("runVoyageEmbeddingBatches", () => {
         controller.close();
       },
     });
-
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      body: stream,
+    uploadBatchJsonlFile.mockImplementationOnce(async (params) => {
+      expect(params.errorPrefix).toBe("voyage batch file upload failed");
+      expect(params.requests).toEqual(mockRequests);
+      return "file-123";
+    });
+    postJsonWithRetry.mockImplementationOnce(async (params) => {
+      expect(params.url).toContain("/batches");
+      expect(params.body).toMatchObject({
+        input_file_id: "file-123",
+        completion_window: "12h",
+        request_params: {
+          model: "voyage-4-large",
+          input_type: "document",
+        },
+      });
+      return {
+        id: "batch-abc",
+        status: "pending",
+      };
+    });
+    withRemoteHttpResponse.mockImplementationOnce(async (params) => {
+      expect(params.url).toContain("/batches/batch-abc");
+      return await params.onResponse(
+        new Response(
+          JSON.stringify({
+            id: "batch-abc",
+            status: "completed",
+            output_file_id: "file-out-999",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      );
+    });
+    withRemoteHttpResponse.mockImplementationOnce(async (params) => {
+      expect(params.url).toContain("/files/file-out-999/content");
+      return await params.onResponse(
+        new Response(stream as unknown as BodyInit, {
+          status: 200,
+          headers: { "Content-Type": "application/x-ndjson" },
+        }),
+      );
     });
 
     const results = await runVoyageEmbeddingBatches({
@@ -100,48 +99,29 @@ describe("runVoyageEmbeddingBatches", () => {
       pollIntervalMs: 1, // fast poll
       timeoutMs: 1000,
       concurrency: 1,
+      deps: {
+        now: realNow,
+        sleep: async (ms) => {
+          await nativeSleep(ms);
+        },
+        postJsonWithRetry,
+        uploadBatchJsonlFile,
+        withRemoteHttpResponse,
+      },
     });
 
     expect(results.size).toBe(2);
     expect(results.get("req-1")).toEqual([0.1, 0.1]);
     expect(results.get("req-2")).toEqual([0.2, 0.2]);
-
-    // Verify calls
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-
-    // Verify File Upload
-    expect(fetchMock.mock.calls[0][0]).toContain("/files");
-    const uploadBody = fetchMock.mock.calls[0][1].body as FormData;
-    expect(uploadBody).toBeInstanceOf(FormData);
-    expect(uploadBody.get("purpose")).toBe("batch");
-
-    // Verify Batch Create
-    expect(fetchMock.mock.calls[1][0]).toContain("/batches");
-    const createBody = JSON.parse(fetchMock.mock.calls[1][1].body);
-    expect(createBody.input_file_id).toBe("file-123");
-    expect(createBody.completion_window).toBe("12h");
-    expect(createBody.request_params).toEqual({
-      model: "voyage-4-large",
-      input_type: "document",
-    });
-
-    // Verify Content Fetch
-    expect(fetchMock.mock.calls[3][0]).toContain("/files/file-out-999/content");
+    expect(uploadBatchJsonlFile).toHaveBeenCalledTimes(1);
+    expect(postJsonWithRetry).toHaveBeenCalledTimes(1);
+    expect(withRemoteHttpResponse).toHaveBeenCalledTimes(2);
   });
 
   it("handles empty lines and stream chunks correctly", async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    mockPublicPinnedHostname();
-
-    // 1. Upload
-    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ id: "f1" }) });
-    // 2. Create (completed immediately)
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ id: "b1", status: "completed", output_file_id: "out1" }),
-    });
-    // 3. Download Content (Streaming with chunks and newlines)
+    const withRemoteHttpResponse = vi.fn();
+    const postJsonWithRetry = vi.fn();
+    const uploadBatchJsonlFile = vi.fn();
     const stream = new ReadableStream({
       start(controller) {
         const line1 = JSON.stringify({
@@ -160,8 +140,16 @@ describe("runVoyageEmbeddingBatches", () => {
         controller.close();
       },
     });
-
-    fetchMock.mockResolvedValueOnce({ ok: true, body: stream });
+    uploadBatchJsonlFile.mockResolvedValueOnce("f1");
+    postJsonWithRetry.mockResolvedValueOnce({
+      id: "b1",
+      status: "completed",
+      output_file_id: "out1",
+    });
+    withRemoteHttpResponse.mockImplementationOnce(async (params) => {
+      expect(params.url).toContain("/files/out1/content");
+      return await params.onResponse(new Response(stream as unknown as BodyInit, { status: 200 }));
+    });
 
     const results = await runVoyageEmbeddingBatches({
       client: mockClient,
@@ -171,6 +159,15 @@ describe("runVoyageEmbeddingBatches", () => {
       pollIntervalMs: 1,
       timeoutMs: 1000,
       concurrency: 1,
+      deps: {
+        now: realNow,
+        sleep: async (ms) => {
+          await nativeSleep(ms);
+        },
+        postJsonWithRetry,
+        uploadBatchJsonlFile,
+        withRemoteHttpResponse,
+      },
     });
 
     expect(results.get("req-1")).toEqual([1]);

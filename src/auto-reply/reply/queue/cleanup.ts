@@ -9,6 +9,29 @@ export type ClearSessionQueueResult = {
   keys: string[];
 };
 
+const defaultQueueCleanupDeps = {
+  resolveEmbeddedSessionLane,
+  clearCommandLane,
+};
+
+const queueCleanupDeps = {
+  ...defaultQueueCleanupDeps,
+};
+
+export const __testing = {
+  setDepsForTests(deps: Partial<typeof defaultQueueCleanupDeps> | undefined): void {
+    queueCleanupDeps.resolveEmbeddedSessionLane =
+      deps?.resolveEmbeddedSessionLane ?? defaultQueueCleanupDeps.resolveEmbeddedSessionLane;
+    queueCleanupDeps.clearCommandLane =
+      deps?.clearCommandLane ?? defaultQueueCleanupDeps.clearCommandLane;
+  },
+  resetDepsForTests(): void {
+    queueCleanupDeps.resolveEmbeddedSessionLane =
+      defaultQueueCleanupDeps.resolveEmbeddedSessionLane;
+    queueCleanupDeps.clearCommandLane = defaultQueueCleanupDeps.clearCommandLane;
+  },
+};
+
 export function clearSessionQueues(keys: Array<string | undefined>): ClearSessionQueueResult {
   const seen = new Set<string>();
   let followupCleared = 0;
@@ -24,7 +47,9 @@ export function clearSessionQueues(keys: Array<string | undefined>): ClearSessio
     clearedKeys.push(cleaned);
     followupCleared += clearFollowupQueue(cleaned);
     clearFollowupDrainCallback(cleaned);
-    laneCleared += clearCommandLane(resolveEmbeddedSessionLane(cleaned));
+    laneCleared += queueCleanupDeps.clearCommandLane(
+      queueCleanupDeps.resolveEmbeddedSessionLane(cleaned),
+    );
   }
 
   return { followupCleared, laneCleared, keys: clearedKeys };

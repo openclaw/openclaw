@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  collectTelegramAllowFromUsernameWarnings,
+  collectTelegramEmptyAllowlistExtraWarnings,
   collectTelegramGroupPolicyWarnings,
   scanTelegramAllowFromUsernameEntries,
 } from "./telegram.js";
@@ -57,6 +59,33 @@ describe("doctor telegram provider warnings", () => {
     expect(warnings).toEqual([]);
   });
 
+  it("returns extra empty-allowlist warnings only for telegram allowlist groups", () => {
+    const warnings = collectTelegramEmptyAllowlistExtraWarnings({
+      account: {
+        botToken: "123:abc",
+        groupPolicy: "allowlist",
+        groups: {
+          ops: { allow: true },
+        },
+      },
+      channelName: "telegram",
+      prefix: "channels.telegram",
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining(
+        'channels.telegram.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty',
+      ),
+    ]);
+    expect(
+      collectTelegramEmptyAllowlistExtraWarnings({
+        account: { groupPolicy: "allowlist" },
+        channelName: "signal",
+        prefix: "channels.signal",
+      }),
+    ).toEqual([]);
+  });
+
   it("finds non-numeric telegram allowFrom username entries across account scopes", () => {
     const hits = scanTelegramAllowFromUsernameEntries({
       channels: {
@@ -90,6 +119,18 @@ describe("doctor telegram provider warnings", () => {
         path: "channels.telegram.accounts.work.groups.-100123.topics.99.allowFrom",
         entry: "@topic-user",
       },
+    ]);
+  });
+
+  it("formats allowFrom username warnings", () => {
+    const warnings = collectTelegramAllowFromUsernameWarnings({
+      hits: [{ path: "channels.telegram.allowFrom", entry: "@top" }],
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining("Telegram allowFrom contains 1 non-numeric entries"),
+      expect.stringContaining('Run "openclaw doctor --fix"'),
     ]);
   });
 });

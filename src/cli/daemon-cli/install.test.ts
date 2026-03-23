@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureFullEnv } from "../../test-utils/env.js";
+import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import type { DaemonActionResponse } from "./response.js";
 
-const resolveAutoNodeExtraCaCertsMock = vi.hoisted(() => vi.fn());
+const resolveNodeStartupTlsEnvironmentMock = vi.hoisted(() => vi.fn());
 const loadConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn(() => 18789));
@@ -51,8 +52,8 @@ const service = vi.hoisted(() => ({
   readRuntime: vi.fn(async () => ({ status: "stopped" as const })),
 }));
 
-vi.mock("../../bootstrap/node-extra-ca-certs.js", () => ({
-  resolveAutoNodeExtraCaCerts: resolveAutoNodeExtraCaCertsMock,
+vi.mock("../../bootstrap/node-startup-env.js", () => ({
+  resolveNodeStartupTlsEnvironment: resolveNodeStartupTlsEnvironmentMock,
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -125,13 +126,9 @@ vi.mock("./response.js", () => ({
   installDaemonServiceAndEmit: installDaemonServiceAndEmitMock,
 }));
 
-const runtimeLogs: string[] = [];
+const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 vi.mock("../../runtime.js", () => ({
-  defaultRuntime: {
-    log: (message: string) => runtimeLogs.push(message),
-    error: vi.fn(),
-    exit: vi.fn(),
-  },
+  defaultRuntime,
 }));
 
 function expectFirstInstallPlanCallOmitsToken() {
@@ -156,7 +153,7 @@ const envSnapshot = captureFullEnv();
 describe("runDaemonInstall", () => {
   beforeEach(() => {
     loadConfigMock.mockReset();
-    resolveAutoNodeExtraCaCertsMock.mockReset();
+    resolveNodeStartupTlsEnvironmentMock.mockReset();
     readConfigFileSnapshotMock.mockReset();
     resolveGatewayPortMock.mockClear();
     writeConfigFileMock.mockReset();
@@ -170,7 +167,7 @@ describe("runDaemonInstall", () => {
     isGatewayDaemonRuntimeMock.mockReset();
     installDaemonServiceAndEmitMock.mockReset();
     service.isLoaded.mockReset();
-    runtimeLogs.length = 0;
+    resetRuntimeCapture();
     actionState.warnings.length = 0;
     actionState.emitted.length = 0;
     actionState.failed.length = 0;
@@ -198,9 +195,11 @@ describe("runDaemonInstall", () => {
     installDaemonServiceAndEmitMock.mockResolvedValue(undefined);
     service.isLoaded.mockResolvedValue(false);
     service.readCommand.mockResolvedValue(null);
-    resolveAutoNodeExtraCaCertsMock.mockReturnValue(undefined);
+    resolveNodeStartupTlsEnvironmentMock.mockReturnValue({
+      NODE_EXTRA_CA_CERTS: undefined,
+      NODE_USE_SYSTEM_CA: undefined,
+    });
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.CLAWDBOT_GATEWAY_TOKEN;
   });
 
   afterEach(() => {
@@ -300,7 +299,10 @@ describe("runDaemonInstall", () => {
 
   it("returns already-installed when the service already has the expected TLS env", async () => {
     service.isLoaded.mockResolvedValue(true);
-    resolveAutoNodeExtraCaCertsMock.mockReturnValue("/etc/ssl/certs/ca-certificates.crt");
+    resolveNodeStartupTlsEnvironmentMock.mockReturnValue({
+      NODE_EXTRA_CA_CERTS: "/etc/ssl/certs/ca-certificates.crt",
+      NODE_USE_SYSTEM_CA: undefined,
+    });
     service.readCommand.mockResolvedValue({
       programArguments: ["openclaw", "gateway", "run"],
       environment: {
@@ -316,7 +318,10 @@ describe("runDaemonInstall", () => {
 
   it("reinstalls when an existing service is missing the nvm TLS CA bundle", async () => {
     service.isLoaded.mockResolvedValue(true);
-    resolveAutoNodeExtraCaCertsMock.mockReturnValue("/etc/ssl/certs/ca-certificates.crt");
+    resolveNodeStartupTlsEnvironmentMock.mockReturnValue({
+      NODE_EXTRA_CA_CERTS: "/etc/ssl/certs/ca-certificates.crt",
+      NODE_USE_SYSTEM_CA: undefined,
+    });
     service.readCommand.mockResolvedValue({
       programArguments: ["openclaw", "gateway", "run"],
       environment: {},
@@ -329,11 +334,13 @@ describe("runDaemonInstall", () => {
 
   it("reinstalls when the installed service still runs from nvm even if the installer runtime does not", async () => {
     service.isLoaded.mockResolvedValue(true);
-    resolveAutoNodeExtraCaCertsMock.mockImplementation(({ execPath }) =>
-      typeof execPath === "string" && execPath.includes("/.nvm/")
-        ? "/etc/ssl/certs/ca-certificates.crt"
-        : undefined,
-    );
+    resolveNodeStartupTlsEnvironmentMock.mockImplementation(({ execPath }) => ({
+      NODE_EXTRA_CA_CERTS:
+        typeof execPath === "string" && execPath.includes("/.nvm/")
+          ? "/etc/ssl/certs/ca-certificates.crt"
+          : undefined,
+      NODE_USE_SYSTEM_CA: undefined,
+    }));
     service.readCommand.mockResolvedValue({
       programArguments: ["/home/test/.nvm/versions/node/v22.18.0/bin/node", "dist/entry.js"],
       environment: {},
@@ -342,10 +349,40 @@ describe("runDaemonInstall", () => {
     await runDaemonInstall({ json: true });
 
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
-    expect(resolveAutoNodeExtraCaCertsMock).toHaveBeenCalledWith(
+    expect(resolveNodeStartupTlsEnvironmentMock).toHaveBeenCalledWith(
       expect.objectContaining({
         execPath: "/home/test/.nvm/versions/node/v22.18.0/bin/node",
       }),
     );
+  });
+
+  it("reuses env-backed service secrets during forced reinstall when the current shell is missing them", async () => {
+    service.isLoaded.mockResolvedValue(true);
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {
+        OPENAI_API_KEY: "service-openai-key",
+      },
+    } as never);
+    const previous = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      await runDaemonInstall({ json: true, force: true });
+
+      expect(buildGatewayInstallPlanMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          env: expect.objectContaining({
+            OPENAI_API_KEY: "service-openai-key",
+          }),
+        }),
+      );
+      expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previous;
+      }
+    }
   });
 });

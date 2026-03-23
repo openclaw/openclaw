@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { type FSWatcher } from "chokidar";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
@@ -7,6 +5,7 @@ import type { ResolvedMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
@@ -18,12 +17,11 @@ import {
   type OpenAiEmbeddingClient,
   type VoyageEmbeddingClient,
 } from "./embeddings.js";
-import { isFileMissingError, statRegularFile } from "./fs-utils.js";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
-import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
 import { extractKeywords } from "./query-expansion.js";
+import { readMemoryFile } from "./read-file.js";
 import type {
   MemoryEmbeddingProbeResult,
   MemoryProviderStatus,
@@ -38,22 +36,21 @@ const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const BATCH_FAILURE_LIMIT = 2;
 
-const MEMORY_INDEX_MANAGER_CACHE_KEY = "__openclawMemoryIndexManagerCache";
+const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
 type MemoryIndexManagerCacheStore = {
   indexCache: Map<string, MemoryIndexManager>;
   indexCachePending: Map<string, Promise<MemoryIndexManager>>;
 };
 
 function getMemoryIndexManagerCacheStore(): MemoryIndexManagerCacheStore {
-  const globalCache = globalThis as typeof globalThis & {
-    [MEMORY_INDEX_MANAGER_CACHE_KEY]?: MemoryIndexManagerCacheStore;
-  };
   // Keep manager caches reachable across `vi.resetModules()` so cleanup still reaches older managers.
-  globalCache[MEMORY_INDEX_MANAGER_CACHE_KEY] ??= {
-    indexCache: new Map<string, MemoryIndexManager>(),
-    indexCachePending: new Map<string, Promise<MemoryIndexManager>>(),
-  };
-  return globalCache[MEMORY_INDEX_MANAGER_CACHE_KEY];
+  return resolveGlobalSingleton<MemoryIndexManagerCacheStore>(
+    MEMORY_INDEX_MANAGER_CACHE_KEY,
+    () => ({
+      indexCache: new Map<string, MemoryIndexManager>(),
+      indexCachePending: new Map<string, Promise<MemoryIndexManager>>(),
+    }),
+  );
 }
 
 const log = createSubsystemLogger("memory");
@@ -174,7 +171,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return null;
     }
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-    const key = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}`;
+    const purpose = params.purpose === "status" ? "status" : "default";
+    const key = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}:${purpose}`;
     const statusOnly = params.purpose === "status";
     const existing = INDEX_CACHE.get(key);
     if (existing) {
@@ -185,7 +183,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return pending;
     }
     if (statusOnly) {
-      return new MemoryIndexManager({
+      const manager = new MemoryIndexManager({
         cacheKey: key,
         cfg,
         agentId,
@@ -193,6 +191,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         settings,
         purpose: params.purpose,
       });
+      INDEX_CACHE.set(key, manager);
+      return manager;
     }
     const createPromise = (async () => {
       const providerResult = await MemoryIndexManager.loadProviderResult({
@@ -667,72 +667,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     from?: number;
     lines?: number;
   }): Promise<{ text: string; path: string }> {
-    const rawPath = params.relPath.trim();
-    if (!rawPath) {
-      throw new Error("path required");
-    }
-    const absPath = path.isAbsolute(rawPath)
-      ? path.resolve(rawPath)
-      : path.resolve(this.workspaceDir, rawPath);
-    const relPath = path.relative(this.workspaceDir, absPath).replace(/\\/g, "/");
-    const inWorkspace =
-      relPath.length > 0 && !relPath.startsWith("..") && !path.isAbsolute(relPath);
-    const allowedWorkspace = inWorkspace && isMemoryPath(relPath);
-    let allowedAdditional = false;
-    if (!allowedWorkspace && this.settings.extraPaths.length > 0) {
-      const additionalPaths = normalizeExtraMemoryPaths(
-        this.workspaceDir,
-        this.settings.extraPaths,
-      );
-      for (const additionalPath of additionalPaths) {
-        try {
-          const stat = await fs.lstat(additionalPath);
-          if (stat.isSymbolicLink()) {
-            continue;
-          }
-          if (stat.isDirectory()) {
-            if (absPath === additionalPath || absPath.startsWith(`${additionalPath}${path.sep}`)) {
-              allowedAdditional = true;
-              break;
-            }
-            continue;
-          }
-          if (stat.isFile()) {
-            if (absPath === additionalPath && absPath.endsWith(".md")) {
-              allowedAdditional = true;
-              break;
-            }
-          }
-        } catch {}
-      }
-    }
-    if (!allowedWorkspace && !allowedAdditional) {
-      throw new Error("path required");
-    }
-    if (!absPath.endsWith(".md")) {
-      throw new Error("path required");
-    }
-    const statResult = await statRegularFile(absPath);
-    if (statResult.missing) {
-      return { text: "", path: relPath };
-    }
-    let content: string;
-    try {
-      content = await fs.readFile(absPath, "utf-8");
-    } catch (err) {
-      if (isFileMissingError(err)) {
-        return { text: "", path: relPath };
-      }
-      throw err;
-    }
-    if (!params.from && !params.lines) {
-      return { text: content, path: relPath };
-    }
-    const lines = content.split("\n");
-    const start = Math.max(1, params.from ?? 1);
-    const count = Math.max(1, params.lines ?? lines.length);
-    const slice = lines.slice(start - 1, start - 1 + count);
-    return { text: slice.join("\n"), path: relPath };
+    return await readMemoryFile({
+      workspaceDir: this.workspaceDir,
+      extraPaths: this.settings.extraPaths,
+      relPath: params.relPath,
+      from: params.from,
+      lines: params.lines,
+    });
   }
 
   status(): MemoryProviderStatus {
