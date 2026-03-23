@@ -1879,7 +1879,7 @@ Controls elevated (host) exec access:
 
 ### `tools.loopDetection`
 
-Tool-loop safety checks are **disabled by default**. Set `enabled: true` to activate detection.
+Tool-loop safety checks are **enabled by default**. Set `enabled: false` to disable.
 Settings can be defined globally in `tools.loopDetection` and overridden per-agent at `agents.list[].tools.loopDetection`.
 
 ```json5

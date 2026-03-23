@@ -10,7 +10,7 @@ read_when:
 # Tool-loop detection
 
 OpenClaw can keep agents from getting stuck in repeated tool-call patterns.
-The guard is **disabled by default**.
+The guard is **enabled by default**.
 
 Enable it only where needed, because it can block legitimate repeated calls with strict settings.
 
@@ -28,7 +28,7 @@ Global defaults:
 {
   tools: {
     loopDetection: {
-      enabled: false,
+      enabled: true,
       historySize: 30,
       warningThreshold: 10,
       criticalThreshold: 20,

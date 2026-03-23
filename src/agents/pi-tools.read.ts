@@ -638,13 +638,39 @@ export function createOpenClawReadTool(
         normalized ??
         (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
       assertRequiredParams(record, CLAUDE_PARAM_GROUPS.read, base.name);
-      const result = await executeReadWithAdaptivePaging({
-        base,
-        toolCallId,
-        args: (normalized ?? params ?? {}) as Record<string, unknown>,
-        signal,
-        maxBytes: resolveAdaptiveReadMaxBytes(options),
-      });
+      let result: Awaited<ReturnType<typeof executeReadWithAdaptivePaging>>;
+      try {
+        result = await executeReadWithAdaptivePaging({
+          base,
+          toolCallId,
+          args: (normalized ?? params ?? {}) as Record<string, unknown>,
+          signal,
+          maxBytes: resolveAdaptiveReadMaxBytes(options),
+        });
+      } catch (error) {
+        // Graceful degradation: offset out-of-range should not abort the run.
+        // Upstream pi-coding-agent throws "Offset N is beyond end of file (M lines total)".
+        const message = error instanceof Error ? error.message : String(error ?? "");
+        const offsetMatch = /^Offset (\d+) is beyond end of file \((\d+) lines total\)$/.exec(
+          message,
+        );
+        if (offsetMatch) {
+          const requestedOffset = offsetMatch[1];
+          const totalLines = offsetMatch[2];
+          const filePath = typeof record?.path === "string" ? String(record.path) : "<unknown>";
+          result = {
+            content: [
+              {
+                type: "text",
+                text: `[tools.read] Offset ${requestedOffset} is beyond end of file (${totalLines} lines total). No content to display. Use offset <= ${totalLines} to read the file.`,
+              },
+            ],
+            details: { offsetOutOfRange: true, requestedOffset, totalLines },
+          } as unknown as Awaited<ReturnType<typeof executeReadWithAdaptivePaging>>;
+        } else {
+          throw error;
+        }
+      }
       const filePath = typeof record?.path === "string" ? String(record.path) : "<unknown>";
       const strippedDetailsResult = stripReadTruncationContentDetails(result);
       const normalizedResult = await normalizeReadImageResult(strippedDetailsResult, filePath);

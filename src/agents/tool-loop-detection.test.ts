@@ -249,15 +249,16 @@ describe("tool-loop-detection", () => {
   });
 
   describe("detectToolCallLoop", () => {
-    it("is disabled by default", () => {
+    it("is enabled by default", () => {
       const state = createState();
 
+      // 20 calls exceeds WARNING_THRESHOLD (10) → should detect loop
       for (let i = 0; i < 20; i += 1) {
         recordToolCall(state, "read", { path: "/same.txt" }, `default-${i}`);
       }
 
       const loopResult = detectToolCallLoop(state, "read", { path: "/same.txt" });
-      expect(loopResult.stuck).toBe(false);
+      expect(loopResult.stuck).toBe(true);
     });
 
     it("does not flag unique tool calls", () => {
