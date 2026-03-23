@@ -71,6 +71,7 @@ type StatusArgs = {
   agent: AgentConfig;
   agentId?: string;
   runtimeContextTokens?: number;
+  explicitConfiguredContextTokens?: number;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
   parentSessionKey?: string;
@@ -526,26 +527,19 @@ export function buildStatusMessage(args: StatusArgs): string {
       ? args.runtimeContextTokens
       : undefined;
   const explicitConfiguredContextTokens =
-    typeof args.agent?.contextTokens === "number" && args.agent.contextTokens > 0
-      ? args.agent.contextTokens
+    typeof args.explicitConfiguredContextTokens === "number" &&
+    args.explicitConfiguredContextTokens > 0
+      ? args.explicitConfiguredContextTokens
       : undefined;
   // When a fallback model is active, the selected-model context limit that
   // callers keep on the agent config is often stale. Prefer an explicit runtime
-  // snapshot when available. If the caller passed an explicit context cap that
-  // differs from the selected-model window, keep that too; otherwise preserve a
-  // persisted runtime snapshot unless it still matches the selected-model
-  // window and the active runtime window differs.
+  // snapshot when available. Separately, callers can pass an explicit configured
+  // cap that should win even when it numerically matches the selected model's
+  // native window. Otherwise preserve a persisted runtime snapshot unless it
+  // still matches the selected-model window and the active runtime window differs.
   const contextTokens = runtimeDiffersFromSelected
     ? (explicitRuntimeContextTokens ??
-      (() => {
-        if (
-          explicitConfiguredContextTokens !== undefined &&
-          explicitConfiguredContextTokens !== selectedContextTokens
-        ) {
-          return explicitConfiguredContextTokens;
-        }
-        return undefined;
-      })() ??
+      explicitConfiguredContextTokens ??
       (() => {
         if (persistedContextTokens === undefined) {
           return activeContextTokens ?? DEFAULT_CONTEXT_TOKENS;

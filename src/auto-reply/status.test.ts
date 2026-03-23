@@ -401,6 +401,50 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("Context: 49k/1.0m");
   });
 
+  it("keeps an explicit configured context cap even when it matches the selected model window", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            "minimax-portal": {
+              models: [{ id: "MiniMax-M2.5", contextWindow: 200_000 }],
+            },
+            xiaomi: {
+              models: [{ id: "mimo-v2-flash", contextWindow: 128_000 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "xiaomi/mimo-v2-flash",
+        contextTokens: 128_000,
+      },
+      explicitConfiguredContextTokens: 128_000,
+      sessionEntry: {
+        sessionId: "fallback-context-window-configured-cap-equals-selected",
+        updatedAt: 0,
+        providerOverride: "xiaomi",
+        modelOverride: "mimo-v2-flash",
+        modelProvider: "minimax-portal",
+        model: "MiniMax-M2.5",
+        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
+        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.5",
+        fallbackNoticeReason: "model not allowed",
+        totalTokens: 49_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      activeModelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.5");
+    expect(normalized).toContain("Context: 49k/128k");
+    expect(normalized).not.toContain("Context: 49k/200k");
+  });
+
   it("uses per-agent sandbox config when config and session key are provided", () => {
     const text = buildStatusMessage({
       config: {
