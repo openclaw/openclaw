@@ -192,6 +192,11 @@ describe("slackPlugin outbound", () => {
     },
   };
 
+  it("advertises the 8000-character Slack default chunk limit", () => {
+    expect(slackOutbound.textChunkLimit).toBe(8000);
+    expect(slackPlugin.outbound?.textChunkLimit).toBe(8000);
+  });
+
   it("uses threadId as threadTs fallback for sendText", async () => {
     const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-text" });
     const sendText = requireSlackSendText();
