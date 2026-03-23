@@ -257,6 +257,7 @@ interface OllamaChatRequest {
   stream: boolean;
   tools?: OllamaTool[];
   options?: Record<string, unknown>;
+  think?: boolean;
 }
 
 interface OllamaChatMessage {
@@ -652,6 +653,14 @@ export function createOllamaStreamFn(
           ollamaOptions.num_predict = options.maxTokens;
         }
 
+        const body: OllamaChatRequest = {
+          model: model.id,
+          messages: ollamaMessages,
+          stream: true,
+          ...(ollamaTools.length > 0 ? { tools: ollamaTools } : {}),
+          options: ollamaOptions,
+        };
+        options?.onPayload?.(body, model);
         const headers: Record<string, string> = {
           "Content-Type": "application/json",
           ...defaultHeaders,
@@ -667,13 +676,7 @@ export function createOllamaStreamFn(
         const response = await fetch(chatUrl, {
           method: "POST",
           headers,
-          body: JSON.stringify({
-            model: model.id,
-            messages: ollamaMessages,
-            stream: true,
-            ...(ollamaTools.length > 0 ? { tools: ollamaTools } : {}),
-            options: ollamaOptions,
-          } satisfies OllamaChatRequest),
+          body: JSON.stringify(body),
           signal: options?.signal,
         });
 
