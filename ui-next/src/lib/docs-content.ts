@@ -33,7 +33,7 @@ const CATEGORY_ORDER: { id: string; label: string; pages: string[] }[] = [
   {
     id: "operations",
     label: "Operations",
-    pages: ["rpc", "deployment", "channels", "spawning", "mcp"],
+    pages: ["rpc", "orchestration", "deployment", "channels", "spawning", "mcp"],
   },
   {
     id: "interface",
