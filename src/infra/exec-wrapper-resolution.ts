@@ -13,20 +13,6 @@ const POSIX_SHELL_WRAPPER_NAMES = ["ash", "bash", "dash", "fish", "ksh", "sh", "
 const WINDOWS_CMD_WRAPPER_NAMES = ["cmd"] as const;
 const POWERSHELL_WRAPPER_NAMES = ["powershell", "pwsh"] as const;
 const SHELL_MULTIPLEXER_WRAPPER_NAMES = ["busybox", "toybox"] as const;
-const DISPATCH_WRAPPER_NAMES = [
-  "chrt",
-  "doas",
-  "env",
-  "ionice",
-  "nice",
-  "nohup",
-  "setsid",
-  "stdbuf",
-  "sudo",
-  "taskset",
-  "time",
-  "timeout",
-] as const;
 
 function withWindowsExeAliases(names: readonly string[]): string[] {
   const expanded = new Set<string>();
@@ -49,13 +35,11 @@ function stripWindowsExecutableSuffix(value: string): string {
 export const POSIX_SHELL_WRAPPERS = new Set(POSIX_SHELL_WRAPPER_NAMES);
 export const WINDOWS_CMD_WRAPPERS = new Set(withWindowsExeAliases(WINDOWS_CMD_WRAPPER_NAMES));
 export const POWERSHELL_WRAPPERS = new Set(withWindowsExeAliases(POWERSHELL_WRAPPER_NAMES));
-export const DISPATCH_WRAPPER_EXECUTABLES = new Set(withWindowsExeAliases(DISPATCH_WRAPPER_NAMES));
 
 const POSIX_SHELL_WRAPPER_CANONICAL = new Set<string>(POSIX_SHELL_WRAPPER_NAMES);
 const WINDOWS_CMD_WRAPPER_CANONICAL = new Set<string>(WINDOWS_CMD_WRAPPER_NAMES);
 const POWERSHELL_WRAPPER_CANONICAL = new Set<string>(POWERSHELL_WRAPPER_NAMES);
 const SHELL_MULTIPLEXER_WRAPPER_CANONICAL = new Set<string>(SHELL_MULTIPLEXER_WRAPPER_NAMES);
-const DISPATCH_WRAPPER_CANONICAL = new Set<string>(DISPATCH_WRAPPER_NAMES);
 const SHELL_WRAPPER_CANONICAL = new Set<string>([
   ...POSIX_SHELL_WRAPPER_NAMES,
   ...WINDOWS_CMD_WRAPPER_NAMES,
@@ -104,7 +88,6 @@ const TIME_FLAG_OPTIONS = new Set([
 const TIME_OPTIONS_WITH_VALUE = new Set(["-f", "--format", "-o", "--output"]);
 const TIMEOUT_FLAG_OPTIONS = new Set(["--foreground", "--preserve-status", "-v", "--verbose"]);
 const TIMEOUT_OPTIONS_WITH_VALUE = new Set(["-k", "--kill-after", "-s", "--signal"]);
-const TRANSPARENT_DISPATCH_WRAPPERS = new Set(["nice", "nohup", "stdbuf", "time", "timeout"]);
 
 type ShellWrapperKind = "posix" | "cmd" | "powershell";
 
@@ -140,7 +123,7 @@ export function normalizeExecutableToken(token: string): string {
 }
 
 export function isDispatchWrapperExecutable(token: string): boolean {
-  return DISPATCH_WRAPPER_CANONICAL.has(normalizeExecutableToken(token));
+  return DISPATCH_WRAPPER_SPEC_BY_NAME.has(normalizeExecutableToken(token));
 }
 
 export function isShellWrapperExecutable(token: string): boolean {
@@ -420,6 +403,35 @@ function unwrapTimeoutInvocation(argv: string[]): string[] | null {
   });
 }
 
+type DispatchWrapperSpec = {
+  name: string;
+  transparent: boolean;
+  unwrap?: (argv: string[]) => string[] | null;
+};
+
+const DISPATCH_WRAPPER_SPECS: readonly DispatchWrapperSpec[] = [
+  { name: "chrt", transparent: false },
+  { name: "doas", transparent: false },
+  { name: "env", transparent: false, unwrap: unwrapEnvInvocation },
+  { name: "ionice", transparent: false },
+  { name: "nice", transparent: true, unwrap: unwrapNiceInvocation },
+  { name: "nohup", transparent: true, unwrap: unwrapNohupInvocation },
+  { name: "setsid", transparent: false },
+  { name: "stdbuf", transparent: true, unwrap: unwrapStdbufInvocation },
+  { name: "sudo", transparent: false },
+  { name: "taskset", transparent: false },
+  { name: "time", transparent: true, unwrap: unwrapTimeInvocation },
+  { name: "timeout", transparent: true, unwrap: unwrapTimeoutInvocation },
+];
+
+const DISPATCH_WRAPPER_SPEC_BY_NAME = new Map(
+  DISPATCH_WRAPPER_SPECS.map((spec) => [spec.name, spec] as const),
+);
+
+export const DISPATCH_WRAPPER_EXECUTABLES = new Set(
+  withWindowsExeAliases(DISPATCH_WRAPPER_SPECS.map((spec) => spec.name)),
+);
+
 export type DispatchWrapperUnwrapResult =
   | { kind: "not-wrapper" }
   | { kind: "blocked"; wrapper: string }
@@ -451,29 +463,13 @@ export function unwrapKnownDispatchWrapperInvocation(argv: string[]): DispatchWr
     return { kind: "not-wrapper" };
   }
   const wrapper = normalizeExecutableToken(token0);
-  switch (wrapper) {
-    case "env":
-      return unwrapDispatchWrapper(wrapper, unwrapEnvInvocation(argv));
-    case "nice":
-      return unwrapDispatchWrapper(wrapper, unwrapNiceInvocation(argv));
-    case "nohup":
-      return unwrapDispatchWrapper(wrapper, unwrapNohupInvocation(argv));
-    case "stdbuf":
-      return unwrapDispatchWrapper(wrapper, unwrapStdbufInvocation(argv));
-    case "time":
-      return unwrapDispatchWrapper(wrapper, unwrapTimeInvocation(argv));
-    case "timeout":
-      return unwrapDispatchWrapper(wrapper, unwrapTimeoutInvocation(argv));
-    case "chrt":
-    case "doas":
-    case "ionice":
-    case "setsid":
-    case "sudo":
-    case "taskset":
-      return blockDispatchWrapper(wrapper);
-    default:
-      return { kind: "not-wrapper" };
+  const spec = DISPATCH_WRAPPER_SPEC_BY_NAME.get(wrapper);
+  if (!spec) {
+    return { kind: "not-wrapper" };
   }
+  return spec.unwrap
+    ? unwrapDispatchWrapper(wrapper, spec.unwrap(argv))
+    : blockDispatchWrapper(wrapper);
 }
 
 export function unwrapDispatchWrappersForResolution(
@@ -488,7 +484,7 @@ function isSemanticDispatchWrapperUsage(wrapper: string, argv: string[]): boolea
   if (wrapper === "env") {
     return envInvocationUsesModifiers(argv);
   }
-  return !TRANSPARENT_DISPATCH_WRAPPERS.has(wrapper);
+  return !DISPATCH_WRAPPER_SPEC_BY_NAME.get(wrapper)?.transparent;
 }
 
 function blockedDispatchWrapperPlan(params: {
