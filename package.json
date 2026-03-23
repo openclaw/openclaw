@@ -692,7 +692,7 @@
     "test:auth:compat": "vitest run --config vitest.gateway.config.ts src/gateway/server.auth.compat-baseline.test.ts src/gateway/client.test.ts src/gateway/reconnect-gating.test.ts src/gateway/protocol/connect-error-details.test.ts",
     "test:build:singleton": "node scripts/test-built-plugin-singleton.mjs",
     "test:changed": "pnpm test -- --changed origin/main",
-    "test:channels": "vitest run --config vitest.channels.config.ts",
+    "test:channels": "OPENCLAW_TEST_SKIP_DEFAULT=1 OPENCLAW_TEST_INCLUDE_CHANNELS=1 node scripts/test-parallel.mjs",
     "test:contracts": "pnpm test:contracts:channels && pnpm test:contracts:plugins",
     "test:contracts:channels": "OPENCLAW_TEST_PROFILE=low pnpm test -- src/channels/plugins/contracts",
     "test:contracts:plugins": "OPENCLAW_TEST_PROFILE=low pnpm test -- src/plugins/contracts",
