@@ -1,7 +1,9 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+import { buildSingleProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog";
 import { mistralMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyMistralConfig, MISTRAL_DEFAULT_MODEL_REF } from "./onboard.js";
+import { buildMistralProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "mistral";
 
@@ -37,6 +39,16 @@ export default definePluginEntry({
           },
         }),
       ],
+      catalog: {
+        order: "simple",
+        run: (ctx) =>
+          buildSingleProviderApiKeyCatalog({
+            ctx,
+            providerId: PROVIDER_ID,
+            buildProvider: buildMistralProvider,
+            allowExplicitBaseUrl: true,
+          }),
+      },
       capabilities: {
         transcriptToolCallIdMode: "strict9",
         transcriptToolCallIdModelHints: [
