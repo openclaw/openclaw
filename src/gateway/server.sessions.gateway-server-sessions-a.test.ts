@@ -52,6 +52,10 @@ const acpRuntimeMocks = vi.hoisted(() => ({
   getAcpRuntimeBackend: vi.fn(),
   requireAcpRuntimeBackend: vi.fn(),
 }));
+const acpManagerMocks = vi.hoisted(() => ({
+  cancelSession: vi.fn(async () => {}),
+  closeSession: vi.fn(async () => {}),
+}));
 const browserSessionTabMocks = vi.hoisted(() => ({
   closeTrackedBrowserTabsForSessions: vi.fn(async () => 0),
 }));
@@ -138,6 +142,13 @@ vi.mock("../acp/runtime/registry.js", async (importOriginal) => {
     },
   };
 });
+
+vi.mock("../acp/control-plane/manager.js", () => ({
+  getAcpSessionManager: () => ({
+    cancelSession: acpManagerMocks.cancelSession,
+    closeSession: acpManagerMocks.closeSession,
+  }),
+}));
 
 vi.mock("../browser/session-tab-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../browser/session-tab-registry.js")>();
@@ -242,6 +253,8 @@ describe("gateway server sessions", () => {
     acpRuntimeMocks.requireAcpRuntimeBackend.mockImplementation((backendId?: string) =>
       acpRuntimeMocks.getAcpRuntimeBackend(backendId),
     );
+    acpManagerMocks.cancelSession.mockClear();
+    acpManagerMocks.closeSession.mockClear();
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockClear();
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockResolvedValue(0);
   });
@@ -1164,41 +1177,23 @@ describe("gateway server sessions", () => {
         },
       },
     });
-    acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue({
-      id: "acpx",
-      runtime: {
-        ensureSession: vi.fn(async () => ({
-          sessionKey: "agent:main:discord:group:dev",
-          backend: "acpx",
-          runtimeSessionName: "runtime:delete",
-        })),
-        runTurn: vi.fn(async function* () {}),
-        cancel: acpRuntimeMocks.cancel,
-        close: acpRuntimeMocks.close,
-      },
-    });
-
     const { ws } = await openClient();
     const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
       key: "discord:group:dev",
     });
     expect(deleted.ok).toBe(true);
     expect(deleted.payload?.deleted).toBe(true);
-    expect(acpRuntimeMocks.close).toHaveBeenCalledWith({
-      handle: {
-        sessionKey: "agent:main:discord:group:dev",
-        backend: "acpx",
-        runtimeSessionName: "runtime:delete",
-      },
+    expect(acpManagerMocks.closeSession).toHaveBeenCalledWith({
+      allowBackendUnavailable: true,
+      cfg: expect.any(Object),
+      requireAcpSession: false,
       reason: "session-delete",
+      sessionKey: "agent:main:discord:group:dev",
     });
-    expect(acpRuntimeMocks.cancel).toHaveBeenCalledWith({
-      handle: {
-        sessionKey: "agent:main:discord:group:dev",
-        backend: "acpx",
-        runtimeSessionName: "runtime:delete",
-      },
+    expect(acpManagerMocks.cancelSession).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
       reason: "session-delete",
+      sessionKey: "agent:main:discord:group:dev",
     });
 
     ws.close();
@@ -1403,32 +1398,17 @@ describe("gateway server sessions", () => {
         },
       },
     });
-    acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue({
-      id: "acpx",
-      runtime: {
-        ensureSession: vi.fn(async () => ({
-          sessionKey: "agent:main:main",
-          backend: "acpx",
-          runtimeSessionName: "runtime:reset",
-        })),
-        runTurn: vi.fn(async function* () {}),
-        cancel: vi.fn(async () => {}),
-        close: acpRuntimeMocks.close,
-      },
-    });
-
     const { ws } = await openClient();
     const reset = await rpcReq<{ ok: true; key: string }>(ws, "sessions.reset", {
       key: "main",
     });
     expect(reset.ok).toBe(true);
-    expect(acpRuntimeMocks.close).toHaveBeenCalledWith({
-      handle: {
-        sessionKey: "agent:main:main",
-        backend: "acpx",
-        runtimeSessionName: "runtime:reset",
-      },
+    expect(acpManagerMocks.closeSession).toHaveBeenCalledWith({
+      allowBackendUnavailable: true,
+      cfg: expect.any(Object),
+      requireAcpSession: false,
       reason: "session-reset",
+      sessionKey: "agent:main:main",
     });
 
     ws.close();
