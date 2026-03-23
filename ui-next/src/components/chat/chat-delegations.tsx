@@ -89,20 +89,20 @@ function DelegationCard({ entry }: { entry: DelegationEntry }) {
   // Auto-update elapsed time every second for active delegations
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (entry.status === "running" || entry.status === "spawned") {
+    if (entry.status === "running" || entry.status === "spawned" || entry.status === "stale") {
       const id = setInterval(() => setNow(Date.now()), 1000);
       return () => clearInterval(id);
     }
   }, [entry.status]);
 
+  // Compute elapsed — timestamps are in ms (Date.now() style)
+  const refTime = entry.startedAt ?? entry.createdAt;
   const elapsed =
-    entry.endedAt != null
-      ? entry.elapsedMs
-      : entry.startedAt != null
-        ? now - entry.startedAt
-        : now - entry.createdAt;
+    entry.endedAt != null && entry.endedAt > 0 ? entry.elapsedMs : refTime > 0 ? now - refTime : 0;
 
-  const agentDisplay = entry.label ?? entry.agentId ?? "sub-agent";
+  // Extract agent name from childSessionKey (agent:<name>:subagent:...) or use label/agentId
+  const agentFromKey = entry.childSessionKey?.split(":")?.[1];
+  const agentDisplay = entry.label ?? entry.agentId ?? agentFromKey ?? "sub-agent";
   const task = entry.task ? truncate(entry.task, 80) : null;
 
   return (
