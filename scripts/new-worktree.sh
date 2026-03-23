@@ -79,6 +79,27 @@ Usage: scripts/new-worktree.sh <feature-name> [--base <branch>]
 EOF
 }
 
+resolve_default_base_branch() {
+  local current_branch=""
+  local upstream_branch=""
+
+  current_branch="$(git branch --show-current 2>/dev/null || true)"
+  upstream_branch="$(git rev-parse --abbrev-ref --symbolic-full-name @{upstream} 2>/dev/null || true)"
+
+  # Keep the automatic default intentionally narrow: use the dedicated
+  # consumer base only when the current checkout is on that branch or is a
+  # feature branch that still tracks that branch. Everything else falls back
+  # to main so feature branches do not silently start branching from each
+  # other just because they exist.
+  if [[ "$current_branch" == "codex/consumer-openclaw-project" ]] ||
+    [[ "$upstream_branch" == "origin/codex/consumer-openclaw-project" ]]; then
+    printf 'codex/consumer-openclaw-project'
+    return
+  fi
+
+  printf 'main'
+}
+
 run_ensure_with_timeout() {
   local worktree_path="$1"
   local timeout_secs="${OPENCLAW_NEW_WORKTREE_ENSURE_TIMEOUT_SECS:-45}"
@@ -134,7 +155,8 @@ if [[ $# -lt 1 ]]; then
 fi
 
 FEATURE_NAME=""
-BASE_BRANCH="main"
+BASE_BRANCH=""
+BASE_SOURCE="auto"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -144,6 +166,7 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       BASE_BRANCH="$2"
+      BASE_SOURCE="flag"
       shift 2
       ;;
     --help|-h)
@@ -197,6 +220,10 @@ if ! git fetch origin; then
   echo "Warning: git fetch origin failed; continuing with local refs." >&2
 fi
 
+if [[ -z "$BASE_BRANCH" ]]; then
+  BASE_BRANCH="$(resolve_default_base_branch)"
+fi
+
 if ! git show-ref --verify --quiet "refs/remotes/origin/${BASE_BRANCH}"; then
   echo "Error: origin/${BASE_BRANCH} does not exist locally. Fetch it or choose a different --base." >&2
   exit 1
@@ -239,5 +266,7 @@ fi
 
 echo "worktree=${WORKTREE_PATH}"
 echo "branch=${BRANCH_NAME}"
+echo "base_branch=${BASE_BRANCH}"
+echo "base_source=${BASE_SOURCE}"
 echo "bot_fingerprint=${BOT_FINGERPRINT}"
 echo "dev_port=${DEV_PORT}"

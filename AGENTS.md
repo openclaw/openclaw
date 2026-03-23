@@ -250,6 +250,7 @@
 
 - Worktree credential bootstrap (Telegram live checks):
   - Preferred worktree lifecycle entrypoint: `bash scripts/new-worktree.sh <feature-name>`.
+  - `scripts/new-worktree.sh` defaults to the consumer base only when the current branch or upstream is `codex/consumer-openclaw-project`; otherwise it defaults to `main`. Use `--base <branch>` when you want something else explicitly.
   - Preferred stale-claim cleanup entrypoint: `bash scripts/gc-worktrees.sh` first, then `bash scripts/gc-worktrees.sh --auto` only after reviewing the dry-run table.
   - Preferred isolated mac app entrypoint per worktree: `bash scripts/dev-launch-mac.sh`.
   - Preferred automatic GC installer: `bash scripts/install-worktree-gc.sh install` (check with `status`, inspect with `install --dry-run`).
