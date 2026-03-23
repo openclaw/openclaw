@@ -1,9 +1,25 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles.js";
 import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
-import { resolveProviderAuths, type ProviderAuth } from "./provider-usage.auth.js";
+import { clearConfigCache, type OpenClawConfig } from "../config/config.js";
+
+const resolveProviderUsageAuthWithPluginMock = vi.fn(async (..._args: unknown[]) => null);
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveProviderUsageAuthWithPlugin: resolveProviderUsageAuthWithPluginMock,
+}));
+
+vi.mock("../agents/cli-credentials.js", () => ({
+  readCodexCliCredentialsCached: () => null,
+  readMiniMaxCliCredentialsCached: () => null,
+  readQwenCliCredentialsCached: () => null,
+}));
+
+let resolveProviderAuths: typeof import("./provider-usage.auth.js").resolveProviderAuths;
+type ProviderAuth = import("./provider-usage.auth.js").ProviderAuth;
 
 describe("resolveProviderAuths key normalization", () => {
   let suiteRoot = "";
@@ -18,6 +34,7 @@ describe("resolveProviderAuths key normalization", () => {
 
   beforeAll(async () => {
     suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-auth-suite-"));
+    ({ resolveProviderAuths } = await import("./provider-usage.auth.js"));
   });
 
   afterAll(async () => {
@@ -26,54 +43,60 @@ describe("resolveProviderAuths key normalization", () => {
     suiteCase = 0;
   });
 
-  async function withSuiteHome<T>(
-    fn: (home: string) => Promise<T>,
-    env: Record<string, string | undefined>,
-  ): Promise<T> {
+  beforeEach(() => {
+    clearConfigCache();
+    clearRuntimeAuthProfileStoreSnapshots();
+    resolveProviderUsageAuthWithPluginMock.mockReset();
+    resolveProviderUsageAuthWithPluginMock.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    clearConfigCache();
+    clearRuntimeAuthProfileStoreSnapshots();
+  });
+
+  async function withSuiteHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
     const base = path.join(suiteRoot, `case-${++suiteCase}`);
     await fs.mkdir(base, { recursive: true });
     await fs.mkdir(path.join(base, ".openclaw", "agents", "main", "sessions"), { recursive: true });
+    return await fn(base);
+  }
 
-    const keysToRestore = new Set<string>([
-      "HOME",
-      "USERPROFILE",
-      "HOMEDRIVE",
-      "HOMEPATH",
-      "OPENCLAW_HOME",
-      "OPENCLAW_STATE_DIR",
-      ...Object.keys(env),
-    ]);
-    const snapshot: Record<string, string | undefined> = {};
-    for (const key of keysToRestore) {
-      snapshot[key] = process.env[key];
-    }
+  function agentDirForHome(home: string): string {
+    return path.join(home, ".openclaw", "agents", "main", "agent");
+  }
 
-    process.env.HOME = base;
-    process.env.USERPROFILE = base;
-    delete process.env.OPENCLAW_HOME;
-    process.env.OPENCLAW_STATE_DIR = path.join(base, ".openclaw");
-    for (const [key, value] of Object.entries(env)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
+  function buildSuiteEnv(
+    home: string,
+    env: Record<string, string | undefined> = {},
+  ): NodeJS.ProcessEnv {
+    const suiteEnv: NodeJS.ProcessEnv = {
+      ...EMPTY_PROVIDER_ENV,
+      HOME: home,
+      USERPROFILE: home,
+      OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+      ...env,
+    };
+    const match = home.match(/^([A-Za-z]:)(.*)$/);
+    if (match) {
+      suiteEnv.HOMEDRIVE = match[1];
+      suiteEnv.HOMEPATH = match[2] || "\\";
     }
+    return suiteEnv;
+  }
+
+  async function readConfigForHome(home: string): Promise<Record<string, unknown>> {
     try {
-      return await fn(base);
-    } finally {
-      for (const [key, value] of Object.entries(snapshot)) {
-        if (value === undefined) {
-          delete process.env[key];
-        } else {
-          process.env[key] = value;
-        }
-      }
+      return JSON.parse(
+        await fs.readFile(path.join(home, ".openclaw", "openclaw.json"), "utf8"),
+      ) as Record<string, unknown>;
+    } catch {
+      return {};
     }
   }
 
   async function writeAuthProfiles(home: string, profiles: Record<string, unknown>) {
-    const agentDir = path.join(home, ".openclaw", "agents", "main", "agent");
+    const agentDir = agentDirForHome(home);
     await fs.mkdir(agentDir, { recursive: true });
     await fs.writeFile(
       path.join(agentDir, "auth-profiles.json"),
@@ -93,7 +116,7 @@ describe("resolveProviderAuths key normalization", () => {
   }
 
   async function writeProfileOrder(home: string, provider: string, profileIds: string[]) {
-    const agentDir = path.join(home, ".openclaw", "agents", "main", "agent");
+    const agentDir = agentDirForHome(home);
     const parsed = JSON.parse(
       await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
     ) as Record<string, unknown>;
@@ -128,28 +151,26 @@ describe("resolveProviderAuths key normalization", () => {
   }
 
   async function resolveMinimaxAuthFromConfiguredKey(apiKey: string) {
-    return await withSuiteHome(
-      async (home) => {
-        await writeConfig(home, {
-          models: {
-            providers: {
-              minimax: {
-                baseUrl: "https://api.minimaxi.com",
-                models: [createTestModelDefinition()],
-                apiKey,
-              },
+    return await withSuiteHome(async (home) => {
+      await writeConfig(home, {
+        models: {
+          providers: {
+            minimax: {
+              baseUrl: "https://api.minimaxi.com",
+              models: [createTestModelDefinition()],
+              apiKey,
             },
           },
-        });
+        },
+      });
 
-        return await resolveProviderAuths({
-          providers: ["minimax"],
-        });
-      },
-      {
-        ...EMPTY_PROVIDER_ENV,
-      },
-    );
+      return await resolveProviderAuths({
+        providers: ["minimax"],
+        agentDir: agentDirForHome(home),
+        config: (await readConfigForHome(home)) as OpenClawConfig,
+        env: buildSuiteEnv(home),
+      });
+    });
   }
 
   async function expectResolvedAuthsFromSuiteHome(params: {
@@ -158,19 +179,16 @@ describe("resolveProviderAuths key normalization", () => {
     env?: Record<string, string | undefined>;
     setup?: (home: string) => Promise<void>;
   }) {
-    await withSuiteHome(
-      async (home) => {
-        await params.setup?.(home);
-        const auths = await resolveProviderAuths({
-          providers: params.providers,
-        });
-        expect(auths).toEqual(params.expected);
-      },
-      {
-        ...EMPTY_PROVIDER_ENV,
-        ...params.env,
-      },
-    );
+    await withSuiteHome(async (home) => {
+      await params.setup?.(home);
+      const auths = await resolveProviderAuths({
+        providers: params.providers,
+        agentDir: agentDirForHome(home),
+        config: (await readConfigForHome(home)) as OpenClawConfig,
+        env: buildSuiteEnv(home, params.env),
+      });
+      expect(auths).toEqual(params.expected);
+    });
   }
 
   it.each([
@@ -380,18 +398,24 @@ describe("resolveProviderAuths key normalization", () => {
 
       const auths = await resolveProviderAuths({
         providers: ["anthropic"],
+        agentDir: agentDirForHome(home),
+        config: (await readConfigForHome(home)) as OpenClawConfig,
+        env: buildSuiteEnv(home),
       });
       expect(auths).toEqual([]);
-    }, {});
+    });
   });
 
   it("skips providers without oauth-compatible profiles", async () => {
-    await withSuiteHome(async () => {
+    await withSuiteHome(async (home) => {
       const auths = await resolveProviderAuths({
         providers: ["anthropic"],
+        agentDir: agentDirForHome(home),
+        config: (await readConfigForHome(home)) as OpenClawConfig,
+        env: buildSuiteEnv(home),
       });
       expect(auths).toEqual([]);
-    }, {});
+    });
   });
 
   it("skips oauth profiles that resolve without an api key and uses later profiles", async () => {
@@ -409,9 +433,12 @@ describe("resolveProviderAuths key normalization", () => {
 
       const auths = await resolveProviderAuths({
         providers: ["anthropic"],
+        agentDir: agentDirForHome(home),
+        config: (await readConfigForHome(home)) as OpenClawConfig,
+        env: buildSuiteEnv(home),
       });
       expect(auths).toEqual([{ provider: "anthropic", token: "anthropic-token" }]);
-    }, {});
+    });
   });
 
   it("skips api_key entries in oauth token resolution order", async () => {
@@ -424,9 +451,12 @@ describe("resolveProviderAuths key normalization", () => {
 
       const auths = await resolveProviderAuths({
         providers: ["anthropic"],
+        agentDir: agentDirForHome(home),
+        config: (await readConfigForHome(home)) as OpenClawConfig,
+        env: buildSuiteEnv(home),
       });
       expect(auths).toEqual([{ provider: "anthropic", token: "token-1" }]);
-    }, {});
+    });
   });
 
   it("ignores marker-backed config keys for provider usage auth resolution", async () => {
