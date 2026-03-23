@@ -176,35 +176,30 @@ describe("fs-safe", () => {
     expect((err as SafeOpenError).message).not.toMatch(/EISDIR/i);
   });
 
-  it("reads a file within root", async () => {
+  it("reads files within root through all read helpers", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");
+
     await fs.writeFile(path.join(root, "inside.txt"), "inside");
-    const result = await readFileWithinRoot({
+    const byRelativePath = await readFileWithinRoot({
       rootDir: root,
       relativePath: "inside.txt",
     });
-    expect(result.buffer.toString("utf8")).toBe("inside");
-    expect(result.realPath).toContain("inside.txt");
-    expect(result.stat.size).toBe(6);
-  });
+    expect(byRelativePath.buffer.toString("utf8")).toBe("inside");
+    expect(byRelativePath.realPath).toContain("inside.txt");
+    expect(byRelativePath.stat.size).toBe(6);
 
-  it("reads an absolute path within root via readPathWithinRoot", async () => {
-    const root = await tempDirs.make("openclaw-fs-safe-root-");
-    const insidePath = path.join(root, "absolute.txt");
-    await fs.writeFile(insidePath, "absolute");
-    const result = await readPathWithinRoot({
+    const absolutePath = path.join(root, "absolute.txt");
+    await fs.writeFile(absolutePath, "absolute");
+    const byAbsolutePath = await readPathWithinRoot({
       rootDir: root,
-      filePath: insidePath,
+      filePath: absolutePath,
     });
-    expect(result.buffer.toString("utf8")).toBe("absolute");
-  });
+    expect(byAbsolutePath.buffer.toString("utf8")).toBe("absolute");
 
-  it("creates a root-scoped read callback", async () => {
-    const root = await tempDirs.make("openclaw-fs-safe-root-");
-    const insidePath = path.join(root, "scoped.txt");
-    await fs.writeFile(insidePath, "scoped");
+    const scopedPath = path.join(root, "scoped.txt");
+    await fs.writeFile(scopedPath, "scoped");
     const readScoped = createRootScopedReadFile({ rootDir: root });
-    await expect(readScoped(insidePath)).resolves.toEqual(Buffer.from("scoped"));
+    await expect(readScoped(scopedPath)).resolves.toEqual(Buffer.from("scoped"));
   });
 
   it.runIf(process.platform !== "win32")("blocks symlink escapes under root", async () => {
@@ -440,17 +435,21 @@ describe("tilde expansion in file tools", () => {
   it("keeps tilde expansion behavior aligned", async () => {
     const { expandHomePrefix } = await import("./home-dir.js");
     const originalHome = process.env.HOME;
+    const originalOpenClawHome = process.env.OPENCLAW_HOME;
     const fakeHome = path.resolve(path.sep, "tmp", "fake-home-test");
     process.env.HOME = fakeHome;
+    process.env.OPENCLAW_HOME = fakeHome;
     try {
       const result = expandHomePrefix("~/file.txt");
       expect(path.normalize(result)).toBe(path.join(fakeHome, "file.txt"));
     } finally {
       process.env.HOME = originalHome;
+      process.env.OPENCLAW_HOME = originalOpenClawHome;
     }
 
     const root = await tempDirs.make("openclaw-tilde-test-");
     process.env.HOME = root;
+    process.env.OPENCLAW_HOME = root;
     try {
       await fs.writeFile(path.join(root, "hello.txt"), "tilde-works");
       const result = await openFileWithinRoot({
@@ -471,6 +470,7 @@ describe("tilde expansion in file tools", () => {
       expect(content).toBe("tilde-write-works");
     } finally {
       process.env.HOME = originalHome;
+      process.env.OPENCLAW_HOME = originalOpenClawHome;
     }
 
     const outsideRoot = await tempDirs.make("openclaw-tilde-outside-");

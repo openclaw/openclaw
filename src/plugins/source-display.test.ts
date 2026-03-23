@@ -69,6 +69,7 @@ describe("formatPluginSourceForTable", () => {
       {
         OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(ignoredHome, "ignored-bundled"),
         OPENCLAW_STATE_DIR: path.join(ignoredHome, "ignored-state"),
+        OPENCLAW_HOME: undefined,
         HOME: ignoredHome,
       },
       () =>
@@ -76,6 +77,7 @@ describe("formatPluginSourceForTable", () => {
           env: {
             ...process.env,
             HOME: homeDir,
+            OPENCLAW_HOME: undefined,
             OPENCLAW_BUNDLED_PLUGINS_DIR: "~/bundled",
             OPENCLAW_STATE_DIR: "~/state",
           },

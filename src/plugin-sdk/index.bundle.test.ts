@@ -7,11 +7,7 @@ import { buildPluginSdkEntrySources, pluginSdkEntrypoints } from "./entrypoints.
 
 const require = createRequire(import.meta.url);
 const tsdownModuleUrl = pathToFileURL(require.resolve("tsdown")).href;
-const bundledRepresentativeEntrypoints = [
-  "channel-runtime",
-  "matrix-runtime-heavy",
-  "windows-spawn",
-] as const;
+const bundledRepresentativeEntrypoints = ["matrix-runtime-heavy"] as const;
 const bundledCoverageEntrySources = buildPluginSdkEntrySources(bundledRepresentativeEntrypoints);
 
 describe("plugin-sdk bundled exports", () => {

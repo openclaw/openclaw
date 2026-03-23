@@ -6,6 +6,8 @@ const DEFAULT_OPENAI_IMAGE_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OUTPUT_MIME = "image/png";
 const DEFAULT_SIZE = "1024x1024";
 const OPENAI_SUPPORTED_SIZES = ["1024x1024", "1024x1536", "1536x1024"] as const;
+// Only advertise ratios we can satisfy exactly with OpenAI's supported size presets.
+const OPENAI_SUPPORTED_ASPECT_RATIOS = ["1:1", "2:3", "3:2"] as const;
 
 type OpenAIImageApiResponse = {
   data?: Array<{
@@ -19,6 +21,24 @@ function resolveOpenAIBaseUrl(cfg: Parameters<typeof resolveApiKeyForProvider>[0
   return direct || DEFAULT_OPENAI_IMAGE_BASE_URL;
 }
 
+function resolveOpenAISize(params: { size?: string; aspectRatio?: string }): string {
+  const explicitSize = params.size?.trim();
+  if (explicitSize) {
+    return explicitSize;
+  }
+
+  switch (params.aspectRatio?.trim()) {
+    case "1:1":
+      return "1024x1024";
+    case "2:3":
+      return "1024x1536";
+    case "3:2":
+      return "1536x1024";
+    default:
+      return DEFAULT_SIZE;
+  }
+}
+
 export function buildOpenAIImageGenerationProvider(): ImageGenerationProviderPlugin {
   return {
     id: "openai",
@@ -29,7 +49,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProviderPlu
       generate: {
         maxCount: 4,
         supportsSize: true,
-        supportsAspectRatio: false,
+        supportsAspectRatio: true,
         supportsResolution: false,
       },
       edit: {
@@ -42,6 +62,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProviderPlu
       },
       geometry: {
         sizes: [...OPENAI_SUPPORTED_SIZES],
+        aspectRatios: [...OPENAI_SUPPORTED_ASPECT_RATIOS],
       },
     },
     async generateImage(req) {
@@ -75,7 +96,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProviderPlu
           model: req.model || DEFAULT_OPENAI_IMAGE_MODEL,
           prompt: req.prompt,
           n: req.count ?? 1,
-          size: req.size ?? DEFAULT_SIZE,
+          size: resolveOpenAISize({ size: req.size, aspectRatio: req.aspectRatio }),
         }),
         signal: controller.signal,
       }).finally(() => {

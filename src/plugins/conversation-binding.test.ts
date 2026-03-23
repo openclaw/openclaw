@@ -7,12 +7,33 @@ import type {
   SessionBindingAdapter,
   SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
-import { createEmptyPluginRegistry } from "./registry-empty.js";
-import { setActivePluginRegistry } from "./runtime.js";
+import type { PluginRegistry } from "./registry.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-binding-"));
 const approvalsPath = path.join(tempRoot, "plugin-binding-approvals.json");
 
+function createPluginRegistryStub(): PluginRegistry {
+  return {
+    plugins: [],
+    tools: [],
+    hooks: [],
+    typedHooks: [],
+    channels: [],
+    channelSetups: [],
+    providers: [],
+    speechProviders: [],
+    mediaUnderstandingProviders: [],
+    imageGenerationProviders: [],
+    webSearchProviders: [],
+    gatewayHandlers: {},
+    httpRoutes: [],
+    cliRegistrars: [],
+    services: [],
+    commands: [],
+    conversationBindingResolvedHandlers: [],
+    diagnostics: [],
+  };
+}
 const sessionBindingState = vi.hoisted(() => {
   const records = new Map<string, SessionBindingRecord>();
   let nextId = 1;
@@ -83,6 +104,10 @@ const sessionBindingState = vi.hoisted(() => {
   };
 });
 
+const pluginRuntimeState = vi.hoisted(() => ({
+  registry: createPluginRegistryStub(),
+}));
+
 vi.mock("../infra/home-dir.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/home-dir.js")>();
   return {
@@ -96,6 +121,13 @@ vi.mock("../infra/home-dir.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./runtime.js", () => ({
+  getActivePluginRegistry: () => pluginRuntimeState.registry,
+  setActivePluginRegistry: (registry: PluginRegistry) => {
+    pluginRuntimeState.registry = registry;
+  },
+}));
+
 const {
   __testing,
   buildPluginBindingApprovalCustomId,
@@ -107,6 +139,7 @@ const {
 } = await import("./conversation-binding.js");
 const { registerSessionBindingAdapter, unregisterSessionBindingAdapter } =
   await import("../infra/outbound/session-binding-service.js");
+const { setActivePluginRegistry } = await import("./runtime.js");
 
 type PluginBindingRequest = Awaited<ReturnType<typeof requestPluginConversationBinding>>;
 type ConversationBindingModule = typeof import("./conversation-binding.js");
@@ -174,7 +207,7 @@ describe("plugin conversation binding approvals", () => {
   beforeEach(() => {
     sessionBindingState.reset();
     __testing.reset();
-    setActivePluginRegistry(createEmptyPluginRegistry());
+    setActivePluginRegistry(createPluginRegistryStub());
     fs.rmSync(approvalsPath, { force: true });
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "default" });
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "work" });
@@ -499,7 +532,7 @@ describe("plugin conversation binding approvals", () => {
   });
 
   it("notifies the owning plugin when a bind approval is approved", async () => {
-    const registry = createEmptyPluginRegistry();
+    const registry = createPluginRegistryStub();
     const onResolved = vi.fn(async () => undefined);
     registry.conversationBindingResolvedHandlers.push({
       pluginId: "codex",
@@ -558,7 +591,7 @@ describe("plugin conversation binding approvals", () => {
   });
 
   it("notifies the owning plugin when a bind approval is denied", async () => {
-    const registry = createEmptyPluginRegistry();
+    const registry = createPluginRegistryStub();
     const onResolved = vi.fn(async () => undefined);
     registry.conversationBindingResolvedHandlers.push({
       pluginId: "codex",
@@ -613,7 +646,7 @@ describe("plugin conversation binding approvals", () => {
   });
 
   it("does not wait for an approved bind callback before returning", async () => {
-    const registry = createEmptyPluginRegistry();
+    const registry = createPluginRegistryStub();
     const callbackGate = createDeferredVoid();
     const onResolved = vi.fn(async () => callbackGate.promise);
     registry.conversationBindingResolvedHandlers.push({
@@ -664,7 +697,7 @@ describe("plugin conversation binding approvals", () => {
   });
 
   it("does not wait for a denied bind callback before returning", async () => {
-    const registry = createEmptyPluginRegistry();
+    const registry = createPluginRegistryStub();
     const callbackGate = createDeferredVoid();
     const onResolved = vi.fn(async () => callbackGate.promise);
     registry.conversationBindingResolvedHandlers.push({

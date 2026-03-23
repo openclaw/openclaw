@@ -56,6 +56,33 @@ const createManager = (calls: CallRecord[]) => {
   return { manager, endCall, processEvent };
 };
 
+function hasPort(value: unknown): value is { port: number | string } {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const maybeAddress = value as { port?: unknown };
+  return typeof maybeAddress.port === "number" || typeof maybeAddress.port === "string";
+}
+
+function requireBoundRequestUrl(server: VoiceCallWebhookServer, baseUrl: string) {
+  const address = (
+    server as unknown as { server?: { address?: () => unknown } }
+  ).server?.address?.();
+  if (!hasPort(address) || !address.port) {
+    throw new Error("voice webhook server did not expose a bound port");
+  }
+  const requestUrl = new URL(baseUrl);
+  requestUrl.port = String(address.port);
+  return requestUrl;
+}
+
+function expectWebhookUrl(url: string, expectedPath: string) {
+  const parsed = new URL(url);
+  expect(parsed.pathname).toBe(expectedPath);
+  expect(parsed.port).not.toBe("");
+  expect(parsed.port).not.toBe("0");
+}
+
 async function runStaleCallReaperCase(params: {
   callAgeMs: number;
   staleCallReaperSeconds: number;
@@ -79,13 +106,7 @@ async function runStaleCallReaperCase(params: {
 }
 
 async function postWebhookForm(server: VoiceCallWebhookServer, baseUrl: string, body: string) {
-  const address = (
-    server as unknown as { server?: { address?: () => unknown } }
-  ).server?.address?.();
-  const requestUrl = new URL(baseUrl);
-  if (address && typeof address === "object" && "port" in address && address.port) {
-    requestUrl.port = String(address.port);
-  }
+  const requestUrl = requireBoundRequestUrl(server, baseUrl);
   return await fetch(requestUrl.toString(), {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -154,13 +175,7 @@ describe("VoiceCallWebhookServer path matching", () => {
 
     try {
       const baseUrl = await server.start();
-      const address = (
-        server as unknown as { server?: { address?: () => unknown } }
-      ).server?.address?.();
-      const requestUrl = new URL(baseUrl);
-      if (address && typeof address === "object" && "port" in address && address.port) {
-        requestUrl.port = String(address.port);
-      }
+      const requestUrl = requireBoundRequestUrl(server, baseUrl);
       requestUrl.pathname = "/voice/webhook-evil";
 
       const response = await fetch(requestUrl.toString(), {
@@ -245,11 +260,19 @@ describe("VoiceCallWebhookServer replay handling", () => {
 
       expect(response.status).toBe(200);
       expect(parseWebhookEvent).toHaveBeenCalledTimes(1);
-      expect(parseWebhookEvent.mock.calls[0]?.[1]).toEqual({
+      const parseOptions = parseWebhookEvent.mock.calls[0]?.[1];
+      if (!parseOptions) {
+        throw new Error("webhook server did not pass verified parse options");
+      }
+      expect(parseOptions).toEqual({
         verifiedRequestKey: "verified:req:123",
       });
       expect(processEvent).toHaveBeenCalledTimes(1);
-      expect(processEvent.mock.calls[0]?.[0]?.dedupeKey).toBe("verified:req:123");
+      const firstEvent = processEvent.mock.calls[0]?.[0];
+      if (!firstEvent) {
+        throw new Error("webhook server did not forward the parsed event");
+      }
+      expect(firstEvent.dedupeKey).toBe("verified:req:123");
     } finally {
       await server.stop();
     }
@@ -316,11 +339,10 @@ describe("VoiceCallWebhookServer start idempotency", () => {
       const secondUrl = await server.start();
 
       // Dynamic port allocations should resolve to a real listening port.
-      expect(firstUrl).toContain("/voice/webhook");
-      expect(firstUrl).not.toContain(":0/");
+      expectWebhookUrl(firstUrl, "/voice/webhook");
       // Idempotent re-start should return the same already-bound URL.
       expect(secondUrl).toBe(firstUrl);
-      expect(secondUrl).toContain("/voice/webhook");
+      expectWebhookUrl(secondUrl, "/voice/webhook");
     } finally {
       await server.stop();
     }
@@ -332,12 +354,12 @@ describe("VoiceCallWebhookServer start idempotency", () => {
     const server = new VoiceCallWebhookServer(config, manager, provider);
 
     const firstUrl = await server.start();
-    expect(firstUrl).toContain("/voice/webhook");
+    expectWebhookUrl(firstUrl, "/voice/webhook");
     await server.stop();
 
     // After stopping, a new start should succeed
     const secondUrl = await server.start();
-    expect(secondUrl).toContain("/voice/webhook");
+    expectWebhookUrl(secondUrl, "/voice/webhook");
     await server.stop();
   });
 
@@ -426,7 +448,9 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
         onConnect?: (providerCallId: string, streamSid: string) => void;
       };
     };
-    expect(mediaHandler).toBeTruthy();
+    if (!mediaHandler) {
+      throw new Error("expected webhook server to expose a media stream handler");
+    }
 
     mediaHandler.config.onConnect?.("CA-stream-1", "MZ-new");
     mediaHandler.config.onDisconnect?.("CA-stream-1", "MZ-old");

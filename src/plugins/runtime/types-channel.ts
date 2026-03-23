@@ -178,14 +178,9 @@ export type PluginRuntimeChannel = {
       clearReplyMarkup: (
         chatIdInput: string | number,
         messageIdInput: string | number,
-        opts?: {
-          token?: string;
-          accountId?: string;
-          verbose?: boolean;
-          api?: Partial<import("grammy").Bot["api"]>;
-          retry?: import("../../infra/retry.js").RetryConfig;
-          cfg?: ReturnType<typeof import("../../config/config.js").loadConfig>;
-        },
+        opts?: Parameters<
+          typeof import("../../plugin-sdk/telegram.js").editMessageReplyMarkupTelegram
+        >[3],
       ) => Promise<{ ok: true; messageId: string; chatId: string }>;
       deleteMessage: typeof import("../../plugin-sdk/telegram.js").deleteMessageTelegram;
       renameTopic: typeof import("../../plugin-sdk/telegram.js").renameForumTopicTelegram;

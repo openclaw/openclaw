@@ -43,7 +43,7 @@ Each program specifies:
 The agent loads these instructions every session via the workspace bootstrap files (see [Agent Workspace](/concepts/agent-workspace) for the full list of auto-injected files) and executes against them, combined with [cron jobs](/automation/cron-jobs) for time-based enforcement.
 
 <Tip>
-Put standing orders in `AGENTS.md` to guarantee they're loaded every session. The workspace bootstrap automatically injects `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, and `MEMORY.md` — but not arbitrary files in subdirectories.
+Put standing orders in `AGENTS.md` to guarantee they're loaded every session. The workspace bootstrap automatically injects `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, and `MEMORY.md` — but not arbitrary files in subdirectories.
 </Tip>
 
 ## Anatomy of a Standing Order
@@ -86,7 +86,7 @@ Agent: Reads standing orders → executes steps → reports results
 The cron job prompt should reference the standing order rather than duplicating it:
 
 ```bash
-openclaw cron create \
+openclaw cron add \
   --name daily-inbox-triage \
   --cron "0 8 * * 1-5" \
   --tz America/New_York \

@@ -67,6 +67,93 @@ describe("OpenAI image-generation provider", () => {
     });
   });
 
+  it("maps supported aspect ratios onto OpenAI size presets", async () => {
+    vi.spyOn(modelAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "sk-test",
+      source: "env",
+      mode: "api-key",
+    });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [{ b64_json: Buffer.from("png-data").toString("base64") }],
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-1.5",
+      prompt: "draw a portrait",
+      aspectRatio: "2:3",
+      cfg: {},
+      authStore: { version: 1, profiles: {} },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.openai.com/v1/images/generations",
+      expect.objectContaining({
+        body: JSON.stringify({
+          model: "gpt-image-1.5",
+          prompt: "draw a portrait",
+          n: 1,
+          size: "1024x1536",
+        }),
+      }),
+    );
+  });
+
+  it("advertises only exact aspect ratios supported by OpenAI size presets", () => {
+    const provider = buildOpenAIImageGenerationProvider();
+    const geometry = provider.capabilities.geometry;
+
+    expect(provider.capabilities.generate.supportsAspectRatio).toBe(true);
+    expect(geometry).toBeDefined();
+    if (!geometry) {
+      throw new Error("expected OpenAI image generation geometry capabilities");
+    }
+    expect(geometry.aspectRatios).toEqual(["1:1", "2:3", "3:2"]);
+  });
+
+  it("prefers an explicit size over aspect ratio mapping", async () => {
+    vi.spyOn(modelAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "sk-test",
+      source: "env",
+      mode: "api-key",
+    });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [{ b64_json: Buffer.from("png-data").toString("base64") }],
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-1.5",
+      prompt: "draw a landscape",
+      size: "1024x1024",
+      aspectRatio: "16:9",
+      cfg: {},
+      authStore: { version: 1, profiles: {} },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.openai.com/v1/images/generations",
+      expect.objectContaining({
+        body: JSON.stringify({
+          model: "gpt-image-1.5",
+          prompt: "draw a landscape",
+          n: 1,
+          size: "1024x1024",
+        }),
+      }),
+    );
+  });
+
   it("rejects reference-image edits for now", async () => {
     const provider = buildOpenAIImageGenerationProvider();
 

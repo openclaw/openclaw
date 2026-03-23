@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempHome } from "../../../test/helpers/temp-home.js";
 import type { OpenClawConfig } from "../config.js";
+import { resolveStorePath } from "./paths.js";
 import {
   resolveAllAgentSessionStoreTargets,
   resolveAllAgentSessionStoreTargetsSync,
@@ -91,15 +92,11 @@ describe("resolveSessionStoreTargets", () => {
     expect(targets).toEqual([
       {
         agentId: "main",
-        storePath: path.resolve(
-          path.join(process.env.HOME ?? "", ".openclaw/agents/main/sessions/sessions.json"),
-        ),
+        storePath: resolveStorePath(cfg.session?.store, { agentId: "main", env: process.env }),
       },
       {
         agentId: "work",
-        storePath: path.resolve(
-          path.join(process.env.HOME ?? "", ".openclaw/agents/work/sessions/sessions.json"),
-        ),
+        storePath: resolveStorePath(cfg.session?.store, { agentId: "work", env: process.env }),
       },
     ]);
   });

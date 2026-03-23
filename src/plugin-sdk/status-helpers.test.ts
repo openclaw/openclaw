@@ -4,6 +4,7 @@ import {
   buildBaseChannelStatusSummary,
   buildComputedAccountStatusSnapshot,
   buildRuntimeAccountStatusSnapshot,
+  createComputedAccountStatusAdapter,
   buildTokenChannelStatusSummary,
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
@@ -66,6 +67,28 @@ describe("buildBaseChannelStatusSummary", () => {
       lastError: "boom",
     });
   });
+
+  it("merges extra fields into the normalized channel summary", () => {
+    expect(
+      buildBaseChannelStatusSummary(
+        {
+          configured: true,
+        },
+        {
+          mode: "webhook",
+          secretSource: "env",
+        },
+      ),
+    ).toEqual({
+      configured: true,
+      mode: "webhook",
+      secretSource: "env",
+      running: false,
+      lastStartAt: null,
+      lastStopAt: null,
+      lastError: null,
+    });
+  });
 });
 
 describe("buildBaseAccountStatusSnapshot", () => {
@@ -86,6 +109,34 @@ describe("buildBaseAccountStatusSnapshot", () => {
       probe: undefined,
       lastInboundAt: null,
       lastOutboundAt: null,
+    });
+  });
+
+  it("merges extra snapshot fields after the shared account shape", () => {
+    expect(
+      buildBaseAccountStatusSnapshot(
+        {
+          account: { accountId: "default", configured: true },
+        },
+        {
+          connected: true,
+          mode: "polling",
+        },
+      ),
+    ).toEqual({
+      accountId: "default",
+      name: undefined,
+      enabled: undefined,
+      configured: true,
+      running: false,
+      lastStartAt: null,
+      lastStopAt: null,
+      lastError: null,
+      probe: undefined,
+      lastInboundAt: null,
+      lastOutboundAt: null,
+      connected: true,
+      mode: "polling",
     });
   });
 });
@@ -112,6 +163,77 @@ describe("buildComputedAccountStatusSnapshot", () => {
       lastOutboundAt: null,
     });
   });
+
+  it("merges computed extras after the shared fields", () => {
+    expect(
+      buildComputedAccountStatusSnapshot(
+        {
+          accountId: "default",
+          configured: true,
+        },
+        {
+          connected: true,
+        },
+      ),
+    ).toEqual({
+      accountId: "default",
+      name: undefined,
+      enabled: undefined,
+      configured: true,
+      running: false,
+      lastStartAt: null,
+      lastStopAt: null,
+      lastError: null,
+      probe: undefined,
+      lastInboundAt: null,
+      lastOutboundAt: null,
+      connected: true,
+    });
+  });
+});
+
+describe("createComputedAccountStatusAdapter", () => {
+  it("builds account snapshots from computed account metadata and extras", () => {
+    const status = createComputedAccountStatusAdapter<
+      { accountId: string; enabled: boolean; profileUrl: string },
+      { ok: boolean }
+    >({
+      defaultRuntime: createDefaultChannelRuntimeState("default"),
+      resolveAccountSnapshot: ({ account, runtime, probe }) => ({
+        accountId: account.accountId,
+        enabled: account.enabled,
+        configured: true,
+        extra: {
+          profileUrl: account.profileUrl,
+          connected: runtime?.running ?? false,
+          probe,
+        },
+      }),
+    });
+
+    expect(
+      status.buildAccountSnapshot?.({
+        account: { accountId: "default", enabled: true, profileUrl: "https://example.test" },
+        cfg: {} as never,
+        runtime: { accountId: "default", running: true },
+        probe: { ok: true },
+      }),
+    ).toEqual({
+      accountId: "default",
+      name: undefined,
+      enabled: true,
+      configured: true,
+      running: true,
+      lastStartAt: null,
+      lastStopAt: null,
+      lastError: null,
+      probe: { ok: true },
+      lastInboundAt: null,
+      lastOutboundAt: null,
+      profileUrl: "https://example.test",
+      connected: true,
+    });
+  });
 });
 
 describe("buildRuntimeAccountStatusSnapshot", () => {
@@ -122,6 +244,17 @@ describe("buildRuntimeAccountStatusSnapshot", () => {
       lastStopAt: null,
       lastError: null,
       probe: undefined,
+    });
+  });
+
+  it("merges extra fields into runtime snapshots", () => {
+    expect(buildRuntimeAccountStatusSnapshot({}, { port: 3978 })).toEqual({
+      running: false,
+      lastStartAt: null,
+      lastStopAt: null,
+      lastError: null,
+      probe: undefined,
+      port: 3978,
     });
   });
 });

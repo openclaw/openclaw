@@ -85,6 +85,22 @@
       "destination": "/tools/perplexity-search"
     },
     {
+      "source": "/web-fetch",
+      "destination": "/tools/web-fetch"
+    },
+    {
+      "source": "/gemini-search",
+      "destination": "/tools/gemini-search"
+    },
+    {
+      "source": "/grok-search",
+      "destination": "/tools/grok-search"
+    },
+    {
+      "source": "/kimi-search",
+      "destination": "/tools/kimi-search"
+    },
+    {
       "source": "/tts",
       "destination": "/tools/tts"
     },
@@ -1037,12 +1053,29 @@
                 "group": "Plugins",
                 "pages": [
                   "tools/plugin",
-                  "plugins/building-plugins",
                   "plugins/community",
                   "plugins/bundles",
-                  "plugins/manifest",
-                  "plugins/sdk-migration",
-                  "plugins/architecture"
+                  {
+                    "group": "Building Plugins",
+                    "pages": [
+                      "plugins/building-plugins",
+                      "plugins/sdk-channel-plugins",
+                      "plugins/sdk-provider-plugins",
+                      "plugins/sdk-migration"
+                    ]
+                  },
+                  {
+                    "group": "SDK Reference",
+                    "pages": [
+                      "plugins/sdk-overview",
+                      "plugins/sdk-entrypoints",
+                      "plugins/sdk-runtime",
+                      "plugins/sdk-setup",
+                      "plugins/sdk-testing",
+                      "plugins/manifest",
+                      "plugins/architecture"
+                    ]
+                  }
                 ]
               },
               {
@@ -1075,12 +1108,26 @@
                 "pages": [
                   "tools/apply-patch",
                   {
-                    "group": "Browser",
+                    "group": "Web Browser",
                     "pages": [
                       "tools/browser",
                       "tools/browser-login",
                       "tools/browser-linux-troubleshooting",
                       "tools/browser-wsl2-windows-remote-cdp-troubleshooting"
+                    ]
+                  },
+                  {
+                    "group": "Web Tools",
+                    "pages": [
+                      "tools/web-fetch",
+                      "tools/web",
+                      "tools/brave-search",
+                      "tools/firecrawl",
+                      "tools/gemini-search",
+                      "tools/grok-search",
+                      "tools/kimi-search",
+                      "tools/perplexity-search",
+                      "tools/tavily"
                     ]
                   },
                   "tools/btw",
@@ -1093,17 +1140,7 @@
                   "tools/loop-detection",
                   "tools/pdf",
                   "tools/reactions",
-                  "tools/thinking",
-                  {
-                    "group": "Web and search",
-                    "pages": [
-                      "tools/web",
-                      "tools/brave-search",
-                      "tools/firecrawl",
-                      "tools/perplexity-search",
-                      "tools/tavily"
-                    ]
-                  }
+                  "tools/thinking"
                 ]
               },
               {

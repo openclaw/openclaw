@@ -2,11 +2,13 @@ import { randomUUID } from "node:crypto";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
 import { primeConfiguredBindingRegistry } from "../channels/plugins/binding-registry.js";
 import type { loadConfig } from "../config/config.js";
+import { resolveGatewayStartupPluginIds } from "../plugins/channel-plugin-ids.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { setGatewaySubagentRuntime } from "../plugins/runtime/index.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import type { ErrorShape } from "./protocol/index.js";
@@ -32,18 +34,10 @@ type FallbackGatewayContextState = {
   context: GatewayRequestContext | undefined;
 };
 
-const fallbackGatewayContextState = (() => {
-  const globalState = globalThis as typeof globalThis & {
-    [FALLBACK_GATEWAY_CONTEXT_STATE_KEY]?: FallbackGatewayContextState;
-  };
-  const existing = globalState[FALLBACK_GATEWAY_CONTEXT_STATE_KEY];
-  if (existing) {
-    return existing;
-  }
-  const created: FallbackGatewayContextState = { context: undefined };
-  globalState[FALLBACK_GATEWAY_CONTEXT_STATE_KEY] = created;
-  return created;
-})();
+const fallbackGatewayContextState = resolveGlobalSingleton<FallbackGatewayContextState>(
+  FALLBACK_GATEWAY_CONTEXT_STATE_KEY,
+  () => ({ context: undefined }),
+);
 
 export function setFallbackGatewayContext(ctx: GatewayRequestContext): void {
   // TODO: This startup snapshot can become stale if runtime config/context changes.
@@ -65,20 +59,12 @@ const PLUGIN_SUBAGENT_POLICY_STATE_KEY: unique symbol = Symbol.for(
   "openclaw.pluginSubagentOverridePolicyState",
 );
 
-const pluginSubagentPolicyState: PluginSubagentPolicyState = (() => {
-  const globalState = globalThis as typeof globalThis & {
-    [PLUGIN_SUBAGENT_POLICY_STATE_KEY]?: PluginSubagentPolicyState;
-  };
-  const existing = globalState[PLUGIN_SUBAGENT_POLICY_STATE_KEY];
-  if (existing) {
-    return existing;
-  }
-  const created: PluginSubagentPolicyState = {
+const pluginSubagentPolicyState = resolveGlobalSingleton<PluginSubagentPolicyState>(
+  PLUGIN_SUBAGENT_POLICY_STATE_KEY,
+  () => ({
     policies: {},
-  };
-  globalState[PLUGIN_SUBAGENT_POLICY_STATE_KEY] = created;
-  return created;
-})();
+  }),
+);
 
 function normalizeAllowedModelRef(raw: string): string | null {
   const trimmed = raw.trim();
@@ -408,6 +394,11 @@ export function loadGatewayPlugins(params: {
   const pluginRegistry = loadOpenClawPlugins({
     config: params.cfg,
     workspaceDir: params.workspaceDir,
+    onlyPluginIds: resolveGatewayStartupPluginIds({
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+      env: process.env,
+    }),
     logger: {
       info: (msg) => params.log.info(msg),
       warn: (msg) => params.log.warn(msg),

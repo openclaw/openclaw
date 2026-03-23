@@ -79,6 +79,21 @@ const createRecordedSendActivity = (
 
 const REVOCATION_ERROR = "Cannot perform 'set' on a proxy that has been revoked";
 
+function requireConversationId(ref: { conversation?: { id?: string } }) {
+  if (!ref.conversation?.id) {
+    throw new Error("expected Teams top-level send to preserve conversation id");
+  }
+  return ref.conversation.id;
+}
+
+function requireSentMessage(sent: Array<{ text?: string; entities?: unknown[] }>) {
+  const firstSent = sent[0];
+  if (!firstSent?.text) {
+    throw new Error("expected Teams message send to include rendered text");
+  }
+  return firstSent;
+}
+
 const createFallbackAdapter = (proactiveSent: string[]): MSTeamsAdapter => ({
   continueConversation: async (_appId, _reference, logic) => {
     await logic({
@@ -222,7 +237,7 @@ describe("msteams messenger", () => {
         conversation?: { id?: string };
       };
       expect(ref.activityId).toBeUndefined();
-      expect(ref.conversation?.id).toBe("19:abc@thread.tacv2");
+      expect(requireConversationId(ref)).toBe("19:abc@thread.tacv2");
     });
 
     it("preserves parsed mentions when appending OneDrive fallback file links", async () => {
@@ -262,11 +277,12 @@ describe("msteams messenger", () => {
         expect(ids).toEqual(["id:one"]);
         expect(graphUploadMockState.uploadAndShareOneDrive).toHaveBeenCalledOnce();
         expect(sent).toHaveLength(1);
-        expect(sent[0]?.text).toContain("Hello <at>John</at>");
-        expect(sent[0]?.text).toContain(
+        const firstSent = requireSentMessage(sent);
+        expect(firstSent.text).toContain("Hello <at>John</at>");
+        expect(firstSent.text).toContain(
           "📎 [upload.txt](https://onedrive.example.com/share/item123)",
         );
-        expect(sent[0]?.entities).toEqual([
+        expect(firstSent.entities).toEqual([
           {
             type: "mention",
             text: "<at>John</at>",

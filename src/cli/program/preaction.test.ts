@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const setVerboseMock = vi.fn();
 const emitCliBannerMock = vi.fn();
@@ -36,6 +36,15 @@ vi.mock("../plugin-registry.js", () => ({
   ensurePluginRegistryLoaded: ensurePluginRegistryLoadedMock,
 }));
 
+const mockedModuleIds = [
+  "../../globals.js",
+  "../../runtime.js",
+  "../banner.js",
+  "../cli-name.js",
+  "./config-guard.js",
+  "../plugin-registry.js",
+];
+
 let registerPreActionHooks: typeof import("./preaction.js").registerPreActionHooks;
 let originalProcessArgv: string[];
 let originalProcessTitle: string;
@@ -44,6 +53,13 @@ let originalHideBanner: string | undefined;
 
 beforeAll(async () => {
   ({ registerPreActionHooks } = await import("./preaction.js"));
+});
+
+afterAll(() => {
+  for (const id of mockedModuleIds) {
+    vi.doUnmock(id);
+  }
+  vi.resetModules();
 });
 
 beforeEach(() => {
