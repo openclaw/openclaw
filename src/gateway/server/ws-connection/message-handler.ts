@@ -542,7 +542,8 @@ export function attachGatewayWsMessageHandler(params: {
           if (
             !device &&
             (decision.kind !== "allow" ||
-              (!preserveInsecureLocalControlUiScopes &&
+              (!controlUiAuthPolicy.allowBypass &&
+                !preserveInsecureLocalControlUiScopes &&
                 (authMethod === "token" || authMethod === "password" || trustedProxyAuthOk)))
           ) {
             clearUnboundScopes();
