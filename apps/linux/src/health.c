@@ -54,102 +54,104 @@ static gchar** build_standard_argv(const gchar **prefix, const gchar *subcommand
     return (gchar **)g_ptr_array_free(arr, FALSE);
 }
 
-static gchar** resolve_openclaw_argv(const gchar *subcommand) {
-    // Deterministic 4-tier executable resolution strategy:
-    // Priority 1: Use systemd's ExecStart parsing if available (most reliable, matches what daemon runs)
-    // Priority 2: Use build-tree repo-local sibling binary (for dev/test environments)
-    // Priority 3: Fallback to PATH resolution using typical npm prefix paths
-    // Priority 4: Hardcoded generic fallback
-
+static gchar** resolve_from_systemd(const gchar *subcommand) {
     SystemdState *sys = state_get_systemd();
-    if (sys && sys->exec_start_argv && g_strv_length(sys->exec_start_argv) > 0) {
-        gint len = g_strv_length(sys->exec_start_argv);
-        gint gateway_idx = -1;
-        
-        for (gint i = 0; i < len; i++) {
-            if (g_strcmp0(sys->exec_start_argv[i], "gateway") == 0) {
-                gateway_idx = i;
-                break;
-            }
-        }
+    if (!sys || !sys->exec_start_argv || g_strv_length(sys->exec_start_argv) == 0) {
+        return NULL;
+    }
 
-        if (gateway_idx >= 0) {
-            GPtrArray *arr = g_ptr_array_new();
-            // Copy prefix up to and including 'gateway'
-            for (gint i = 0; i <= gateway_idx; i++) {
-                g_ptr_array_add(arr, g_strdup(sys->exec_start_argv[i]));
-            }
-            
-            // Insert subcommand
-            if (subcommand) {
-                g_ptr_array_add(arr, g_strdup(subcommand));
-                if (g_strcmp0(subcommand, "status") == 0) {
-                    g_ptr_array_add(arr, g_strdup("--json"));
-                }
-            }
-            
-            // Explicit allowlist: we preserve only specific service context flags,
-            // avoiding unsupported `run` flags that crash `status` or `probe`.
-            for (gint i = gateway_idx + 1; i < len; i++) {
-                const gchar *arg = sys->exec_start_argv[i];
-                if (gateway_arg_should_be_forwarded(arg)) {
-                    g_ptr_array_add(arr, g_strdup(arg));
-                    if (i + 1 < len) {
-                        g_ptr_array_add(arr, g_strdup(sys->exec_start_argv[i + 1]));
-                        i++; // Skip the value since we just consumed it
-                    }
-                }
-            }
-            
-            g_ptr_array_add(arr, NULL);
-            return (gchar **)g_ptr_array_free(arr, FALSE);
+    gint len = g_strv_length(sys->exec_start_argv);
+    gint gateway_idx = -1;
+    
+    for (gint i = 0; i < len; i++) {
+        if (g_strcmp0(sys->exec_start_argv[i], "gateway") == 0) {
+            gateway_idx = i;
+            break;
         }
     }
 
-    // Priority 2: Repo-local (with bounded upward search to tolerate Meson build directories)
-    g_autofree gchar *exe_path = g_file_read_link("/proc/self/exe", NULL);
-    if (exe_path) {
-        gchar *current_dir = g_path_get_dirname(exe_path);
-        gboolean found_local = FALSE;
-        gchar *local_js = NULL;
-        
-        for (int depth = 0; depth < 5; depth++) {
-            local_js = g_build_filename(current_dir, "dist", "index.js", NULL);
-            if (g_file_test(local_js, G_FILE_TEST_EXISTS)) {
-                found_local = TRUE;
-                break;
-            }
-            g_free(local_js);
-            local_js = NULL;
-            
-            gchar *parent_dir = g_path_get_dirname(current_dir);
-            if (g_strcmp0(current_dir, parent_dir) == 0) {
-                g_free(parent_dir);
-                break; // Reached root
-            }
-            g_free(current_dir);
-            current_dir = parent_dir;
+    if (gateway_idx >= 0) {
+        GPtrArray *arr = g_ptr_array_new();
+        // Copy prefix up to and including 'gateway'
+        for (gint i = 0; i <= gateway_idx; i++) {
+            g_ptr_array_add(arr, g_strdup(sys->exec_start_argv[i]));
         }
         
-        g_free(current_dir);
+        // Insert subcommand
+        if (subcommand) {
+            g_ptr_array_add(arr, g_strdup(subcommand));
+            if (g_strcmp0(subcommand, "status") == 0) {
+                g_ptr_array_add(arr, g_strdup("--json"));
+            }
+        }
         
-        if (found_local && local_js) {
-            const gchar *prefix[] = {"node", local_js, NULL};
-            gchar **new_argv = build_standard_argv(prefix, subcommand);
-            g_free(local_js);
-            return new_argv;
+        // Explicit allowlist: we preserve only specific service context flags,
+        // avoiding unsupported `run` flags that crash `status` or `probe`.
+        for (gint i = gateway_idx + 1; i < len; i++) {
+            const gchar *arg = sys->exec_start_argv[i];
+            if (gateway_arg_should_be_forwarded(arg)) {
+                g_ptr_array_add(arr, g_strdup(arg));
+                if (i + 1 < len) {
+                    g_ptr_array_add(arr, g_strdup(sys->exec_start_argv[i + 1]));
+                    i++; // Skip the value since we just consumed it
+                }
+            }
+        }
+        
+        g_ptr_array_add(arr, NULL);
+        return (gchar **)g_ptr_array_free(arr, FALSE);
+    }
+    return NULL;
+}
+
+static gchar** resolve_from_repo_local(const gchar *subcommand) {
+    g_autofree gchar *exe_path = g_file_read_link("/proc/self/exe", NULL);
+    if (!exe_path) return NULL;
+
+    gchar *current_dir = g_path_get_dirname(exe_path);
+    gboolean found_local = FALSE;
+    gchar *local_js = NULL;
+    
+    for (int depth = 0; depth < 5; depth++) {
+        local_js = g_build_filename(current_dir, "dist", "index.js", NULL);
+        if (g_file_test(local_js, G_FILE_TEST_EXISTS)) {
+            found_local = TRUE;
+            break;
         }
         g_free(local_js);
+        local_js = NULL;
+        
+        gchar *parent_dir = g_path_get_dirname(current_dir);
+        if (g_strcmp0(current_dir, parent_dir) == 0) {
+            g_free(parent_dir);
+            break; // Reached root
+        }
+        g_free(current_dir);
+        current_dir = parent_dir;
     }
+    
+    g_free(current_dir);
+    
+    if (found_local && local_js) {
+        const gchar *prefix[] = {"node", local_js, NULL};
+        gchar **new_argv = build_standard_argv(prefix, subcommand);
+        g_free(local_js);
+        return new_argv;
+    }
+    g_free(local_js);
+    return NULL;
+}
 
-    // Priority 3: PATH
+static gchar** resolve_from_path(const gchar *subcommand) {
     g_autofree gchar *path_bin = g_find_program_in_path("openclaw");
     if (path_bin) {
         const gchar *prefix[] = {path_bin, NULL};
         return build_standard_argv(prefix, subcommand);
     }
+    return NULL;
+}
 
-    // Priority 4: Hardcoded
+static gchar** resolve_from_npm_global(const gchar *subcommand) {
     const gchar *home_dir = g_get_home_dir();
     if (home_dir) {
         g_autofree gchar *npm_path = g_build_filename(home_dir, ".npm-global", "bin", "openclaw", NULL);
@@ -158,6 +160,22 @@ static gchar** resolve_openclaw_argv(const gchar *subcommand) {
             return build_standard_argv(prefix, subcommand);
         }
     }
+    return NULL;
+}
+
+static gchar** resolve_openclaw_argv(const gchar *subcommand) {
+    // Deterministic 4-tier executable resolution strategy:
+    gchar **argv = resolve_from_systemd(subcommand);
+    if (argv) return argv;
+
+    argv = resolve_from_repo_local(subcommand);
+    if (argv) return argv;
+
+    argv = resolve_from_path(subcommand);
+    if (argv) return argv;
+
+    argv = resolve_from_npm_global(subcommand);
+    if (argv) return argv;
 
     // Fallback
     const gchar *prefix[] = {"openclaw", NULL};
