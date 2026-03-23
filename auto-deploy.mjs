@@ -2,7 +2,7 @@
 
 // 自动部署脚本
 
-import { execSync, exec } from "child_process";
+import { execSync } from "child_process";
 import { dirname, resolve } from "path";
 import { fileURLToPath, readFileSync } from "url";
 
