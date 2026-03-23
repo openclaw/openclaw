@@ -106,8 +106,15 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
 - The publish run must be started manually with `workflow_dispatch`.
 - Both release workflows accept `preflight_only=true` to run CI
   validation/build steps without entering the gated publish job.
+- `preflight_only=true` on the npm workflow is also the right way to validate an
+  existing tag after publish; it should keep running the build checks even when
+  the npm version is already published.
+- Validation-only runs may be dispatched from a branch when you are testing a
+  workflow change before merge.
 - npm preflight and macOS preflight must both pass before any publish run
   starts.
+- Real publish runs must be dispatched from `main`; branch-dispatched publish
+  attempts should fail before the protected environment is reached.
 - The release workflows stay tag-based; rely on the documented release sequence
   rather than workflow-level SHA pinning.
 - The `npm-release` environment must be approved by `@openclaw/openclaw-release-managers` before publish continues.
