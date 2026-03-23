@@ -75,7 +75,7 @@ function truncateErrorReason(error: string): string {
   // "https://s3.amazonaws.com/bucket/file.pdf" are not partially matched
   // by the filesystem-path regex.
   cleaned = cleaned.replace(/data:[a-zA-Z0-9/+._-]*[;,]\S*/g, "<data-uri>");
-  cleaned = cleaned.replace(/https?:\/\/\S+/g, "<url>");
+  cleaned = cleaned.replace(/(?:https?|wss?):\/\/\S+/g, "<url>");
   // Scrub absolute filesystem paths — any Unix path with 2+ segments and
   // Windows drive-letter roots (C:\...) — to avoid leaking sandbox/host
   // directory structure in non-verbose mode (#46592).
@@ -89,7 +89,9 @@ function truncateErrorReason(error: string): string {
   // Windows paths may contain spaces (e.g. "C:\Users\Jane Doe\...") and parens
   // ("C:\Program Files (x86)\..."), so consume until end-of-string or a
   // delimiter that cannot appear in a path context.
-  cleaned = cleaned.replace(/[A-Z]:\\[\w\\. ()+-]+(?:\\[\w\\. ()+-]+)*/g, "<path>");
+  cleaned = cleaned.replace(/[A-Za-z]:\\[\w\\. ()+-]+(?:\\[\w\\. ()+-]+)*/g, "<path>");
+  // UNC paths (\\server\share\...)
+  cleaned = cleaned.replace(/\\\\[\w.-]+(?:\\[\w. ()+-]+)+/g, "<path>");
   // Scrub session keys that may embed channel-specific PII such as phone
   // numbers or chat IDs (e.g. "agent:main:whatsapp:direct:+15555550123").
   // P2 review thread on #46592.
