@@ -65,6 +65,11 @@ function buildQverisSection(params: {
   const hasInspect = params.availableTools.has("qveris_inspect");
   const hasWebSearch = params.availableTools.has("web_search");
   const hasWebFetch = params.availableTools.has("web_fetch");
+  const availableQverisTools = [
+    "qveris_discover",
+    ...(hasInvoke ? ["qveris_call"] : []),
+    ...(hasInspect ? ["qveris_inspect"] : []),
+  ];
   const qverisExecutionLine = hasInvoke
     ? "   -> Prefer qveris_discover + qveris_call. Specialized APIs/services return precise structured data or service outputs from dedicated providers."
     : "   -> Use qveris_discover to identify the best specialized API/service available in this session. If qveris_call is unavailable here, report the limitation honestly instead of promising a tool call you cannot make.";
@@ -113,6 +118,20 @@ function buildQverisSection(params: {
     webResearchLine,
     `${hasInspect ? "6" : "5"}. **None of the above?**`,
     "   -> Report the limitation honestly. Never fabricate data.",
+    "",
+    "QVeris access rules (CRITICAL):",
+    `- In this session, use only these QVeris tools: ${availableQverisTools.join(", ")}.`,
+    hasInvoke
+      ? "- NEVER call QVeris discovery/invocation endpoints directly (for example /search, /tools/execute, /tools/by-ids). Use qveris_discover/qveris_call instead."
+      : "- NEVER call QVeris discovery/invocation endpoints directly (for example /search, /tools/execute, /tools/by-ids). Use qveris_discover only, and report honestly when execution is unavailable in this session.",
+    hasInvoke
+      ? "- Exception: if qveris_call returns full_content_file_url, follow the large-data instructions below to download that returned file URL."
+      : undefined,
+    "- NEVER guess or hardcode QVeris API base URLs — endpoint resolution is handled internally by the tools.",
+    "- NEVER reveal or print the value of QVERIS_API_KEY — authentication is handled internally by the tools.",
+    hasInvoke
+      ? "- If qveris_call fails, follow the error recovery steps below. Do NOT bypass the workflow with raw API requests."
+      : undefined,
     "",
     "qveris_discover anti-patterns (NEVER do these):",
     "- Searching for software configuration or setup instructions",

@@ -63,6 +63,20 @@ describe("classifyQverisError", () => {
     expect(result.error_type).toBe("network_error");
     expect(result.detail).toBe("something weird");
   });
+
+  it("includes default workflow note when no opts supplied", () => {
+    const result = classifyQverisError(new Error("fetch failed: ECONNREFUSED"));
+    expect(result.note).toContain("Stay inside the QVeris tool workflow");
+    expect(result.note).toContain("Never call /search");
+    expect(result.note).toContain("QVERIS_API_KEY");
+  });
+
+  it("uses caller-provided workflow note when supplied", () => {
+    const result = classifyQverisError(new Error("fetch failed: ECONNREFUSED"), {
+      note: "custom recovery note",
+    });
+    expect(result.note).toBe("custom recovery note");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -313,6 +327,7 @@ describe("createQverisTools", () => {
     const parsed = parseToolResult(result);
     expect(parsed.success).toBe(false);
     expect(parsed.error_type).toBe("json_parse_error");
+    expect(String(parsed.note)).toContain("Stay inside the QVeris tool workflow");
   });
 
   it("qveris_call auto-resolves search_id from discover tracker on repeated calls", async () => {
@@ -382,6 +397,9 @@ describe("createQverisTools", () => {
     expect(parsed.success).toBe(false);
     expect(parsed.error_type).toBe("tool_not_discovered");
     expect(String(parsed.detail)).toContain("not been discovered");
+    expect(String(parsed.detail)).toContain("/search or /tools/execute");
+    expect(String(parsed.note)).toContain("Stay inside the QVeris tool workflow");
+    expect(String(parsed.note)).toContain("Never call /search");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -431,6 +449,7 @@ describe("createQverisTools", () => {
     expect(parsed1.success).toBe(false);
     expect(parsed1.recovery_step).toBe("fix_params");
     expect(parsed1.attempt_number).toBe(1);
+    expect(String(parsed1.note)).toContain("Stay inside the QVeris tool workflow");
 
     const result2 = await invoke.execute("call-2", {
       tool_id: "tool-x",

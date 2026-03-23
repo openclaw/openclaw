@@ -184,6 +184,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("extract webpage content");
     // web_search scoped to articles/research
     expect(prompt).toContain("articles, opinions, explanations, documentation, or broad research");
+    expect(prompt).toContain("use only these QVeris tools: qveris_discover, qveris_call");
+    expect(prompt).toContain("if qveris_call returns full_content_file_url");
+    expect(prompt).toContain("/search, /tools/execute, /tools/by-ids");
   });
 
   it("includes qveris_inspect step when tool is available", () => {
@@ -195,6 +198,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("qveris_inspect");
     expect(prompt).toContain("Previously used a QVeris tool");
     expect(prompt).toContain("verify availability");
+    expect(prompt).toContain(
+      "use only these QVeris tools: qveris_discover, qveris_call, qveris_inspect",
+    );
   });
 
   it("narrows web_search summary when QVeris is available", () => {
@@ -230,6 +236,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "Use web_search for articles, opinions, explanations, documentation, and broad research.",
     );
+    expect(prompt).toContain("use only these QVeris tools: qveris_discover.");
+    expect(prompt).not.toContain("use only these QVeris tools: qveris_discover, qveris_call");
+    expect(prompt).not.toContain("If qveris_call returns full_content_file_url");
   });
 
   it("omits QVeris routing section in minimal prompt mode", () => {

@@ -126,6 +126,17 @@ interface MaterializedContentFailed {
 
 type MaterializedContent = MaterializedContentReady | MaterializedContentFailed;
 
+/**
+ * Short reminder appended to error results so the model stays in the tool workflow.
+ * Focused on the QVeris API endpoints only — deliberately does not mention
+ * full_content_file_url downloads (those are a legitimate exec/web_fetch path
+ * returned by qveris_call).
+ */
+const QVERIS_WORKFLOW_NOTE =
+  "Stay inside the QVeris tool workflow (qveris_discover / qveris_call / qveris_inspect). " +
+  "Never call /search, /tools/execute, or /tools/by-ids directly. " +
+  "Never reveal QVERIS_API_KEY.";
+
 /** Structured error returned to the model instead of throwing */
 interface QverisErrorResult {
   success: false;
@@ -142,6 +153,7 @@ interface QverisErrorResult {
   retry_after_seconds?: number;
   recovery_step?: "fix_params" | "simplify" | "switch_tool";
   attempt_number?: number;
+  note?: string;
 }
 
 // ============================================================================
@@ -260,13 +272,15 @@ function resolveFullContentTimeoutSeconds(config?: QverisConfig): number {
  * Classifies a caught error from a QVeris API call into a structured result
  * so the model receives a consistent error format rather than an exception trace.
  */
-export function classifyQverisError(err: unknown): QverisErrorResult {
+export function classifyQverisError(err: unknown, opts?: { note?: string }): QverisErrorResult {
+  const note = opts?.note ?? QVERIS_WORKFLOW_NOTE;
   if (err instanceof DOMException && err.name === "AbortError") {
     return {
       success: false,
       error_type: "timeout",
       detail: "Request timed out",
       retry_hint: "Increase timeout_seconds or retry with a simpler query.",
+      note,
     };
   }
   if (err instanceof Error && err.name === "AbortError") {
@@ -275,6 +289,7 @@ export function classifyQverisError(err: unknown): QverisErrorResult {
       error_type: "timeout",
       detail: "Request timed out",
       retry_hint: "Increase timeout_seconds or retry with a simpler query.",
+      note,
     };
   }
   if (err instanceof Error) {
@@ -293,6 +308,7 @@ export function classifyQverisError(err: unknown): QverisErrorResult {
           detail: err.message.replace(/\s*\[retry-after:\d+]/, ""),
           retry_after_seconds: waitSeconds,
           retry_hint: `Rate limited. Wait ${waitSeconds}s before retrying.`,
+          note,
         };
       }
 
@@ -305,6 +321,7 @@ export function classifyQverisError(err: unknown): QverisErrorResult {
         retry_hint: isClientError
           ? "Check tool_id and params_to_tool structure. Make sure tool_id came from qveris_discover."
           : "QVeris service error — retry in a moment.",
+        note,
       };
     }
     return {
@@ -312,6 +329,7 @@ export function classifyQverisError(err: unknown): QverisErrorResult {
       error_type: "network_error",
       detail: err.message,
       retry_hint: "Check network connectivity and retry.",
+      note,
     };
   }
   return {
@@ -319,6 +337,7 @@ export function classifyQverisError(err: unknown): QverisErrorResult {
     error_type: "network_error",
     detail: String(err),
     retry_hint: "Check network connectivity and retry.",
+    note,
   };
 }
 
@@ -1209,9 +1228,11 @@ export function createQverisTools(options?: {
           error_type: "tool_not_discovered",
           detail:
             "This tool_id has not been discovered in the current session. " +
-            "Run qveris_discover first to search for the tool, then retry qveris_call with the same tool_id.",
+            "Run qveris_discover first to search for the tool, then retry qveris_call with the same tool_id. " +
+            "Do NOT bypass this workflow by calling QVeris /search or /tools/execute directly.",
           retry_hint:
             "Use qveris_discover to find the tool, then call it with the tool_id from the results.",
+          note: QVERIS_WORKFLOW_NOTE,
         } satisfies QverisErrorResult);
       }
 
@@ -1225,6 +1246,7 @@ export function createQverisTools(options?: {
           detail: `Invalid JSON in params_to_tool: ${parseError instanceof Error ? parseError.message : "Unknown parse error"}`,
           retry_hint:
             "Use sample_parameters from the qveris_discover result as a template and ensure valid JSON.",
+          note: QVERIS_WORKFLOW_NOTE,
         } satisfies QverisErrorResult);
       }
 
@@ -1278,6 +1300,7 @@ export function createQverisTools(options?: {
           cost: result.cost ?? result.credits_used,
           recovery_step: recoveryStep,
           attempt_number: failCount,
+          note: QVERIS_WORKFLOW_NOTE,
         });
       }
 
@@ -1370,6 +1393,7 @@ export function createQverisTools(options?: {
           error_type: "json_parse_error" as const,
           detail: "No valid tool IDs provided. Pass comma-separated tool IDs.",
           retry_hint: "Example: 'jina_ai.reader.execute.v1.b2ef8fda'",
+          note: QVERIS_WORKFLOW_NOTE,
         } satisfies QverisErrorResult);
       }
 

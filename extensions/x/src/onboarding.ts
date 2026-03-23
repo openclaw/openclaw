@@ -1,10 +1,7 @@
-import type { ChannelOnboardingAdapter, OpenClawConfig } from "openclaw/plugin-sdk/x";
-import {
-  promptAccountId,
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-  formatDocsLink,
-} from "openclaw/plugin-sdk/x";
+import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup-runtime";
+import { createStandardChannelSetupStatus } from "openclaw/plugin-sdk/setup-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/x";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId, formatDocsLink } from "openclaw/plugin-sdk/x";
 import { getXChannel } from "./runtime.js";
 
 const channel = "x" as const;
@@ -83,24 +80,34 @@ function writeAccountConfig(params: {
   };
 }
 
-export const xOnboardingAdapter: ChannelOnboardingAdapter = {
+function isXConfigured(cfg: OpenClawConfig): boolean {
+  const xChannel = getXChannel();
+  return xChannel
+    .listXAccountIds(cfg)
+    .some((accountId: string) =>
+      xChannel.isXAccountConfigured(xChannel.resolveXAccount(cfg, accountId)),
+    );
+}
+
+/**
+ * Proper ChannelSetupWizard for X. The previous implementation wrongly assigned
+ * a ChannelSetupWizardAdapter (flat getStatus/configure shape) to the setupWizard
+ * slot via an unsafe `as unknown` cast, causing a crash on wizard.status.resolveConfigured.
+ */
+export const xSetupWizard: ChannelSetupWizard = {
   channel,
-  getStatus: async ({ cfg }) => {
-    const xChannel = getXChannel();
-    const configured = xChannel
-      .listXAccountIds(cfg)
-      .some((accountId: string) =>
-        xChannel.isXAccountConfigured(xChannel.resolveXAccount(cfg, accountId)),
-      );
-    return {
-      channel,
-      configured,
-      statusLines: [`X (Twitter): ${configured ? "configured" : "needs API credentials"}`],
-      selectionHint: configured ? "configured · credentials present" : "new · add credentials",
-      quickstartScore: configured ? 1 : 10,
-    };
-  },
-  configure: async ({ cfg, prompter, accountOverrides, shouldPromptAccountIds }) => {
+  status: createStandardChannelSetupStatus({
+    channelLabel: "X (Twitter)",
+    configuredLabel: "configured",
+    unconfiguredLabel: "needs API credentials",
+    configuredHint: "configured · credentials present",
+    unconfiguredHint: "new · add credentials",
+    configuredScore: 1,
+    unconfiguredScore: 10,
+    resolveConfigured: ({ cfg }) => isXConfigured(cfg),
+  }),
+  credentials: [],
+  finalize: async ({ cfg, prompter, options }) => {
     const xChannel = getXChannel();
     await prompter.note(
       [
@@ -111,19 +118,11 @@ export const xOnboardingAdapter: ChannelOnboardingAdapter = {
       "X credentials",
     );
 
-    const xOverride = accountOverrides.x?.trim();
+    const xOverride = (
+      options as Record<string, Record<string, string>> | undefined
+    )?.accountOverrides?.x?.trim();
     const defaultAccountId = xChannel.defaultAccountId ?? DEFAULT_ACCOUNT_ID;
     let xAccountId = xOverride ? normalizeAccountId(xOverride) : defaultAccountId;
-    if (shouldPromptAccountIds && !xOverride) {
-      xAccountId = await promptAccountId({
-        cfg,
-        prompter,
-        label: "X",
-        currentId: xAccountId,
-        listAccountIds: (nextCfg) => xChannel.listXAccountIds(nextCfg),
-        defaultAccountId,
-      });
-    }
 
     const existing = xChannel.resolveXAccount(cfg, xAccountId);
     const hasExistingCreds = xChannel.isXAccountConfigured(existing);
@@ -185,8 +184,6 @@ export const xOnboardingAdapter: ChannelOnboardingAdapter = {
         placeholder: "http://127.0.0.1:7890",
       });
 
-      // Prompt for X user IDs used in allowFrom / actionsAllowFrom.
-      // These control who can mention the bot and who can trigger proactive actions.
       const existingAllowFrom = existing?.allowFrom ?? [];
       const existingActionsAllowFrom = existing?.actionsAllowFrom ?? [];
       const allowFromInput = await prompter.text({
@@ -243,7 +240,7 @@ export const xOnboardingAdapter: ChannelOnboardingAdapter = {
       };
     }
 
-    return { cfg: next, accountId: xAccountId };
+    return { cfg: next, credentialValues: {} };
   },
   disable: (cfg) => ({
     ...cfg,
