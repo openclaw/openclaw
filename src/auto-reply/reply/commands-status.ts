@@ -29,6 +29,29 @@ import type { CommandContext } from "./commands-types.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
 import { resolveSubagentLabel } from "./subagents-utils.js";
 
+// Some usage endpoints only work with CLI/session OAuth tokens, not API keys.
+// Skip those probes when the active auth mode cannot satisfy the endpoint.
+const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
+  "anthropic",
+  "github-copilot",
+  "google-gemini-cli",
+  "openai-codex",
+]);
+
+function shouldLoadUsageSummary(params: {
+  provider?: string;
+  selectedModelAuth?: string;
+}): boolean {
+  if (!params.provider) {
+    return false;
+  }
+  if (!USAGE_OAUTH_ONLY_PROVIDERS.has(params.provider)) {
+    return true;
+  }
+  const auth = params.selectedModelAuth?.trim().toLowerCase();
+  return Boolean(auth?.startsWith("oauth") || auth?.startsWith("token"));
+}
+
 export async function buildStatusReply(params: {
   cfg: OpenClawConfig;
   command: CommandContext;
@@ -78,6 +101,25 @@ export async function buildStatusReply(params: {
     ? resolveSessionAgentId({ sessionKey, config: cfg })
     : resolveDefaultAgentId(cfg);
   const statusAgentDir = resolveAgentDir(cfg, statusAgentId);
+  const modelRefs = resolveSelectedAndActiveModel({
+    selectedProvider: provider,
+    selectedModel: model,
+    sessionEntry,
+  });
+  const selectedModelAuth = resolveModelAuthLabel({
+    provider,
+    cfg,
+    sessionEntry,
+    agentDir: statusAgentDir,
+  });
+  const activeModelAuth = modelRefs.activeDiffers
+    ? resolveModelAuthLabel({
+        provider: modelRefs.active.provider,
+        cfg,
+        sessionEntry,
+        agentDir: statusAgentDir,
+      })
+    : selectedModelAuth;
   const currentUsageProvider = (() => {
     try {
       return resolveUsageProviderId(provider);
@@ -86,12 +128,32 @@ export async function buildStatusReply(params: {
     }
   })();
   let usageLine: string | null = null;
-  if (currentUsageProvider) {
+  if (
+    currentUsageProvider &&
+    shouldLoadUsageSummary({
+      provider: currentUsageProvider,
+      selectedModelAuth,
+    })
+  ) {
     try {
-      const usageSummary = await loadProviderUsageSummary({
-        timeoutMs: 3500,
-        providers: [currentUsageProvider],
-        agentDir: statusAgentDir,
+      const usageSummaryTimeoutMs = 3500;
+      let usageTimeout: NodeJS.Timeout | undefined;
+      const usageSummary = await Promise.race([
+        loadProviderUsageSummary({
+          timeoutMs: usageSummaryTimeoutMs,
+          providers: [currentUsageProvider],
+          agentDir: statusAgentDir,
+        }),
+        new Promise<never>((_, reject) => {
+          usageTimeout = setTimeout(
+            () => reject(new Error("usage summary timeout")),
+            usageSummaryTimeoutMs,
+          );
+        }),
+      ]).finally(() => {
+        if (usageTimeout) {
+          clearTimeout(usageTimeout);
+        }
       });
       const usageEntry = usageSummary.providers[0];
       if (usageEntry && !usageEntry.error && usageEntry.windows.length > 0) {
@@ -143,25 +205,6 @@ export async function buildStatusReply(params: {
   const groupActivation = isGroup
     ? (normalizeGroupActivation(sessionEntry?.groupActivation) ?? defaultGroupActivation())
     : undefined;
-  const modelRefs = resolveSelectedAndActiveModel({
-    selectedProvider: provider,
-    selectedModel: model,
-    sessionEntry,
-  });
-  const selectedModelAuth = resolveModelAuthLabel({
-    provider,
-    cfg,
-    sessionEntry,
-    agentDir: statusAgentDir,
-  });
-  const activeModelAuth = modelRefs.activeDiffers
-    ? resolveModelAuthLabel({
-        provider: modelRefs.active.provider,
-        cfg,
-        sessionEntry,
-        agentDir: statusAgentDir,
-      })
-    : selectedModelAuth;
   const agentDefaults = cfg.agents?.defaults ?? {};
   const effectiveFastMode =
     resolvedFastMode ??
@@ -186,6 +229,10 @@ export async function buildStatusReply(params: {
       elevatedDefault: agentDefaults.elevatedDefault,
     },
     agentId: statusAgentId,
+    explicitConfiguredContextTokens:
+      typeof agentDefaults.contextTokens === "number" && agentDefaults.contextTokens > 0
+        ? agentDefaults.contextTokens
+        : undefined,
     sessionEntry,
     sessionKey,
     parentSessionKey,

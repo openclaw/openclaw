@@ -42,6 +42,10 @@ vi.mock("./fetch.js", () => ({
 }));
 
 vi.mock("grammy", () => ({
+  API_CONSTANTS: {
+    DEFAULT_UPDATE_TYPES: ["message"],
+    ALL_UPDATE_TYPES: ["message"],
+  },
   Bot: class {
     api = botApi;
     catch = vi.fn();
@@ -52,15 +56,16 @@ vi.mock("grammy", () => ({
       botCtorSpy(token, options);
     }
   },
+  GrammyError: class GrammyError extends Error {
+    description = "";
+  },
   InputFile: class {},
 }));
 
-import {
-  deleteMessageTelegram,
-  reactMessageTelegram,
-  resetTelegramClientOptionsCacheForTests,
-  sendMessageTelegram,
-} from "./send.js";
+let deleteMessageTelegram: typeof import("./send.js").deleteMessageTelegram;
+let reactMessageTelegram: typeof import("./send.js").reactMessageTelegram;
+let resetTelegramClientOptionsCacheForTests: typeof import("./send.js").resetTelegramClientOptionsCacheForTests;
+let sendMessageTelegram: typeof import("./send.js").sendMessageTelegram;
 
 describe("telegram proxy client", () => {
   const proxyUrl = "http://proxy.test:8080";
@@ -84,7 +89,14 @@ describe("telegram proxy client", () => {
     );
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({
+      deleteMessageTelegram,
+      reactMessageTelegram,
+      resetTelegramClientOptionsCacheForTests,
+      sendMessageTelegram,
+    } = await import("./send.js"));
     resetTelegramClientOptionsCacheForTests();
     vi.unstubAllEnvs();
     botApi.sendMessage.mockResolvedValue({ message_id: 1, chat: { id: "123" } });

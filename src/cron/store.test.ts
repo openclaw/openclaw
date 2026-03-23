@@ -113,6 +113,30 @@ describe("cron store", () => {
     expect(JSON.parse(backupRaw)).toEqual(first);
   });
 
+  it("skips backup files for runtime-only state churn", async () => {
+    const store = await makeStorePath();
+    const first = makeStore("job-1", true);
+    const second: CronStoreFile = {
+      ...first,
+      jobs: first.jobs.map((job) => ({
+        ...job,
+        updatedAtMs: job.updatedAtMs + 60_000,
+        state: {
+          ...job.state,
+          nextRunAtMs: job.createdAtMs + 60_000,
+          lastRunAtMs: job.createdAtMs + 30_000,
+        },
+      })),
+    };
+
+    await saveCronStore(store.storePath, first);
+    await saveCronStore(store.storePath, second);
+
+    const currentRaw = await fs.readFile(store.storePath, "utf-8");
+    expect(JSON.parse(currentRaw)).toEqual(second);
+    await expect(fs.stat(`${store.storePath}.bak`)).rejects.toThrow();
+  });
+
   it.skipIf(process.platform === "win32")(
     "writes store and backup files with secure permissions",
     async () => {

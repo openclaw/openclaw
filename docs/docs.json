@@ -85,6 +85,30 @@
       "destination": "/tools/perplexity-search"
     },
     {
+      "source": "/web-fetch",
+      "destination": "/tools/web-fetch"
+    },
+    {
+      "source": "/duckduckgo-search",
+      "destination": "/tools/duckduckgo-search"
+    },
+    {
+      "source": "/exa-search",
+      "destination": "/tools/exa-search"
+    },
+    {
+      "source": "/gemini-search",
+      "destination": "/tools/gemini-search"
+    },
+    {
+      "source": "/grok-search",
+      "destination": "/tools/grok-search"
+    },
+    {
+      "source": "/kimi-search",
+      "destination": "/tools/kimi-search"
+    },
+    {
       "source": "/tts",
       "destination": "/tools/tts"
     },
@@ -926,6 +950,7 @@
                 "pages": [
                   "install/updating",
                   "install/migrating",
+                  "install/migrating-matrix",
                   "install/uninstall",
                   "install/development-channels"
                 ]
@@ -955,8 +980,8 @@
                   "channels/nextcloud-talk",
                   "channels/nostr",
                   "channels/signal",
-                  "channels/synology-chat",
                   "channels/slack",
+                  "channels/synology-chat",
                   "channels/telegram",
                   "channels/tlon",
                   "channels/twitch",
@@ -1037,24 +1062,29 @@
                 "group": "Plugins",
                 "pages": [
                   "tools/plugin",
-                  "plugins/building-plugins",
                   "plugins/community",
                   "plugins/bundles",
-                  "plugins/manifest",
-                  "plugins/sdk-migration",
-                  "plugins/architecture"
-                ]
-              },
-              {
-                "group": "Plugin SDK",
-                "pages": [
-                  "plugins/sdk-overview",
-                  "plugins/sdk-entrypoints",
-                  "plugins/sdk-runtime",
-                  "plugins/sdk-setup",
-                  "plugins/sdk-channel-plugins",
-                  "plugins/sdk-provider-plugins",
-                  "plugins/sdk-testing"
+                  {
+                    "group": "Building Plugins",
+                    "pages": [
+                      "plugins/building-plugins",
+                      "plugins/sdk-channel-plugins",
+                      "plugins/sdk-provider-plugins",
+                      "plugins/sdk-migration"
+                    ]
+                  },
+                  {
+                    "group": "SDK Reference",
+                    "pages": [
+                      "plugins/sdk-overview",
+                      "plugins/sdk-entrypoints",
+                      "plugins/sdk-runtime",
+                      "plugins/sdk-setup",
+                      "plugins/sdk-testing",
+                      "plugins/manifest",
+                      "plugins/architecture"
+                    ]
+                  }
                 ]
               },
               {
@@ -1087,12 +1117,28 @@
                 "pages": [
                   "tools/apply-patch",
                   {
-                    "group": "Browser",
+                    "group": "Web Browser",
                     "pages": [
                       "tools/browser",
                       "tools/browser-login",
                       "tools/browser-linux-troubleshooting",
                       "tools/browser-wsl2-windows-remote-cdp-troubleshooting"
+                    ]
+                  },
+                  {
+                    "group": "Web Tools",
+                    "pages": [
+                      "tools/web-fetch",
+                      "tools/web",
+                      "tools/brave-search",
+                      "tools/duckduckgo-search",
+                      "tools/exa-search",
+                      "tools/firecrawl",
+                      "tools/gemini-search",
+                      "tools/grok-search",
+                      "tools/kimi-search",
+                      "tools/perplexity-search",
+                      "tools/tavily"
                     ]
                   },
                   "tools/btw",
@@ -1105,17 +1151,7 @@
                   "tools/loop-detection",
                   "tools/pdf",
                   "tools/reactions",
-                  "tools/thinking",
-                  {
-                    "group": "Web and search",
-                    "pages": [
-                      "tools/web",
-                      "tools/brave-search",
-                      "tools/firecrawl",
-                      "tools/perplexity-search",
-                      "tools/tavily"
-                    ]
-                  }
+                  "tools/thinking"
                 ]
               },
               {
@@ -1145,25 +1181,26 @@
                 "pages": [
                   "providers/anthropic",
                   "providers/bedrock",
-                  "providers/cloudflare-ai-gateway",
                   "providers/claude-max-api-proxy",
+                  "providers/cloudflare-ai-gateway",
                   "providers/deepgram",
+                  "providers/deepseek",
                   "providers/github-copilot",
+                  "providers/glm",
                   "providers/google",
                   "providers/groq",
                   "providers/huggingface",
                   "providers/kilocode",
                   "providers/litellm",
-                  "providers/glm",
                   "providers/minimax",
+                  "providers/mistral",
                   "providers/modelstudio",
                   "providers/moonshot",
-                  "providers/mistral",
                   "providers/nvidia",
                   "providers/ollama",
                   "providers/openai",
-                  "providers/opencode-go",
                   "providers/opencode",
+                  "providers/opencode-go",
                   "providers/openrouter",
                   "providers/perplexity-provider",
                   "providers/qianfan",
@@ -1171,8 +1208,8 @@
                   "providers/sglang",
                   "providers/synthetic",
                   "providers/together",
-                  "providers/vercel-ai-gateway",
                   "providers/venice",
+                  "providers/vercel-ai-gateway",
                   "providers/vllm",
                   "providers/volcengine",
                   "providers/xai",
@@ -1709,7 +1746,6 @@
               {
                 "group": "扩展",
                 "pages": [
-                  "zh-CN/plugins/architecture",
                   "zh-CN/plugins/voice-call",
                   "zh-CN/plugins/zalouser",
                   "zh-CN/plugins/manifest",

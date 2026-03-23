@@ -44,7 +44,7 @@ export function parseArgs(argv) {
     }
     if (arg === "--min-duration-ms") {
       const parsed = Number.parseFloat(argv[i + 1] ?? "");
-      if (Number.isFinite(parsed) && parsed > 0) {
+      if (Number.isFinite(parsed) && parsed >= 0) {
         args.minDurationMs = parsed;
       }
       i += 1;
@@ -52,7 +52,7 @@ export function parseArgs(argv) {
     }
     if (arg === "--min-gain-ms") {
       const parsed = Number.parseFloat(argv[i + 1] ?? "");
-      if (Number.isFinite(parsed) && parsed > 0) {
+      if (Number.isFinite(parsed) && parsed >= 0) {
         args.minGainMs = parsed;
       }
       i += 1;
@@ -80,10 +80,11 @@ export function parseArgs(argv) {
 
 export function getExistingThreadCandidateExclusions(behavior) {
   return new Set([
+    ...(behavior.base?.threadPinned ?? []).map((entry) => entry.file),
+    ...(behavior.base?.threadSingleton ?? []).map((entry) => entry.file),
     ...(behavior.unit?.isolated ?? []).map((entry) => entry.file),
-    ...(behavior.unit?.singletonIsolated ?? []).map((entry) => entry.file),
+    ...(behavior.unit?.threadPinned ?? []).map((entry) => entry.file),
     ...(behavior.unit?.threadSingleton ?? []).map((entry) => entry.file),
-    ...(behavior.unit?.vmForkSingleton ?? []).map((entry) => entry.file),
   ]);
 }
 

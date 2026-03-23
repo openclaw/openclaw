@@ -116,10 +116,10 @@ export function registerBrowserFormWaitEvalCommands(
           },
         });
         if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
+          defaultRuntime.writeJson(result);
           return;
         }
-        defaultRuntime.log(JSON.stringify(result.result ?? null, null, 2));
+        defaultRuntime.writeJson(result.result ?? null);
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);

@@ -77,6 +77,30 @@ function relativePath(repoRoot: string, filePath: string): string {
   return path.relative(repoRoot, filePath).split(path.sep).join(path.posix.sep);
 }
 
+function isAbsoluteImportPath(value: string): boolean {
+  return path.isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value);
+}
+
+function normalizeDeclarationImportSpecifier(repoRoot: string, value: string): string {
+  if (!isAbsoluteImportPath(value)) {
+    return value;
+  }
+
+  const resolvedPath = path.resolve(value);
+  const relative = path.relative(repoRoot, resolvedPath);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    return value;
+  }
+  return relative.split(path.sep).join(path.posix.sep);
+}
+
+function normalizeDeclarationText(repoRoot: string, value: string): string {
+  return value.replaceAll(/import\("([^"]+)"\)/g, (match, specifier: string) => {
+    const normalized = normalizeDeclarationImportSpecifier(repoRoot, specifier);
+    return normalized === specifier ? match : `import("${normalized}")`;
+  });
+}
+
 function createCompilerContext(repoRoot: string) {
   const configPath = ts.findConfigFile(
     repoRoot,
@@ -185,6 +209,7 @@ function resolveSymbolAndDeclaration(
 }
 
 function printNode(
+  repoRoot: string,
   checker: ts.TypeChecker,
   printer: ts.Printer,
   declaration: ts.Declaration,
@@ -194,12 +219,15 @@ function printNode(
     if (signatures.length === 0) {
       return `export function ${declaration.name?.text ?? "anonymous"}();`;
     }
-    return signatures
-      .map(
-        (signature) =>
-          `export function ${declaration.name?.text ?? "anonymous"}${checker.signatureToString(signature)};`,
-      )
-      .join("\n");
+    return normalizeDeclarationText(
+      repoRoot,
+      signatures
+        .map(
+          (signature) =>
+            `export function ${declaration.name?.text ?? "anonymous"}${checker.signatureToString(signature)};`,
+        )
+        .join("\n"),
+    );
   }
 
   if (ts.isVariableDeclaration(declaration)) {
@@ -209,7 +237,10 @@ function printNode(
       declaration.parent && (ts.getCombinedNodeFlags(declaration.parent) & ts.NodeFlags.Const) !== 0
         ? "const"
         : "let";
-    return `export ${prefix} ${name}: ${checker.typeToString(type, declaration, ts.TypeFormatFlags.NoTruncation)};`;
+    return normalizeDeclarationText(
+      repoRoot,
+      `export ${prefix} ${name}: ${checker.typeToString(type, declaration, ts.TypeFormatFlags.NoTruncation)};`,
+    );
   }
 
   if (ts.isInterfaceDeclaration(declaration)) {
@@ -230,11 +261,14 @@ function printNode(
 
   if (ts.isTypeAliasDeclaration(declaration)) {
     const type = checker.getTypeAtLocation(declaration);
-    const rendered = `export type ${declaration.name.text} = ${checker.typeToString(
-      type,
-      declaration,
-      ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.MultilineObjectLiterals,
-    )};`;
+    const rendered = normalizeDeclarationText(
+      repoRoot,
+      `export type ${declaration.name.text} = ${checker.typeToString(
+        type,
+        declaration,
+        ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.MultilineObjectLiterals,
+      )};`,
+    );
     if (rendered.length > 1200) {
       return `export type ${declaration.name.text} = /* see source */`;
     }
@@ -247,9 +281,10 @@ function printNode(
   if (!text) {
     return null;
   }
-  return text.length > 1200
-    ? `${text.slice(0, 1175).trimEnd()}\n/* truncated; see source */`
-    : text;
+  const normalizedText = normalizeDeclarationText(repoRoot, text);
+  return normalizedText.length > 1200
+    ? `${normalizedText.slice(0, 1175).trimEnd()}\n/* truncated; see source */`
+    : normalizedText;
 }
 
 function buildExportSurface(params: {
@@ -262,7 +297,7 @@ function buildExportSurface(params: {
   const { checker, printer, program, repoRoot, symbol } = params;
   const { declaration, resolvedSymbol } = resolveSymbolAndDeclaration(checker, symbol);
   return {
-    declaration: declaration ? printNode(checker, printer, declaration) : null,
+    declaration: declaration ? printNode(repoRoot, checker, printer, declaration) : null,
     exportName: symbol.getName(),
     kind: inferExportKind(resolvedSymbol, declaration),
     source: declaration

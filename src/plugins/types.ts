@@ -905,6 +905,7 @@ export type WebSearchProviderPlugin = {
   id: WebSearchProviderId;
   label: string;
   hint: string;
+  requiresCredential?: boolean;
   credentialLabel?: string;
   envVars: string[];
   placeholder: string;
@@ -971,6 +972,8 @@ export type PluginCommandContext = {
   channelId?: ChannelId;
   /** Whether the sender is on the allowlist */
   isAuthorizedSender: boolean;
+  /** Gateway client scopes for internal control-plane callers */
+  gatewayClientScopes?: string[];
   /** Raw command arguments after the command name */
   args?: string;
   /** The full normalized command body */

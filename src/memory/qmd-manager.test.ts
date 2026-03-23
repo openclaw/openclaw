@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { setTimeout as scheduleNativeTimeout } from "node:timers";
 import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -39,7 +40,7 @@ function createMockChild(params?: { autoClose?: boolean; closeDelayMs?: number }
         child.emit("close", 0);
       });
     } else {
-      setTimeout(() => {
+      scheduleNativeTimeout(() => {
         child.emit("close", 0);
       }, delayMs);
     }
