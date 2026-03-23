@@ -117,6 +117,16 @@ describe("/model chat UX", () => {
     expect(reply?.text).toContain("Switch: /model <provider/model>");
   });
 
+  it("shows structured buttons for poros /model summary", async () => {
+    const reply = await resolveModelInfoReply({ surface: "poros" });
+
+    expect(reply?.text).toContain("Current:");
+    expect(reply?.text).toContain("Tap below to browse models");
+    const buttons = (reply?.channelData as { poros?: { buttons?: unknown[][] } })?.poros?.buttons;
+    expect(buttons).toBeDefined();
+    expect(buttons?.length).toBeGreaterThan(0);
+  });
+
   it("shows active runtime model when different from selected model", async () => {
     const reply = await resolveModelInfoReply({
       provider: "fireworks",

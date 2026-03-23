@@ -1,4 +1,8 @@
 import { logVerbose } from "../../globals.js";
+import {
+  buildStructuredInlineButtonsChannelData,
+  supportsStructuredInlineButtonsSurface,
+} from "../inline-buttons.js";
 import { listSkillCommandsForAgents } from "../skill-commands.js";
 import {
   buildCommandsMessage,
@@ -50,7 +54,7 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
     });
   const surface = params.ctx.Surface;
 
-  if (surface === "telegram") {
+  if (supportsStructuredInlineButtonsSurface(surface)) {
     const result = buildCommandsMessagePaginated(params.cfg, skillCommands, {
       page: 1,
       surface,
@@ -61,15 +65,10 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
         shouldContinue: false,
         reply: {
           text: result.text,
-          channelData: {
-            telegram: {
-              buttons: buildCommandsPaginationKeyboard(
-                result.currentPage,
-                result.totalPages,
-                params.agentId,
-              ),
-            },
-          },
+          channelData: buildStructuredInlineButtonsChannelData(
+            buildCommandsPaginationKeyboard(result.currentPage, result.totalPages, params.agentId),
+            surface,
+          ),
         },
       };
     }

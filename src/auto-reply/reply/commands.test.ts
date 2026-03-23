@@ -1362,6 +1362,31 @@ describe("/models command", () => {
     expect(buttons?.length).toBeGreaterThan(0);
   });
 
+  it("lists providers on poros (buttons)", async () => {
+    const params = buildPolicyParams("/models", cfg, { Provider: "poros", Surface: "poros" });
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toBe("Select a provider:");
+    const buttons = (result.reply?.channelData as { poros?: { buttons?: unknown[][] } })?.poros
+      ?.buttons;
+    expect(buttons).toBeDefined();
+    expect(buttons?.length).toBeGreaterThan(0);
+  });
+
+  it("lists provider models on poros with structured buttons", async () => {
+    const params = buildPolicyParams("/models anthropic", cfg, {
+      Provider: "poros",
+      Surface: "poros",
+    });
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Models (anthropic");
+    const buttons = (result.reply?.channelData as { poros?: { buttons?: unknown[][] } })?.poros
+      ?.buttons;
+    expect(buttons).toBeDefined();
+    expect(buttons?.length).toBeGreaterThan(0);
+  });
+
   it("handles provider model pagination, all mode, and unknown providers", async () => {
     const cases = [
       {
@@ -1464,6 +1489,26 @@ describe("/models command", () => {
     });
 
     expect(result.reply?.text).toContain("localai");
+  });
+});
+
+describe("/commands command", () => {
+  it("renders poros pagination buttons when multiple pages are available", async () => {
+    const cfg = {
+      commands: { text: true, config: false, debug: false },
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
+    } as unknown as OpenClawConfig;
+
+    const result = await handleCommands(
+      buildPolicyParams("/commands", cfg, { Provider: "poros", Surface: "poros" }),
+    );
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("ℹ️ Commands (1/");
+    const buttons = (result.reply?.channelData as { poros?: { buttons?: unknown[][] } })?.poros
+      ?.buttons;
+    expect(buttons).toBeDefined();
+    expect(buttons?.length).toBeGreaterThan(0);
   });
 });
 

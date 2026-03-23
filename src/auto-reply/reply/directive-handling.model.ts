@@ -14,6 +14,10 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { shortenHomePath } from "../../utils.js";
+import {
+  buildStructuredInlineButtonsChannelData,
+  supportsStructuredInlineButtonsSurface,
+} from "../inline-buttons.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveModelsCommandReply } from "./commands-models.js";
@@ -246,12 +250,12 @@ export async function maybeHandleModelDirectiveInfo(params: {
       sessionEntry: params.sessionEntry,
     });
     const current = modelRefs.selected.label;
-    const isTelegram = params.surface === "telegram";
+    const supportsStructuredButtons = supportsStructuredInlineButtonsSurface(params.surface);
     const activeRuntimeLine = modelRefs.activeDiffers
       ? `Active: ${modelRefs.active.label} (runtime)`
       : null;
 
-    if (isTelegram) {
+    if (supportsStructuredButtons) {
       const buttons = buildBrowseProvidersButton();
       return {
         text: [
@@ -264,7 +268,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
         ]
           .filter(Boolean)
           .join("\n"),
-        channelData: { telegram: { buttons } },
+        channelData: buildStructuredInlineButtonsChannelData(buttons, params.surface),
       };
     }
 

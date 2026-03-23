@@ -1303,18 +1303,54 @@ describe("buildCommandsMessagePaginated", () => {
     expect(result.text).toContain("/stop - Stop the current run.");
   });
 
-  it("includes plugin commands in the paginated list", () => {
-    listPluginCommands.mockReturnValue([
-      { name: "plugin_cmd", description: "Plugin command", pluginId: "demo-plugin" },
-    ]);
+  it("formats poros output with pages", () => {
     const result = buildCommandsMessagePaginated(
       {
         commands: { config: false, debug: false },
       } as unknown as OpenClawConfig,
       undefined,
-      { surface: "telegram", page: 99 },
+      { surface: "poros", page: 1 },
     );
-    expect(result.text).toContain("Plugins");
-    expect(result.text).toContain("/plugin_cmd (demo-plugin) - Plugin command");
+    expect(result.text).toContain("ℹ️ Commands (1/");
+    expect(result.text).toContain("Session");
+    expect(result.text).toContain("/stop - Stop the current run.");
+  });
+
+  it("includes plugin commands in the paginated list", () => {
+    vi.resetModules();
+    vi.doMock("../plugins/commands.js", () => ({
+      listPluginCommands: () => [
+        { name: "plugin_cmd", description: "Plugin command", pluginId: "demo-plugin" },
+      ],
+    }));
+
+    return import("./status.js").then(({ buildCommandsMessagePaginated: buildPaginated }) => {
+      const firstPage = buildPaginated(
+        {
+          commands: { config: false, debug: false },
+        } as unknown as OpenClawConfig,
+        undefined,
+        { surface: "telegram", page: 1 },
+      );
+
+      let foundPage = firstPage;
+      for (let page = 1; page <= firstPage.totalPages; page += 1) {
+        const result = buildPaginated(
+          {
+            commands: { config: false, debug: false },
+          } as unknown as OpenClawConfig,
+          undefined,
+          { surface: "telegram", page },
+        );
+        if (result.text.includes("/plugin_cmd (demo-plugin) - Plugin command")) {
+          foundPage = result;
+          break;
+        }
+      }
+
+      expect(foundPage.text).toContain("Plugins");
+      expect(foundPage.text).toContain("/plugin_cmd (demo-plugin) - Plugin command");
+      vi.doUnmock("../plugins/commands.js");
+    });
   });
 });

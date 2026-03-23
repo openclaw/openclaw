@@ -47,6 +47,7 @@ import {
 } from "./commands-registry.js";
 import type { CommandCategory } from "./commands-registry.types.js";
 import { resolveActiveFallbackState } from "./fallback-state.js";
+import { supportsStructuredInlineButtonsSurface } from "./inline-buttons.js";
 import { formatProviderModelRef, resolveSelectedAndActiveModel } from "./model-runtime.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./thinking.js";
 
@@ -973,8 +974,8 @@ export function buildCommandsMessagePaginated(
   options?: CommandsMessageOptions,
 ): CommandsMessageResult {
   const page = Math.max(1, options?.page ?? 1);
-  const surface = options?.surface?.toLowerCase();
-  const isTelegram = surface === "telegram";
+  const surface = options?.surface;
+  const supportsStructuredButtons = supportsStructuredInlineButtonsSurface(surface);
 
   const commands = cfg
     ? listChatCommandsForConfig(cfg, { skillCommands })
@@ -982,7 +983,7 @@ export function buildCommandsMessagePaginated(
   const pluginCommands = listPluginCommands();
   const items = buildCommandItems(commands, pluginCommands);
 
-  if (!isTelegram) {
+  if (!supportsStructuredButtons) {
     const lines = ["ℹ️ Slash commands", ""];
     lines.push(formatCommandList(items));
     return {

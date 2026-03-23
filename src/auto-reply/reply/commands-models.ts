@@ -17,6 +17,10 @@ import {
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import {
+  buildStructuredInlineButtonsChannelData,
+  supportsStructuredInlineButtonsSurface,
+} from "../inline-buttons.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -235,12 +239,11 @@ export async function resolveModelsCommandReply(params: {
   const { provider, page, pageSize, all } = parseModelsArgs(argText);
 
   const { byProvider, providers } = await buildModelsProviderData(params.cfg, params.agentId);
-  const isTelegram = params.surface === "telegram";
+  const supportsStructuredButtons = supportsStructuredInlineButtonsSurface(params.surface);
 
   // Provider list (no provider specified)
   if (!provider) {
-    // For Telegram: show buttons if there are providers
-    if (isTelegram && providers.length > 0) {
+    if (supportsStructuredButtons && providers.length > 0) {
       const providerInfos: ProviderInfo[] = providers.map((p) => ({
         id: p,
         count: byProvider.get(p)?.size ?? 0,
@@ -249,11 +252,10 @@ export async function resolveModelsCommandReply(params: {
       const text = "Select a provider:";
       return {
         text,
-        channelData: { telegram: { buttons } },
+        channelData: buildStructuredInlineButtonsChannelData(buttons, params.surface),
       };
     }
 
-    // Text fallback for non-Telegram surfaces
     const lines: string[] = [
       "Providers:",
       ...providers.map((p) =>
@@ -297,8 +299,7 @@ export async function resolveModelsCommandReply(params: {
     return { text: lines.join("\n") };
   }
 
-  // For Telegram: use button-based model list with inline keyboard pagination
-  if (isTelegram) {
+  if (supportsStructuredButtons) {
     const telegramPageSize = getModelsPageSize();
     const totalPages = calculateTotalPages(total, telegramPageSize);
     const safePage = Math.max(1, Math.min(page, totalPages));
@@ -321,11 +322,10 @@ export async function resolveModelsCommandReply(params: {
     });
     return {
       text,
-      channelData: { telegram: { buttons } },
+      channelData: buildStructuredInlineButtonsChannelData(buttons, params.surface),
     };
   }
 
-  // Text fallback for non-Telegram surfaces
   const effectivePageSize = all ? total : pageSize;
   const pageCount = effectivePageSize > 0 ? Math.ceil(total / effectivePageSize) : 1;
   const safePage = all ? 1 : Math.max(1, Math.min(page, pageCount));
