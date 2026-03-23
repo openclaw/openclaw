@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
 import type { ThemeTransitionContext } from "../theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../theme.ts";
@@ -11,7 +12,7 @@ import {
   schemaType,
   type JsonSchema,
 } from "./config-form.shared.ts";
-import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form.ts";
+import { analyzeConfigSchema, renderConfigForm, getSectionMeta } from "./config-form.ts";
 
 export type ConfigProps = {
   raw: string;
@@ -383,6 +384,59 @@ const SECTION_CATEGORIES: SectionCategory[] = [
 // Flat lookup: all categorised keys
 const CATEGORISED_KEYS = new Set(SECTION_CATEGORIES.flatMap((c) => c.sections.map((s) => s.key)));
 
+const CONFIG_CATEGORY_LABEL_KEYS: Record<string, string> = {
+  core: "configNav.categories.core",
+  ai: "configNav.categories.ai",
+  communication: "configNav.categories.communication",
+  automation: "configNav.categories.automation",
+  infrastructure: "configNav.categories.infrastructure",
+  appearance: "configNav.categories.appearance",
+  other: "configNav.categories.other",
+};
+
+const CONFIG_SECTION_LABEL_KEYS: Record<string, string> = {
+  env: "configNav.sections.env",
+  auth: "configNav.sections.auth",
+  update: "configNav.sections.update",
+  meta: "configNav.sections.meta",
+  logging: "configNav.sections.logging",
+  agents: "configNav.sections.agents",
+  models: "configNav.sections.models",
+  skills: "configNav.sections.skills",
+  tools: "configNav.sections.tools",
+  memory: "configNav.sections.memory",
+  session: "configNav.sections.session",
+  channels: "configNav.sections.channels",
+  messages: "configNav.sections.messages",
+  broadcast: "configNav.sections.broadcast",
+  talk: "configNav.sections.talk",
+  audio: "configNav.sections.audio",
+  commands: "configNav.sections.commands",
+  hooks: "configNav.sections.hooks",
+  bindings: "configNav.sections.bindings",
+  cron: "configNav.sections.cron",
+  approvals: "configNav.sections.approvals",
+  plugins: "configNav.sections.plugins",
+  gateway: "configNav.sections.gateway",
+  web: "configNav.sections.web",
+  browser: "configNav.sections.browser",
+  nodeHost: "configNav.sections.nodeHost",
+  canvasHost: "configNav.sections.canvasHost",
+  discovery: "configNav.sections.discovery",
+  media: "configNav.sections.media",
+  __appearance__: "configNav.sections.appearanceRoot",
+  ui: "configNav.sections.ui",
+  wizard: "configNav.sections.wizard",
+};
+
+function translateConfigLabel(translationKey: string | undefined, fallback: string) {
+  if (!translationKey) {
+    return fallback;
+  }
+  const translated = t(translationKey);
+  return translated === translationKey ? fallback : translated;
+}
+
 function getSectionIcon(key: string) {
   return sidebarIcons[key as keyof typeof sidebarIcons] ?? sidebarIcons.default;
 }
@@ -440,7 +494,7 @@ function resolveSectionMeta(
   label: string;
   description?: string;
 } {
-  const meta = SECTION_META[key];
+  const meta = getSectionMeta(key);
   if (meta) {
     return meta;
   }
@@ -685,9 +739,15 @@ export function renderConfig(props: ConfigProps) {
   const VIRTUAL_SECTIONS = new Set(["__appearance__"]);
   const visibleCategories = SECTION_CATEGORIES.map((cat) => ({
     ...cat,
-    sections: cat.sections.filter(
-      (s) => (includeVirtualSections && VIRTUAL_SECTIONS.has(s.key)) || s.key in schemaProps,
-    ),
+    label: translateConfigLabel(CONFIG_CATEGORY_LABEL_KEYS[cat.id], cat.label),
+    sections: cat.sections
+      .filter(
+        (s) => (includeVirtualSections && VIRTUAL_SECTIONS.has(s.key)) || s.key in schemaProps,
+      )
+      .map((section) => ({
+        ...section,
+        label: translateConfigLabel(CONFIG_SECTION_LABEL_KEYS[section.key], section.label),
+      })),
   })).filter((cat) => cat.sections.length > 0);
 
   // Catch any schema keys not in our categories
@@ -696,7 +756,13 @@ export function renderConfig(props: ConfigProps) {
     .map((k) => ({ key: k, label: k.charAt(0).toUpperCase() + k.slice(1) }));
 
   const otherCategory: SectionCategory | null =
-    extraSections.length > 0 ? { id: "other", label: "Other", sections: extraSections } : null;
+    extraSections.length > 0
+      ? {
+          id: "other",
+          label: translateConfigLabel(CONFIG_CATEGORY_LABEL_KEYS.other, "Other"),
+          sections: extraSections,
+        }
+      : null;
 
   const isVirtualSection =
     includeVirtualSections &&
@@ -717,7 +783,7 @@ export function renderConfig(props: ConfigProps) {
   const effectiveSubsection = null;
 
   const topTabs = [
-    { key: null as string | null, label: props.navRootLabel ?? "Settings" },
+    { key: null as string | null, label: props.navRootLabel ?? t("nav.settings") },
     ...[...visibleCategories, ...(otherCategory ? [otherCategory] : [])].flatMap((cat) =>
       cat.sections.map((s) => ({ key: s.key, label: s.label })),
     ),

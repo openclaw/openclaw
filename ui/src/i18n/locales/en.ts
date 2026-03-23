@@ -133,7 +133,8 @@ export const en: TranslationMap = {
       skills: "Skills",
       recentSessions: "Recent Sessions",
       cronJobs: "{count} jobs",
-      tokensMessages: "{tokens} tokens · {messages} messages",
+      cronFailed: "Failed: {count}",
+      tokensMessages: "{tokens} tokens · {messages} msgs",
       skillsBlocked: "Blocked: {count}",
       skillsActive: "Active: {count}",
     },
@@ -155,6 +156,187 @@ export const en: TranslationMap = {
     palette: {
       placeholder: "Type a command…",
       noResults: "No results",
+      groups: {
+        search: "Search",
+        navigation: "Navigation",
+        skills: "Skills",
+      },
+      items: {
+        overview: "Overview",
+        sessions: "Sessions",
+        scheduled: "Scheduled",
+        skills: "Skills",
+        settings: "Settings",
+        agents: "Agents",
+        shellCommand: "Shell Command",
+        debugMode: "Debug Mode",
+      },
+      descriptions: {
+        runShell: "Run shell",
+        toggleDebug: "Toggle debug",
+      },
+      hints: {
+        navigate: "navigate",
+        select: "select",
+        close: "close",
+      },
+    },
+  },
+  configNav: {
+    categories: {
+      core: "Core",
+      ai: "AI & Agents",
+      communication: "Communication",
+      automation: "Automation",
+      infrastructure: "Infrastructure",
+      appearance: "Appearance",
+      other: "Other",
+    },
+    sections: {
+      env: "Environment",
+      auth: "Authentication",
+      update: "Updates",
+      meta: "Meta",
+      logging: "Logging",
+      agents: "Agents",
+      models: "Models",
+      skills: "Skills",
+      tools: "Tools",
+      memory: "Memory",
+      session: "Session",
+      channels: "Channels",
+      messages: "Messages",
+      broadcast: "Broadcast",
+      talk: "Talk",
+      audio: "Audio",
+      commands: "Commands",
+      hooks: "Hooks",
+      bindings: "Bindings",
+      cron: "Cron",
+      approvals: "Approvals",
+      plugins: "Plugins",
+      gateway: "Gateway",
+      web: "Web",
+      browser: "Browser",
+      nodeHost: "NodeHost",
+      canvasHost: "CanvasHost",
+      discovery: "Discovery",
+      media: "Media",
+      appearanceRoot: "Appearance",
+      ui: "UI",
+      wizard: "Setup Wizard",
+    },
+  },
+  configMeta: {
+    sections: {
+      env: {
+        label: "Environment Variables",
+        description: "Environment variables passed to the gateway process",
+      },
+      update: {
+        label: "Updates",
+        description: "Auto-update settings and release channel",
+      },
+      agents: {
+        label: "Agents",
+        description: "Agent configurations, models, and identities",
+      },
+      auth: {
+        label: "Authentication",
+        description: "API keys and authentication profiles",
+      },
+      channels: {
+        label: "Channels",
+        description: "Messaging channels (Telegram, Discord, Slack, etc.)",
+      },
+      messages: {
+        label: "Messages",
+        description: "Message handling and routing settings",
+      },
+      commands: {
+        label: "Commands",
+        description: "Custom slash commands",
+      },
+      hooks: {
+        label: "Hooks",
+        description: "Webhooks and event hooks",
+      },
+      skills: {
+        label: "Skills",
+        description: "Skill packs and capabilities",
+      },
+      tools: {
+        label: "Tools",
+        description: "Tool configurations (browser, search, etc.)",
+      },
+      gateway: {
+        label: "Gateway",
+        description: "Gateway server settings (port, auth, binding)",
+      },
+      wizard: {
+        label: "Setup Wizard",
+        description: "Setup wizard state and history",
+      },
+      meta: {
+        label: "Metadata",
+        description: "Gateway metadata and version information",
+      },
+      logging: {
+        label: "Logging",
+        description: "Log levels and output configuration",
+      },
+      browser: {
+        label: "Browser",
+        description: "Browser automation settings",
+      },
+      ui: {
+        label: "UI",
+        description: "User interface preferences",
+      },
+      models: {
+        label: "Models",
+        description: "AI model configurations and providers",
+      },
+      bindings: {
+        label: "Bindings",
+        description: "Key bindings and shortcuts",
+      },
+      broadcast: {
+        label: "Broadcast",
+        description: "Broadcast and notification settings",
+      },
+      audio: {
+        label: "Audio",
+        description: "Audio input/output settings",
+      },
+      session: {
+        label: "Session",
+        description: "Session management and persistence",
+      },
+      cron: {
+        label: "Cron",
+        description: "Scheduled tasks and automation",
+      },
+      web: {
+        label: "Web",
+        description: "Web server and API settings",
+      },
+      discovery: {
+        label: "Discovery",
+        description: "Service discovery and networking",
+      },
+      canvasHost: {
+        label: "Canvas Host",
+        description: "Canvas rendering and display",
+      },
+      talk: {
+        label: "Talk",
+        description: "Voice and speech settings",
+      },
+      plugins: {
+        label: "Plugins",
+        description: "Plugin management and extensions",
+      },
     },
   },
   usage: {

@@ -10,6 +10,8 @@ import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelCatalogEntry } from "../types.ts";
 import type { SessionsListResult } from "../types.ts";
 import { renderChat, type ChatProps } from "./chat.ts";
+import { renderCommandPalette } from "./command-palette.ts";
+import { renderConfig, type ConfigProps } from "./config.ts";
 import { renderOverview, type OverviewProps } from "./overview.ts";
 
 function createSessions(): SessionsListResult {
@@ -246,6 +248,53 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
     onRefresh: () => undefined,
     onNavigate: () => undefined,
     onRefreshLogs: () => undefined,
+    ...overrides,
+  };
+}
+
+function createConfigProps(overrides: Partial<ConfigProps> = {}): ConfigProps {
+  return {
+    raw: "{\n}\n",
+    originalRaw: "{\n}\n",
+    valid: true,
+    issues: [],
+    loading: false,
+    saving: false,
+    applying: false,
+    updating: false,
+    connected: true,
+    schema: {
+      type: "object",
+      properties: {},
+    },
+    schemaLoading: false,
+    uiHints: {},
+    formMode: "form",
+    showModeToggle: true,
+    formValue: {},
+    originalValue: {},
+    searchQuery: "",
+    activeSection: null,
+    activeSubsection: null,
+    onRawChange: vi.fn(),
+    onFormModeChange: vi.fn(),
+    onFormPatch: vi.fn(),
+    onSearchChange: vi.fn(),
+    onSectionChange: vi.fn(),
+    onSubsectionChange: vi.fn(),
+    onReload: vi.fn(),
+    onSave: vi.fn(),
+    onApply: vi.fn(),
+    onUpdate: vi.fn(),
+    version: "2026.3.22",
+    theme: "claw",
+    themeMode: "system",
+    setTheme: vi.fn(),
+    setThemeMode: vi.fn(),
+    borderRadius: 50,
+    setBorderRadius: vi.fn(),
+    gatewayUrl: "",
+    assistantName: "OpenClaw",
     ...overrides,
   };
 }
@@ -590,6 +639,116 @@ describe("chat view", () => {
     expect(i18n.t("overview.connection.title")).toBe("Cómo conectarse");
     expect(i18n.t("overview.connection.docsLink")).toBe("Leer la documentación →");
     expect(i18n.t("overview.palette.placeholder")).toBe("Escribe un comando…");
+    expect(i18n.t("overview.cards.cronFailed", { count: "2" })).toBe("Fallidas: 2");
+
+    await i18n.setLocale("en");
+    expect(i18n.t("overview.cards.tokensMessages", { tokens: "345", messages: "7" })).toBe(
+      "345 tokens · 7 msgs",
+    );
+  });
+
+  it("renders localized failed cron hints on overview cards", async () => {
+    const container = document.createElement("div");
+    const props = createOverviewProps({
+      skillsReport: { workspaceDir: "", managedSkillsDir: "", skills: [] },
+      cronJobs: [
+        {
+          id: "job-1",
+          name: "Daily sync",
+          enabled: true,
+          createdAtMs: 0,
+          updatedAtMs: 0,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "main",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "ping" },
+          state: { lastStatus: "error" },
+        },
+      ],
+      cronStatus: {
+        enabled: true,
+        jobs: 1,
+        nextWakeAtMs: null,
+      },
+    });
+
+    await i18n.setLocale("es");
+    render(renderOverview(props), container);
+    await Promise.resolve();
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("Fallidas: 1");
+    expect(text).not.toContain("1 failed");
+
+    await i18n.setLocale("en");
+  });
+
+  it("localizes command palette labels and hints in Spanish", async () => {
+    const container = document.createElement("div");
+    await i18n.setLocale("es");
+
+    render(
+      renderCommandPalette({
+        open: true,
+        query: "",
+        activeIndex: 0,
+        onToggle: vi.fn(),
+        onQueryChange: vi.fn(),
+        onActiveIndexChange: vi.fn(),
+        onNavigate: vi.fn(),
+        onSlashCommand: vi.fn(),
+      }),
+      container,
+    );
+
+    const groupLabels = Array.from(container.querySelectorAll(".cmd-palette__group-label")).map(
+      (node) => node.textContent?.trim(),
+    );
+    expect(groupLabels).toEqual(expect.arrayContaining(["Búsqueda", "Navegación", "Habilidades"]));
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("Resumen");
+    expect(text).toContain("Programado");
+    expect(text).toContain("Comando de shell");
+    expect(text).toContain("Modo de depuración");
+    expect(text).toContain("navegar");
+    expect(text).toContain("seleccionar");
+    expect(text).toContain("cerrar");
+    expect(text).not.toContain("Navigation");
+    expect(text).not.toContain("navigate");
+
+    await i18n.setLocale("en");
+  });
+
+  it("localizes appearance settings tabs in Spanish", async () => {
+    const container = document.createElement("div");
+    await i18n.setLocale("es");
+
+    render(
+      renderConfig(
+        createConfigProps({
+          navRootLabel: i18n.t("tabs.appearance"),
+          includeSections: ["__appearance__", "ui", "wizard"],
+          includeVirtualSections: true,
+          schema: {
+            type: "object",
+            properties: {
+              ui: { type: "object", properties: {} },
+              wizard: { type: "object", properties: {} },
+            },
+          },
+        }),
+      ),
+      container,
+    );
+
+    const tabs = Array.from(container.querySelectorAll(".config-top-tabs__tab")).map((tab) =>
+      tab.textContent?.trim(),
+    );
+    expect(tabs).toContain("Apariencia");
+    expect(tabs).toContain("UI");
+    expect(tabs).toContain("Asistente de configuración");
+    expect(container.textContent).not.toContain("Setup Wizard");
 
     await i18n.setLocale("en");
   });

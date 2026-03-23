@@ -135,6 +135,7 @@ export const es: TranslationMap = {
       skills: "Habilidades",
       recentSessions: "Sesiones recientes",
       cronJobs: "{count} tareas",
+      cronFailed: "Fallidas: {count}",
       tokensMessages: "{tokens} tokens · {messages} mensajes",
       skillsBlocked: "Bloqueadas: {count}",
       skillsActive: "Activas: {count}",
@@ -157,6 +158,187 @@ export const es: TranslationMap = {
     palette: {
       placeholder: "Escribe un comando…",
       noResults: "Sin resultados",
+      groups: {
+        search: "Búsqueda",
+        navigation: "Navegación",
+        skills: "Habilidades",
+      },
+      items: {
+        overview: "Resumen",
+        sessions: "Sesiones",
+        scheduled: "Programado",
+        skills: "Habilidades",
+        settings: "Ajustes",
+        agents: "Agentes",
+        shellCommand: "Comando de shell",
+        debugMode: "Modo de depuración",
+      },
+      descriptions: {
+        runShell: "Ejecutar shell",
+        toggleDebug: "Alternar depuración",
+      },
+      hints: {
+        navigate: "navegar",
+        select: "seleccionar",
+        close: "cerrar",
+      },
+    },
+  },
+  configNav: {
+    categories: {
+      core: "Núcleo",
+      ai: "IA y agentes",
+      communication: "Comunicaciones",
+      automation: "Automatización",
+      infrastructure: "Infraestructura",
+      appearance: "Apariencia",
+      other: "Otros",
+    },
+    sections: {
+      env: "Entorno",
+      auth: "Autenticación",
+      update: "Actualizaciones",
+      meta: "Meta",
+      logging: "Registros",
+      agents: "Agentes",
+      models: "Modelos",
+      skills: "Habilidades",
+      tools: "Herramientas",
+      memory: "Memoria",
+      session: "Sesión",
+      channels: "Canales",
+      messages: "Mensajes",
+      broadcast: "Difusión",
+      talk: "Conversación",
+      audio: "Audio",
+      commands: "Comandos",
+      hooks: "Hooks",
+      bindings: "Bindings",
+      cron: "Cron",
+      approvals: "Aprobaciones",
+      plugins: "Plugins",
+      gateway: "Puerta de enlace",
+      web: "Web",
+      browser: "Navegador",
+      nodeHost: "NodeHost",
+      canvasHost: "CanvasHost",
+      discovery: "Descubrimiento",
+      media: "Medios",
+      appearanceRoot: "Apariencia",
+      ui: "UI",
+      wizard: "Asistente de configuración",
+    },
+  },
+  configMeta: {
+    sections: {
+      env: {
+        label: "Variables de entorno",
+        description: "Variables de entorno pasadas al proceso de la puerta de enlace",
+      },
+      update: {
+        label: "Actualizaciones",
+        description: "Ajustes de actualización automática y canal de versiones",
+      },
+      agents: {
+        label: "Agentes",
+        description: "Configuraciones de agentes, modelos e identidades",
+      },
+      auth: {
+        label: "Autenticación",
+        description: "Claves API y perfiles de autenticación",
+      },
+      channels: {
+        label: "Canales",
+        description: "Canales de mensajería (Telegram, Discord, Slack, etc.)",
+      },
+      messages: {
+        label: "Mensajes",
+        description: "Ajustes de manejo y enrutamiento de mensajes",
+      },
+      commands: {
+        label: "Comandos",
+        description: "Comandos slash personalizados",
+      },
+      hooks: {
+        label: "Hooks",
+        description: "Webhooks y hooks de eventos",
+      },
+      skills: {
+        label: "Habilidades",
+        description: "Paquetes de habilidades y capacidades",
+      },
+      tools: {
+        label: "Herramientas",
+        description: "Configuraciones de herramientas (navegador, búsqueda, etc.)",
+      },
+      gateway: {
+        label: "Puerta de enlace",
+        description: "Ajustes del servidor gateway (puerto, autenticación y binding)",
+      },
+      wizard: {
+        label: "Asistente de configuración",
+        description: "Estado e historial del asistente de configuración",
+      },
+      meta: {
+        label: "Metadatos",
+        description: "Metadatos de la puerta de enlace e información de versión",
+      },
+      logging: {
+        label: "Registros",
+        description: "Niveles de registro y configuración de salida",
+      },
+      browser: {
+        label: "Navegador",
+        description: "Ajustes de automatización del navegador",
+      },
+      ui: {
+        label: "UI",
+        description: "Preferencias de la interfaz de usuario",
+      },
+      models: {
+        label: "Modelos",
+        description: "Configuraciones de modelos y proveedores de IA",
+      },
+      bindings: {
+        label: "Bindings",
+        description: "Bindings y atajos de teclado",
+      },
+      broadcast: {
+        label: "Difusión",
+        description: "Ajustes de difusión y notificaciones",
+      },
+      audio: {
+        label: "Audio",
+        description: "Ajustes de entrada y salida de audio",
+      },
+      session: {
+        label: "Sesión",
+        description: "Gestión y persistencia de sesiones",
+      },
+      cron: {
+        label: "Cron",
+        description: "Tareas programadas y automatización",
+      },
+      web: {
+        label: "Web",
+        description: "Ajustes del servidor web y la API",
+      },
+      discovery: {
+        label: "Descubrimiento",
+        description: "Descubrimiento de servicios y red",
+      },
+      canvasHost: {
+        label: "Canvas Host",
+        description: "Renderizado y visualización de canvas",
+      },
+      talk: {
+        label: "Conversación",
+        description: "Ajustes de voz y habla",
+      },
+      plugins: {
+        label: "Plugins",
+        description: "Gestión de plugins y extensiones",
+      },
     },
   },
   chat: {

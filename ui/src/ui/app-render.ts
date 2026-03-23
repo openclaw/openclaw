@@ -1718,7 +1718,7 @@ export function renderApp(state: AppViewState) {
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
-                navRootLabel: "Appearance",
+                navRootLabel: t("tabs.appearance"),
                 includeSections: [...APPEARANCE_SECTION_KEYS],
                 includeVirtualSections: true,
               })
@@ -1785,7 +1785,7 @@ export function renderApp(state: AppViewState) {
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
-                navRootLabel: "Automation",
+                navRootLabel: t("tabs.automation"),
                 includeSections: [...AUTOMATION_SECTION_KEYS],
                 includeVirtualSections: false,
               })
@@ -1852,7 +1852,7 @@ export function renderApp(state: AppViewState) {
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
-                navRootLabel: "Infrastructure",
+                navRootLabel: t("tabs.infrastructure"),
                 includeSections: [...INFRASTRUCTURE_SECTION_KEYS],
                 includeVirtualSections: false,
               })
@@ -1919,7 +1919,7 @@ export function renderApp(state: AppViewState) {
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
-                navRootLabel: "AI & Agents",
+                navRootLabel: t("tabs.aiAgents"),
                 includeSections: [...AI_AGENTS_SECTION_KEYS],
                 includeVirtualSections: false,
               })

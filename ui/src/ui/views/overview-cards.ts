@@ -95,7 +95,7 @@ export function renderOverviewCards(props: OverviewCardsProps) {
 
   const cronHint =
     failedCronCount > 0
-      ? html`<span class="danger">${failedCronCount} failed</span>`
+      ? html`<span class="danger">${t("overview.cards.cronFailed", { count: String(failedCronCount) })}</span>`
       : cronNext
         ? t("overview.stats.cronNext", { time: formatNextRun(cronNext) })
         : "";
