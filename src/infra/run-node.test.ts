@@ -419,6 +419,69 @@ describe("run-node script", () => {
     });
   });
 
+  it("restores forwarded NODE_OPTIONS for the final openclaw process only", async () => {
+    await withTempDir(async (tmp) => {
+      await writeRuntimePostBuildScaffold(tmp);
+
+      const spawnCalls: Array<{
+        cmd: string;
+        args: string[];
+        env: NodeJS.ProcessEnv | undefined;
+      }> = [];
+      const spawn = (cmd: string, args: string[], options: unknown) => {
+        const spawnOptions = options as { env?: NodeJS.ProcessEnv } | undefined;
+        spawnCalls.push({
+          cmd,
+          args,
+          env: spawnOptions?.env,
+        });
+        return createExitedProcess(0);
+      };
+
+      const forwardedNodeOptions =
+        '--inspect=9229 --require "./loader.js" --max-old-space-size=4096';
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["gateway"],
+        execArgv: [],
+        env: {
+          ...process.env,
+          NODE_OPTIONS: "--max-old-space-size=4096",
+          OPENCLAW_FORCE_BUILD: "1",
+          OPENCLAW_RUNNER_LOG: "0",
+          OPENCLAW_RUNNER_FORWARDED_NODE_OPTIONS: forwardedNodeOptions,
+        },
+        spawn,
+        execPath: process.execPath,
+        platform: process.platform,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([
+        {
+          cmd: process.execPath,
+          args: ["scripts/tsdown-build.mjs", "--no-clean"],
+          env: expect.objectContaining({
+            NODE_OPTIONS: "--max-old-space-size=4096",
+            OPENCLAW_RUNNER_FORWARDED_NODE_OPTIONS: forwardedNodeOptions,
+          }),
+        },
+        {
+          cmd: process.execPath,
+          args: [path.join(tmp, "openclaw.mjs"), "gateway"],
+          env: expect.objectContaining({
+            NODE_OPTIONS: forwardedNodeOptions,
+          }),
+        },
+      ]);
+      expect(spawnCalls[1]?.env).not.toEqual(
+        expect.objectContaining({
+          OPENCLAW_RUNNER_FORWARDED_NODE_OPTIONS: expect.any(String),
+        }),
+      );
+    });
+  });
+
   it("skips rebuilding when dist is current and the source tree is clean", async () => {
     await withTempDir(async (tmp) => {
       const srcPath = path.join(tmp, "src", "index.ts");

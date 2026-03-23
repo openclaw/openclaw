@@ -10,6 +10,7 @@ import { runRuntimePostBuild } from "./runtime-postbuild.mjs";
 const buildScript = "scripts/tsdown-build.mjs";
 const compilerArgs = [buildScript, "--no-clean"];
 const OPENCLAW_RUNNER_FORWARDED_EXEC_ARGV = "OPENCLAW_RUNNER_FORWARDED_EXEC_ARGV";
+const OPENCLAW_RUNNER_FORWARDED_NODE_OPTIONS = "OPENCLAW_RUNNER_FORWARDED_NODE_OPTIONS";
 
 const runNodeSourceRoots = ["src", "extensions"];
 const runNodeConfigFiles = ["tsconfig.json", "package.json", "tsdown.config.ts"];
@@ -274,10 +275,23 @@ const resolveForwardedExecArgv = (env) => {
   }
 };
 
+const resolveForwardedNodeOptions = (env) => {
+  const rawValue = env?.[OPENCLAW_RUNNER_FORWARDED_NODE_OPTIONS];
+  if (typeof rawValue !== "string" || rawValue.trim().length === 0) {
+    return undefined;
+  }
+  return rawValue;
+};
+
 const runOpenClaw = async (deps) => {
   const childEnv = { ...deps.env };
   delete childEnv.OPENCLAW_RUNNER_RUNTIME_CWD;
   delete childEnv.OPENCLAW_RUNNER_FORWARDED_EXEC_ARGV;
+  const forwardedNodeOptions = resolveForwardedNodeOptions(childEnv);
+  delete childEnv.OPENCLAW_RUNNER_FORWARDED_NODE_OPTIONS;
+  if (forwardedNodeOptions) {
+    childEnv.NODE_OPTIONS = forwardedNodeOptions;
+  }
   const nodeProcess = deps.spawn(
     deps.execPath,
     [...deps.execArgv, path.join(deps.packageRoot, "openclaw.mjs"), ...deps.args],

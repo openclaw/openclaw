@@ -433,6 +433,45 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(resolveOpenClawPackageRootSyncMock).not.toHaveBeenCalled();
   });
 
+  it("strips NODE_OPTIONS inspector and preload flags from the wrapper hop but forwards them to the final hop", () => {
+    delete process.env.OPENCLAW_NO_RESPAWN;
+    clearSupervisorHints();
+    setPlatform("linux");
+    const rootPath = path.join(path.parse(process.cwd()).root, "repo", "openclaw");
+    const runNodePath = path.join(rootPath, "scripts", "run-node.mjs");
+    const sourceEntryPath = path.join(rootPath, "src", "entry.ts");
+    const tsconfigPath = path.join(rootPath, "tsconfig.json");
+    process.execArgv = ["--trace-warnings"];
+    process.env.NODE_OPTIONS = '--inspect=9229 --require "./loader.js" --max-old-space-size=4096';
+    process.argv = ["/usr/local/bin/node", path.join(rootPath, "openclaw.mjs"), "gateway"];
+    resolveOpenClawPackageRootSyncMock.mockReturnValue(rootPath);
+    existsSyncMock.mockImplementation(
+      (value: unknown) =>
+        value === runNodePath || value === sourceEntryPath || value === tsconfigPath,
+    );
+    spawnMock.mockReturnValue({ pid: 8181, unref: vi.fn() });
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue("/tmp/openclaw-runtime");
+
+    const result = restartGatewayProcessWithFreshPid();
+    cwdSpy.mockRestore();
+
+    expect(result).toEqual({ mode: "spawned", pid: 8181 });
+    expect(spawnMock).toHaveBeenCalledWith(
+      process.execPath,
+      ["--trace-warnings", runNodePath, "gateway"],
+      expect.objectContaining({
+        cwd: "/tmp/openclaw-runtime",
+        detached: true,
+        env: expect.objectContaining({
+          NODE_OPTIONS: "--max-old-space-size=4096",
+          OPENCLAW_RUNNER_FORWARDED_NODE_OPTIONS:
+            '--inspect=9229 --require "./loader.js" --max-old-space-size=4096',
+        }),
+        stdio: "inherit",
+      }),
+    );
+  });
+
   it("keeps dev TypeScript entrypoints unchanged", () => {
     delete process.env.OPENCLAW_NO_RESPAWN;
     clearSupervisorHints();

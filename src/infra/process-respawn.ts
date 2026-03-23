@@ -9,6 +9,7 @@ import { detectRespawnSupervisor } from "./supervisor-markers.js";
 type RespawnMode = "spawned" | "supervised" | "disabled" | "failed";
 const OPENCLAW_RUNNER_RUNTIME_CWD = "OPENCLAW_RUNNER_RUNTIME_CWD";
 const OPENCLAW_RUNNER_FORWARDED_EXEC_ARGV = "OPENCLAW_RUNNER_FORWARDED_EXEC_ARGV";
+const OPENCLAW_RUNNER_FORWARDED_NODE_OPTIONS = "OPENCLAW_RUNNER_FORWARDED_NODE_OPTIONS";
 
 export type GatewayRespawnResult = {
   mode: RespawnMode;
@@ -158,6 +159,59 @@ function stripIntermediateExecArgv(execArgv: string[]): string[] {
   return stripped;
 }
 
+function stripOuterQuotes(value: string): string {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+function tokenizeNodeOptions(value: string): string[] {
+  return (value.match(/(?:[^\s"']+|"(?:\\.|[^"])*"|'(?:\\.|[^'])*')+/g) ?? []).map((token) =>
+    stripOuterQuotes(token),
+  );
+}
+
+function formatNodeOptions(tokens: string[]): string | undefined {
+  if (tokens.length === 0) {
+    return undefined;
+  }
+  return tokens
+    .map((token) => {
+      if (!/\s/.test(token) && !token.includes('"')) {
+        return token;
+      }
+      return `"${token.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+    })
+    .join(" ");
+}
+
+function stripIntermediateNodeOptions(value: string | undefined): string | undefined {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return undefined;
+  }
+  const tokens = tokenizeNodeOptions(value);
+  const stripped: string[] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (isInspectorExecArgv(token)) {
+      continue;
+    }
+    if (isPreloadExecArgv(token)) {
+      if (!token.includes("=")) {
+        index += 1;
+      }
+      continue;
+    }
+    stripped.push(token);
+  }
+  return formatNodeOptions(stripped);
+}
+
 function buildSourceTreeRespawnPlan(packageRoot: string): {
   args: string[];
   cwd: string;
@@ -165,6 +219,20 @@ function buildSourceTreeRespawnPlan(packageRoot: string): {
 } {
   const wrapperExecArgv = stripIntermediateExecArgv(process.execArgv);
   const runtimeCwd = process.cwd();
+  const wrapperNodeOptions = stripIntermediateNodeOptions(process.env.NODE_OPTIONS);
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    [OPENCLAW_RUNNER_RUNTIME_CWD]: runtimeCwd,
+    [OPENCLAW_RUNNER_FORWARDED_EXEC_ARGV]: JSON.stringify(process.execArgv),
+  };
+  if (typeof process.env.NODE_OPTIONS === "string" && process.env.NODE_OPTIONS.trim()) {
+    env[OPENCLAW_RUNNER_FORWARDED_NODE_OPTIONS] = process.env.NODE_OPTIONS;
+  }
+  if (wrapperNodeOptions) {
+    env.NODE_OPTIONS = wrapperNodeOptions;
+  } else {
+    delete env.NODE_OPTIONS;
+  }
   return {
     args: [
       ...wrapperExecArgv,
@@ -172,11 +240,7 @@ function buildSourceTreeRespawnPlan(packageRoot: string): {
       ...process.argv.slice(2),
     ],
     cwd: runtimeCwd,
-    env: {
-      ...process.env,
-      [OPENCLAW_RUNNER_RUNTIME_CWD]: runtimeCwd,
-      [OPENCLAW_RUNNER_FORWARDED_EXEC_ARGV]: JSON.stringify(process.execArgv),
-    },
+    env,
   };
 }
 
