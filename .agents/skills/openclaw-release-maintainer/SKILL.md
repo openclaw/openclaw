@@ -112,10 +112,10 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
   rather than workflow-level SHA pinning.
 - The `npm-release` environment must be approved by `@openclaw/openclaw-release-managers` before publish continues.
 - Mac publish uses `.github/workflows/macos-release.yml` for build, signing,
-  notarization, release-asset upload, and signed `appcast.xml` artifact
-  generation.
-- The agent must download the signed `appcast.xml` artifact from the successful
-  mac workflow and then update `appcast.xml` on `main`.
+  notarization, stable-feed `appcast.xml` artifact generation, and release-asset
+  upload.
+- The agent must download the signed `appcast.xml` artifact from a successful
+  stable mac workflow and then update `appcast.xml` on `main`.
 - For beta mac releases, do not update the shared production `appcast.xml`
   unless a separate beta Sparkle feed exists.
 - `.github/workflows/macos-release.yml` still requires the `mac-release`
@@ -147,12 +147,13 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
 13. Wait for `npm-release` approval from `@openclaw/openclaw-release-managers`.
 14. Start `.github/workflows/macos-release.yml` for the real publish and wait
     for `mac-release` approval and success.
-15. For stable releases, generate the signed `appcast.xml` before the public
-    mac assets are uploaded, then download the signed `appcast.xml` artifact
-    from the successful mac run, update `appcast.xml` on `main`, and verify the
-    feed.
-16. For beta releases, publish the mac assets but do not update the shared
-    production `appcast.xml` unless a separate beta feed exists.
+15. For stable releases, let the mac workflow generate the signed
+    `appcast.xml` artifact before it uploads the public mac assets, then
+    download that artifact from the successful run, update `appcast.xml` on
+    `main`, and verify the feed.
+16. For beta releases, publish the mac assets but expect no shared production
+    `appcast.xml` artifact and do not update the shared production feed unless a
+    separate beta feed exists.
 17. After publish, verify npm and any attached release artifacts.
 
 ## GHSA advisory work

@@ -111,6 +111,11 @@ jobs:
     if: ${{ !inputs.preflight_only }}
     runs-on: macos-latest
     environment: mac-release
+    concurrency:
+      # Stable releases all derive the same shared appcast.xml; serialize those
+      # runs so each artifact starts from the latest stable feed snapshot.
+      group: macos-release-publish-${{ contains(inputs.tag, '-beta.') && inputs.tag || 'stable-feed' }}
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
@@ -148,6 +153,18 @@ jobs:
         id: package_version
         run: echo "value=$(node -p 'require(\"./package.json\").version')" >> "$GITHUB_OUTPUT"
 
+      - name: Determine release channel
+        id: release_channel
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ "$RELEASE_TAG" == *-beta.* ]]; then
+            echo "is_beta=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_beta=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Import Developer ID certificate
         env:
           MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
@@ -181,7 +198,6 @@ jobs:
           security default-keychain -d user -s "$KEYCHAIN_PATH"
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
-          echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
 
       - name: Resolve signing identity
         run: |
@@ -230,6 +246,44 @@ jobs:
           SPARKLE_FEED_URL: ${{ env.SPARKLE_FEED_URL }}
         run: scripts/package-mac-dist.sh
 
+      - name: Checkout main branch for appcast seed
+        if: ${{ steps.release_channel.outputs.is_beta != 'true' }}
+        uses: actions/checkout@v6
+        with:
+          path: openclaw-main
+          ref: main
+          fetch-depth: 0
+
+      - name: Seed appcast from main
+        if: ${{ steps.release_channel.outputs.is_beta != 'true' }}
+        run: |
+          set -euo pipefail
+          APPCAST_SOURCE="openclaw-main/appcast.xml"
+          if [[ -f "$APPCAST_SOURCE" ]]; then
+            cp "$APPCAST_SOURCE" appcast.xml
+          else
+            echo "No existing appcast at $APPCAST_SOURCE; generating a fresh feed."
+          fi
+
+      - name: Generate signed appcast artifact
+        if: ${{ steps.release_channel.outputs.is_beta != 'true' }}
+        env:
+          SPARKLE_DOWNLOAD_URL_PREFIX: https://github.com/openclaw/openclaw/releases/download/${{ inputs.tag }}/
+          SPARKLE_RELEASE_VERSION: ${{ steps.package_version.outputs.value }}
+        run: scripts/make_appcast.sh "dist/OpenClaw-${{ steps.package_version.outputs.value }}.zip" "${{ env.SPARKLE_FEED_URL }}"
+
+      - name: Upload stable appcast artifact
+        if: ${{ steps.release_channel.outputs.is_beta != 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-appcast-${{ inputs.tag }}
+          path: appcast.xml
+          if-no-files-found: error
+
+      - name: Skip shared appcast for beta releases
+        if: ${{ steps.release_channel.outputs.is_beta == 'true' }}
+        run: echo "Beta release detected; skip shared production appcast artifact generation."
+
       - name: Upload macOS assets to GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -243,36 +297,6 @@ jobs:
             "dist/OpenClaw-$VERSION.dSYM.zip" \
             --clobber \
             --repo "$GITHUB_REPOSITORY"
-
-      - name: Checkout main branch for appcast seed
-        uses: actions/checkout@v6
-        with:
-          path: openclaw-main
-          ref: main
-          fetch-depth: 0
-
-      - name: Seed appcast from main
-        run: |
-          set -euo pipefail
-          APPCAST_SOURCE="openclaw-main/appcast.xml"
-          if [[ -f "$APPCAST_SOURCE" ]]; then
-            cp "$APPCAST_SOURCE" appcast.xml
-          else
-            echo "No existing appcast at $APPCAST_SOURCE; generating a fresh feed."
-          fi
-
-      - name: Generate signed appcast artifact
-        env:
-          SPARKLE_DOWNLOAD_URL_PREFIX: https://github.com/openclaw/openclaw/releases/download/${{ inputs.tag }}/
-          SPARKLE_RELEASE_VERSION: ${{ steps.package_version.outputs.value }}
-        run: scripts/make_appcast.sh "dist/OpenClaw-${{ steps.package_version.outputs.value }}.zip" "${{ env.SPARKLE_FEED_URL }}"
-
-      - name: Upload appcast artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: macos-appcast-${{ inputs.tag }}
-          path: appcast.xml
-          if-no-files-found: error
 
       - name: Clean up signing keychain
         if: always()
