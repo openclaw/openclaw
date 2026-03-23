@@ -41,6 +41,7 @@ export function createScopedVitestConfig(
   include: string[],
   options?: {
     dir?: string;
+    env?: Record<string, string | undefined>;
     exclude?: string[];
     pool?: "threads" | "forks";
     passWithNoTests?: boolean;
@@ -68,7 +69,7 @@ export function createScopedVitestConfig(
     ...base,
     test: {
       ...baseTest,
-      isolate: resolveVitestIsolation(),
+      isolate: resolveVitestIsolation(options?.env),
       ...(scopedDir ? { dir: scopedDir } : {}),
       include: relativizeScopedPatterns(include, scopedDir),
       exclude,
