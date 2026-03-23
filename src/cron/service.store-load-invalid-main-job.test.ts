@@ -8,6 +8,7 @@ import {
   installCronTestHooks,
   writeCronStoreSnapshot,
 } from "./service.test-harness.js";
+import { loadCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
 const noopLogger = createNoopLogger();
@@ -72,6 +73,61 @@ describe("CronService store load", () => {
     const jobs = await cron.list({ includeDisabled: true });
     expect(jobs[0]?.state.lastStatus).toBe("skipped");
     expect(jobs[0]?.state.lastError).toMatch(/main job requires/i);
+
+    cron.stop();
+  });
+
+  it("runs legacy main jobs with systemEvent message payloads loaded from disk", async () => {
+    const { dir, storePath } = await makeStorePath();
+    tempDir = dir;
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+
+    const job = {
+      id: "job-legacy-system-message",
+      enabled: true,
+      createdAtMs: Date.parse("2025-12-13T00:00:00.000Z"),
+      updatedAtMs: Date.parse("2025-12-13T00:00:00.000Z"),
+      schedule: { kind: "at", at: "2025-12-13T00:00:01.000Z" },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", message: "  legacy tick  " },
+      state: {},
+      name: "legacy-system-message",
+    } as CronJob;
+
+    await writeCronStoreSnapshot({ storePath, jobs: [job] });
+
+    const cron = new CronService({
+      storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    await cron.start();
+    vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
+    await cron.run("job-legacy-system-message", "due");
+
+    expect(enqueueSystemEvent).toHaveBeenCalledWith("legacy tick", {
+      agentId: undefined,
+      sessionKey: undefined,
+      contextKey: "cron:job-legacy-system-message",
+    });
+    expect(requestHeartbeatNow).toHaveBeenCalledWith({
+      reason: "cron:job-legacy-system-message",
+      agentId: undefined,
+      sessionKey: undefined,
+    });
+
+    const stored = await loadCronStore(storePath);
+    expect(stored.jobs[0]?.payload).toMatchObject({
+      kind: "systemEvent",
+      text: "legacy tick",
+    });
+    expect((stored.jobs[0]?.payload as { message?: unknown } | undefined)?.message).toBeUndefined();
 
     cron.stop();
   });

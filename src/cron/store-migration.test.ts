@@ -130,4 +130,26 @@ describe("normalizeStoredCronJobs", () => {
     expect(jobs[0]?.payload).toMatchObject({ kind: "agentTurn", message: "ping" });
     expect(jobs[1]?.payload).toMatchObject({ kind: "systemEvent", text: "pong" });
   });
+
+  it("migrates legacy systemEvent payload.message fields into text", () => {
+    const jobs = [
+      {
+        id: "legacy-system-message",
+        name: "legacy",
+        enabled: true,
+        wakeMode: "now",
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+        payload: { kind: "systemEvent", message: "  ping  " },
+        sessionTarget: "main",
+        state: {},
+      },
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    expect(result.mutated).toBe(true);
+    expect(jobs[0]?.payload).toMatchObject({ kind: "systemEvent", text: "ping" });
+    const payload = jobs[0]?.payload as Record<string, unknown> | undefined;
+    expect(payload?.message).toBeUndefined();
+  });
 });

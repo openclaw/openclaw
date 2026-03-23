@@ -123,6 +123,22 @@ function coercePayload(payload: UnknownRecord) {
       next.text = trimmed;
     }
   }
+  if (next.kind === "systemEvent") {
+    const text =
+      typeof next.text === "string"
+        ? next.text.trim()
+        : typeof next.message === "string"
+          ? next.message.trim()
+          : "";
+    if (text) {
+      next.text = text;
+    } else {
+      delete next.text;
+    }
+    if ("message" in next) {
+      delete next.message;
+    }
+  }
   if ("model" in next) {
     if (typeof next.model === "string") {
       const trimmed = next.model.trim();
