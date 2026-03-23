@@ -49,4 +49,48 @@ describe("image-generation provider registry", () => {
     expect(provider?.id).toBe("custom-image");
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
+
+  it("ignores prototype-like provider ids and aliases", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.imageGenerationProviders.push(
+      {
+        pluginId: "blocked-image",
+        pluginName: "Blocked Image",
+        source: "test",
+        provider: {
+          id: "__proto__",
+          aliases: ["constructor", "prototype"],
+          capabilities: {
+            generate: {},
+            edit: { enabled: false },
+          },
+          generateImage: async () => ({
+            images: [{ buffer: Buffer.from("image"), mimeType: "image/png" }],
+          }),
+        },
+      },
+      {
+        pluginId: "safe-image",
+        pluginName: "Safe Image",
+        source: "test",
+        provider: {
+          id: "safe-image",
+          aliases: ["safe-alias", "constructor"],
+          capabilities: {
+            generate: {},
+            edit: { enabled: false },
+          },
+          generateImage: async () => ({
+            images: [{ buffer: Buffer.from("image"), mimeType: "image/png" }],
+          }),
+        },
+      },
+    );
+    setActivePluginRegistry(registry);
+
+    expect(listImageGenerationProviders().map((provider) => provider.id)).toEqual(["safe-image"]);
+    expect(getImageGenerationProvider("__proto__")).toBeUndefined();
+    expect(getImageGenerationProvider("constructor")).toBeUndefined();
+    expect(getImageGenerationProvider("safe-alias")?.id).toBe("safe-image");
+  });
 });
