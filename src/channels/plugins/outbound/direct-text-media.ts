@@ -18,6 +18,7 @@ type DirectSendOptions = {
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
   maxBytes?: number;
+  viewOnce?: boolean;
 };
 
 type DirectSendResult = { messageId: string; [key: string]: unknown };
@@ -80,6 +81,7 @@ export function createDirectTextMediaOutbound<
     replyToId?: string | null;
     mediaUrl?: string;
     mediaLocalRoots?: readonly string[];
+    viewOnce?: boolean;
     buildOptions: (params: DirectSendOptions) => TOpts;
   }) => {
     const send = params.resolveSender(sendParams.deps);
@@ -96,6 +98,7 @@ export function createDirectTextMediaOutbound<
         mediaLocalRoots: sendParams.mediaLocalRoots,
         accountId: sendParams.accountId,
         replyToId: sendParams.replyToId,
+        viewOnce: sendParams.viewOnce,
         maxBytes,
       }),
     );
@@ -109,7 +112,7 @@ export function createDirectTextMediaOutbound<
     textChunkLimit: 4000,
     sendPayload: async (ctx) =>
       await sendTextMediaPayload({ channel: params.channel, ctx, adapter: outbound }),
-    sendText: async ({ cfg, to, text, accountId, deps, replyToId }) => {
+    sendText: async ({ cfg, to, text, accountId, deps, replyToId, viewOnce }) => {
       return await sendDirect({
         cfg,
         to,
@@ -117,10 +120,21 @@ export function createDirectTextMediaOutbound<
         accountId,
         deps,
         replyToId,
+        viewOnce,
         buildOptions: params.buildTextOptions,
       });
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps, replyToId }) => {
+    sendMedia: async ({
+      cfg,
+      to,
+      text,
+      mediaUrl,
+      mediaLocalRoots,
+      accountId,
+      deps,
+      replyToId,
+      viewOnce,
+    }) => {
       return await sendDirect({
         cfg,
         to,
@@ -130,6 +144,7 @@ export function createDirectTextMediaOutbound<
         accountId,
         deps,
         replyToId,
+        viewOnce,
         buildOptions: params.buildMediaOptions,
       });
     },

@@ -140,6 +140,7 @@ export type ChannelOutboundContext = {
   accountId?: string | null;
   identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
+  viewOnce?: boolean;
   silent?: boolean;
 };
 

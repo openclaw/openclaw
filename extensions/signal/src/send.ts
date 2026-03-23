@@ -16,6 +16,7 @@ export type SignalSendOpts = {
   mediaLocalRoots?: readonly string[];
   maxBytes?: number;
   timeoutMs?: number;
+  viewOnce?: boolean;
   textMode?: "markdown" | "plain";
   textStyles?: SignalTextStyleRange[];
 };
@@ -126,15 +127,16 @@ export async function sendMessageSignal(
   })();
 
   let attachments: string[] | undefined;
+  let attachmentKind: string | undefined;
   if (opts.mediaUrl?.trim()) {
     const resolved = await resolveOutboundAttachmentFromUrl(opts.mediaUrl.trim(), maxBytes, {
       localRoots: opts.mediaLocalRoots,
     });
     attachments = [resolved.path];
-    const kind = kindFromMime(resolved.contentType ?? undefined);
-    if (!message && kind) {
+    attachmentKind = kindFromMime(resolved.contentType ?? undefined);
+    if (!message && attachmentKind) {
       // Avoid sending an empty body when only attachments exist.
-      message = kind === "image" ? "<media:image>" : `<media:${kind}>`;
+      message = attachmentKind === "image" ? "<media:image>" : `<media:${attachmentKind}>`;
       messageFromPlaceholder = true;
     }
   }
@@ -169,6 +171,18 @@ export async function sendMessageSignal(
   }
   if (attachments && attachments.length > 0) {
     params.attachments = attachments;
+  }
+  if (opts.viewOnce) {
+    if (!attachments || attachments.length === 0) {
+      throw new Error("Signal view-once requires an image attachment");
+    }
+    if (attachmentKind === "image") {
+      params["view-once"] = true;
+    } else {
+      throw new Error(
+        `Signal view-once is only supported for image attachments (got ${attachmentKind})`,
+      );
+    }
   }
 
   const targetParams = buildTargetParams(target, {

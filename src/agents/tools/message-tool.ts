@@ -117,6 +117,12 @@ function buildSendSchema(options: { includeInteractive: boolean }) {
     ),
     bestEffort: Type.Optional(Type.Boolean()),
     gifPlayback: Type.Optional(Type.Boolean()),
+    viewOnce: Type.Optional(
+      Type.Boolean({
+        description:
+          "Send media as view-once (disappearing after one view). Supported on WhatsApp and Signal.",
+      }),
+    ),
     forceDocument: Type.Optional(
       Type.Boolean({
         description: "Send image/GIF as document to avoid Telegram compression (Telegram only).",

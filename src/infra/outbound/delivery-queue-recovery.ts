@@ -72,6 +72,7 @@ function buildRecoveryDeliverParams(entry: QueuedDelivery, cfg: OpenClawConfig) 
     bestEffort: entry.bestEffort,
     gifPlayback: entry.gifPlayback,
     forceDocument: entry.forceDocument,
+    viewOnce: entry.viewOnce,
     silent: entry.silent,
     mirror: entry.mirror,
     skipQueue: true, // Prevent re-enqueueing during recovery.

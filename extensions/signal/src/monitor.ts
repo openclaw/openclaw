@@ -314,6 +314,7 @@ async function deliverReplies(params: {
           account,
           maxBytes,
           accountId,
+          viewOnce: payload.viewOnce,
         });
       },
       sendMedia: async ({ mediaUrl, caption }) => {
@@ -323,6 +324,7 @@ async function deliverReplies(params: {
           mediaUrl,
           maxBytes,
           accountId,
+          viewOnce: payload.viewOnce,
         });
       },
     });

@@ -86,6 +86,7 @@ export async function executeSendAction(params: {
   gifPlayback?: boolean;
   forceDocument?: boolean;
   bestEffort?: boolean;
+  viewOnce?: boolean;
   replyToId?: string;
   threadId?: string | number;
 }): Promise<{
@@ -95,6 +96,18 @@ export async function executeSendAction(params: {
   sendResult?: MessageSendResult;
 }> {
   throwIfAborted(params.ctx.abortSignal);
+  if (params.viewOnce) {
+    const channel = params.ctx.channel;
+    if (channel !== "whatsapp" && channel !== "signal") {
+      throw new Error(`View-once media is not supported for channel: ${channel}`);
+    }
+    const mediaCount = (params.mediaUrls?.length ?? 0) + (params.mediaUrl ? 1 : 0);
+    if (mediaCount === 0) {
+      throw new Error(
+        `View-once requested but no media attachments provided; text-only messages cannot be view-once`,
+      );
+    }
+  }
   const pluginHandled = await tryHandleWithPluginAction({
     ctx: params.ctx,
     action: "send",
@@ -134,6 +147,7 @@ export async function executeSendAction(params: {
     threadId: params.threadId,
     gifPlayback: params.gifPlayback,
     forceDocument: params.forceDocument,
+    viewOnce: params.viewOnce,
     dryRun: params.ctx.dryRun,
     bestEffort: params.bestEffort ?? undefined,
     deps: params.ctx.deps,

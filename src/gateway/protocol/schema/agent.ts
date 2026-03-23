@@ -36,6 +36,7 @@ export const SendParamsSchema = Type.Object(
     mediaUrl: Type.Optional(Type.String()),
     mediaUrls: Type.Optional(Type.Array(Type.String())),
     gifPlayback: Type.Optional(Type.Boolean()),
+    viewOnce: Type.Optional(Type.Boolean()),
     channel: Type.Optional(Type.String()),
     accountId: Type.Optional(Type.String()),
     /** Optional agent id for per-agent media root resolution on gateway sends. */

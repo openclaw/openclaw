@@ -136,10 +136,14 @@ export async function deliverWebReply(params: {
               image: media.buffer,
               caption,
               mimetype: media.contentType,
+              viewOnce: replyResult.viewOnce,
             }),
           "media:image",
         );
       } else if (media.kind === "audio") {
+        if (replyResult.viewOnce) {
+          throw new Error(`WhatsApp view-once is not supported for audio attachments`);
+        }
         await sendWithRetry(
           () =>
             msg.sendMedia({
@@ -147,6 +151,7 @@ export async function deliverWebReply(params: {
               ptt: true,
               mimetype: media.contentType,
               caption,
+              viewOnce: replyResult.viewOnce,
             }),
           "media:audio",
         );
@@ -157,10 +162,16 @@ export async function deliverWebReply(params: {
               video: media.buffer,
               caption,
               mimetype: media.contentType,
+              viewOnce: replyResult.viewOnce,
             }),
           "media:video",
         );
       } else {
+        if (replyResult.viewOnce) {
+          throw new Error(
+            `WhatsApp view-once is only supported for image and video attachments (got ${media.kind})`,
+          );
+        }
         const fileName = media.fileName ?? mediaUrl.split("/").pop() ?? "file";
         const mimetype = media.contentType ?? "application/octet-stream";
         await sendWithRetry(
@@ -170,6 +181,7 @@ export async function deliverWebReply(params: {
               fileName,
               caption,
               mimetype,
+              viewOnce: replyResult.viewOnce,
             }),
           "media:document",
         );
@@ -195,6 +207,9 @@ export async function deliverWebReply(params: {
     onError: async ({ error, mediaUrl, caption, isFirst }) => {
       whatsappOutboundLog.error(`Failed sending web media to ${msg.from}: ${formatError(error)}`);
       replyLogger.warn({ err: error, mediaUrl }, "failed to send web media reply");
+      if (replyResult.viewOnce) {
+        throw error;
+      }
       if (!isFirst) {
         return;
       }

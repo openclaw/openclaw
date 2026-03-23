@@ -86,6 +86,7 @@ export function createWhatsAppOutboundBase({
         accountId,
         deps,
         gifPlayback,
+        viewOnce,
       }) => {
         const send =
           resolveOutboundSendDep<WhatsAppSendMessage>(deps, "whatsapp") ?? sendMessageWhatsApp;
@@ -96,6 +97,7 @@ export function createWhatsAppOutboundBase({
           mediaLocalRoots,
           accountId: accountId ?? undefined,
           gifPlayback,
+          viewOnce,
         });
       },
       sendPoll: async ({ cfg, to, poll, accountId }) =>

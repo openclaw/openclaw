@@ -24,6 +24,7 @@ export type QueuedDeliveryPayload = {
   bestEffort?: boolean;
   gifPlayback?: boolean;
   forceDocument?: boolean;
+  viewOnce?: boolean;
   silent?: boolean;
   mirror?: OutboundMirror;
 };
@@ -140,6 +141,7 @@ export async function enqueueDelivery(
     bestEffort: params.bestEffort,
     gifPlayback: params.gifPlayback,
     forceDocument: params.forceDocument,
+    viewOnce: params.viewOnce,
     silent: params.silent,
     mirror: params.mirror,
     retryCount: 0,

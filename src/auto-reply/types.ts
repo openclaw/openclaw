@@ -95,6 +95,8 @@ export type ReplyPayload = {
    *  Should be excluded from TTS transcript accumulation so compaction
    *  status lines are not synthesised into the spoken assistant reply. */
   isCompactionNotice?: boolean;
+  /** If true, send media as view-once (disappearing). Supported by WhatsApp and Signal. */
+  viewOnce?: boolean;
   /** Channel-specific payload data (per-channel envelope). */
   channelData?: Record<string, unknown>;
 };

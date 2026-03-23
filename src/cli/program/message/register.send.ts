@@ -37,6 +37,11 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
           "--silent",
           "Send message silently without notification (Telegram + Discord)",
           false,
+        )
+        .option(
+          "--view-once",
+          "Send media as view-once (disappearing). Supported on WhatsApp and Signal.",
+          false,
         ),
     )
     .action(async (opts) => {

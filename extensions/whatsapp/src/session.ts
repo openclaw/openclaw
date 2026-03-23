@@ -125,6 +125,19 @@ export async function createWaSocket(
     browser: ["openclaw", "cli", VERSION],
     syncFullHistory: false,
     markOnlineOnConnect: false,
+    patchMessageBeforeSending: (message) => {
+      if (message?.viewOnceMessage) {
+        const innerMsg = message.viewOnceMessage.message;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const anyInner = innerMsg as any;
+        const mediaType = anyInner ? Object.keys(anyInner)[0] : null;
+        if (mediaType && anyInner[mediaType]) {
+          anyInner[mediaType].viewOnce = true;
+        }
+        return { viewOnceMessageV2: { message: innerMsg } };
+      }
+      return message;
+    },
   });
 
   sock.ev.on("creds.update", () => enqueueSaveCreds(authDir, saveCreds, sessionLogger));

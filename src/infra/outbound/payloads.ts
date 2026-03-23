@@ -19,6 +19,7 @@ export type NormalizedOutboundPayload = {
   audioAsVoice?: boolean;
   interactive?: InteractiveReply;
   channelData?: Record<string, unknown>;
+  viewOnce?: boolean;
 };
 
 export type OutboundPayloadJson = {
@@ -28,6 +29,7 @@ export type OutboundPayloadJson = {
   audioAsVoice?: boolean;
   interactive?: InteractiveReply;
   channelData?: Record<string, unknown>;
+  viewOnce?: boolean;
 };
 
 function mergeMediaUrls(...lists: Array<ReadonlyArray<string | undefined> | undefined>): string[] {
@@ -116,6 +118,7 @@ export function normalizeOutboundPayloads(
       audioAsVoice: payload.audioAsVoice === true ? true : undefined,
       ...(hasInteractive ? { interactive } : {}),
       ...(hasChannelData ? { channelData } : {}),
+      ...(payload.viewOnce ? { viewOnce: true } : {}),
     });
   }
   return normalizedPayloads;
@@ -134,6 +137,7 @@ export function normalizeOutboundPayloadsForJson(
       audioAsVoice: payload.audioAsVoice === true ? true : undefined,
       interactive: payload.interactive,
       channelData: payload.channelData,
+      viewOnce: payload.viewOnce,
     });
   }
   return normalized;

@@ -40,8 +40,12 @@ export function createWebSendApi(params: {
             image: mediaBuffer,
             caption: text || undefined,
             mimetype: mediaType,
+            ...(sendOptions?.viewOnce ? { viewOnce: true } : {}),
           };
         } else if (mediaType.startsWith("audio/")) {
+          if (sendOptions?.viewOnce) {
+            throw new Error(`WhatsApp view-once is not supported for audio attachments`);
+          }
           payload = { audio: mediaBuffer, ptt: true, mimetype: mediaType };
         } else if (mediaType.startsWith("video/")) {
           const gifPlayback = sendOptions?.gifPlayback;
@@ -50,8 +54,14 @@ export function createWebSendApi(params: {
             caption: text || undefined,
             mimetype: mediaType,
             ...(gifPlayback ? { gifPlayback: true } : {}),
+            ...(sendOptions?.viewOnce ? { viewOnce: true } : {}),
           };
         } else {
+          if (sendOptions?.viewOnce) {
+            throw new Error(
+              `WhatsApp view-once is only supported for image and video attachments (got ${mediaType})`,
+            );
+          }
           const fileName = sendOptions?.fileName?.trim() || "file";
           payload = {
             document: mediaBuffer,
@@ -61,6 +71,9 @@ export function createWebSendApi(params: {
           };
         }
       } else {
+        if (sendOptions?.viewOnce) {
+          throw new Error("WhatsApp view-once requested but no media provided");
+        }
         payload = { text };
       }
       const result = await params.sock.sendMessage(jid, payload);

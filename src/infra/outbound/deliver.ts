@@ -29,7 +29,9 @@ import {
 } from "../../hooks/message-hook-mappers.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { maxBytesForKind } from "../../media/constants.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import { loadWebMedia } from "../../media/web-media.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
@@ -79,6 +81,7 @@ type ChannelHandler = {
       replyToId?: string | null;
       threadId?: string | number | null;
       audioAsVoice?: boolean;
+      viewOnce?: boolean;
     },
   ) => Promise<OutboundDeliveryResult>;
   sendFormattedText?: (
@@ -87,6 +90,7 @@ type ChannelHandler = {
       replyToId?: string | null;
       threadId?: string | number | null;
       audioAsVoice?: boolean;
+      viewOnce?: boolean;
     },
   ) => Promise<OutboundDeliveryResult[]>;
   sendFormattedMedia?: (
@@ -96,6 +100,7 @@ type ChannelHandler = {
       replyToId?: string | null;
       threadId?: string | number | null;
       audioAsVoice?: boolean;
+      viewOnce?: boolean;
     },
   ) => Promise<OutboundDeliveryResult>;
   sendText: (
@@ -104,6 +109,7 @@ type ChannelHandler = {
       replyToId?: string | null;
       threadId?: string | number | null;
       audioAsVoice?: boolean;
+      viewOnce?: boolean;
     },
   ) => Promise<OutboundDeliveryResult>;
   sendMedia: (
@@ -113,6 +119,7 @@ type ChannelHandler = {
       replyToId?: string | null;
       threadId?: string | number | null;
       audioAsVoice?: boolean;
+      viewOnce?: boolean;
     },
   ) => Promise<OutboundDeliveryResult>;
 };
@@ -128,6 +135,7 @@ type ChannelHandlerParams = {
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
   forceDocument?: boolean;
+  viewOnce?: boolean;
   silent?: boolean;
   mediaLocalRoots?: readonly string[];
 };
@@ -165,11 +173,13 @@ function createPluginHandler(
     replyToId?: string | null;
     threadId?: string | number | null;
     audioAsVoice?: boolean;
+    viewOnce?: boolean;
   }): Omit<ChannelOutboundContext, "text" | "mediaUrl"> => ({
     ...baseCtx,
     replyToId: overrides?.replyToId ?? baseCtx.replyToId,
     threadId: overrides?.threadId ?? baseCtx.threadId,
     audioAsVoice: overrides?.audioAsVoice,
+    viewOnce: overrides?.viewOnce ?? baseCtx.viewOnce,
   });
   return {
     chunker,
@@ -248,6 +258,7 @@ function createChannelOutboundContextBase(
     gifPlayback: params.gifPlayback,
     forceDocument: params.forceDocument,
     deps: params.deps,
+    viewOnce: params.viewOnce,
     silent: params.silent,
     mediaLocalRoots: params.mediaLocalRoots,
   };
@@ -267,6 +278,7 @@ type DeliverOutboundPayloadsCoreParams = {
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
   forceDocument?: boolean;
+  viewOnce?: boolean;
   abortSignal?: AbortSignal;
   bestEffort?: boolean;
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
@@ -345,6 +357,7 @@ function buildPayloadSummary(payload: ReplyPayload): NormalizedOutboundPayload {
     audioAsVoice: payload.audioAsVoice === true ? true : undefined,
     interactive: payload.interactive,
     channelData: payload.channelData,
+    viewOnce: payload.viewOnce,
   };
 }
 
@@ -498,6 +511,7 @@ export async function deliverOutboundPayloads(
         bestEffort: params.bestEffort,
         gifPlayback: params.gifPlayback,
         forceDocument: params.forceDocument,
+        viewOnce: params.viewOnce,
         silent: params.silent,
         mirror: params.mirror,
       }).catch(() => null); // Best-effort — don't block delivery if queue write fails.
@@ -565,6 +579,7 @@ async function deliverOutboundPayloadsCore(
     identity: params.identity,
     gifPlayback: params.gifPlayback,
     forceDocument: params.forceDocument,
+    viewOnce: params.viewOnce,
     silent: params.silent,
     mediaLocalRoots,
   });
@@ -666,11 +681,40 @@ async function deliverOutboundPayloadsCore(
       payloadSummary = hookResult.payloadSummary;
 
       params.onPayload?.(payloadSummary);
+      const viewOnce = effectivePayload.viewOnce ?? params.viewOnce;
+      if (viewOnce) {
+        if (channel !== "whatsapp" && channel !== "signal") {
+          throw new Error(`View-once media is not supported for channel: ${channel}`);
+        }
+        if (payloadSummary.mediaUrls.length === 0) {
+          throw new Error(
+            `View-once requested but no media attachments provided; text-only messages cannot be view-once`,
+          );
+        }
+        // Exhaustive pre-flight validation of all attachments to avoid partial delivery failure.
+        for (const url of payloadSummary.mediaUrls) {
+          const media = await loadWebMedia(url, {
+            localRoots: mediaLocalRoots,
+            maxBytes: maxBytesForKind("document"),
+          });
+          if (channel === "whatsapp" && media.kind !== "image" && media.kind !== "video") {
+            throw new Error(
+              `WhatsApp view-once is only supported for image and video attachments (got ${media.kind})`,
+            );
+          }
+          if (channel === "signal" && media.kind !== "image") {
+            throw new Error(
+              `Signal view-once is only supported for image attachments (got ${media.kind})`,
+            );
+          }
+        }
+      }
       const sendOverrides = {
         replyToId: effectivePayload.replyToId ?? params.replyToId ?? undefined,
         threadId: params.threadId ?? undefined,
         audioAsVoice: effectivePayload.audioAsVoice === true ? true : undefined,
         forceDocument: params.forceDocument,
+        viewOnce,
       };
       if (
         handler.sendPayload &&
