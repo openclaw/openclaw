@@ -84,6 +84,7 @@
   "keyed-async-queue",
   "line",
   "line-core",
+  "line-runtime",
   "llm-task",
   "matrix",
   "mattermost",
