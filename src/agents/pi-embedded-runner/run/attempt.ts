@@ -102,7 +102,7 @@ import type { TranscriptPolicy } from "../../transcript-policy.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
-import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
+import { isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import type { CompactEmbeddedPiSessionParams } from "../compact.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
@@ -139,6 +139,16 @@ import { installToolResultContextGuard } from "../tool-result-context-guard.js";
 import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
+import {
+  assembleAttemptContextEngine,
+  finalizeAttemptContextEngineTurn,
+  runAttemptContextEngineBootstrap,
+} from "./attempt.context-engine-helpers.js";
+import {
+  appendAttemptCacheTtlIfNeeded,
+  composeSystemPromptWithHookContext,
+  resolveAttemptSpawnWorkspaceDir,
+} from "./attempt.thread-helpers.js";
 import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
 import {
   resolveRunTimeoutDuringCompaction,
@@ -1501,21 +1511,11 @@ export async function resolvePromptBuildHookResult(params: {
   };
 }
 
-export function composeSystemPromptWithHookContext(params: {
-  baseSystemPrompt?: string;
-  prependSystemContext?: string;
-  appendSystemContext?: string;
-}): string | undefined {
-  const prependSystem = params.prependSystemContext?.trim();
-  const appendSystem = params.appendSystemContext?.trim();
-  if (!prependSystem && !appendSystem) {
-    return undefined;
-  }
-  return joinPresentTextSegments(
-    [params.prependSystemContext, params.baseSystemPrompt, params.appendSystemContext],
-    { trim: true },
-  );
-}
+export {
+  appendAttemptCacheTtlIfNeeded,
+  composeSystemPromptWithHookContext,
+  resolveAttemptSpawnWorkspaceDir,
+} from "./attempt.thread-helpers.js";
 
 export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "full" {
   if (!sessionKey) {
@@ -1663,7 +1663,6 @@ export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
-  const prevCwd = process.cwd();
   const runAbortController = new AbortController();
   // Proxy bootstrap must happen before timeout tuning so the timeouts wrap the
   // active EnvHttpProxyAgent instead of being replaced by a bare proxy dispatcher.
@@ -1690,7 +1689,6 @@ export async function runEmbeddedAttempt(
   await fs.mkdir(effectiveWorkspace, { recursive: true });
 
   let restoreSkillEnv: (() => void) | undefined;
-  process.chdir(effectiveWorkspace);
   try {
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: effectiveWorkspace,
@@ -1798,8 +1796,10 @@ export async function runEmbeddedAttempt(
           workspaceDir: effectiveWorkspace,
           // When sandboxing uses a copied workspace (`ro` or `none`), effectiveWorkspace points
           // at the sandbox copy. Spawned subagents should inherit the real workspace instead.
-          spawnWorkspaceDir:
-            sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? resolvedWorkspace : undefined,
+          spawnWorkspaceDir: resolveAttemptSpawnWorkspaceDir({
+            sandbox,
+            resolvedWorkspace,
+          }),
           config: params.config,
           abortSignal: runAbortController.signal,
           modelProvider: params.model.provider,
@@ -1945,7 +1945,7 @@ export async function runEmbeddedAttempt(
       config: params.config,
       agentId: sessionAgentId,
       workspaceDir: effectiveWorkspace,
-      cwd: process.cwd(),
+      cwd: effectiveWorkspace,
       runtime: {
         host: machineName,
         os: `${os.type()} ${os.release()}`,
@@ -1964,7 +1964,7 @@ export async function runEmbeddedAttempt(
     const docsPath = await resolveOpenClawDocsPath({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
-      cwd: process.cwd(),
+      cwd: effectiveWorkspace,
       moduleUrl: import.meta.url,
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
@@ -2071,32 +2071,30 @@ export async function runEmbeddedAttempt(
       });
       trackSessionManagerAccess(params.sessionFile);
 
-      if (hadSessionFile && (params.contextEngine?.bootstrap || params.contextEngine?.maintain)) {
-        try {
-          if (typeof params.contextEngine?.bootstrap === "function") {
-            await params.contextEngine.bootstrap({
-              sessionId: params.sessionId,
-              sessionKey: params.sessionKey,
-              sessionFile: params.sessionFile,
-            });
-          }
+      await runAttemptContextEngineBootstrap({
+        hadSessionFile,
+        contextEngine: params.contextEngine,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        sessionFile: params.sessionFile,
+        sessionManager,
+        runtimeContext: buildAfterTurnRuntimeContext({
+          attempt: params,
+          workspaceDir: effectiveWorkspace,
+          agentDir,
+        }),
+        runMaintenance: async (contextParams) =>
           await runContextEngineMaintenance({
-            contextEngine: params.contextEngine,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            sessionFile: params.sessionFile,
-            reason: "bootstrap",
-            sessionManager,
-            runtimeContext: buildAfterTurnRuntimeContext({
-              attempt: params,
-              workspaceDir: effectiveWorkspace,
-              agentDir,
-            }),
-          });
-        } catch (bootstrapErr) {
-          log.warn(`context engine bootstrap failed: ${String(bootstrapErr)}`);
-        }
-      }
+            contextEngine: contextParams.contextEngine as never,
+            sessionId: contextParams.sessionId,
+            sessionKey: contextParams.sessionKey,
+            sessionFile: contextParams.sessionFile,
+            reason: contextParams.reason,
+            sessionManager: contextParams.sessionManager as never,
+            runtimeContext: contextParams.runtimeContext,
+          }),
+        warn: (message) => log.warn(message),
+      });
 
       await prepareSessionManagerForRun({
         sessionManager,
@@ -2455,14 +2453,18 @@ export async function runEmbeddedAttempt(
 
         if (params.contextEngine) {
           try {
-            const assembled = await params.contextEngine.assemble({
+            const assembled = await assembleAttemptContextEngine({
+              contextEngine: params.contextEngine,
               sessionId: params.sessionId,
               sessionKey: params.sessionKey,
               messages: activeSession.messages,
               tokenBudget: params.contextTokenBudget,
-              model: params.modelId,
+              modelId: params.modelId,
               ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
             });
+            if (!assembled) {
+              throw new Error("context engine assemble returned no result");
+            }
             if (assembled.messages !== activeSession.messages) {
               activeSession.agent.replaceMessages(assembled.messages);
             }
@@ -2977,18 +2979,15 @@ export async function runEmbeddedAttempt(
         // Skip when timed out during compaction — session state may be inconsistent.
         // Also skip when compaction ran this attempt — appending a custom entry
         // after compaction would break the guard again. See: #28491
-        if (!timedOutDuringCompaction && !compactionOccurredThisAttempt) {
-          const shouldTrackCacheTtl =
-            params.config?.agents?.defaults?.contextPruning?.mode === "cache-ttl" &&
-            isCacheTtlEligibleProvider(params.provider, params.modelId);
-          if (shouldTrackCacheTtl) {
-            appendCacheTtlTimestamp(sessionManager, {
-              timestamp: Date.now(),
-              provider: params.provider,
-              modelId: params.modelId,
-            });
-          }
-        }
+        appendAttemptCacheTtlIfNeeded({
+          sessionManager,
+          timedOutDuringCompaction,
+          compactionOccurredThisAttempt,
+          config: params.config,
+          provider: params.provider,
+          modelId: params.modelId,
+          isCacheTtlEligibleProvider,
+        });
 
         // If timeout occurred during compaction, use pre-compaction snapshot when available
         // (compaction restructures messages but does not add user/assistant turns).
@@ -3032,66 +3031,31 @@ export async function runEmbeddedAttempt(
             workspaceDir: effectiveWorkspace,
             agentDir,
           });
-          let postTurnFinalizationSucceeded = true;
-
-          if (typeof params.contextEngine.afterTurn === "function") {
-            try {
-              await params.contextEngine.afterTurn({
-                sessionId: sessionIdUsed,
-                sessionKey: params.sessionKey,
-                sessionFile: params.sessionFile,
-                messages: messagesSnapshot,
-                prePromptMessageCount,
-                tokenBudget: params.contextTokenBudget,
-                runtimeContext: afterTurnRuntimeContext,
-              });
-            } catch (afterTurnErr) {
-              postTurnFinalizationSucceeded = false;
-              log.warn(`context engine afterTurn failed: ${String(afterTurnErr)}`);
-            }
-          } else {
-            // Fallback: ingest new messages individually
-            const newMessages = messagesSnapshot.slice(prePromptMessageCount);
-            if (newMessages.length > 0) {
-              if (typeof params.contextEngine.ingestBatch === "function") {
-                try {
-                  await params.contextEngine.ingestBatch({
-                    sessionId: sessionIdUsed,
-                    sessionKey: params.sessionKey,
-                    messages: newMessages,
-                  });
-                } catch (ingestErr) {
-                  postTurnFinalizationSucceeded = false;
-                  log.warn(`context engine ingest failed: ${String(ingestErr)}`);
-                }
-              } else {
-                for (const msg of newMessages) {
-                  try {
-                    await params.contextEngine.ingest({
-                      sessionId: sessionIdUsed,
-                      sessionKey: params.sessionKey,
-                      message: msg,
-                    });
-                  } catch (ingestErr) {
-                    postTurnFinalizationSucceeded = false;
-                    log.warn(`context engine ingest failed: ${String(ingestErr)}`);
-                  }
-                }
-              }
-            }
-          }
-
-          if (!promptError && !aborted && !yieldAborted && postTurnFinalizationSucceeded) {
-            await runContextEngineMaintenance({
-              contextEngine: params.contextEngine,
-              sessionId: sessionIdUsed,
-              sessionKey: params.sessionKey,
-              sessionFile: params.sessionFile,
-              reason: "turn",
-              sessionManager,
-              runtimeContext: afterTurnRuntimeContext,
-            });
-          }
+          await finalizeAttemptContextEngineTurn({
+            contextEngine: params.contextEngine,
+            promptError: Boolean(promptError),
+            aborted,
+            yieldAborted,
+            sessionIdUsed,
+            sessionKey: params.sessionKey,
+            sessionFile: params.sessionFile,
+            messagesSnapshot,
+            prePromptMessageCount,
+            tokenBudget: params.contextTokenBudget,
+            runtimeContext: afterTurnRuntimeContext,
+            runMaintenance: async (contextParams) =>
+              await runContextEngineMaintenance({
+                contextEngine: contextParams.contextEngine as never,
+                sessionId: contextParams.sessionId,
+                sessionKey: contextParams.sessionKey,
+                sessionFile: contextParams.sessionFile,
+                reason: contextParams.reason,
+                sessionManager: contextParams.sessionManager as never,
+                runtimeContext: contextParams.runtimeContext,
+              }),
+            sessionManager,
+            warn: (message) => log.warn(message),
+          });
         }
 
         cacheTrace?.recordStage("session:after", {
@@ -3244,6 +3208,5 @@ export async function runEmbeddedAttempt(
     }
   } finally {
     restoreSkillEnv?.();
-    process.chdir(prevCwd);
   }
 }
