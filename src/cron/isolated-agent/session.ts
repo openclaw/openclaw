@@ -24,23 +24,11 @@ export function resolveCronSession(params: {
   const entry = store[params.sessionKey];
 
   // Check if we can reuse an existing session
-  // Isolated cron sessions (identified by :cron:isolated: in the key) always create
-  // new sessions to ensure complete isolation between executions.
-  // Note: params.sessionKey is transformed by toAgentStoreSessionKey to include
-  // the agent prefix, so we use includes() instead of startsWith().
-  const isIsolatedSession = params.sessionKey.includes(":cron:isolated:");
-
   let sessionId: string;
   let isNewSession: boolean;
   let systemSent: boolean;
 
-  if (isIsolatedSession || params.forceNew || !entry?.sessionId) {
-    // Isolated sessions always create new sessions without checking freshness.
-    // For non-isolated sessions, this handles forced new or no existing session.
-    sessionId = crypto.randomUUID();
-    isNewSession = true;
-    systemSent = false;
-  } else {
+  if (!params.forceNew && entry?.sessionId) {
     // Evaluate freshness using the configured reset policy
     // Cron/webhook sessions use "direct" reset type (1:1 conversation style)
     const resetPolicy = resolveSessionResetPolicy({
@@ -64,6 +52,11 @@ export function resolveCronSession(params: {
       isNewSession = true;
       systemSent = false;
     }
+  } else {
+    // No existing session or forced new
+    sessionId = crypto.randomUUID();
+    isNewSession = true;
+    systemSent = false;
   }
 
   clearBootstrapSnapshotOnSessionRollover({

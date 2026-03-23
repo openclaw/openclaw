@@ -285,18 +285,12 @@ export function buildGatewayCronService(params: {
     },
     runIsolatedAgentJob: async ({ job, message, abortSignal }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
-      // Generate a unique session key for isolated cron runs to ensure complete
-      // session isolation between executions. This prevents context leakage.
-      let sessionKey;
-      if (job.sessionTarget === "isolated") {
-        // Use crypto.randomUUID() for better entropy and consistency with session.ts
-        const uniqueId = crypto.randomUUID();
-        sessionKey = `cron:${job.id}:isolated:${uniqueId}`;
-      } else if (job.sessionTarget.startsWith("session:")) {
+      let sessionKey = `cron:${job.id}`;
+      if (job.sessionTarget.startsWith("session:")) {
         const customSessionId = job.sessionTarget.slice(8).trim();
-        sessionKey = customSessionId || `cron:${job.id}`;
-      } else {
-        sessionKey = `cron:${job.id}`;
+        if (customSessionId) {
+          sessionKey = customSessionId;
+        }
       }
       return await runCronIsolatedAgentTurn({
         cfg: runtimeConfig,
