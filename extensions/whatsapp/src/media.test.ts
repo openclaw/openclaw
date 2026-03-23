@@ -28,6 +28,16 @@ vi.mock("../../../src/media/image-ops.js", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
+    "openclaw/plugin-sdk/media-runtime",
+  );
+  return {
+    ...actual,
+    convertHeicToJpeg: (...args: unknown[]) => convertHeicToJpegMock(...args),
+  };
+});
+
 let fixtureRoot = "";
 let fixtureFileCount = 0;
 let largeJpegBuffer: Buffer;
@@ -391,6 +401,21 @@ describe("local media root guard", () => {
     expect(result.kind).toBe("image");
   });
 
+  it("rejects remote-host file URLs before filesystem checks", async () => {
+    const realpathSpy = vi.spyOn(fs, "realpath");
+
+    try {
+      await expect(
+        loadWebMedia("file://attacker/share/evil.png", 1024 * 1024, {
+          localRoots: [resolvePreferredOpenClawTmpDir()],
+        }),
+      ).rejects.toMatchObject({ code: "invalid-file-url" });
+      expect(realpathSpy).not.toHaveBeenCalled();
+    } finally {
+      realpathSpy.mockRestore();
+    }
+  });
+
   it("accepts win32 dev=0 stat mismatch for local file loads", async () => {
     const actualLstat = await fs.lstat(tinyPngFile);
     const actualStat = await fs.stat(tinyPngFile);
@@ -411,6 +436,23 @@ describe("local media root guard", () => {
     } finally {
       statSpy.mockRestore();
       lstatSpy.mockRestore();
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("rejects Windows network paths before filesystem checks", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const realpathSpy = vi.spyOn(fs, "realpath");
+
+    try {
+      await expect(
+        loadWebMedia("\\\\attacker\\share\\evil.png", 1024 * 1024, {
+          localRoots: [resolvePreferredOpenClawTmpDir()],
+        }),
+      ).rejects.toMatchObject({ code: "network-path-not-allowed" });
+      expect(realpathSpy).not.toHaveBeenCalled();
+    } finally {
+      realpathSpy.mockRestore();
       platformSpy.mockRestore();
     }
   });

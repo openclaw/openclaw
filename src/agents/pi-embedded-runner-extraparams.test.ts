@@ -1272,7 +1272,7 @@ describe("applyExtraParamsToAgent", () => {
       agents: {
         defaults: {
           models: {
-            "openai-codex/gpt-5.3-codex": {
+            "openai-codex/gpt-5.4": {
               params: {
                 transport: "websocket",
               },
@@ -1282,12 +1282,12 @@ describe("applyExtraParamsToAgent", () => {
       },
     };
 
-    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.3-codex");
+    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.4");
 
     const model = {
       api: "openai-codex-responses",
       provider: "openai-codex",
-      id: "gpt-5.3-codex",
+      id: "gpt-5.4",
     } as Model<"openai-codex-responses">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
@@ -1329,12 +1329,12 @@ describe("applyExtraParamsToAgent", () => {
   it("defaults Codex transport to auto (WebSocket-first)", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
-    applyExtraParamsToAgent(agent, undefined, "openai-codex", "gpt-5.3-codex");
+    applyExtraParamsToAgent(agent, undefined, "openai-codex", "gpt-5.4");
 
     const model = {
       api: "openai-codex-responses",
       provider: "openai-codex",
-      id: "gpt-5.3-codex",
+      id: "gpt-5.4",
     } as Model<"openai-codex-responses">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
@@ -1446,7 +1446,7 @@ describe("applyExtraParamsToAgent", () => {
       agents: {
         defaults: {
           models: {
-            "openai-codex/gpt-5.3-codex": {
+            "openai-codex/gpt-5.4": {
               params: {
                 transport: "sse",
               },
@@ -1456,12 +1456,12 @@ describe("applyExtraParamsToAgent", () => {
       },
     };
 
-    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.3-codex");
+    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.4");
 
     const model = {
       api: "openai-codex-responses",
       provider: "openai-codex",
-      id: "gpt-5.3-codex",
+      id: "gpt-5.4",
     } as Model<"openai-codex-responses">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
@@ -1476,7 +1476,7 @@ describe("applyExtraParamsToAgent", () => {
       agents: {
         defaults: {
           models: {
-            "openai-codex/gpt-5.3-codex": {
+            "openai-codex/gpt-5.4": {
               params: {
                 transport: "websocket",
               },
@@ -1486,12 +1486,12 @@ describe("applyExtraParamsToAgent", () => {
       },
     };
 
-    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.3-codex");
+    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.4");
 
     const model = {
       api: "openai-codex-responses",
       provider: "openai-codex",
-      id: "gpt-5.3-codex",
+      id: "gpt-5.4",
     } as Model<"openai-codex-responses">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, { transport: "sse" });
@@ -1506,7 +1506,7 @@ describe("applyExtraParamsToAgent", () => {
       agents: {
         defaults: {
           models: {
-            "openai-codex/gpt-5.3-codex": {
+            "openai-codex/gpt-5.4": {
               params: {
                 transport: "udp",
               },
@@ -1516,12 +1516,12 @@ describe("applyExtraParamsToAgent", () => {
       },
     };
 
-    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.3-codex");
+    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.4");
 
     const model = {
       api: "openai-codex-responses",
       provider: "openai-codex",
-      id: "gpt-5.3-codex",
+      id: "gpt-5.4",
     } as Model<"openai-codex-responses">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});

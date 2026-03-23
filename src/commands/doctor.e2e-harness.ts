@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import type { LegacyStateDetection } from "./doctor-state-migrations.js";
 
@@ -181,7 +182,7 @@ vi.mock("../agents/skills-status.js", () => ({
 }));
 
 vi.mock("../plugins/loader.js", () => ({
-  loadOpenClawPlugins: () => ({ plugins: [], diagnostics: [] }),
+  loadOpenClawPlugins: () => createEmptyPluginRegistry(),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
