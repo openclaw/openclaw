@@ -12,7 +12,7 @@
 # Two runtime variants:
 #   Default (bookworm):      docker build .
 #   Slim (bookworm-slim):    docker build --build-arg OPENCLAW_VARIANT=slim .
-ARG OPENCLAW_EXTENSIONS=""
+ARG OPENCLAW_EXTENSIONS="acpx amazon-bedrock anthropic anthropic-vertex bluebubbles brave byteplus chutes cloudflare-ai-gateway copilot-proxy device-pair diagnostics-otel diffs discord elevenlabs fal feishu firecrawl github-copilot google googlechat huggingface imessage irc kilocode kimi-coding line llm-task lobster matrix mattermost memory-core memory-lancedb microsoft minimax mistral modelstudio moonshot msteams nextcloud-talk nostr nvidia ollama open-prose openai opencode opencode-go openrouter openshell perplexity phone-control qianfan qwen-portal-auth sglang shared signal slack synology-chat synthetic talk-voice tavily telegram thread-ownership tlon together twitch venice vercel-ai-gateway vllm voice-call volcengine whatsapp xai xiaomi zai zalo zalouser"
 ARG OPENCLAW_VARIANT=default
 ARG OPENCLAW_DOCKER_APT_UPGRADE=1
 ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:24-bookworm@sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"

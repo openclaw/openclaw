@@ -1,0 +1,26 @@
+steps:
+  # The repo .dockerignore excludes apps/ then re-includes apps/shared/ via !
+  # patterns. Cloud Build's Docker version may not honor nested re-includes.
+  # Work around by patching .dockerignore to use targeted excludes instead.
+  - name: "ubuntu"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        sed -i 's|^apps/$|apps/android/\napps/ios/\napps/macos/|' .dockerignore
+        sed -i 's|^vendor/$||' .dockerignore
+        echo "--- .dockerignore after patch ---"
+        cat .dockerignore
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "us-central1-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw:latest"
+      - "."
+    env:
+      - "DOCKER_BUILDKIT=1"
+images:
+  - "us-central1-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw:latest"
+timeout: 1800s
+options:
+  machineType: "E2_HIGHCPU_8"
