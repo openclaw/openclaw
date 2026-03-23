@@ -8,8 +8,10 @@ import { renderMarkdownWithMarkers } from "openclaw/plugin-sdk/text-runtime";
 
 // Escape special characters for Slack mrkdwn format.
 // Preserve Slack's angle-bracket tokens so mentions and links stay intact.
+// NOTE: We do NOT escape & because Slack's API handles entity encoding automatically.
+// Pre-escaping & causes double-encoding (& → &amp; → &#38;).
 function escapeSlackMrkdwnSegment(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 const SLACK_ANGLE_TOKEN_RE = /<[^>\n]+>/g;

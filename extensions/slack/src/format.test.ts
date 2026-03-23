@@ -25,7 +25,7 @@ describe("markdownToSlackMrkdwn", () => {
         "see <https://example.com|docs>",
       ],
       ["does not duplicate bare URLs", "see https://example.com", "see https://example.com"],
-      ["escapes unsafe characters", "a & b < c > d", "a &amp; b &lt; c &gt; d"],
+      ["escapes unsafe characters", "a & b < c > d", "a & b &lt; c &gt; d"],
       [
         "preserves Slack angle-bracket markup (mentions/links)",
         "hi <@U123> see <https://example.com|docs> and <!here>",
@@ -69,7 +69,7 @@ describe("escapeSlackMrkdwn", () => {
   });
 
   it("escapes slack and mrkdwn control characters", () => {
-    expect(escapeSlackMrkdwn("mode_*`~<&>\\")).toBe("mode\\_\\*\\`\\~&lt;&amp;&gt;\\\\");
+    expect(escapeSlackMrkdwn("mode_*`~<&>\\")).toBe("mode\\_\\*\\`\\~&lt;&&gt;\\\\");
   });
 });
 
