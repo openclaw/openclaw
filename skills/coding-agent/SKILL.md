@@ -1,9 +1,9 @@
 ---
 name: coding-agent
-description: 'Delegate coding tasks to Codex, Claude Code, or Pi agents via background process. Use when: (1) building/creating new features or apps, (2) reviewing PRs (spawn in temp dir), (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-liner fixes (just edit), reading code (use read tool), thread-bound ACP harness requests in chat (for example spawn/run Codex or Claude Code in a Discord thread; use sessions_spawn with runtime:"acp"), or any work in ~/clawd workspace (never spawn agents here). Claude Code: use --print --permission-mode bypassPermissions (no PTY). Codex/Pi/OpenCode: pty:true required.'
+description: 'Delegate coding tasks to Codex, Claude Code, Kimi CLI, or Pi agents via background process. Use when: (1) building/creating new features or apps, (2) reviewing PRs (spawn in temp dir), (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-liner fixes (just edit), reading code (use read tool), thread-bound ACP harness requests in chat (for example spawn/run Codex or Claude Code in a Discord thread; use sessions_spawn with runtime:"acp"), or any work in ~/clawd workspace (never spawn agents here). Claude Code: use --print --permission-mode bypassPermissions (no PTY). Codex/Kimi/Pi/OpenCode: pty:true required.'
 metadata:
   {
-    "openclaw": { "emoji": "🧩", "requires": { "anyBins": ["claude", "codex", "opencode", "pi"] } },
+    "openclaw": { "emoji": "🧩", "requires": { "anyBins": ["claude", "codex", "kimi", "kimi-coding", "opencode", "pi"] } },
   }
 ---
 
@@ -11,7 +11,7 @@ metadata:
 
 Use **bash** (with optional background mode) for all coding agent work. Simple and effective.
 
-## ⚠️ PTY Mode: Codex/Pi/OpenCode yes, Claude Code no
+## ⚠️ PTY Mode: Codex/Pi/OpenCode yes, Claude Code/Kimi no
 
 For **Codex, Pi, and OpenCode**, PTY is still required (interactive terminal apps):
 
@@ -20,13 +20,15 @@ For **Codex, Pi, and OpenCode**, PTY is still required (interactive terminal app
 bash pty:true command:"codex exec 'Your prompt'"
 ```
 
-For **Claude Code** (`claude` CLI), use `--print --permission-mode bypassPermissions` instead.
-`--dangerously-skip-permissions` with PTY can exit after the confirmation dialog.
-`--print` mode keeps full tool access and avoids interactive confirmation:
+For **Claude Code** (`claude` CLI) and **Kimi CLI** (`kimi-coding`), use `--print` mode instead.
+This avoids interactive confirmation and eliminates the need for PTY:
 
 ```bash
 # ✅ Correct for Claude Code (no PTY needed)
 cd /path/to/project && claude --permission-mode bypassPermissions --print 'Your task'
+
+# ✅ Correct for Kimi CLI (no PTY needed)
+bash workdir:~/project command:"kimi-coding --print 'Your task'"
 
 # For background execution: use background:true on the exec tool
 
@@ -201,6 +203,48 @@ bash pty:true command:"pi --provider openai --model gpt-4o-mini -p 'Your task'"
 
 ---
 
+## Kimi CLI (Moonshot AI)
+
+```bash
+# Install: npm install -g @moonshotai/kimi-coding
+# Or: curl -fsSL https://kimi.moonshot.cn/install.sh | sh
+
+# Non-interactive mode (recommended, no PTY needed)
+bash workdir:~/project command:"kimi-coding --print 'Your task'"
+
+# Background execution (no PTY needed)
+bash workdir:~/project background:true command:"kimi-coding --print 'Refactor the auth module'"
+
+# Interactive mode (PTY required)
+bash pty:true workdir:~/project command:"kimi-coding 'Your task'"
+
+# Quick one-liner
+bash command:"kimi-coding -p 'Summarize the main files'"
+
+# With specific model
+bash command:"kimi-coding --print --model kimi-k2.5 'Your task'"
+```
+
+**Installation:**
+```bash
+# Via npm
+npm install -g @moonshotai/kimi-coding
+
+# Or official install script
+curl -fsSL https://kimi.moonshot.cn/install.sh | sh
+```
+
+**Configuration:**
+```bash
+# Set API key
+export MOONSHOT_API_KEY="your-api-key"
+# Or configure in ~/.kimi/config.toml
+```
+
+**Note:** Kimi CLI supports `--print` mode for non-interactive execution (similar to Claude Code), eliminating the need for PTY in most cases.
+
+---
+
 ## Parallel Issue Fixing with git worktrees
 
 For fixing multiple issues in parallel, use git worktrees:
@@ -232,8 +276,8 @@ git worktree remove /tmp/issue-99
 ## ⚠️ Rules
 
 1. **Use the right execution mode per agent**:
-   - Codex/Pi/OpenCode: `pty:true`
-   - Claude Code: `--print --permission-mode bypassPermissions` (no PTY required)
+   - Codex/Pi/OpenCode: `pty:true` (interactive required)
+   - Claude Code/Kimi CLI: `--print` mode (no PTY needed)
 2. **Respect tool choice** - if user asks for Codex, use Codex.
    - Orchestrator mode: do NOT hand-code patches yourself.
    - If an agent fails/hangs, respawn it or ask the user for direction, but don't silently take over.
