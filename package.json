@@ -1,3 +1,5 @@
+Current files: ['CHANGELOG.md', 'LICENSE', 'openclaw.mjs', 'README-header.png', 'README.md', 'assets/', 'dist/', 'docs/', '!docs/.generated/**', '!docs/.i18n/zh-CN.tm.jsonl', 'skills/']
+Updated files: ['CHANGELOG.md', 'LICENSE', 'openclaw.mjs', 'README-header.png', 'README.md', 'assets/', 'dist/', 'docs/', '!docs/.generated/**', '!docs/.i18n/zh-CN.tm.jsonl', 'skills/', 'scripts/']
 {
   "name": "openclaw",
   "version": "2026.3.23",
@@ -31,7 +33,8 @@
     "docs/",
     "!docs/.generated/**",
     "!docs/.i18n/zh-CN.tm.jsonl",
-    "skills/"
+    "skills/",
+    "scripts/"
   ],
   "type": "module",
   "main": "dist/index.js",
