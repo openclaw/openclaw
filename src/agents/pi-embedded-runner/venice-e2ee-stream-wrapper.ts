@@ -26,15 +26,15 @@ interface E2EEInstance {
   clearSession: () => void;
 }
 
-let _e2ee: E2EEInstance | null = null;
-let _e2eeKey: string | null = null;
+const _e2eeCache = new Map<string, E2EEInstance>();
 
 function getE2EE(apiKey: string): E2EEInstance {
-  if (!_e2ee || _e2eeKey !== apiKey) {
-    _e2ee = createVeniceE2EE({ apiKey });
-    _e2eeKey = apiKey;
+  let instance = _e2eeCache.get(apiKey);
+  if (!instance) {
+    instance = createVeniceE2EE({ apiKey });
+    _e2eeCache.set(apiKey, instance);
   }
-  return _e2ee;
+  return instance;
 }
 
 // ── Public wrapper ──────────────────────────────────────────────────────────
@@ -66,9 +66,12 @@ export function createVeniceE2EEStreamWrapper(baseStreamFn: StreamFn | undefined
     let session: E2EESession;
     try {
       session = await e2ee.createSession(model.id);
-    } catch {
-      // If attestation fails, fall back to plaintext
-      return underlying(model, context, options);
+    } catch (err) {
+      throw new Error(
+        `Venice E2EE setup failed: ${err instanceof Error ? err.message : String(err)}. ` +
+          `Refusing to send plaintext to an E2EE model.`,
+        { cause: err },
+      );
     }
 
     // ── Encrypt context ─────────────────────────────────────────────────
@@ -86,7 +89,11 @@ export function createVeniceE2EEStreamWrapper(baseStreamFn: StreamFn | undefined
       },
       onPayload: (payload: unknown) => {
         if (payload && typeof payload === "object") {
-          (payload as Record<string, unknown>).venice_parameters = {
+          const p = payload as Record<string, unknown>;
+          p.venice_parameters = {
+            ...(p.venice_parameters && typeof p.venice_parameters === "object"
+              ? (p.venice_parameters as Record<string, unknown>)
+              : {}),
             enable_e2ee: true,
           };
         }
@@ -103,7 +110,7 @@ export function createVeniceE2EEStreamWrapper(baseStreamFn: StreamFn | undefined
         for await (const event of sourceStream) {
           resultStream.push(await decryptEvent(event, session, decryptedAccum));
         }
-      } catch {
+      } finally {
         resultStream.end();
       }
     })();
