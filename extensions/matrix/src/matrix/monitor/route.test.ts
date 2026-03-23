@@ -131,6 +131,7 @@ describe("resolveMatrixInboundRoute", () => {
   });
 
   it("lets runtime conversation bindings override both sender and room route matches", () => {
+    const touch = vi.fn();
     registerSessionBindingAdapter({
       channel: "matrix",
       accountId: "ops",
@@ -151,7 +152,7 @@ describe("resolveMatrixInboundRoute", () => {
               metadata: { boundBy: "user-1" },
             }
           : null,
-      touch: vi.fn(),
+      touch,
     });
 
     const cfg = {
@@ -176,11 +177,13 @@ describe("resolveMatrixInboundRoute", () => {
       ],
     } satisfies OpenClawConfig;
 
-    const { route, configuredBinding } = resolveDmRoute(cfg);
+    const { route, configuredBinding, runtimeBindingId } = resolveDmRoute(cfg);
 
     expect(configuredBinding).toBeNull();
+    expect(runtimeBindingId).toBe("ops:!dm:example.org");
     expect(route.agentId).toBe("bound");
     expect(route.matchedBy).toBe("binding.channel");
     expect(route.sessionKey).toBe("agent:bound:session-1");
+    expect(touch).not.toHaveBeenCalled();
   });
 });
