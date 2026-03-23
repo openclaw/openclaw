@@ -862,8 +862,17 @@ export async function runCronIsolatedAgentTurn(params: {
   // Exception: when a `message_sending` plugin hook intentionally cancelled
   // all payloads, deliverOutboundPayloads legitimately returns no results
   // without any delivery error.  This is not a failure — the hook decided
-  // the message should not be sent.  Fixes review thread on #49880.
-  if (deliveryAttempted && !deliveryBestEffort && !delivered && !deliveryResult.hookCancelled) {
+  // the message should not be sent.  Similarly, when the channel sanitizer
+  // strips all payloads (e.g. HTML-only on WhatsApp), deliverOutboundPayloads
+  // returns [] without throwing — this is also not a failure (noOpDelivery).
+  // Fixes review thread on #49880.
+  if (
+    deliveryAttempted &&
+    !deliveryBestEffort &&
+    !delivered &&
+    !deliveryResult.hookCancelled &&
+    !deliveryResult.noOpDelivery
+  ) {
     return withRunSession({
       status: "error",
       error: "delivery failed without enriched result",
