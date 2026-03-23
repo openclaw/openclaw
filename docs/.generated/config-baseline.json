@@ -6641,7 +6641,6 @@
       "required": false,
       "enumValues": [
         "off",
-        "log",
         "on-miss",
         "always"
       ],
@@ -60974,7 +60973,6 @@
       "required": false,
       "enumValues": [
         "off",
-        "log",
         "on-miss",
         "always"
       ],
@@ -60984,7 +60982,7 @@
         "tools"
       ],
       "label": "Exec Ask",
-      "help": "Approval strategy for when exec commands require human confirmation before running. Use \"log\" to notify the active channel before running without requiring approval, \"on-miss\" to prompt only when no matching allowlist rule exists, \"always\" to require explicit approval for every command, and \"off\" to skip approval entirely. Use stricter ask behavior in shared channels and lower-friction settings in private operator contexts.",
+      "help": "Approval strategy for when exec commands require human confirmation before running. Use stricter ask behavior in shared channels and lower-friction settings in private operator contexts.",
       "hasChildren": false
     },
     {
