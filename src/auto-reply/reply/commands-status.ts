@@ -186,6 +186,10 @@ export async function buildStatusReply(params: {
       elevatedDefault: agentDefaults.elevatedDefault,
     },
     agentId: statusAgentId,
+    explicitConfiguredContextTokens:
+      typeof agentDefaults.contextTokens === "number" && agentDefaults.contextTokens > 0
+        ? agentDefaults.contextTokens
+        : undefined,
     sessionEntry,
     sessionKey,
     parentSessionKey,
