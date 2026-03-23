@@ -4,9 +4,21 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
 }));
 
-vi.mock("../../../api.js", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
-}));
+vi.mock("../../../api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../api.js")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+  };
+});
+
+vi.mock("../../../runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../runtime-api.js")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+  };
+});
 
 import { guardedJsonApiRequest } from "./guarded-json-api.js";
 

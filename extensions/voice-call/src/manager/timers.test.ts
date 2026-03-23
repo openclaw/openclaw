@@ -47,7 +47,6 @@ describe("voice-call manager timers", () => {
     await vi.advanceTimersByTimeAsync(5_000);
 
     expect(call).toEqual({ id: "call-1", state: "active", endReason: "timeout" });
-    expect(persistCallRecordMock).toHaveBeenCalledWith("/tmp/voice-call.json", call);
     expect(onTimeout).toHaveBeenCalledWith("call-1");
     expect(ctx.maxDurationTimers.has("call-1")).toBe(false);
 

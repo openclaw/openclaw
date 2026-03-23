@@ -9,7 +9,7 @@ import {
 } from "./bot-native-commands.test-helpers.js";
 
 describe("native command auth in groups", () => {
-  function setup(params: {
+  async function setup(params: {
     cfg?: OpenClawConfig;
     telegramCfg?: TelegramAccountConfig;
     allowFrom?: string[];
@@ -18,7 +18,7 @@ describe("native command auth in groups", () => {
     groupConfig?: Record<string, unknown>;
     resolveGroupPolicy?: () => ChannelGroupPolicy;
   }) {
-    return createNativeCommandsHarness({
+    return await createNativeCommandsHarness({
       cfg: params.cfg ?? ({} as OpenClawConfig),
       telegramCfg: params.telegramCfg ?? ({} as TelegramAccountConfig),
       allowFrom: params.allowFrom ?? [],
@@ -36,7 +36,7 @@ describe("native command auth in groups", () => {
   }
 
   it("authorizes native commands in groups when sender is in groupAllowFrom", async () => {
-    const { handlers, sendMessage } = setup({
+    const { handlers, sendMessage } = await setup({
       groupAllowFrom: ["12345"],
       useAccessGroups: true,
       // no allowFrom — sender is NOT in DM allowlist
@@ -51,7 +51,7 @@ describe("native command auth in groups", () => {
   });
 
   it("authorizes native commands in groups from commands.allowFrom.telegram", async () => {
-    const { handlers, sendMessage } = setup({
+    const { handlers, sendMessage } = await setup({
       cfg: {
         commands: {
           allowFrom: {
@@ -73,7 +73,7 @@ describe("native command auth in groups", () => {
   });
 
   it("uses commands.allowFrom.telegram as the sole auth source when configured", async () => {
-    const { handlers, sendMessage } = setup({
+    const { handlers, sendMessage } = await setup({
       cfg: {
         commands: {
           allowFrom: {
@@ -97,7 +97,7 @@ describe("native command auth in groups", () => {
   });
 
   it("keeps groupPolicy disabled enforced when commands.allowFrom is configured", async () => {
-    const { handlers, sendMessage } = setup({
+    const { handlers, sendMessage } = await setup({
       cfg: {
         channels: {
           telegram: {
@@ -130,7 +130,7 @@ describe("native command auth in groups", () => {
   });
 
   it("keeps group chat allowlists enforced when commands.allowFrom is configured", async () => {
-    const { handlers, sendMessage } = setup({
+    const { handlers, sendMessage } = await setup({
       cfg: {
         commands: {
           allowFrom: {
@@ -158,7 +158,7 @@ describe("native command auth in groups", () => {
   });
 
   it("rejects native commands in groups when sender is in neither allowlist", async () => {
-    const { handlers, sendMessage } = setup({
+    const { handlers, sendMessage } = await setup({
       allowFrom: ["99999"],
       groupAllowFrom: ["99999"],
       useAccessGroups: true,
@@ -175,7 +175,7 @@ describe("native command auth in groups", () => {
   });
 
   it("replies in the originating forum topic when auth is rejected", async () => {
-    const { handlers, sendMessage } = setup({
+    const { handlers, sendMessage } = await setup({
       allowFrom: ["99999"],
       groupAllowFrom: ["99999"],
       useAccessGroups: true,

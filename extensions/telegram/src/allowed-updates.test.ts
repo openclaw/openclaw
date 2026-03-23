@@ -1,8 +1,18 @@
 import { API_CONSTANTS } from "grammy";
-import { describe, expect, it } from "vitest";
-import { DEFAULT_TELEGRAM_UPDATE_TYPES, resolveTelegramAllowedUpdates } from "./allowed-updates.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+type AllowedUpdatesModule = typeof import("./allowed-updates.js");
+
+let DEFAULT_TELEGRAM_UPDATE_TYPES: AllowedUpdatesModule["DEFAULT_TELEGRAM_UPDATE_TYPES"];
+let resolveTelegramAllowedUpdates: AllowedUpdatesModule["resolveTelegramAllowedUpdates"];
 
 describe("resolveTelegramAllowedUpdates", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ DEFAULT_TELEGRAM_UPDATE_TYPES, resolveTelegramAllowedUpdates } =
+      await import("./allowed-updates.js"));
+  });
+
   it("includes the default update types plus reaction and channel post support", () => {
     const updates = resolveTelegramAllowedUpdates();
 

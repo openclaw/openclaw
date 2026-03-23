@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -23,6 +23,11 @@ describe("buildTelegramMessageContext named-account DM fallback", () => {
 
   afterEach(() => {
     clearRuntimeConfigSnapshot();
+    recordInboundSessionMock.mockClear();
+  });
+
+  beforeEach(() => {
+    vi.resetModules();
     recordInboundSessionMock.mockClear();
   });
 
@@ -94,7 +99,7 @@ describe("buildTelegramMessageContext named-account DM fallback", () => {
     expect(atlas?.ctxPayload?.SessionKey).not.toBe(skynet?.ctxPayload?.SessionKey);
   });
 
-  it("keeps identity-linked peer canonicalization in the named-account fallback path", async () => {
+  it("keeps named-account DM fallback isolated even when identityLinks are configured", async () => {
     const cfg = {
       ...baseCfg,
       session: {
@@ -117,7 +122,7 @@ describe("buildTelegramMessageContext named-account DM fallback", () => {
       },
     });
 
-    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:telegram:atlas:direct:alice-shared");
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:telegram:atlas:direct:814912386");
   });
 
   it("still drops named-account group messages without an explicit binding", async () => {

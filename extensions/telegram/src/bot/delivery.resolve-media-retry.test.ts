@@ -5,14 +5,28 @@ import type { TelegramContext } from "./types.js";
 const saveMediaBuffer = vi.fn();
 const fetchRemoteMedia = vi.fn();
 
-vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
-  return {
-    ...actual,
-    saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args),
-    fetchRemoteMedia: (...args: unknown[]) => fetchRemoteMedia(...args),
-  };
-});
+async function mockMediaRuntimeModuleForTest(
+  importOriginal: () => Promise<typeof import("openclaw/plugin-sdk/media-runtime")>,
+) {
+  const actual = await importOriginal();
+  const mockModule = Object.create(null) as Record<string, unknown>;
+  Object.defineProperties(mockModule, Object.getOwnPropertyDescriptors(actual));
+  Object.defineProperty(mockModule, "saveMediaBuffer", {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    value: (...args: Parameters<typeof saveMediaBuffer>) => saveMediaBuffer(...args),
+  });
+  Object.defineProperty(mockModule, "fetchRemoteMedia", {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    value: (...args: Parameters<typeof fetchRemoteMedia>) => fetchRemoteMedia(...args),
+  });
+  return mockModule;
+}
+
+vi.mock("openclaw/plugin-sdk/media-runtime", mockMediaRuntimeModuleForTest);
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
@@ -33,7 +47,9 @@ vi.mock("../sticker-cache.js", () => ({
   describeStickerImage: async () => null,
 }));
 
-import { resolveMedia } from "./delivery.js";
+type DeliveryModule = typeof import("./delivery.js");
+
+let resolveMedia: DeliveryModule["resolveMedia"];
 
 const MAX_MEDIA_BYTES = 10_000_000;
 const BOT_TOKEN = "tok123";
@@ -168,7 +184,9 @@ async function flushRetryTimers() {
 }
 
 describe("resolveMedia getFile retry", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ resolveMedia } = await import("./delivery.js"));
     vi.useFakeTimers();
     fetchRemoteMedia.mockReset();
     saveMediaBuffer.mockReset();
@@ -391,7 +409,9 @@ describe("resolveMedia getFile retry", () => {
 });
 
 describe("resolveMedia original filename preservation", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ resolveMedia } = await import("./delivery.js"));
     vi.useFakeTimers();
     fetchRemoteMedia.mockClear();
     saveMediaBuffer.mockClear();

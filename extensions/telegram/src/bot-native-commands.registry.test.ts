@@ -1,19 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { clearPluginCommands, registerPluginCommand } from "../../../src/plugins/commands.js";
-const deliveryMocks = vi.hoisted(() => ({
-  deliverReplies: vi.fn(async () => ({ delivered: true })),
-}));
+type NativeCommandsModule = typeof import("./bot-native-commands.js");
 
-vi.mock("./bot/delivery.js", () => ({
-  deliverReplies: deliveryMocks.deliverReplies,
-}));
-
-import { registerTelegramNativeCommands } from "./bot-native-commands.js";
+let registerTelegramNativeCommands: NativeCommandsModule["registerTelegramNativeCommands"];
 import {
   createCommandBot,
   createNativeCommandTestParams,
   createPrivateCommandContext,
+  deliverReplies,
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
 
@@ -50,10 +45,12 @@ async function registerPairMenu(params: {
 }
 
 describe("registerTelegramNativeCommands real plugin registry", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ registerTelegramNativeCommands } = await import("./bot-native-commands.js"));
     clearPluginCommands();
-    deliveryMocks.deliverReplies.mockClear();
-    deliveryMocks.deliverReplies.mockResolvedValue({ delivered: true });
+    deliverReplies.mockClear();
+    deliverReplies.mockResolvedValue({ delivered: true });
   });
 
   afterEach(() => {
@@ -73,7 +70,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
 
     await handler?.(createPrivateCommandContext({ match: "now" }));
 
-    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
+    expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [expect.objectContaining({ text: "paired:now" })],
       }),
@@ -101,7 +98,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
 
     await handler?.(createPrivateCommandContext({ match: "now", messageId: 2 }));
 
-    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
+    expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [expect.objectContaining({ text: "paired:now" })],
       }),
@@ -153,7 +150,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
       }),
     );
 
-    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
+    expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [expect.objectContaining({ text: "paired:now" })],
       }),

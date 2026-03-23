@@ -1,24 +1,41 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramNetworkConfig } from "../../../src/config/types.telegram.js";
-import {
-  resetTelegramNetworkConfigStateForTests,
-  resolveTelegramAutoSelectFamilyDecision,
-  resolveTelegramDnsResultOrderDecision,
-} from "./network-config.js";
 
-// Mock isWSL2Sync at the top level
-vi.mock("../../../src/infra/wsl.js", () => ({
-  isWSL2Sync: vi.fn(() => false),
-}));
+type NetworkConfigModule = typeof import("./network-config.js");
 
-import { isWSL2Sync } from "../../../src/infra/wsl.js";
+let resetTelegramNetworkConfigStateForTests: NetworkConfigModule["resetTelegramNetworkConfigStateForTests"];
+let resolveTelegramAutoSelectFamilyDecision: NetworkConfigModule["resolveTelegramAutoSelectFamilyDecision"];
+let resolveTelegramDnsResultOrderDecision: NetworkConfigModule["resolveTelegramDnsResultOrderDecision"];
+
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return {
+    ...actual,
+    isWSL2Sync: vi.fn(() => false),
+  };
+});
+
+let isWSL2Sync: typeof import("openclaw/plugin-sdk/infra-runtime").isWSL2Sync;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({
+    resetTelegramNetworkConfigStateForTests,
+    resolveTelegramAutoSelectFamilyDecision,
+    resolveTelegramDnsResultOrderDecision,
+  } = await import("./network-config.js"));
+  ({ isWSL2Sync } = await import("openclaw/plugin-sdk/infra-runtime"));
+  vi.mocked(isWSL2Sync).mockReset();
+  vi.mocked(isWSL2Sync).mockReturnValue(false);
+  resetTelegramNetworkConfigStateForTests();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  resetTelegramNetworkConfigStateForTests();
+});
 
 describe("resolveTelegramAutoSelectFamilyDecision", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-    resetTelegramNetworkConfigStateForTests();
-  });
-
   it.each([
     {
       name: "prefers env enable over env disable",

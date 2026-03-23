@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 import { withEnvAsync } from "../../../test/helpers/extensions/env.js";
 import { useFrozenTime, useRealTime } from "../../../test/helpers/extensions/frozen-time.js";
@@ -35,16 +35,13 @@ const {
 } = harness;
 import { resolveTelegramFetch } from "./fetch.js";
 
-// Import after the harness registers `vi.mock(...)` for grammY and Telegram internals.
-const {
-  createTelegramBot: createTelegramBotBase,
-  getTelegramSequentialKey,
-  setTelegramBotRuntimeForTest,
-} = await import("./bot.js");
-setTelegramBotRuntimeForTest(
-  telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
-);
-const createTelegramBot = (opts: Parameters<typeof createTelegramBotBase>[0]) =>
+type BotModule = typeof import("./bot.js");
+
+let createTelegramBotBase: BotModule["createTelegramBot"];
+let getTelegramSequentialKey: BotModule["getTelegramSequentialKey"];
+let setTelegramBotRuntimeForTest: BotModule["setTelegramBotRuntimeForTest"];
+
+const createTelegramBot = (opts: Parameters<BotModule["createTelegramBot"]>[0]) =>
   createTelegramBotBase({
     ...opts,
     telegramDeps: telegramBotDepsForTest,
@@ -91,6 +88,20 @@ describe("createTelegramBot", () => {
   });
   afterAll(() => {
     process.env.TZ = ORIGINAL_TZ;
+  });
+
+  beforeEach(async () => {
+    vi.resetModules();
+    ({
+      createTelegramBot: createTelegramBotBase,
+      getTelegramSequentialKey,
+      setTelegramBotRuntimeForTest,
+    } = await import("./bot.js"));
+    setTelegramBotRuntimeForTest(
+      telegramBotRuntimeForTest as unknown as Parameters<
+        BotModule["setTelegramBotRuntimeForTest"]
+      >[0],
+    );
   });
 
   // groupPolicy tests

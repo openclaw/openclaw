@@ -31,10 +31,14 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
   };
 });
 
-import { TelegramPollingSession } from "./polling-session.js";
+type PollingSessionModule = typeof import("./polling-session.js");
+
+let TelegramPollingSession: PollingSessionModule["TelegramPollingSession"];
 
 describe("TelegramPollingSession", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ TelegramPollingSession } = await import("./polling-session.js"));
     runMock.mockReset();
     createTelegramBotMock.mockReset();
     isRecoverableTelegramNetworkErrorMock.mockReset().mockReturnValue(true);

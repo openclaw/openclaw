@@ -2,8 +2,11 @@ import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { request, type IncomingMessage } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
-import { startTelegramWebhook } from "./webhook.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+type StartTelegramWebhook = typeof import("./webhook.js").startTelegramWebhook;
+
+let startTelegramWebhook: StartTelegramWebhook;
 
 const handlerSpy = vi.hoisted(() => vi.fn((..._args: unknown[]): unknown => undefined));
 const setWebhookSpy = vi.hoisted(() => vi.fn());
@@ -296,11 +299,11 @@ function sha256(text: string): string {
 }
 
 type StartWebhookOptions = Omit<
-  Parameters<typeof startTelegramWebhook>[0],
+  Parameters<StartTelegramWebhook>[0],
   "token" | "port" | "abortSignal"
 >;
 
-type StartedWebhook = Awaited<ReturnType<typeof startTelegramWebhook>>;
+type StartedWebhook = Awaited<ReturnType<StartTelegramWebhook>>;
 
 function getServerPort(server: StartedWebhook["server"]): number {
   const address = server.address();
@@ -388,6 +391,18 @@ async function runNearLimitPayloadTest(mode: "single" | "random-chunked"): Promi
 }
 
 describe("startTelegramWebhook", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ startTelegramWebhook } = await import("./webhook.js"));
+    handlerSpy.mockClear();
+    setWebhookSpy.mockClear();
+    deleteWebhookSpy.mockClear();
+    initSpy.mockClear();
+    stopSpy.mockClear();
+    webhookCallbackSpy.mockClear();
+    createTelegramBotSpy.mockClear();
+  });
+
   it("starts server, registers webhook, and serves health", async () => {
     initSpy.mockClear();
     createTelegramBotSpy.mockClear();

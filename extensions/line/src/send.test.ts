@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   pushMessageMock,
@@ -24,9 +24,9 @@ const {
       getProfile: getProfileMock,
     };
   });
-  const loadConfigMock = vi.fn(() => ({}));
-  const resolveLineAccountMock = vi.fn(() => ({ accountId: "default" }));
-  const resolveLineChannelAccessTokenMock = vi.fn(() => "line-token");
+  const loadConfigMock = vi.fn();
+  const resolveLineAccountMock = vi.fn();
+  const resolveLineChannelAccessTokenMock = vi.fn();
   const recordChannelActivityMock = vi.fn();
   const logVerboseMock = vi.fn();
   return {
@@ -43,42 +43,12 @@ const {
   };
 });
 
-vi.mock("@line/bot-sdk", () => ({
-  messagingApi: { MessagingApiClient: MessagingApiClientMock },
-}));
-
-vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
-  loadConfig: loadConfigMock,
-}));
-
-vi.mock("./accounts.js", () => ({
-  resolveLineAccount: resolveLineAccountMock,
-}));
-
-vi.mock("./channel-access-token.js", () => ({
-  resolveLineChannelAccessToken: resolveLineChannelAccessTokenMock,
-}));
-
-vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
-  recordChannelActivity: recordChannelActivityMock,
-}));
-
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
-  return {
-    ...actual,
-    logVerbose: logVerboseMock,
-  };
-});
-
 let sendModule: typeof import("./send.js");
 
 describe("LINE send helpers", () => {
-  beforeAll(async () => {
-    sendModule = await import("./send.js");
-  });
+  beforeEach(async () => {
+    vi.resetModules();
 
-  beforeEach(() => {
     pushMessageMock.mockReset();
     replyMessageMock.mockReset();
     showLoadingAnimationMock.mockReset();
@@ -90,12 +60,58 @@ describe("LINE send helpers", () => {
     recordChannelActivityMock.mockReset();
     logVerboseMock.mockReset();
 
-    loadConfigMock.mockReturnValue({});
-    resolveLineAccountMock.mockReturnValue({ accountId: "default" });
+    loadConfigMock.mockReturnValue({
+      channels: {
+        line: {
+          channelAccessToken: "line-token",
+          accounts: {
+            default: {
+              channelAccessToken: "line-token",
+            },
+          },
+        },
+      },
+    });
+    resolveLineAccountMock.mockReturnValue({
+      accountId: "default",
+      channelAccessToken: "line-token",
+    });
     resolveLineChannelAccessTokenMock.mockReturnValue("line-token");
     pushMessageMock.mockResolvedValue({});
     replyMessageMock.mockResolvedValue({});
     showLoadingAnimationMock.mockResolvedValue({});
+
+    vi.doMock("@line/bot-sdk", () => ({
+      messagingApi: {
+        MessagingApiClient: MessagingApiClientMock,
+      },
+    }));
+
+    vi.doMock("openclaw/plugin-sdk/config-runtime", () => ({
+      loadConfig: loadConfigMock,
+    }));
+
+    vi.doMock("./accounts.js", () => ({
+      resolveLineAccount: resolveLineAccountMock,
+    }));
+
+    vi.doMock("./channel-access-token.js", () => ({
+      resolveLineChannelAccessToken: resolveLineChannelAccessTokenMock,
+    }));
+
+    vi.doMock("openclaw/plugin-sdk/infra-runtime", () => ({
+      recordChannelActivity: recordChannelActivityMock,
+    }));
+
+    vi.doMock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+      return {
+        ...actual,
+        logVerbose: logVerboseMock,
+      };
+    });
+
+    sendModule = await import("./send.js");
   });
 
   afterEach(() => {
@@ -114,7 +130,7 @@ describe("LINE send helpers", () => {
       "line:user:U123",
       "https://example.com/original.jpg",
       undefined,
-      { verbose: true },
+      { verbose: true, channelAccessToken: "line-token" },
     );
 
     expect(pushMessageMock).toHaveBeenCalledWith({
@@ -141,6 +157,7 @@ describe("LINE send helpers", () => {
       replyToken: "reply-token",
       mediaUrl: "https://example.com/media.jpg",
       verbose: true,
+      channelAccessToken: "line-token",
     });
 
     expect(replyMessageMock).toHaveBeenCalledTimes(1);
@@ -181,7 +198,9 @@ describe("LINE send helpers", () => {
     pushMessageMock.mockRejectedValueOnce(err);
 
     await expect(
-      sendModule.pushMessagesLine("U999", [{ type: "text", text: "hello" }]),
+      sendModule.pushMessagesLine("U999", [{ type: "text", text: "hello" }], {
+        channelAccessToken: "line-token",
+      }),
     ).rejects.toThrow("LINE push failed");
 
     expect(logVerboseMock).toHaveBeenCalledWith(
@@ -195,8 +214,12 @@ describe("LINE send helpers", () => {
       pictureUrl: "https://example.com/peter.jpg",
     });
 
-    const first = await sendModule.getUserProfile("U-cache");
-    const second = await sendModule.getUserProfile("U-cache");
+    const first = await sendModule.getUserProfile("U-cache", {
+      channelAccessToken: "line-token",
+    });
+    const second = await sendModule.getUserProfile("U-cache", {
+      channelAccessToken: "line-token",
+    });
 
     expect(first).toEqual({
       displayName: "Peter",
@@ -209,7 +232,9 @@ describe("LINE send helpers", () => {
   it("continues when loading animation is unsupported", async () => {
     showLoadingAnimationMock.mockRejectedValueOnce(new Error("unsupported"));
 
-    await expect(sendModule.showLoadingAnimation("line:room:R1")).resolves.toBeUndefined();
+    await expect(
+      sendModule.showLoadingAnimation("line:room:R1", { channelAccessToken: "line-token" }),
+    ).resolves.toBeUndefined();
 
     expect(logVerboseMock).toHaveBeenCalledWith(
       expect.stringContaining("line: loading animation failed (non-fatal)"),
@@ -221,6 +246,7 @@ describe("LINE send helpers", () => {
       "U-quick",
       "Pick one",
       Array.from({ length: 20 }, (_, index) => `Choice ${index + 1}`),
+      { channelAccessToken: "line-token" },
     );
 
     expect(pushMessageMock).toHaveBeenCalledTimes(1);

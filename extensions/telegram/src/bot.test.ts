@@ -33,12 +33,13 @@ const { listNativeCommandSpecs, listNativeCommandSpecsForConfig } =
 const { loadSessionStore } = await import("../../../src/config/sessions.js");
 const { normalizeTelegramCommandName } =
   await import("../../../src/config/telegram-custom-commands.js");
-const { createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest } =
-  await import("./bot.js");
-setTelegramBotRuntimeForTest(
-  telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
-);
-const createTelegramBot = (opts: Parameters<typeof createTelegramBotBase>[0]) =>
+
+type BotModule = typeof import("./bot.js");
+
+let createTelegramBotBase: BotModule["createTelegramBot"];
+let setTelegramBotRuntimeForTest: BotModule["setTelegramBotRuntimeForTest"];
+
+const createTelegramBot = (opts: Parameters<BotModule["createTelegramBot"]>[0]) =>
   createTelegramBotBase({
     ...opts,
     telegramDeps: telegramBotDepsForTest,
@@ -63,7 +64,15 @@ describe("createTelegramBot", () => {
     process.env.TZ = ORIGINAL_TZ;
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest } =
+      await import("./bot.js"));
+    setTelegramBotRuntimeForTest(
+      telegramBotRuntimeForTest as unknown as Parameters<
+        BotModule["setTelegramBotRuntimeForTest"]
+      >[0],
+    );
     setMyCommandsSpy.mockClear();
     clearPluginInteractiveHandlers();
     loadConfig.mockReturnValue({
