@@ -248,8 +248,8 @@ describe("applyMediaUnderstanding", () => {
     }));
     vi.doMock("./providers/index.js", async (importOriginal) => {
       const actual = await importOriginal<typeof import("./providers/index.js")>();
-      const { deepgramProvider } = await import("./providers/deepgram/index.js");
-      const { groqProvider } = await import("./providers/groq/index.js");
+      const { deepgramProvider } = await import("../../extensions/deepgram/media-understanding-provider.js");
+      const { groqProvider } = await import("../../extensions/groq/media-understanding-provider.js");
       return {
         ...actual,
         buildMediaUnderstandingRegistry: (
