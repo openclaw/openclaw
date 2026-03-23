@@ -884,33 +884,34 @@ export async function runHeartbeatOnce(opts: {
 
     // Policy feedback: check if heartbeat delivery should be suppressed (active mode only).
     try {
-      const { getPolicyHintsSafe, logPolicyAction } = await import(
-        "../policy-feedback/gateway-bridge.js"
-      );
-      const hints = await getPolicyHintsSafe({
-        agentId,
-        sessionKey,
-        channelId: delivery.channel,
-      });
-      if (hints.recommendation === "suppress" && hints.mode === "active") {
-        logPolicyAction({
+      const bridge = await import("../policy-feedback/gateway-bridge.js");
+      if (bridge.isPolicyFeedbackActive()) {
+        const hints = await bridge.getPolicyHintsSafe({
           agentId,
           sessionKey,
-          actionType: "suppressed",
           channelId: delivery.channel,
-          accountId: deliveryAccountId,
-          contextSummary: "Heartbeat suppressed by policy feedback",
         });
-        emitHeartbeatEvent({
-          status: "skipped",
-          reason: "policy-suppressed",
-          durationMs: Date.now() - startedAt,
-          channel: delivery.channel,
-          accountId: delivery.accountId,
-        });
-        return { status: "skipped", reason: "policy-suppressed" };
+        if (hints.recommendation === "suppress" && hints.mode === "active") {
+          bridge.logPolicyAction({
+            agentId,
+            sessionKey,
+            actionType: "suppressed",
+            channelId: delivery.channel,
+            accountId: deliveryAccountId,
+            contextSummary: "Heartbeat suppressed by policy feedback",
+          });
+          emitHeartbeatEvent({
+            status: "skipped",
+            reason: "policy-suppressed",
+            durationMs: Date.now() - startedAt,
+            channel: delivery.channel,
+            accountId: delivery.accountId,
+          });
+          return { status: "skipped", reason: "policy-suppressed" };
+        }
       }
-      logPolicyAction({
+      // Log heartbeat action unconditionally (passive mode still observes)
+      bridge.logPolicyAction({
         agentId,
         sessionKey,
         actionType: "heartbeat_run",

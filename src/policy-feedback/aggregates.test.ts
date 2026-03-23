@@ -245,20 +245,7 @@ describe("AggregateComputer", () => {
   });
 
   describe("updateAggregatesIncremental", () => {
-    it("increments action count", () => {
-      const computer = new AggregateComputer();
-      const action = makeAction({ id: "a1" });
-
-      computer.updateAggregatesIncremental(action);
-
-      // Use getAggregates to check
-      return computer.getAggregates().then((results) => {
-        expect(results[0].totalActions).toBe(1);
-        expect(results[0].byActionType.agent_reply?.count).toBe(1);
-      });
-    });
-
-    it("incorporates outcome in incremental update", () => {
+    it("increments outcome count without recounting actions", () => {
       const computer = new AggregateComputer();
       const action = makeAction({ id: "a1" });
       const outcome = makeOutcome({
@@ -267,19 +254,32 @@ describe("AggregateComputer", () => {
         outcomeType: "user_replied",
       });
 
+      // Seed the action type stats (as recomputeAggregates would)
+      const stats = computeFromRecords([action], []);
+      // Manually set cached aggregates via a full recompute mock
+      (computer as unknown as { aggregates: typeof stats }).aggregates = stats;
+
       computer.updateAggregatesIncremental(action, outcome);
 
       return computer.getAggregates().then((results) => {
+        // Action count should NOT increase (already counted)
+        expect(results[0].totalActions).toBe(1);
+        // Outcome count should increase
         expect(results[0].totalOutcomes).toBe(1);
         expect(results[0].byActionType.agent_reply?.outcomeCount).toBe(1);
         expect(results[0].byActionType.agent_reply?.replyRate).toBe(1);
       });
     });
 
-    it("correctly updates reply rate over multiple actions", () => {
+    it("correctly updates reply rate over multiple outcomes", () => {
       const computer = new AggregateComputer();
       const a1 = makeAction({ id: "a1" });
       const a2 = makeAction({ id: "a2" });
+
+      // Seed with action stats
+      const stats = computeFromRecords([a1, a2], []);
+      (computer as unknown as { aggregates: typeof stats }).aggregates = stats;
+
       const replied = makeOutcome({
         id: "o1",
         actionId: "a1",
@@ -305,8 +305,12 @@ describe("AggregateComputer", () => {
   describe("getAggregates", () => {
     it("returns all aggregates when no filter specified", async () => {
       const computer = new AggregateComputer();
-      computer.updateAggregatesIncremental(makeAction({ id: "a1" }));
-      computer.updateAggregatesIncremental(makeAction({ id: "a2", actionType: "tool_call" }));
+      const actions = [
+        makeAction({ id: "a1" }),
+        makeAction({ id: "a2", actionType: "tool_call" }),
+      ];
+      const stats = computeFromRecords(actions, []);
+      (computer as unknown as { aggregates: typeof stats }).aggregates = stats;
 
       const results = await computer.getAggregates();
       expect(results).toHaveLength(1);
@@ -316,8 +320,12 @@ describe("AggregateComputer", () => {
 
     it("filters by action type when specified", async () => {
       const computer = new AggregateComputer();
-      computer.updateAggregatesIncremental(makeAction({ id: "a1" }));
-      computer.updateAggregatesIncremental(makeAction({ id: "a2", actionType: "tool_call" }));
+      const actions = [
+        makeAction({ id: "a1" }),
+        makeAction({ id: "a2", actionType: "tool_call" }),
+      ];
+      const stats = computeFromRecords(actions, []);
+      (computer as unknown as { aggregates: typeof stats }).aggregates = stats;
 
       const results = await computer.getAggregates("agent_reply");
       expect(results).toHaveLength(1);

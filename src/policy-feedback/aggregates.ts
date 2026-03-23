@@ -123,65 +123,40 @@ export class AggregateComputer {
    * and optional outcome without re-reading all logs.
    * Never throws.
    */
-  updateAggregatesIncremental(newAction: ActionRecord, outcome?: OutcomeRecord): void {
+  /**
+   * Incremental update: adjust cached aggregates with a new outcome for an
+   * existing action. Only updates outcome-related stats (reply rate, outcome
+   * count) — action counts are NOT incremented since the action was already
+   * counted when it was first logged.
+   */
+  updateAggregatesIncremental(action: ActionRecord, outcome: OutcomeRecord): void {
     try {
       const stats = this.aggregates;
       stats.computedAt = new Date().toISOString();
-      stats.totalActions += 1;
+      stats.totalOutcomes += 1;
 
-      // Per-action-type
-      const at = newAction.actionType;
-      const existing: ActionTypeStats = stats.byActionType[at] ?? {
-        count: 0,
-        outcomeCount: 0,
-        replyRate: 0,
-        suppressionRate: 0,
-      };
-      existing.count += 1;
-      if (newAction.actionType === "suppressed") {
-        existing.suppressionRate =
-          (existing.suppressionRate * (existing.count - 1) + 1) / existing.count;
-      } else {
-        existing.suppressionRate =
-          (existing.suppressionRate * (existing.count - 1)) / existing.count;
-      }
-      stats.byActionType[at] = existing;
-
-      // Per-hour-of-day
-      const hour = new Date(newAction.timestamp).getUTCHours();
-      const hourEntry: HourStats = stats.byHourOfDay[hour] ?? {
-        count: 0,
-        replyRate: 0,
-      };
-      hourEntry.count += 1;
-      stats.byHourOfDay[hour] = hourEntry;
-
-      // Per-channel
-      const ch = newAction.channelId;
-      const channelEntry = stats.byChannel[ch] ?? { count: 0, replyRate: 0 };
-      channelEntry.count += 1;
-      stats.byChannel[ch] = channelEntry;
-
-      // Outcome
-      if (outcome) {
-        stats.totalOutcomes += 1;
+      const at = action.actionType;
+      const existing = stats.byActionType[at];
+      if (existing) {
         existing.outcomeCount += 1;
         const replied = isReplyOutcome(outcome);
-        // Recalculate reply rate
-        if (existing.outcomeCount > 0) {
-          const prevReplies = existing.replyRate * (existing.outcomeCount - 1);
-          existing.replyRate = (prevReplies + (replied ? 1 : 0)) / existing.outcomeCount;
-        }
+        const prevReplies = existing.replyRate * (existing.outcomeCount - 1);
+        existing.replyRate = (prevReplies + (replied ? 1 : 0)) / existing.outcomeCount;
 
         // Update hour reply rate
-        const prevHourReplies = hourEntry.replyRate * (hourEntry.count - 1);
-        hourEntry.replyRate =
-          hourEntry.count > 0 ? (prevHourReplies + (replied ? 1 : 0)) / hourEntry.count : 0;
+        const hour = new Date(action.timestamp).getUTCHours();
+        const hourEntry = stats.byHourOfDay[hour];
+        if (hourEntry && hourEntry.count > 0) {
+          const prevHourReplies = hourEntry.replyRate * (hourEntry.count - 1);
+          hourEntry.replyRate = (prevHourReplies + (replied ? 1 : 0)) / hourEntry.count;
+        }
 
         // Update channel reply rate
-        const prevChReplies = channelEntry.replyRate * (channelEntry.count - 1);
-        channelEntry.replyRate =
-          channelEntry.count > 0 ? (prevChReplies + (replied ? 1 : 0)) / channelEntry.count : 0;
+        const channelEntry = stats.byChannel[action.channelId];
+        if (channelEntry && channelEntry.count > 0) {
+          const prevChReplies = channelEntry.replyRate * (channelEntry.count - 1);
+          channelEntry.replyRate = (prevChReplies + (replied ? 1 : 0)) / channelEntry.count;
+        }
       }
     } catch (err: unknown) {
       log.warn("Failed incremental aggregate update", { error: String(err) });

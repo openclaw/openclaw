@@ -325,6 +325,21 @@ export class PolicyFeedbackEngineImpl implements PolicyFeedbackEngine {
   async getPolicyHints(input: GetPolicyHintsInput): Promise<PolicyHints> {
     try {
       const hints = await this.ranker.getPolicyHints(input);
+
+      // Apply constraint layer on top of ranker hints so that built-in rules
+      // (cooldown, repeated ignores, time_of_day_block, etc.) can escalate
+      // the recommendation to "suppress" even when the score is above threshold.
+      const flags = featureFlagsForMode(this.config.mode);
+      if (flags.enableConstraints && hints.recommendation !== "suppress") {
+        const context = input.context ?? { channelId: input.channelId };
+        const noOpPreferred = this.constraints.isNoOpPreferred(context);
+        if (noOpPreferred) {
+          hints.recommendation = "suppress";
+          hints.reasons.push("Multiple constraint rules triggered — suppress recommended");
+          hints.activeConstraints = this.constraints.getActiveConstraints();
+        }
+      }
+
       log.debug("policy hints generated", {
         agentId: input.agentId,
         recommendation: hints.recommendation,
@@ -395,6 +410,11 @@ export class PolicyFeedbackEngineImpl implements PolicyFeedbackEngine {
    */
   getMode(): PolicyMode {
     return this.config.mode;
+  }
+
+  /** The resolved home directory used for storage paths. */
+  getHome(): string {
+    return this.home;
   }
 
   /** Read-only access to the resolved config for init/maintenance callers. */

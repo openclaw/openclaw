@@ -32,14 +32,16 @@ function startMaintenanceTimer(
   engine: PolicyFeedbackEngineImpl,
   intervalMs: number,
   retentionDays: number,
+  home: string,
+  agentId: string,
 ): () => void {
   const timer = setInterval(() => {
-    // Recompute aggregates from full log history
-    engine.recomputeAggregates().catch(() => {});
+    // Recompute aggregates from per-agent log history (matches where actions are stored)
+    engine.recomputeAggregates(agentId).catch(() => {});
 
-    // Prune records older than retention period
+    // Prune records older than retention period (use the same home as the engine)
     if (retentionDays > 0) {
-      pruneOldRecords(retentionDays).catch((err: unknown) => {
+      pruneOldRecords(retentionDays, { home }).catch((err: unknown) => {
         log.warn("Log retention pruning failed", { error: String(err) });
       });
     }
@@ -94,6 +96,8 @@ export async function initializePolicyFeedback(options: {
       engine,
       resolvedConfig.aggregateIntervalMs,
       resolvedConfig.logRetentionDays,
+      engine.getHome(),
+      options.agentId,
     );
 
     return {
