@@ -16,7 +16,7 @@ title: "Tests"
 - `pnpm test`: runs the full wrapper. It keeps only a small behavioral override manifest in git, then uses a checked-in timing snapshot to peel the heaviest measured unit files into dedicated lanes.
 - Unit files default to `threads` in the wrapper; keep fork-only exceptions documented in `test/fixtures/test-parallel.behavior.json`.
 - `pnpm test:channels` now defaults to `threads` via `vitest.channels.config.ts`; the March 22, 2026 direct full-suite control run passed clean without channel-specific fork exceptions.
-- `pnpm test:extensions` now defaults to `threads` via `vitest.extensions.config.ts`; the March 22, 2026 direct full-suite control run passed clean without extension-specific fork exceptions.
+- `pnpm test:extensions` runs through the wrapper and keeps documented extension fork-only exceptions in `test/fixtures/test-parallel.behavior.json`; the shared extension lane still defaults to `threads`.
 - `pnpm test:extensions`: runs extension/plugin suites.
 - `pnpm test:perf:imports`: enables Vitest import-duration + import-breakdown reporting for the wrapper.
 - `pnpm test:perf:imports:changed`: same import profiling, but only for files changed since `origin/main`.
