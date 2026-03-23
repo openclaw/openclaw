@@ -30,7 +30,8 @@ Env guards:
   AUTO_PR_BRANCH_PREFIX=<prefix>     (default: openclaw/sre-auto)
   AUTO_PR_BODY_MAX_LINES=<int>       (default: 120; compact oversized PR bodies)
   AUTO_PR_BODY_MAX_CHARS=<int>       (default: 12000; compact oversized PR bodies)
-  AUTO_PR_SIGNED_COMMITS=1|0         (default: 1; GitHub API signed commit flow)
+  AUTO_PR_SIGNED_COMMITS=1           (default and required; GitHub API signed commit flow is mandatory for security)
+  AUTO_PR_GITHUB_APP_TOKEN_CACHE_TTL=<sec> (default: 3300; keep below GitHub App token expiry)
   AUTO_PR_NOTIFY_ENABLED=1|0         (default: 1)
   AUTO_PR_NOTIFY_USER_ID=<U...>      (default: first SLACK_ALLOWED_USER_IDS value)
   AUTO_PR_NOTIFY_STRICT=1|0          (default: 1)
@@ -129,6 +130,18 @@ split_csv_nonempty_lines() {
     | tr ',' '\n' \
     | sed -E 's/^[[:space:]]+|[[:space:]]+$//g' \
     | awk 'NF > 0 { print }'
+}
+
+resolve_positive_int_env() {
+  local env_name="$1"
+  local fallback="${2:-}"
+  local value="${!env_name:-$fallback}"
+
+  if ! [[ "$value" =~ ^[0-9]+$ ]] || [[ "$value" -le 0 ]]; then
+    printf '%s must be a positive integer\n' "$env_name" >&2
+    return 1
+  fi
+  printf '%s\n' "$value"
 }
 
 validate_linear_selector_value() {
@@ -711,34 +724,135 @@ github_repo_access_ok() {
   [[ "$probe_code" == "200" ]]
 }
 
-resolve_auth_token_for_repo() {
-  local repo="${1:-}"
-  local env_token app_token env_probe_code app_probe_code
+AUTO_PR_AUTOFIX_GITHUB_APP_TOKEN_CACHE=""
+AUTO_PR_AUTOFIX_GITHUB_APP_TOKEN_CACHE_EPOCH="0"
 
-  env_token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
-  if [[ -n "$env_token" ]] && github_repo_access_ok "$env_token" "$repo"; then
-    printf '%s\n' "$env_token"
+resolve_github_app_token_for_repo() {
+  local repo="${1:-}"
+  local force_refresh="${2:-0}"
+  local app_token now_epoch cache_ttl
+
+  RESOLVED_AUTH_TOKEN=""
+  RESOLVED_AUTH_TOKEN_SOURCE=""
+  GITHUB_REPO_ACCESS_LAST_CODE=""
+
+  if [[ -z "$repo" ]]; then
+    echo "resolve_github_app_token_for_repo requires repo" >&2
+    return 1
+  fi
+
+  now_epoch="$(date +%s)"
+  if ! cache_ttl="$(resolve_positive_int_env AUTO_PR_GITHUB_APP_TOKEN_CACHE_TTL 3300)"; then
+    return 1
+  fi
+  if ! truthy "$force_refresh" \
+    && [[ -n "${AUTO_PR_AUTOFIX_GITHUB_APP_TOKEN_CACHE:-}" ]] \
+    && [[ "${AUTO_PR_AUTOFIX_GITHUB_APP_TOKEN_CACHE_EPOCH:-0}" =~ ^[0-9]+$ ]] \
+    && (( now_epoch - AUTO_PR_AUTOFIX_GITHUB_APP_TOKEN_CACHE_EPOCH < cache_ttl )); then
+    RESOLVED_AUTH_TOKEN="$AUTO_PR_AUTOFIX_GITHUB_APP_TOKEN_CACHE"
+    RESOLVED_AUTH_TOKEN_SOURCE="github_app"
     return 0
   fi
-  env_probe_code="${GITHUB_REPO_ACCESS_LAST_CODE:-}"
 
   app_token="$(mint_github_app_token || true)"
-  if [[ -n "$app_token" ]] && github_repo_access_ok "$app_token" "$repo"; then
-    printf '%s\n' "$app_token"
-    return 0
-  fi
-  app_probe_code="${GITHUB_REPO_ACCESS_LAST_CODE:-}"
-
-  if [[ -n "$env_token" && "$env_probe_code" != "401" && "$env_probe_code" != "403" && "$env_probe_code" != "404" ]]; then
-    printf '%s\n' "$env_token"
-    return 0
-  fi
-  if [[ -n "$app_token" && "$app_probe_code" != "401" && "$app_probe_code" != "403" && "$app_probe_code" != "404" ]]; then
-    printf '%s\n' "$app_token"
-    return 0
+  if [[ -z "$app_token" ]]; then
+    echo "verified bot commits require GitHub App credentials for ${repo}; failed to mint installation token (check GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, GITHUB_APP_INSTALLATION_ID)" >&2
+    return 1
   fi
 
+  if ! github_repo_access_ok "$app_token" "$repo"; then
+    echo "verified bot commits require GitHub App repo access for ${repo} (HTTP ${GITHUB_REPO_ACCESS_LAST_CODE:-unknown})" >&2
+    return 1
+  fi
+
+  AUTO_PR_AUTOFIX_GITHUB_APP_TOKEN_CACHE="$app_token"
+  AUTO_PR_AUTOFIX_GITHUB_APP_TOKEN_CACHE_EPOCH="$now_epoch"
+  RESOLVED_AUTH_TOKEN="$app_token"
+  RESOLVED_AUTH_TOKEN_SOURCE="github_app"
+  return 0
+}
+
+refresh_auth_context() {
+  if ! resolve_github_app_token_for_repo "$REPO_SLUG" "${1:-0}"; then
+    return 1
+  fi
+  AUTH_TOKEN="$RESOLVED_AUTH_TOKEN"
+  AUTH_TOKEN_SOURCE="$RESOLVED_AUTH_TOKEN_SOURCE"
+  export GITHUB_TOKEN="$AUTH_TOKEN"
+  export GH_TOKEN="$AUTH_TOKEN"
+  git_auth_basic="$(printf 'x-access-token:%s' "$AUTH_TOKEN" | base64 | tr -d '\n')"
+  return 0
+}
+
+require_api_signed_commit_mode() {
+  # Force verified GitHub App commits so bot authorship stays auditable and fail-closed.
+  if truthy "${AUTO_PR_SIGNED_COMMITS:-1}"; then
+    return 0
+  fi
+  echo "AUTO_PR_SIGNED_COMMITS=0 is no longer supported; verified bot commits must use GitHub createCommitOnBranch via GitHub App auth" >&2
   return 1
+}
+
+stderr_indicates_auth_failure() {
+  local stderr_file="${1:-}"
+  [[ -n "$stderr_file" && -f "$stderr_file" ]] || return 1
+  grep -Eqi '(401|403|bad credentials|authentication failed|requires authentication|expired)' "$stderr_file"
+}
+
+create_api_signed_commit_with_retry() {
+  local repo_path="${1:-}"
+  local repo_slug="${2:-}"
+  local base_branch="${3:-}"
+  local head_branch="${4:-}"
+  local commit_msg="${5:-}"
+  local git_auth_header="${6:-}"
+  local signed_commit_attempt_err signed_commit_response retry_git_auth_header should_force_refresh=0
+
+  if [[ -z "$repo_path" || -z "$repo_slug" || -z "$base_branch" || -z "$head_branch" || -z "$commit_msg" || -z "$git_auth_header" ]]; then
+    echo "create_api_signed_commit_with_retry requires repo path, repo slug, base branch, head branch, commit message, and auth" >&2
+    return 1
+  fi
+
+  signed_commit_attempt_err="$(mktemp)"
+  signed_commit_response="$(
+    create_api_signed_commit "$repo_path" "$repo_slug" "$base_branch" "$head_branch" "$commit_msg" "$git_auth_header" \
+      2>"$signed_commit_attempt_err" || true
+  )"
+  if [[ -z "$signed_commit_response" ]]; then
+    if [[ -s "$signed_commit_attempt_err" ]]; then
+      if stderr_indicates_auth_failure "$signed_commit_attempt_err"; then
+        should_force_refresh=1
+        echo "initial signed commit attempt failed; refreshing auth and retrying" >&2
+      else
+        echo "initial signed commit attempt failed; retrying once" >&2
+      fi
+      cat "$signed_commit_attempt_err" >&2
+    fi
+    retry_git_auth_header="$git_auth_header"
+    if [[ "$should_force_refresh" -eq 1 ]]; then
+      if ! refresh_auth_context 1; then
+        rm -f "$signed_commit_attempt_err"
+        return 1
+      fi
+      # refresh_auth_context rewrites git_auth_basic with a freshly minted token.
+      retry_git_auth_header="$git_auth_basic"
+    fi
+    : >"$signed_commit_attempt_err"
+    signed_commit_response="$(
+      create_api_signed_commit "$repo_path" "$repo_slug" "$base_branch" "$head_branch" "$commit_msg" "$retry_git_auth_header" \
+        2>"$signed_commit_attempt_err" || true
+    )"
+  fi
+  if [[ -z "$signed_commit_response" ]]; then
+    if [[ -s "$signed_commit_attempt_err" ]]; then
+      cat "$signed_commit_attempt_err" >&2
+    fi
+    rm -f "$signed_commit_attempt_err"
+    echo "failed to create verified bot commit via GitHub API createCommitOnBranch" >&2
+    return 1
+  fi
+  rm -f "$signed_commit_attempt_err"
+  printf '%s\n' "$signed_commit_response"
 }
 
 resolve_slack_notify_user_id() {
@@ -1236,7 +1350,7 @@ apply_pr_tracking_label() {
   status=$?
   set -e
   if [[ "$status" -ne 0 ]] && printf '%s' "$output" | grep -Eqi '(401|403|bad credentials|authentication failed|requires authentication|expired)'; then
-    if declare -F refresh_auth_context >/dev/null 2>&1 && refresh_auth_context; then
+    if declare -F refresh_auth_context >/dev/null 2>&1 && refresh_auth_context 1; then
       set +e
       output="$("${cmd[@]}" 2>&1)"
       status=$?
@@ -1561,18 +1675,9 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   exit 0
 fi
 
-refresh_auth_context() {
-  AUTH_TOKEN="$(resolve_auth_token_for_repo "$REPO_SLUG" || true)"
-  if [[ -z "$AUTH_TOKEN" ]]; then
-    echo "missing or invalid GitHub auth token for ${REPO_SLUG} (GITHUB_TOKEN/GH_TOKEN or GitHub App env)" >&2
-    return 1
-  fi
-  export GITHUB_TOKEN="$AUTH_TOKEN"
-  export GH_TOKEN="$AUTH_TOKEN"
-  git_auth_basic="$(printf 'x-access-token:%s' "$AUTH_TOKEN" | base64 | tr -d '\n')"
-  return 0
-}
-
+if ! require_api_signed_commit_mode; then
+  exit 1
+fi
 if ! refresh_auth_context; then
   exit 1
 fi
@@ -1612,45 +1717,17 @@ if git -C "$REPO_PATH" diff --cached \
   exit 1
 fi
 
-if truthy "${AUTO_PR_SIGNED_COMMITS:-1}"; then
-  if ! refresh_auth_context; then
-    exit 1
-  fi
-  signed_commit_response="$(create_api_signed_commit "$REPO_PATH" "$REPO_SLUG" "$BASE_BRANCH" "$HEAD_BRANCH" "$COMMIT_MSG" "$git_auth_basic" || true)"
-  if [[ -z "$signed_commit_response" ]]; then
-    if ! refresh_auth_context; then
-      exit 1
-    fi
-    signed_commit_response="$(create_api_signed_commit "$REPO_PATH" "$REPO_SLUG" "$BASE_BRANCH" "$HEAD_BRANCH" "$COMMIT_MSG" "$git_auth_basic" || true)"
-  fi
-  if [[ -z "$signed_commit_response" ]]; then
-    echo "failed to create signed commit via GitHub API (set AUTO_PR_SIGNED_COMMITS=0 to use local git commit fallback)" >&2
-    exit 1
-  fi
-  signed_commit_url="$(printf '%s' "$signed_commit_response" | jq -r '.data.createCommitOnBranch.commit.url // empty')"
-  if [[ -n "$signed_commit_url" ]]; then
-    echo "signed commit created: ${signed_commit_url}"
-  fi
-else
-  git -C "$REPO_PATH" commit -m "$COMMIT_MSG"
-
-  if ! refresh_auth_context; then
-    exit 1
-  fi
-  if ! sync_branch_with_base "$REPO_PATH" "$BASE_BRANCH" "$git_auth_basic"; then
-    echo "failed to sync ${HEAD_BRANCH} with origin/${BASE_BRANCH} before PR creation" >&2
-    exit 1
-  fi
-
-  if ! refresh_auth_context; then
-    exit 1
-  fi
-  git -C "$REPO_PATH" \
-    -c credential.helper= \
-    -c core.askPass= \
-    -c "http.extraHeader=Authorization: Basic ${git_auth_basic}" \
-    push -u origin "$HEAD_BRANCH"
+signed_commit_response="$(create_api_signed_commit_with_retry "$REPO_PATH" "$REPO_SLUG" "$BASE_BRANCH" "$HEAD_BRANCH" "$COMMIT_MSG" "$git_auth_basic" || true)"
+if [[ -z "$signed_commit_response" ]]; then
+  exit 1
 fi
+signed_commit_url="$(printf '%s' "$signed_commit_response" | jq -r '.data.createCommitOnBranch.commit.url // empty')"
+signed_commit_oid="$(printf '%s' "$signed_commit_response" | jq -r '.data.createCommitOnBranch.commit.oid // empty')"
+if [[ -z "$signed_commit_url" || -z "$signed_commit_oid" ]]; then
+  echo "signed commit response missing commit url or oid" >&2
+  exit 1
+fi
+echo "signed commit created via ${AUTH_TOKEN_SOURCE:-unknown}: ${signed_commit_url} (${signed_commit_oid})"
 
 LINEAR_ISSUE_REFS=()
 while IFS= read -r linear_ref; do
@@ -1680,7 +1757,7 @@ pr_output="$("${pr_cmd[@]}" 2>&1)"
 pr_status=$?
 set -e
 if [[ "$pr_status" -ne 0 ]] && printf '%s' "$pr_output" | grep -Eqi '(401|403|bad credentials|authentication failed|requires authentication|expired)'; then
-  if refresh_auth_context; then
+  if refresh_auth_context 1; then
     set +e
     pr_output="$("${pr_cmd[@]}" 2>&1)"
     pr_status=$?

@@ -54,7 +54,7 @@ autofix-pr.sh \
 | Linear ticket        | Creates or reuses Linear ticket when missing (`AUTO_PR_LINEAR_*`)          |
 | Branch naming        | Branch = Linear `branchName` from the linked ticket                        |
 | PR title             | Conventional format carrying the Linear ticket scope token                 |
-| Auth                 | Authenticated push via GitHub App + `gh pr create`                         |
+| Auth                 | Verified `createCommitOnBranch` via GitHub App + `gh pr create`            |
 | Tracking label       | Adds `openclaw-sre` label on PR (`AUTO_PR_TRACKING_LABEL`)                 |
 | Linear label         | Adds `openclaw-sre` label on linked Linear tickets                         |
 | Linear attachment    | Attaches PR URL + implementation comment back to the ticket                |
