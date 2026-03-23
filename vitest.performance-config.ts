@@ -5,6 +5,11 @@ const isEnabled = (value: string | undefined): boolean => {
   return normalized === "1" || normalized === "true";
 };
 
+const isDisabled = (value: string | undefined): boolean => {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "0" || normalized === "false";
+};
+
 export function loadVitestExperimentalConfig(env: EnvMap = process.env): {
   experimental?: {
     fsModuleCache?: true;
@@ -18,7 +23,7 @@ export function loadVitestExperimentalConfig(env: EnvMap = process.env): {
     printImportBreakdown?: true;
   } = {};
 
-  if (isEnabled(env.OPENCLAW_VITEST_FS_MODULE_CACHE)) {
+  if (!isDisabled(env.OPENCLAW_VITEST_FS_MODULE_CACHE)) {
     experimental.fsModuleCache = true;
   }
   if (isEnabled(env.OPENCLAW_VITEST_IMPORT_DURATIONS)) {
