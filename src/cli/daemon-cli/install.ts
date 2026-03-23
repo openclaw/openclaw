@@ -1,4 +1,4 @@
-import { resolveAutoNodeExtraCaCerts } from "../../bootstrap/node-extra-ca-certs.js";
+import { resolveNodeStartupTlsEnvironment } from "../../bootstrap/node-startup-env.js";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
@@ -146,14 +146,15 @@ async function gatewayServiceNeedsAutoNodeExtraCaCertsRefresh(params: {
     }
     const currentEnvironment = currentCommand.environment ?? {};
     const currentNodeExtraCaCerts = currentEnvironment.NODE_EXTRA_CA_CERTS?.trim();
-    const expectedNodeExtraCaCerts = resolveAutoNodeExtraCaCerts({
+    const expectedNodeExtraCaCerts = resolveNodeStartupTlsEnvironment({
       env: {
         ...params.env,
         ...currentEnvironment,
         NODE_EXTRA_CA_CERTS: undefined,
       },
       execPath: currentExecPath,
-    });
+      includeDarwinDefaults: false,
+    }).NODE_EXTRA_CA_CERTS;
     if (!expectedNodeExtraCaCerts) {
       return false;
     }

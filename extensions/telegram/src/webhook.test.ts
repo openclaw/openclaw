@@ -73,6 +73,20 @@ vi.mock("grammy", async (importOriginal) => {
   const actual = await importOriginal<typeof import("grammy")>();
   return {
     ...actual,
+    API_CONSTANTS: actual.API_CONSTANTS ?? {
+      DEFAULT_UPDATE_TYPES: ["message"],
+      ALL_UPDATE_TYPES: ["message"],
+    },
+    InputFile:
+      actual.InputFile ??
+      class InputFile {
+        constructor(public readonly path: string) {}
+      },
+    GrammyError:
+      actual.GrammyError ??
+      class GrammyError extends Error {
+        description = "";
+      },
     webhookCallback: webhookCallbackSpy,
   };
 });
@@ -436,6 +450,7 @@ describe("startTelegramWebhook", () => {
           expect.objectContaining({
             certificate: expect.objectContaining({
               fileData: "/path/to/cert.pem",
+              filename: "cert.pem",
             }),
           }),
         );

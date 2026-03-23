@@ -50,7 +50,7 @@ import {
 
 type DetectZaiEndpoint = typeof import("./zai-endpoint-detect.js").detectZaiEndpoint;
 
-vi.mock("../providers/github-copilot-auth.js", () => ({
+vi.mock("../../extensions/github-copilot/login.js", () => ({
   githubCopilotLoginCommand: vi.fn(async () => {}),
 }));
 
@@ -62,9 +62,14 @@ vi.mock("./openai-codex-oauth.js", () => ({
 }));
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
-vi.mock("../plugins/providers.js", () => ({
-  resolvePluginProviders,
-}));
+vi.mock("../plugins/provider-auth-choice.runtime.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../plugins/provider-auth-choice.runtime.js")>();
+  return {
+    ...actual,
+    resolvePluginProviders,
+  };
+});
 
 const detectZaiEndpoint = vi.hoisted(() => vi.fn<DetectZaiEndpoint>(async () => null));
 vi.mock("./zai-endpoint-detect.js", () => ({

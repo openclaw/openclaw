@@ -11,6 +11,7 @@ import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 const resolveCopilotApiTokenMock = vi.fn();
+const COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token";
 const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
   computeBackoffMock: vi.fn(
     (
@@ -38,30 +39,6 @@ vi.mock("../../extensions/github-copilot/token.js", () => ({
   resolveCopilotApiToken: (...args: unknown[]) => resolveCopilotApiTokenMock(...args),
 }));
 
-vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
-  return {
-    ...actual,
-    prepareProviderRuntimeAuth: async (params: {
-      provider: string;
-      context: { apiKey: string; env: NodeJS.ProcessEnv };
-    }) => {
-      if (params.provider !== "github-copilot") {
-        return undefined;
-      }
-      const token = await resolveCopilotApiTokenMock({
-        githubToken: params.context.apiKey,
-        env: params.context.env,
-      });
-      return {
-        apiKey: token.token,
-        baseUrl: token.baseUrl,
-        expiresAt: token.expiresAt,
-      };
-    },
-  };
-});
-
 vi.mock("./pi-embedded-runner/compact.js", () => ({
   compactEmbeddedPiSessionDirect: vi.fn(async () => {
     throw new Error("compact should not run in auth profile rotation tests");
@@ -78,6 +55,7 @@ vi.mock("./models-config.js", async (importOriginal) => {
 
 let runEmbeddedPiAgent: typeof import("./pi-embedded-runner/run.js").runEmbeddedPiAgent;
 let unregisterLogTransport: (() => void) | undefined;
+const originalFetch = globalThis.fetch;
 
 beforeAll(async () => {
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner/run.js"));
@@ -87,11 +65,27 @@ beforeEach(() => {
   vi.useRealTimers();
   runEmbeddedAttemptMock.mockClear();
   resolveCopilotApiTokenMock.mockReset();
+  globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url !== COPILOT_TOKEN_URL) {
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    }
+    const token = await resolveCopilotApiTokenMock();
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        token: token.token,
+        expires_at: Math.floor(token.expiresAt / 1000),
+      }),
+    } as Response;
+  }) as typeof fetch;
   computeBackoffMock.mockClear();
   sleepWithAbortMock.mockClear();
 });
 
 afterEach(() => {
+  globalThis.fetch = originalFetch;
   unregisterLogTransport?.();
   unregisterLogTransport = undefined;
   setLoggerOverride(null);
@@ -517,11 +511,9 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
   it("refreshes copilot token after auth error and retries once", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
-    vi.useFakeTimers();
     try {
       await writeCopilotAuthStore(agentDir);
       const now = Date.now();
-      vi.setSystemTime(now);
 
       resolveCopilotApiTokenMock
         .mockResolvedValueOnce({
@@ -575,7 +567,6 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
       expect(resolveCopilotApiTokenMock).toHaveBeenCalledTimes(2);
     } finally {
-      vi.useRealTimers();
       await fs.rm(agentDir, { recursive: true, force: true });
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
@@ -584,11 +575,9 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
   it("allows another auth refresh after a successful retry", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
-    vi.useFakeTimers();
     try {
       await writeCopilotAuthStore(agentDir);
       const now = Date.now();
-      vi.setSystemTime(now);
 
       resolveCopilotApiTokenMock
         .mockResolvedValueOnce({
@@ -662,7 +651,6 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(4);
       expect(resolveCopilotApiTokenMock).toHaveBeenCalledTimes(3);
     } finally {
-      vi.useRealTimers();
       await fs.rm(agentDir, { recursive: true, force: true });
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }

@@ -3,6 +3,7 @@ import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.js";
 import {
+  clearProviderRuntimeHookCache,
   prepareProviderDynamicModel,
   resolveProviderRuntimePlugin,
   runProviderDynamicModel,
@@ -193,6 +194,22 @@ function resolveExplicitModelWithRegistry(params: {
     return { kind: "suppressed" };
   }
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const inlineModels = buildInlineProviderModels(cfg?.models?.providers ?? {});
+  const normalizedProvider = normalizeProviderId(provider);
+  const inlineMatch = inlineModels.find(
+    (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
+  );
+  if (inlineMatch?.api) {
+    return {
+      kind: "resolved",
+      model: normalizeResolvedModel({
+        provider,
+        cfg,
+        agentDir,
+        model: inlineMatch as Model<Api>,
+      }),
+    };
+  }
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
 
   if (model) {
@@ -212,19 +229,17 @@ function resolveExplicitModelWithRegistry(params: {
   }
 
   const providers = cfg?.models?.providers ?? {};
-  const inlineModels = buildInlineProviderModels(providers);
-  const normalizedProvider = normalizeProviderId(provider);
-  const inlineMatch = inlineModels.find(
+  const fallbackInlineMatch = buildInlineProviderModels(providers).find(
     (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
   );
-  if (inlineMatch?.api) {
+  if (fallbackInlineMatch?.api) {
     return {
       kind: "resolved",
       model: normalizeResolvedModel({
         provider,
         cfg,
         agentDir,
-        model: inlineMatch as Model<Api>,
+        model: fallbackInlineMatch as Model<Api>,
       }),
     };
   }
@@ -349,6 +364,9 @@ export async function resolveModelAsync(
   modelId: string,
   agentDir?: string,
   cfg?: OpenClawConfig,
+  options?: {
+    retryTransientProviderRuntimeMiss?: boolean;
+  },
 ): Promise<{
   model?: Model<Api>;
   error?: string;
@@ -372,7 +390,11 @@ export async function resolveModelAsync(
       modelRegistry,
     };
   }
-  if (!explicitModel) {
+  const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const resolveDynamicAttempt = async (options?: { clearHookCache?: boolean }) => {
+    if (options?.clearHookCache) {
+      clearProviderRuntimeHookCache();
+    }
     const providerPlugin = resolveProviderRuntimePlugin({
       provider,
       config: cfg,
@@ -387,21 +409,26 @@ export async function resolveModelAsync(
           provider,
           modelId,
           modelRegistry,
-          providerConfig: resolveConfiguredProviderConfig(cfg, provider),
+          providerConfig,
         },
       });
     }
+    return resolveModelWithRegistry({
+      provider,
+      modelId,
+      modelRegistry,
+      cfg,
+      agentDir: resolvedAgentDir,
+    });
+  };
+  let model =
+    explicitModel?.kind === "resolved" ? explicitModel.model : await resolveDynamicAttempt();
+  if (!model && !explicitModel && options?.retryTransientProviderRuntimeMiss) {
+    // Startup can race the first provider-runtime snapshot load on a fresh
+    // gateway boot. Retry once with a cleared hook cache before surfacing a
+    // user-visible "Unknown model" that disappears on the next message.
+    model = await resolveDynamicAttempt({ clearHookCache: true });
   }
-  const model =
-    explicitModel?.kind === "resolved"
-      ? explicitModel.model
-      : resolveModelWithRegistry({
-          provider,
-          modelId,
-          modelRegistry,
-          cfg,
-          agentDir: resolvedAgentDir,
-        });
   if (model) {
     return { model, authStorage, modelRegistry };
   }
