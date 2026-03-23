@@ -148,6 +148,43 @@ API key auth, and dynamic model resolution.
     `openclaw onboard --acme-ai-api-key <key>` and select
     `acme-ai/acme-large` as their model.
 
+    For bundled providers that only register one text provider with API-key
+    auth plus a single catalog-backed runtime, prefer the narrower
+    `defineSingleProviderPluginEntry(...)` helper:
+
+    ```typescript
+    import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+
+    export default defineSingleProviderPluginEntry({
+      id: "acme-ai",
+      name: "Acme AI",
+      description: "Acme AI model provider",
+      provider: {
+        label: "Acme AI",
+        docsPath: "/providers/acme-ai",
+        auth: [
+          {
+            methodId: "api-key",
+            label: "Acme AI API key",
+            hint: "API key from your Acme AI dashboard",
+            optionKey: "acmeAiApiKey",
+            flagName: "--acme-ai-api-key",
+            envVar: "ACME_AI_API_KEY",
+            promptMessage: "Enter your Acme AI API key",
+            defaultModel: "acme-ai/acme-large",
+          },
+        ],
+        catalog: {
+          buildProvider: () => ({
+            api: "openai-completions",
+            baseUrl: "https://api.acme-ai.com/v1",
+            models: [{ id: "acme-large", name: "Acme Large" }],
+          }),
+        },
+      },
+    });
+    ```
+
   </Step>
 
   <Step title="Add dynamic model resolution">
