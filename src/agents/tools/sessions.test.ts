@@ -87,7 +87,10 @@ const installRegistry = async () => {
 };
 
 function createMainSessionsListTool() {
-  return createSessionsListTool({ agentSessionKey: MAIN_AGENT_SESSION_KEY });
+  return createSessionsListTool({
+    agentSessionKey: MAIN_AGENT_SESSION_KEY,
+    config: loadConfigMock() as never,
+  });
 }
 
 async function executeMainSessionsList() {
@@ -98,6 +101,7 @@ function createMainSessionsSendTool() {
   return createSessionsSendTool({
     agentSessionKey: MAIN_AGENT_SESSION_KEY,
     agentChannel: MAIN_AGENT_CHANNEL,
+    config: loadConfigMock() as never,
   });
 }
 
@@ -222,7 +226,10 @@ describe("resolveAnnounceTarget", () => {
       sessionKey: "agent:main:discord:group:dev",
       displayKey: "agent:main:discord:group:dev",
     });
-    expect(target).toEqual({ channel: "discord", to: "channel:dev" });
+    expect(target).toMatchObject({
+      kind: "external_target",
+      target: { channel: "discord", to: "channel:dev" },
+    });
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -245,9 +252,12 @@ describe("resolveAnnounceTarget", () => {
       displayKey: "agent:main:whatsapp:group:123@g.us",
     });
     expect(target).toEqual({
-      channel: "whatsapp",
-      to: "123@g.us",
-      accountId: "work",
+      kind: "external_target",
+      target: {
+        channel: "whatsapp",
+        to: "123@g.us",
+        accountId: "work",
+      },
     });
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     const first = callGatewayMock.mock.calls[0]?.[0] as { method?: string } | undefined;
