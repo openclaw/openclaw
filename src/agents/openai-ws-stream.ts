@@ -524,7 +524,37 @@ export function convertMessagesToInputItems(
     }
   }
 
-  return items;
+  // Collapse consecutive user messages that result from model-fallback retries.
+  // When error assistant messages are stripped (empty content), the user messages
+  // from each failed attempt become adjacent. Keep only the last in each run. (#31101)
+  return collapseConsecutiveUserMessages(items);
+}
+
+/**
+ * When model fallback retries inject duplicate user messages and the
+ * intervening error-assistant entries are dropped (empty content), the input
+ * ends up with consecutive user messages. Collapse each run down to the last
+ * entry so the model sees the prompt exactly once.
+ */
+function collapseConsecutiveUserMessages(items: InputItem[]): InputItem[] {
+  if (items.length <= 1) return items;
+  const out: InputItem[] = [];
+  for (const item of items) {
+    const prev = out[out.length - 1];
+    if (
+      prev &&
+      "role" in prev &&
+      prev.role === "user" &&
+      "role" in item &&
+      item.role === "user"
+    ) {
+      // Replace previous with current (keep the later/more recent one)
+      out[out.length - 1] = item;
+      continue;
+    }
+    out.push(item);
+  }
+  return out;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

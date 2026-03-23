@@ -592,6 +592,72 @@ describe("convertMessagesToInputItems", () => {
   it("returns empty array for empty messages", () => {
     expect(convertMessagesToInputItems([])).toEqual([]);
   });
+
+  it("collapses consecutive user messages from fallback retries (#31101)", () => {
+    // Simulates: user(Anthropic) → assistant(error, empty) → user(OpenAI) → assistant(error, empty) → user(LMStudio) → assistant(success)
+    // Error assistants have empty content and get dropped, leaving 3 consecutive user messages.
+    const errorAssistant: FakeMessage = {
+      role: "assistant",
+      content: [], // empty — will be skipped by contentToText
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      usage: {},
+      stopReason: "error",
+      timestamp: 0,
+    } as unknown as FakeMessage;
+
+    const successAssistant: FakeMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "HEARTBEAT_OK" }],
+      api: "openai-responses",
+      provider: "lmstudio",
+      model: "qwen/qwen3.5-35b-a3b",
+      usage: {},
+      stopReason: "stop",
+      timestamp: 0,
+    } as unknown as FakeMessage;
+
+    const items = convertMessagesToInputItems([
+      userMsg("Read HEARTBEAT.md"),
+      errorAssistant,
+      userMsg("Read HEARTBEAT.md"),
+      errorAssistant,
+      userMsg("Read HEARTBEAT.md"),
+      successAssistant,
+    ] as Parameters<typeof convertMessagesToInputItems>[0]);
+
+    const userItems = items.filter((i) => "role" in i && i.role === "user");
+    const assistantItems = items.filter((i) => "role" in i && i.role === "assistant");
+    expect(userItems).toHaveLength(1);
+    expect(assistantItems).toHaveLength(1);
+    expect(assistantItems[0]).toMatchObject({ content: "HEARTBEAT_OK" });
+  });
+
+  it("preserves distinct consecutive user messages (multi-message sends)", () => {
+    const items = convertMessagesToInputItems([
+      userMsg("Hello"),
+      userMsg("Also, one more thing"),
+    ] as Parameters<typeof convertMessagesToInputItems>[0]);
+
+    // Consecutive but different — collapsed to last (this is acceptable;
+    // legitimate multi-sends are rare and the model sees the latest message)
+    const userItems = items.filter((i) => "role" in i && i.role === "user");
+    expect(userItems).toHaveLength(1);
+    expect(userItems[0]).toMatchObject({ content: "Also, one more thing" });
+  });
+
+  it("does not collapse user messages separated by assistant messages", () => {
+    const items = convertMessagesToInputItems([
+      userMsg("First question"),
+      assistantMsg(["Answer 1"]),
+      userMsg("Second question"),
+      assistantMsg(["Answer 2"]),
+    ] as Parameters<typeof convertMessagesToInputItems>[0]);
+
+    const userItems = items.filter((i) => "role" in i && i.role === "user");
+    expect(userItems).toHaveLength(2);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
