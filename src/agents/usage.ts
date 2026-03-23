@@ -29,6 +29,7 @@ export type UsageLike = {
     promptTokenCount?: number;
     candidatesTokenCount?: number;
     totalTokenCount?: number;
+    cachedContentTokenCount?: number;
   };
 };
 
