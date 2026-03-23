@@ -42,8 +42,11 @@ type DebounceBuffer<T> = {
   task: Promise<void>;
 };
 
+const DEFAULT_MAX_TRACKED_KEYS = 2048;
+
 export type InboundDebounceCreateParams<T> = {
   debounceMs: number;
+  maxTrackedKeys?: number;
   buildKey: (item: T) => string | null | undefined;
   shouldDebounce?: (item: T) => boolean;
   resolveDebounceMs?: (item: T) => number | undefined;
@@ -55,6 +58,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
   const buffers = new Map<string, DebounceBuffer<T>>();
   const keyChains = new Map<string, Promise<void>>();
   const defaultDebounceMs = Math.max(0, Math.trunc(params.debounceMs));
+  const maxTrackedKeys = Math.max(1, Math.trunc(params.maxTrackedKeys ?? DEFAULT_MAX_TRACKED_KEYS));
 
   const resolveDebounceMs = (item: T) => {
     const resolved = params.resolveDebounceMs?.(item);
@@ -150,6 +154,13 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     buffer.timeout.unref?.();
   };
 
+  const canTrackKey = (key: string) => {
+    if (buffers.has(key) || keyChains.has(key)) {
+      return true;
+    }
+    return Math.max(buffers.size, keyChains.size) < maxTrackedKeys;
+  };
+
   const enqueue = async (item: T) => {
     const key = params.buildKey(item);
     const debounceMs = resolveDebounceMs(item);
@@ -189,6 +200,10 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       existing.items.push(item);
       existing.debounceMs = debounceMs;
       scheduleFlush(key, existing);
+      return;
+    }
+    if (!canTrackKey(key)) {
+      await runFlush([item]);
       return;
     }
 
