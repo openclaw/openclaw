@@ -165,6 +165,9 @@ async function releaseHeldLock(
     return true;
   } finally {
     held.releasePromise = undefined;
+    if (HELD_LOCKS.size === 0) {
+      stopWatchdogTimer();
+    }
   }
 }
 
@@ -188,6 +191,9 @@ function releaseAllLocksSync(): void {
     }
     HELD_LOCKS.delete(sessionFile);
   }
+  if (HELD_LOCKS.size === 0) {
+    stopWatchdogTimer();
+  }
 }
 
 async function runLockWatchdogCheck(nowMs = Date.now()): Promise<number> {
@@ -209,6 +215,15 @@ async function runLockWatchdogCheck(nowMs = Date.now()): Promise<number> {
     }
   }
   return released;
+}
+
+function stopWatchdogTimer(): void {
+  const watchdogState = resolveWatchdogState();
+  if (watchdogState.timer) {
+    clearInterval(watchdogState.timer);
+    watchdogState.timer = undefined;
+  }
+  watchdogState.started = false;
 }
 
 function ensureWatchdogStarted(intervalMs: number): void {
@@ -269,6 +284,15 @@ function registerCleanupHandlers(): void {
       // Ignore unsupported signals on this platform.
     }
   }
+}
+
+function unregisterCleanupHandlers(): void {
+  const cleanupState = resolveCleanupState();
+  for (const [signal, handler] of cleanupState.cleanupHandlers) {
+    process.off(signal, handler);
+  }
+  cleanupState.cleanupHandlers.clear();
+  cleanupState.registered = false;
 }
 
 async function readLockPayload(lockPath: string): Promise<LockFilePayload | null> {
@@ -558,3 +582,9 @@ export const __testing = {
   releaseAllLocksSync,
   runLockWatchdogCheck,
 };
+
+export function resetSessionWriteLockStateForTest(): void {
+  releaseAllLocksSync();
+  stopWatchdogTimer();
+  unregisterCleanupHandlers();
+}
