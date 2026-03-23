@@ -1685,6 +1685,33 @@ describe("followup queue drain restart after idle window", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toBe("before-clear");
   });
+
+  it("clears the remembered callback after a queue drains fully", async () => {
+    const key = `test-auto-clear-callback-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const firstProcessed = createDeferred<void>();
+
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      firstProcessed.resolve();
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "before-idle" }), settings);
+    scheduleFollowupDrain(key, runFollowup);
+    await firstProcessed.promise;
+
+    // Let the idle drain finish and clear its callback.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    // Enqueueing after a clean drain should not auto-start anything until a
+    // fresh finalize path supplies a new callback.
+    enqueueFollowupRun(key, createRun({ prompt: "after-idle" }), settings);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt).toBe("before-idle");
+  });
 });
 
 const emptyCfg = {} as OpenClawConfig;

@@ -178,6 +178,7 @@ export function scheduleFollowupDrain(
       queue.draining = false;
       if (queue.items.length === 0 && queue.droppedCount === 0) {
         FOLLOWUP_QUEUES.delete(key);
+        clearFollowupDrainCallback(key);
       } else {
         scheduleFollowupDrain(key, effectiveRunFollowup);
       }
