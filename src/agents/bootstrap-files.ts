@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
@@ -8,8 +9,10 @@ import {
   resolveBootstrapTotalMaxChars,
 } from "./pi-embedded-helpers.js";
 import {
+  DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_HEARTBEAT_FILENAME,
   filterBootstrapFilesForSession,
+  isWorkspaceSetupCompleted,
   loadWorkspaceBootstrapFiles,
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
@@ -72,6 +75,35 @@ function excludeHeartbeatFromFullContext(
   return files.filter((file) => file.name !== DEFAULT_HEARTBEAT_FILENAME);
 }
 
+async function excludeCompletedBootstrapFromMainContext(params: {
+  files: WorkspaceBootstrapFile[];
+  workspaceDir: string;
+  sessionKey?: string;
+  contextMode?: BootstrapContextMode;
+  runKind?: BootstrapContextRunKind;
+}): Promise<WorkspaceBootstrapFile[]> {
+  if ((params.contextMode ?? "full") === "lightweight") {
+    return params.files;
+  }
+  if ((params.runKind ?? "default") !== "default") {
+    return params.files;
+  }
+  if (
+    params.sessionKey &&
+    (isSubagentSessionKey(params.sessionKey) || isCronSessionKey(params.sessionKey))
+  ) {
+    return params.files;
+  }
+  try {
+    if (!(await isWorkspaceSetupCompleted(params.workspaceDir))) {
+      return params.files;
+    }
+  } catch {
+    return params.files;
+  }
+  return params.files.filter((file) => file.name !== DEFAULT_BOOTSTRAP_FILENAME);
+}
+
 export async function resolveBootstrapFilesForRun(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -103,10 +135,15 @@ export async function resolveBootstrapFilesForRun(params: {
     sessionId: params.sessionId,
     agentId: params.agentId,
   });
-  return sanitizeBootstrapFiles(
-    excludeHeartbeatFromFullContext(updated, params.contextMode),
-    params.warn,
-  );
+  const withoutHeartbeat = excludeHeartbeatFromFullContext(updated, params.contextMode);
+  const filtered = await excludeCompletedBootstrapFromMainContext({
+    files: withoutHeartbeat,
+    workspaceDir: params.workspaceDir,
+    sessionKey: params.sessionKey,
+    contextMode: params.contextMode,
+    runKind: params.runKind,
+  });
+  return sanitizeBootstrapFiles(filtered, params.warn);
 }
 
 export async function resolveBootstrapContextForRun(params: {

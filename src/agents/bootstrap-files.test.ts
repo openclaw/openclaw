@@ -8,7 +8,7 @@ import {
 } from "../hooks/internal-hooks.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { resolveBootstrapContextForRun, resolveBootstrapFilesForRun } from "./bootstrap-files.js";
-import type { WorkspaceBootstrapFile } from "./workspace.js";
+import { DEFAULT_BOOTSTRAP_FILENAME, type WorkspaceBootstrapFile } from "./workspace.js";
 
 function registerExtraBootstrapFileHook() {
   registerInternalHook("agent:bootstrap", (event) => {
@@ -23,6 +23,22 @@ function registerExtraBootstrapFileHook() {
       } as unknown as WorkspaceBootstrapFile,
     ];
   });
+}
+
+async function markWorkspaceSetupCompleted(workspaceDir: string): Promise<void> {
+  await fs.mkdir(path.join(workspaceDir, ".openclaw"), { recursive: true });
+  await fs.writeFile(
+    path.join(workspaceDir, ".openclaw", "workspace-state.json"),
+    JSON.stringify(
+      {
+        version: 1,
+        setupCompletedAt: "2026-03-23T00:00:00.000Z",
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
 }
 
 function registerMalformedBootstrapFileHook() {
@@ -107,6 +123,29 @@ describe("resolveBootstrapFilesForRun", () => {
     const files = await resolveBootstrapFilesForRun({ workspaceDir });
 
     expect(files.some((file) => file.name === "HEARTBEAT.md")).toBe(false);
+    expect(files.some((file) => file.name === "SOUL.md")).toBe(true);
+  });
+
+  it("hides BOOTSTRAP.md from completed full main-session bootstrap context", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_BOOTSTRAP_FILENAME), "finish setup", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "persona", "utf8");
+    await markWorkspaceSetupCompleted(workspaceDir);
+
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+
+    expect(files.some((file) => file.name === DEFAULT_BOOTSTRAP_FILENAME)).toBe(false);
+    expect(files.some((file) => file.name === "SOUL.md")).toBe(true);
+  });
+
+  it("keeps BOOTSTRAP.md in full main-session bootstrap context before setup completes", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_BOOTSTRAP_FILENAME), "finish setup", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "persona", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+
+    expect(files.some((file) => file.name === DEFAULT_BOOTSTRAP_FILENAME)).toBe(true);
     expect(files.some((file) => file.name === "SOUL.md")).toBe(true);
   });
 });
