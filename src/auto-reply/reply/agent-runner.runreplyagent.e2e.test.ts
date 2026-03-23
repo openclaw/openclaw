@@ -114,6 +114,7 @@ function createMinimalRun(params?: {
   typingMode?: TypingMode;
   blockStreamingEnabled?: boolean;
   isActive?: boolean;
+  isRunActive?: () => boolean;
   shouldFollowup?: boolean;
   resolvedQueueMode?: string;
   runOverrides?: Partial<FollowupRun["run"]>;
@@ -169,6 +170,7 @@ function createMinimalRun(params?: {
         shouldSteer: false,
         shouldFollowup: params?.shouldFollowup ?? false,
         isActive: params?.isActive ?? false,
+        isRunActive: params?.isRunActive,
         isStreaming: false,
         opts,
         typing,
@@ -323,6 +325,23 @@ describe("runReplyAgent heartbeat followup guard", () => {
 
     expect(result).toBeUndefined();
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("starts draining immediately when the active snapshot is already stale", async () => {
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: false },
+      isActive: true,
+      isRunActive: () => false,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+    });
+
+    const result = await run();
+
+    expect(result).toBeUndefined();
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
 
