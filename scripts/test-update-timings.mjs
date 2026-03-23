@@ -1,7 +1,10 @@
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import {
+  collectVitestFileDurations,
+  normalizeTrackedRepoPath,
+  readJsonFile,
+  runVitestJsonReport,
+  writeJsonFile,
+} from "./test-report-utils.mjs";
 import { unitTimingManifestPath } from "./test-runner-manifest.mjs";
 
 function parseArgs(argv) {
@@ -9,7 +12,7 @@ function parseArgs(argv) {
     config: "vitest.unit.config.ts",
     out: unitTimingManifestPath,
     reportPath: "",
-    limit: 128,
+    limit: 256,
     defaultDurationMs: 250,
   };
   for (let i = 0; i < argv.length; i += 1) {
@@ -49,42 +52,15 @@ function parseArgs(argv) {
   return args;
 }
 
-const normalizeRepoPath = (value) => value.split(path.sep).join("/");
-
 const opts = parseArgs(process.argv.slice(2));
-const reportPath =
-  opts.reportPath || path.join(os.tmpdir(), `openclaw-vitest-timings-${Date.now()}.json`);
-
-if (!(opts.reportPath && fs.existsSync(reportPath))) {
-  const run = spawnSync(
-    "pnpm",
-    ["vitest", "run", "--config", opts.config, "--reporter=json", "--outputFile", reportPath],
-    {
-      stdio: "inherit",
-      env: process.env,
-    },
-  );
-
-  if (run.status !== 0) {
-    process.exit(run.status ?? 1);
-  }
-}
-
-const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+const reportPath = runVitestJsonReport({
+  config: opts.config,
+  reportPath: opts.reportPath,
+  prefix: "openclaw-vitest-timings",
+});
+const report = readJsonFile(reportPath);
 const files = Object.fromEntries(
-  (report.testResults ?? [])
-    .map((result) => {
-      const file = typeof result.name === "string" ? normalizeRepoPath(result.name) : "";
-      const start = typeof result.startTime === "number" ? result.startTime : 0;
-      const end = typeof result.endTime === "number" ? result.endTime : 0;
-      const testCount = Array.isArray(result.assertionResults) ? result.assertionResults.length : 0;
-      return {
-        file,
-        durationMs: Math.max(0, end - start),
-        testCount,
-      };
-    })
-    .filter((entry) => entry.file.length > 0 && entry.durationMs > 0)
+  collectVitestFileDurations(report, normalizeTrackedRepoPath)
     .toSorted((a, b) => b.durationMs - a.durationMs)
     .slice(0, opts.limit)
     .map((entry) => [
@@ -103,7 +79,7 @@ const output = {
   files,
 };
 
-fs.writeFileSync(opts.out, `${JSON.stringify(output, null, 2)}\n`);
+writeJsonFile(opts.out, output);
 console.log(
   `[test-update-timings] wrote ${String(Object.keys(files).length)} timings to ${opts.out}`,
 );

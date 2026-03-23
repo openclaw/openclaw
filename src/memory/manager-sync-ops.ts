@@ -94,6 +94,12 @@ function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
   return parts.some((segment) => IGNORED_MEMORY_WATCH_DIR_NAMES.has(segment));
 }
 
+export function runDetachedMemorySync(sync: () => Promise<void>, reason: "interval" | "watch") {
+  void sync().catch((err) => {
+    log.warn(`memory sync failed (${reason}): ${String(err)}`);
+  });
+}
+
 export abstract class MemoryManagerSyncOps {
   protected abstract readonly cfg: OpenClawConfig;
   protected abstract readonly agentId: string;
@@ -361,6 +367,7 @@ export abstract class MemoryManagerSyncOps {
     const result = ensureMemoryIndexSchema({
       db: this.db,
       embeddingCacheTable: EMBEDDING_CACHE_TABLE,
+      cacheEnabled: this.cache.enabled,
       ftsTable: FTS_TABLE,
       ftsEnabled: this.fts.enabled,
     });
@@ -649,9 +656,7 @@ export abstract class MemoryManagerSyncOps {
     }
     const ms = minutes * 60 * 1000;
     this.intervalTimer = setInterval(() => {
-      void this.sync({ reason: "interval" }).catch((err) => {
-        log.warn(`memory sync failed (interval): ${String(err)}`);
-      });
+      runDetachedMemorySync(() => this.sync({ reason: "interval" }), "interval");
     }, ms);
   }
 
@@ -664,9 +669,7 @@ export abstract class MemoryManagerSyncOps {
     }
     this.watchTimer = setTimeout(() => {
       this.watchTimer = null;
-      void this.sync({ reason: "watch" }).catch((err) => {
-        log.warn(`memory sync failed (watch): ${String(err)}`);
-      });
+      runDetachedMemorySync(() => this.sync({ reason: "watch" }), "watch");
     }, this.settings.sync.watchDebounceMs);
   }
 

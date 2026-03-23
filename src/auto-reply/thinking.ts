@@ -34,7 +34,7 @@ import {
   resolveProviderBinaryThinking,
   resolveProviderDefaultThinkingLevel,
   resolveProviderXHighThinking,
-} from "../plugins/provider-runtime.js";
+} from "../plugins/provider-thinking.js";
 
 export function isBinaryThinkingProvider(provider?: string | null, model?: string | null): boolean {
   if (isBinaryThinkingProviderFallback(provider)) {

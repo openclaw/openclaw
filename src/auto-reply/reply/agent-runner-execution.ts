@@ -47,7 +47,7 @@ import {
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
 import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
-import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
+import { createReplyMediaPathNormalizer } from "./reply-media-paths.runtime.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 export type RuntimeFallbackAttempt = {
@@ -199,6 +199,23 @@ export async function runAgentTurnWithFallback(params: {
         return text;
       };
       const blockReplyPipeline = params.blockReplyPipeline;
+      // Build the delivery handler once so both onAgentEvent (compaction start
+      // notice) and the onBlockReply field share the same instance.  This
+      // ensures replyToId threading (replyToMode=all|first) is applied to
+      // compaction notices just like every other block reply.
+      const blockReplyHandler = params.opts?.onBlockReply
+        ? createBlockReplyDeliveryHandler({
+            onBlockReply: params.opts.onBlockReply,
+            currentMessageId: params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
+            normalizeStreamingText,
+            applyReplyToMode: params.applyReplyToMode,
+            normalizeMediaPaths: normalizeReplyMediaPaths,
+            typingSignals: params.typingSignals,
+            blockStreamingEnabled: params.blockStreamingEnabled,
+            blockReplyPipeline,
+            directlySentBlockKeys,
+          })
+        : undefined;
       const onToolResult = params.opts?.onToolResult;
       const fallbackResult = await runWithModelFallback({
         ...resolveModelFallbackOptions(params.followupRun.run),
@@ -394,11 +411,34 @@ export async function runAgentTurnWithFallback(params: {
                       await params.opts?.onToolStart?.({ name, phase });
                     }
                   }
-                  // Track auto-compaction completion and notify UI layer.
+                  // Track auto-compaction and notify higher layers.
                   if (evt.stream === "compaction") {
                     const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
                     if (phase === "start") {
-                      await params.opts?.onCompactionStart?.();
+                      if (params.opts?.onCompactionStart) {
+                        await params.opts.onCompactionStart();
+                      } else if (params.opts?.onBlockReply) {
+                        // Send directly via opts.onBlockReply (bypassing the
+                        // pipeline) so the notice does not cause final payloads
+                        // to be discarded on non-streaming model paths.
+                        const currentMessageId =
+                          params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
+                        const noticePayload = params.applyReplyToMode({
+                          text: "🧹 Compacting context...",
+                          replyToId: currentMessageId,
+                          replyToCurrent: true,
+                          isCompactionNotice: true,
+                        });
+                        try {
+                          await params.opts.onBlockReply(noticePayload);
+                        } catch (err) {
+                          // Non-critical notice delivery failure should not
+                          // bubble out of the fire-and-forget event handler.
+                          logVerbose(
+                            `compaction start notice delivery failed (non-fatal): ${String(err)}`,
+                          );
+                        }
+                      }
                     }
                     const completed = evt.data?.completed === true;
                     if (phase === "end" && completed) {
@@ -410,20 +450,7 @@ export async function runAgentTurnWithFallback(params: {
                 // Always pass onBlockReply so flushBlockReplyBuffer works before tool execution,
                 // even when regular block streaming is disabled. The handler sends directly
                 // via opts.onBlockReply when the pipeline isn't available.
-                onBlockReply: params.opts?.onBlockReply
-                  ? createBlockReplyDeliveryHandler({
-                      onBlockReply: params.opts.onBlockReply,
-                      currentMessageId:
-                        params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
-                      normalizeStreamingText,
-                      applyReplyToMode: params.applyReplyToMode,
-                      normalizeMediaPaths: normalizeReplyMediaPaths,
-                      typingSignals: params.typingSignals,
-                      blockStreamingEnabled: params.blockStreamingEnabled,
-                      blockReplyPipeline,
-                      directlySentBlockKeys,
-                    })
-                  : undefined,
+                onBlockReply: blockReplyHandler,
                 onBlockReplyFlush:
                   params.blockStreamingEnabled && blockReplyPipeline
                     ? async () => {
