@@ -3,9 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  clearRuntimeAuthProfileStoreSnapshots,
   calculateAuthProfileCooldownMs,
   ensureAuthProfileStore,
   markAuthProfileFailure,
+  replaceRuntimeAuthProfileStoreSnapshots,
 } from "./auth-profiles.js";
 
 type AuthProfileStore = ReturnType<typeof ensureAuthProfileStore>;
@@ -48,6 +50,73 @@ function expectCooldownInRange(remainingMs: number, minMs: number, maxMs: number
 }
 
 describe("markAuthProfileFailure", () => {
+  it("does not overwrite fresher on-disk credentials with a stale runtime snapshot", async () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
+    try {
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      fs.writeFileSync(
+        authPath,
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-expired-old",
+            },
+          },
+        }),
+      );
+
+      replaceRuntimeAuthProfileStoreSnapshots([
+        {
+          agentDir,
+          store: ensureAuthProfileStore(agentDir),
+        },
+      ]);
+
+      fs.writeFileSync(
+        authPath,
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-fresh-new",
+            },
+          },
+        }),
+      );
+
+      const staleRuntimeStore = ensureAuthProfileStore(agentDir);
+      const staleCredential = staleRuntimeStore.profiles["openai:default"];
+      expect(staleCredential?.type).toBe("api_key");
+      expect(staleCredential && "key" in staleCredential ? staleCredential.key : undefined).toBe(
+        "sk-expired-old",
+      );
+
+      await markAuthProfileFailure({
+        store: staleRuntimeStore,
+        profileId: "openai:default",
+        reason: "rate_limit",
+        agentDir,
+      });
+
+      clearRuntimeAuthProfileStoreSnapshots();
+      const reloaded = ensureAuthProfileStore(agentDir);
+      const reloadedCredential = reloaded.profiles["openai:default"];
+      expect(reloadedCredential?.type).toBe("api_key");
+      expect(
+        reloadedCredential && "key" in reloadedCredential ? reloadedCredential.key : undefined,
+      ).toBe("sk-fresh-new");
+      expect(typeof reloaded.usageStats?.["openai:default"]?.cooldownUntil).toBe("number");
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("disables billing failures for ~5 hours by default", async () => {
     await withAuthProfileStore(async ({ agentDir, store }) => {
       const startedAt = Date.now();
