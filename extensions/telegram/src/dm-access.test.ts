@@ -19,7 +19,10 @@ vi.mock("./api-logging.js", () => ({
 
 import type { Message } from "@grammyjs/types";
 import { normalizeAllowFrom } from "./bot-access.js";
-let enforceTelegramDmAccess: typeof import("./dm-access.js").enforceTelegramDmAccess;
+
+type DmAccessModule = typeof import("./dm-access.js");
+
+let enforceTelegramDmAccess: DmAccessModule["enforceTelegramDmAccess"];
 
 function createDmMessage(overrides: Partial<Message> = {}): Message {
   return {
@@ -40,8 +43,10 @@ function createDmMessage(overrides: Partial<Message> = {}): Message {
 describe("enforceTelegramDmAccess", () => {
   beforeEach(async () => {
     vi.resetModules();
-    vi.clearAllMocks();
     ({ enforceTelegramDmAccess } = await import("./dm-access.js"));
+    createChannelPairingChallengeIssuerMock.mockReset();
+    upsertChannelPairingRequestMock.mockReset().mockResolvedValue(undefined);
+    withTelegramApiErrorLoggingMock.mockReset().mockImplementation(async ({ fn }) => await fn());
   });
 
   it("allows DMs when policy is open", async () => {

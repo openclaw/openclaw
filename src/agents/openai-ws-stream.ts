@@ -697,7 +697,7 @@ export function createOpenAIWebSocketStreamFn(
   sessionId: string,
   opts: OpenAIWebSocketStreamOptions = {},
 ): StreamFn {
-  return (model, context, options) => {
+  const streamFn: StreamFn = (model, context, options) => {
     const eventStream = createEventStream();
 
     const run = async () => {
@@ -1011,8 +1011,9 @@ export function createOpenAIWebSocketStreamFn(
       }),
     );
 
-    return eventStream;
+    return eventStream as unknown as ReturnType<StreamFn>;
   };
+  return streamFn;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

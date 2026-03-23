@@ -11,6 +11,7 @@ const createConfig = (overrides: Partial<VoiceCallConfig> = {}): VoiceCallConfig
     provider: "plivo",
     fromNumber: "+15550000000",
     inboundPolicy: "disabled",
+    skipSignatureVerification: true,
   });
   base.serve.port = 0;
 

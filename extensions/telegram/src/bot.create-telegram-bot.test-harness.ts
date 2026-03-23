@@ -36,6 +36,10 @@ const { loadWebMedia } = vi.hoisted((): { loadWebMedia: AnyMock } => ({
   loadWebMedia: vi.fn(),
 }));
 
+const undiciHoisted = vi.hoisted(() => ({
+  undiciFetchSpy: vi.fn<typeof fetch>(async (...args) => await globalThis.fetch(...args)),
+}));
+
 export function getLoadWebMediaMock(): AnyMock {
   return loadWebMedia;
 }
@@ -46,6 +50,24 @@ vi.mock("openclaw/plugin-sdk/web-media", () => ({
 vi.mock("openclaw/plugin-sdk/web-media.js", () => ({
   loadWebMedia,
 }));
+
+vi.mock("undici", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("undici")>();
+  class AgentFallback {
+    close() {}
+    destroy() {}
+  }
+  class EnvHttpProxyAgentFallback extends AgentFallback {}
+  class ProxyAgentFallback extends AgentFallback {}
+  return {
+    ...actual,
+    Agent: actual.Agent ?? AgentFallback,
+    EnvHttpProxyAgent: actual.EnvHttpProxyAgent ?? EnvHttpProxyAgentFallback,
+    ProxyAgent: actual.ProxyAgent ?? ProxyAgentFallback,
+    fetch: (...args: Parameters<typeof undiciHoisted.undiciFetchSpy>) =>
+      undiciHoisted.undiciFetchSpy(...args),
+  };
+});
 
 const { loadConfig, resolveStorePathMock } = vi.hoisted(
   (): {
@@ -491,6 +513,10 @@ beforeEach(() => {
   resolveStorePathMock.mockReset();
   resolveStorePathMock.mockImplementation((storePath?: string) => storePath ?? sessionStorePath);
   loadWebMedia.mockReset();
+  undiciHoisted.undiciFetchSpy.mockReset();
+  undiciHoisted.undiciFetchSpy.mockImplementation(
+    async (...args) => await globalThis.fetch(...args),
+  );
   readChannelAllowFromStore.mockReset();
   readChannelAllowFromStore.mockResolvedValue([]);
   upsertChannelPairingRequest.mockReset();

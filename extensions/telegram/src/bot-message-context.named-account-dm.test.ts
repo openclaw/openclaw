@@ -1,4 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../src/config/config.js";
+import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 
 const recordInboundSessionMock = vi.fn().mockResolvedValue(undefined);
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
@@ -8,10 +13,6 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
     recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
   };
 });
-
-let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
-let clearRuntimeConfigSnapshot: typeof import("../../../src/config/config.js").clearRuntimeConfigSnapshot;
-let setRuntimeConfigSnapshot: typeof import("../../../src/config/config.js").setRuntimeConfigSnapshot;
 
 describe("buildTelegramMessageContext named-account DM fallback", () => {
   const baseCfg = {
@@ -25,12 +26,9 @@ describe("buildTelegramMessageContext named-account DM fallback", () => {
     recordInboundSessionMock.mockClear();
   });
 
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.resetModules();
-    ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
-      await import("../../../src/config/config.js"));
-    ({ buildTelegramMessageContextForTest } =
-      await import("./bot-message-context.test-harness.js"));
+    recordInboundSessionMock.mockClear();
   });
 
   function getLastUpdateLastRoute(): { sessionKey?: string } | undefined {
@@ -101,7 +99,7 @@ describe("buildTelegramMessageContext named-account DM fallback", () => {
     expect(atlas?.ctxPayload?.SessionKey).not.toBe(skynet?.ctxPayload?.SessionKey);
   });
 
-  it("keeps identity-linked peer canonicalization in the named-account fallback path", async () => {
+  it("keeps named-account DM fallback isolated even when identityLinks are configured", async () => {
     const cfg = {
       ...baseCfg,
       session: {
@@ -124,7 +122,7 @@ describe("buildTelegramMessageContext named-account DM fallback", () => {
       },
     });
 
-    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:telegram:atlas:direct:alice-shared");
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:telegram:atlas:direct:814912386");
   });
 
   it("still drops named-account group messages without an explicit binding", async () => {

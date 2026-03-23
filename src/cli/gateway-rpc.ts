@@ -19,29 +19,51 @@ export function addGatewayClientOptions(cmd: Command) {
     .option("--expect-final", "Wait for final response (agent)", false);
 }
 
+function isRetryableCliTransportError(err: unknown): boolean {
+  const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return (
+    message.includes("gateway closed (1000") ||
+    message.includes("gateway closed (1006") ||
+    message.includes("gateway timeout") ||
+    message.includes("connect challenge timeout")
+  );
+}
+
 export async function callGatewayFromCli(
   method: string,
   opts: GatewayRpcOpts,
   params?: unknown,
-  extra?: { expectFinal?: boolean; progress?: boolean },
+  extra?: { expectFinal?: boolean; progress?: boolean; quiet?: boolean },
 ) {
   const showProgress = extra?.progress ?? opts.json !== true;
+  const quiet = extra?.quiet === true;
+  const baseMode = quiet ? GATEWAY_CLIENT_MODES.PROBE : GATEWAY_CLIENT_MODES.CLI;
   return await withProgress(
     {
       label: `Gateway ${method}`,
       indeterminate: true,
       enabled: showProgress,
     },
-    async () =>
-      await callGateway({
-        url: opts.url,
-        token: opts.token,
-        method,
-        params,
-        expectFinal: extra?.expectFinal ?? Boolean(opts.expectFinal),
-        timeoutMs: Number(opts.timeout ?? 10_000),
-        clientName: GATEWAY_CLIENT_NAMES.CLI,
-        mode: GATEWAY_CLIENT_MODES.CLI,
-      }),
+    async () => {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          return await callGateway({
+            url: opts.url,
+            token: opts.token,
+            method,
+            params,
+            expectFinal: extra?.expectFinal ?? Boolean(opts.expectFinal),
+            timeoutMs: Number(opts.timeout ?? 10_000),
+            clientName: GATEWAY_CLIENT_NAMES.CLI,
+            mode: attempt === 0 ? baseMode : GATEWAY_CLIENT_MODES.PROBE,
+          });
+        } catch (err) {
+          if (attempt === 2 || !isRetryableCliTransportError(err)) {
+            throw err;
+          }
+        }
+      }
+      throw new Error(`gateway retries exhausted for ${method}`);
+    },
   );
 }

@@ -24,15 +24,14 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   };
 });
 
-let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
+const { buildTelegramMessageContextForTest } =
+  await import("./bot-message-context.test-harness.js");
 
 describe("buildTelegramMessageContext bound conversation override", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.resetModules();
     hoisted.resolveByConversationMock.mockReset().mockReturnValue(null);
     hoisted.touchMock.mockReset();
-    ({ buildTelegramMessageContextForTest } =
-      await import("./bot-message-context.test-harness.js"));
   });
 
   it("routes forum topic messages to the bound session", async () => {

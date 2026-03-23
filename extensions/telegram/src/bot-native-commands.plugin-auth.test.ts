@@ -1,46 +1,84 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { TelegramAccountConfig } from "../../../src/config/types.js";
+import {
+  createNativeCommandTestParams,
+  type NativeCommandTestParams,
+} from "./bot-native-commands.fixture-test-support.js";
 
-let createNativeCommandsHarness: typeof import("./bot-native-commands.test-helpers.js").createNativeCommandsHarness;
-let deliverReplies: typeof import("./bot-native-commands.test-helpers.js").deliverReplies;
-let executePluginCommand: typeof import("./bot-native-commands.test-helpers.js").executePluginCommand;
-let getPluginCommandSpecs: typeof import("./bot-native-commands.test-helpers.js").getPluginCommandSpecs;
-let matchPluginCommand: typeof import("./bot-native-commands.test-helpers.js").matchPluginCommand;
+type NativeCommandsModule = typeof import("./bot-native-commands.js");
 
-let getPluginCommandSpecsMock: {
-  mockReturnValue: (
-    value: ReturnType<typeof import("../../../src/plugins/commands.js").getPluginCommandSpecs>,
-  ) => unknown;
-};
-let matchPluginCommandMock: {
-  mockReturnValue: (
-    value: ReturnType<typeof import("../../../src/plugins/commands.js").matchPluginCommand>,
-  ) => unknown;
-};
-let executePluginCommandMock: {
-  mockResolvedValue: (
-    value: Awaited<
-      ReturnType<typeof import("../../../src/plugins/commands.js").executePluginCommand>
-    >,
-  ) => unknown;
-};
+type GetPluginCommandSpecsFn =
+  typeof import("openclaw/plugin-sdk/plugin-runtime").getPluginCommandSpecs;
+type MatchPluginCommandFn = typeof import("openclaw/plugin-sdk/plugin-runtime").matchPluginCommand;
+type ExecutePluginCommandFn =
+  typeof import("openclaw/plugin-sdk/plugin-runtime").executePluginCommand;
+
+type DeliverRepliesFn = typeof import("./bot/delivery.js").deliverReplies;
+
+let registerTelegramNativeCommands: NativeCommandsModule["registerTelegramNativeCommands"];
+
+const pluginMocks = vi.hoisted(() => ({
+  getPluginCommandSpecs: vi.fn<GetPluginCommandSpecsFn>(() => []),
+  matchPluginCommand: vi.fn<MatchPluginCommandFn>(() => null),
+  executePluginCommand: vi.fn<ExecutePluginCommandFn>(async () => ({ text: "ok" })),
+}));
+const deliveryMocks = vi.hoisted(() => ({
+  deliverReplies: vi.fn<DeliverRepliesFn>(async () => ({ delivered: true })),
+}));
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  getPluginCommandSpecs: pluginMocks.getPluginCommandSpecs,
+  matchPluginCommand: pluginMocks.matchPluginCommand,
+  executePluginCommand: pluginMocks.executePluginCommand,
+}));
+
+vi.mock("./bot/delivery.js", () => ({
+  deliverReplies: deliveryMocks.deliverReplies,
+}));
+
+function createHarness(params?: {
+  cfg?: OpenClawConfig;
+  telegramCfg?: TelegramAccountConfig;
+  allowFrom?: string[];
+  nativeEnabled?: boolean;
+}) {
+  const handlers: Record<string, (ctx: unknown) => Promise<void>> = {};
+  const sendMessage = vi.fn().mockResolvedValue(undefined);
+  const setMyCommands = vi.fn().mockResolvedValue(undefined);
+  const log = vi.fn();
+
+  registerTelegramNativeCommands({
+    ...createNativeCommandTestParams({
+      cfg: params?.cfg ?? ({} as OpenClawConfig),
+      runtime: { log, error: vi.fn(), exit: vi.fn() } as NativeCommandTestParams["runtime"],
+      telegramCfg: params?.telegramCfg ?? ({} as TelegramAccountConfig),
+      allowFrom: params?.allowFrom ?? [],
+      nativeEnabled: params?.nativeEnabled ?? true,
+      nativeSkillsEnabled: false,
+      bot: {
+        api: {
+          setMyCommands,
+          sendMessage,
+        },
+        command: vi.fn((name: string, handler: (ctx: unknown) => Promise<void>) => {
+          handlers[name] = handler;
+        }),
+      } as unknown as NativeCommandTestParams["bot"],
+    }),
+  });
+
+  return { handlers, setMyCommands, log, bot: { api: { sendMessage } } };
+}
 
 describe("registerTelegramNativeCommands (plugin auth)", () => {
   beforeEach(async () => {
     vi.resetModules();
-    ({
-      createNativeCommandsHarness,
-      deliverReplies,
-      executePluginCommand,
-      getPluginCommandSpecs,
-      matchPluginCommand,
-    } = await import("./bot-native-commands.test-helpers.js"));
-    getPluginCommandSpecsMock =
-      getPluginCommandSpecs as unknown as typeof getPluginCommandSpecsMock;
-    matchPluginCommandMock = matchPluginCommand as unknown as typeof matchPluginCommandMock;
-    executePluginCommandMock = executePluginCommand as unknown as typeof executePluginCommandMock;
-    vi.clearAllMocks();
+    ({ registerTelegramNativeCommands } = await import("./bot-native-commands.js"));
+    pluginMocks.getPluginCommandSpecs.mockReset().mockReturnValue([]);
+    pluginMocks.matchPluginCommand.mockReset().mockReturnValue(null);
+    pluginMocks.executePluginCommand.mockReset().mockResolvedValue({ text: "ok" });
+    deliveryMocks.deliverReplies.mockReset().mockResolvedValue({ delivered: true });
   });
 
   it("does not register plugin commands in menu when native=false but keeps handlers available", () => {
@@ -49,9 +87,9 @@ describe("registerTelegramNativeCommands (plugin auth)", () => {
       description: `Command ${i}`,
       acceptsArgs: false,
     }));
-    getPluginCommandSpecsMock.mockReturnValue(specs);
+    pluginMocks.getPluginCommandSpecs.mockReturnValue(specs as never);
 
-    const { handlers, setMyCommands, log } = createNativeCommandsHarness({
+    const { handlers, setMyCommands, log } = createHarness({
       cfg: {} as OpenClawConfig,
       telegramCfg: {} as TelegramAccountConfig,
       nativeEnabled: false,
@@ -71,13 +109,13 @@ describe("registerTelegramNativeCommands (plugin auth)", () => {
       handler: vi.fn(),
     } as const;
 
-    getPluginCommandSpecsMock.mockReturnValue([
+    pluginMocks.getPluginCommandSpecs.mockReturnValue([
       { name: "plugin", description: "Plugin command", acceptsArgs: false },
-    ]);
-    matchPluginCommandMock.mockReturnValue({ command, args: undefined });
-    executePluginCommandMock.mockResolvedValue({ text: "ok" });
+    ] as never);
+    pluginMocks.matchPluginCommand.mockReturnValue({ command, args: undefined } as never);
+    pluginMocks.executePluginCommand.mockResolvedValue({ text: "ok" } as never);
 
-    const { handlers, bot } = createNativeCommandsHarness({
+    const { handlers, bot } = createHarness({
       cfg: {} as OpenClawConfig,
       telegramCfg: {} as TelegramAccountConfig,
       allowFrom: ["999"],
@@ -96,13 +134,13 @@ describe("registerTelegramNativeCommands (plugin auth)", () => {
 
     await handlers.plugin?.(ctx);
 
-    expect(matchPluginCommand).toHaveBeenCalled();
-    expect(executePluginCommand).toHaveBeenCalledWith(
+    expect(pluginMocks.matchPluginCommand).toHaveBeenCalled();
+    expect(pluginMocks.executePluginCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         isAuthorizedSender: false,
       }),
     );
-    expect(deliverReplies).toHaveBeenCalledWith(
+    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [{ text: "ok" }],
       }),

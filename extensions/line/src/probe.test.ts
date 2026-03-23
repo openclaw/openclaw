@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const { getBotInfoMock, MessagingApiClientMock } = vi.hoisted(() => {
   const getBotInfoMock = vi.fn();
   const MessagingApiClientMock = vi.fn(function () {
@@ -15,11 +15,13 @@ let probeLineBot: typeof import("./probe.js").probeLineBot;
 
 afterEach(() => {
   vi.useRealTimers();
-  getBotInfoMock.mockClear();
 });
 
 describe("probeLineBot", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    getBotInfoMock.mockReset();
+    MessagingApiClientMock.mockClear();
     ({ probeLineBot } = await import("./probe.js"));
   });
 

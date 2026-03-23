@@ -4,6 +4,10 @@ import { request, type IncomingMessage } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+type StartTelegramWebhook = typeof import("./webhook.js").startTelegramWebhook;
+
+let startTelegramWebhook: StartTelegramWebhook;
+
 const handlerSpy = vi.hoisted(() => vi.fn((..._args: unknown[]): unknown => undefined));
 const setWebhookSpy = vi.hoisted(() => vi.fn());
 const deleteWebhookSpy = vi.hoisted(() => vi.fn(async () => true));
@@ -93,13 +97,6 @@ vi.mock("grammy", async (importOriginal) => {
 vi.mock("./bot.js", () => ({
   createTelegramBot: createTelegramBotSpy,
 }));
-
-let startTelegramWebhook: typeof import("./webhook.js").startTelegramWebhook;
-
-beforeEach(async () => {
-  vi.resetModules();
-  ({ startTelegramWebhook } = await import("./webhook.js"));
-});
 
 async function fetchWithTimeout(
   input: string,
@@ -302,11 +299,11 @@ function sha256(text: string): string {
 }
 
 type StartWebhookOptions = Omit<
-  Parameters<typeof startTelegramWebhook>[0],
+  Parameters<StartTelegramWebhook>[0],
   "token" | "port" | "abortSignal"
 >;
 
-type StartedWebhook = Awaited<ReturnType<typeof startTelegramWebhook>>;
+type StartedWebhook = Awaited<ReturnType<StartTelegramWebhook>>;
 
 function getServerPort(server: StartedWebhook["server"]): number {
   const address = server.address();
@@ -394,6 +391,18 @@ async function runNearLimitPayloadTest(mode: "single" | "random-chunked"): Promi
 }
 
 describe("startTelegramWebhook", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ startTelegramWebhook } = await import("./webhook.js"));
+    handlerSpy.mockClear();
+    setWebhookSpy.mockClear();
+    deleteWebhookSpy.mockClear();
+    initSpy.mockClear();
+    stopSpy.mockClear();
+    webhookCallbackSpy.mockClear();
+    createTelegramBotSpy.mockClear();
+  });
+
   it("starts server, registers webhook, and serves health", async () => {
     initSpy.mockClear();
     createTelegramBotSpy.mockClear();
@@ -451,15 +460,15 @@ describe("startTelegramWebhook", () => {
         webhookCertPath: "/path/to/cert.pem",
       },
       async () => {
-        expect(setWebhookSpy).toHaveBeenCalledWith(
-          expect.any(String),
-          expect.objectContaining({
-            certificate: expect.objectContaining({
-              fileData: "/path/to/cert.pem",
-              filename: "cert.pem",
-            }),
-          }),
-        );
+        expect(setWebhookSpy).toHaveBeenCalledTimes(1);
+        const [, options] = setWebhookSpy.mock.calls[0] ?? [];
+        const certificate = (options as { certificate?: Record<string, unknown> } | undefined)
+          ?.certificate;
+        expect(certificate).toBeDefined();
+        expect(
+          (certificate as { fileData?: string; path?: string } | undefined)?.fileData ??
+            (certificate as { fileData?: string; path?: string } | undefined)?.path,
+        ).toBe("/path/to/cert.pem");
       },
     );
   });

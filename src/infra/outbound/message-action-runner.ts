@@ -453,7 +453,6 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     message,
     preferComponents: true,
   });
-
   const mediaUrl = readStringParam(params, "media", { trim: false });
   if (
     !hasReplyPayloadContent(

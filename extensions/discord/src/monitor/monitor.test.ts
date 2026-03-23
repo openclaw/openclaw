@@ -104,14 +104,20 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
   return {
     ...actual,
-    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+    enqueueSystemEvent: (...args: Parameters<typeof actual.enqueueSystemEvent>) => {
+      enqueueSystemEventMock(...args);
+      return actual.enqueueSystemEvent(...args);
+    },
   };
 });
 vi.mock("openclaw/plugin-sdk/infra-runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
   return {
     ...actual,
-    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+    enqueueSystemEvent: (...args: Parameters<typeof actual.enqueueSystemEvent>) => {
+      enqueueSystemEventMock(...args);
+      return actual.enqueueSystemEvent(...args);
+    },
   };
 });
 

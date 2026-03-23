@@ -83,14 +83,31 @@ function createWhatsAppDirectStreamingArgs(params?: {
   });
 }
 
-vi.mock("../../../../../src/auto-reply/reply/provider-dispatcher.js", () => ({
-  // oxlint-disable-next-line typescript/no-explicit-any
-  dispatchReplyWithBufferedBlockDispatcher: vi.fn(async (params: any) => {
-    capturedDispatchParams = params;
-    capturedCtx = params.ctx;
-    return { queuedFinal: false };
-  }),
-}));
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+  return {
+    ...actual,
+    // oxlint-disable-next-line typescript/no-explicit-any
+    dispatchReplyWithBufferedBlockDispatcher: vi.fn(async (params: any) => {
+      capturedDispatchParams = params;
+      capturedCtx = params.ctx;
+      return { queuedFinal: false };
+    }),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/reply-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+  return {
+    ...actual,
+    // oxlint-disable-next-line typescript/no-explicit-any
+    dispatchReplyWithBufferedBlockDispatcher: vi.fn(async (params: any) => {
+      capturedDispatchParams = params;
+      capturedCtx = params.ctx;
+      return { queuedFinal: false };
+    }),
+  };
+});
 
 vi.mock("./last-route.js", () => ({
   trackBackgroundTask: (tasks: Set<Promise<unknown>>, task: Promise<unknown>) => {
@@ -323,7 +340,9 @@ describe("web processMessage inbound context", () => {
 
     // oxlint-disable-next-line typescript/no-explicit-any
     const dispatcherOptions = (capturedDispatchParams as any)?.dispatcherOptions;
-    expect(dispatcherOptions?.onReplyStart).toBe(sendComposing);
+    expect(
+      dispatcherOptions?.onReplyStart ?? dispatcherOptions?.typingCallbacks?.onReplyStart,
+    ).toBe(sendComposing);
   });
 
   it("updates main last route for DM when session key matches main session key", async () => {

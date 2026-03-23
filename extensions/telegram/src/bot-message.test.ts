@@ -15,15 +15,17 @@ vi.mock("./bot-message-dispatch.js", () => ({
   dispatchTelegramMessage,
 }));
 
-let createTelegramMessageProcessor: typeof import("./bot-message.js").createTelegramMessageProcessor;
+type BotMessageModule = typeof import("./bot-message.js");
+
+let createTelegramMessageProcessor: BotMessageModule["createTelegramMessageProcessor"];
 
 describe("telegram bot message processor", () => {
   beforeEach(async () => {
     vi.resetModules();
+    ({ createTelegramMessageProcessor } = await import("./bot-message.js"));
     buildTelegramMessageContext.mockClear();
     dispatchTelegramMessage.mockClear();
     upsertChannelPairingRequest.mockClear();
-    ({ createTelegramMessageProcessor } = await import("./bot-message.js"));
   });
 
   const telegramDepsForTest = {

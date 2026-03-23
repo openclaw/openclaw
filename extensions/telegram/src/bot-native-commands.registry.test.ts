@@ -1,16 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
-const deliveryMocks = vi.hoisted(() => ({
-  deliverReplies: vi.fn(async () => ({ delivered: true })),
-}));
+import { clearPluginCommands, registerPluginCommand } from "../../../src/plugins/commands.js";
+type NativeCommandsModule = typeof import("./bot-native-commands.js");
 
-let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
-let clearPluginCommands: typeof import("../../../src/plugins/commands.js").clearPluginCommands;
-let registerPluginCommand: typeof import("../../../src/plugins/commands.js").registerPluginCommand;
-let createCommandBot: typeof import("./bot-native-commands.menu-test-support.js").createCommandBot;
-let createNativeCommandTestParams: typeof import("./bot-native-commands.menu-test-support.js").createNativeCommandTestParams;
-let createPrivateCommandContext: typeof import("./bot-native-commands.menu-test-support.js").createPrivateCommandContext;
-let waitForRegisteredCommands: typeof import("./bot-native-commands.menu-test-support.js").waitForRegisteredCommands;
+let registerTelegramNativeCommands: NativeCommandsModule["registerTelegramNativeCommands"];
+import {
+  createCommandBot,
+  createNativeCommandTestParams,
+  createPrivateCommandContext,
+  deliverReplies,
+  waitForRegisteredCommands,
+} from "./bot-native-commands.menu-test-support.js";
 
 function registerPairPluginCommand(params?: {
   nativeNames?: { telegram?: string; discord?: string };
@@ -47,24 +47,10 @@ async function registerPairMenu(params: {
 describe("registerTelegramNativeCommands real plugin registry", () => {
   beforeEach(async () => {
     vi.resetModules();
-    vi.doMock("./bot/delivery.js", () => ({
-      deliverReplies: deliveryMocks.deliverReplies,
-    }));
-    vi.doMock("./bot/delivery.replies.js", () => ({
-      deliverReplies: deliveryMocks.deliverReplies,
-    }));
-    ({ clearPluginCommands, registerPluginCommand } =
-      await import("../../../src/plugins/commands.js"));
     ({ registerTelegramNativeCommands } = await import("./bot-native-commands.js"));
-    ({
-      createCommandBot,
-      createNativeCommandTestParams,
-      createPrivateCommandContext,
-      waitForRegisteredCommands,
-    } = await import("./bot-native-commands.menu-test-support.js"));
     clearPluginCommands();
-    deliveryMocks.deliverReplies.mockClear();
-    deliveryMocks.deliverReplies.mockResolvedValue({ delivered: true });
+    deliverReplies.mockClear();
+    deliverReplies.mockResolvedValue({ delivered: true });
   });
 
   afterEach(() => {
@@ -84,7 +70,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
 
     await handler?.(createPrivateCommandContext({ match: "now" }));
 
-    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
+    expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [expect.objectContaining({ text: "paired:now" })],
       }),
@@ -112,7 +98,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
 
     await handler?.(createPrivateCommandContext({ match: "now", messageId: 2 }));
 
-    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
+    expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [expect.objectContaining({ text: "paired:now" })],
       }),
@@ -164,7 +150,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
       }),
     );
 
-    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
+    expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [expect.objectContaining({ text: "paired:now" })],
       }),

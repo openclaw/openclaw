@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 
 // Mock recordInboundSession to capture updateLastRoute parameter
 const recordInboundSessionMock = vi.fn().mockResolvedValue(undefined);
@@ -9,8 +10,6 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
     recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
   };
 });
-
-let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
 
 describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#8891)", () => {
   async function buildCtx(params: {
@@ -30,11 +29,9 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     return callArgs?.updateLastRoute;
   }
 
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.resetModules();
     recordInboundSessionMock.mockClear();
-    ({ buildTelegramMessageContextForTest } =
-      await import("./bot-message-context.test-harness.js"));
   });
 
   it("passes threadId to updateLastRoute for DM topics", async () => {

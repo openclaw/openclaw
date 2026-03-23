@@ -23,21 +23,24 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-let getProxyUrlFromFetch: typeof import("./proxy.js").getProxyUrlFromFetch;
-let makeProxyFetch: typeof import("./proxy.js").makeProxyFetch;
+vi.mock("undici", () => ({
+  ProxyAgent: mocks.ProxyAgent,
+  fetch: mocks.undiciFetch,
+  setGlobalDispatcher: mocks.setGlobalDispatcher,
+}));
+
+type ProxyModule = typeof import("./proxy.js");
+
+let getProxyUrlFromFetch: ProxyModule["getProxyUrlFromFetch"];
+let makeProxyFetch: ProxyModule["makeProxyFetch"];
 
 describe("makeProxyFetch", () => {
   beforeEach(async () => {
     vi.resetModules();
-    mocks.undiciFetch.mockReset();
-    mocks.proxyAgentSpy.mockClear();
-    mocks.setGlobalDispatcher.mockClear();
-    vi.doMock("undici", () => ({
-      ProxyAgent: mocks.ProxyAgent,
-      fetch: mocks.undiciFetch,
-      setGlobalDispatcher: mocks.setGlobalDispatcher,
-    }));
     ({ getProxyUrlFromFetch, makeProxyFetch } = await import("./proxy.js"));
+    mocks.undiciFetch.mockReset();
+    mocks.proxyAgentSpy.mockReset();
+    mocks.setGlobalDispatcher.mockReset();
   });
 
   it("uses undici fetch with ProxyAgent dispatcher", async () => {

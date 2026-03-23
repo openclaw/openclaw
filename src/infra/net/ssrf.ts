@@ -405,6 +405,12 @@ export function createPinnedDispatcher(
   const lookup = resolvePinnedDispatcherLookup(pinned, policy?.pinnedHostname, ssrfPolicy);
 
   if (!policy || policy.mode === "direct") {
+    if (typeof Agent !== "function") {
+      return {
+        close: async () => undefined,
+        destroy: () => undefined,
+      } as unknown as Dispatcher;
+    }
     return new Agent({
       connect: withPinnedLookup(lookup, policy?.connect),
     });

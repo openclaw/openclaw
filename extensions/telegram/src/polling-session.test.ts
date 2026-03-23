@@ -31,17 +31,19 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
   };
 });
 
-let TelegramPollingSession: typeof import("./polling-session.js").TelegramPollingSession;
+type PollingSessionModule = typeof import("./polling-session.js");
+
+let TelegramPollingSession: PollingSessionModule["TelegramPollingSession"];
 
 describe("TelegramPollingSession", () => {
   beforeEach(async () => {
     vi.resetModules();
+    ({ TelegramPollingSession } = await import("./polling-session.js"));
     runMock.mockReset();
     createTelegramBotMock.mockReset();
     isRecoverableTelegramNetworkErrorMock.mockReset().mockReturnValue(true);
     computeBackoffMock.mockReset().mockReturnValue(0);
     sleepWithAbortMock.mockReset().mockResolvedValue(undefined);
-    ({ TelegramPollingSession } = await import("./polling-session.js"));
   });
 
   it("uses backoff helpers for recoverable polling retries", async () => {

@@ -1,29 +1,28 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
-import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
+import type { UpdateCheckResult } from "../infra/update-check.js";
 import { loggingState } from "../logging/state.js";
-import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { getAgentLocalStatuses } from "./status.agent-local.js";
+import type { getAgentLocalStatuses as getAgentLocalStatusesFn } from "./status.agent-local.js";
 import type { StatusScanResult } from "./status.scan.js";
-import {
-  buildTailscaleHttpsUrl,
-  pickGatewaySelfPresence,
-  resolveGatewayProbeSnapshot,
-  resolveMemoryPluginStatus,
-  resolveSharedMemoryStatusSnapshot,
-  type MemoryPluginStatus,
-  type MemoryStatusSnapshot,
+import type {
+  GatewayProbeSnapshot,
+  MemoryPluginStatus,
+  MemoryStatusSnapshot,
 } from "./status.scan.shared.js";
-import { getStatusSummary } from "./status.summary.js";
-import { getUpdateCheckResult } from "./status.update.js";
+import type { StatusSummary } from "./status.types.js";
+
+type AgentLocalStatuses = Awaited<ReturnType<typeof getAgentLocalStatusesFn>>;
 
 let pluginRegistryModulePromise: Promise<typeof import("../cli/plugin-registry.js")> | undefined;
 let configIoModulePromise: Promise<typeof import("../config/io.js")> | undefined;
+let statusSummaryModulePromise: Promise<typeof import("./status.summary.js")> | undefined;
+let statusUpdateModulePromise: Promise<typeof import("./status.update.js")> | undefined;
+let statusAgentLocalModulePromise: Promise<typeof import("./status.agent-local.js")> | undefined;
+let statusScanSharedModulePromise: Promise<typeof import("./status.scan.shared.js")> | undefined;
 let commandSecretTargetsModulePromise:
   | Promise<typeof import("../cli/command-secret-targets.js")>
   | undefined;
@@ -34,6 +33,7 @@ let memorySearchModulePromise: Promise<typeof import("../agents/memory-search.js
 let statusScanDepsRuntimeModulePromise:
   | Promise<typeof import("./status.scan.deps.runtime.js")>
   | undefined;
+let processExecModulePromise: Promise<typeof import("../process/exec.js")> | undefined;
 
 function loadPluginRegistryModule() {
   pluginRegistryModulePromise ??= import("../cli/plugin-registry.js");
@@ -43,6 +43,26 @@ function loadPluginRegistryModule() {
 function loadConfigIoModule() {
   configIoModulePromise ??= import("../config/io.js");
   return configIoModulePromise;
+}
+
+function loadStatusSummaryModule() {
+  statusSummaryModulePromise ??= import("./status.summary.js");
+  return statusSummaryModulePromise;
+}
+
+function loadStatusUpdateModule() {
+  statusUpdateModulePromise ??= import("./status.update.js");
+  return statusUpdateModulePromise;
+}
+
+function loadStatusAgentLocalModule() {
+  statusAgentLocalModulePromise ??= import("./status.agent-local.js");
+  return statusAgentLocalModulePromise;
+}
+
+function loadStatusScanSharedModule() {
+  statusScanSharedModulePromise ??= import("./status.scan.shared.js");
+  return statusScanSharedModulePromise;
 }
 
 function loadCommandSecretTargetsModule() {
@@ -65,6 +85,171 @@ function loadStatusScanDepsRuntimeModule() {
   return statusScanDepsRuntimeModulePromise;
 }
 
+function loadProcessExecModule() {
+  processExecModulePromise ??= import("../process/exec.js");
+  return processExecModulePromise;
+}
+
+const LEGACY_STATE_DIRNAMES = [".clawdbot", ".moldbot", ".moltbot"] as const;
+const CONFIG_FILENAME = "openclaw.json";
+const LEGACY_CONFIG_FILENAMES = ["clawdbot.json", "moldbot.json", "moltbot.json"] as const;
+const DEFAULT_GATEWAY_PORT = 18789;
+const DEFAULT_ACCOUNT_ID = "default";
+const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
+const CHANNEL_ENV_PREFIXES = [
+  ["BLUEBUBBLES_", "bluebubbles"],
+  ["DISCORD_", "discord"],
+  ["GOOGLECHAT_", "googlechat"],
+  ["IRC_", "irc"],
+  ["LINE_", "line"],
+  ["MATRIX_", "matrix"],
+  ["MSTEAMS_", "msteams"],
+  ["SIGNAL_", "signal"],
+  ["SLACK_", "slack"],
+  ["TELEGRAM_", "telegram"],
+  ["WHATSAPP_", "whatsapp"],
+  ["ZALOUSER_", "zalouser"],
+  ["ZALO_", "zalo"],
+] as const;
+
+function resolveHomeDirFast(env: NodeJS.ProcessEnv = process.env): string {
+  return env.OPENCLAW_HOME?.trim() || env.HOME || env.USERPROFILE || os.homedir();
+}
+
+function resolveUserPathFast(input: string, env: NodeJS.ProcessEnv = process.env): string {
+  if (input.startsWith("~/")) {
+    return path.join(resolveHomeDirFast(env), input.slice(2));
+  }
+  if (input === "~") {
+    return resolveHomeDirFast(env);
+  }
+  return input;
+}
+
+function resolveStateDirFast(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
+  if (override) {
+    return resolveUserPathFast(override, env);
+  }
+  const homeDir = resolveHomeDirFast(env);
+  const newDir = path.join(homeDir, ".openclaw");
+  if (env.OPENCLAW_TEST_FAST === "1") {
+    return newDir;
+  }
+  if (existsSync(newDir)) {
+    return newDir;
+  }
+  for (const legacy of LEGACY_STATE_DIRNAMES) {
+    const legacyDir = path.join(homeDir, legacy);
+    if (existsSync(legacyDir)) {
+      return legacyDir;
+    }
+  }
+  return newDir;
+}
+
+function resolveOAuthDirFast(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env.OPENCLAW_OAUTH_DIR?.trim();
+  if (override) {
+    return resolveUserPathFast(override, env);
+  }
+  return path.join(resolveStateDirFast(env), "credentials");
+}
+
+function hasNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasMeaningfulChannelConfigFast(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return Object.keys(value).some((key) => key !== "enabled");
+}
+
+function hasWhatsAppAuthStateFast(env: NodeJS.ProcessEnv): boolean {
+  try {
+    const oauthDir = resolveOAuthDirFast(env);
+    const legacyCreds = path.join(oauthDir, "creds.json");
+    if (existsSync(legacyCreds)) {
+      return true;
+    }
+    const accountsRoot = path.join(oauthDir, "whatsapp");
+    const defaultCreds = path.join(accountsRoot, DEFAULT_ACCOUNT_ID, "creds.json");
+    if (existsSync(defaultCreds)) {
+      return true;
+    }
+    return readdirSync(accountsRoot, { withFileTypes: true }).some((entry) => {
+      if (!entry.isDirectory()) {
+        return false;
+      }
+      return existsSync(path.join(accountsRoot, entry.name, "creds.json"));
+    });
+  } catch {
+    return false;
+  }
+}
+
+function hasPotentialConfiguredChannelsFast(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const channels = isRecord(cfg.channels) ? cfg.channels : null;
+  if (channels) {
+    for (const [key, value] of Object.entries(channels)) {
+      if (IGNORED_CHANNEL_CONFIG_KEYS.has(key)) {
+        continue;
+      }
+      if (hasMeaningfulChannelConfigFast(value)) {
+        return true;
+      }
+    }
+  }
+  for (const [key, value] of Object.entries(env)) {
+    if (!hasNonEmptyString(value)) {
+      continue;
+    }
+    if (
+      CHANNEL_ENV_PREFIXES.some(([prefix]) => key.startsWith(prefix)) ||
+      key === "TELEGRAM_BOT_TOKEN"
+    ) {
+      return true;
+    }
+  }
+  return hasWhatsAppAuthStateFast(env);
+}
+
+function resolveConfigPathFast(env: NodeJS.ProcessEnv = process.env): string {
+  const explicit = env.OPENCLAW_CONFIG_PATH?.trim() || env.CLAWDBOT_CONFIG_PATH?.trim();
+  if (explicit) {
+    return resolveUserPathFast(explicit, env);
+  }
+  const stateDir = resolveStateDirFast(env);
+  const candidates = [
+    path.join(stateDir, CONFIG_FILENAME),
+    ...LEGACY_CONFIG_FILENAMES.map((name) => path.join(stateDir, name)),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return path.join(stateDir, CONFIG_FILENAME);
+}
+
+function resolveGatewayPortFast(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.OPENCLAW_GATEWAY_PORT?.trim() || env.CLAWDBOT_GATEWAY_PORT?.trim();
+  if (!raw) {
+    return DEFAULT_GATEWAY_PORT;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_GATEWAY_PORT;
+}
+
 function shouldSkipMissingConfigFastPath(): boolean {
   return (
     process.env.VITEST === "true" ||
@@ -74,28 +259,21 @@ function shouldSkipMissingConfigFastPath(): boolean {
 }
 
 function isMissingConfigColdStart(): boolean {
-  return !shouldSkipMissingConfigFastPath() && !existsSync(resolveConfigPath(process.env));
-}
-
-function buildColdStartUpdateResult(): Awaited<ReturnType<typeof getUpdateCheckResult>> {
-  return {
-    root: null,
-    installKind: "unknown",
-    packageManager: "unknown",
-  };
+  return !shouldSkipMissingConfigFastPath() && !existsSync(resolveConfigPathFast(process.env));
 }
 
 function resolveDefaultMemoryStorePath(agentId: string): string {
-  return path.join(resolveStateDir(process.env, os.homedir), "memory", `${agentId}.sqlite`);
+  return path.join(resolveStateDirFast(process.env), "memory", `${agentId}.sqlite`);
 }
 
 async function resolveMemoryStatusSnapshot(params: {
   cfg: OpenClawConfig;
-  agentStatus: Awaited<ReturnType<typeof getAgentLocalStatuses>>;
+  agentStatus: AgentLocalStatuses;
   memoryPlugin: MemoryPluginStatus;
 }): Promise<MemoryStatusSnapshot | null> {
   const { resolveMemorySearchConfig } = await loadMemorySearchModule();
   const { getMemorySearchManager } = await loadStatusScanDepsRuntimeModule();
+  const { resolveSharedMemoryStatusSnapshot } = await loadStatusScanSharedModule();
   return await resolveSharedMemoryStatusSnapshot({
     cfg: params.cfg,
     agentStatus: params.agentStatus,
@@ -106,8 +284,12 @@ async function resolveMemoryStatusSnapshot(params: {
   });
 }
 
+function hasMissingConfigFastPath(): boolean {
+  return !shouldSkipMissingConfigFastPath() && !existsSync(resolveConfigPathFast(process.env));
+}
+
 async function readStatusSourceConfig(): Promise<OpenClawConfig> {
-  if (!shouldSkipMissingConfigFastPath() && !existsSync(resolveConfigPath(process.env))) {
+  if (hasMissingConfigFastPath()) {
     return {};
   }
   const { readBestEffortConfig } = await loadConfigIoModule();
@@ -118,7 +300,7 @@ async function resolveStatusConfig(params: {
   sourceConfig: OpenClawConfig;
   commandName: "status --json";
 }): Promise<{ resolvedConfig: OpenClawConfig; diagnostics: string[] }> {
-  if (!shouldSkipMissingConfigFastPath() && !existsSync(resolveConfigPath(process.env))) {
+  if (hasMissingConfigFastPath()) {
     return { resolvedConfig: params.sourceConfig, diagnostics: [] };
   }
   const [{ resolveCommandSecretRefsViaGateway }, { getStatusCommandSecretTargetIds }] =
@@ -129,6 +311,85 @@ async function resolveStatusConfig(params: {
     targetIds: getStatusCommandSecretTargetIds(),
     mode: "read_only_status",
   });
+}
+
+function buildLeanAgentLocalStatuses(): AgentLocalStatuses {
+  return {
+    defaultId: "main",
+    agents: [],
+    totalSessions: 0,
+    bootstrapPendingCount: 0,
+  };
+}
+
+function buildLeanStatusSummary(params: { agentStatus: AgentLocalStatuses }): StatusSummary {
+  return {
+    heartbeat: {
+      defaultAgentId: params.agentStatus.defaultId,
+      agents: params.agentStatus.agents.map((agent) => ({
+        agentId: agent.id,
+        enabled: false,
+        every: "off",
+        everyMs: null,
+      })),
+    },
+    channelSummary: [],
+    queuedSystemEvents: [],
+    sessions: {
+      paths: params.agentStatus.agents.map((agent) => agent.sessionsPath),
+      count: params.agentStatus.totalSessions,
+      defaults: { model: null, contextTokens: null },
+      recent: [],
+      byAgent: params.agentStatus.agents.map((agent) => ({
+        agentId: agent.id,
+        path: agent.sessionsPath,
+        count: agent.sessionsCount,
+        recent: [],
+      })),
+    },
+  };
+}
+
+function buildLeanUpdateCheckResult(): UpdateCheckResult {
+  return {
+    root: null,
+    installKind: "unknown",
+    packageManager: "unknown",
+  };
+}
+
+function buildLeanGatewayProbeSnapshot(): GatewayProbeSnapshot {
+  const port = resolveGatewayPortFast(process.env);
+  const url = `ws://127.0.0.1:${port}`;
+  const urlSource = "local loopback";
+  return {
+    gatewayConnection: {
+      url,
+      urlSource,
+      message: [
+        `Gateway target: ${url}`,
+        `Source: ${urlSource}`,
+        `Config: ${resolveConfigPathFast(process.env)}`,
+      ].join("\n"),
+    },
+    remoteUrlMissing: false,
+    gatewayMode: "local" as const,
+    gatewayProbeAuth: {},
+    gatewayProbeAuthWarning: undefined,
+    gatewayProbe: null,
+  };
+}
+
+function resolveMemoryPluginStatusFast(cfg: OpenClawConfig): MemoryPluginStatus {
+  const pluginsEnabled = cfg.plugins?.enabled !== false;
+  if (!pluginsEnabled) {
+    return { enabled: false, slot: null, reason: "plugins disabled" };
+  }
+  const raw = typeof cfg.plugins?.slots?.memory === "string" ? cfg.plugins.slots.memory.trim() : "";
+  if (raw && raw.toLowerCase() === "none") {
+    return { enabled: false, slot: null, reason: 'plugins.slots.memory="none"' };
+  }
+  return { enabled: true, slot: raw || "memory-core" };
 }
 
 export async function scanStatusJsonFast(
@@ -144,7 +405,7 @@ export async function scanStatusJsonFast(
     sourceConfig: loadedRaw,
     commandName: "status --json",
   });
-  const hasConfiguredChannels = hasPotentialConfiguredChannels(cfg);
+  const hasConfiguredChannels = hasPotentialConfiguredChannelsFast(cfg);
   if (hasConfiguredChannels) {
     const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
     // Route plugin registration logs to stderr so they don't corrupt JSON on stdout.
@@ -159,48 +420,57 @@ export async function scanStatusJsonFast(
   const osSummary = resolveOsSummary();
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   const updateTimeoutMs = opts.all ? 6500 : 2500;
-  const skipColdStartNetworkChecks = coldStart && !hasConfiguredChannels && opts.all !== true;
-  const updatePromise = skipColdStartNetworkChecks
-    ? Promise.resolve(buildColdStartUpdateResult())
-    : getUpdateCheckResult({
-        timeoutMs: updateTimeoutMs,
-        fetchGit: true,
-        includeRegistry: true,
-      });
-  const agentStatusPromise = getAgentLocalStatuses(cfg);
-  const summaryPromise = getStatusSummary({ config: cfg, sourceConfig: loadedRaw });
+  const canUseLeanSummary = coldStart && !hasConfiguredChannels && opts.all !== true;
+  const updatePromise = canUseLeanSummary
+    ? Promise.resolve(buildLeanUpdateCheckResult())
+    : loadStatusUpdateModule().then(({ getUpdateCheckResult }) =>
+        getUpdateCheckResult({
+          timeoutMs: updateTimeoutMs,
+          fetchGit: true,
+          includeRegistry: true,
+        }),
+      );
+  const agentStatusPromise = canUseLeanSummary
+    ? Promise.resolve(buildLeanAgentLocalStatuses())
+    : loadStatusAgentLocalModule().then(({ getAgentLocalStatuses }) => getAgentLocalStatuses(cfg));
 
   const tailscaleDnsPromise =
-    tailscaleMode === "off"
+    tailscaleMode === "off" || canUseLeanSummary
       ? Promise.resolve<string | null>(null)
-      : loadStatusScanDepsRuntimeModule()
-          .then(({ getTailnetHostname }) =>
+      : Promise.all([loadStatusScanDepsRuntimeModule(), loadProcessExecModule()])
+          .then(([{ getTailnetHostname }, { runExec }]) =>
             getTailnetHostname((cmd, args) =>
               runExec(cmd, args, { timeoutMs: 1200, maxBuffer: 200_000 }),
             ),
           )
           .catch(() => null);
 
-  const gatewayProbePromise = resolveGatewayProbeSnapshot({
-    cfg,
-    opts: {
-      ...opts,
-      ...(skipColdStartNetworkChecks ? { skipProbe: true } : {}),
-    },
-  });
+  const gatewayProbePromise = canUseLeanSummary
+    ? Promise.resolve(buildLeanGatewayProbeSnapshot())
+    : loadStatusScanSharedModule().then(({ resolveGatewayProbeSnapshot }) =>
+        resolveGatewayProbeSnapshot({ cfg, opts }),
+      );
 
-  const [tailscaleDns, update, agentStatus, gatewaySnapshot, summary] = await Promise.all([
+  const [tailscaleDns, update, agentStatus, gatewaySnapshot] = await Promise.all([
     tailscaleDnsPromise,
     updatePromise,
     agentStatusPromise,
     gatewayProbePromise,
-    summaryPromise,
   ]);
-  const tailscaleHttpsUrl = buildTailscaleHttpsUrl({
-    tailscaleMode,
-    tailscaleDns,
-    controlUiBasePath: cfg.gateway?.controlUi?.basePath,
-  });
+  const summary = canUseLeanSummary
+    ? buildLeanStatusSummary({ agentStatus })
+    : await loadStatusSummaryModule().then(({ getStatusSummary }) =>
+        getStatusSummary({ config: cfg, sourceConfig: loadedRaw }),
+      );
+  const tailscaleHttpsUrl = canUseLeanSummary
+    ? null
+    : await loadStatusScanSharedModule().then(({ buildTailscaleHttpsUrl }) =>
+        buildTailscaleHttpsUrl({
+          tailscaleMode,
+          tailscaleDns,
+          controlUiBasePath: cfg.gateway?.controlUi?.basePath,
+        }),
+      );
 
   const {
     gatewayConnection,
@@ -212,9 +482,15 @@ export async function scanStatusJsonFast(
   } = gatewaySnapshot;
   const gatewayReachable = gatewayProbe?.ok === true;
   const gatewaySelf = gatewayProbe?.presence
-    ? pickGatewaySelfPresence(gatewayProbe.presence)
+    ? await loadStatusScanSharedModule().then(({ pickGatewaySelfPresence }) =>
+        pickGatewaySelfPresence(gatewayProbe.presence),
+      )
     : null;
-  const memoryPlugin = resolveMemoryPluginStatus(cfg);
+  const memoryPlugin = canUseLeanSummary
+    ? resolveMemoryPluginStatusFast(cfg)
+    : await loadStatusScanSharedModule().then(({ resolveMemoryPluginStatus }) =>
+        resolveMemoryPluginStatus(cfg),
+      );
   // Keep the lean `status --json` route off the memory manager/runtime graph.
   // Deep memory inspection is still available on the explicit `--all` path.
   const memory = opts.all

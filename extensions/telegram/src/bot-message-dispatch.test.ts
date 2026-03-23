@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { Bot } from "grammy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -57,11 +58,6 @@ vi.mock("./bot/delivery.js", () => ({
   emitInternalMessageSentHook,
 }));
 
-vi.mock("./bot/delivery.replies.js", () => ({
-  deliverReplies,
-  emitInternalMessageSentHook,
-}));
-
 vi.mock("./send.js", () => ({
   createForumTopicTelegram,
   deleteMessageTelegram,
@@ -92,12 +88,13 @@ vi.mock("./sticker-cache.js", () => ({
   describeStickerImage: vi.fn(),
 }));
 
-let dispatchTelegramMessage: typeof import("./bot-message-dispatch.js").dispatchTelegramMessage;
+type BotMessageDispatchModule = typeof import("./bot-message-dispatch.js");
+
+let dispatchTelegramMessage: BotMessageDispatchModule["dispatchTelegramMessage"];
 
 const telegramDepsForTest: TelegramBotDeps = {
   loadConfig: loadConfig as TelegramBotDeps["loadConfig"],
   resolveStorePath: resolveStorePath as TelegramBotDeps["resolveStorePath"],
-  loadSessionStore: loadSessionStore as TelegramBotDeps["loadSessionStore"],
   readChannelAllowFromStore:
     readChannelAllowFromStore as TelegramBotDeps["readChannelAllowFromStore"],
   upsertChannelPairingRequest:
@@ -109,16 +106,12 @@ const telegramDepsForTest: TelegramBotDeps = {
   listSkillCommandsForAgents:
     listSkillCommandsForAgents as TelegramBotDeps["listSkillCommandsForAgents"],
   wasSentByBot: wasSentByBot as TelegramBotDeps["wasSentByBot"],
-  createTelegramDraftStream:
-    createTelegramDraftStream as TelegramBotDeps["createTelegramDraftStream"],
-  deliverReplies: deliverReplies as TelegramBotDeps["deliverReplies"],
-  emitInternalMessageSentHook:
-    emitInternalMessageSentHook as TelegramBotDeps["emitInternalMessageSentHook"],
-  editMessageTelegram: editMessageTelegram as TelegramBotDeps["editMessageTelegram"],
 };
 
 describe("dispatchTelegramMessage draft streaming", () => {
-  type TelegramMessageContext = Parameters<typeof dispatchTelegramMessage>[0]["context"];
+  type TelegramMessageContext = Parameters<
+    BotMessageDispatchModule["dispatchTelegramMessage"]
+  >[0]["context"];
 
   beforeEach(async () => {
     vi.resetModules();
@@ -217,11 +210,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
   function createBot(): Bot {
     return {
       api: {
-        sendMessage: vi.fn(async (_chatId, _text, params) => ({
-          message_id:
-            typeof params?.message_thread_id === "number" ? params.message_thread_id : 1001,
-        })),
-        editMessageText: vi.fn(async () => ({ message_id: 1001 })),
+        sendMessage: vi.fn(),
+        editMessageText: vi.fn(),
         deleteMessage: vi.fn().mockResolvedValue(true),
         editForumTopic: vi.fn().mockResolvedValue(true),
       },
@@ -297,14 +287,19 @@ describe("dispatchTelegramMessage draft streaming", () => {
       }),
     );
     expect(draftStream.update).toHaveBeenCalledWith("Hello");
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        thread: { id: 777, scope: "dm" },
-        mediaLocalRoots: expect.arrayContaining([
-          expect.stringMatching(/[\\/]\.openclaw[\\/]workspace-work$/u),
-        ]),
-      }),
-    );
+    const delivered = deliverReplies.mock.calls[0]?.[0] as {
+      thread?: { id?: number; scope?: string };
+      mediaLocalRoots?: unknown;
+    };
+    expect(delivered?.thread).toEqual({ id: 777, scope: "dm" });
+    expect(Array.isArray(delivered?.mediaLocalRoots)).toBe(true);
+    expect(
+      (delivered?.mediaLocalRoots as unknown[]).some(
+        (entry) =>
+          typeof entry === "string" &&
+          entry.endsWith(`${path.sep}.openclaw${path.sep}workspace-work`),
+      ),
+    ).toBe(true);
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
         replyOptions: expect.objectContaining({
