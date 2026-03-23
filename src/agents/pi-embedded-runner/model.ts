@@ -194,6 +194,22 @@ function resolveExplicitModelWithRegistry(params: {
     return { kind: "suppressed" };
   }
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const inlineModels = buildInlineProviderModels(cfg?.models?.providers ?? {});
+  const normalizedProvider = normalizeProviderId(provider);
+  const inlineMatch = inlineModels.find(
+    (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
+  );
+  if (inlineMatch?.api) {
+    return {
+      kind: "resolved",
+      model: normalizeResolvedModel({
+        provider,
+        cfg,
+        agentDir,
+        model: inlineMatch as Model<Api>,
+      }),
+    };
+  }
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
 
   if (model) {
@@ -213,19 +229,17 @@ function resolveExplicitModelWithRegistry(params: {
   }
 
   const providers = cfg?.models?.providers ?? {};
-  const inlineModels = buildInlineProviderModels(providers);
-  const normalizedProvider = normalizeProviderId(provider);
-  const inlineMatch = inlineModels.find(
+  const fallbackInlineMatch = buildInlineProviderModels(providers).find(
     (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
   );
-  if (inlineMatch?.api) {
+  if (fallbackInlineMatch?.api) {
     return {
       kind: "resolved",
       model: normalizeResolvedModel({
         provider,
         cfg,
         agentDir,
-        model: inlineMatch as Model<Api>,
+        model: fallbackInlineMatch as Model<Api>,
       }),
     };
   }
