@@ -424,6 +424,59 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(setActivityStatus).toHaveBeenCalledWith("idle");
   });
 
+  it("orphan-clear sets idle, not error, when inactive local BTW final has stopReason error", () => {
+    const { state, chatLog, setActivityStatus, handleChatEvent, noteLocalBtwRunId } =
+      createHandlersHarness({
+        state: { activeChatRunId: null },
+      });
+    noteLocalBtwRunId("run-btw-err");
+
+    handleChatEvent({
+      runId: "run-btw-err",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "partial" },
+    });
+    setActivityStatus.mockClear();
+
+    handleChatEvent({
+      runId: "run-btw-err",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { stopReason: "error", content: [{ type: "text", text: "failed" }] },
+    });
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalled();
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+    expect(setActivityStatus).not.toHaveBeenCalledWith("error");
+  });
+
+  it("orphan-clear sets idle, not error, when inactive local BTW run ends in chat error state", () => {
+    const { state, setActivityStatus, handleChatEvent, noteLocalBtwRunId } =
+      createHandlersHarness({
+        state: { activeChatRunId: null },
+      });
+    noteLocalBtwRunId("run-btw-chat-err");
+
+    handleChatEvent({
+      runId: "run-btw-chat-err",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "partial" },
+    });
+    setActivityStatus.mockClear();
+
+    handleChatEvent({
+      runId: "run-btw-chat-err",
+      sessionKey: state.currentSessionKey,
+      state: "error",
+      errorMessage: "gateway timeout",
+    });
+
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+    expect(setActivityStatus).not.toHaveBeenCalledWith("error");
+  });
+
   it("does not clear activity on inactive final when another run is still in flight", () => {
     const { state, chatLog, setActivityStatus, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
