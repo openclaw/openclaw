@@ -8,6 +8,7 @@ import {
   readStringParam,
   resolveSearchCacheTtlMs,
   resolveSearchTimeoutSeconds,
+  resolveSiteName,
   resolveProviderWebSearchPluginConfig,
   setProviderWebSearchPluginConfigValue,
   type SearchConfigRecord,
@@ -116,13 +117,12 @@ async function runBaiduSearch(params: {
         const snippet = entry.snippet ?? "";
         const title = entry.title ?? "";
         const url = entry.url ?? "";
-        const site = entry.website ?? "";
         return {
           title: title ? wrapWebContent(title, "web_search") : "",
           url, // Keep raw for tool chaining
           snippet: snippet ? wrapWebContent(snippet, "web_search") : "",
           date: entry.date || undefined,
-          site: site,
+          siteName: resolveSiteName(url),
         };
       });
       return { results: mapped };
@@ -215,7 +215,7 @@ export function createBaiduWebSearchProvider(): WebSearchProviderPlugin {
     placeholder: "bce...",
     signupUrl: "https://console.bce.baidu.com/ai-search/qianfan/ais/console/apiKey",
     docsUrl: "https://docs.openclaw.ai/tools/web",
-    autoDetectOrder: 5,
+    autoDetectOrder: 70,
     credentialPath: "plugins.entries.baidu.config.webSearch.apiKey",
     inactiveSecretPaths: ["plugins.entries.baidu.config.webSearch.apiKey"],
     getCredentialValue: (searchConfig) => {
