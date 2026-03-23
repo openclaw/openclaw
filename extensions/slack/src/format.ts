@@ -6,10 +6,21 @@ import {
 } from "openclaw/plugin-sdk/text-runtime";
 import { renderMarkdownWithMarkers } from "openclaw/plugin-sdk/text-runtime";
 
-// Escape special characters for Slack mrkdwn format.
-// Preserve Slack's angle-bracket tokens so mentions and links stay intact.
+const SLACK_HTML_ENTITY_RE = /&(?:[a-zA-Z][a-zA-Z0-9]+|#\d+|#x[0-9A-Fa-f]+);/g;
+const SLACK_LITERAL_ENTITY_RE = /&(?:amp|lt|gt|#0*38|#0*60|#0*62|#x0*26|#x0*3[cC]|#x0*3[eE]);/g;
+
+// Escape angle brackets for outbound Slack mrkdwn.
+// Preserve bare '&' to avoid double-encoding plain text, but re-escape
+// entity-looking sequences so Slack does not decode them into live tokens.
 function escapeSlackMrkdwnSegment(text: string): string {
-  return text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return text
+    .replace(SLACK_HTML_ENTITY_RE, (entity) => `&amp;${entity.slice(1)}`)
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function protectSlackLiteralEntitiesBeforeParse(text: string): string {
+  return text.replace(SLACK_LITERAL_ENTITY_RE, (entity) => `&amp;${entity.slice(1)}`);
 }
 
 const SLACK_ANGLE_TOKEN_RE = /<[^>\n]+>/g;
@@ -35,7 +46,7 @@ function escapeSlackMrkdwnContent(text: string): string {
   if (!text) {
     return "";
   }
-  if (!text.includes("<") && !text.includes(">")) {
+  if (!text.includes("&") && !text.includes("<") && !text.includes(">")) {
     return text;
   }
 
@@ -63,7 +74,7 @@ function escapeSlackMrkdwnText(text: string): string {
   if (!text) {
     return "";
   }
-  if (!text.includes("<") && !text.includes(">")) {
+  if (!text.includes("&") && !text.includes("<") && !text.includes(">")) {
     return text;
   }
 
@@ -122,7 +133,7 @@ export function markdownToSlackMrkdwn(
   markdown: string,
   options: SlackMarkdownOptions = {},
 ): string {
-  const ir = markdownToIR(markdown ?? "", {
+  const ir = markdownToIR(protectSlackLiteralEntitiesBeforeParse(markdown ?? ""), {
     linkify: false,
     autolink: false,
     headingStyle: "bold",
@@ -141,7 +152,7 @@ export function markdownToSlackMrkdwnChunks(
   limit: number,
   options: SlackMarkdownOptions = {},
 ): string[] {
-  const ir = markdownToIR(markdown ?? "", {
+  const ir = markdownToIR(protectSlackLiteralEntitiesBeforeParse(markdown ?? ""), {
     linkify: false,
     autolink: false,
     headingStyle: "bold",
