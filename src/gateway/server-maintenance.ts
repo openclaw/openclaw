@@ -209,53 +209,49 @@ export function startGatewayMaintenanceTimers(params: {
         )
         .all() as ActiveRunRow[];
 
+      // On the first run after gateway startup, fire a heartbeat so the agent can notice
+      // any stale delegations and re-spawn work as needed.
       if (isFirstDelegationRun) {
         isFirstDelegationRun = false;
-        // Detect runs orphaned by a gateway restart (started but never ended, older than stale threshold)
-        const nowMs = Date.now();
-        const orphanedRunIds: string[] = [];
-        for (const row of rows) {
-          if (
-            row.started_at != null &&
-            row.ended_at == null &&
-            row.created_at != null &&
-            nowMs - row.created_at > DELEGATION_STALE_THRESHOLD_MS
-          ) {
-            params.logHealth.error(
-              `delegation: orphaned run ${row.run_id} (agent=${row.agent_id ?? "?"}, ` +
-                `task=${(row.task ?? "").slice(0, 80)}) — started_at set but no ended_at after restart`,
-            );
-            orphanedRunIds.push(row.run_id);
-          }
+        // Fire a heartbeat so the agent can re-evaluate pending/stale delegations after restart
+        try {
+          requestHeartbeatNow({ reason: "delegation-resume" });
+        } catch {
+          // Non-fatal: heartbeat handler may not be registered yet (e.g. during tests)
         }
+      }
 
-        if (orphanedRunIds.length > 0) {
-          // Mark each orphaned run as ended so they no longer show as stale.
-          // The heartbeat fired below will let the agent see pending work and re-delegate.
-          for (const runId of orphanedRunIds) {
-            try {
-              db.prepare(
-                `UPDATE op1_subagent_runs
-                 SET ended_at = ?, outcome_json = ?, ended_reason = ?
-                 WHERE run_id = ?`,
-              ).run(
-                nowMs,
-                JSON.stringify({ status: "interrupted", reason: "gateway_restart" }),
-                "gateway_restart",
-                runId,
-              );
-            } catch (updateErr) {
-              params.logHealth.error(
-                `delegation: failed to mark orphaned run ${runId} as ended: ${formatError(updateErr)}`,
-              );
-            }
-          }
-
-          // Fire a heartbeat so the agent can notice the stale delegations and re-spawn as needed
+      // Detect zombie runs on EVERY check: started but never ended, running longer than
+      // DELEGATION_STALE_THRESHOLD_MS. These are processes killed by a gateway restart (or
+      // any other crash) whose records were never closed out.
+      const nowMs = Date.now();
+      for (const row of rows) {
+        if (
+          row.started_at != null &&
+          row.ended_at == null &&
+          nowMs - row.started_at > DELEGATION_STALE_THRESHOLD_MS
+        ) {
+          params.logHealth.error(
+            `delegation: zombie run ${row.run_id} (agent=${row.agent_id ?? "?"}, ` +
+              `task=${(row.task ?? "").slice(0, 80)}) — started_at set but no ended_at after ` +
+              `${Math.round((nowMs - row.started_at) / 1000)}s, marking interrupted`,
+          );
           try {
-            requestHeartbeatNow({ reason: "delegation-resume" });
-          } catch {
-            // Non-fatal: heartbeat handler may not be registered yet (e.g. during tests)
+            db.prepare(
+              `UPDATE op1_subagent_runs
+               SET ended_at = ?, outcome_json = ?, ended_reason = ?, cleanup_completed_at = ?
+               WHERE run_id = ?`,
+            ).run(
+              nowMs,
+              JSON.stringify({ status: "interrupted", reason: "zombie_process" }),
+              "zombie_process",
+              nowMs,
+              row.run_id,
+            );
+          } catch (updateErr) {
+            params.logHealth.error(
+              `delegation: failed to mark zombie run ${row.run_id} as ended: ${formatError(updateErr)}`,
+            );
           }
         }
       }
