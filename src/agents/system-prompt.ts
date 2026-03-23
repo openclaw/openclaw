@@ -660,7 +660,7 @@ export function buildAgentSystemPrompt(params: {
   lines.push(
     "## Runtime",
     buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
-    `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
+    `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows the current Reasoning status.`,
   );
 
   return lines.filter(Boolean).join("\n");

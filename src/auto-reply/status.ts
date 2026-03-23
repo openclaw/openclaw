@@ -48,7 +48,13 @@ import {
 import type { CommandCategory } from "./commands-registry.types.js";
 import { resolveActiveFallbackState } from "./fallback-state.js";
 import { formatProviderModelRef, resolveSelectedAndActiveModel } from "./model-runtime.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./thinking.js";
+import {
+  normalizeReasoningLevel,
+  type ElevatedLevel,
+  type ReasoningLevel,
+  type ThinkLevel,
+  type VerboseLevel,
+} from "./thinking.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
 type AgentConfig = Partial<AgentDefaults> & {
@@ -206,6 +212,19 @@ const formatQueueDetails = (queue?: QueueStatus) => {
     detailParts.push(`drop ${queue.dropPolicy}`);
   }
   return detailParts.length ? ` (${detailParts.join(" · ")})` : "";
+};
+
+const formatReasoningStatus = (reasoningLevel: ReasoningLevel): string => {
+  switch (reasoningLevel) {
+    case "off":
+      return "hidden";
+    case "on":
+      return "visible";
+    case "stream":
+      return "stream";
+    default:
+      return "hidden";
+  }
 };
 
 const readUsageFromSessionLog = (
@@ -512,7 +531,8 @@ export function buildStatusMessage(args: StatusArgs): string {
   const verboseLevel =
     args.resolvedVerbose ?? args.sessionEntry?.verboseLevel ?? args.agent?.verboseDefault ?? "off";
   const fastMode = args.resolvedFast ?? args.sessionEntry?.fastMode ?? false;
-  const reasoningLevel = args.resolvedReasoning ?? args.sessionEntry?.reasoningLevel ?? "off";
+  const reasoningLevel: ReasoningLevel =
+    args.resolvedReasoning ?? normalizeReasoningLevel(args.sessionEntry?.reasoningLevel) ?? "off";
   const elevatedLevel =
     args.resolvedElevated ??
     args.sessionEntry?.elevatedLevel ??
@@ -560,7 +580,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     `Think: ${thinkLevel}`,
     fastMode ? "Fast: on" : null,
     verboseLabel,
-    reasoningLevel !== "off" ? `Reasoning: ${reasoningLevel}` : null,
+    `Reasoning: ${formatReasoningStatus(reasoningLevel)}`,
     elevatedLabel,
   ];
   const optionsLine = optionParts.filter(Boolean).join(" · ");

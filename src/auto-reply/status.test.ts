@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { clearPluginCommands, registerPluginCommand } from "../plugins/commands.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { createSuccessfulImageMediaDecision } from "./media-understanding.test-fixtures.js";
 import {
@@ -13,18 +14,8 @@ import {
   buildStatusMessage,
 } from "./status.js";
 
-const { listPluginCommands } = vi.hoisted(() => ({
-  listPluginCommands: vi.fn(
-    (): Array<{ name: string; description: string; pluginId: string }> => [],
-  ),
-}));
-
-vi.mock("../plugins/commands.js", () => ({
-  listPluginCommands,
-}));
-
 afterEach(() => {
-  vi.restoreAllMocks();
+  clearPluginCommands();
 });
 
 describe("buildStatusMessage", () => {
@@ -86,6 +77,7 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("updated 10m ago");
     expect(normalized).toContain("Runtime: direct");
     expect(normalized).toContain("Think: medium");
+    expect(normalized).toContain("Reasoning: hidden");
     expect(normalized).not.toContain("verbose");
     expect(normalized).toContain("elevated");
     expect(normalized).toContain("Queue: collect");
@@ -110,7 +102,25 @@ describe("buildStatusMessage", () => {
 
     expect(normalized).toContain("Think: high");
     expect(normalized).toContain("verbose:full");
-    expect(normalized).toContain("Reasoning: on");
+    expect(normalized).toContain("Reasoning: visible");
+  });
+
+  it("shows reasoning stream mode distinctly from hidden visibility", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/pi:opus",
+      },
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+        reasoningLevel: "stream",
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+    const normalized = normalizeTestText(text);
+
+    expect(normalized).toContain("Reasoning: stream");
   });
 
   it("shows fast mode when enabled", () => {
@@ -746,9 +756,13 @@ describe("buildCommandsMessagePaginated", () => {
   });
 
   it("includes plugin commands in the paginated list", () => {
-    listPluginCommands.mockReturnValue([
-      { name: "plugin_cmd", description: "Plugin command", pluginId: "demo-plugin" },
-    ]);
+    expect(
+      registerPluginCommand("demo-plugin", {
+        name: "plugin_cmd",
+        description: "Plugin command",
+        handler: async () => ({ text: "ok" }),
+      }),
+    ).toEqual({ ok: true });
     const result = buildCommandsMessagePaginated(
       {
         commands: { config: false, debug: false },
