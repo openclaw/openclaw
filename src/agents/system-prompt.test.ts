@@ -400,6 +400,20 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("current date");
   });
 
+  it("includes privacy rules for internal implementation details", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain("## Privacy");
+    expect(prompt).toContain("Keep internal implementation details private");
+    expect(prompt).toContain("Time zone is scheduling context, not physical location.");
+    expect(prompt).toContain(
+      "Never use session_status time zone output as a substitute for a weather location.",
+    );
+    expect(prompt).toContain("default weather city");
+  });
+
   // The system prompt intentionally does NOT include the current date/time.
   // Only the timezone is included, to keep the prompt stable for caching.
   // See: https://github.com/moltbot/moltbot/commit/66eec295b894bce8333886cfbca3b960c57c4946
@@ -595,6 +609,8 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("agent=work");
+    expect(prompt).not.toContain("host=host");
+    expect(prompt).not.toContain("model=anthropic/claude");
   });
 
   it("includes reasoning visibility hint", () => {
@@ -626,12 +642,12 @@ describe("buildAgentSystemPrompt", () => {
     );
 
     expect(line).toContain("agent=work");
-    expect(line).toContain("host=host");
-    expect(line).toContain("repo=/repo");
     expect(line).toContain("os=macOS (arm64)");
     expect(line).toContain("node=v20");
-    expect(line).toContain("model=anthropic/claude");
-    expect(line).toContain("default_model=anthropic/claude-opus-4-5");
+    expect(line).not.toContain("host=host");
+    expect(line).not.toContain("repo=/repo");
+    expect(line).not.toContain("model=anthropic/claude");
+    expect(line).not.toContain("default_model=anthropic/claude-opus-4-5");
     expect(line).toContain("channel=telegram");
     expect(line).toContain("capabilities=inlineButtons");
     expect(line).toContain("thinking=low");

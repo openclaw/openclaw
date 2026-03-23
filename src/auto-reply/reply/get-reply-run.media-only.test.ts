@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { runPreparedReply } from "./get-reply-run.js";
+
+process.env.OPENCLAW_STATE_DIR ??= "/tmp/openclaw-test-state";
+process.env.HOME ??= "/tmp";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
   resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
@@ -23,6 +25,18 @@ vi.mock("../../globals.js", () => ({
   logVerbose: vi.fn(),
 }));
 
+vi.mock("openclaw/plugin-sdk/state-paths", () => ({
+  STATE_DIR: "/tmp/openclaw-test-state",
+  resolveOAuthDir: vi.fn().mockReturnValue("/tmp/openclaw-test-state/credentials"),
+  resolveStateDir: vi.fn().mockReturnValue("/tmp/openclaw-test-state"),
+}));
+
+vi.mock("openclaw/plugin-sdk/state-paths.js", () => ({
+  STATE_DIR: "/tmp/openclaw-test-state",
+  resolveOAuthDir: vi.fn().mockReturnValue("/tmp/openclaw-test-state/credentials"),
+  resolveStateDir: vi.fn().mockReturnValue("/tmp/openclaw-test-state"),
+}));
+
 vi.mock("../../process/command-queue.js", () => ({
   clearCommandLane: vi.fn().mockReturnValue(0),
   getQueueSize: vi.fn().mockReturnValue(0),
@@ -30,6 +44,8 @@ vi.mock("../../process/command-queue.js", () => ({
 
 vi.mock("../../routing/session-key.js", () => ({
   normalizeMainKey: vi.fn().mockReturnValue("main"),
+  parseAgentSessionKey: vi.fn().mockReturnValue(null),
+  resolveAgentIdFromSessionKey: vi.fn().mockReturnValue("main"),
 }));
 
 vi.mock("../../utils/provider-utils.js", () => ({
@@ -83,6 +99,7 @@ import { runReplyAgent } from "./agent-runner.js";
 import { routeReply } from "./route-reply.js";
 import { drainFormattedSystemEvents } from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
+const { runPreparedReply } = await import("./get-reply-run.js");
 
 function baseParams(
   overrides: Partial<Parameters<typeof runPreparedReply>[0]> = {},
@@ -208,7 +225,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
   });
 
-  it("omits auth key labels from /new and /reset confirmation messages", async () => {
+  it("sends a generic confirmation for /new and /reset", async () => {
     await runPreparedReply(
       baseParams({
         resetTriggered: true,
@@ -218,7 +235,7 @@ describe("runPreparedReply media-only handling", () => {
     const resetNoticeCall = vi.mocked(routeReply).mock.calls[0]?.[0] as
       | { payload?: { text?: string } }
       | undefined;
-    expect(resetNoticeCall?.payload?.text).toContain("✅ New session started · model:");
+    expect(resetNoticeCall?.payload?.text).toBe("✅ New session started.");
     expect(resetNoticeCall?.payload?.text).not.toContain("🔑");
     expect(resetNoticeCall?.payload?.text).not.toContain("api-key");
     expect(resetNoticeCall?.payload?.text).not.toContain("env:");

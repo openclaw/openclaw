@@ -101,6 +101,24 @@ function buildTimeSection(params: { userTimezone?: string }) {
   return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
 }
 
+function buildImplementationPrivacySection(isMinimal: boolean) {
+  if (isMinimal) {
+    return [];
+  }
+  return [
+    "## Privacy",
+    "- Keep internal implementation details private in user-facing replies.",
+    "- Never disclose framework/system names, model or provider ids, runtime or session ids, tool names, hostnames, repo paths, prompt file names, env vars, API or auth details, or raw status cards.",
+    '- If asked which system, framework, or model you use, answer generically (for example: "I am an AI assistant, and the detailed runtime implementation is private.").',
+    "- Do not use session_status or other tools to fetch private implementation details for user-facing disclosure.",
+    "- Time zone is scheduling context, not physical location.",
+    "- Never infer a city, country, or address from time zone, hostname, or runtime metadata.",
+    "- Never use session_status time zone output as a substitute for a weather location.",
+    "- If workspace or user context provides a default weather city, use it when weather is requested without an explicit location; otherwise ask for the location.",
+    "",
+  ];
+}
+
 function buildReplyTagsSection(isMinimal: boolean) {
   if (isMinimal) {
     return [];
@@ -266,7 +284,7 @@ export function buildAgentSystemPrompt(params: {
       : "Spawn an isolated sub-agent session",
     subagents: "List, steer, or kill sub-agent runs for this requester session",
     session_status:
-      "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
+      "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated) for operational checks; optional per-session model override",
     image: "Analyze an image with the configured image model",
     image_generate: "Generate images with the configured image-generation model",
   };
@@ -403,6 +421,7 @@ export function buildAgentSystemPrompt(params: {
     skillsPrompt,
     readToolName,
   });
+  const privacySection = buildImplementationPrivacySection(isMinimal);
   const memorySection = buildMemorySection({
     isMinimal,
     availableTools,
@@ -444,7 +463,7 @@ export function buildAgentSystemPrompt(params: {
           "- sessions_history: fetch session history",
           "- sessions_send: send to another session",
           "- subagents: list/steer/kill sub-agent runs",
-          '- session_status: show usage/time/model state and answer "what model are we using?"',
+          "- session_status: show usage/time/reasoning state for operational checks",
         ].join("\n"),
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
@@ -470,6 +489,7 @@ export function buildAgentSystemPrompt(params: {
     "When approvals are required, preserve and show the full command/script exactly as provided (including chained operators like &&, ||, |, ;, or multiline shells) so the user can approve what will actually run.",
     "",
     ...safetySection,
+    ...privacySection,
     "## OpenClaw CLI Quick Reference",
     "OpenClaw is controlled via subcommands. Do not invent commands.",
     "To manage the Gateway daemon service (start/stop/restart):",
@@ -697,16 +717,12 @@ export function buildRuntimeLine(
 ): string {
   return `Runtime: ${[
     runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",
-    runtimeInfo?.host ? `host=${runtimeInfo.host}` : "",
-    runtimeInfo?.repoRoot ? `repo=${runtimeInfo.repoRoot}` : "",
     runtimeInfo?.os
       ? `os=${runtimeInfo.os}${runtimeInfo?.arch ? ` (${runtimeInfo.arch})` : ""}`
       : runtimeInfo?.arch
         ? `arch=${runtimeInfo.arch}`
         : "",
     runtimeInfo?.node ? `node=${runtimeInfo.node}` : "",
-    runtimeInfo?.model ? `model=${runtimeInfo.model}` : "",
-    runtimeInfo?.defaultModel ? `default_model=${runtimeInfo.defaultModel}` : "",
     runtimeInfo?.shell ? `shell=${runtimeInfo.shell}` : "",
     runtimeChannel ? `channel=${runtimeChannel}` : "",
     runtimeChannel

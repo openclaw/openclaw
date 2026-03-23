@@ -75,9 +75,9 @@ describe("buildStatusMessage", () => {
     });
     const normalized = normalizeTestText(text);
 
-    expect(normalized).toContain("OpenClaw");
-    expect(normalized).toContain("Model: anthropic/pi:opus");
-    expect(normalized).toContain("api-key");
+    expect(normalized).not.toContain("OpenClaw");
+    expect(normalized).not.toContain("Model:");
+    expect(normalized).not.toContain("api-key");
     expect(normalized).toContain("Tokens: 1.2k in / 800 out");
     expect(normalized).toContain("Cost: $0.0020");
     expect(normalized).toContain("Context: 16k/32k (50%)");
@@ -130,7 +130,7 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Fast: on");
   });
 
-  it("notes channel model overrides in status output", () => {
+  it("keeps status output sanitized when a channel model override is active", () => {
     const text = buildStatusMessage({
       config: {
         channels: {
@@ -156,8 +156,9 @@ describe("buildStatusMessage", () => {
     });
     const normalized = normalizeTestText(text);
 
-    expect(normalized).toContain("Model: openai/gpt-4.1");
-    expect(normalized).toContain("channel override");
+    expect(normalized).not.toContain("Model:");
+    expect(normalized).not.toContain("channel override");
+    expect(normalized).toContain("Context:");
   });
 
   it("shows 1M context window when anthropic context1m is enabled", () => {
@@ -323,7 +324,7 @@ describe("buildStatusMessage", () => {
     expect(optionsLine).not.toContain("elevated");
   });
 
-  it("shows selected model and active runtime model when they differ", () => {
+  it("omits selected and fallback model details when runtime drifts", () => {
     const text = buildStatusMessage({
       agent: {
         model: "anthropic/claude-opus-4-5",
@@ -349,12 +350,11 @@ describe("buildStatusMessage", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Model: openai/gpt-4.1-mini");
-    expect(normalized).toContain("Fallback: anthropic/claude-haiku-4-5");
-    expect(normalized).toContain("(rate limit)");
-    expect(normalized).not.toContain(" - Reason:");
-    expect(normalized).not.toContain("Active:");
-    expect(normalized).toContain("di_123...abc");
+    expect(normalized).not.toContain("Model:");
+    expect(normalized).not.toContain("Fallback:");
+    expect(normalized).not.toContain("(rate limit)");
+    expect(normalized).not.toContain("di_123...abc");
+    expect(normalized).toContain("Context:");
   });
 
   it("omits active fallback details when runtime drift does not match fallback state", () => {
@@ -380,7 +380,7 @@ describe("buildStatusMessage", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Model: openai/gpt-4.1-mini");
+    expect(normalized).not.toContain("Model:");
     expect(normalized).not.toContain("Fallback:");
     expect(normalized).not.toContain("(rate limit)");
   });
@@ -408,7 +408,7 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("Fallback:");
   });
 
-  it("keeps provider prefix from configured model", () => {
+  it("omits provider-prefixed model details from chat-visible status output", () => {
     const text = buildStatusMessage({
       agent: {
         model: "google-antigravity/claude-sonnet-4-5",
@@ -418,7 +418,7 @@ describe("buildStatusMessage", () => {
       modelAuth: "api-key",
     });
 
-    expect(normalizeTestText(text)).toContain("Model: google-antigravity/claude-sonnet-4-5");
+    expect(normalizeTestText(text)).not.toContain("Model:");
   });
 
   it("handles missing agent config gracefully", () => {
@@ -430,7 +430,7 @@ describe("buildStatusMessage", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Model:");
+    expect(normalized).not.toContain("Model:");
     expect(normalized).toContain("Context:");
     expect(normalized).toContain("Queue: collect");
   });

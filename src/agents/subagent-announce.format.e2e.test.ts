@@ -344,7 +344,7 @@ describe("subagent announce formatting", () => {
     };
     const msg = call?.params?.message as string;
     expect(call?.params?.sessionKey).toBe("agent:main:main");
-    expect(msg).toContain("OpenClaw runtime context (internal):");
+    expect(msg).toContain("Runtime context (internal):");
     expect(msg).toContain("[Internal task completion event]");
     expect(msg).toContain("session_id: child-session-123");
     expect(msg).toContain("subagent task");

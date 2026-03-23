@@ -21,6 +21,7 @@ type ResolvedOutboundTarget = {
 };
 
 const MB = 1024 * 1024;
+const TRANSIENT_FOCUS_LOSS_STEPS = ["activate_window", "focus_input"] as const;
 
 function resolveWechatLinuxMediaMaxBytes(cfg: CoreConfig, account: ResolvedWechatLinuxAccount) {
   const accountLimitMb =
@@ -96,6 +97,22 @@ async function cleanupTempDir(tempDir?: string) {
   await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
 }
 
+function shouldRetryWechatLinuxFocusLoss(error: unknown): boolean {
+  const text = String(error ?? "");
+  return TRANSIENT_FOCUS_LOSS_STEPS.some((step) => text.includes(`send_focus_lost:${step}:`));
+}
+
+async function runWechatLinuxSendWithRetry<T>(send: () => Promise<T>): Promise<T> {
+  try {
+    return await send();
+  } catch (error) {
+    if (!shouldRetryWechatLinuxFocusLoss(error)) {
+      throw error;
+    }
+    return await send();
+  }
+}
+
 export async function resolveWechatLinuxOutboundTarget(params: {
   cfg: CoreConfig;
   accountId?: string | null;
@@ -143,11 +160,13 @@ export async function sendWechatLinuxText(params: {
     accountId: params.accountId,
     target: params.to,
   });
-  const result = await sendWechatLinuxBridgeText({
-    account,
-    chatId: resolved.chatId,
-    text: params.text,
-  });
+  const result = await runWechatLinuxSendWithRetry(() =>
+    sendWechatLinuxBridgeText({
+      account,
+      chatId: resolved.chatId,
+      text: params.text,
+    }),
+  );
   noteRecentWechatLinuxOutbound(account.accountId, result.matched_local_id);
   return {
     messageId: result.matched_local_id ? String(result.matched_local_id) : "",
@@ -189,12 +208,14 @@ export async function sendWechatLinuxMedia(params: {
     maxBytes,
   });
   try {
-    const result = await sendWechatLinuxBridgeFile({
-      account,
-      chatId: resolved.chatId,
-      path: materialized.tempPath,
-      image: isImageContent(materialized.fileName, materialized.contentType),
-    });
+    const result = await runWechatLinuxSendWithRetry(() =>
+      sendWechatLinuxBridgeFile({
+        account,
+        chatId: resolved.chatId,
+        path: materialized.tempPath,
+        image: isImageContent(materialized.fileName, materialized.contentType),
+      }),
+    );
     noteRecentWechatLinuxOutbound(account.accountId, result.matched_local_id);
     return {
       messageId: result.matched_local_id ? String(result.matched_local_id) : "",

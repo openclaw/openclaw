@@ -2,15 +2,10 @@ import fs from "node:fs";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveModelAuthMode } from "../agents/model-auth.js";
-import {
-  buildModelAliasIndex,
-  resolveConfiguredModelRef,
-  resolveModelRefFromString,
-} from "../agents/model-selection.js";
+import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/usage.js";
-import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import { isCommandFlagEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -21,7 +16,6 @@ import {
   type SessionScope,
 } from "../config/sessions.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
-import { resolveCommitHash } from "../infra/git-commit.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 import { listPluginCommands } from "../plugins/commands.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
@@ -39,7 +33,6 @@ import {
   formatUsd,
   resolveModelCostConfig,
 } from "../utils/usage-format.js";
-import { VERSION } from "../version.js";
 import {
   listChatCommands,
   listChatCommandsForConfig,
@@ -572,14 +565,8 @@ export function buildStatusMessage(args: StatusArgs): string {
 
   const selectedAuthMode =
     normalizeAuthMode(args.modelAuth) ?? resolveModelAuthMode(selectedProvider, args.config);
-  const selectedAuthLabelValue =
-    args.modelAuth ??
-    (selectedAuthMode && selectedAuthMode !== "unknown" ? selectedAuthMode : undefined);
   const activeAuthMode =
     normalizeAuthMode(args.activeModelAuth) ?? resolveModelAuthMode(activeProvider, args.config);
-  const activeAuthLabelValue =
-    args.activeModelAuth ??
-    (activeAuthMode && activeAuthMode !== "unknown" ? activeAuthMode : undefined);
   const selectedModelLabel = modelRefs.selected.label || "unknown";
   const activeModelLabel = formatProviderModelRef(activeProvider, activeModel) || "unknown";
   const fallbackState = resolveActiveFallbackState({
@@ -610,56 +597,6 @@ export function buildStatusMessage(args: StatusArgs): string {
         })
       : undefined;
   const costLabel = showCost && hasUsage ? formatUsd(cost) : undefined;
-
-  const selectedAuthLabel = selectedAuthLabelValue ? ` · 🔑 ${selectedAuthLabelValue}` : "";
-  const channelModelNote = (() => {
-    if (!args.config || !entry) {
-      return undefined;
-    }
-    if (entry.modelOverride?.trim() || entry.providerOverride?.trim()) {
-      return undefined;
-    }
-    const channelOverride = resolveChannelModelOverride({
-      cfg: args.config,
-      channel: entry.channel ?? entry.origin?.provider,
-      groupId: entry.groupId,
-      groupChannel: entry.groupChannel,
-      groupSubject: entry.subject,
-      parentSessionKey: args.parentSessionKey,
-    });
-    if (!channelOverride) {
-      return undefined;
-    }
-    const aliasIndex = buildModelAliasIndex({
-      cfg: args.config,
-      defaultProvider: DEFAULT_PROVIDER,
-    });
-    const resolvedOverride = resolveModelRefFromString({
-      raw: channelOverride.model,
-      defaultProvider: DEFAULT_PROVIDER,
-      aliasIndex,
-    });
-    if (!resolvedOverride) {
-      return undefined;
-    }
-    if (
-      resolvedOverride.ref.provider !== selectedProvider ||
-      resolvedOverride.ref.model !== selectedModel
-    ) {
-      return undefined;
-    }
-    return "channel override";
-  })();
-  const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
-  const modelLine = `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`;
-  const showFallbackAuth = activeAuthLabelValue && activeAuthLabelValue !== selectedAuthLabelValue;
-  const fallbackLine = fallbackState.active
-    ? `↪️ Fallback: ${activeModelLabel}${
-        showFallbackAuth ? ` · 🔑 ${activeAuthLabelValue}` : ""
-      } (${fallbackState.reason ?? "selected model unavailable"})`
-    : null;
-  const commit = resolveCommitHash({ moduleUrl: import.meta.url });
-  const versionLine = `🦞 OpenClaw ${VERSION}${commit ? ` (${commit})` : ""}`;
   const usagePair = formatUsagePair(inputTokens, outputTokens);
   const cacheLine = formatCacheLine(inputTokens, cacheRead, cacheWrite);
   const costLine = costLabel ? `💵 Cost: ${costLabel}` : null;
@@ -669,10 +606,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry);
 
   return [
-    versionLine,
     args.timeLine,
-    modelLine,
-    fallbackLine,
     usageCostLine,
     cacheLine,
     `📚 ${contextLine}`,
