@@ -83,9 +83,10 @@ export function scheduleFollowupDrain(
   if (!queue) {
     return;
   }
+  const effectiveRunFollowup = FOLLOWUP_RUN_CALLBACKS.get(key) ?? runFollowup;
   // Cache callback only when a drain actually starts. Avoid keeping stale
   // callbacks around from finalize calls where no queue work is pending.
-  rememberFollowupDrainCallback(key, runFollowup);
+  rememberFollowupDrainCallback(key, effectiveRunFollowup);
   void (async () => {
     try {
       const collectState = { forceIndividualCollect: false };
@@ -104,7 +105,7 @@ export function scheduleFollowupDrain(
             collectState,
             isCrossChannel,
             items: queue.items,
-            run: runFollowup,
+            run: effectiveRunFollowup,
           });
           if (collectDrainResult === "empty") {
             break;
@@ -128,7 +129,7 @@ export function scheduleFollowupDrain(
             summary,
             renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
           });
-          await runFollowup({
+          await effectiveRunFollowup({
             prompt,
             run,
             enqueuedAt: Date.now(),
@@ -149,7 +150,7 @@ export function scheduleFollowupDrain(
           }
           if (
             !(await drainNextQueueItem(queue.items, async (item) => {
-              await runFollowup({
+              await effectiveRunFollowup({
                 prompt: summaryPrompt,
                 run,
                 enqueuedAt: Date.now(),
@@ -166,7 +167,7 @@ export function scheduleFollowupDrain(
           continue;
         }
 
-        if (!(await drainNextQueueItem(queue.items, runFollowup))) {
+        if (!(await drainNextQueueItem(queue.items, effectiveRunFollowup))) {
           break;
         }
       }
@@ -178,7 +179,7 @@ export function scheduleFollowupDrain(
       if (queue.items.length === 0 && queue.droppedCount === 0) {
         FOLLOWUP_QUEUES.delete(key);
       } else {
-        scheduleFollowupDrain(key, runFollowup);
+        scheduleFollowupDrain(key, effectiveRunFollowup);
       }
     }
   })();
