@@ -1,7 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
 
-const diagnosticCheckpointLogsEnabled = process.env.OPENCLAW_DIAGNOSTIC_CHECKPOINTS === "1";
-
 export type DiagnosticSessionState = "idle" | "processing" | "waiting";
 
 type DiagnosticBaseEvent = {
@@ -208,11 +206,6 @@ export function emitDiagnosticEvent(event: DiagnosticEventInput) {
     seq: (state.seq += 1),
     ts: Date.now(),
   } satisfies DiagnosticEventPayload;
-  if (diagnosticCheckpointLogsEnabled) {
-    console.warn(
-      `[diagnostic-events][checkpoints] emit type=${enriched.type} seq=${enriched.seq} listeners=${state.listeners.size}${"sessionKey" in enriched && typeof enriched.sessionKey === "string" ? ` sessionKey=${enriched.sessionKey}` : ""}`,
-    );
-  }
   state.dispatchDepth += 1;
   for (const listener of state.listeners) {
     try {
@@ -236,16 +229,8 @@ export function emitDiagnosticEvent(event: DiagnosticEventInput) {
 export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => void): () => void {
   const state = getDiagnosticEventsState();
   state.listeners.add(listener);
-  if (diagnosticCheckpointLogsEnabled) {
-    console.warn(`[diagnostic-events][checkpoints] subscribe listeners=${state.listeners.size}`);
-  }
   return () => {
     state.listeners.delete(listener);
-    if (diagnosticCheckpointLogsEnabled) {
-      console.warn(
-        `[diagnostic-events][checkpoints] unsubscribe listeners=${state.listeners.size}`,
-      );
-    }
   };
 }
 

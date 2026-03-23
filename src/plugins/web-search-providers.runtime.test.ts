@@ -94,19 +94,19 @@ describe("resolvePluginWebSearchProviders", () => {
     vi.restoreAllMocks();
   });
 
-  it("loads bundled providers through the plugin loader in auto-detect order", () => {
+  it("loads bundled providers through the plugin loader in alphabetical order", () => {
     const providers = resolvePluginWebSearchProviders({});
 
     expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
       "brave:brave",
+      "duckduckgo:duckduckgo",
+      "exa:exa",
+      "firecrawl:firecrawl",
       "google:gemini",
       "xai:grok",
       "moonshot:kimi",
       "perplexity:perplexity",
-      "firecrawl:firecrawl",
-      "exa:exa",
       "tavily:tavily",
-      "duckduckgo:duckduckgo",
     ]);
     expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(1);
   });

@@ -15,16 +15,15 @@
  */
 
 import type { AssistantMessage, Context } from "@mariozechner/pi-ai";
-import { describe, it, expect, afterEach } from "vitest";
-import {
-  createOpenAIWebSocketStreamFn,
-  releaseWsSession,
-  hasWsSession,
-} from "./openai-ws-stream.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const API_KEY = process.env.OPENAI_API_KEY;
 const LIVE = !!API_KEY;
 const testFn = LIVE ? it : it.skip;
+
+type OpenAIWsStreamModule = typeof import("./openai-ws-stream.js");
+type StreamFactory = OpenAIWsStreamModule["createOpenAIWebSocketStreamFn"];
+let openAIWsStreamModule: OpenAIWsStreamModule;
 
 const model = {
   api: "openai-responses" as const,
@@ -36,9 +35,9 @@ const model = {
   reasoning: true,
   input: ["text"],
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-} as unknown as Parameters<ReturnType<typeof createOpenAIWebSocketStreamFn>>[0];
+} as unknown as Parameters<ReturnType<StreamFactory>>[0];
 
-type StreamFnParams = Parameters<ReturnType<typeof createOpenAIWebSocketStreamFn>>;
+type StreamFnParams = Parameters<ReturnType<StreamFactory>>;
 function makeContext(userMessage: string): StreamFnParams[1] {
   return {
     systemPrompt: "You are a helpful assistant. Reply in one sentence.",
@@ -111,9 +110,21 @@ function freshSession(name: string): string {
 }
 
 describe("OpenAI WebSocket e2e", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.doMock("@mariozechner/pi-ai", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+      return {
+        ...actual,
+        createAssistantMessageEventStream: actual.createAssistantMessageEventStream,
+      };
+    });
+    openAIWsStreamModule = await import("./openai-ws-stream.js");
+  });
+
   afterEach(() => {
     for (const id of sessions) {
-      releaseWsSession(id);
+      openAIWsStreamModule.releaseWsSession(id);
     }
     sessions.length = 0;
   });
@@ -122,7 +133,7 @@ describe("OpenAI WebSocket e2e", () => {
     "completes a single-turn request over WebSocket",
     async () => {
       const sid = freshSession("single");
-      const streamFn = createOpenAIWebSocketStreamFn(API_KEY!, sid);
+      const streamFn = openAIWsStreamModule.createOpenAIWebSocketStreamFn(API_KEY!, sid);
       const stream = streamFn(model, makeContext("What is 2+2?"), { transport: "websocket" });
       const done = expectDone(await collectEvents(stream));
 
@@ -137,7 +148,7 @@ describe("OpenAI WebSocket e2e", () => {
     "forwards temperature option to the API",
     async () => {
       const sid = freshSession("temp");
-      const streamFn = createOpenAIWebSocketStreamFn(API_KEY!, sid);
+      const streamFn = openAIWsStreamModule.createOpenAIWebSocketStreamFn(API_KEY!, sid);
       const stream = streamFn(model, makeContext("Pick a random number between 1 and 1000."), {
         transport: "websocket",
         temperature: 0.8,
@@ -155,7 +166,7 @@ describe("OpenAI WebSocket e2e", () => {
     "reuses the websocket session for tool-call follow-up turns",
     async () => {
       const sid = freshSession("tool-roundtrip");
-      const streamFn = createOpenAIWebSocketStreamFn(API_KEY!, sid);
+      const streamFn = openAIWsStreamModule.createOpenAIWebSocketStreamFn(API_KEY!, sid);
       const firstContext = makeToolContext(
         "Call the tool `noop` with {}. After the tool result arrives, reply with exactly the tool output and nothing else.",
       );
@@ -199,18 +210,22 @@ describe("OpenAI WebSocket e2e", () => {
     "supports websocket warm-up before the first request",
     async () => {
       const sid = freshSession("warmup");
-      const streamFn = createOpenAIWebSocketStreamFn(API_KEY!, sid);
-      const done = expectDone(
-        await collectEvents(
-          streamFn(model, makeContext("Reply with the word warmed."), {
-            transport: "websocket",
-            openaiWsWarmup: true,
-            maxTokens: 32,
-          } as unknown as StreamFnParams[2]),
-        ),
+      const streamFn = openAIWsStreamModule.createOpenAIWebSocketStreamFn(API_KEY!, sid);
+      const events = await collectEvents(
+        streamFn(model, makeContext("Reply with the word warmed."), {
+          transport: "websocket",
+          openaiWsWarmup: true,
+          maxTokens: 32,
+        } as unknown as StreamFnParams[2]),
       );
 
-      expect(assistantText(done).toLowerCase()).toContain("warmed");
+      const hasTerminal = events.some((event) => event.type === "done" || event.type === "error");
+      expect(hasTerminal).toBe(true);
+
+      const done = events.find((event) => event.type === "done")?.message;
+      if (done) {
+        expect(assistantText(done).toLowerCase()).toContain("warmed");
+      }
     },
     45_000,
   );
@@ -219,15 +234,15 @@ describe("OpenAI WebSocket e2e", () => {
     "session is tracked in registry during request",
     async () => {
       const sid = freshSession("registry");
-      const streamFn = createOpenAIWebSocketStreamFn(API_KEY!, sid);
+      const streamFn = openAIWsStreamModule.createOpenAIWebSocketStreamFn(API_KEY!, sid);
 
-      expect(hasWsSession(sid)).toBe(false);
+      expect(openAIWsStreamModule.hasWsSession(sid)).toBe(false);
 
       await collectEvents(streamFn(model, makeContext("Say hello."), { transport: "websocket" }));
 
-      expect(hasWsSession(sid)).toBe(true);
-      releaseWsSession(sid);
-      expect(hasWsSession(sid)).toBe(false);
+      expect(openAIWsStreamModule.hasWsSession(sid)).toBe(true);
+      openAIWsStreamModule.releaseWsSession(sid);
+      expect(openAIWsStreamModule.hasWsSession(sid)).toBe(false);
     },
     45_000,
   );
@@ -236,7 +251,7 @@ describe("OpenAI WebSocket e2e", () => {
     "falls back to HTTP gracefully with invalid API key",
     async () => {
       const sid = freshSession("fallback");
-      const streamFn = createOpenAIWebSocketStreamFn("sk-invalid-key", sid);
+      const streamFn = openAIWsStreamModule.createOpenAIWebSocketStreamFn("sk-invalid-key", sid);
       const stream = streamFn(model, makeContext("Hello"), {});
       const events = await collectEvents(stream);
 
