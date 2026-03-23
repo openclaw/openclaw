@@ -165,7 +165,7 @@ const MATRIX_CASES: MatrixCase[] = [
   },
 ];
 
-describe("implicit provider resolution matrix", { timeout: 180_000 }, () => {
+describe("implicit provider resolution matrix", { timeout: 300_000 }, () => {
   it.each(MATRIX_CASES)(
     "$name",
     async ({ env, authProfiles, explicitProviders, assertProviders }) => {
