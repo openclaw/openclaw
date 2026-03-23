@@ -11,6 +11,7 @@ import { createSyntaxTheme } from "./syntax-theme.js";
 
 const DARK_TEXT = "#E8E3D5";
 const LIGHT_TEXT = "#1E1E1E";
+const HEX_COLOR_RE = /^#[0-9a-f]{6}$/i;
 const XTERM_LEVELS = [0, 95, 135, 175, 215, 255] as const;
 
 function channelToSrgb(value: number): number {
@@ -75,6 +76,11 @@ function isLightBackground(): boolean {
   return false;
 }
 
+function readHexColorEnv(name: string): string | undefined {
+  const value = process.env[name]?.trim();
+  return value && HEX_COLOR_RE.test(value) ? value : undefined;
+}
+
 /** Whether the terminal has a light background. Exported for testing only. */
 export const lightMode = isLightBackground();
 
@@ -126,7 +132,15 @@ export const lightPalette = {
   success: "#047857",
 } as const;
 
-export const palette = lightMode ? lightPalette : darkPalette;
+const basePalette = lightMode ? lightPalette : darkPalette;
+const userBgOverride = readHexColorEnv("OPENCLAW_TUI_USER_BG");
+const userTextOverride = readHexColorEnv("OPENCLAW_TUI_USER_TEXT");
+
+export const palette = {
+  ...basePalette,
+  ...(userBgOverride ? { userBg: userBgOverride } : {}),
+  ...(userTextOverride ? { userText: userTextOverride } : {}),
+};
 
 const fg = (hex: string) => (text: string) => chalk.hex(hex)(text);
 const bg = (hex: string) => (text: string) => chalk.bgHex(hex)(text);

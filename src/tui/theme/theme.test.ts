@@ -233,6 +233,26 @@ describe("light background detection", () => {
     expect(lightMod.theme.assistantText("hello")).toBe("hello");
     expect(darkMod.theme.assistantText("hello")).toBe("hello");
   });
+
+  it("allows overriding user message colors via env vars", async () => {
+    const mod = await importThemeWithEnv({
+      OPENCLAW_THEME: "dark",
+      OPENCLAW_TUI_USER_BG: "#8FAFCA",
+      OPENCLAW_TUI_USER_TEXT: "#102132",
+    });
+    expect(mod.palette.userBg).toBe("#8FAFCA");
+    expect(mod.palette.userText).toBe("#102132");
+  });
+
+  it("ignores invalid user color overrides", async () => {
+    const mod = await importThemeWithEnv({
+      OPENCLAW_THEME: "dark",
+      OPENCLAW_TUI_USER_BG: "steelblue",
+      OPENCLAW_TUI_USER_TEXT: "#12345",
+    });
+    expect(mod.palette.userBg).toBe(mod.darkPalette.userBg);
+    expect(mod.palette.userText).toBe(mod.darkPalette.userText);
+  });
 });
 
 describe("light palette accessibility", () => {

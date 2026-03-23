@@ -72,6 +72,8 @@ to apply context-specific rules.
 
 - `OPENCLAW_THEME=light`: force the light TUI palette when your terminal has a light background.
 - `OPENCLAW_THEME=dark`: force the dark TUI palette.
+- `OPENCLAW_TUI_USER_BG=#RRGGBB`: override the TUI user-message background color.
+- `OPENCLAW_TUI_USER_TEXT=#RRGGBB`: override the TUI user-message text color.
 - `COLORFGBG`: if your terminal exports it, OpenClaw uses the background color hint to auto-pick the TUI palette.
 
 ## Env var substitution in config
