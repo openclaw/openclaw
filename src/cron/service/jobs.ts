@@ -556,6 +556,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     description: normalizeOptionalString(input.description),
     enabled,
     deleteAfterRun,
+    beforeRun: normalizeOptionalText(input.beforeRun),
     createdAtMs: now,
     updatedAtMs: now,
     schedule,
@@ -592,6 +593,9 @@ export function applyJobPatch(
   }
   if (typeof patch.deleteAfterRun === "boolean") {
     job.deleteAfterRun = patch.deleteAfterRun;
+  }
+  if ("beforeRun" in patch) {
+    job.beforeRun = normalizeOptionalText(patch.beforeRun);
   }
   if (patch.schedule) {
     if (patch.schedule.kind === "cron") {
