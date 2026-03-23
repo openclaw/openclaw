@@ -224,7 +224,7 @@ export async function runServiceStart(params: {
         ok: true,
         result: restartStatus.daemonActionResult,
         message: restartStatus.message,
-        service: buildDaemonServiceSnapshot(params.service, loaded || true),
+        service: buildDaemonServiceSnapshot(params.service, true),
       });
       if (!json) {
         defaultRuntime.log(restartStatus.message);
