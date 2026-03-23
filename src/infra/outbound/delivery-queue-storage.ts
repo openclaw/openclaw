@@ -9,6 +9,24 @@ import type { OutboundChannel } from "./targets.js";
 const QUEUE_DIRNAME = "delivery-queue";
 const FAILED_DIRNAME = "failed";
 
+/**
+ * Tracks delivery IDs that are currently in-flight (between enqueue and ack/fail).
+ * The periodic recovery timer skips these to avoid replaying a send that is still
+ * being attempted by the original caller.  After a crash the set is empty, so
+ * crash-leftover entries are correctly recovered.
+ */
+const inFlightDeliveryIds = new Set<string>();
+
+/** Reset in-flight tracking — test-only. Simulates process restart. */
+export function _resetInFlightTracking(): void {
+  inFlightDeliveryIds.clear();
+}
+
+/** Check whether a delivery ID is currently in-flight. */
+export function isDeliveryInFlight(id: string): boolean {
+  return inFlightDeliveryIds.has(id);
+}
+
 export type QueuedDeliveryPayload = {
   channel: Exclude<OutboundChannel, "none">;
   to: string;
@@ -147,6 +165,7 @@ export async function enqueueDelivery(
     gatewayClientScopes: params.gatewayClientScopes,
     retryCount: 0,
   });
+  inFlightDeliveryIds.add(id);
   return id;
 }
 
@@ -160,6 +179,7 @@ export async function enqueueDelivery(
  * by {@link loadPendingDeliveries} on the next startup without re-sending.
  */
 export async function ackDelivery(id: string, stateDir?: string): Promise<void> {
+  inFlightDeliveryIds.delete(id);
   const { jsonPath, deliveredPath } = resolveQueueEntryPaths(id, stateDir);
   try {
     // Phase 1: atomic rename marks the delivery as complete.
@@ -180,6 +200,7 @@ export async function ackDelivery(id: string, stateDir?: string): Promise<void> 
 
 /** Update a queue entry after a failed delivery attempt. */
 export async function failDelivery(id: string, error: string, stateDir?: string): Promise<void> {
+  inFlightDeliveryIds.delete(id);
   const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
   const entry = await readQueueEntry(filePath);
   entry.retryCount += 1;

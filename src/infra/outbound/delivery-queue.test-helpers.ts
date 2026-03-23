@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, vi } from "vitest";
+import { _resetInFlightTracking } from "./delivery-queue.js";
 import type { DeliverFn, RecoveryLogger } from "./delivery-queue.js";
 
 export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => string } {
@@ -16,6 +17,7 @@ export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => stri
   beforeEach(() => {
     tmpDir = path.join(fixtureRoot, `case-${fixtureCount++}`);
     fs.mkdirSync(tmpDir, { recursive: true });
+    _resetInFlightTracking();
   });
 
   afterAll(() => {

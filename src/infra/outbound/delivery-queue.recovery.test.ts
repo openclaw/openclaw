@@ -2,10 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  _resetInFlightTracking,
   enqueueDelivery,
   loadPendingDeliveries,
   MAX_RETRIES,
   recoverPendingDeliveries,
+  startDeliveryRecoveryTimer,
+  type DeliverFn,
 } from "./delivery-queue.js";
 import {
   asDeliverFn,
@@ -32,6 +35,8 @@ describe("delivery-queue recovery", () => {
     log?: ReturnType<typeof createRecoveryLog>;
     maxRecoveryMs?: number;
   }) => {
+    // Simulate crash recovery: in-flight set is empty after restart.
+    _resetInFlightTracking();
     const result = await recoverPendingDeliveries({
       deliver: asDeliverFn(deliver),
       log,
@@ -53,6 +58,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      skippedDisconnected: 0,
     });
 
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
@@ -169,12 +175,13 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      skippedDisconnected: 0,
     });
 
     const remaining = await loadPendingDeliveries(tmpDir());
     expect(remaining).toHaveLength(3);
     expect(remaining.every((entry) => entry.retryCount === 1)).toBe(true);
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("deferred to next startup"));
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("deferred to next sweep"));
   });
 
   it("defers entries until backoff becomes eligible", async () => {
@@ -196,6 +203,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 1,
+      skippedDisconnected: 0,
     });
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(1);
     expect(log.info).toHaveBeenCalledWith(expect.stringContaining("not ready for retry yet"));
@@ -227,6 +235,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 1,
+      skippedDisconnected: 0,
     });
     expect(deliver).toHaveBeenCalledTimes(1);
     expect(deliver).toHaveBeenCalledWith(
@@ -256,6 +265,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 1,
+      skippedDisconnected: 0,
     });
     expect(firstDeliver).not.toHaveBeenCalled();
 
@@ -267,6 +277,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      skippedDisconnected: 0,
     });
     expect(secondDeliver).toHaveBeenCalledTimes(1);
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
@@ -283,7 +294,270 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      skippedDisconnected: 0,
     });
     expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("skips entries for disconnected channels without burning retries", async () => {
+    await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "wa" }] }, tmpDir());
+    await enqueueDelivery({ channel: "telegram", to: "2", payloads: [{ text: "tg" }] }, tmpDir());
+    _resetInFlightTracking(); // Simulate crash recovery.
+
+    const deliver = vi.fn().mockResolvedValue([]);
+    const result = await recoverPendingDeliveries({
+      deliver: asDeliverFn(deliver),
+      log: createRecoveryLog(),
+      cfg: baseCfg,
+      stateDir: tmpDir(),
+      isChannelConnected: (channel) => channel === "telegram",
+    });
+
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ channel: "telegram" }));
+    expect(result.recovered).toBe(1);
+    expect(result.skippedDisconnected).toBe(1);
+
+    const remaining = await loadPendingDeliveries(tmpDir());
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]?.channel).toBe("whatsapp");
+    // Retry count should not have been incremented for the skipped entry.
+    expect(remaining[0]?.retryCount).toBe(0);
+  });
+
+  it("recovers all entries when isChannelConnected is not provided", async () => {
+    await enqueueCrashRecoveryEntries();
+    _resetInFlightTracking(); // Simulate crash recovery.
+    const deliver = vi.fn().mockResolvedValue([]);
+    const result = await recoverPendingDeliveries({
+      deliver: asDeliverFn(deliver),
+      log: createRecoveryLog(),
+      cfg: baseCfg,
+      stateDir: tmpDir(),
+    });
+
+    expect(deliver).toHaveBeenCalledTimes(2);
+    expect(result.recovered).toBe(2);
+    expect(result.skippedDisconnected).toBe(0);
+  });
+
+  describe("startDeliveryRecoveryTimer", () => {
+    const createLog = () => createRecoveryLog();
+
+    it("does not start when abort signal is already aborted", () => {
+      const controller = new AbortController();
+      controller.abort();
+
+      const log = createLog();
+      const timer = startDeliveryRecoveryTimer({
+        deliver: vi.fn() as unknown as DeliverFn,
+        log,
+        cfg: baseCfg,
+        isChannelConnected: () => true,
+        stateDir: tmpDir(),
+        abortSignal: controller.signal,
+      });
+
+      timer.stop();
+    });
+
+    it("respects startup grace period", async () => {
+      vi.useFakeTimers();
+      const start = new Date("2026-01-01T00:00:00.000Z");
+      vi.setSystemTime(start);
+
+      await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir());
+      _resetInFlightTracking(); // Simulate crash recovery.
+
+      const deliver = vi.fn().mockResolvedValue([]);
+      const timer = startDeliveryRecoveryTimer({
+        deliver: deliver as unknown as DeliverFn,
+        log: createLog(),
+        cfg: baseCfg,
+        isChannelConnected: () => true,
+        stateDir: tmpDir(),
+        checkIntervalMs: 1_000,
+        startupGraceMs: 5_000,
+      });
+
+      // First tick at 1s — within grace period, should not deliver.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(deliver).not.toHaveBeenCalled();
+
+      // Tick at 6s — past grace period, should deliver.
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+
+      timer.stop();
+      vi.useRealTimers();
+    });
+
+    it("skips entries for disconnected channels on each sweep", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+
+      await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "wa" }] },
+        tmpDir(),
+      );
+      await enqueueDelivery({ channel: "telegram", to: "2", payloads: [{ text: "tg" }] }, tmpDir());
+      _resetInFlightTracking(); // Simulate crash recovery.
+
+      let whatsappConnected = false;
+      const deliver = vi.fn().mockResolvedValue([]);
+      const timer = startDeliveryRecoveryTimer({
+        deliver: deliver as unknown as DeliverFn,
+        log: createLog(),
+        cfg: baseCfg,
+        isChannelConnected: (channel) => {
+          if (channel === "whatsapp") {
+            return whatsappConnected;
+          }
+          return channel === "telegram";
+        },
+        stateDir: tmpDir(),
+        checkIntervalMs: 1_000,
+        startupGraceMs: 0,
+      });
+
+      // First sweep: telegram connected, whatsapp not.
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+      expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ channel: "telegram" }));
+
+      // WhatsApp reconnects.
+      whatsappConnected = true;
+      deliver.mockClear();
+
+      // Second sweep: now both connected. Only whatsapp remains in queue.
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+      expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ channel: "whatsapp" }));
+
+      // Queue should be fully drained.
+      const remaining = await loadPendingDeliveries(tmpDir());
+      expect(remaining).toHaveLength(0);
+
+      timer.stop();
+      vi.useRealTimers();
+    });
+
+    it("does not run concurrent sweeps", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+
+      await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir());
+      _resetInFlightTracking(); // Simulate crash recovery.
+
+      let deliverResolve: (() => void) | null = null;
+      const deliver = vi.fn().mockImplementation(
+        () =>
+          new Promise<unknown[]>((resolve) => {
+            deliverResolve = () => resolve([]);
+          }),
+      );
+
+      const timer = startDeliveryRecoveryTimer({
+        deliver: deliver as unknown as DeliverFn,
+        log: createLog(),
+        cfg: baseCfg,
+        isChannelConnected: () => true,
+        stateDir: tmpDir(),
+        checkIntervalMs: 1_000,
+        startupGraceMs: 0,
+      });
+
+      // First sweep starts — wait for deliver to be called (async I/O in sweep).
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+
+      // Second tick fires while first sweep is in flight (deliver hasn't resolved).
+      await vi.advanceTimersByTimeAsync(1_000);
+      // Still only 1 call — second sweep was skipped by sweepInFlight guard.
+      expect(deliver).toHaveBeenCalledTimes(1);
+
+      // Complete the first sweep.
+      deliverResolve!();
+      await vi.advanceTimersByTimeAsync(0);
+
+      timer.stop();
+      vi.useRealTimers();
+    });
+
+    it("stops via abort signal", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+
+      await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir());
+      _resetInFlightTracking(); // Simulate crash recovery.
+
+      const controller = new AbortController();
+      const deliver = vi.fn().mockResolvedValue([]);
+      const timer = startDeliveryRecoveryTimer({
+        deliver: deliver as unknown as DeliverFn,
+        log: createLog(),
+        cfg: baseCfg,
+        isChannelConnected: () => true,
+        stateDir: tmpDir(),
+        checkIntervalMs: 1_000,
+        startupGraceMs: 0,
+        abortSignal: controller.signal,
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+
+      // Abort — subsequent ticks should not fire.
+      controller.abort();
+      deliver.mockClear();
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(deliver).not.toHaveBeenCalled();
+
+      timer.stop();
+      vi.useRealTimers();
+    });
+
+    it("uses fresh config on each sweep when cfg is a getter", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+
+      await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir());
+      _resetInFlightTracking();
+
+      const cfgA = { tag: "a" };
+      const cfgB = { tag: "b" };
+      let currentCfg: Record<string, string> = cfgA;
+
+      const deliver = vi.fn().mockResolvedValue([]);
+      const timer = startDeliveryRecoveryTimer({
+        deliver: deliver as unknown as DeliverFn,
+        log: createLog(),
+        cfg: () => currentCfg as never,
+        isChannelConnected: () => true,
+        stateDir: tmpDir(),
+        checkIntervalMs: 1_000,
+        startupGraceMs: 0,
+      });
+
+      // First sweep uses cfgA.
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+      expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ cfg: cfgA }));
+
+      // Re-enqueue and switch config.
+      await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "b" }] }, tmpDir());
+      _resetInFlightTracking();
+      currentCfg = cfgB;
+      deliver.mockClear();
+
+      // Second sweep uses cfgB.
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+      expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ cfg: cfgB }));
+
+      timer.stop();
+      vi.useRealTimers();
+    });
   });
 });

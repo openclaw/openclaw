@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import {
   ackDelivery,
   failDelivery,
+  isDeliveryInFlight,
   loadPendingDeliveries,
   moveToFailed,
   type QueuedDelivery,
@@ -13,6 +14,7 @@ export type RecoverySummary = {
   failed: number;
   skippedMaxRetries: number;
   deferredBackoff: number;
+  skippedDisconnected: number;
 };
 
 export type DeliverFn = (
@@ -58,6 +60,7 @@ function createEmptyRecoverySummary(): RecoverySummary {
     failed: 0,
     skippedMaxRetries: 0,
     deferredBackoff: 0,
+    skippedDisconnected: 0,
   };
 }
 
@@ -142,16 +145,22 @@ export function isPermanentDeliveryError(error: string): boolean {
 }
 
 /**
- * On gateway startup, scan the delivery queue and retry any pending entries.
+ * Scan the delivery queue and retry any pending entries.
  * Uses exponential backoff and moves entries that exceed MAX_RETRIES to failed/.
+ * When called from the periodic timer, `isChannelConnected` gates retries so
+ * entries for disconnected channels are skipped without burning retries.
  */
 export async function recoverPendingDeliveries(opts: {
   deliver: DeliverFn;
   log: RecoveryLogger;
   cfg: OpenClawConfig;
   stateDir?: string;
-  /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to next startup. Default: 60 000. */
+  /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to next sweep. Default: 60 000. */
   maxRecoveryMs?: number;
+  /** When provided, entries whose channel is not connected are skipped without incrementing retryCount. */
+  isChannelConnected?: (channel: string, accountId?: string) => boolean;
+  /** Abort signal — checked between entries so an in-flight sweep can be cancelled on shutdown. */
+  abortSignal?: AbortSignal;
 }): Promise<RecoverySummary> {
   const pending = await loadPendingDeliveries(opts.stateDir);
   if (pending.length === 0) {
@@ -165,19 +174,37 @@ export async function recoverPendingDeliveries(opts: {
   const summary = createEmptyRecoverySummary();
 
   for (let i = 0; i < pending.length; i++) {
+    if (opts.abortSignal?.aborted) {
+      opts.log.info("Recovery aborted by signal");
+      break;
+    }
+
     const entry = pending[i];
     const now = Date.now();
     if (now >= deadline) {
-      opts.log.warn(`Recovery time budget exceeded — remaining entries deferred to next startup`);
+      opts.log.warn(`Recovery time budget exceeded — remaining entries deferred to next sweep`);
       await deferRemainingEntriesForBudget(pending.slice(i), opts.stateDir);
       break;
     }
+
+    // Skip entries currently being sent by the original caller.
+    if (isDeliveryInFlight(entry.id)) {
+      continue;
+    }
+
+    // Always clean up exhausted entries regardless of channel state.
     if (entry.retryCount >= MAX_RETRIES) {
       opts.log.warn(
         `Delivery ${entry.id} exceeded max retries (${entry.retryCount}/${MAX_RETRIES}) — moving to failed/`,
       );
       await moveEntryToFailedWithLogging(entry.id, opts.log, opts.stateDir);
       summary.skippedMaxRetries += 1;
+      continue;
+    }
+
+    // Skip entries whose target channel is not connected — don't burn retries.
+    if (opts.isChannelConnected && !opts.isChannelConnected(entry.channel, entry.accountId)) {
+      summary.skippedDisconnected += 1;
       continue;
     }
 
@@ -214,9 +241,101 @@ export async function recoverPendingDeliveries(opts: {
   }
 
   opts.log.info(
-    `Delivery recovery complete: ${summary.recovered} recovered, ${summary.failed} failed, ${summary.skippedMaxRetries} skipped (max retries), ${summary.deferredBackoff} deferred (backoff)`,
+    `Delivery recovery complete: ${summary.recovered} recovered, ${summary.failed} failed, ${summary.skippedMaxRetries} skipped (max retries), ${summary.deferredBackoff} deferred (backoff), ${summary.skippedDisconnected} skipped (disconnected)`,
   );
   return summary;
+}
+
+/**
+ * Start a periodic timer that re-scans the delivery queue and retries pending
+ * entries whose target channel is connected.  Replaces the old startup-only
+ * recovery which raced with channel connection (~3-5 s after boot).
+ *
+ * Follows the same pattern as `channel-health-monitor.ts`:
+ *   • `setInterval` with a concurrency guard
+ *   • `timer.unref()` so the timer doesn't keep the process alive
+ *   • `AbortSignal` for external cancellation
+ *
+ * @returns An object with a `stop()` method to cancel the timer.
+ */
+export function startDeliveryRecoveryTimer(opts: {
+  deliver: DeliverFn;
+  log: RecoveryLogger;
+  cfg: OpenClawConfig | (() => OpenClawConfig);
+  isChannelConnected: (channel: string, accountId?: string) => boolean;
+  stateDir?: string;
+  /** Interval between sweeps in ms. Default: 30 000 (30 s). */
+  checkIntervalMs?: number;
+  /** Grace period before first sweep in ms. Default: 5 000. */
+  startupGraceMs?: number;
+  /** External abort signal — stops the timer when aborted. */
+  abortSignal?: AbortSignal;
+}): { stop: () => void } {
+  const intervalMs = opts.checkIntervalMs ?? 30_000;
+  const startupGraceMs = opts.startupGraceMs ?? 5_000;
+
+  let stopped = false;
+  let sweepInFlight = false;
+  let initialTimer: ReturnType<typeof setTimeout> | null = null;
+  let timer: ReturnType<typeof setInterval> | null = null;
+
+  const sweepAbort = new AbortController();
+
+  async function runSweep(): Promise<void> {
+    if (stopped || sweepInFlight) {
+      return;
+    }
+    sweepInFlight = true;
+    try {
+      const resolvedCfg = typeof opts.cfg === "function" ? opts.cfg() : opts.cfg;
+      await recoverPendingDeliveries({
+        deliver: opts.deliver,
+        log: opts.log,
+        cfg: resolvedCfg,
+        stateDir: opts.stateDir,
+        isChannelConnected: opts.isChannelConnected,
+        abortSignal: sweepAbort.signal,
+      });
+    } catch (err) {
+      opts.log.error(`Delivery recovery sweep failed: ${String(err)}`);
+    } finally {
+      sweepInFlight = false;
+    }
+  }
+
+  function stop(): void {
+    stopped = true;
+    sweepAbort.abort();
+    if (initialTimer) {
+      clearTimeout(initialTimer);
+      initialTimer = null;
+    }
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+    }
+  }
+
+  // Schedule the first sweep after the startup grace period so channels
+  // have time to connect, then sweep on a fixed interval thereafter.
+  initialTimer = setTimeout(() => {
+    void runSweep();
+    if (stopped) {
+      return;
+    }
+    timer = setInterval(() => void runSweep(), intervalMs);
+    timer.unref();
+  }, startupGraceMs + 1);
+  initialTimer.unref();
+
+  if (opts.abortSignal) {
+    opts.abortSignal.addEventListener("abort", stop, { once: true });
+  }
+
+  opts.log.info(
+    `Delivery recovery timer started (grace=${startupGraceMs}ms, interval=${intervalMs}ms)`,
+  );
+  return { stop };
 }
 
 export { MAX_RETRIES };

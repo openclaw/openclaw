@@ -1109,18 +1109,52 @@ export async function startGatewayServer(
         ? startGatewayModelPricingRefresh({ config: cfgAtStart })
         : () => {};
 
-    // Recover pending outbound deliveries from previous crash/restart.
+    // Periodic delivery queue recovery: retry pending outbound messages when
+    // their target channel is connected.  Replaces the previous startup-only
+    // recovery which raced with channel connection.
+    let deliveryRecoveryTimerStopped = false;
+    let deliveryRecoveryTimer: { stop: () => void } | null = {
+      stop() {
+        deliveryRecoveryTimerStopped = true;
+      },
+    };
     if (!minimalTestGateway) {
       void (async () => {
-        const { recoverPendingDeliveries } = await import("../infra/outbound/delivery-queue.js");
+        const { startDeliveryRecoveryTimer } = await import("../infra/outbound/delivery-queue.js");
         const { deliverOutboundPayloads } = await import("../infra/outbound/deliver.js");
+        if (deliveryRecoveryTimerStopped) {
+          return;
+        }
         const logRecovery = log.child("delivery-recovery");
-        await recoverPendingDeliveries({
+        const timer = startDeliveryRecoveryTimer({
           deliver: deliverOutboundPayloads,
           log: logRecovery,
-          cfg: cfgAtStart,
+          cfg: () => loadConfig(),
+          isChannelConnected: (channel, accountId) => {
+            const snapshot = channelManager.getRuntimeSnapshot();
+            const account = accountId
+              ? snapshot.channelAccounts[channel]?.[accountId]
+              : snapshot.channels[channel];
+            if (!account) {
+              // Channel/account not in snapshot (removed or unconfigured).
+              // Return true so the entry is retried — delivery will fail with
+              // a permanent error and moveToFailed() cleans it up.
+              return true;
+            }
+            // Prefer `connected` (persistent-connection channels like WhatsApp/Discord).
+            // Fall back to `running` for webhook/API channels (Google Chat, IRC, etc.)
+            // that never populate `connected`.
+            return account.connected ?? account.running ?? false;
+          },
         });
-      })().catch((err) => log.error(`Delivery recovery failed: ${String(err)}`));
+        // Re-check after assignment: close() may have raced between the flag
+        // check above and this point, leaving the real timer unstopped.
+        if (deliveryRecoveryTimerStopped) {
+          timer.stop();
+          return;
+        }
+        deliveryRecoveryTimer = timer;
+      })().catch((err) => log.error(`Delivery recovery timer setup failed: ${String(err)}`));
     }
 
     const execApprovalManager = new ExecApprovalManager();
@@ -1453,6 +1487,7 @@ export async function startGatewayServer(
       authRateLimiter?.dispose();
       browserAuthRateLimiter.dispose();
       stopModelPricingRefresh();
+      deliveryRecoveryTimer?.stop();
       channelHealthMonitor?.stop();
       clearSecretsRuntimeSnapshot();
       await close(opts);
