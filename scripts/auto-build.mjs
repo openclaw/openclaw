@@ -106,141 +106,113 @@ try {
 }
 
 // 4. 复制文件并压缩
-try {
-  console.log("\n[5/4] 正在复制文件并压缩...");
-
-  // 清理旧的品牌目录
+async function copyAndCompress() {
   try {
-    rmSync(BRAND_DIR, { recursive: true, force: true });
-  } catch (error) {
-    // 忽略错误
-  }
+    console.log("\n[5/4] 正在复制文件并压缩...");
 
-  // 创建品牌目录
-  mkdirSync(BRAND_DIR, { recursive: true });
-
-  // 复制文件
-  cpSync(resolve(WORK_DIR, "dist"), resolve(BRAND_DIR, "dist"), { recursive: true });
-  copyFileSync(resolve(WORK_DIR, "package.json"), resolve(BRAND_DIR, "package.json"));
-  copyFileSync(resolve(WORK_DIR, "pnpm-lock.yaml"), resolve(BRAND_DIR, "pnpm-lock.yaml"));
-  copyFileSync(resolve(WORK_DIR, "openclaw.mjs"), resolve(BRAND_DIR, "openclaw.mjs"));
-  copyFileSync(resolve(WORK_DIR, "auto-deploy.mjs"), resolve(BRAND_DIR, "auto-deploy.mjs"));
-
-  console.log("文件复制成功");
-
-  // 压缩文件夹
-  const zipPath = resolve(OUTPUT_DIR, `${BRAND_NAME}.zip`);
-  let compressionSuccess = false;
-
-  try {
-    rmSync(zipPath, { force: true });
-  } catch (error) {
-    // 忽略错误
-  }
-
-  // 使用 zip 命令或其他方式压缩
-  try {
-    execSync(`zip -r "${zipPath}" "${BRAND_NAME}"`, { cwd: OUTPUT_DIR, stdio: "inherit" });
-    console.log("压缩成功");
-    compressionSuccess = true;
-  } catch (error) {
-    console.warn("zip命令失败，尝试安装zip工具...");
+    // 清理旧的品牌目录
     try {
-      // 尝试安装zip工具
-      if (process.platform === "win32") {
-        console.log("Windows平台，尝试使用choco安装zip...");
-        try {
-          execSync("choco install zip -y", { stdio: "inherit" });
-        } catch (chocoError) {
-          console.warn("choco安装失败，尝试使用winget安装7zip...");
-          try {
-            execSync("winget install 7zip.7zip", { stdio: "inherit" });
-            // 使用7zip进行压缩
-            execSync(`"C:\\Program Files\\7-Zip\\7z.exe" a "${BRAND_NAME}.zip" "${BRAND_NAME}"`, {
-              cwd: OUTPUT_DIR,
-              stdio: "inherit",
-            });
-            console.log("7zip压缩成功");
-            compressionSuccess = true;
-            // 跳过后续步骤
-            throw new Error("7zip压缩成功，跳过后续步骤");
-          } catch (wingetError) {
-            console.warn("winget安装失败，尝试使用PowerShell压缩...");
-            // 直接跳转到PowerShell压缩
-            throw new Error("winget安装失败，使用PowerShell");
-          }
-        }
-      } else if (process.platform === "linux") {
-        console.log("Linux平台，尝试使用apt安装zip...");
-        try {
-          execSync("sudo apt-get install zip -y", { stdio: "inherit" });
-        } catch (sudoError) {
-          console.warn("sudo失败，尝试不使用sudo...");
-          try {
-            execSync("apt-get install zip -y", { stdio: "inherit" });
-          } catch (aptError) {
-            console.warn("apt安装失败，尝试使用其他包管理器...");
-            // 尝试使用yum
-            try {
-              execSync("yum install zip -y", { stdio: "inherit" });
-            } catch (yumError) {
-              console.warn("yum安装失败，尝试使用pacman...");
-              // 尝试使用pacman
-              try {
-                execSync("pacman -S zip --noconfirm", { stdio: "inherit" });
-              } catch (pacmanError) {
-                console.error("所有包管理器安装失败");
-                throw new Error("所有包管理器安装失败");
-              }
-            }
-          }
-        }
-      } else if (process.platform === "darwin") {
-        console.log("macOS平台，尝试使用brew安装zip...");
-        execSync("brew install zip", { stdio: "inherit" });
-      }
-      // 安装后再次尝试压缩
-      execSync(`zip -r "${zipPath}" "${BRAND_NAME}"`, { cwd: OUTPUT_DIR, stdio: "inherit" });
-      console.log("压缩成功");
-      compressionSuccess = true;
-    } catch (installError) {
-      if (installError.message === "7zip压缩成功，跳过后续步骤") {
-        // 7zip压缩成功，直接返回
-        compressionSuccess = true;
-      } else {
-        console.warn("安装zip工具失败，尝试使用PowerShell压缩...");
-        try {
-          // 使用PowerShell进行压缩（Windows兼容）
-          const powershellCommand = `Compress-Archive -Path "${BRAND_NAME}" -DestinationPath "${BRAND_NAME}.zip" -Force`;
-          execSync(`powershell -Command "${powershellCommand}"`, {
-            cwd: OUTPUT_DIR,
-            stdio: "inherit",
-          });
-          console.log("PowerShell压缩成功");
-          compressionSuccess = true;
-        } catch (psError) {
-          console.error("压缩失败:", psError.message);
-          compressionSuccess = false;
-        }
-      }
+      rmSync(BRAND_DIR, { recursive: true, force: true });
+    } catch (error) {
+      // 忽略错误
     }
-  }
 
-  // 清理临时文件
-  rmSync(BRAND_DIR, { recursive: true, force: true });
+    // 创建品牌目录
+    mkdirSync(BRAND_DIR, { recursive: true });
 
-  if (compressionSuccess) {
-    console.log("\n打包完成！");
-    console.log(`输出文件: ${zipPath}`);
-    console.log("\n下一步操作:");
-    console.log("1. 解压生成的zip文件到目标服务器");
-    console.log("2. 在目标服务器上执行: node auto-deploy.mjs");
-  } else {
-    console.error("\n打包完成，但压缩失败！");
-    console.error("请手动压缩deploy目录中的文件");
+    // 复制文件
+    cpSync(resolve(WORK_DIR, "dist"), resolve(BRAND_DIR, "dist"), { recursive: true });
+    copyFileSync(resolve(WORK_DIR, "package.json"), resolve(BRAND_DIR, "package.json"));
+    copyFileSync(resolve(WORK_DIR, "pnpm-lock.yaml"), resolve(BRAND_DIR, "pnpm-lock.yaml"));
+    copyFileSync(resolve(WORK_DIR, "openclaw.mjs"), resolve(BRAND_DIR, "openclaw.mjs"));
+    copyFileSync(resolve(WORK_DIR, "auto-deploy.mjs"), resolve(BRAND_DIR, "auto-deploy.mjs"));
+
+    console.log("文件复制成功");
+
+    // 压缩文件夹
+    const zipPath = resolve(OUTPUT_DIR, `${BRAND_NAME}.zip`);
+    let compressionSuccess = false;
+
+    try {
+      rmSync(zipPath, { force: true });
+    } catch (error) {
+      // 忽略错误
+    }
+
+    // 使用Node.js的archiver包进行压缩
+    try {
+      console.log("正在压缩文件...");
+
+      // 尝试使用archiver包
+      let archiver;
+      try {
+        // 尝试 require 本地安装的 archiver
+        archiver = require("archiver");
+      } catch (requireError) {
+        // 如果没有安装，尝试安装
+        console.log("archiver包未安装，正在安装...");
+        execSync("npm install archiver", { cwd: WORK_DIR, stdio: "inherit" });
+        archiver = require("archiver");
+      }
+
+      const fs = require("fs");
+      const path = require("path");
+
+      // 创建输出流
+      const output = fs.createWriteStream(zipPath);
+      const archive = archiver("zip", {
+        zlib: { level: 9 }, // 最高压缩级别
+      });
+
+      // 监听完成事件
+      output.on("close", function () {
+        console.log(`压缩成功，总大小: ${archive.pointer()} 字节`);
+        compressionSuccess = true;
+      });
+
+      // 监听错误事件
+      archive.on("error", function (err) {
+        throw err;
+      });
+
+      // 管道连接
+      archive.pipe(output);
+
+      // 添加目录
+      archive.directory(path.join(OUTPUT_DIR, BRAND_NAME), BRAND_NAME);
+
+      // 完成压缩
+      archive.finalize();
+
+      // 等待压缩完成
+      await new Promise((resolve, reject) => {
+        output.on("close", resolve);
+        archive.on("error", reject);
+      });
+    } catch (error) {
+      console.error("压缩失败:", error.message);
+      compressionSuccess = false;
+    }
+
+    // 清理临时文件
+    rmSync(BRAND_DIR, { recursive: true, force: true });
+
+    if (compressionSuccess) {
+      console.log("\n打包完成！");
+      console.log(`输出文件: ${zipPath}`);
+      console.log("\n下一步操作:");
+      console.log("1. 解压生成的zip文件到目标服务器");
+      console.log("2. 在目标服务器上执行: node auto-deploy.mjs");
+    } else {
+      console.error("\n打包完成，但压缩失败！");
+      console.error("请手动压缩deploy目录中的文件");
+      process.exit(1);
+    }
+  } catch (error) {
+    console.error("复制文件或压缩失败:", error.message);
     process.exit(1);
   }
-} catch (error) {
-  console.error("复制文件或压缩失败:", error.message);
-  process.exit(1);
 }
+
+// 执行复制和压缩
+copyAndCompress();
