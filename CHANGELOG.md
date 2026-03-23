@@ -78,6 +78,7 @@ Docs: https://docs.openclaw.ai
 - Agents: add per-agent thinking/reasoning/fast defaults and auto-revert disallowed model overrides to the agent's default selection. Thanks @xuanmingguo and @vincentkoc.
 - Control UI/usage: drop the empty session-detail placeholder card so the usage view stays single-column until a real session detail panel is selected. (#52013) Thanks @BunsDev.
 - Hooks/workspace: keep repo-local `<workspace>/hooks` disabled until explicitly enabled, block workspace hook name collisions from shadowing bundled/managed/plugin hooks, and treat `hooks.internal.load.extraDirs` as trusted managed hook sources.
+- Web tools/Exa: add Exa as a bundled web-search plugin with Exa-native date filters, search-mode selection, and optional content extraction under `plugins.entries.exa.config.webSearch.*`. Thanks @V-Gutierrez and @vincentkoc.
 - CLI/hooks: route hook-pack install and update through `openclaw plugins`, keep `openclaw hooks` focused on hook visibility and per-hook controls, and show plugin-managed hook details in CLI output.
 - Channels/QQ Bot: add a bundled QQ Bot channel extension with WebSocket gateway, multi-account support, C2C/group/guild messaging, media handling (image/voice/video/file), SILK audio codec, image server, slash commands, message queuing, session persistence, credential backup, reference index store, typing keepalive, STT, TTS, proactive messaging, cron reminders, and known user tracking — available during `openclaw onboard` without requiring a separate plugin install.
 
