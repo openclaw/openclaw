@@ -278,6 +278,77 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(sessionStore["agent:main:dm:1"]?.thinkingLevel).toBe("off");
   });
 
+  it("stores future-thread thinking default on parent Telegram chat when /think is set in a topic", async () => {
+    const directives = parseInlineDirectives("/think high");
+    const threadSessionKey = "agent:main:telegram:group:-100123:topic:77";
+    const parentSessionKey = "agent:main:telegram:group:-100123";
+    const sessionEntry = createSessionEntry();
+    const parentEntry = createSessionEntry({ sessionId: "parent-think-1" });
+    const sessionStore = {
+      [threadSessionKey]: sessionEntry,
+      [parentSessionKey]: parentEntry,
+    };
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionKey: threadSessionKey,
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(result?.text).toContain("Thinking level set to high.");
+    expect(sessionStore[parentSessionKey]?.futureThreadThinkingLevelOverride).toBe("high");
+  });
+
+  it("stores future-thread thinking default on parent Telegram chat when /thinking adaptive is set in a topic", async () => {
+    const directives = parseInlineDirectives("/thinking adaptive");
+    const threadSessionKey = "agent:main:telegram:group:-100123:topic:77";
+    const parentSessionKey = "agent:main:telegram:group:-100123";
+    const sessionEntry = createSessionEntry();
+    const parentEntry = createSessionEntry({ sessionId: "parent-think-adaptive-1" });
+    const sessionStore = {
+      [threadSessionKey]: sessionEntry,
+      [parentSessionKey]: parentEntry,
+    };
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionKey: threadSessionKey,
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(result?.text).toContain("Thinking level set to adaptive.");
+    expect(sessionStore[parentSessionKey]?.futureThreadThinkingLevelOverride).toBe("adaptive");
+  });
+
+  it("stores future-thread thinking default on main parent for Telegram DM main-scoped thread keys", async () => {
+    const directives = parseInlineDirectives("/think off");
+    const threadSessionKey = "agent:main:main:thread:123456789:42";
+    const parentSessionKey = "agent:main:main";
+    const sessionEntry = createSessionEntry({ channel: "telegram" });
+    const parentEntry = createSessionEntry({ sessionId: "parent-think-main-1" });
+    const sessionStore = {
+      [threadSessionKey]: sessionEntry,
+      [parentSessionKey]: parentEntry,
+    };
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionKey: threadSessionKey,
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(result?.text).toContain("Thinking disabled.");
+    expect(sessionStore[parentSessionKey]?.futureThreadThinkingLevelOverride).toBe("off");
+  });
   it("stores future-thread default on parent Telegram chat when /model is set in a topic", async () => {
     const directives = parseInlineDirectives("/model openai/gpt-4o");
     const threadSessionKey = "agent:main:telegram:group:-100123:topic:77";

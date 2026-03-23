@@ -1,4 +1,8 @@
-import { normalizeVerboseLevel, type VerboseLevel } from "../auto-reply/thinking.js";
+import {
+  normalizeVerboseLevel,
+  type ThinkLevel,
+  type VerboseLevel,
+} from "../auto-reply/thinking.js";
 import type { SessionEntry } from "../config/sessions.js";
 
 export function parseVerboseOverride(
@@ -29,4 +33,30 @@ export function applyVerboseOverride(entry: SessionEntry, level: VerboseLevel | 
     return;
   }
   entry.verboseLevel = level;
+}
+
+export function applyFutureThreadThinkingLevelOverride(
+  entry: SessionEntry,
+  level: ThinkLevel | null | undefined,
+): { updated: boolean } {
+  if (level === undefined) {
+    return { updated: false };
+  }
+
+  if (level === null) {
+    if (entry.futureThreadThinkingLevelOverride !== undefined) {
+      delete entry.futureThreadThinkingLevelOverride;
+      entry.updatedAt = Date.now();
+      return { updated: true };
+    }
+    return { updated: false };
+  }
+
+  if (entry.futureThreadThinkingLevelOverride !== level) {
+    entry.futureThreadThinkingLevelOverride = level;
+    entry.updatedAt = Date.now();
+    return { updated: true };
+  }
+
+  return { updated: false };
 }

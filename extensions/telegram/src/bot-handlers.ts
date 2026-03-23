@@ -41,7 +41,9 @@ import {
 import { dispatchPluginInteractiveHandler } from "../../../src/plugins/interactive.js";
 import { resolveAgentRoute } from "../../../src/routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../src/routing/session-key.js";
+import { applyFutureThreadModelDefault } from "../../../src/sessions/future-thread-defaults.js";
 import { applyModelOverrideToSessionEntry } from "../../../src/sessions/model-overrides.js";
+import { resolveFutureThreadParentSessionKey } from "../../../src/sessions/session-key-utils.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   isSenderAllowed,
@@ -1542,6 +1544,27 @@ export const registerTelegramHandlers = ({
                   isDefault: isDefaultSelection,
                 },
               });
+
+              // Model-picker callbacks bypass directive handling, so we must
+              // mirror the same "future thread default" write here. Without
+              // this, selecting a model inside a Telegram topic only updates
+              // the current topic and new sibling topics keep the old default.
+              const parentSessionKey = resolveFutureThreadParentSessionKey({
+                sessionKey,
+                channelHint: "telegram",
+              });
+              if (parentSessionKey) {
+                applyFutureThreadModelDefault({
+                  store,
+                  parentSessionKey,
+                  selection: {
+                    provider: selection.provider,
+                    model: selection.model,
+                    isDefault: isDefaultSelection,
+                  },
+                  afterThreadId: messageThreadId ?? resolvedThreadId,
+                });
+              }
             });
 
             // Update message to show success with visual feedback
