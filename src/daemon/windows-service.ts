@@ -1,9 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
-import {
-  resolveGatewayWindowsServiceName,
-  resolveNodeWindowsServiceName,
-} from "./constants.js";
+import { resolveGatewayWindowsServiceName, resolveNodeWindowsServiceName } from "./constants.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
@@ -258,7 +255,10 @@ function waitForServiceState(serviceName: string, matcher: (state?: string) => b
   return false;
 }
 
-export async function stopWindowsService({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
+export async function stopWindowsService({
+  stdout,
+  env,
+}: GatewayServiceControlArgs): Promise<void> {
   const effectiveEnv = env ?? (process.env as GatewayServiceEnv);
   const serviceName = resolveWindowsServiceName(effectiveEnv);
   const result = runWindowsCommand("sc.exe", ["stop", serviceName]);

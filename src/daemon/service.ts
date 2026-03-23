@@ -18,14 +18,6 @@ import {
   stopScheduledTask,
   uninstallScheduledTask,
 } from "./schtasks.js";
-import {
-  isWindowsServiceInstalled,
-  readWindowsServiceCommand,
-  readWindowsServiceRuntime,
-  restartWindowsService,
-  stopWindowsService,
-  uninstallWindowsService,
-} from "./windows-service.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
@@ -47,6 +39,14 @@ import {
   stopSystemdService,
   uninstallSystemdService,
 } from "./systemd.js";
+import {
+  isWindowsServiceInstalled,
+  readWindowsServiceCommand,
+  readWindowsServiceRuntime,
+  restartWindowsService,
+  stopWindowsService,
+  uninstallWindowsService,
+} from "./windows-service.js";
 export type {
   GatewayServiceCommandConfig,
   GatewayServiceControlArgs,
