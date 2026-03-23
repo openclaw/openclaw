@@ -32,8 +32,20 @@ type ActiveRunRow = {
   result_preview: string | null;
 };
 
-function computeDelegationStatus(row: ActiveRunRow): "pending" | "running" | "stale" | "done" {
+function computeDelegationStatus(
+  row: ActiveRunRow,
+): "pending" | "running" | "stale" | "done" | "failed" {
   if (row.ended_at != null) {
+    // Check if the outcome indicates failure/interruption
+    if (row.outcome) {
+      try {
+        const o = JSON.parse(row.outcome) as Record<string, unknown>;
+        const s = o.status;
+        if (s === "error" || s === "interrupted" || s === "cancelled" || s === "timeout") {
+          return "failed";
+        }
+      } catch {}
+    }
     return "done";
   }
   if (row.started_at != null) {
@@ -265,7 +277,7 @@ export function startGatewayMaintenanceTimers(params: {
           resultPreview: r.result_preview ?? null,
           elapsedMs: r.created_at != null ? nowBroadcast - r.created_at : 0,
         }))
-        .filter((d) => d.status !== "done");
+        .filter((d) => d.status !== "done" && d.status !== "failed");
 
       if (activeDelegations.length > 0) {
         params.broadcast("delegation", { delegations: activeDelegations });

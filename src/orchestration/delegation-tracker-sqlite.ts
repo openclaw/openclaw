@@ -43,7 +43,15 @@ function deriveStatus(row: SubagentRunRow, nowMs: number): DelegationSummary["st
   if (row.outcome_json) {
     try {
       const outcome = JSON.parse(row.outcome_json) as Record<string, unknown>;
-      if (outcome.error || outcome.failed || outcome.status === "error") {
+      const s = outcome.status;
+      if (
+        outcome.error ||
+        outcome.failed ||
+        s === "error" ||
+        s === "interrupted" ||
+        s === "cancelled" ||
+        s === "timeout"
+      ) {
         return "failed";
       }
     } catch {
