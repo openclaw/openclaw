@@ -1,9 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
-import {
-  listBundledWebSearchPluginIds,
-  resolveBundledWebSearchPluginId,
-} from "../plugins/bundled-web-search.js";
+import { listBundledWebSearchPluginIds } from "../plugins/bundled-web-search-ids.js";
+import { resolveBundledWebSearchPluginId } from "../plugins/bundled-web-search-provider-ids.js";
 import type {
   PluginWebSearchProviderEntry,
   WebSearchCredentialResolutionSource,
