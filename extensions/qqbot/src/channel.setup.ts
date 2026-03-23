@@ -87,10 +87,10 @@ export const qqbotSetupPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       let clientSecret = "";
 
       if (input.token) {
-        const parts = input.token.split(":");
-        if (parts.length === 2) {
-          appId = parts[0];
-          clientSecret = parts[1];
+        const colonIdx = input.token.indexOf(":");
+        if (colonIdx > 0) {
+          appId = input.token.slice(0, colonIdx);
+          clientSecret = input.token.slice(colonIdx + 1);
         }
       }
 

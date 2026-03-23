@@ -18,8 +18,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { getQQBotDataDir } from "./utils/platform.js";
 
-const BACKUP_FILENAME = "credential-backup.json";
-
 interface CredentialBackup {
   accountId: string;
   appId: string;
@@ -27,8 +25,9 @@ interface CredentialBackup {
   savedAt: string;
 }
 
-function getBackupPath(): string {
-  return path.join(getQQBotDataDir("data"), BACKUP_FILENAME);
+function getBackupPath(accountId: string): string {
+  const safeName = accountId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  return path.join(getQQBotDataDir("data"), `credential-backup-${safeName}.json`);
 }
 
 /**
@@ -37,7 +36,7 @@ function getBackupPath(): string {
 export function saveCredentialBackup(accountId: string, appId: string, clientSecret: string): void {
   if (!appId || !clientSecret) return; // 不保存空凭证
   try {
-    const backupPath = getBackupPath();
+    const backupPath = getBackupPath(accountId);
     const data: CredentialBackup = {
       accountId,
       appId,
@@ -59,15 +58,14 @@ export function saveCredentialBackup(accountId: string, appId: string, clientSec
  * 从暂存文件读取凭证（仅在配置为空时调用）
  * 返回 null 表示无可用备份
  */
-export function loadCredentialBackup(accountId?: string): CredentialBackup | null {
+export function loadCredentialBackup(accountId: string): CredentialBackup | null {
   try {
-    const backupPath = getBackupPath();
+    const backupPath = getBackupPath(accountId);
     if (!fs.existsSync(backupPath)) return null;
     const raw = fs.readFileSync(backupPath, "utf8");
     const data: CredentialBackup = JSON.parse(raw);
     if (!data.appId || !data.clientSecret) return null;
-    // 如果指定了 accountId，校验是否匹配
-    if (accountId && data.accountId !== accountId) return null;
+    if (data.accountId !== accountId) return null;
     return data;
   } catch {
     return null;
