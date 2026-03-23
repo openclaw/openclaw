@@ -103,10 +103,9 @@ function resolveToolNameForPermission(params: RequestPermissionRequest): string 
 
   const fromMeta = readFirstStringValue(toolMeta, ["toolName", "tool_name", "name"]);
   const fromRawInput = readFirstStringValue(rawInput, ["tool", "toolName", "tool_name", "name"]);
-  const fromTitle = parseToolNameFromTitle(toolCall?.title);
+  const titleName = parseToolNameFromTitle(toolCall?.title);
   const metaName = fromMeta ? normalizeToolName(fromMeta) : undefined;
   const rawInputName = fromRawInput ? normalizeToolName(fromRawInput) : undefined;
-  const titleName = fromTitle;
   if ((fromMeta && !metaName) || (fromRawInput && !rawInputName)) {
     return undefined;
   }
