@@ -8,7 +8,7 @@ import {
 } from "../../scripts/copy-bundled-plugin-metadata.mjs";
 
 const tempDirs: string[] = [];
-const includeOptionalEnv = { OPENCLAW_INCLUDE_OPTIONAL_BUNDLED: "1" } as const;
+const excludeOptionalEnv = { OPENCLAW_INCLUDE_OPTIONAL_BUNDLED: "0" } as const;
 const copyBundledPluginMetadataWithEnv = copyBundledPluginMetadata as (params?: {
   repoRoot?: string;
   env?: NodeJS.ProcessEnv;
@@ -60,7 +60,7 @@ describe("copyBundledPluginMetadata", () => {
       openclaw: { extensions: ["./index.ts"] },
     });
 
-    copyBundledPluginMetadataWithEnv({ repoRoot, env: includeOptionalEnv });
+    copyBundledPluginMetadata({ repoRoot });
 
     expect(
       fs.existsSync(path.join(repoRoot, "dist", "extensions", "acpx", "openclaw.plugin.json")),
@@ -131,7 +131,7 @@ describe("copyBundledPluginMetadata", () => {
     fs.mkdirSync(staleNodeModulesSkillDir, { recursive: true });
     fs.writeFileSync(path.join(staleNodeModulesSkillDir, "stale.txt"), "stale\n", "utf8");
 
-    copyBundledPluginMetadataWithEnv({ repoRoot, env: includeOptionalEnv });
+    copyBundledPluginMetadata({ repoRoot });
 
     const copiedSkillDir = path.join(
       repoRoot,
@@ -174,7 +174,7 @@ describe("copyBundledPluginMetadata", () => {
       openclaw: { extensions: ["./index.ts"] },
     });
 
-    copyBundledPluginMetadataWithEnv({ repoRoot, env: includeOptionalEnv });
+    copyBundledPluginMetadata({ repoRoot });
 
     expect(
       fs.readFileSync(
@@ -227,7 +227,7 @@ describe("copyBundledPluginMetadata", () => {
     const staleNodeModulesDir = path.join(repoRoot, "dist", "extensions", "tlon", "node_modules");
     fs.mkdirSync(staleNodeModulesDir, { recursive: true });
 
-    copyBundledPluginMetadataWithEnv({ repoRoot, env: includeOptionalEnv });
+    copyBundledPluginMetadata({ repoRoot });
 
     const bundledManifest = JSON.parse(
       fs.readFileSync(
@@ -269,7 +269,7 @@ describe("copyBundledPluginMetadata", () => {
     });
 
     try {
-      copyBundledPluginMetadataWithEnv({ repoRoot, env: includeOptionalEnv });
+      copyBundledPluginMetadata({ repoRoot });
     } finally {
       cpSyncSpy.mockRestore();
     }
@@ -319,7 +319,7 @@ describe("copyBundledPluginMetadata", () => {
     });
     fs.mkdirSync(path.join(repoRoot, "extensions"), { recursive: true });
 
-    copyBundledPluginMetadataWithEnv({ repoRoot, env: includeOptionalEnv });
+    copyBundledPluginMetadata({ repoRoot });
 
     expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", "removed-plugin"))).toBe(false);
   });
@@ -339,12 +339,12 @@ describe("copyBundledPluginMetadata", () => {
       name: "@openclaw/google-gemini-cli-auth",
     });
 
-    copyBundledPluginMetadataWithEnv({ repoRoot, env: includeOptionalEnv });
+    copyBundledPluginMetadata({ repoRoot });
 
     expect(fs.existsSync(staleDistDir)).toBe(false);
   });
 
-  it("skips metadata for optional bundled clusters unless explicitly enabled", () => {
+  it("skips metadata for optional bundled clusters only when explicitly disabled", () => {
     const repoRoot = makeRepoRoot("openclaw-bundled-plugin-optional-skip-");
     const pluginDir = path.join(repoRoot, "extensions", "acpx");
     fs.mkdirSync(pluginDir, { recursive: true });
@@ -357,7 +357,7 @@ describe("copyBundledPluginMetadata", () => {
       openclaw: { extensions: ["./index.ts"] },
     });
 
-    copyBundledPluginMetadataWithEnv({ repoRoot, env: {} });
+    copyBundledPluginMetadataWithEnv({ repoRoot, env: excludeOptionalEnv });
 
     expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", "acpx"))).toBe(false);
   });
