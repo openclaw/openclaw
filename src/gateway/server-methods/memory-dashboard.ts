@@ -27,6 +27,7 @@ export type MemorySearchPayload = {
   model?: string;
   files?: number;
   fallbackSearch?: boolean;
+  searchMode?: string;
 };
 
 export type MemoryReindexPayload = {
@@ -167,6 +168,7 @@ export const memoryDashboardHandlers: GatewayRequestHandlers = {
         }
       }
 
+      const qmdConfig = cfg.memory?.qmd;
       const payload: MemorySearchPayload = {
         results,
         provider: status.provider,
@@ -174,6 +176,7 @@ export const memoryDashboardHandlers: GatewayRequestHandlers = {
         model: status.model,
         files: status.files,
         fallbackSearch,
+        searchMode: fallbackSearch ? "text" : (qmdConfig?.searchMode ?? "search"),
       };
       respond(true, payload, undefined);
     } catch (err) {

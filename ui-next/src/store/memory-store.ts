@@ -102,6 +102,7 @@ export type MemoryState = {
   searchResults: MemorySearchResultUI[];
   searching: boolean;
   searchBackend: string | null;
+  searchMode: string | null;
   searchFiles: number | null;
   searchFallback: boolean;
   searchHistory: string[];
@@ -148,6 +149,7 @@ export type MemoryState = {
   setSearchResults: (results: MemorySearchResultUI[]) => void;
   setSearching: (searching: boolean) => void;
   setSearchBackend: (backend: string | null) => void;
+  setSearchMode: (mode: string | null) => void;
   setSearchFiles: (files: number | null) => void;
   setSearchFallback: (fallback: boolean) => void;
   addToSearchHistory: (query: string) => void;
@@ -219,6 +221,7 @@ const initialState = {
   searchResults: [] as MemorySearchResultUI[],
   searching: false,
   searchBackend: null as string | null,
+  searchMode: null as string | null,
   searchFiles: null as number | null,
   searchFallback: false,
   searchHistory: loadPersistedSearchHistory(),
@@ -266,6 +269,7 @@ export const useMemoryStore = create<MemoryState>((set) => ({
   setSearchResults: (results) => set({ searchResults: results }),
   setSearching: (searching) => set({ searching: searching }),
   setSearchBackend: (backend) => set({ searchBackend: backend }),
+  setSearchMode: (mode) => set({ searchMode: mode }),
   setSearchFiles: (files) => set({ searchFiles: files }),
   setSearchFallback: (fallback) => set({ searchFallback: fallback }),
   addToSearchHistory: (query) =>

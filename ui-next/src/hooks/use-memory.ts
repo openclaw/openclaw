@@ -51,6 +51,7 @@ type MemorySearchResult = {
   model?: string;
   files?: number;
   fallbackSearch?: boolean;
+  searchMode?: string;
 };
 
 type MemoryReindexResult = {
@@ -109,6 +110,7 @@ export function useMemory() {
         });
         store.setSearchResults(result.results);
         store.setSearchBackend(result.backend);
+        store.setSearchMode(result.searchMode ?? null);
         store.setSearchFiles(result.files ?? null);
         store.setSearchFallback(result.fallbackSearch ?? false);
         store.addToSearchHistory(query);

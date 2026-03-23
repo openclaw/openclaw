@@ -1388,10 +1388,10 @@ function SearchTab() {
     searchResults,
     searching,
     searchBackend,
+    searchMode,
     searchFiles,
     searchFallback,
     searchHistory,
-    indexStatus,
     expandedResultId,
     searchSourceFilter,
     searchSortBy,
@@ -1568,9 +1568,14 @@ function SearchTab() {
           <Badge variant="outline" className="text-[10px] font-mono">
             backend: {searchBackend}
           </Badge>
-          {searchBackend === "builtin" && indexStatus?.custom && (
+          {searchMode && (
             <Badge variant="outline" className="text-[10px] font-mono">
-              mode: {(indexStatus.custom.searchMode as string) ?? "unknown"}
+              mode: {searchMode}
+            </Badge>
+          )}
+          {searchFiles != null && searchFiles > 0 && (
+            <Badge variant="outline" className="text-[10px] font-mono">
+              indexed: {searchFiles} files
             </Badge>
           )}
         </div>
