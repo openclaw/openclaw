@@ -25,7 +25,7 @@ import {
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
 
-const DEFAULT_KIMI_BASE_URL = "https://api.moonshot.cn/v1";
+const DEFAULT_KIMI_BASE_URL = "https://api.moonshot.ai/v1";
 const DEFAULT_KIMI_MODEL = "kimi-k2.5";
 
 const KIMI_WEB_SEARCH_TOOL = {
@@ -200,38 +200,32 @@ async function runKimiSearch(params: {
             };
           }
 
-          messages.push({
-            role: "assistant",
-            content: message?.content ?? "",
-            ...(message?.reasoning_content ? { reasoning_content: message.reasoning_content } : {}),
-            tool_calls: toolCalls,
-          });
+          const validToolCalls = toolCalls.filter(
+              (toolCall) => toolCall.id?.trim() && toolCall.function?.name?.trim(),
+          );
 
-          let pushed = false;
-
-          for (const toolCall of toolCalls) {
-            const toolCallId = toolCall.id?.trim();
-            const toolName = toolCall.function?.name?.trim();
-
-            if (!toolCallId || !toolName) {
-              continue;
-            }
-
-            pushed = true;
-            messages.push({
-              role: "tool",
-              tool_call_id: toolCallId,
-              name: toolName,
-              content: buildKimiToolMessageContent(toolCall),
-            });
-          }
-
-          if (!pushed) {
+          if (validToolCalls.length !== toolCalls.length || validToolCalls.length === 0) {
             return {
               done: true,
               content: text ?? "No response",
               citations: [...collectedCitations],
             };
+          }
+
+          messages.push({
+            role: "assistant",
+            content: message?.content ?? "",
+            ...(message?.reasoning_content ? { reasoning_content: message.reasoning_content } : {}),
+            tool_calls: validToolCalls,
+          });
+
+          for (const toolCall of validToolCalls) {
+            messages.push({
+              role: "tool",
+              tool_call_id: toolCall.id!.trim(),
+              name: toolCall.function!.name!.trim(),
+              content: buildKimiToolMessageContent(toolCall),
+            });
           }
 
           return { done: false };
