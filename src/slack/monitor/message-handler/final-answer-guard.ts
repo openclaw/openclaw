@@ -1,5 +1,7 @@
 import type { ReplyPayload } from "../../../auto-reply/types.js";
+import { matchesHumanCorrection } from "../../../sre/patterns.js";
 import { stripSlackMentionsForCommandDetection } from "../commands.js";
+import { findSlackIncidentHeaderLineIndex } from "../incident-format.js";
 
 type SlackEitherOrQuestion = {
   leftOption: string;
@@ -8,6 +10,10 @@ type SlackEitherOrQuestion = {
 
 const BOTH_OR_NEITHER_RE = /\b(both|neither)\b/i;
 const DEPENDS_RE = /\b(?:it\s+)?depends\b/i;
+const DISPROVED_THEORY_RE = /^disproved theory:/im;
+const STATUS_LABEL_RE = /^(?:\*Status:\*|_Status:_)/i;
+const DEFAULT_DISPROVED_THEORY_LINE =
+  "Disproved theory: earlier thread theory was wrong; conclusions below use the latest human correction and fresh evidence.";
 
 function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
@@ -122,6 +128,74 @@ export function enforceSlackDirectEitherOrAnswer(params: {
   return {
     ...params.payload,
     text: `Direct answer: it depends.\n\n${replyText}`,
+  };
+}
+
+export function shouldRequireSlackDisprovedTheory(params: {
+  inboundText?: string;
+  incidentRootOnly?: boolean;
+  isThreadReply?: boolean;
+}): boolean {
+  // Human corrections in incident-root-only threads must force an explicit
+  // retraction line so follow-up RCA does not silently build on stale bot
+  // theories from earlier in the thread.
+  if (!params.incidentRootOnly || !params.isThreadReply) {
+    return false;
+  }
+  const source = normalizeWhitespace(
+    stripSlackMentionsForCommandDetection(params.inboundText ?? ""),
+  );
+  if (!source) {
+    return false;
+  }
+  return matchesHumanCorrection(source);
+}
+
+function injectSlackDisprovedTheoryLine(replyText: string): string {
+  if (DISPROVED_THEORY_RE.test(replyText)) {
+    return replyText.trim();
+  }
+  const lines = replyText.trim().split("\n");
+  const incidentIndex = findSlackIncidentHeaderLineIndex(replyText);
+  if (lines.length === 0 || incidentIndex < 0) {
+    return replyText.trim();
+  }
+  const statusIndex = lines.findIndex(
+    (line, index) => index > incidentIndex && STATUS_LABEL_RE.test(line.trim()),
+  );
+  const insertAt = statusIndex >= 0 ? statusIndex + 1 : incidentIndex + 1;
+  const boundedInsertAt = Math.min(Math.max(insertAt, incidentIndex + 1), lines.length);
+  return [
+    ...lines.slice(0, boundedInsertAt),
+    DEFAULT_DISPROVED_THEORY_LINE,
+    ...lines.slice(boundedInsertAt),
+  ].join("\n");
+}
+
+export function enforceSlackDisprovedTheoryRetraction(params: {
+  inboundText?: string;
+  incidentRootOnly?: boolean;
+  isThreadReply?: boolean;
+  payload: ReplyPayload;
+}): ReplyPayload {
+  const rawText = params.payload.text;
+  const replyText = typeof rawText === "string" ? rawText.trim() : "";
+  if (!replyText || params.payload.isError) {
+    return params.payload;
+  }
+  if (!shouldRequireSlackDisprovedTheory(params)) {
+    return params.payload;
+  }
+  if (DISPROVED_THEORY_RE.test(replyText)) {
+    return params.payload;
+  }
+  if (findSlackIncidentHeaderLineIndex(replyText) < 0) {
+    return params.payload;
+  }
+
+  return {
+    ...params.payload,
+    text: injectSlackDisprovedTheoryLine(replyText),
   };
 }
 

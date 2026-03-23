@@ -28,7 +28,10 @@ import { appendSlackStream, startSlackStream, stopSlackStream } from "../../stre
 import { resolveSlackThreadTargets } from "../../threading.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
 import { createSlackReplyDeliveryPlan, deliverReplies, resolveSlackThreadTs } from "../replies.js";
-import { enforceSlackDirectEitherOrAnswer } from "./final-answer-guard.js";
+import {
+  enforceSlackDirectEitherOrAnswer,
+  enforceSlackDisprovedTheoryRetraction,
+} from "./final-answer-guard.js";
 import type { PreparedSlackMessage } from "./types.js";
 
 function hasMedia(payload: ReplyPayload): boolean {
@@ -79,6 +82,38 @@ export function isSlackStreamingEnabled(params: {
     return false;
   }
   return params.nativeStreaming;
+}
+
+/**
+ * Resolves Slack reply streaming behavior from normalized channel policy.
+ * Incident-root-only channels disable previews, native partial streaming, and
+ * progress acks so no partial reasoning leaks into incident threads.
+ */
+export function resolveSlackReplyStreamingPolicy(params: {
+  mode: "off" | "partial" | "block" | "progress";
+  nativeStreaming: boolean;
+  incidentRootOnly?: boolean;
+}): {
+  previewStreamingEnabled: boolean;
+  streamingEnabled: boolean;
+  sendProgressAck: boolean;
+} {
+  if (params.incidentRootOnly) {
+    return {
+      previewStreamingEnabled: false,
+      streamingEnabled: false,
+      sendProgressAck: false,
+    };
+  }
+
+  return {
+    previewStreamingEnabled: params.mode !== "off",
+    streamingEnabled: isSlackStreamingEnabled({
+      mode: params.mode,
+      nativeStreaming: params.nativeStreaming,
+    }),
+    sendProgressAck: params.mode === "progress",
+  };
 }
 
 export function resolveSlackStreamingThreadHint(params: {
@@ -253,12 +288,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     streamMode: account.config.streamMode,
     nativeStreaming: account.config.nativeStreaming,
   });
-  const previewStreamingEnabled = slackStreaming.mode !== "off";
-  const streamingEnabled = isSlackStreamingEnabled({
+  const streamingPolicy = resolveSlackReplyStreamingPolicy({
     mode: slackStreaming.mode,
     nativeStreaming: slackStreaming.nativeStreaming,
+    incidentRootOnly: prepared.channelConfig?.incidentRootOnly === true,
   });
-  const sendProgressAck = slackStreaming.mode === "progress";
+  const { previewStreamingEnabled, streamingEnabled, sendProgressAck } = streamingPolicy;
   let didSendProgressAck = false;
   const streamThreadHint = resolveSlackStreamingThreadHint({
     replyToMode: prepared.replyToMode,
@@ -389,10 +424,16 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     deliver: async (incomingPayload, info) => {
       const payload =
         info.kind === "final"
-          ? enforceSlackDirectEitherOrAnswer({
-              questionText:
+          ? enforceSlackDisprovedTheoryRetraction({
+              inboundText:
                 message.text ?? prepared.ctxPayload.CommandBody ?? prepared.ctxPayload.RawBody,
-              payload: incomingPayload,
+              incidentRootOnly: prepared.channelConfig?.incidentRootOnly === true,
+              isThreadReply,
+              payload: enforceSlackDirectEitherOrAnswer({
+                questionText:
+                  message.text ?? prepared.ctxPayload.CommandBody ?? prepared.ctxPayload.RawBody,
+                payload: incomingPayload,
+              }),
             })
           : incomingPayload;
       if (useStreaming) {

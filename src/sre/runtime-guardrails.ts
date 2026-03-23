@@ -6,6 +6,7 @@ import {
   EXACT_ARTIFACT_RE,
   extractInlineJsonTextValue,
   extractResolverFamily,
+  matchesHumanCorrection,
 } from "./patterns.js";
 
 type GuardrailFailureFamily = "shell" | "rbac" | "git_auth" | "model_auth";
@@ -43,8 +44,6 @@ const DEFAULT_SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT = path.join(
   "scripts",
   SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT_NAME,
 );
-const HUMAN_CORRECTION_RE =
-  /\b(this is wrong|that is wrong|you(?:'re| are) wrong|actual issue|current lead is|we confirmed|this is connected|my only explanation|not the issue|old lead is stale|previous guess was stale|outdated theory)\b/i;
 const RESOLVER_TOKEN_RE = {
   vaultByAddress: /\bvaultByAddress\b/,
   vaultV2ByAddress: /\bvaultV2ByAddress\b/,
@@ -87,7 +86,7 @@ function hasPromptGuardrailSignal(prompt: string): boolean {
   return (
     DATA_INCIDENT_RE.test(prompt) ||
     EXACT_ARTIFACT_RE.test(prompt) ||
-    HUMAN_CORRECTION_RE.test(prompt)
+    matchesHumanCorrection(prompt)
   );
 }
 
@@ -209,7 +208,7 @@ function scanTranscriptLines(lines: string[]): TranscriptScan {
     if (line.includes('"role":"user"')) {
       const text = extractInlineJsonTextValue(line) ?? "";
       const preview = cleanLine(text);
-      if (HUMAN_CORRECTION_RE.test(text)) {
+      if (matchesHumanCorrection(text)) {
         scan.latestHumanCorrection = { line: lineNo, preview };
       }
       if (DATA_INCIDENT_RE.test(text)) {
@@ -256,7 +255,7 @@ function resolveGuardrailSignals(params: {
   latestUserArtifact?: TranscriptPreview;
   latestHumanCorrection?: HumanCorrectionPreview;
 }): GuardrailSignals {
-  const promptHasHumanCorrection = HUMAN_CORRECTION_RE.test(params.prompt);
+  const promptHasHumanCorrection = matchesHumanCorrection(params.prompt);
   const promptArtifact = buildPromptArtifact(params.prompt);
   const currentUserArtifact = promptArtifact ?? params.latestUserArtifact;
   const currentHumanCorrection = promptHasHumanCorrection

@@ -10,6 +10,10 @@ LINEAR_API_DEFAULT="${SCRIPT_DIR}/linear-ticket-api.sh"
 if [[ ! -x "$LINEAR_API_DEFAULT" && -x "${SCRIPT_DIR}/../linear-ticket-api.sh" ]]; then
   LINEAR_API_DEFAULT="${SCRIPT_DIR}/../linear-ticket-api.sh"
 fi
+FRONTEND_RESOLVER_DEFAULT="${SCRIPT_DIR}/frontend-project-resolver.sh"
+if [[ ! -x "$FRONTEND_RESOLVER_DEFAULT" && -x "${SCRIPT_DIR}/../frontend-project-resolver.sh" ]]; then
+  FRONTEND_RESOLVER_DEFAULT="${SCRIPT_DIR}/../frontend-project-resolver.sh"
+fi
 die() {
   printf 'bug-report-triage: %s\n' "$*" >&2
   exit 1
@@ -27,6 +31,10 @@ trim() {
 to_lower() {
   printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'
 }
+
+# Keep in sync with src/sre/patterns.ts HUMAN_CORRECTION_RE. Curated parity is
+# enforced in src/sre/patterns.test.ts because Bash callers cannot import TS.
+HUMAN_CORRECTION_GREP_RE="this is wrong|that is wrong|you're wrong|you are wrong|this is not the issue|that is not the issue|this is not correct|that is not correct|this is not right|that is not right|this is not accurate|that is not accurate|does not look like|not a ui problem|(the )?actual issue is|(the )?main issue is|the bug is|the issue is actually|the issue is[^.!?]{0,80}(instead of|rather than)|miscommunication|current lead is|we confirmed|this is connected|my only explanation|not the issue|old lead is stale|previous guess was stale|outdated theory"
 
 validate_local_file_path() {
   local value="${1:-}"
@@ -70,6 +78,7 @@ sanitize_extracted_url() {
 
 ROUTING_CONFIG="$(validate_local_file_path "${BUG_REPORT_ROUTING_CONFIG:-$ROUTING_CONFIG_DEFAULT}")"
 LINEAR_API_RAW="${BUG_REPORT_LINEAR_API:-$LINEAR_API_DEFAULT}"
+FRONTEND_RESOLVER_RAW="${BUG_REPORT_FRONTEND_RESOLVER:-$FRONTEND_RESOLVER_DEFAULT}"
 
 read_body_arg() {
   local mode="$1"
@@ -264,6 +273,229 @@ priority_from_text() {
   printf '%s\n' "$default_priority"
 }
 
+normalize_frontend_env() {
+  local raw_env
+  raw_env="$(to_lower "$(trim "${1:-}")")"
+  case "$raw_env" in
+    prod|production|prd)
+      printf 'prd\n'
+      ;;
+    dev|development)
+      printf 'dev\n'
+      ;;
+    *)
+      printf '\n'
+      ;;
+  esac
+}
+
+extract_latest_human_correction() {
+  local text="$1"
+  local correction
+
+  correction="$(trim "$(extract_field "$text" "Latest correction")")"
+  if [[ -n "$correction" ]]; then
+    printf '%s\n' "$correction"
+    return 0
+  fi
+
+  correction="$(trim "$(extract_field "$text" "Correction")")"
+  if [[ -n "$correction" ]]; then
+    printf '%s\n' "$correction"
+    return 0
+  fi
+
+  correction="$(trim "$(extract_field "$text" "Human correction")")"
+  if [[ -n "$correction" ]]; then
+    printf '%s\n' "$correction"
+    return 0
+  fi
+
+  correction="$(
+    printf '%s\n' "$text" \
+      | grep -Ei "$HUMAN_CORRECTION_GREP_RE" \
+      | tail -n 1 \
+      || true
+  )"
+  trim "$correction"
+}
+
+infer_prime_app_hint() {
+  local report_lc="$1"
+
+  case "$report_lc" in
+    *"curator-v2-app.vercel.app"*|*"curator-v2"*|*"curator v2"*|*"increase timelock"*|*"decrease timelock"*|*"pending timelock"*|*"timelock action"*|*"pendingtimelockcard"*)
+      printf 'curator-v2-app\n'
+      ;;
+    *"curator-api.morpho.org"*|*"curator rpc"*|*"curator-api"*)
+      printf 'curator-rpc-api\n'
+      ;;
+    *"curator.morpho.org"*|*"curator app"*|*"curator-app"*)
+      printf 'curator-app\n'
+      ;;
+    *"delegate.morpho.org"*|*"delegate-app"*|*"delegate app"*)
+      printf 'delegate-app\n'
+      ;;
+    *"liquidation.morpho.org"*|*"liquidation-app"*|*"liquidation app"*)
+      printf 'liquidation-app\n'
+      ;;
+    *"markets-v2-app.vercel.app"*|*"markets-v2"*|*"markets v2"*)
+      printf 'markets-v2-app\n'
+      ;;
+    *)
+      printf '\n'
+      ;;
+  esac
+}
+
+infer_repo_hint() {
+  local route_id="$1"
+  local app_hint="$2"
+
+  if [[ "$route_id" == "consumer-app" ]]; then
+    printf 'morpho-org/consumer-monorepo\n'
+    return 0
+  fi
+  if [[ -n "$app_hint" ]]; then
+    printf 'morpho-org/prime-monorepo\n'
+    return 0
+  fi
+  printf '\n'
+}
+
+requires_bug_report_chronology_check() {
+  local report_lc="$1"
+
+  # Reserve chronology gating for state/order mismatches, not generic uses of
+  # words like "history" or "timeline" in unrelated bug reports.
+  if report_mentions_state_mismatch "$report_lc"; then
+    printf 'true\n'
+    return 0
+  fi
+  if report_mentions_history_context "$report_lc" \
+    && report_mentions_chronology_signal "$report_lc"; then
+    printf 'true\n'
+    return 0
+  fi
+  if [[ "$report_lc" == *"stale"* || "$report_lc" == *"old timelock"* || "$report_lc" == *"older timelock"* ]]; then
+    printf 'true\n'
+    return 0
+  fi
+  if report_mentions_timelock_pending_state "$report_lc"; then
+    printf 'true\n'
+    return 0
+  fi
+  printf 'false\n'
+}
+
+report_mentions_state_mismatch() {
+  local report_lc="$1"
+  [[
+    "$report_lc" == *"shows as"* ||
+    "$report_lc" == *"showing as"* ||
+    "$report_lc" == *"displayed as"* ||
+    "$report_lc" == *"instead of"* ||
+    "$report_lc" == *"latest action"* ||
+    "$report_lc" == *"last action"*
+  ]]
+}
+
+report_mentions_history_context() {
+  local report_lc="$1"
+  [[ "$report_lc" == *"history"* || "$report_lc" == *"timeline"* || "$report_lc" == *"chronology"* ]]
+}
+
+report_mentions_chronology_signal() {
+  local report_lc="$1"
+  [[
+    "$report_lc" == *"pending"* ||
+    "$report_lc" == *"latest"* ||
+    "$report_lc" == *"last action"* ||
+    "$report_lc" == *"timelock"* ||
+    "$report_lc" == *"stale"* ||
+    "$report_lc" == *"shows as"* ||
+    "$report_lc" == *"showing as"* ||
+    "$report_lc" == *"displayed as"* ||
+    "$report_lc" == *"instead of"*
+  ]]
+}
+
+report_mentions_timelock_pending_state() {
+  local report_lc="$1"
+  [[ "$report_lc" == *"timelock"* && ( "$report_lc" == *"pending"* || "$report_lc" == *"increase"* || "$report_lc" == *"decrease"* ) ]]
+}
+
+resolve_frontend_project_json() {
+  local env_name="${1:-}"
+  local prompt_text="${2:-}"
+  local resolver_path output
+
+  [[ -n "$env_name" ]] || {
+    printf 'null\n'
+    return 0
+  }
+
+  resolver_path="$FRONTEND_RESOLVER_RAW"
+  if [[ -z "$resolver_path" || ! -x "$resolver_path" ]]; then
+    printf 'null\n'
+    return 0
+  fi
+
+  # Feed the report through stdin so raw user text does not show up in argv or
+  # process listings for the helper subprocess.
+  set +e
+  output="$(printf '%s' "$prompt_text" | "$resolver_path" "$env_name" 2>/dev/null)"
+  local status=$?
+  set -e
+  if [[ "$status" -ne 0 ]] || ! printf '%s\n' "$output" | jq -e . >/dev/null 2>&1; then
+    printf 'null\n'
+    return 0
+  fi
+  printf '%s\n' "$output"
+}
+
+build_fix_gate_json() {
+  local artifact_url="$1"
+  local actual_result="$2"
+  local expected_result="$3"
+  local chronology_required="$4"
+  local required_blockers=()
+  local advisories=()
+  local required_blockers_json="[]"
+  local advisories_json="[]"
+
+  if [[ -z "$artifact_url" ]]; then
+    required_blockers+=("Need exact artifact URL or Slack thread before code blame.")
+  fi
+  if [[ -z "$actual_result" ]]; then
+    required_blockers+=("Need explicit actual result wording from the report.")
+  fi
+  if [[ -z "$expected_result" ]]; then
+    required_blockers+=("Need explicit expected result wording from the report.")
+  fi
+  if [[ "$chronology_required" == "true" ]]; then
+    required_blockers+=("Replay state/history chronology before naming a UI-label or stale-state cause.")
+  fi
+  advisories+=("Need one implicated live code-path or telemetry fact before recommending a fix.")
+  advisories+=("Need a concrete validation step before recommending a fix.")
+  if ((${#required_blockers[@]})); then
+    required_blockers_json="$(json_array_from_lines "${required_blockers[@]}")"
+  fi
+  if ((${#advisories[@]})); then
+    advisories_json="$(json_array_from_lines "${advisories[@]}")"
+  fi
+
+  jq -nc \
+    --argjson requiredBlockers "$required_blockers_json" \
+    --argjson advisories "$advisories_json" \
+    '{
+      ready: ($requiredBlockers | length == 0),
+      blockers: $requiredBlockers,
+      requiredBlockers: $requiredBlockers,
+      advisories: $advisories
+    }'
+}
+
 select_route_bundle() {
   local report_lc="$1"
   jq -c --arg report "$report_lc" '
@@ -343,8 +575,10 @@ build_plan_json() {
   local summary environment source_url thread_url actual_result expected_result priority_hint
   local priority analysis_mode routing_ambiguous next_text matched_terms_json matched_routes_json
   local route_id route_team route_project route_priority route_analysis route_next labels_json
-  local signal_lines signal matched_terms joined_terms
-  local owner_missing
+  local signal_lines matched_terms joined_terms
+  local owner_missing normalized_env artifact_url primary_symptom latest_correction
+  local chronology_required app_hint repo_hint frontend_json fix_gate_json
+  local posthog_hint sentry_hint preflight_checks
 
   summary="$(extract_summary "$report")"
   environment="$(extract_environment "$report")"
@@ -370,19 +604,32 @@ build_plan_json() {
   owner_pool="$(printf '%s\n' "$route_json" | jq -r '.ownerPool // empty')"
   owner_json="$(resolve_owner_json "$owner_pool")"
   owner_missing="$(printf '%s\n' "$owner_json" | jq -r '.missing')"
+  normalized_env="$(normalize_frontend_env "$environment")"
+  artifact_url="$source_url"
+  [[ -n "$artifact_url" ]] || artifact_url="$thread_url"
+  primary_symptom="$actual_result"
+  [[ -n "$primary_symptom" ]] || primary_symptom="$summary"
+  latest_correction="$(extract_latest_human_correction "$report")"
+  chronology_required="$(requires_bug_report_chronology_check "$report_lc")"
+  app_hint="$(infer_prime_app_hint "$report_lc")"
+  repo_hint="$(infer_repo_hint "$route_id" "$app_hint")"
 
   priority="$(priority_from_text "$priority_hint" "$report_lc" "$route_priority")"
   analysis_mode="$route_analysis"
-  if [[ "$priority" == "1" || "$priority" == "2" ]]; then
+  if [[ "$priority" == "1" || "$priority" == "2" || "$chronology_required" == "true" ]]; then
     analysis_mode="deep"
   fi
 
   next_text="$route_next"
-  if [[ "$routing_ambiguous" == "true" ]]; then
-    next_text="Routing ambiguous; keep manual-review label and tighten route before deep RCA."
-  elif [[ "$owner_missing" == "true" ]]; then
-    next_text="Manual assignment needed before PR work."
+  if [[ "$chronology_required" == "true" ]]; then
+    next_text="Replay exact artifact and state/history chronology before code blame. ${next_text}"
   fi
+  if [[ "$routing_ambiguous" == "true" ]]; then
+    next_text="Routing ambiguous; keep manual-review label and tighten route before deep RCA. ${next_text}"
+  elif [[ "$owner_missing" == "true" ]]; then
+    next_text="Manual assignment needed before PR work. ${next_text}"
+  fi
+  next_text="$(trim "$next_text")"
 
   labels_json="$(
     jq -nc \
@@ -396,6 +643,32 @@ build_plan_json() {
         + (if $ambiguous == "true" or $ownerMissing == "true" then ["manual-review"] else [] end)
       ) | map(select(length > 0)) | unique'
   )"
+  frontend_json="null"
+  if [[ -n "$normalized_env" && -n "$repo_hint" ]]; then
+    frontend_json="$(resolve_frontend_project_json "$normalized_env" "$report")"
+  fi
+  posthog_hint="$(printf '%s\n' "$frontend_json" | jq -r '.posthog.top.key // empty' 2>/dev/null || true)"
+  sentry_hint="$(printf '%s\n' "$frontend_json" | jq -r '.sentry.top.key // empty' 2>/dev/null || true)"
+  fix_gate_json="$(build_fix_gate_json "$artifact_url" "$actual_result" "$expected_result" "$chronology_required")"
+
+  preflight_checks=()
+  if [[ -n "$artifact_url" ]]; then
+    preflight_checks+=("Replay exact artifact before naming a cause.")
+  else
+    preflight_checks+=("Obtain an exact artifact URL or Slack thread before RCA.")
+  fi
+  if [[ "$chronology_required" == "true" ]]; then
+    preflight_checks+=("Confirm state/history chronology before UI-label or stale-state claims.")
+  fi
+  if [[ -n "$latest_correction" || -n "$thread_url" ]]; then
+    preflight_checks+=("Re-read the latest human correction in-thread before fix proposals.")
+  fi
+  if [[ -n "$repo_hint" ]]; then
+    preflight_checks+=("Repo hint: ${repo_hint}.")
+  fi
+  if [[ -n "$app_hint" ]]; then
+    preflight_checks+=("App hint: ${app_hint}.")
+  fi
 
   signal_lines=()
   if [[ -n "$environment" ]]; then
@@ -410,6 +683,24 @@ build_plan_json() {
   joined_terms="$(printf '%s\n' "$matched_terms_json" | jq -r 'join(", ")')"
   if [[ -n "$joined_terms" ]]; then
     signal_lines+=("matched:${joined_terms}")
+  fi
+  if [[ -n "$latest_correction" ]]; then
+    signal_lines+=("correction:$(truncate_text "$latest_correction" 100)")
+  fi
+  if [[ "$chronology_required" == "true" ]]; then
+    signal_lines+=("chronology:required")
+  fi
+  if [[ -n "$repo_hint" ]]; then
+    signal_lines+=("repo:${repo_hint}")
+  fi
+  if [[ -n "$app_hint" ]]; then
+    signal_lines+=("app:${app_hint}")
+  fi
+  if [[ -n "$posthog_hint" ]]; then
+    signal_lines+=("posthog:${posthog_hint}")
+  fi
+  if [[ -n "$sentry_hint" ]]; then
+    signal_lines+=("sentry:${sentry_hint}")
   fi
   signal_lines+=("priority:${priority}")
 
@@ -428,6 +719,12 @@ build_plan_json() {
     --arg team "$route_team" \
     --arg project "$route_project" \
     --arg routeId "$route_id" \
+    --arg artifactUrl "$artifact_url" \
+    --arg primarySymptom "$primary_symptom" \
+    --arg latestCorrection "$latest_correction" \
+    --arg chronologyRequired "$chronology_required" \
+    --arg repoHint "$repo_hint" \
+    --arg appHint "$app_hint" \
     --arg issueTitle "Bug: ${summary}" \
     --argjson route "$route_json" \
     --argjson owner "$owner_json" \
@@ -435,6 +732,9 @@ build_plan_json() {
     --argjson matchedTerms "$matched_terms_json" \
     --argjson matchedRoutes "$matched_routes_json" \
     --argjson signals "$(json_array_from_lines "${signal_lines[@]}")" \
+    --argjson frontend "$frontend_json" \
+    --argjson fixGate "$fix_gate_json" \
+    --argjson preflightChecks "$(json_array_from_lines "${preflight_checks[@]}")" \
     '{
       summary: $summary,
       analysisMode: $analysisMode,
@@ -455,6 +755,26 @@ build_plan_json() {
       summaryLine: $summary,
       signals: $signals,
       next: $next,
+      preflight: {
+        primarySymptom: $primarySymptom,
+        exactArtifactUrl: (if $artifactUrl == "" then null else $artifactUrl end),
+        latestHumanCorrection: (if $latestCorrection == "" then null else $latestCorrection end),
+        chronologyCheckRequired: ($chronologyRequired == "true"),
+        repoHint: (if $repoHint == "" then null else $repoHint end),
+        appHint: (if $appHint == "" then null else $appHint end),
+        frontendProjects: (
+          if $frontend == null then
+            null
+          else
+            {
+              posthog: ($frontend.posthog.top.key // null),
+              sentry: ($frontend.sentry.top.key // null)
+            }
+          end
+        ),
+        requiredChecks: $preflightChecks
+      },
+      fixGate: $fixGate,
       linear: {
         title: $issueTitle
       },
@@ -473,7 +793,8 @@ build_issue_body() {
   local report="$1"
   local plan_json="$2"
   local route_id team project priority analysis_mode owner_display source_url thread_url
-  local actual_result expected_result
+  local actual_result expected_result primary_symptom artifact_url latest_correction
+  local chronology_required repo_hint app_hint posthog_hint sentry_hint
 
   route_id="$(printf '%s\n' "$plan_json" | jq -r '.route.id')"
   team="$(printf '%s\n' "$plan_json" | jq -r '.route.team // empty')"
@@ -485,6 +806,14 @@ build_issue_body() {
   thread_url="$(printf '%s\n' "$plan_json" | jq -r '.report.threadUrl // empty')"
   actual_result="$(printf '%s\n' "$plan_json" | jq -r '.report.actualResult // empty')"
   expected_result="$(printf '%s\n' "$plan_json" | jq -r '.report.expectedResult // empty')"
+  primary_symptom="$(printf '%s\n' "$plan_json" | jq -r '.preflight.primarySymptom // empty')"
+  artifact_url="$(printf '%s\n' "$plan_json" | jq -r '.preflight.exactArtifactUrl // empty')"
+  latest_correction="$(printf '%s\n' "$plan_json" | jq -r '.preflight.latestHumanCorrection // empty')"
+  chronology_required="$(printf '%s\n' "$plan_json" | jq -r '.preflight.chronologyCheckRequired')"
+  repo_hint="$(printf '%s\n' "$plan_json" | jq -r '.preflight.repoHint // empty')"
+  app_hint="$(printf '%s\n' "$plan_json" | jq -r '.preflight.appHint // empty')"
+  posthog_hint="$(printf '%s\n' "$plan_json" | jq -r '.preflight.frontendProjects.posthog // empty')"
+  sentry_hint="$(printf '%s\n' "$plan_json" | jq -r '.preflight.frontendProjects.sentry // empty')"
 
   cat <<EOF
 ## Intake
@@ -499,11 +828,27 @@ build_issue_body() {
 ## Signals
 $(printf '%s\n' "$plan_json" | jq -r '.signals[] | "- " + .')
 
+## Preflight
+- Primary symptom: ${primary_symptom:-[none]}
+- Exact artifact: ${artifact_url:-[none]}
+- Latest human correction: ${latest_correction:-[none]}
+- Chronology check required: ${chronology_required}
+- Repo hint: ${repo_hint:-[none]}
+- App hint: ${app_hint:-[none]}
+- PostHog hint: ${posthog_hint:-[none]}
+- Sentry hint: ${sentry_hint:-[none]}
+$(printf '%s\n' "$plan_json" | jq -r '.preflight.requiredChecks[] | "- Required: " + .')
+
 ## Report Details
 - Source URL: ${source_url:-[none]}
 - Slack thread: ${thread_url:-[none]}
 - Actual result: ${actual_result:-[none]}
 - Expected result: ${expected_result:-[none]}
+
+## Fix Gate
+- Ready for fix recommendation: $(printf '%s\n' "$plan_json" | jq -r '.fixGate.ready')
+$(printf '%s\n' "$plan_json" | jq -r '.fixGate.blockers[]? | "- Blocker: " + .')
+$(printf '%s\n' "$plan_json" | jq -r '.fixGate.advisories[]? | "- Advisory: " + .')
 
 ## Next
 - $(printf '%s\n' "$plan_json" | jq -r '.next')
@@ -609,6 +954,8 @@ cmd_create_issue() {
       signals: $plan.signals,
       next: $plan.next,
       analysisMode: $plan.analysisMode,
+      preflight: $plan.preflight,
+      fixGate: $plan.fixGate,
       report: $plan.report,
       threadAttachment: (
         if $threadUrl == "" then

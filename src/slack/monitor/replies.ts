@@ -4,9 +4,50 @@ import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-refere
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { sendMessageSlack, type SlackSendIdentity } from "../send.js";
+import { parseSlackTarget } from "../targets.js";
+
+function resolveSlackHookChannelId(target: string): string | undefined {
+  try {
+    const parsedTarget = parseSlackTarget(target, { defaultKind: "channel" });
+    return parsedTarget?.kind === "channel" ? parsedTarget.id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function applySlackMessageSendingHooks(params: {
+  target: string;
+  text: string;
+  threadTs?: string;
+  accountId?: string;
+  mediaUrl?: string;
+}): Promise<{ cancelled: boolean; text: string }> {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("message_sending")) {
+    return { cancelled: false, text: params.text };
+  }
+  const hookChannelId = resolveSlackHookChannelId(params.target);
+  const hookResult = await hookRunner.runMessageSending(
+    {
+      to: params.target,
+      content: params.text,
+      metadata: {
+        threadTs: params.threadTs,
+        ...(hookChannelId ? { channelId: hookChannelId } : {}),
+        ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
+      },
+    },
+    { channelId: "slack", accountId: params.accountId ?? undefined },
+  );
+  if (hookResult?.cancel) {
+    return { cancelled: true, text: params.text };
+  }
+  return { cancelled: false, text: hookResult?.content ?? params.text };
+}
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
@@ -26,10 +67,21 @@ export async function deliverReplies(params: {
     const inlineReplyToId = params.replyToMode === "off" ? undefined : payload.replyToId;
     const threadTs = inlineReplyToId ?? params.replyThreadTs;
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-    const text = payload.text ?? "";
-    if (!text && mediaList.length === 0) {
+    const rawText = payload.text ?? "";
+    if (!rawText && mediaList.length === 0) {
       continue;
     }
+    const hookResult = await applySlackMessageSendingHooks({
+      target: params.target,
+      text: rawText,
+      threadTs,
+      accountId: params.accountId,
+      mediaUrl: mediaList[0],
+    });
+    if (hookResult.cancelled) {
+      continue;
+    }
+    const text = hookResult.text;
 
     if (mediaList.length === 0) {
       const trimmed = text.trim();

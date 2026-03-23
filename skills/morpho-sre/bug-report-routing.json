@@ -22,6 +22,10 @@
       "current": "florian",
       "rotation": ["florian"]
     },
+    "curator": {
+      "current": "florian",
+      "rotation": ["florian"]
+    },
     "general": {}
   },
   "routes": [
@@ -85,6 +89,29 @@
       "labels": ["data-path"],
       "matchAny": ["database", "postgres", "replica", "stale data", "stale row", "sql"],
       "next": "Validate one live DB row and provenance before naming a fix."
+    },
+    {
+      "id": "curator-frontend",
+      "team": "CRTR",
+      "ownerPool": "curator",
+      "priority": "2",
+      "analysisMode": "deep",
+      "labels": ["curator-app", "prime-frontend"],
+      "matchAny": [
+        "curator.morpho.org",
+        "curator-v2-app.vercel.app",
+        "curator-api.morpho.org",
+        "curator app",
+        "curator-v2",
+        "curator v2",
+        "curator rpc",
+        "timelock action",
+        "pending timelock",
+        "increase timelock",
+        "decrease timelock",
+        "pendingtimelockcard"
+      ],
+      "next": "Prime frontend repo is morpho-org/prime-monorepo; replay pending-action chronology before UI-label PRs."
     },
     {
       "id": "general-bug",

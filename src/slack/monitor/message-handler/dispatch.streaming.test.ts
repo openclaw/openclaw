@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isSlackStreamingEnabled,
+  resolveSlackReplyStreamingPolicy,
   resolveSlackStreamingThreadHint,
   shouldForceSlackDraftBoundary,
 } from "./dispatch.js";
@@ -15,6 +16,50 @@ describe("slack native streaming defaults", () => {
     expect(isSlackStreamingEnabled({ mode: "block", nativeStreaming: true })).toBe(false);
     expect(isSlackStreamingEnabled({ mode: "progress", nativeStreaming: true })).toBe(false);
     expect(isSlackStreamingEnabled({ mode: "off", nativeStreaming: true })).toBe(false);
+  });
+});
+
+describe("slack incident-thread streaming policy", () => {
+  it("disables previews, partial streams, and progress acks in incident-root-only channels", () => {
+    expect(
+      resolveSlackReplyStreamingPolicy({
+        mode: "partial",
+        nativeStreaming: true,
+        incidentRootOnly: true,
+      }),
+    ).toEqual({
+      previewStreamingEnabled: false,
+      streamingEnabled: false,
+      sendProgressAck: false,
+    });
+  });
+
+  it("keeps normal streaming behavior outside incident-root-only channels", () => {
+    expect(
+      resolveSlackReplyStreamingPolicy({
+        mode: "progress",
+        nativeStreaming: true,
+        incidentRootOnly: false,
+      }),
+    ).toEqual({
+      previewStreamingEnabled: true,
+      streamingEnabled: false,
+      sendProgressAck: true,
+    });
+  });
+
+  it("treats undefined incidentRootOnly as normal non-incident behavior", () => {
+    expect(
+      resolveSlackReplyStreamingPolicy({
+        mode: "partial",
+        nativeStreaming: true,
+        incidentRootOnly: undefined,
+      }),
+    ).toEqual({
+      previewStreamingEnabled: true,
+      streamingEnabled: true,
+      sendProgressAck: false,
+    });
   });
 });
 

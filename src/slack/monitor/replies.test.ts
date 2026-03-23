@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMock = vi.fn();
+const getGlobalHookRunnerMock = vi.fn();
 vi.mock("../send.js", () => ({
   sendMessageSlack: (...args: unknown[]) => sendMock(...args),
+}));
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => getGlobalHookRunnerMock(),
 }));
 
 import { deliverReplies } from "./replies.js";
@@ -22,6 +26,8 @@ function baseParams(overrides?: Record<string, unknown>) {
 describe("deliverReplies identity passthrough", () => {
   beforeEach(() => {
     sendMock.mockReset();
+    getGlobalHookRunnerMock.mockReset();
+    getGlobalHookRunnerMock.mockReturnValue(null);
   });
   it("passes identity to sendMessageSlack for text replies", async () => {
     sendMock.mockResolvedValue(undefined);
@@ -66,5 +72,69 @@ describe("deliverReplies identity passthrough", () => {
 
     expect(sendMock).toHaveBeenCalledOnce();
     expect(sendMock.mock.calls[0][2]).toMatchObject({ mediaLocalRoots });
+  });
+
+  it("runs message_sending hooks before sending monitor replies", async () => {
+    sendMock.mockResolvedValue(undefined);
+    const hookRunner = {
+      hasHooks: vi.fn().mockReturnValue(true),
+      runMessageSending: vi.fn().mockResolvedValue({ content: "*Incident:* ok" }),
+    };
+    getGlobalHookRunnerMock.mockReturnValue(hookRunner);
+
+    await deliverReplies(baseParams({ replyThreadTs: "1111.2222" }));
+
+    expect(hookRunner.hasHooks).toHaveBeenCalledWith("message_sending");
+    expect(hookRunner.runMessageSending).toHaveBeenCalledWith(
+      {
+        to: "C123",
+        content: "hello",
+        metadata: { threadTs: "1111.2222", channelId: "C123" },
+      },
+      { channelId: "slack", accountId: undefined },
+    );
+    expect(sendMock).toHaveBeenCalledOnce();
+    expect(sendMock).toHaveBeenCalledWith(
+      "C123",
+      "*Incident:* ok",
+      expect.objectContaining({ threadTs: "1111.2222" }),
+    );
+  });
+
+  it("drops monitor replies canceled by message_sending hooks", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn().mockReturnValue(true),
+      runMessageSending: vi.fn().mockResolvedValue({ cancel: true }),
+    };
+    getGlobalHookRunnerMock.mockReturnValue(hookRunner);
+
+    await deliverReplies(baseParams({ replyThreadTs: "1111.2222" }));
+
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("passes bare Slack channel ids to hooks when the target has a channel prefix", async () => {
+    sendMock.mockResolvedValue(undefined);
+    const hookRunner = {
+      hasHooks: vi.fn().mockReturnValue(true),
+      runMessageSending: vi.fn().mockResolvedValue({ content: "*Incident:* ok" }),
+    };
+    getGlobalHookRunnerMock.mockReturnValue(hookRunner);
+
+    await deliverReplies(
+      baseParams({
+        target: "channel:C123",
+        replyThreadTs: "1111.2222",
+      }),
+    );
+
+    expect(hookRunner.runMessageSending).toHaveBeenCalledWith(
+      {
+        to: "channel:C123",
+        content: "hello",
+        metadata: { threadTs: "1111.2222", channelId: "C123" },
+      },
+      { channelId: "slack", accountId: undefined },
+    );
   });
 });

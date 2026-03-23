@@ -149,4 +149,47 @@ describe("audit-session-transcripts", () => {
     expect(audit.discussion.exactArtifactReplayBeforeSpeculation).toBe(true);
     expect(audit.discussion.exactArtifactReplayMissed).toBe(false);
   });
+
+  it("flags progress-only chatter and missing retraction after a human correction", () => {
+    const audit = analyze(`
+{"type":"session","id":"s8"}
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Likely cause: UI label mismatch in PendingTimelockCard"}]}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Now let me verify the history ordering."}]}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Let me compose the response."}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"This is not a UI problem. The bug is that the last action is increase timelock to 3, not decrease to 1."}]}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"*Incident:* Pending timelock mismatch. *Likely cause:* stale pending action history."}]}}
+`);
+
+    expect(audit.discussion.progressOnlyReplyCount).toBe(2);
+    expect(audit.discussion.contradictionWithoutRetraction).toBe(true);
+  });
+
+  it("does not count substantive replies that happen to contain the word good", () => {
+    const audit = analyze(`
+{"type":"session","id":"s8b"}
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Good evidence from the replay: the pending action matches the latest onchain state."}]}}
+`);
+
+    expect(audit.discussion.progressOnlyReplyCount).toBe(0);
+  });
+
+  it("does not count substantive replies that use progress words mid-sentence", () => {
+    const audit = analyze(`
+{"type":"session","id":"s8c"}
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"*Incident:* After checking all pod logs, the root cause is OOM in the indexer."}]}}
+`);
+
+    expect(audit.discussion.progressOnlyReplyCount).toBe(0);
+  });
+
+  it("does not flag contradiction recovery when the assistant retracts the stale theory", () => {
+    const audit = analyze(`
+{"type":"session","id":"s9"}
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Likely cause: UI label mismatch in PendingTimelockCard"}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"This is not a UI problem. The bug is that the last action is increase timelock to 3, not decrease to 1."}]}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"*Incident:* Re-scoped.\\nDisproved theory: earlier UI-label theory was wrong.\\n*Evidence:* latest human correction and replay point to chronology, not rendering."}]}}
+`);
+
+    expect(audit.discussion.contradictionWithoutRetraction).toBe(false);
+  });
 });

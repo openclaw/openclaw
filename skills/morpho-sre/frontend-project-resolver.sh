@@ -114,10 +114,15 @@ main() {
 
   require_cmd "$JQ_BIN"
 
-  env_name="$(normalize_env_name "${1:-}")" || die "usage: frontend-project-resolver.sh <dev|prd> <question text>"
+  env_name="$(normalize_env_name "${1:-}")" || die "usage: frontend-project-resolver.sh <dev|prd> [question text]"
   shift || true
-  [[ $# -gt 0 ]] || die "missing question text"
-  prompt_text="$*"
+  if [[ "$#" -gt 0 ]]; then
+    prompt_text="$*"
+  else
+    prompt_text="$(cat)"
+  fi
+  prompt_text="$(trim "$prompt_text")"
+  [[ -n "$prompt_text" ]] || die "missing question text"
   prompt_normalized="$(printf '%s' "$prompt_text" | tr '[:upper:]' '[:lower:]')"
 
   posthog_map_raw="$(resolve_env_value POSTHOG_PROJECT_MAP "$env_name")"

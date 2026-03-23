@@ -4,7 +4,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { DATA_INCIDENT_RE, EXACT_ARTIFACT_RE, extractResolverFamily } from "../src/sre/patterns.ts";
+import {
+  DATA_INCIDENT_RE,
+  EXACT_ARTIFACT_RE,
+  extractResolverFamily,
+  HUMAN_CORRECTION_RE,
+} from "../src/sre/patterns.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -103,6 +108,8 @@ export type TranscriptAudit = {
     exactArtifactReplayMissed: boolean;
     resolverMismatch: boolean;
     dataIncidentWithoutPlaybook: boolean;
+    progressOnlyReplyCount: number;
+    contradictionWithoutRetraction: boolean;
   };
 };
 
@@ -129,6 +136,8 @@ export type TranscriptAuditSummary = {
     sessionsWithKnownIssueSearch: number;
     sessionsWithFalseAccessClaim: number;
     sessionsWithWorkaroundScopeIgnored: number;
+    sessionsWithProgressOnlyReplies: number;
+    sessionsWithContradictionWithoutRetraction: number;
   };
   skills: Array<{ name: string; count: number }>;
   recommendations: string[];
@@ -168,6 +177,8 @@ const NO_ACCESS_RE =
 const CONSUMER_TX_BUG_RE = /\b(offchain|permit2?|approval|allowance|usdt|repay|wallet)\b/i;
 const WORKAROUND_CLUE_RE =
   /\b(toggle(?:d|ing)?\s+off|offchain approval|on-?chain approval|works?\s+by performing approval onchain|succeeded to interact|workaround)\b/i;
+const PROGRESS_ONLY_REPLY_RE =
+  /(?:^|\n)\s*(?:(?:on it|found it|let me verify|checking|now let me|i need to|the script|let me check|let me compose|there are stale changes|the commit was created|pr is created\. let me|now i see some issues|honest answer)\b|good\s*[—-])/i;
 
 type SessionMetadata = {
   model?: string;
@@ -629,6 +640,23 @@ export function analyzeTranscriptRecords(
   const dataIncidentWithoutPlaybook =
     userTexts.some((entry) => DATA_INCIDENT_RE.test(entry.text)) &&
     !retrievalReads.some((entry) => /db-data-incident-playbook\.md$/i.test(entry));
+  const progressOnlyReplyCount = assistantTexts.filter((entry) =>
+    PROGRESS_ONLY_REPLY_RE.test(entry.text),
+  ).length;
+  const latestHumanCorrection = userTexts
+    .toReversed()
+    .find((entry) => HUMAN_CORRECTION_RE.test(entry.text));
+  const contradictionWithoutRetraction =
+    latestHumanCorrection != null &&
+    assistantTexts.some(
+      (entry) =>
+        entry.line > latestHumanCorrection.line &&
+        (SPECULATION_RE.test(entry.text) ||
+          /\b(?:root cause|likely cause|incident|status|evidence)\b/i.test(entry.text)),
+    ) &&
+    !assistantTexts.some(
+      (entry) => entry.line > latestHumanCorrection.line && /\bdisproved theory:/i.test(entry.text),
+    );
 
   return {
     path: pathLabel,
@@ -699,6 +727,8 @@ export function analyzeTranscriptRecords(
       exactArtifactReplayMissed,
       resolverMismatch,
       dataIncidentWithoutPlaybook,
+      progressOnlyReplyCount,
+      contradictionWithoutRetraction,
     },
   };
 }
@@ -851,6 +881,12 @@ export async function auditTranscriptPaths(pathsToScan: string[]): Promise<Trans
   const sessionsWithWorkaroundScopeIgnored = sessions.filter(
     (entry) => entry.discussion.workaroundScopeIgnored,
   ).length;
+  const sessionsWithProgressOnlyReplies = sessions.filter(
+    (entry) => entry.discussion.progressOnlyReplyCount > 0,
+  ).length;
+  const sessionsWithContradictionWithoutRetraction = sessions.filter(
+    (entry) => entry.discussion.contradictionWithoutRetraction,
+  ).length;
 
   if (sessionsWithConfiguredSkills > 0 && sessionsWithPreflight < sessionsWithConfiguredSkills) {
     recommendations.push(
@@ -929,6 +965,16 @@ export async function auditTranscriptPaths(pathsToScan: string[]): Promise<Trans
       "Keep consumer tx investigations anchored on workaround clues and separate the primary app bug from secondary user state.",
     );
   }
+  if (sessionsWithProgressOnlyReplies > 0) {
+    recommendations.push(
+      "Suppress progress-only chatter in incident and bug-report threads; wait until evidence, mitigation, or validation is ready.",
+    );
+  }
+  if (sessionsWithContradictionWithoutRetraction > 0) {
+    recommendations.push(
+      "When a human correction lands, require `Disproved theory:` before any replacement RCA or status update.",
+    );
+  }
 
   return {
     scannedPaths: pathsToScan.length > 0 ? pathsToScan : [path.join("~", ".openclaw", "agents")],
@@ -953,6 +999,8 @@ export async function auditTranscriptPaths(pathsToScan: string[]): Promise<Trans
       sessionsWithKnownIssueSearch,
       sessionsWithFalseAccessClaim,
       sessionsWithWorkaroundScopeIgnored,
+      sessionsWithProgressOnlyReplies,
+      sessionsWithContradictionWithoutRetraction,
     },
     skills: [...skillCounts.entries()]
       .map(([name, count]) => ({ name, count }))

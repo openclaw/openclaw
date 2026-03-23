@@ -9,6 +9,8 @@ trap 'rm -rf "$TMP"' EXIT
 
 FAKE_LINEAR="$TMP/fake-linear.sh"
 FAKE_LOG="$TMP/fake-linear.log"
+FAKE_RESOLVER="$TMP/fake-resolver.sh"
+FAKE_RESOLVER_LOG="$TMP/fake-resolver.log"
 
 cat >"$FAKE_LINEAR" <<'EOF'
 #!/usr/bin/env bash
@@ -44,6 +46,18 @@ esac
 EOF
 chmod +x "$FAKE_LINEAR"
 
+cat >"$FAKE_RESOLVER" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+LOG_FILE="${BUG_REPORT_FAKE_RESOLVER_LOG:?}"
+stdin_text="$(cat)"
+jq -nc --arg env "${1:-}" --arg stdin "$stdin_text" --arg extra "${2:-}" \
+  '{ env: $env, stdin: $stdin, extra: $extra }' >>"$LOG_FILE"
+jq -nc '{ posthog: { top: null }, sentry: { top: null } }'
+EOF
+chmod +x "$FAKE_RESOLVER"
+
 expected_consumer_owner="$(
   jq -r '
     .ownerPools["consumer-app"].current
@@ -77,12 +91,74 @@ printf '%s\n' "$consumer_plan" | jq -e --arg owner "$expected_consumer_owner" '.
 printf '%s\n' "$consumer_plan" | jq -e '.analysisMode == "deep"' >/dev/null
 printf '%s\n' "$consumer_plan" | jq -e '.signals | index("environment:prod") != null' >/dev/null
 printf '%s\n' "$consumer_plan" | jq -e '.signals | any(. == "priority:2")' >/dev/null
+printf '%s\n' "$consumer_plan" | jq -e '.fixGate.ready == true and (.fixGate.blockers | length == 0) and (.fixGate.requiredBlockers | length == 0) and (.fixGate.advisories | length == 2)' >/dev/null
 
 consumer_plan_without_linear="$(
   printf '%s\n' "$consumer_report_text" \
     | env BUG_REPORT_ROUTING_CONFIG="$ROUTING" BUG_REPORT_LINEAR_API="../missing-linear.sh" "$SCRIPT" plan --stdin
 )"
 printf '%s\n' "$consumer_plan_without_linear" | jq -e '.route.id == "consumer-app"' >/dev/null
+
+curator_report_text=$'Title: Increase timelock action shows as decrease timelock action\nEnvironment: prod\nSource URL: https://curator-v2-app.vercel.app/ethereum/vault/0xdeadbeef\nActual result: Pending action shows decrease timelock to 1 even though the latest action should be increase timelock to 3\nExpected result: Latest pending action should show increase timelock to 3\nCorrection: This is not a UI problem unless chronology replay disproves the old pending action theory'
+
+curator_plan="$(
+  printf '%s\n' "$curator_report_text" \
+    | env BUG_REPORT_ROUTING_CONFIG="$ROUTING" "$SCRIPT" plan --stdin
+)"
+
+printf '%s\n' "$curator_plan" | jq -e '.route.id == "curator-frontend" and .route.team == "CRTR"' >/dev/null
+printf '%s\n' "$curator_plan" | jq -e '.preflight.appHint == "curator-v2-app" and .preflight.repoHint == "morpho-org/prime-monorepo"' >/dev/null
+printf '%s\n' "$curator_plan" | jq -e '.preflight.chronologyCheckRequired == true' >/dev/null
+printf '%s\n' "$curator_plan" | jq -e '.fixGate.ready == false' >/dev/null
+printf '%s\n' "$curator_plan" | jq -e '.fixGate.blockers | index("Replay state/history chronology before naming a UI-label or stale-state cause.") != null' >/dev/null
+printf '%s\n' "$curator_plan" | jq -e '.signals | index("chronology:required") != null' >/dev/null
+printf '%s\n' "$curator_plan" | jq -e '.next | contains("Replay exact artifact and state/history chronology before code blame.")' >/dev/null
+
+mixed_case_curator_report_text=$'Title: Increase timelock Action Shows As decrease timelock action\nEnvironment: prod\nSource URL: https://curator-v2-app.vercel.app/ethereum/vault/0xdeadbeef\nActual result: Pending action Shows As decrease timelock to 1 Instead Of increase timelock to 3\nExpected result: Latest pending action should show increase timelock to 3'
+mixed_case_curator_plan="$(
+  printf '%s\n' "$mixed_case_curator_report_text" \
+    | env BUG_REPORT_ROUTING_CONFIG="$ROUTING" "$SCRIPT" plan --stdin
+)"
+printf '%s\n' "$mixed_case_curator_plan" | jq -e '.preflight.chronologyCheckRequired == true' >/dev/null
+
+generic_history_report_text=$'Title: History tab typo\nActual result: History tab label is reapy\nExpected result: History tab should say repay'
+generic_history_plan="$(
+  printf '%s\n' "$generic_history_report_text" \
+    | env BUG_REPORT_ROUTING_CONFIG="$ROUTING" "$SCRIPT" plan --stdin
+)"
+printf '%s\n' "$generic_history_plan" | jq -e '.preflight.chronologyCheckRequired == false' >/dev/null
+
+latest_correction_report_text=$'Title: Pending action mismatch\nActual result: Pending action shows decrease timelock to 1\nExpected result: Latest pending action should show increase timelock to 3\nThis is wrong, old note\nThe bug is the latest pending action chronology'
+latest_correction_plan="$(
+  printf '%s\n' "$latest_correction_report_text" \
+    | env BUG_REPORT_ROUTING_CONFIG="$ROUTING" "$SCRIPT" plan --stdin
+)"
+printf '%s\n' "$latest_correction_plan" | jq -e '.preflight.latestHumanCorrection == "The bug is the latest pending action chronology"' >/dev/null
+
+non_correction_report_text=$'Title: Pending action mismatch\nActual result: Pending action shows decrease timelock to 1\nExpected result: Latest pending action should show increase timelock to 3\nThis is not ready for production yet.'
+non_correction_plan="$(
+  printf '%s\n' "$non_correction_report_text" \
+    | env BUG_REPORT_ROUTING_CONFIG="$ROUTING" "$SCRIPT" plan --stdin
+)"
+printf '%s\n' "$non_correction_plan" | jq -e '.preflight.latestHumanCorrection == null' >/dev/null
+
+resolver_prompt_report=$'Title: Wallet connect resolver prompt handoff\nEnvironment: prod\nSource URL: https://app.morpho.org/ethereum/vault/0xbeef\nActual result: Wallet connect report keeps shell metacharacters $(echo nope) literal\nExpected result: Resolver should read the full report from stdin only'
+resolver_prompt_plan="$(
+  printf '%s\n' "$resolver_prompt_report" \
+    | env \
+        BUG_REPORT_ROUTING_CONFIG="$ROUTING" \
+        BUG_REPORT_FRONTEND_RESOLVER="$FAKE_RESOLVER" \
+        BUG_REPORT_FAKE_RESOLVER_LOG="$FAKE_RESOLVER_LOG" \
+        "$SCRIPT" plan --stdin
+)"
+printf '%s\n' "$resolver_prompt_plan" | jq -e '.report.actualResult == "Wallet connect report keeps shell metacharacters $(echo nope) literal"' >/dev/null
+printf '%s\n' "$resolver_prompt_plan" | jq -e '.route.id == "consumer-app"' >/dev/null
+jq -se '
+  length == 1
+  and .[0].env == "prd"
+  and .[0].extra == ""
+  and (.[0].stdin | contains("Wallet connect report keeps shell metacharacters $(echo nope) literal"))
+' "$FAKE_RESOLVER_LOG" >/dev/null
 
 consumer_issue="$(
   env \
@@ -131,6 +207,25 @@ printf '%s\n' "$consumer_issue_attach_warn" | jq -e '.issue.identifier == "PLA-9
 printf '%s\n' "$consumer_issue_attach_warn" | jq -e '.threadAttachment.attached == false' >/dev/null
 rg -F 'warning: failed to attach Slack thread for PLA-900 (issue already created)' "$TMP/attach-warn.err" >/dev/null
 rg -F 'attach failed' "$TMP/attach-warn.err" >/dev/null
+
+curator_issue="$(
+  env \
+    BUG_REPORT_ROUTING_CONFIG="$ROUTING" \
+    BUG_REPORT_LINEAR_API="$FAKE_LINEAR" \
+    BUG_REPORT_FAKE_LOG="$FAKE_LOG" \
+    "$SCRIPT" create-issue --text "$curator_report_text"
+)"
+
+printf '%s\n' "$curator_issue" | jq -e '.route.id == "curator-frontend" and .preflight.chronologyCheckRequired == true' >/dev/null
+printf '%s\n' "$curator_issue" | jq -e '.fixGate.ready == false' >/dev/null
+
+jq -se '
+  map(
+    select(.args[0] == "issue" and .args[1] == "create")
+    | (.args | index("--team")) as $team_idx
+    | $team_idx != null and .args[$team_idx + 1] == "CRTR"
+  ) | any
+' "$FAKE_LOG" >/dev/null
 
 generic_report="$TMP/generic-report.txt"
 cat >"$generic_report" <<'EOF'

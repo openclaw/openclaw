@@ -59,6 +59,14 @@ jq -e '
 ' "$CONFIG" >/dev/null
 
 jq -e '
+  .channels.slack.channels["#bug-report"].systemPrompt | contains("replay the exact artifact and prove state/history chronology before code blame")
+' "$CONFIG" >/dev/null
+
+jq -e '
+  .channels.slack.channels["#bug-report"].systemPrompt | contains("Do not name a UI-label/rendering cause or suggest a fix PR until you have exact artifact replay")
+' "$CONFIG" >/dev/null
+
+jq -e '
   .channels.slack.channels["#platform-monitoring"].systemPrompt == "__START_GATEWAY_MONITORING_PROMPT__"
 ' "$CONFIG" >/dev/null
 

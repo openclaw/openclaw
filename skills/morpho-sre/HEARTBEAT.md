@@ -98,6 +98,7 @@ When a BetterStack alert/update arrives in monitored Slack channels (`#staging-i
 - Keep unrelated warnings under `*Also watching:*`.
 - Never lead with routing hints, fingerprint changes, raw section names, signal counts, or `primary/supporting` namespace jargon.
 - Never stream drafts, progress chatter, tool JSON, exec-approval warnings, or command-construction failures into any Slack thread.
+- In `incidentRootOnly` channels, native preview streaming, partial reply streaming, and progress acknowledgements stay disabled by design; operators should expect one final incident-format reply once evidence is ready.
 - Never send progress-only replies (`On it`, `Found it`, `Let me verify`, `Checking…`) in any Slack thread.
 - Content gate anti-patterns — these are ALWAYS progress-only and must NEVER be posted as standalone messages: "Now let me...", "I need to...", "Good —...", "The script...", "Let me check...", "Let me compose...", "There are stale changes...", "The commit was created...", "PR is created. Let me...", "Now I see some issues...", "Honest answer:...". Buffer all intermediate work into the next substantive incident-format reply.
 - Meta-response handling: if a human asks about the bot's own capabilities, model, or environment, fold the answer into the next incident-format reply under a `*Context:*` section — do not send a standalone conversational message.

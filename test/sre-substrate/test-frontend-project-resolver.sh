@@ -25,6 +25,17 @@ interface_result="$(
 printf '%s\n' "$interface_result" | jq -e '.posthog.top.key == "interface-v2"' >/dev/null
 printf '%s\n' "$interface_result" | jq -e '.sentry.top.key == "interface-v2"' >/dev/null
 
+stdin_result="$(
+  printf '%s' 'consumer app interface v2 login broken' \
+    | env \
+        POSTHOG_PROJECT_MAP_PRD='{"landing":{"id":"111","aliases":["landing","morpho.org","marketing"]},"interface-v2":{"id":"222","aliases":["interface v2","interface-v2","consumer app","app.morpho.org"]}}' \
+        SENTRY_PROJECT_MAP_PRD='{"landing":{"id":"11","aliases":["landing","morpho.org","marketing"]},"interface-v2":{"id":"22","aliases":["interface v2","interface-v2","consumer app","app.morpho.org"]}}' \
+        "${SCRIPT_PATH}" prd
+)"
+
+printf '%s\n' "$stdin_result" | jq -e '.posthog.top.key == "interface-v2"' >/dev/null
+printf '%s\n' "$stdin_result" | jq -e '.sentry.top.key == "interface-v2"' >/dev/null
+
 fallback="$(
   POSTHOG_PROJECT_ID_DEV='999' \
   SENTRY_PROJECT_SLUGS_DEV='landing,interface-v2' \
