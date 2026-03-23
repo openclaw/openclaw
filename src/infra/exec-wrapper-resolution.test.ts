@@ -40,6 +40,7 @@ describe("normalizeExecutableToken", () => {
 describe("wrapper classification", () => {
   test.each([
     { token: "sudo", dispatch: true, shell: false },
+    { token: "time", dispatch: true, shell: false },
     { token: "timeout.exe", dispatch: true, shell: false },
     { token: "bash", dispatch: false, shell: true },
     { token: "pwsh.exe", dispatch: false, shell: true },
@@ -119,6 +120,10 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
       expected: { kind: "unwrapped", wrapper: "stdbuf", argv: ["bash", "-lc", "echo hi"] },
     },
     {
+      argv: ["time", "-p", "bash", "-lc", "echo hi"],
+      expected: { kind: "unwrapped", wrapper: "time", argv: ["bash", "-lc", "echo hi"] },
+    },
+    {
       argv: ["timeout", "--signal=TERM", "5s", "bash", "-lc", "echo hi"],
       expected: { kind: "unwrapped", wrapper: "timeout", argv: ["bash", "-lc", "echo hi"] },
     },
@@ -136,6 +141,46 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
 });
 
 describe("resolveDispatchWrapperExecutionPlan", () => {
+  test.each([
+    {
+      argv: ["nice", "-n", "5", "bash", "-lc", "echo hi"],
+      wrapper: "nice",
+      effectiveArgv: ["bash", "-lc", "echo hi"],
+    },
+    {
+      argv: ["nohup", "--", "bash", "-lc", "echo hi"],
+      wrapper: "nohup",
+      effectiveArgv: ["bash", "-lc", "echo hi"],
+    },
+    {
+      argv: ["stdbuf", "-o", "L", "bash", "-lc", "echo hi"],
+      wrapper: "stdbuf",
+      effectiveArgv: ["bash", "-lc", "echo hi"],
+    },
+    {
+      argv: ["time", "-p", "bash", "-lc", "echo hi"],
+      wrapper: "time",
+      effectiveArgv: ["bash", "-lc", "echo hi"],
+    },
+    {
+      argv: ["timeout", "--signal=TERM", "5s", "bash", "-lc", "echo hi"],
+      wrapper: "timeout",
+      effectiveArgv: ["bash", "-lc", "echo hi"],
+    },
+  ])("keeps transparent wrapper handling in sync for %s", ({ argv, wrapper, effectiveArgv }) => {
+    expect(isDispatchWrapperExecutable(wrapper)).toBe(true);
+    expect(unwrapKnownDispatchWrapperInvocation(argv)).toEqual({
+      kind: "unwrapped",
+      wrapper,
+      argv: effectiveArgv,
+    });
+    expect(resolveDispatchWrapperExecutionPlan(argv)).toEqual({
+      argv: effectiveArgv,
+      wrappers: [wrapper],
+      policyBlocked: false,
+    });
+  });
+
   test("unwraps transparent wrapper chains", () => {
     expect(
       resolveDispatchWrapperExecutionPlan(["nohup", "nice", "-n", "5", "bash", "-lc", "echo hi"]),
