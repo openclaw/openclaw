@@ -43,6 +43,7 @@ function routesOpenRouterToProvider(
     !Array.isArray(compat.openRouterRouting)
       ? (compat.openRouterRouting as {
           allow_fallbacks?: unknown;
+          allowFallbacks?: unknown;
           only?: unknown;
           order?: unknown;
           providers?: unknown;
@@ -60,7 +61,7 @@ function routesOpenRouterToProvider(
     return true;
   }
 
-  const allowFallbacks = routing?.allow_fallbacks;
+  const allowFallbacks = routing?.allowFallbacks ?? routing?.allow_fallbacks;
   const order = normalizeRoutingList(routing?.order);
   if (allowFallbacks === false && order.length === 1 && order[0] === providerId) {
     return true;

@@ -466,6 +466,51 @@ describe("extra-params: OpenAI-compatible tool payloads", () => {
     expect(payload.tools?.[0]?.function).not.toHaveProperty("strict");
   });
 
+  it("keeps function.strict when an OpenRouter route disables fallbacks with allowFallbacks", () => {
+    const payload = runExtraParamsCase({
+      applyProvider: "openrouter",
+      applyModelId: "auto",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/auto": {
+                params: {
+                  provider: {
+                    order: ["openai"],
+                    allowFallbacks: false,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      model: makeModel({
+        api: "openai-completions",
+        provider: "openrouter",
+        id: "auto",
+        baseUrl: "https://openrouter.ai/api/v1",
+      }),
+      payload: {
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "web_search",
+              parameters: { type: "object", properties: {} },
+              strict: true,
+            },
+          },
+        ],
+      },
+    }).payload as {
+      tools?: Array<{ function?: Record<string, unknown> }>;
+    };
+
+    expect(payload.tools?.[0]?.function?.strict).toBe(true);
+  });
+
   it("strips function.strict when an OpenRouter OpenAI-backed route explicitly disables strict mode", () => {
     const payload = runExtraParamsCase({
       applyProvider: "openrouter",
