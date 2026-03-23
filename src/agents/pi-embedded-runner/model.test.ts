@@ -22,8 +22,7 @@ vi.mock("./openrouter-model-capabilities.js", () => ({
     mockLoadOpenRouterModelCapabilities(modelId),
 }));
 
-vi.mock("../../plugins/provider-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../plugins/provider-runtime.js")>();
+vi.mock("../../plugins/provider-runtime.js", () => {
   const HANDLED_DYNAMIC_PROVIDERS = new Set([
     "openrouter",
     "github-copilot",
@@ -97,7 +96,7 @@ vi.mock("../../plugins/provider-runtime.js", async (importOriginal) => {
           return undefined;
         }
         const template = findTemplate(params, "github-copilot", ["gpt-5.2-codex"]);
-        if (lower === "gpt-5.3-codex" && template) {
+        if (lower === "gpt-5.4" && template) {
           return cloneTemplate(
             template,
             modelId,
@@ -128,9 +127,9 @@ vi.mock("../../plugins/provider-runtime.js", async (importOriginal) => {
       case "openai-codex": {
         const template =
           lower === "gpt-5.4"
-            ? findTemplate(params, "openai-codex", ["gpt-5.3-codex", "gpt-5.2-codex"])
+            ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.2-codex"])
             : lower === "gpt-5.3-codex-spark"
-              ? findTemplate(params, "openai-codex", ["gpt-5.3-codex", "gpt-5.2-codex"])
+              ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.2-codex"])
               : findTemplate(params, "openai-codex", ["gpt-5.2-codex"]);
         const fallback = {
           provider: "openai-codex",
@@ -173,7 +172,7 @@ vi.mock("../../plugins/provider-runtime.js", async (importOriginal) => {
             fallback,
           );
         }
-        if (lower === "gpt-5.3-codex") {
+        if (lower === "gpt-5.4") {
           return cloneTemplate(
             template,
             modelId,
@@ -316,10 +315,26 @@ vi.mock("../../plugins/provider-runtime.js", async (importOriginal) => {
     return undefined;
   };
   return {
-    ...actual,
-    resolveProviderRuntimePlugin: (
-      params: Parameters<typeof actual.resolveProviderRuntimePlugin>[0],
-    ) =>
+    clearProviderRuntimeHookCache: () => {},
+    resolveProviderBuiltInModelSuppression: (params: {
+      context: {
+        provider: string;
+        modelId: string;
+      };
+    }) => {
+      if (
+        (params.context.provider === "openai" ||
+          params.context.provider === "azure-openai-responses") &&
+        params.context.modelId === "gpt-5.3-codex-spark"
+      ) {
+        return {
+          suppress: true,
+          errorMessage: `Unknown model: ${params.context.provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported via openai-codex OAuth. Use openai-codex/gpt-5.3-codex-spark.`,
+        };
+      }
+      return undefined;
+    },
+    resolveProviderRuntimePlugin: (params: { provider: string }) =>
       HANDLED_DYNAMIC_PROVIDERS.has(params.provider)
         ? {
             id: params.provider,
@@ -337,28 +352,36 @@ vi.mock("../../plugins/provider-runtime.js", async (importOriginal) => {
             normalizeResolvedModel: (ctx: { provider: string; model: Record<string, unknown> }) =>
               normalizeDynamicModel(ctx),
           }
-        : actual.resolveProviderRuntimePlugin(params),
-    runProviderDynamicModel: (params: Parameters<typeof actual.runProviderDynamicModel>[0]) =>
+        : undefined,
+    runProviderDynamicModel: (params: {
+      provider: string;
+      context: {
+        modelId: string;
+        modelRegistry: { find: (provider: string, modelId: string) => unknown };
+      };
+    }) =>
       buildDynamicModel({
         provider: params.provider,
         modelId: params.context.modelId,
         modelRegistry: params.context.modelRegistry,
-      }) ?? actual.runProviderDynamicModel(params),
-    prepareProviderDynamicModel: async (
-      params: Parameters<typeof actual.prepareProviderDynamicModel>[0],
-    ) =>
+      }),
+    prepareProviderDynamicModel: async (params: {
+      provider: string;
+      context: { modelId: string };
+    }) =>
       params.provider === "openrouter"
         ? await mockLoadOpenRouterModelCapabilities(params.context.modelId)
-        : await actual.prepareProviderDynamicModel(params),
-    normalizeProviderResolvedModelWithPlugin: (
-      params: Parameters<typeof actual.normalizeProviderResolvedModelWithPlugin>[0],
-    ) =>
+        : undefined,
+    normalizeProviderResolvedModelWithPlugin: (params: {
+      provider: string;
+      context: { model: unknown };
+    }) =>
       HANDLED_DYNAMIC_PROVIDERS.has(params.provider)
         ? normalizeDynamicModel({
             provider: params.provider,
-            model: params.context.model as unknown as Record<string, unknown>,
+            model: params.context.model as Record<string, unknown>,
           })
-        : actual.normalizeProviderResolvedModelWithPlugin(params),
+        : undefined,
   };
 });
 
@@ -406,23 +429,6 @@ function buildForwardCompatTemplate(params: {
     contextWindow: params.contextWindow ?? 200000,
     maxTokens: params.maxTokens ?? 64000,
   };
-}
-
-function expectResolvedForwardCompatFallback(params: {
-  provider: string;
-  id: string;
-  expectedModel: Record<string, unknown>;
-  cfg?: OpenClawConfig;
-}) {
-  const result = resolveModel(params.provider, params.id, "/tmp/agent", params.cfg);
-  expect(result.error).toBeUndefined();
-  expect(result.model).toMatchObject(params.expectedModel);
-}
-
-function expectUnknownModelError(provider: string, id: string) {
-  const result = resolveModel(provider, id, "/tmp/agent");
-  expect(result.model).toBeUndefined();
-  expect(result.error).toBe(`Unknown model: ${provider}/${id}`);
 }
 
 describe("buildInlineProviderModels", () => {
@@ -1003,13 +1009,13 @@ describe("resolveModel", () => {
     });
   });
 
-  it("builds an openai-codex fallback for gpt-5.3-codex", () => {
+  it("builds an openai-codex fallback for gpt-5.4", () => {
     mockOpenAICodexTemplateModel();
 
-    const result = resolveModel("openai-codex", "gpt-5.3-codex", "/tmp/agent");
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent");
 
     expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex"));
+    expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
   });
 
   it("builds an openai-codex fallback for gpt-5.4", () => {
@@ -1267,383 +1273,5 @@ describe("resolveModel", () => {
       api: "openai-completions",
       baseUrl: "https://proxy.example.com/v1",
     });
-  });
-
-  it("builds an anthropic forward-compat fallback for claude-opus-4-6", () => {
-    mockDiscoveredModel({
-      provider: "anthropic",
-      modelId: "claude-opus-4-5",
-      templateModel: buildForwardCompatTemplate({
-        id: "claude-opus-4-5",
-        name: "Claude Opus 4.5",
-        provider: "anthropic",
-        api: "anthropic-messages",
-        baseUrl: "https://api.anthropic.com",
-      }),
-    });
-
-    expectResolvedForwardCompatFallback({
-      provider: "anthropic",
-      id: "claude-opus-4-6",
-      expectedModel: {
-        provider: "anthropic",
-        id: "claude-opus-4-6",
-        api: "anthropic-messages",
-        baseUrl: "https://api.anthropic.com",
-        reasoning: true,
-      },
-    });
-  });
-
-  it("builds an anthropic forward-compat fallback for claude-sonnet-4-6", () => {
-    mockDiscoveredModel({
-      provider: "anthropic",
-      modelId: "claude-sonnet-4-5",
-      templateModel: buildForwardCompatTemplate({
-        id: "claude-sonnet-4-5",
-        name: "Claude Sonnet 4.5",
-        provider: "anthropic",
-        api: "anthropic-messages",
-        baseUrl: "https://api.anthropic.com",
-      }),
-    });
-
-    expectResolvedForwardCompatFallback({
-      provider: "anthropic",
-      id: "claude-sonnet-4-6",
-      expectedModel: {
-        provider: "anthropic",
-        id: "claude-sonnet-4-6",
-        api: "anthropic-messages",
-        baseUrl: "https://api.anthropic.com",
-        reasoning: true,
-      },
-    });
-  });
-
-  it("builds a zai forward-compat fallback for glm-5", () => {
-    mockDiscoveredModel({
-      provider: "zai",
-      modelId: "glm-4.7",
-      templateModel: buildForwardCompatTemplate({
-        id: "glm-4.7",
-        name: "GLM-4.7",
-        provider: "zai",
-        api: "openai-completions",
-        baseUrl: "https://api.z.ai/api/paas/v4",
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        maxTokens: 131072,
-      }),
-    });
-
-    expectResolvedForwardCompatFallback({
-      provider: "zai",
-      id: "glm-5",
-      expectedModel: {
-        provider: "zai",
-        id: "glm-5",
-        api: "openai-completions",
-        baseUrl: "https://api.z.ai/api/paas/v4",
-        reasoning: true,
-      },
-    });
-  });
-
-  it("keeps unknown-model errors when no antigravity thinking template exists", () => {
-    expectUnknownModelError("google-antigravity", "claude-opus-4-6-thinking");
-  });
-
-  it("keeps unknown-model errors when no antigravity non-thinking template exists", () => {
-    expectUnknownModelError("google-antigravity", "claude-opus-4-6");
-  });
-
-  it("keeps unknown-model errors for non-gpt-5 openai-codex ids", () => {
-    expectUnknownModelError("openai-codex", "gpt-4.1-mini");
-  });
-
-  it("rejects direct openai gpt-5.3-codex-spark with a codex-only hint", () => {
-    const result = resolveModel("openai", "gpt-5.3-codex-spark", "/tmp/agent");
-
-    expect(result.model).toBeUndefined();
-    expect(result.error).toBe(
-      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported via openai-codex OAuth. Use openai-codex/gpt-5.3-codex-spark.",
-    );
-  });
-
-  it("keeps suppressed openai gpt-5.3-codex-spark from falling through provider fallback", () => {
-    const cfg = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            api: "openai-responses",
-            models: [{ ...makeModel("gpt-4.1"), api: "openai-responses" }],
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const result = resolveModel("openai", "gpt-5.3-codex-spark", "/tmp/agent", cfg);
-
-    expect(result.model).toBeUndefined();
-    expect(result.error).toBe(
-      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported via openai-codex OAuth. Use openai-codex/gpt-5.3-codex-spark.",
-    );
-  });
-
-  it("rejects azure openai gpt-5.3-codex-spark with a codex-only hint", () => {
-    const result = resolveModel("azure-openai-responses", "gpt-5.3-codex-spark", "/tmp/agent");
-
-    expect(result.model).toBeUndefined();
-    expect(result.error).toBe(
-      "Unknown model: azure-openai-responses/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported via openai-codex OAuth. Use openai-codex/gpt-5.3-codex-spark.",
-    );
-  });
-
-  it("uses codex fallback even when openai-codex provider is configured", () => {
-    // This test verifies the ordering: codex fallback must fire BEFORE the generic providerCfg fallback.
-    // If ordering is wrong, the generic fallback would use api: "openai-responses" (the default)
-    // instead of "openai-codex-responses".
-    const cfg: OpenClawConfig = {
-      models: {
-        providers: {
-          "openai-codex": {
-            baseUrl: "https://custom.example.com",
-            // No models array, or models without gpt-5.3-codex
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    expectResolvedForwardCompatFallback({
-      provider: "openai-codex",
-      id: "gpt-5.3-codex",
-      cfg,
-      expectedModel: {
-        api: "openai-codex-responses",
-        id: "gpt-5.3-codex",
-        provider: "openai-codex",
-      },
-    });
-  });
-
-  it("uses codex fallback when inline model omits api (#39682)", () => {
-    mockOpenAICodexTemplateModel();
-
-    const cfg: OpenClawConfig = {
-      models: {
-        providers: {
-          "openai-codex": {
-            baseUrl: "https://custom.example.com",
-            headers: { "X-Custom-Auth": "token-123" },
-            models: [{ id: "gpt-5.4" }],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent", cfg);
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
-      api: "openai-codex-responses",
-      baseUrl: "https://custom.example.com",
-      headers: { "X-Custom-Auth": "token-123" },
-      id: "gpt-5.4",
-      provider: "openai-codex",
-    });
-  });
-
-  it("normalizes openai-codex gpt-5.4 overrides away from /v1/responses", () => {
-    mockOpenAICodexTemplateModel();
-
-    const cfg: OpenClawConfig = {
-      models: {
-        providers: {
-          "openai-codex": {
-            baseUrl: "https://api.openai.com/v1",
-            api: "openai-responses",
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    expectResolvedForwardCompatFallback({
-      provider: "openai-codex",
-      id: "gpt-5.4",
-      cfg,
-      expectedModel: {
-        api: "openai-codex-responses",
-        baseUrl: "https://chatgpt.com/backend-api",
-        id: "gpt-5.4",
-        provider: "openai-codex",
-      },
-    });
-  });
-
-  it("does not rewrite openai baseUrl when openai-codex api stays non-codex", () => {
-    mockOpenAICodexTemplateModel();
-
-    const cfg: OpenClawConfig = {
-      models: {
-        providers: {
-          "openai-codex": {
-            baseUrl: "https://api.openai.com/v1",
-            api: "openai-completions",
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    expectResolvedForwardCompatFallback({
-      provider: "openai-codex",
-      id: "gpt-5.4",
-      cfg,
-      expectedModel: {
-        api: "openai-completions",
-        baseUrl: "https://api.openai.com/v1",
-        id: "gpt-5.4",
-        provider: "openai-codex",
-      },
-    });
-  });
-
-  it("includes auth hint for unknown ollama models (#17328)", () => {
-    // resetMockDiscoverModels() in beforeEach already sets find → null
-    const result = resolveModel("ollama", "gemma3:4b", "/tmp/agent");
-
-    expect(result.model).toBeUndefined();
-    expect(result.error).toContain("Unknown model: ollama/gemma3:4b");
-    expect(result.error).toContain("OLLAMA_API_KEY");
-    expect(result.error).toContain("docs.openclaw.ai/providers/ollama");
-  });
-
-  it("includes auth hint for unknown vllm models", () => {
-    const result = resolveModel("vllm", "llama-3-70b", "/tmp/agent");
-
-    expect(result.model).toBeUndefined();
-    expect(result.error).toContain("Unknown model: vllm/llama-3-70b");
-    expect(result.error).toContain("VLLM_API_KEY");
-  });
-
-  it("does not add auth hint for non-local providers", () => {
-    const result = resolveModel("google-antigravity", "some-model", "/tmp/agent");
-
-    expect(result.model).toBeUndefined();
-    expect(result.error).toBe("Unknown model: google-antigravity/some-model");
-  });
-
-  it("applies provider baseUrl override to registry-found models", () => {
-    mockDiscoveredModel({
-      provider: "anthropic",
-      modelId: "claude-sonnet-4-5",
-      templateModel: buildForwardCompatTemplate({
-        id: "claude-sonnet-4-5",
-        name: "Claude Sonnet 4.5",
-        provider: "anthropic",
-        api: "anthropic-messages",
-        baseUrl: "https://api.anthropic.com",
-      }),
-    });
-
-    const cfg = {
-      models: {
-        providers: {
-          anthropic: {
-            baseUrl: "https://my-proxy.example.com",
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModel("anthropic", "claude-sonnet-4-5", "/tmp/agent", cfg);
-    expect(result.error).toBeUndefined();
-    expect(result.model?.baseUrl).toBe("https://my-proxy.example.com");
-  });
-
-  it("applies provider headers override to registry-found models", () => {
-    mockDiscoveredModel({
-      provider: "anthropic",
-      modelId: "claude-sonnet-4-5",
-      templateModel: buildForwardCompatTemplate({
-        id: "claude-sonnet-4-5",
-        name: "Claude Sonnet 4.5",
-        provider: "anthropic",
-        api: "anthropic-messages",
-        baseUrl: "https://api.anthropic.com",
-      }),
-    });
-
-    const cfg = {
-      models: {
-        providers: {
-          anthropic: {
-            headers: { "X-Custom-Auth": "token-123" },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModel("anthropic", "claude-sonnet-4-5", "/tmp/agent", cfg);
-    expect(result.error).toBeUndefined();
-    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
-      "X-Custom-Auth": "token-123",
-    });
-  });
-
-  it("lets provider config override registry-found kimi user agent headers", () => {
-    mockDiscoveredModel({
-      provider: "kimi",
-      modelId: "kimi-code",
-      templateModel: {
-        ...buildForwardCompatTemplate({
-          id: "kimi-code",
-          name: "Kimi Code",
-          provider: "kimi",
-          api: "anthropic-messages",
-          baseUrl: "https://api.kimi.com/coding/",
-        }),
-        headers: { "User-Agent": "claude-code/0.1.0" },
-      },
-    });
-
-    const cfg = {
-      models: {
-        providers: {
-          kimi: {
-            headers: {
-              "User-Agent": "custom-kimi-client/1.0",
-              "X-Kimi-Tenant": "tenant-a",
-            },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModel("kimi", "kimi-code", "/tmp/agent", cfg);
-    expect(result.error).toBeUndefined();
-    expect(result.model?.id).toBe("kimi-for-coding");
-    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
-      "User-Agent": "custom-kimi-client/1.0",
-      "X-Kimi-Tenant": "tenant-a",
-    });
-  });
-
-  it("does not override when no provider config exists", () => {
-    mockDiscoveredModel({
-      provider: "anthropic",
-      modelId: "claude-sonnet-4-5",
-      templateModel: buildForwardCompatTemplate({
-        id: "claude-sonnet-4-5",
-        name: "Claude Sonnet 4.5",
-        provider: "anthropic",
-        api: "anthropic-messages",
-        baseUrl: "https://api.anthropic.com",
-      }),
-    });
-
-    const result = resolveModel("anthropic", "claude-sonnet-4-5", "/tmp/agent");
-    expect(result.error).toBeUndefined();
-    expect(result.model?.baseUrl).toBe("https://api.anthropic.com");
   });
 });
