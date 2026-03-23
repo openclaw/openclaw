@@ -179,7 +179,6 @@ export async function enqueueDelivery(
  * by {@link loadPendingDeliveries} on the next startup without re-sending.
  */
 export async function ackDelivery(id: string, stateDir?: string): Promise<void> {
-  inFlightDeliveryIds.delete(id);
   const { jsonPath, deliveredPath } = resolveQueueEntryPaths(id, stateDir);
   try {
     // Phase 1: atomic rename marks the delivery as complete.
@@ -190,12 +189,17 @@ export async function ackDelivery(id: string, stateDir?: string): Promise<void> 
       // .json already gone — may have been renamed by a previous ack attempt.
       // Try to clean up a leftover .delivered marker if present.
       await unlinkBestEffort(deliveredPath);
+      inFlightDeliveryIds.delete(id);
       return;
     }
     throw err;
   }
   // Phase 2: remove the marker file.
   await unlinkBestEffort(deliveredPath);
+  // Clear in-flight only after the queue entry is successfully removed.
+  // If the rename fails transiently, the entry stays protected from the
+  // recovery timer so it won't be resent while the original send succeeded.
+  inFlightDeliveryIds.delete(id);
 }
 
 /** Update a queue entry after a failed delivery attempt. */
