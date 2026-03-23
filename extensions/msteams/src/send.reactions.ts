@@ -54,8 +54,12 @@ export type ReactMessageMSTeamsResult = {
  * Add a reaction to an MS Teams message via the Graph API.
  *
  * MS Teams Bot Framework does not expose a "send reaction" verb; outbound reactions
- * must go through the Graph API `/chats/{chatId}/messages/{messageId}/reactions`.
- * This requires the `ChatMessage.Send` or `Chat.ReadWrite` application permission.
+ * must go through the Graph API `/chats/{chatId}/messages/{messageId}/setReaction`.
+ * This requires the `ChatMessage.Send` or `Chat.ReadWrite` **Delegated** permission.
+ *
+ * LIMITATION: `setReaction`/`unsetReaction` only supports Delegated permissions.
+ * The bot currently uses Application credentials, so outbound reactions will not work
+ * until delegated-auth support is implemented. The code is kept here for future use.
  *
  * Note: Only conversations with Graph-compatible IDs (19:xxx@thread.*) are supported.
  * Personal DM conversations with Bot Framework IDs (a:xxx) cannot use this endpoint
@@ -68,7 +72,9 @@ export async function reactMessageMSTeams(
   const core = getMSTeamsRuntime();
   const log = core.logging.getChildLogger({ name: "msteams:react" });
 
-  const conversationId = normalizeMSTeamsConversationId(to.trim());
+  // Strip conversation: prefix if present — Graph API uses the bare chat ID.
+  const rawTo = to.trim().replace(/^conversation:/, "");
+  const conversationId = normalizeMSTeamsConversationId(rawTo);
   if (!isGraphCompatibleConversationId(conversationId)) {
     log.warn?.(
       "MS Teams reactions via Graph API require a 19:xxx@thread conversation ID; " +
@@ -81,11 +87,19 @@ export async function reactMessageMSTeams(
     );
   }
 
+  // LIMITATION: setReaction only works with Delegated permissions; Application credentials
+  // (used by the bot) are not supported. This call will fail until delegated auth is added.
+  log.warn?.(
+    "MS Teams setReaction requires Delegated permissions; Application credentials are not supported. " +
+      "Outbound reactions will not work until delegated-auth support is implemented.",
+    { conversationId, activityId },
+  );
+
   const reactionType = resolveTeamsReactionType(emoji);
   const token = await resolveGraphToken(cfg);
 
-  // POST /chats/{chatId}/messages/{messageId}/reactions
-  const path = `/chats/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(activityId)}/reactions`;
+  // POST /chats/{chatId}/messages/{messageId}/setReaction
+  const path = `/chats/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(activityId)}/setReaction`;
   await fetchGraphJson<unknown>({
     token,
     path,
@@ -111,7 +125,11 @@ export type RemoveReactionMSTeamsParams = {
 /**
  * Remove a reaction from an MS Teams message via the Graph API.
  *
- * Uses DELETE /chats/{chatId}/messages/{messageId}/reactions/{reactionType}.
+ * Uses POST /chats/{chatId}/messages/{messageId}/unsetReaction with body {"reactionType": "..."}.
+ *
+ * LIMITATION: `unsetReaction` only supports Delegated permissions.
+ * The bot currently uses Application credentials, so outbound reaction removal will not work
+ * until delegated-auth support is implemented.
  */
 export async function removeReactionMSTeams(
   params: RemoveReactionMSTeamsParams,
@@ -120,7 +138,9 @@ export async function removeReactionMSTeams(
   const core = getMSTeamsRuntime();
   const log = core.logging.getChildLogger({ name: "msteams:react" });
 
-  const conversationId = normalizeMSTeamsConversationId(to.trim());
+  // Strip conversation: prefix if present — Graph API uses the bare chat ID.
+  const rawTo = to.trim().replace(/^conversation:/, "");
+  const conversationId = normalizeMSTeamsConversationId(rawTo);
   if (!isGraphCompatibleConversationId(conversationId)) {
     log.warn?.("MS Teams reactions via Graph API require a 19:xxx@thread conversation ID", {
       conversationId,
@@ -130,15 +150,24 @@ export async function removeReactionMSTeams(
     );
   }
 
+  // LIMITATION: unsetReaction only works with Delegated permissions; Application credentials
+  // (used by the bot) are not supported. This call will fail until delegated auth is added.
+  log.warn?.(
+    "MS Teams unsetReaction requires Delegated permissions; Application credentials are not supported. " +
+      "Outbound reaction removal will not work until delegated-auth support is implemented.",
+    { conversationId, activityId },
+  );
+
   const reactionType = resolveTeamsReactionType(emoji);
   const token = await resolveGraphToken(cfg);
 
-  // DELETE /chats/{chatId}/messages/{messageId}/reactions/{reactionType}
-  const path = `/chats/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(activityId)}/reactions/${encodeURIComponent(reactionType)}`;
+  // POST /chats/{chatId}/messages/{messageId}/unsetReaction
+  const path = `/chats/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(activityId)}/unsetReaction`;
   await fetchGraphJson<unknown>({
     token,
     path,
-    method: "DELETE",
+    method: "POST",
+    body: { reactionType },
   });
 
   log.debug?.("reaction removed", { conversationId, activityId, reactionType });

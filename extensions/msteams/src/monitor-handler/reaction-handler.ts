@@ -3,6 +3,7 @@ import {
   isDangerousNameMatchingEnabled,
   resolveEffectiveAllowFromLists,
   readStoreAllowFromForDmPolicy,
+  resolveDefaultGroupPolicy,
   createChannelPairingController,
 } from "../../runtime-api.js";
 import { normalizeMSTeamsConversationId } from "../inbound.js";
@@ -138,8 +139,9 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
       }
 
       const effectiveGroupAllowFrom = resolvedAllowFromLists.effectiveGroupAllowFrom;
+      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
       const groupAllowed = isMSTeamsGroupAllowed({
-        groupPolicy: msteamsCfg.groupPolicy ?? "allowlist",
+        groupPolicy: msteamsCfg.groupPolicy ?? defaultGroupPolicy ?? "allowlist",
         allowFrom: effectiveGroupAllowFrom,
         senderId,
         senderName,

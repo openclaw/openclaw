@@ -84,6 +84,19 @@ describe("reactMessageMSTeams", () => {
     );
   });
 
+  it("strips conversation: prefix before constructing Graph path", async () => {
+    const { fetchGraphJson } = await import("./graph.js");
+    await reactMessageMSTeams({
+      cfg: validCfg,
+      to: "conversation:19:abc123@thread.tacv2",
+      activityId: "msg-004b",
+      emoji: "👍",
+    });
+    const call = (fetchGraphJson as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(call.path).toContain("19%3Aabc123%40thread.tacv2");
+    expect(call.path).not.toContain("conversation%3A");
+  });
+
   it("throws for a non-Graph-compatible conversation ID", async () => {
     await expect(
       reactMessageMSTeams({
@@ -105,7 +118,7 @@ describe("removeReactionMSTeams", () => {
     vi.clearAllMocks();
   });
 
-  it("calls fetchGraphJson DELETE for a valid 19: conversation ID", async () => {
+  it("calls fetchGraphJson POST /unsetReaction for a valid 19: conversation ID", async () => {
     const { fetchGraphJson } = await import("./graph.js");
     const result = await removeReactionMSTeams({
       cfg: validCfg,
@@ -116,11 +129,25 @@ describe("removeReactionMSTeams", () => {
     expect(result).toEqual({ ok: true });
     expect(fetchGraphJson).toHaveBeenCalledWith(
       expect.objectContaining({
-        method: "DELETE",
+        method: "POST",
+        body: { reactionType: "like" },
       }),
     );
     const call = (fetchGraphJson as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(call.path).toContain("like");
+    expect(call.path).toContain("unsetReaction");
+  });
+
+  it("strips conversation: prefix before constructing Graph path", async () => {
+    const { fetchGraphJson } = await import("./graph.js");
+    await removeReactionMSTeams({
+      cfg: validCfg,
+      to: "conversation:19:abc123@thread.tacv2",
+      activityId: "msg-007",
+      emoji: "👍",
+    });
+    const call = (fetchGraphJson as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(call.path).toContain("19%3Aabc123%40thread.tacv2");
+    expect(call.path).not.toContain("conversation%3A");
   });
 
   it("throws for a non-Graph-compatible conversation ID", async () => {
