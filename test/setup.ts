@@ -32,6 +32,7 @@ import type {
   ChannelPlugin,
 } from "../src/channels/plugins/types.js";
 import type { OpenClawConfig } from "../src/config/config.js";
+import { resetFileLockStateForTest } from "../src/infra/file-lock.js";
 import type { OutboundSendDeps } from "../src/infra/outbound/deliver.js";
 import { installProcessWarningFilter } from "../src/infra/warning-filter.js";
 import type { PluginRegistry } from "../src/plugins/registry.js";
@@ -334,6 +335,7 @@ beforeAll(() => {
 
 afterEach(() => {
   resetContextWindowCacheForTest();
+  resetFileLockStateForTest();
   resetModelsJsonReadyCacheForTest();
   resetSessionWriteLockStateForTest();
   if (globalRegistryState.registry !== DEFAULT_PLUGIN_REGISTRY) {
@@ -344,5 +346,6 @@ afterEach(() => {
 });
 
 afterAll(() => {
+  resetFileLockStateForTest();
   resetSessionWriteLockStateForTest();
 });
