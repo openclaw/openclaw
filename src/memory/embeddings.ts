@@ -455,8 +455,15 @@ export async function createEmbeddingProvider(
     // Try built-in remote providers first
     for (const pid of REMOTE_EMBEDDING_PROVIDER_IDS) {
       const pp = pluginProviders[pid];
-      if (pp && (await resolveApiKeyForProvider({ cfg: options.config, provider: pid }))) {
-        return { provider: pp, requestedProvider };
+      if (pp) {
+        try {
+          const apiKey = await resolveApiKeyForProvider({ cfg: options.config, provider: pid });
+          if (apiKey) {
+            return { provider: pp, requestedProvider };
+          }
+        } catch {
+          // No API key for plugin - fall through to try built-in
+        }
       }
       // Try built-in
       try {

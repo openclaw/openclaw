@@ -1023,25 +1023,14 @@ export async function textToSpeechTelephony(params: {
 
     if (pluginTtsProvider) {
       try {
-        if (isBuiltin) {
-          const result = await invokePluginTelephonyTts(
-            pluginTtsProvider,
-            provider,
-            config,
-            params.cfg,
-            params.text,
-          );
-          return result;
-        } else {
-          const result = await invokePluginTelephonyTts(
-            pluginTtsProvider,
-            provider,
-            config,
-            params.cfg,
-            params.text,
-          );
-          return result;
-        }
+        const result = await invokePluginTelephonyTts(
+          pluginTtsProvider,
+          provider,
+          config,
+          params.cfg,
+          params.text,
+        );
+        return result;
       } catch (err) {
         const errorPrefix = isBuiltin ? `${provider} (plugin)` : provider;
         errors.push(formatTtsProviderError(errorPrefix, err));
