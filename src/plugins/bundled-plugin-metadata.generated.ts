@@ -775,6 +775,49 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "exa",
+    idHint: "exa-plugin",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/exa-plugin",
+    packageVersion: "2026.3.22",
+    packageDescription: "OpenClaw Exa plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "exa",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          webSearch: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              apiKey: {
+                type: ["string", "object"],
+              },
+            },
+          },
+        },
+      },
+      providerAuthEnvVars: {
+        exa: ["EXA_API_KEY"],
+      },
+      uiHints: {
+        "webSearch.apiKey": {
+          label: "Exa API Key",
+          help: "Exa Search API key (fallback: EXA_API_KEY env var).",
+          sensitive: true,
+          placeholder: "exa-...",
+        },
+      },
+    },
+  },
+  {
     dirName: "fal",
     idHint: "fal",
     source: {
