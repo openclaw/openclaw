@@ -22,7 +22,6 @@ function createModel(id: string, name: string): ModelDefinitionConfig {
     maxTokens: 8_192,
   };
 }
-
 describe("provider onboarding preset appliers", () => {
   it("creates provider and primary-model appliers for a default model preset", () => {
     const appliers = createDefaultModelPresetAppliers({
