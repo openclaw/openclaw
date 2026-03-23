@@ -24,6 +24,50 @@
     ],
     "threadPinned": [
       {
+        "file": "src/cron/isolated-agent.uses-last-non-empty-agent-text-as.test.ts",
+        "reason": "Measured ~15% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/cron/isolated-agent.skips-delivery-without-whatsapp-recipient-besteffortdeliver-true.test.ts",
+        "reason": "Measured ~13% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/cron/isolated-agent/run.cron-model-override.test.ts",
+        "reason": "Measured ~25% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/cron/isolated-agent/run.owner-auth.test.ts",
+        "reason": "Measured ~19% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/cron/isolated-agent.auth-profile-propagation.test.ts",
+        "reason": "Measured ~22% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/cron/isolated-agent/delivery-dispatch.named-agent.test.ts",
+        "reason": "Measured ~14% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/cron/isolated-agent.subagent-model.test.ts",
+        "reason": "Measured ~21% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/infra/outbound/deliver.test.ts",
+        "reason": "Terminates cleanly under threads, but not process forks on this host."
+      },
+      {
+        "file": "src/infra/outbound/deliver.lifecycle.test.ts",
+        "reason": "Terminates cleanly under threads, but not process forks on this host."
+      },
+      {
+        "file": "src/infra/outbound/message.channels.test.ts",
+        "reason": "Terminates cleanly under threads, but not process forks on this host."
+      },
+      {
+        "file": "src/infra/outbound/message-action-runner.poll.test.ts",
+        "reason": "Terminates cleanly under threads, but not process forks on this host."
+      },
+      {
         "file": "src/infra/outbound/message-action-runner.context.test.ts",
         "reason": "Terminates cleanly under threads, but not process forks on this host."
       },
@@ -38,6 +82,34 @@
       {
         "file": "src/infra/outbound/outbound-policy.test.ts",
         "reason": "Measured ~11% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/infra/outbound/outbound.test.ts",
+        "reason": "Measured ~14% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/plugins/web-search-providers.runtime.test.ts",
+        "reason": "Measured ~17% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/media-understanding/runtime.test.ts",
+        "reason": "Measured ~13% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/media-understanding/resolve.test.ts",
+        "reason": "Measured ~9% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/media-understanding/runner.skip-tiny-audio.test.ts",
+        "reason": "Measured ~23% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/media-understanding/runner.proxy.test.ts",
+        "reason": "Measured ~55% faster under threads than forks on this host while keeping the file green."
+      },
+      {
+        "file": "src/media-understanding/runner.auto-audio.test.ts",
+        "reason": "Measured ~23% faster under threads than forks on this host while keeping the file green."
       },
       {
         "file": "src/media-understanding/runner.video.test.ts",
