@@ -16,6 +16,8 @@ export {
   collectSyncedFolderFindings,
 } from "./audit-extra.sync.js";
 
+export { collectFirewallFindings } from "./audit-firewall.js";
+
 export {
   collectSandboxBrowserHashLabelFindings,
   collectIncludeFilePermFindings,

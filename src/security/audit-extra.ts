@@ -38,3 +38,6 @@ export {
   collectWorkspaceSkillSymlinkEscapeFindings,
   readConfigSnapshotForAudit,
 } from "./audit-extra.async.js";
+
+// Firewall detection
+export { collectFirewallFindings } from "./audit-firewall.js";
