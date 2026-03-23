@@ -20,9 +20,10 @@ export function loadIncludePatternsFromEnv(
   return loadPatternListFile(includeFile, "OPENCLAW_VITEST_INCLUDE_FILE");
 }
 
-export default createScopedVitestConfig(
-  loadIncludePatternsFromEnv() ?? ["extensions/**/*.test.ts"],
-  {
+export function createExtensionsVitestConfig(
+  env: Record<string, string | undefined> = process.env,
+) {
+  return createScopedVitestConfig(loadIncludePatternsFromEnv(env) ?? ["extensions/**/*.test.ts"], {
     dir: "extensions",
     pool: "threads",
     passWithNoTests: true,
@@ -30,5 +31,7 @@ export default createScopedVitestConfig(
     // vitest.channels.config.ts (pnpm test:channels) which provides
     // the heavier mock scaffolding they need.
     exclude: channelTestExclude.filter((pattern) => pattern.startsWith("extensions/")),
-  },
-);
+  });
+}
+
+export default createExtensionsVitestConfig();

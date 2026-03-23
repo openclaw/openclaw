@@ -221,6 +221,34 @@ describe("resolveAllowAlwaysPatterns", () => {
     });
   });
 
+  it("persists carried executables for shell-wrapper positional argv carriers", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const touch = makeExecutable(dir, "touch");
+    const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
+    const safeBins = resolveSafeBins(undefined);
+
+    const { persisted } = resolvePersistedPatterns({
+      command: `sh -lc '$0 "$1"' touch ${path.join(dir, "marker")}`,
+      dir,
+      env,
+      safeBins,
+    });
+    expect(persisted).toEqual([touch]);
+
+    const second = evaluateShellAllowlist({
+      command: `sh -lc '$0 "$1"' touch ${path.join(dir, "second-marker")}`,
+      allowlist: [{ pattern: touch }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(true);
+  });
+
   it("does not treat inline shell commands as persisted script paths", () => {
     if (process.platform === "win32") {
       return;
