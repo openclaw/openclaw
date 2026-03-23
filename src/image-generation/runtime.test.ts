@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { vi } from "vitest";
 
 let generateImage: typeof import("./runtime.js").generateImage;
 let listRuntimeImageGenerationProviders: typeof import("./runtime.js").listRuntimeImageGenerationProviders;
