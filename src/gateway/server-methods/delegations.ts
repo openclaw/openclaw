@@ -55,18 +55,43 @@ export const delegationsHandlers: GatewayRequestHandlers = {
         return;
       }
 
+      // Read the original task and requester session key
+      const fullRow = db
+        .prepare(
+          "SELECT task, requester_session_key, agent_id, child_session_key, label FROM op1_subagent_runs WHERE run_id = ?",
+        )
+        .get(runId) as {
+        task: string | null;
+        requester_session_key: string;
+        agent_id: string | null;
+        child_session_key: string;
+        label: string | null;
+      };
+
+      const agentName =
+        fullRow.agent_id ?? fullRow.child_session_key?.split(":")?.[1] ?? "the sub-agent";
+      const taskText = fullRow.task ?? "the previous task";
+
       // Mark old run as ended with interrupted status
       const now = Date.now();
       db.prepare(
-        "UPDATE op1_subagent_runs SET ended_at = ?, outcome_json = ?, ended_reason = ? WHERE run_id = ?",
+        "UPDATE op1_subagent_runs SET ended_at = ?, outcome_json = ?, ended_reason = ?, cleanup_completed_at = ? WHERE run_id = ?",
       ).run(
         now,
         JSON.stringify({ status: "interrupted", reason: "manual_resume" }),
         "manual_resume",
+        now,
         runId,
       );
 
-      // Fire heartbeat to trigger agent to re-delegate
+      // Inject a system message into the requester's session to trigger re-delegation
+      const { enqueueSystemEvent } = await import("../../infra/system-events.js");
+      enqueueSystemEvent(
+        `[Delegation Resume] The previous delegation to ${agentName} was interrupted. Please re-delegate the following task:\n\n${taskText}`,
+        { sessionKey: fullRow.requester_session_key },
+      );
+
+      // Also fire heartbeat as backup
       requestHeartbeatNow({ reason: "delegation-resume" });
 
       respond(true, { ok: true, previousRunId: runId });
@@ -120,10 +145,21 @@ export const delegationsHandlers: GatewayRequestHandlers = {
 
     try {
       const db = getStateDb();
-      const row = db.prepare("SELECT * FROM op1_subagent_runs WHERE run_id = ?").get(runId) as
-        | { run_id: string; task: string | null }
+      const fullRow = db
+        .prepare(
+          "SELECT run_id, task, requester_session_key, agent_id, child_session_key, label FROM op1_subagent_runs WHERE run_id = ?",
+        )
+        .get(runId) as
+        | {
+            run_id: string;
+            task: string | null;
+            requester_session_key: string;
+            agent_id: string | null;
+            child_session_key: string;
+            label: string | null;
+          }
         | undefined;
-      if (!row) {
+      if (!fullRow) {
         respond(
           false,
           undefined,
@@ -132,19 +168,28 @@ export const delegationsHandlers: GatewayRequestHandlers = {
         return;
       }
 
+      const agentName =
+        fullRow.agent_id ?? fullRow.child_session_key?.split(":")?.[1] ?? "the sub-agent";
+      const taskText = fullRow.task ?? "the previous task";
+
       // Mark old run as ended
       const now = Date.now();
       db.prepare(
-        "UPDATE op1_subagent_runs SET ended_at = ?, outcome_json = ?, ended_reason = ? WHERE run_id = ?",
+        "UPDATE op1_subagent_runs SET ended_at = ?, outcome_json = ?, ended_reason = ?, cleanup_completed_at = ? WHERE run_id = ?",
       ).run(
         now,
         JSON.stringify({ status: "interrupted", reason: "manual_retry" }),
         "manual_retry",
+        now,
         runId,
       );
 
-      // Fire heartbeat to trigger agent to re-delegate with the same task
-      requestHeartbeatNow({ reason: "delegation-retry" });
+      // Inject a retry message into the requester's session to trigger re-delegation
+      const { enqueueSystemEvent } = await import("../../infra/system-events.js");
+      enqueueSystemEvent(
+        `[Delegation Retry] Please re-delegate this task to ${agentName}:\n\n${taskText}`,
+        { sessionKey: fullRow.requester_session_key },
+      );
 
       respond(true, { ok: true, previousRunId: runId });
     } catch (err) {
