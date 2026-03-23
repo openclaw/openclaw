@@ -15,10 +15,6 @@
       "deltaKb": 787149,
       "sources": ["gha-23329089711-node-test-2-2:unit-fast"]
     },
-    "src/infra/outbound/targets.test.ts": {
-      "deltaKb": 784179,
-      "sources": ["job2:unit-fast"]
-    },
     "src/plugins/contracts/wizard.contract.test.ts": {
       "deltaKb": 783770,
       "sources": ["gha-23329089711-node-test-1-2:unit-fast"]
@@ -90,10 +86,6 @@
     "src/cron/isolated-agent.delivers-response-has-heartbeat-ok-but-includes.test.ts": {
       "deltaKb": 377446,
       "sources": ["gha-23328306205-compat-node22:unit-fast"]
-    },
-    "src/infra/outbound/agent-delivery.test.ts": {
-      "deltaKb": 373043,
-      "sources": ["job1:unit-fast"]
     },
     "src/cron/isolated-agent/delivery-dispatch.named-agent.test.ts": {
       "deltaKb": 355840,
