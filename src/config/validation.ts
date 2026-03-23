@@ -31,6 +31,7 @@ import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
+const KNOWN_CHANNEL_ID_SET: ReadonlySet<string> = new Set(CHANNEL_IDS as readonly string[]);
 
 type UnknownIssueRecord = Record<string, unknown>;
 type AllowedValuesCollection = {
@@ -524,6 +525,17 @@ function validateConfigObjectWithPluginsBase(
   const { registry } = ensureRegistry();
   const knownIds = ensureKnownIds();
   const normalizedPlugins = ensureNormalizedPlugins();
+  const isConfiguredChannel = (pluginId: string): boolean => {
+    if (!KNOWN_CHANNEL_ID_SET.has(pluginId)) {
+      return false;
+    }
+    const channelConfig = (config.channels as Record<string, unknown> | undefined)?.[pluginId];
+    return (
+      channelConfig != null &&
+      typeof channelConfig === "object" &&
+      (channelConfig as Record<string, unknown>).enabled !== false
+    );
+  };
   const pushMissingPluginIssue = (
     path: string,
     pluginId: string,
@@ -533,6 +545,16 @@ function validateConfigObjectWithPluginsBase(
       warnings.push({
         path,
         message: `plugin removed: ${pluginId} (stale config entry ignored; remove it from plugins config)`,
+      });
+      return;
+    }
+    // When a missing plugin corresponds to a known channel that is configured,
+    // it is almost certainly an optional bundled plugin that needs to be
+    // installed separately rather than a stale leftover.
+    if (isConfiguredChannel(pluginId)) {
+      warnings.push({
+        path,
+        message: `plugin not installed: ${pluginId} — channel is configured but the plugin is not bundled in this build. Install it with: openclaw plugins install ${pluginId}`,
       });
       return;
     }

@@ -1,5 +1,11 @@
+// Plugins listed here are excluded from the default build and must be installed
+// separately via `openclaw plugins install <name>`.
+//
+// WhatsApp and ACPX were removed from this list to ease the transition to
+// channels-as-plugins. Both are core functionality (primary messaging channel
+// and ACP/Codex runtime) and have no published npm package yet, so excluding
+// them from the default build leaves users with no install path.
 export const optionalBundledClusters = [
-  "acpx",
   "diagnostics-otel",
   "diffs",
   "googlechat",
@@ -10,7 +16,6 @@ export const optionalBundledClusters = [
   "tlon",
   "twitch",
   "ui",
-  "whatsapp",
   "zalouser",
 ];
 

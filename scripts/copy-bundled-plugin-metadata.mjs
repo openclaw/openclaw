@@ -237,6 +237,34 @@ export function copyBundledPluginMetadata(params = {}) {
     }
 
     writeTextFileIfChanged(distPackageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
+
+    // Copy top-level runtime shim .ts files that are not declared as extension
+    // entries or setupEntry. Plugins such as WhatsApp use a lazy boundary
+    // pattern that resolves sibling modules (e.g. light-runtime-api.ts) at
+    // runtime via jiti. These files must be present next to the compiled
+    // index.js for tarball installs where the source tree is absent.
+    const declaredEntries = new Set(
+      [
+        ...(Array.isArray(packageJson.openclaw?.extensions) ? packageJson.openclaw.extensions : []),
+        packageJson.openclaw?.setupEntry,
+      ]
+        .filter((e) => typeof e === "string" && e.trim().length > 0)
+        .map((e) => e.replace(/^\.\//, "").replace(/\.[^.]+$/u, "")),
+    );
+    for (const file of fs.readdirSync(pluginDir)) {
+      if (!file.endsWith(".ts") || file.endsWith(".test.ts") || file.endsWith(".runtime.ts")) {
+        continue;
+      }
+      const baseName = file.replace(/\.[^.]+$/u, "");
+      if (declaredEntries.has(baseName)) {
+        continue;
+      }
+      const sourceFile = path.join(pluginDir, file);
+      const distFile = path.join(distPluginDir, file);
+      if (fs.statSync(sourceFile).isFile()) {
+        fs.copyFileSync(sourceFile, distFile);
+      }
+    }
   }
 
   if (!fs.existsSync(distExtensionsRoot)) {

@@ -525,6 +525,45 @@ describe("config plugin validation", () => {
     }
   });
 
+  it("warns about missing plugin for configured channel with install hint", async () => {
+    // Point bundled plugins at an empty dir so no channel plugins are
+    // discovered, then configure a known channel. The validation should
+    // emit an install hint instead of "stale config entry".
+    const emptyBundledDir = path.join(fixtureRoot, "empty-bundled");
+    await mkdirSafe(emptyBundledDir);
+    clearPluginManifestRegistryCache();
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        channels: {
+          whatsapp: { enabled: true },
+        },
+        plugins: {
+          entries: { whatsapp: { enabled: true } },
+        },
+      },
+      {
+        env: {
+          ...suiteEnv(),
+          OPENCLAW_BUNDLED_PLUGINS_DIR: emptyBundledDir,
+        },
+      },
+    );
+    clearPluginManifestRegistryCache();
+    // Config should still be valid (warnOnly path) but with an install hint.
+    expect(res.ok).toBe(true);
+    expect(res.warnings).toContainEqual({
+      path: "plugins.entries.whatsapp",
+      message: expect.stringContaining("openclaw plugins install whatsapp"),
+    });
+    // Should NOT say "stale config entry" for a configured channel.
+    expect(res.warnings).not.toContainEqual(
+      expect.objectContaining({
+        message: expect.stringContaining("stale config entry"),
+      }),
+    );
+  });
+
   it("rejects invalid heartbeat directPolicy values", async () => {
     const res = validateInSuite({
       agents: {
