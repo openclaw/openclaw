@@ -1535,6 +1535,40 @@ describe("followup queue drain restart after idle window", () => {
     expect(freshCalls[0]?.prompt).toBe("after-idle");
   });
 
+  it("does not auto-start a drain when a busy run only refreshes the callback", async () => {
+    const key = `test-busy-run-refreshes-callback-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const staleCalls: FollowupRun[] = [];
+    const freshCalls: FollowupRun[] = [];
+
+    const staleFollowup = async (run: FollowupRun) => {
+      staleCalls.push(run);
+    };
+    const freshFollowup = async (run: FollowupRun) => {
+      freshCalls.push(run);
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "queued-while-busy" }),
+      settings,
+      "message-id",
+      freshFollowup,
+      false,
+    );
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(freshCalls).toHaveLength(0);
+
+    scheduleFollowupDrain(key, staleFollowup);
+    await vi.waitFor(() => {
+      expect(freshCalls).toHaveLength(1);
+    });
+
+    expect(staleCalls).toHaveLength(0);
+    expect(freshCalls[0]?.prompt).toBe("queued-while-busy");
+  });
+
   it("restarts an idle drain across distinct enqueue and drain module instances", async () => {
     const drainA = await importFreshModule<typeof import("./queue/drain.js")>(
       import.meta.url,
