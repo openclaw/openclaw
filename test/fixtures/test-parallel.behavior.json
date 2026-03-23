@@ -51,6 +51,10 @@
         "reason": "This Discord component builder suite is green alone but can inherit polluted component constructor state from the shared channel lane; keep it in its own forked lane for deterministic CI."
       },
       {
+        "file": "extensions/discord/src/api.test.ts",
+        "reason": "This Discord API retry suite is green alone but can inherit timer or fetch retry contamination from the shared channel lane; keep it in its own forked lane for deterministic CI."
+      },
+      {
         "file": "extensions/discord/src/monitor/provider.skill-dedupe.test.ts",
         "reason": "This Discord provider skill-dedupe suite depends on agent-component classes during provider import; keep it isolated so shared channel workers do not reuse partially mocked component modules."
       },
@@ -61,6 +65,10 @@
       {
         "file": "extensions/whatsapp/src/inbound.test.ts",
         "reason": "This WhatsApp inbound helper suite is green alone but can inherit polluted web-message parsing state from the shared channel lane; keep it in its own forked lane for deterministic CI."
+      },
+      {
+        "file": "extensions/whatsapp/src/inbound.media.test.ts",
+        "reason": "This WhatsApp inbound media suite is green alone but can inherit polluted media and inbound parsing state from the shared channel lane; keep it in its own forked lane for deterministic CI."
       },
       {
         "file": "src/browser/chrome.test.ts",
