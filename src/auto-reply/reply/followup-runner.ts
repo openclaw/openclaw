@@ -5,7 +5,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
-import { lookupContextTokens } from "../../agents/context.js";
+import { lookupCachedContextTokens } from "../../agents/context-cache.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -35,6 +35,9 @@ let piEmbeddedRuntimePromise: Promise<typeof import("../../agents/pi-embedded.ru
 let routeReplyRuntimePromise: Promise<typeof import("./route-reply.runtime.js")> | null = null;
 let replyPayloadsRuntimePromise: Promise<typeof import("./reply-payloads.runtime.js")> | null =
   null;
+let contextTokensRuntimePromise: Promise<
+  typeof import("../../agents/context-tokens.runtime.js")
+> | null = null;
 
 function loadPiEmbeddedRuntime() {
   piEmbeddedRuntimePromise ??= import("../../agents/pi-embedded.runtime.js");
@@ -51,6 +54,10 @@ function loadReplyPayloadsRuntime() {
   return replyPayloadsRuntimePromise;
 }
 
+function loadContextTokensRuntime() {
+  contextTokensRuntimePromise ??= import("../../agents/context-tokens.runtime.js");
+  return contextTokensRuntimePromise;
+}
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
   typing: TypingController;
@@ -318,9 +325,15 @@ export function createFollowupRunner(params: {
       const usage = runResult.meta?.agentMeta?.usage;
       const promptTokens = runResult.meta?.agentMeta?.promptTokens;
       const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
+      const cachedContextTokens = lookupCachedContextTokens(modelUsed);
+      const lazyContextTokens =
+        agentCfgContextTokens == null && cachedContextTokens == null
+          ? (await loadContextTokensRuntime()).lookupContextTokens(modelUsed)
+          : undefined;
       const contextTokensUsed =
         agentCfgContextTokens ??
-        lookupContextTokens(modelUsed) ??
+        cachedContextTokens ??
+        lazyContextTokens ??
         sessionEntry?.contextTokens ??
         DEFAULT_CONTEXT_TOKENS;
 
