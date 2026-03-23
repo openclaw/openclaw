@@ -22,7 +22,7 @@ export function extractOutboundMentions(
   // adjacent tokens don't merge into false mentions and content inside code
   // spans is never matched.
   const cleaned = text.replace(/`[^`]*`/g, (m) => "_".repeat(m.length));
-  const pattern = /(?<=^|[\s({\[<])@\+?(\d{7,25})(?![:\d@a-zA-Z_\-/])/g;
+  const pattern = /(?<=^|[\s({\[<])@\+?(\d{7,25})(?![:\d@\p{L}_\-/])/gu;
   const jids = new Set<string>();
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(cleaned)) !== null) {
