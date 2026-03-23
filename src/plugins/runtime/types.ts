@@ -1,3 +1,5 @@
+import type { ClientToolDefinition } from "../../agents/pi-embedded-runner/run/params.js";
+import type { AgentStreamParams } from "../../commands/agent/types.js";
 import type { PluginRuntimeChannel } from "./types-channel.js";
 import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
 
@@ -14,6 +16,9 @@ export type SubagentRunParams = {
   lane?: string;
   deliver?: boolean;
   idempotencyKey?: string;
+  clientTools?: ClientToolDefinition[];
+  disableTools?: boolean;
+  streamParams?: AgentStreamParams;
 };
 
 export type SubagentRunResult = {
@@ -28,6 +33,12 @@ export type SubagentWaitParams = {
 export type SubagentWaitResult = {
   status: "ok" | "error" | "timeout";
   error?: string;
+  stopReason?: string;
+  pendingToolCalls?: Array<{
+    id: string;
+    name: string;
+    arguments: string;
+  }>;
 };
 
 export type SubagentGetSessionMessagesParams = {

@@ -13,6 +13,7 @@ import {
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { buildBareSessionResetPrompt } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
+import type { AgentStreamParams } from "../../commands/agent/types.js";
 import { loadConfig } from "../../config/config.js";
 import {
   mergeSessionEntry,
@@ -77,6 +78,28 @@ import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
 const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
+const AGENT_WAIT_DEDUPE_METADATA_GRACE_MS = 5_000;
+
+function mergeAgentWaitStructuredMetadata<T extends AgentWaitTerminalSnapshot>(
+  snapshot: T,
+  dedupeSnapshot: AgentWaitTerminalSnapshot | null | undefined,
+): T {
+  if (!dedupeSnapshot) {
+    return snapshot;
+  }
+  return {
+    ...snapshot,
+    stopReason: snapshot.stopReason ?? dedupeSnapshot.stopReason,
+    pendingToolCalls: snapshot.pendingToolCalls ?? dedupeSnapshot.pendingToolCalls,
+  };
+}
+
+function isMissingAgentWaitStructuredMetadata(snapshot: AgentWaitTerminalSnapshot): boolean {
+  if (snapshot.stopReason === undefined && snapshot.status === "ok") {
+    return true;
+  }
+  return snapshot.stopReason === "tool_calls" && snapshot.pendingToolCalls === undefined;
+}
 
 function resolveSenderIsOwnerFromClient(client: GatewayRequestHandlerOptions["client"]): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
@@ -293,6 +316,16 @@ export const agentHandlers: GatewayRequestHandlers = {
       lane?: string;
       extraSystemPrompt?: string;
       internalEvents?: AgentInternalEvent[];
+      clientTools?: Array<{
+        type: "function";
+        function: {
+          name: string;
+          description?: string;
+          parameters?: Record<string, unknown>;
+        };
+      }>;
+      disableTools?: boolean;
+      streamParams?: AgentStreamParams;
       idempotencyKey: string;
       timeout?: number;
       bestEffortDeliver?: boolean;
@@ -791,6 +824,9 @@ export const agentHandlers: GatewayRequestHandlers = {
         lane: request.lane,
         extraSystemPrompt: request.extraSystemPrompt,
         internalEvents: request.internalEvents,
+        clientTools: request.clientTools,
+        disableTools: request.disableTools,
+        streamParams: request.streamParams,
         inputProvenance,
         abortSignal: agentAbortController.signal,
         // Internal-only: allow workspace override for spawned subagent runs.
@@ -934,6 +970,8 @@ export const agentHandlers: GatewayRequestHandlers = {
         startedAt: cachedGatewaySnapshot.startedAt,
         endedAt: cachedGatewaySnapshot.endedAt,
         error: cachedGatewaySnapshot.error,
+        stopReason: cachedGatewaySnapshot.stopReason,
+        pendingToolCalls: cachedGatewaySnapshot.pendingToolCalls,
       });
       return;
     }
@@ -965,6 +1003,44 @@ export const agentHandlers: GatewayRequestHandlers = {
       first.snapshot;
     if (snapshot) {
       if (first.source === "lifecycle") {
+        snapshot = mergeAgentWaitStructuredMetadata(
+          snapshot,
+          readTerminalSnapshotFromGatewayDedupe({
+            dedupe: context.dedupe,
+            runId,
+            ignoreAgentTerminalSnapshot: hasActiveChatRun,
+          }),
+        );
+        if (snapshot.stopReason === undefined) {
+          const immediateDedupeMetadata =
+            (await Promise.race([
+              dedupePromise,
+              Promise.resolve<AgentWaitTerminalSnapshot | null>(null),
+            ])) ?? null;
+          snapshot = mergeAgentWaitStructuredMetadata(snapshot, immediateDedupeMetadata);
+        }
+        if (isMissingAgentWaitStructuredMetadata(snapshot)) {
+          let graceTimer: ReturnType<typeof setTimeout> | null = null;
+          const dedupeMetadata =
+            (await Promise.race([
+              dedupePromise.finally(() => {
+                if (graceTimer != null) {
+                  clearTimeout(graceTimer);
+                }
+              }),
+              new Promise<null>((resolve) => {
+                graceTimer = setTimeout(
+                  () => resolve(null),
+                  Math.max(
+                    1,
+                    Math.min(timeoutMs, AGENT_WAIT_DEDUPE_METADATA_GRACE_MS, 2_147_483_647),
+                  ),
+                );
+                graceTimer.unref?.();
+              }),
+            ])) ?? null;
+          snapshot = mergeAgentWaitStructuredMetadata(snapshot, dedupeMetadata);
+        }
         dedupeAbortController.abort();
       } else {
         lifecycleAbortController.abort();
@@ -988,6 +1064,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       startedAt: snapshot.startedAt,
       endedAt: snapshot.endedAt,
       error: snapshot.error,
+      stopReason: snapshot.stopReason,
+      pendingToolCalls: snapshot.pendingToolCalls,
     });
   },
 };

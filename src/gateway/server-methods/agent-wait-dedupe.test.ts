@@ -258,6 +258,54 @@ describe("agent wait dedupe helper", () => {
     });
   });
 
+  it("extracts stopReason and pendingToolCalls from nested agent result metadata", () => {
+    const dedupe = new Map();
+    const runId = "run-structured-agent";
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      payload: {
+        runId,
+        status: "ok",
+        startedAt: 10,
+        endedAt: 20,
+        result: {
+          meta: {
+            stopReason: "tool_calls",
+            pendingToolCalls: [
+              {
+                id: "call-1",
+                name: "emit_structured_result",
+                arguments: '{"entries":[]}',
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "ok",
+      startedAt: 10,
+      endedAt: 20,
+      error: undefined,
+      stopReason: "tool_calls",
+      pendingToolCalls: [
+        {
+          id: "call-1",
+          name: "emit_structured_result",
+          arguments: '{"entries":[]}',
+        },
+      ],
+    });
+  });
+
   it("resolves multiple waiters for the same run id", async () => {
     const dedupe = new Map();
     const runId = "run-multi";
