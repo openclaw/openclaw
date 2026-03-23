@@ -1,0 +1,43 @@
+name: Build & Release (fork)
+
+on:
+  push:
+    branches: [fix/fallback-duplicate-user-messages]
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.23.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      - name: Pack tarball
+        run: npm pack
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TARBALL=$(ls openclaw-*.tgz)
+          gh release create v2026.3.22-fix1 \
+            --draft \
+            --title "v2026.3.22-fix1: deduplicate fallback user messages" \
+            --notes "Patched build of openclaw 2026.3.22 with fix for #31101/#46005.
+
+          Install: \`npm install -g https://github.com/tyeth-ai-assisted/openclaw/releases/download/v2026.3.22-fix1/${TARBALL}\`" \
+            "$TARBALL"
