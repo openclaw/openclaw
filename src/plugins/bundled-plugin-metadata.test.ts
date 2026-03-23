@@ -103,4 +103,62 @@ describe("bundled plugin metadata", () => {
     expect(stale.changed).toBe(true);
     expect(stale.wrote).toBe(false);
   });
+
+  it("skips optional bundled clusters by default when generating metadata", () => {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-bundled-plugin-optional-meta-"),
+    );
+    tempDirs.push(tempRoot);
+
+    writeJson(path.join(tempRoot, "extensions", "acpx", "package.json"), {
+      name: "@openclaw/acpx",
+      version: "2026.3.22",
+      openclaw: {
+        extensions: ["./index.ts"],
+      },
+    });
+    writeJson(path.join(tempRoot, "extensions", "acpx", "openclaw.plugin.json"), {
+      id: "acpx",
+      configSchema: { type: "object" },
+    });
+    writeJson(path.join(tempRoot, "extensions", "alpha", "package.json"), {
+      name: "@openclaw/alpha",
+      version: "0.0.1",
+      openclaw: {
+        extensions: ["./index.ts"],
+      },
+    });
+    writeJson(path.join(tempRoot, "extensions", "alpha", "openclaw.plugin.json"), {
+      id: "alpha",
+      configSchema: { type: "object" },
+    });
+
+    const entries = collectBundledPluginMetadata({ repoRoot: tempRoot, env: {} });
+    expect(entries.map((entry) => entry.dirName)).toEqual(["alpha"]);
+  });
+
+  it("includes optional bundled clusters when explicitly enabled", () => {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-bundled-plugin-optional-meta-env-"),
+    );
+    tempDirs.push(tempRoot);
+
+    writeJson(path.join(tempRoot, "extensions", "acpx", "package.json"), {
+      name: "@openclaw/acpx",
+      version: "2026.3.22",
+      openclaw: {
+        extensions: ["./index.ts"],
+      },
+    });
+    writeJson(path.join(tempRoot, "extensions", "acpx", "openclaw.plugin.json"), {
+      id: "acpx",
+      configSchema: { type: "object" },
+    });
+
+    const entries = collectBundledPluginMetadata({
+      repoRoot: tempRoot,
+      env: { OPENCLAW_INCLUDE_OPTIONAL_BUNDLED: "1" },
+    });
+    expect(entries.map((entry) => entry.dirName)).toEqual(["acpx"]);
+  });
 });

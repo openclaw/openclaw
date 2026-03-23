@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatGeneratedModule } from "./lib/format-generated-module.mjs";
+import { shouldBuildBundledCluster } from "./lib/optional-bundled-clusters.mjs";
 import { writeTextFileIfChanged } from "./runtime-postbuild-shared.mjs";
 
 const GENERATED_BY = "scripts/generate-bundled-plugin-metadata.mjs";
@@ -136,6 +137,7 @@ function formatTypeScriptModule(source, { outputPath }) {
 
 export function collectBundledPluginMetadata(params = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
+  const env = params.env ?? process.env;
   const extensionsRoot = path.join(repoRoot, "extensions");
   if (!fs.existsSync(extensionsRoot)) {
     return [];
@@ -144,6 +146,9 @@ export function collectBundledPluginMetadata(params = {}) {
   const entries = [];
   for (const dirent of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
     if (!dirent.isDirectory()) {
+      continue;
+    }
+    if (!shouldBuildBundledCluster(dirent.name, env)) {
       continue;
     }
 
