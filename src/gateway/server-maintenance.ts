@@ -1,4 +1,5 @@
 import type { HealthSummary } from "../commands/health.js";
+import { getStateDb } from "../infra/state-db/connection.js";
 import { cleanOldMedia } from "../media/store.js";
 import { reconcileBudgets } from "../orchestration/budget-cron.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
@@ -12,6 +13,37 @@ import {
 import type { DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
+
+const DELEGATION_POLL_INTERVAL_MS = 30_000;
+const DELEGATION_STALE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
+
+type ActiveRunRow = {
+  run_id: string;
+  child_session_key: string;
+  requester_session_key: string;
+  agent_id: string | null;
+  task: string | null;
+  label: string | null;
+  created_at: number | null;
+  started_at: number | null;
+  ended_at: number | null;
+  outcome: string | null;
+  result_preview: string | null;
+};
+
+function computeDelegationStatus(row: ActiveRunRow): "pending" | "running" | "stale" | "done" {
+  if (row.ended_at != null) {
+    return "done";
+  }
+  if (row.started_at != null) {
+    const ageMs = Date.now() - row.started_at * 1000;
+    if (ageMs > DELEGATION_STALE_THRESHOLD_MS) {
+      return "stale";
+    }
+    return "running";
+  }
+  return "pending";
+}
 
 export function startGatewayMaintenanceTimers(params: {
   broadcast: (
@@ -44,6 +76,7 @@ export function startGatewayMaintenanceTimers(params: {
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
+  delegationCheckInterval: ReturnType<typeof setInterval>;
   mediaCleanup: ReturnType<typeof setInterval> | null;
 } {
   setBroadcastHealthUpdate((snap: HealthSummary) => {
@@ -145,8 +178,78 @@ export function startGatewayMaintenanceTimers(params: {
   // Prime on startup so incidents are detected without waiting an hour
   runBudgetReconcile();
 
+  // delegation status polling — queries active subagent runs and broadcasts events
+  let isFirstDelegationRun = true;
+  const runDelegationCheck = () => {
+    try {
+      const db = getStateDb();
+      const rows = db
+        .prepare(
+          `SELECT run_id, child_session_key, requester_session_key, agent_id,
+                  task, label, created_at, started_at, ended_at,
+                  outcome_json AS outcome,
+                  substr(frozen_result_text, 1, 500) AS result_preview
+           FROM op1_subagent_runs
+           WHERE cleanup_completed_at IS NULL
+           ORDER BY created_at DESC
+           LIMIT 50`,
+        )
+        .all() as ActiveRunRow[];
+
+      if (isFirstDelegationRun) {
+        isFirstDelegationRun = false;
+        // Warn about runs that appear orphaned from before a gateway restart
+        const nowSec = Date.now() / 1000;
+        for (const row of rows) {
+          if (
+            row.started_at != null &&
+            row.ended_at == null &&
+            row.created_at != null &&
+            nowSec - row.created_at > DELEGATION_STALE_THRESHOLD_MS / 1000
+          ) {
+            params.logHealth.error(
+              `delegation: orphaned run ${row.run_id} (agent=${row.agent_id ?? "?"}, ` +
+                `task=${(row.task ?? "").slice(0, 80)}) — started_at set but no ended_at after restart`,
+            );
+          }
+        }
+      }
+
+      // Only broadcast when there are active (non-done) delegations to avoid noise
+      const activeDelegations = rows
+        .map((r) => ({
+          runId: r.run_id,
+          sessionKey: r.requester_session_key,
+          agentId: r.agent_id,
+          task: r.task,
+          status: computeDelegationStatus(r),
+          elapsedMs: r.created_at != null ? Date.now() - r.created_at * 1000 : 0,
+        }))
+        .filter((d) => d.status !== "done");
+
+      if (activeDelegations.length > 0) {
+        params.broadcast("delegation", { delegations: activeDelegations });
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("no such table")) {
+        return; // schema not migrated yet — skip silently
+      }
+      params.logHealth.error(`delegation check failed: ${formatError(err)}`);
+    }
+  };
+
+  // Prime immediately so UI gets state on first connect without waiting 30s
+  runDelegationCheck();
+  const delegationCheckInterval = setInterval(runDelegationCheck, DELEGATION_POLL_INTERVAL_MS);
+
   if (typeof params.mediaCleanupTtlMs !== "number") {
-    return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup: null };
+    return {
+      tickInterval,
+      healthInterval,
+      dedupeCleanup,
+      delegationCheckInterval,
+      mediaCleanup: null,
+    };
   }
 
   let mediaCleanupInFlight: Promise<void> | null = null;
@@ -173,5 +276,5 @@ export function startGatewayMaintenanceTimers(params: {
 
   void runMediaCleanup();
 
-  return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup };
+  return { tickInterval, healthInterval, dedupeCleanup, delegationCheckInterval, mediaCleanup };
 }

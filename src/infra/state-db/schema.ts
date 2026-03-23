@@ -1635,6 +1635,66 @@ const MIGRATIONS: Migration[] = [
       );
     },
   },
+  {
+    version: 30,
+    description: "Agent wakeup requests: op1_agent_wakeup_requests",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_agent_wakeup_requests (
+          id            TEXT PRIMARY KEY,
+          workspace_id  TEXT NOT NULL DEFAULT 'default',
+          agent_id      TEXT NOT NULL,
+          task_id       TEXT,
+          reason        TEXT NOT NULL DEFAULT 'task_assigned',
+          status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+          payload_json  TEXT,
+          created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+          processed_at  INTEGER,
+          FOREIGN KEY (workspace_id) REFERENCES op1_workspaces(id) ON DELETE CASCADE
+        )
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_wakeup_requests_agent ON op1_agent_wakeup_requests(agent_id)",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_wakeup_requests_status ON op1_agent_wakeup_requests(status)",
+      );
+    },
+  },
+
+  // ── v31: Approval comment threads ─────────────────────────────────────────
+  {
+    version: 31,
+    description: "Approval comment threads: op1_approval_comments",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_approval_comments (
+          id            TEXT PRIMARY KEY,
+          approval_id   TEXT NOT NULL,
+          author_id     TEXT NOT NULL,
+          author_type   TEXT NOT NULL DEFAULT 'user' CHECK (author_type IN ('agent', 'user', 'system')),
+          body          TEXT NOT NULL,
+          created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+          FOREIGN KEY (approval_id) REFERENCES op1_approvals(id) ON DELETE CASCADE
+        )
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_approval_comments_approval ON op1_approval_comments(approval_id)",
+      );
+    },
+  },
+  {
+    version: 32,
+    description: "Delegation tracker: index on op1_subagent_runs for active delegation lookup",
+    up(db) {
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_subagent_runs_active
+          ON op1_subagent_runs(requester_session_key)
+      `);
+      // Note: SQLite doesn't support partial indexes with WHERE in all cases,
+      // so we use a full index and filter in queries
+    },
+  },
 ];
 
 // ── Public API ──────────────────────────────────────────────────────────────
