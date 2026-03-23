@@ -4,7 +4,6 @@
   "description": "OpenClaw WhatsApp channel plugin",
   "type": "module",
   "dependencies": {
-    "@whiskeysockets/baileys": "7.0.0-rc.9",
     "jimp": "^1.6.0"
   },
   "devDependencies": {
@@ -42,5 +41,8 @@
     "release": {
       "publishToNpm": true
     }
+  },
+  "optionalDependencies": {
+    "@whiskeysockets/baileys": "7.0.0-rc.9"
   }
 }

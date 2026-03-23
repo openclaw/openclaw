@@ -658,9 +658,6 @@ importers:
 
   extensions/whatsapp:
     dependencies:
-      '@whiskeysockets/baileys':
-        specifier: 7.0.0-rc.9
-        version: 7.0.0-rc.9(audio-decode@2.2.3)(jimp@1.6.0)(sharp@0.34.5)
       jimp:
         specifier: ^1.6.0
         version: 1.6.0
@@ -668,6 +665,10 @@ importers:
       openclaw:
         specifier: workspace:*
         version: link:../..
+    optionalDependencies:
+      '@whiskeysockets/baileys':
+        specifier: 7.0.0-rc.9
+        version: 7.0.0-rc.9(audio-decode@2.2.3)(jimp@1.6.0)(sharp@0.34.5)
 
   extensions/xai: {}
 
@@ -7435,17 +7436,20 @@ snapshots:
       '@keyv/bigmap': 1.3.1(keyv@5.6.0)
       hookified: 1.15.1
       keyv: 5.6.0
+    optional: true
 
   '@cacheable/node-cache@1.7.6':
     dependencies:
       cacheable: 2.3.4
       hookified: 1.15.1
       keyv: 5.6.0
+    optional: true
 
   '@cacheable/utils@2.4.0':
     dependencies:
       hashery: 1.5.1
       keyv: 5.6.0
+    optional: true
 
   '@clack/core@1.1.0':
     dependencies:
@@ -7737,8 +7741,10 @@ snapshots:
   '@hapi/boom@9.1.4':
     dependencies:
       '@hapi/hoek': 9.3.0
+    optional: true
 
-  '@hapi/hoek@9.3.0': {}
+  '@hapi/hoek@9.3.0':
+    optional: true
 
   '@homebridge/ciao@1.3.5':
     dependencies:
@@ -8134,8 +8140,10 @@ snapshots:
       hashery: 1.5.1
       hookified: 1.15.1
       keyv: 5.6.0
+    optional: true
 
-  '@keyv/serialize@1.1.1': {}
+  '@keyv/serialize@1.1.1':
+    optional: true
 
   '@kwsites/file-exists@1.1.1':
     dependencies:
@@ -9085,7 +9093,8 @@ snapshots:
 
   '@pierre/theme@0.0.22': {}
 
-  '@pinojs/redact@0.4.0': {}
+  '@pinojs/redact@0.4.0':
+    optional: true
 
   '@polka/url@1.0.0-next.29': {}
 
@@ -9934,7 +9943,8 @@ snapshots:
 
   '@types/linkify-it@5.0.0': {}
 
-  '@types/long@4.0.2': {}
+  '@types/long@4.0.2':
+    optional: true
 
   '@types/markdown-it@14.1.2':
     dependencies:
@@ -9951,7 +9961,8 @@ snapshots:
 
   '@types/ms@2.1.0': {}
 
-  '@types/node@10.17.60': {}
+  '@types/node@10.17.60':
+    optional: true
 
   '@types/node@16.9.1': {}
 
@@ -10172,11 +10183,13 @@ snapshots:
       - bufferutil
       - supports-color
       - utf-8-validate
+    optional: true
 
   '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67':
     dependencies:
       curve25519-js: 0.0.4
       protobufjs: 6.8.8
+    optional: true
 
   abbrev@1.1.1:
     optional: true
@@ -10303,6 +10316,7 @@ snapshots:
   async-mutex@0.5.0:
     dependencies:
       tslib: 2.8.1
+    optional: true
 
   async-retry@1.3.3:
     dependencies:
@@ -10310,7 +10324,8 @@ snapshots:
 
   asynckit@0.4.0: {}
 
-  atomic-sleep@1.0.0: {}
+  atomic-sleep@1.0.0:
+    optional: true
 
   audio-buffer@5.0.0:
     optional: true
@@ -10472,6 +10487,7 @@ snapshots:
       hookified: 1.15.1
       keyv: 5.6.0
       qified: 0.9.0
+    optional: true
 
   call-bind-apply-helpers@1.0.2:
     dependencies:
@@ -10659,7 +10675,8 @@ snapshots:
 
   cssom@0.5.0: {}
 
-  curve25519-js@0.0.4: {}
+  curve25519-js@0.0.4:
+    optional: true
 
   data-uri-to-buffer@4.0.1: {}
 
@@ -11220,6 +11237,7 @@ snapshots:
   hashery@1.5.1:
     dependencies:
       hookified: 1.15.1
+    optional: true
 
   hasown@2.0.2:
     dependencies:
@@ -11249,9 +11267,11 @@ snapshots:
 
   hookable@6.1.0: {}
 
-  hookified@1.15.1: {}
+  hookified@1.15.1:
+    optional: true
 
-  hookified@2.1.0: {}
+  hookified@2.1.0:
+    optional: true
 
   hosted-git-info@9.0.2:
     dependencies:
@@ -11623,6 +11643,7 @@ snapshots:
   keyv@5.6.0:
     dependencies:
       '@keyv/serialize': 1.1.1
+    optional: true
 
   klona@2.0.6: {}
 
@@ -11749,7 +11770,8 @@ snapshots:
 
   loglevel@1.9.2: {}
 
-  long@4.0.0: {}
+  long@4.0.0:
+    optional: true
 
   long@5.3.2: {}
 
@@ -12106,7 +12128,8 @@ snapshots:
 
   omggif@1.0.10: {}
 
-  on-exit-leak-free@2.1.2: {}
+  on-exit-leak-free@2.1.2:
+    optional: true
 
   on-finished@2.4.1:
     dependencies:
@@ -12238,6 +12261,7 @@ snapshots:
     dependencies:
       eventemitter3: 5.0.4
       p-timeout: 7.0.1
+    optional: true
 
   p-retry@4.6.2:
     dependencies:
@@ -12255,7 +12279,8 @@ snapshots:
   p-timeout@4.1.0:
     optional: true
 
-  p-timeout@7.0.1: {}
+  p-timeout@7.0.1:
+    optional: true
 
   pac-proxy-agent@7.2.0:
     dependencies:
@@ -12342,8 +12367,10 @@ snapshots:
   pino-abstract-transport@2.0.0:
     dependencies:
       split2: 4.2.0
+    optional: true
 
-  pino-std-serializers@7.1.0: {}
+  pino-std-serializers@7.1.0:
+    optional: true
 
   pino@9.14.0:
     dependencies:
@@ -12358,6 +12385,7 @@ snapshots:
       safe-stable-stringify: 2.5.0
       sonic-boom: 4.2.1
       thread-stream: 3.1.0
+    optional: true
 
   pixelmatch@5.3.0:
     dependencies:
@@ -12400,7 +12428,8 @@ snapshots:
 
   process-nextick-args@2.0.1: {}
 
-  process-warning@5.0.0: {}
+  process-warning@5.0.0:
+    optional: true
 
   promise@7.3.1:
     dependencies:
@@ -12429,6 +12458,7 @@ snapshots:
       '@types/long': 4.0.2
       '@types/node': 10.17.60
       long: 4.0.0
+    optional: true
 
   protobufjs@7.5.4:
     dependencies:
@@ -12548,6 +12578,7 @@ snapshots:
   qified@0.9.0:
     dependencies:
       hookified: 2.1.0
+    optional: true
 
   qoa-format@1.0.1:
     dependencies:
@@ -12566,7 +12597,8 @@ snapshots:
 
   queue-microtask@1.2.3: {}
 
-  quick-format-unescaped@4.0.4: {}
+  quick-format-unescaped@4.0.4:
+    optional: true
 
   range-parser@1.2.1: {}
 
@@ -12610,7 +12642,8 @@ snapshots:
 
   readdirp@5.0.0: {}
 
-  real-require@0.2.0: {}
+  real-require@0.2.0:
+    optional: true
 
   reflect-metadata@0.2.2: {}
 
@@ -12748,7 +12781,8 @@ snapshots:
       buffer-alloc: 1.2.0
     optional: true
 
-  safe-stable-stringify@2.5.0: {}
+  safe-stable-stringify@2.5.0:
+    optional: true
 
   safer-buffer@2.1.2: {}
 
@@ -12950,6 +12984,7 @@ snapshots:
   sonic-boom@4.2.1:
     dependencies:
       atomic-sleep: 1.0.0
+    optional: true
 
   source-map-js@1.2.1: {}
 
@@ -12964,7 +12999,8 @@ snapshots:
 
   spark-md5@3.0.2: {}
 
-  split2@4.2.0: {}
+  split2@4.2.0:
+    optional: true
 
   sqlite-vec-darwin-arm64@0.1.7:
     optional: true
@@ -13141,6 +13177,7 @@ snapshots:
   thread-stream@3.1.0:
     dependencies:
       real-require: 0.2.0
+    optional: true
 
   tinybench@2.9.0: {}
 
