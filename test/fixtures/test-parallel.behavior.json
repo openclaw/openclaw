@@ -36,28 +36,12 @@
         "reason": "Measured ~25% faster under threads than forks on this host while keeping the file green."
       },
       {
-        "file": "src/cron/isolated-agent/run.skill-filter.test.ts",
-        "reason": "Measured ~15% faster under threads than forks on this host while keeping the file green."
-      },
-      {
         "file": "src/cron/isolated-agent/run.owner-auth.test.ts",
         "reason": "Measured ~19% faster under threads than forks on this host while keeping the file green."
       },
       {
-        "file": "src/cron/isolated-agent.lane.test.ts",
-        "reason": "Measured ~14% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/cron/isolated-agent.direct-delivery-forum-topics.test.ts",
-        "reason": "Measured ~11% faster under threads than forks on this host while keeping the file green."
-      },
-      {
         "file": "src/cron/isolated-agent.auth-profile-propagation.test.ts",
         "reason": "Measured ~22% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/cron/isolated-agent.delivers-response-has-heartbeat-ok-but-includes.test.ts",
-        "reason": "Measured ~12% faster under threads than forks on this host while keeping the file green."
       },
       {
         "file": "src/cron/isolated-agent/delivery-dispatch.named-agent.test.ts",
@@ -65,30 +49,6 @@
       },
       {
         "file": "src/cron/isolated-agent.subagent-model.test.ts",
-        "reason": "Measured ~21% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/cron/service.store-load-invalid-main-job.test.ts",
-        "reason": "Measured ~16% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/cron/service.store-migration.test.ts",
-        "reason": "Measured ~14% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/cron/service.failure-alert.test.ts",
-        "reason": "Measured ~17% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/cron/service.persists-delivered-status.test.ts",
-        "reason": "Measured ~15% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/cron/session-reaper.test.ts",
-        "reason": "Measured ~12% faster under threads than forks on this host while keeping the file green."
-      },
-      {
-        "file": "src/cron/service.session-reaper-in-finally.test.ts",
         "reason": "Measured ~21% faster under threads than forks on this host while keeping the file green."
       },
       {
