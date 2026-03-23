@@ -17,7 +17,8 @@ Current behavior:
 - runtime elevated exec can be blocked with `privateMode.execution.disableElevatedExec`
 - runtime embedding provider selection rejects remote providers in private mode
 - runtime model fallback chains are filtered to `privateMode.localOnly.allowedProviders`
-- filesystem, sandbox, and audit settings are accepted in config, but their remaining runtime enforcement is still in progress
+- runtime sandbox enforcement forces all sessions into sandboxed execution when `privateMode.execution.sandboxMode` is `"all"` or `privateMode.execution.blockHostExec` is true
+- filesystem and audit settings are accepted in config, but their remaining runtime enforcement is still in progress
 
 Recommended current baseline:
 
@@ -70,4 +71,5 @@ Notes:
 - Runtime model fallback enforcement only allows providers from `privateMode.localOnly.allowedProviders` when private mode is enabled.
 - Runtime embedding enforcement blocks remote auto-selection and explicit remote embedding providers in private mode.
 - Runtime elevated exec and skill env injection enforcement depend on `privateMode.execution.disableElevatedExec` and `privateMode.skills.blockEnvInjection`.
+- Runtime sandbox enforcement depends on `privateMode.execution.sandboxMode` and `privateMode.execution.blockHostExec`; when either requires sandbox-first execution, all sessions are treated as sandboxed and failures stay fail-closed instead of falling back to host exec.
 - The safer long-term default for sandbox workspace exposure is `workspaceAccessDefault: "none"` with explicit read-only corpus mounts.

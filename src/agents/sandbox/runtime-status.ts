@@ -10,6 +10,14 @@ import { resolveSandboxConfigForAgent } from "./config.js";
 import { resolveSandboxToolPolicyForAgent } from "./tool-policy.js";
 import type { SandboxConfig, SandboxToolPolicyResolved } from "./types.js";
 
+function isPrivateModeSandboxForced(cfg?: OpenClawConfig): boolean {
+  if (cfg?.privateMode?.enabled !== true) {
+    return false;
+  }
+  const execution = cfg.privateMode.execution;
+  return execution?.sandboxMode === "all" || execution?.blockHostExec === true;
+}
+
 function shouldSandboxSession(cfg: SandboxConfig, sessionKey: string, mainSessionKey: string) {
   if (cfg.mode === "off") {
     return false;
@@ -53,6 +61,7 @@ export function resolveSandboxRuntimeStatus(params: {
   sessionKey: string;
   mainSessionKey: string;
   mode: SandboxConfig["mode"];
+  forcedByPrivateMode: boolean;
   sandboxed: boolean;
   toolPolicy: SandboxToolPolicyResolved;
 } {
@@ -63,10 +72,12 @@ export function resolveSandboxRuntimeStatus(params: {
   });
   const cfg = params.cfg;
   const sandboxCfg = resolveSandboxConfigForAgent(cfg, agentId);
+  const forcedByPrivateMode = isPrivateModeSandboxForced(cfg);
+  const effectiveMode: SandboxConfig["mode"] = forcedByPrivateMode ? "all" : sandboxCfg.mode;
   const mainSessionKey = resolveMainSessionKeyForSandbox({ cfg, agentId });
   const sandboxed = sessionKey
     ? shouldSandboxSession(
-        sandboxCfg,
+        { ...sandboxCfg, mode: effectiveMode },
         resolveComparableSessionKeyForSandbox({ cfg, agentId, sessionKey }),
         mainSessionKey,
       )
@@ -75,7 +86,8 @@ export function resolveSandboxRuntimeStatus(params: {
     agentId,
     sessionKey,
     mainSessionKey,
-    mode: sandboxCfg.mode,
+    mode: effectiveMode,
+    forcedByPrivateMode,
     sandboxed,
     toolPolicy: resolveSandboxToolPolicyForAgent(cfg, agentId),
   };
@@ -124,13 +136,22 @@ export function formatSandboxToolPolicyBlockedMessage(params: {
   const lines: string[] = [];
   lines.push(`Tool "${tool}" blocked by sandbox tool policy (mode=${runtime.mode}).`);
   lines.push(`Session: ${runtime.sessionKey || "(unknown)"}`);
+  if (runtime.forcedByPrivateMode) {
+    lines.push("Sandboxing is being forced by privateMode execution settings.");
+  }
   lines.push(`Reason: ${reasons.join(" + ")}`);
   lines.push("Fix:");
-  lines.push(`- agents.defaults.sandbox.mode=off (disable sandbox)`);
+  if (runtime.forcedByPrivateMode) {
+    lines.push(`- privateMode.execution.sandboxMode: remove "all"`);
+    lines.push(`- privateMode.execution.blockHostExec: set false`);
+    lines.push(`- Or disable privateMode entirely`);
+  } else {
+    lines.push(`- agents.defaults.sandbox.mode=off (disable sandbox)`);
+  }
   for (const fix of fixes) {
     lines.push(`- ${fix}`);
   }
-  if (runtime.mode === "non-main") {
+  if (runtime.mode === "non-main" && !runtime.forcedByPrivateMode) {
     lines.push(`- Use main session key (direct): ${runtime.mainSessionKey}`);
   }
   lines.push(

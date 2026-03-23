@@ -114,4 +114,42 @@ describe("sandbox explain helpers", () => {
     expect(msg).toContain("agents.defaults.sandbox.mode=off");
     expect(msg).toContain("Use main session key (direct): agent:main:main");
   });
+
+  it("explains when sandboxing is forced by private mode", () => {
+    const cfg: OpenClawConfig = {
+      privateMode: {
+        enabled: true,
+        execution: {
+          sandboxMode: "all",
+          blockHostExec: true,
+        },
+      },
+      agents: {
+        defaults: {
+          sandbox: { mode: "off", scope: "agent" },
+        },
+      },
+      tools: {
+        sandbox: {
+          tools: {
+            deny: ["browser"],
+          },
+        },
+      },
+    };
+
+    const msg = formatSandboxToolPolicyBlockedMessage({
+      cfg,
+      sessionKey: "agent:main:main",
+      toolName: "browser",
+    });
+
+    expect(msg).toBeTruthy();
+    expect(msg).toContain("mode=all");
+    expect(msg).toContain("Sandboxing is being forced by privateMode execution settings.");
+    expect(msg).toContain("privateMode.execution.sandboxMode");
+    expect(msg).toContain("privateMode.execution.blockHostExec");
+    expect(msg).not.toContain("agents.defaults.sandbox.mode=off");
+    expect(msg).not.toContain("Use main session key (direct)");
+  });
 });
