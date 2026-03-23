@@ -117,6 +117,7 @@ export function isLocalDirectRequest(
   req?: IncomingMessage,
   trustedProxies?: string[],
   allowRealIpFallback = false,
+  opts?: { allowTailscale?: boolean },
 ): boolean {
   if (!req) {
     return false;
@@ -133,7 +134,10 @@ export function isLocalDirectRequest(
   );
 
   const remoteIsTrustedProxy = isTrustedProxyAddress(req.socket?.remoteAddress, trustedProxies);
-  return isLocalishHost(req.headers?.host) && (!hasForwarded || remoteIsTrustedProxy);
+  return (
+    isLocalishHost(req.headers?.host, { allowTailscale: opts?.allowTailscale }) &&
+    (!hasForwarded || remoteIsTrustedProxy)
+  );
 }
 
 function getTailscaleUser(req?: IncomingMessage): TailscaleUser | null {
@@ -377,6 +381,7 @@ export async function authorizeGatewayConnect(
     req,
     trustedProxies,
     params.allowRealIpFallback === true,
+    { allowTailscale: auth.allowTailscale },
   );
 
   if (auth.mode === "trusted-proxy") {

@@ -360,14 +360,22 @@ export function isLoopbackHost(host: string): boolean {
 /**
  * Local-facing host check for inbound requests:
  * - loopback hosts (localhost/127.x/::1 and mapped forms)
- * - Tailscale Serve/Funnel hostnames (*.ts.net)
+ * - Tailscale Serve/Funnel hostnames (*.ts.net) — only when Tailscale is active
+ *
+ * The `allowTailscale` flag gates the `.ts.net` Host-header branch so that
+ * a co-resident process cannot spoof a Tailscale hostname when Tailscale is
+ * not configured.  Callers that do not pass the flag get loopback-only
+ * behaviour (safe default).
  */
-export function isLocalishHost(hostHeader?: string): boolean {
+export function isLocalishHost(hostHeader?: string, opts?: { allowTailscale?: boolean }): boolean {
   const host = resolveHostName(hostHeader);
   if (!host) {
     return false;
   }
-  return isLoopbackHost(host) || host.endsWith(".ts.net");
+  if (isLoopbackHost(host)) {
+    return true;
+  }
+  return opts?.allowTailscale === true && host.endsWith(".ts.net");
 }
 
 /**

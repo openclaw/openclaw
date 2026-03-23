@@ -97,7 +97,9 @@ export async function handleSessionKillHttpRequest(
   const trustedProxies = opts.trustedProxies ?? cfg.gateway?.trustedProxies;
   const allowRealIpFallback = opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback;
   const requesterSessionKey = req.headers[REQUESTER_SESSION_KEY_HEADER]?.toString().trim();
-  const allowLocalAdminKill = isLocalDirectRequest(req, trustedProxies, allowRealIpFallback);
+  const allowLocalAdminKill = isLocalDirectRequest(req, trustedProxies, allowRealIpFallback, {
+    allowTailscale: opts.auth.allowTailscale,
+  });
   const allowBearerOperatorKill = canBearerTokenKillSessions(token, authResult.ok);
 
   if (!requesterSessionKey && !allowLocalAdminKill && !allowBearerOperatorKill) {

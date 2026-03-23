@@ -118,6 +118,7 @@ openclaw gateway --tailscale funnel --auth password
       tailscale: { mode: "serve" },
     },
   }
+  ```
 
 ## Browser control (remote Gateway + local browser)
 

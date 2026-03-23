@@ -216,8 +216,12 @@ export function attachGatewayWsMessageHandler(params: {
   const hasProxyHeaders = Boolean(forwardedFor || realIp);
   const remoteIsTrustedProxy = isTrustedProxyAddress(remoteAddr, trustedProxies);
   const hasUntrustedProxyHeaders = hasProxyHeaders && !remoteIsTrustedProxy;
-  const hostIsLocalish = isLocalishHost(requestHost);
-  const isLocalClient = isLocalDirectRequest(upgradeReq, trustedProxies, allowRealIpFallback);
+  const hostIsLocalish = isLocalishHost(requestHost, {
+    allowTailscale: resolvedAuth.allowTailscale,
+  });
+  const isLocalClient = isLocalDirectRequest(upgradeReq, trustedProxies, allowRealIpFallback, {
+    allowTailscale: resolvedAuth.allowTailscale,
+  });
   const reportedClientIp =
     isLocalClient || hasUntrustedProxyHeaders
       ? undefined
