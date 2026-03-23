@@ -1,22 +1,13 @@
-import fs from "node:fs";
-import path from "node:path";
-import dotenv from "dotenv";
 import {
   loadAuthProfileStoreForSecretsRuntime,
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { collectConfigServiceEnvVars } from "../config/env-vars.js";
-import { resolveStateDir } from "../config/paths.js";
+import { collectDurableServiceEnvVars } from "../config/state-dir-dotenv.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
-import {
-  isDangerousHostEnvOverrideVarName,
-  isDangerousHostEnvVarName,
-  normalizeEnvVarKey,
-} from "../infra/host-env-security.js";
 import {
   emitDaemonInstallRuntimeWarning,
   resolveDaemonInstallRuntimeInputs,
@@ -26,45 +17,6 @@ import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 export { resolveGatewayDevMode } from "./daemon-install-plan.shared.js";
-
-/**
- * Read and parse `~/.openclaw/.env` (or `$OPENCLAW_STATE_DIR/.env`), returning
- * a filtered record of key-value pairs suitable for embedding in a service
- * environment (LaunchAgent plist, systemd unit, Scheduled Task).
- *
- * Security: dangerous host env vars (NODE_OPTIONS, LD_PRELOAD, etc.) are
- * dropped, matching the same policy applied to config env vars.
- */
-export function readStateDirDotEnvVars(
-  env: Record<string, string | undefined>,
-): Record<string, string> {
-  const stateDir = resolveStateDir(env as NodeJS.ProcessEnv);
-  const dotEnvPath = path.join(stateDir, ".env");
-
-  let content: string;
-  try {
-    content = fs.readFileSync(dotEnvPath, "utf8");
-  } catch {
-    return {};
-  }
-
-  const parsed = dotenv.parse(content);
-  const entries: Record<string, string> = {};
-  for (const [rawKey, value] of Object.entries(parsed)) {
-    if (!value?.trim()) {
-      continue;
-    }
-    const key = normalizeEnvVarKey(rawKey, { portable: true });
-    if (!key) {
-      continue;
-    }
-    if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
-      continue;
-    }
-    entries[key] = value;
-  }
-  return entries;
-}
 
 export type GatewayInstallPlan = {
   programArguments: string[];
@@ -97,6 +49,26 @@ function collectAuthProfileServiceEnvVars(params: {
   }
 
   return entries;
+}
+
+function buildGatewayInstallEnvironment(params: {
+  env: Record<string, string | undefined>;
+  config?: OpenClawConfig;
+  authStore?: AuthProfileStore;
+  serviceEnvironment: Record<string, string | undefined>;
+}): Record<string, string | undefined> {
+  const environment: Record<string, string | undefined> = {
+    ...collectDurableServiceEnvVars({
+      env: params.env,
+      config: params.config,
+    }),
+    ...collectAuthProfileServiceEnvVars({
+      env: params.env,
+      authStore: params.authStore,
+    }),
+  };
+  Object.assign(environment, params.serviceEnvironment);
+  return environment;
 }
 
 export async function buildGatewayInstallPlan(params: {
@@ -146,17 +118,16 @@ export async function buildGatewayInstallPlan(params: {
   //   2. Config env vars              (openclaw.json env.vars + inline keys)
   //   3. Auth-profile env refs        (credential store → env var lookups)
   //   4. Service environment          (HOME, PATH, OPENCLAW_* — highest)
-  const environment: Record<string, string | undefined> = {
-    ...readStateDirDotEnvVars(params.env),
-    ...collectConfigServiceEnvVars(params.config),
-    ...collectAuthProfileServiceEnvVars({
+  return {
+    programArguments,
+    workingDirectory,
+    environment: buildGatewayInstallEnvironment({
       env: params.env,
+      config: params.config,
       authStore: params.authStore,
+      serviceEnvironment,
     }),
   };
-  Object.assign(environment, serviceEnvironment);
-
-  return { programArguments, workingDirectory, environment };
 }
 
 export function gatewayInstallErrorHint(platform = process.platform): string {
