@@ -5,6 +5,7 @@ export function isMissingOperatorReadScopeError(err: unknown): boolean {
   if (!(err instanceof GatewayRequestError)) {
     return false;
   }
+  const detailCode = resolveGatewayErrorDetailCode(err);
   // AUTH_UNAUTHORIZED is the current server signal for scope failures in RPC responses.
   // The message-based fallback below catches cases where no detail code is set.
   if (detailCode === ConnectErrorDetailCodes.AUTH_UNAUTHORIZED) {
