@@ -15,7 +15,7 @@ const dispatcherMocks = vi.hoisted(() => ({
 const configMocks = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({
     browser: {},
-    nodeHost: { browserProxy: { enabled: true } },
+    nodeHost: { browserProxy: { enabled: true, allowProfiles: [] as string[] } },
   })),
 }));
 
@@ -50,7 +50,7 @@ describe("runBrowserProxyCommand", () => {
     controlServiceMocks.startBrowserControlServiceFromConfig.mockReset().mockResolvedValue(true);
     configMocks.loadConfig.mockReset().mockReturnValue({
       browser: {},
-      nodeHost: { browserProxy: { enabled: true } },
+      nodeHost: { browserProxy: { enabled: true, allowProfiles: [] as string[] } },
     });
     browserConfigMocks.resolveBrowserConfig.mockReset().mockReturnValue({
       enabled: true,
@@ -59,7 +59,7 @@ describe("runBrowserProxyCommand", () => {
     ({ runBrowserProxyCommand } = await import("./invoke-browser.js"));
     configMocks.loadConfig.mockReturnValue({
       browser: {},
-      nodeHost: { browserProxy: { enabled: true } },
+      nodeHost: { browserProxy: { enabled: true, allowProfiles: [] as string[] } },
     });
     browserConfigMocks.resolveBrowserConfig.mockReturnValue({
       enabled: true,
@@ -182,5 +182,135 @@ describe("runBrowserProxyCommand", () => {
         }),
       ),
     ).rejects.toThrow("tab not found");
+  });
+
+  it("rejects unauthorized query.profile when allowProfiles is configured", async () => {
+    configMocks.loadConfig.mockReturnValue({
+      browser: {},
+      nodeHost: { browserProxy: { enabled: true, allowProfiles: ["openclaw"] } },
+    });
+
+    await expect(
+      runBrowserProxyCommand(
+        JSON.stringify({
+          method: "GET",
+          path: "/snapshot",
+          query: { profile: "user" },
+          timeoutMs: 50,
+        }),
+      ),
+    ).rejects.toThrow("INVALID_REQUEST: browser profile not allowed");
+    expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("rejects unauthorized body.profile when allowProfiles is configured", async () => {
+    configMocks.loadConfig.mockReturnValue({
+      browser: {},
+      nodeHost: { browserProxy: { enabled: true, allowProfiles: ["openclaw"] } },
+    });
+
+    await expect(
+      runBrowserProxyCommand(
+        JSON.stringify({
+          method: "POST",
+          path: "/stop",
+          body: { profile: "user" },
+          timeoutMs: 50,
+        }),
+      ),
+    ).rejects.toThrow("INVALID_REQUEST: browser profile not allowed");
+    expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("rejects persistent profile creation when allowProfiles is configured", async () => {
+    configMocks.loadConfig.mockReturnValue({
+      browser: {},
+      nodeHost: { browserProxy: { enabled: true, allowProfiles: ["openclaw"] } },
+    });
+
+    await expect(
+      runBrowserProxyCommand(
+        JSON.stringify({
+          method: "POST",
+          path: "/profiles/create",
+          body: { name: "poc", cdpUrl: "http://127.0.0.1:9222" },
+          timeoutMs: 50,
+        }),
+      ),
+    ).rejects.toThrow(
+      "INVALID_REQUEST: browser.proxy cannot create or delete persistent browser profiles when allowProfiles is configured",
+    );
+    expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("rejects persistent profile deletion when allowProfiles is configured", async () => {
+    configMocks.loadConfig.mockReturnValue({
+      browser: {},
+      nodeHost: { browserProxy: { enabled: true, allowProfiles: ["openclaw"] } },
+    });
+
+    await expect(
+      runBrowserProxyCommand(
+        JSON.stringify({
+          method: "DELETE",
+          path: "/profiles/poc",
+          timeoutMs: 50,
+        }),
+      ),
+    ).rejects.toThrow(
+      "INVALID_REQUEST: browser.proxy cannot create or delete persistent browser profiles when allowProfiles is configured",
+    );
+    expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("canonicalizes an allowlisted body profile into the dispatched query", async () => {
+    configMocks.loadConfig.mockReturnValue({
+      browser: {},
+      nodeHost: { browserProxy: { enabled: true, allowProfiles: ["openclaw"] } },
+    });
+    dispatcherMocks.dispatch.mockResolvedValue({
+      status: 200,
+      body: { ok: true },
+    });
+
+    await runBrowserProxyCommand(
+      JSON.stringify({
+        method: "POST",
+        path: "/stop",
+        body: { profile: "openclaw" },
+        timeoutMs: 50,
+      }),
+    );
+
+    expect(dispatcherMocks.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/stop",
+        query: { profile: "openclaw" },
+      }),
+    );
+  });
+
+  it("preserves legacy proxy behavior when allowProfiles is empty", async () => {
+    dispatcherMocks.dispatch.mockResolvedValue({
+      status: 200,
+      body: { ok: true },
+    });
+
+    await runBrowserProxyCommand(
+      JSON.stringify({
+        method: "POST",
+        path: "/profiles/create",
+        body: { name: "poc", cdpUrl: "http://127.0.0.1:9222" },
+        timeoutMs: 50,
+      }),
+    );
+
+    expect(dispatcherMocks.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "POST",
+        path: "/profiles/create",
+        body: { name: "poc", cdpUrl: "http://127.0.0.1:9222" },
+      }),
+    );
   });
 });
