@@ -16,6 +16,14 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 - Pass `--json` for machine-readable summaries.
 - Per-phase logs land under `/tmp/openclaw-parallels-*`.
 - Do not run local and gateway agent turns in parallel on the same fresh workspace or session.
+- For `prlctl exec`, pass the VM name before `--current-user` (`prlctl exec "$VM" --current-user ...`), not the other way around.
+
+## npm install then update
+
+- Preferred entrypoint: `pnpm test:parallels:npm-update`
+- Flow: fresh snapshot -> install npm package baseline -> smoke -> install current main tgz on the same guest -> smoke again.
+- Same-guest update verification should set the default model explicitly to `openai/gpt-5.4` before the agent turn and use a fresh explicit `--session-id` so old session model state does not leak into the check.
+- Linux same-guest update verification should also export `HOME=/root`, pass `OPENAI_API_KEY` via `prlctl exec ... /usr/bin/env`, and use `openclaw agent --local`; the fresh Linux baseline does not rely on persisted gateway credentials.
 
 ## macOS flow
 
