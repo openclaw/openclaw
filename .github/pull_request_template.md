@@ -31,6 +31,32 @@ Describe the problem and fix in 2–5 bullets:
 
 - Closes #
 - Related #
+- [ ] This PR fixes a bug or regression
+
+## Root Cause / Regression History (if applicable)
+
+For bug fixes or regressions, explain why this happened, not just what changed. Otherwise write `N/A`. If the cause is unclear, write `Unknown`.
+
+- Root cause:
+- Missing detection / guardrail:
+- Prior context (`git blame`, prior PR, issue, or refactor if known):
+- Why this regressed now:
+- If unknown, what was ruled out:
+
+## Regression Test Plan (if applicable)
+
+For bug fixes or regressions, name the smallest reliable test coverage that should have caught this. Otherwise write `N/A`.
+
+- Coverage level that should have caught this:
+  - [ ] Unit test
+  - [ ] Seam / integration test
+  - [ ] End-to-end test
+  - [ ] Existing coverage already sufficient
+- Target test or file:
+- Scenario the test should lock in:
+- Why this is the smallest reliable guardrail:
+- Existing test that already covers this (if any):
+- If no new test is added, why not:
 
 ## User-visible / Behavior Changes
 
