@@ -297,6 +297,84 @@ export function createAnthropicBetaHeadersWrapper(
   };
 }
 
+/**
+ * Split the system prompt at `SYSTEM_PROMPT_CACHE_BOUNDARY` into a static
+ * (cached) prefix and a dynamic (uncached) suffix. Anthropic's prompt cache is
+ * prefix-based — any change to the system content invalidates the cache for all
+ * content that follows. By isolating per-turn dynamic sections (group context,
+ * runtime info) into a separate content block without `cache_control`, the
+ * static prefix (tools, skills, memory, safety rules, project context) stays
+ * cached across turns.
+ *
+ * Without this, a single changing field (e.g. the model name after `/model`,
+ * or `extraSystemPrompt` with per-message metadata) causes a full ~60-150k
+ * token cache re-write on every API call.
+ *
+ * Related: openclaw/openclaw#49700, #18963, #19989
+ */
+export function createAnthropicSystemPromptCacheSplitWrapper(
+  baseStreamFn: StreamFn | undefined,
+  delimiter: string,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (model.api !== "anthropic-messages") {
+      return underlying(model, context, options);
+    }
+
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+
+          // Anthropic Messages API: `system` can be a string or content block array.
+          // pi-ai with cacheRetention wraps it as a single-block array with cache_control.
+          const system = payloadObj.system;
+          if (Array.isArray(system)) {
+            const newBlocks: Array<Record<string, unknown>> = [];
+            for (const block of system as Array<Record<string, unknown>>) {
+              if (typeof block.text !== "string" || !block.text.includes(delimiter)) {
+                newBlocks.push(block);
+                continue;
+              }
+              const idx = block.text.indexOf(delimiter);
+              const staticPart = block.text.slice(0, idx).trimEnd();
+              const dynamicPart = block.text.slice(idx + delimiter.length).trimStart();
+
+              // Static prefix: preserve any existing cache_control from pi-ai
+              if (staticPart) {
+                newBlocks.push({
+                  type: "text",
+                  text: staticPart,
+                  ...(block.cache_control ? { cache_control: block.cache_control } : {}),
+                });
+              }
+              // Dynamic suffix: no cache_control so it doesn't invalidate the prefix
+              if (dynamicPart) {
+                newBlocks.push({ type: "text", text: dynamicPart });
+              }
+            }
+            payloadObj.system = newBlocks;
+          } else if (typeof system === "string" && system.includes(delimiter)) {
+            const idx = system.indexOf(delimiter);
+            const staticPart = system.slice(0, idx).trimEnd();
+            const dynamicPart = system.slice(idx + delimiter.length).trimStart();
+            payloadObj.system = [
+              ...(staticPart
+                ? [{ type: "text", text: staticPart, cache_control: { type: "ephemeral" } }]
+                : []),
+              ...(dynamicPart ? [{ type: "text", text: dynamicPart }] : []),
+            ];
+          }
+        }
+        return originalOnPayload?.(payload, model);
+      },
+    });
+  };
+}
+
 export function createAnthropicToolPayloadCompatibilityWrapper(
   baseStreamFn: StreamFn | undefined,
   resolverOptions?: {

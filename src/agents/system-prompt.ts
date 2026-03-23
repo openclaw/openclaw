@@ -16,6 +16,17 @@ import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
  * - "none": Just basic identity line, no sections
  */
 export type PromptMode = "full" | "minimal" | "none";
+
+/**
+ * Delimiter between the static (cacheable) and dynamic (per-turn) parts of the
+ * system prompt. Providers that support prefix-based prompt caching (Anthropic)
+ * can split on this marker and apply `cache_control` only to the static prefix,
+ * avoiding full cache invalidation when the dynamic suffix changes between turns.
+ *
+ * The delimiter is intentionally invisible to the model — it is stripped or used
+ * only at the transport layer.
+ */
+export const SYSTEM_PROMPT_CACHE_BOUNDARY = "\n<!-- OPENCLAW_CACHE_BOUNDARY -->\n";
 type OwnerIdDisplay = "raw" | "hash";
 
 function buildSkillsSection(params: { skillsPrompt?: string; readToolName: string }) {
@@ -567,6 +578,11 @@ export function buildAgentSystemPrompt(params: {
     }),
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
   ];
+
+  // --- Cache boundary: everything above is static per-session; everything below
+  // may change per-turn (group context, runtime info). Providers with prefix-based
+  // caching (Anthropic) split here so the static prefix stays cached.
+  lines.push(SYSTEM_PROMPT_CACHE_BOUNDARY);
 
   if (extraSystemPrompt) {
     // Use "Subagent Context" header for minimal mode (subagents), otherwise "Group Chat Context"

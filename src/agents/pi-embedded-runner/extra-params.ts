@@ -9,6 +9,7 @@ import {
 } from "../../plugins/provider-runtime.js";
 import {
   createAnthropicBetaHeadersWrapper,
+  createAnthropicSystemPromptCacheSplitWrapper,
   createBedrockNoCacheWrapper,
   createAnthropicFastModeWrapper,
   createAnthropicToolPayloadCompatibilityWrapper,
@@ -17,6 +18,7 @@ import {
   resolveAnthropicBetas,
   resolveCacheRetention,
 } from "./anthropic-stream-wrappers.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../system-prompt.js";
 import { createGoogleThinkingPayloadWrapper } from "./google-stream-wrappers.js";
 import { log } from "./logger.js";
 import { createMinimaxFastModeWrapper } from "./minimax-stream-wrappers.js";
@@ -243,6 +245,16 @@ export function applyExtraParamsToAgent(
       `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
     );
     agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
+  }
+
+  // Split the system prompt into static (cached) and dynamic (uncached) blocks
+  // for Anthropic providers. This preserves cache hits across turns by keeping
+  // per-turn dynamic content (group context, runtime info) out of the cached prefix.
+  if (provider === "anthropic" || isAnthropicBedrockModel(provider, modelId)) {
+    agent.streamFn = createAnthropicSystemPromptCacheSplitWrapper(
+      agent.streamFn,
+      SYSTEM_PROMPT_CACHE_BOUNDARY,
+    );
   }
 
   if (shouldApplySiliconFlowThinkingOffCompat({ provider, modelId, thinkingLevel })) {
