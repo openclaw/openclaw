@@ -109,6 +109,11 @@ export function resolvePluginTools(params: {
       continue;
     }
     if (!resolved) {
+      if (entry.names.length > 0) {
+        log.debug(
+          `plugin tool factory returned null (${entry.pluginId}): [${entry.names.join(", ")}]`,
+        );
+      }
       continue;
     }
     const listRaw = Array.isArray(resolved) ? resolved : [resolved];
