@@ -79,6 +79,15 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - `pnpm test` also passes `--isolate=false` at the wrapper level.
   - Opt back into Vitest file isolation with `OPENCLAW_TEST_ISOLATE=1 pnpm test`.
   - `OPENCLAW_TEST_NO_ISOLATE=0` or `OPENCLAW_TEST_NO_ISOLATE=false` also force isolated runs.
+- Fast-local iteration note:
+  - `pnpm test:changed` runs the wrapper with `--changed origin/main`.
+  - The base Vitest config marks the wrapper manifests/config files as `forceRerunTriggers` so changed-mode reruns stay correct when scheduler inputs change.
+  - Use `OPENCLAW_VITEST_FS_MODULE_CACHE=1` for repeated local reruns on a stable branch when transform cost dominates.
+- Perf-debug note:
+  - `pnpm test:perf:imports` enables Vitest import-duration reporting plus import-breakdown output.
+  - `pnpm test:perf:imports:changed` scopes the same profiling view to files changed since `origin/main`.
+  - `pnpm test:perf:profile:main` writes a main-thread CPU profile for Vitest/Vite startup and transform overhead.
+  - `pnpm test:perf:profile:runner` writes runner CPU+heap profiles for the unit suite with file parallelism disabled.
 
 ### E2E (gateway smoke)
 
