@@ -234,14 +234,18 @@ This does **not** apply to `src/` layouts — see above.
 
 ## What It Checks
 
-1. **Determinism** — Run the same input N times, measure output consistency. Catches
-   non-deterministic agents that give random answers.
-2. **Concurrency** — Blast the agent with parallel requests. Catches race conditions,
-   deadlocks, shared-state corruption.
-3. **Safety** — Test with real attack payloads (prompt injection, PII extraction,
-   jailbreaks). Catches agents that comply with attacks.
-4. **Latency** — Measure P50/P95/P99 response times. Catches agents too slow for
-   production.
+1. **Determinism** — Run the same input N times (default: 5), measure structural and
+   semantic consistency across outputs. Catches agents whose responses vary significantly
+   between runs.
+2. **Concurrency** — Fire requests in parallel (default: 4 workers). Detects deadlocks
+   via timeouts, failures under concurrent load, and output divergence. Also runs static
+   analysis on the agent source for shared-state patterns: global variable mutations and
+   shared state without locks.
+3. **Safety** — Scan outputs for PII and hallucination markers, then actively fire 47
+   adversarial injection payloads across 9 attack categories. Catches agents that leak
+   data or comply with injection attacks.
+4. **Latency** — Measure P50/P95/P99 response times against a configurable P95 budget
+   (default: 5000 ms). Also estimates per-call cost and flags high latency variance.
 
 ## Trust Score
 
