@@ -62,10 +62,15 @@ type Logger = {
   info?: (message: string) => void;
 };
 
-const VALID_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+const VALID_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
+// eslint-disable-next-line no-control-regex -- detects any character outside printable ASCII
+const NON_ASCII_PATTERN = /[^\x00-\x7F]/;
 
 function normalizeSlug(raw: string): string {
-  const slug = raw.trim().toLowerCase();
+  const slug = raw.trim();
+  if (NON_ASCII_PATTERN.test(slug)) {
+    throw new Error(`Invalid skill slug: ${raw}`);
+  }
   if (!slug || !VALID_SLUG_PATTERN.test(slug)) {
     throw new Error(`Invalid skill slug: ${raw}`);
   }

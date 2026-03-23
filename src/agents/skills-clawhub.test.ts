@@ -151,6 +151,18 @@ describe("skills-clawhub", () => {
       });
     });
 
+    it("rejects Unicode that case-folds to ASCII (Kelvin sign U+212A)", async () => {
+      // "\u212A" (Kelvin sign) lowercases to "k" — must be caught before lowercasing
+      const result = await installSkillFromClawHub({
+        workspaceDir: "/tmp/workspace",
+        slug: "\u212Aalendar",
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("Invalid skill slug"),
+      });
+    });
+
     it("rejects slug starting with a hyphen", async () => {
       const result = await installSkillFromClawHub({
         workspaceDir: "/tmp/workspace",
@@ -173,7 +185,15 @@ describe("skills-clawhub", () => {
       });
     });
 
-    it("accepts valid ASCII slugs", async () => {
+    it("accepts uppercase ASCII slugs (preserves original casing behavior)", async () => {
+      const result = await installSkillFromClawHub({
+        workspaceDir: "/tmp/workspace",
+        slug: "React",
+      });
+      expect(result).toMatchObject({ ok: true });
+    });
+
+    it("accepts valid lowercase ASCII slugs", async () => {
       const result = await installSkillFromClawHub({
         workspaceDir: "/tmp/workspace",
         slug: "calendar-2",
