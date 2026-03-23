@@ -42,6 +42,7 @@ const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const MAX_CALVER_DISTANCE_DAYS = 2;
 const REQUIRED_PACKED_PATHS = ["dist/control-ui/index.html"];
 const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
+const NPM_PACK_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
 function normalizeRepoUrl(value: unknown): string {
   if (typeof value !== "string") {
@@ -315,6 +316,7 @@ function runNpmCommand(args: string[]): string {
   const invocation = resolveNpmCommandInvocation();
   return execFileSync(invocation.command, [...invocation.args, ...args], {
     encoding: "utf8",
+    maxBuffer: NPM_PACK_MAX_BUFFER_BYTES,
     stdio: ["ignore", "pipe", "pipe"],
   });
 }
