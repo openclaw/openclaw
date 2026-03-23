@@ -84,6 +84,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Media/Windows: block remote-host `file://` media URLs and UNC/network paths before local filesystem resolution in core media loading and adjacent prompt/sandbox attachment seams. Thanks @vincentkoc.
 - Gateway/discovery: fail closed on unresolved Bonjour and DNS-SD service endpoints in CLI discovery, onboarding, and `gateway status` so TXT-only hints can no longer steer routing or SSH auto-target selection. Thanks @nexrin for reporting.
 - Gateway/startup: load bundled channel plugins from compiled `dist/extensions` entries in built installs, so gateway boot no longer recompiles bundled extension TypeScript on every startup and WhatsApp-class cold starts drop back to seconds instead of tens of seconds or worse. (#47560) Thanks @ngutman.
 - Gateway/startup: prewarm the configured primary model before channel startup and retry one transient provider-runtime miss so the first Telegram or Discord message after boot no longer fails with `Unknown model: openai-codex/gpt-5.4`. Thanks @vincentkoc.
