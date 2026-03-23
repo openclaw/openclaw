@@ -117,18 +117,25 @@ function resolveMentionPatterns(
   const agentConfig = agentId ? resolveAgentConfig(cfg, agentId) : undefined;
   const agentGroupChat = agentConfig?.groupChat;
   if (agentGroupChat && Object.hasOwn(agentGroupChat, "mentionPatterns")) {
-    return Array.isArray(agentGroupChat.mentionPatterns)
-      ? agentGroupChat.mentionPatterns
-      : [];
+    return Array.isArray(agentGroupChat.mentionPatterns) ? agentGroupChat.mentionPatterns : [];
   }
   const globalGroupChat = cfg.messages?.groupChat;
   if (globalGroupChat && Object.hasOwn(globalGroupChat, "mentionPatterns")) {
-    return Array.isArray(globalGroupChat.mentionPatterns)
-      ? globalGroupChat.mentionPatterns
-      : [];
+    return Array.isArray(globalGroupChat.mentionPatterns) ? globalGroupChat.mentionPatterns : [];
   }
   const derived = deriveMentionPatterns(agentConfig?.identity);
   return derived.length > 0 ? derived : [];
+}
+
+function resolveFallbackProviderMentionStripRegexes(providerId?: string | null): RegExp[] {
+  switch (providerId?.trim().toLowerCase()) {
+    case "discord":
+      return [/<@!?\d+>/gi];
+    case "slack":
+      return [/<@[^>\s]+>/gi];
+    default:
+      return [];
+  }
 }
 
 export function buildMentionRegexes(cfg: OpenClawConfig | undefined, agentId?: string): RegExp[] {
@@ -229,7 +236,9 @@ export function stripMentions(
       cache: mentionStripRegexCompileCache,
       warnRejected: false,
     });
-  for (const re of [...configRegexes, ...providerRegexes]) {
+  const fallbackProviderRegexes =
+    providerRegexes.length > 0 ? [] : resolveFallbackProviderMentionStripRegexes(providerId);
+  for (const re of [...configRegexes, ...providerRegexes, ...fallbackProviderRegexes]) {
     result = result.replace(re, " ");
   }
   if (providerMentions?.stripMentions) {
