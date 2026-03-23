@@ -3,6 +3,7 @@ import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import {
   createAllowFromSection,
   createPromptParsedAllowFromForAccount,
+  createStandardChannelSetupStatus,
   setSetupChannelEnabled,
 } from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
@@ -168,21 +169,20 @@ const ircDmPolicy: ChannelSetupDmPolicy = {
 
 export const ircSetupWizard: ChannelSetupWizard = {
   channel,
-  status: {
+  status: createStandardChannelSetupStatus({
+    channelLabel: "IRC",
     configuredLabel: "configured",
     unconfiguredLabel: "needs host + nick",
     configuredHint: "configured",
     unconfiguredHint: "needs host + nick",
     configuredScore: 1,
     unconfiguredScore: 0,
+    includeStatusLine: true,
     resolveConfigured: ({ cfg }) =>
       listIrcAccountIds(cfg as CoreConfig).some(
         (accountId) => resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }).configured,
       ),
-    resolveStatusLines: ({ configured }) => [
-      `IRC: ${configured ? "configured" : "needs host + nick"}`,
-    ],
-  },
+  }),
   introNote: {
     title: "IRC setup",
     lines: [

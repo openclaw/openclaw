@@ -42,6 +42,7 @@ export {
   createLegacyCompatChannelDmPolicy,
   createNestedChannelParsedAllowFromPrompt,
   createPromptParsedAllowFromForAccount,
+  createStandardChannelSetupStatus,
   createNestedChannelAllowFromSetter,
   createNestedChannelDmPolicy,
   createNestedChannelDmPolicySetter,

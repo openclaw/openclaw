@@ -13,7 +13,11 @@ import type {
   PromptAccountId,
   PromptAccountIdParams,
 } from "./setup-wizard-types.js";
-import type { ChannelSetupWizard, ChannelSetupWizardAllowFromEntry } from "./setup-wizard.js";
+import type {
+  ChannelSetupWizard,
+  ChannelSetupWizardAllowFromEntry,
+  ChannelSetupWizardStatus,
+} from "./setup-wizard.js";
 
 let providerAuthInputPromise:
   | Promise<Pick<typeof import("../../plugins/provider-auth-ref.js"), "promptSecretRefForSetup">>
@@ -154,6 +158,50 @@ export function normalizeAllowFromEntries(
     })
     .filter(Boolean);
   return [...new Set(normalized)];
+}
+
+export function createStandardChannelSetupStatus(params: {
+  channelLabel: string;
+  configuredLabel: string;
+  unconfiguredLabel: string;
+  configuredHint?: string;
+  unconfiguredHint?: string;
+  configuredScore?: number;
+  unconfiguredScore?: number;
+  includeStatusLine?: boolean;
+  resolveConfigured: ChannelSetupWizardStatus["resolveConfigured"];
+  resolveExtraStatusLines?: (params: {
+    cfg: OpenClawConfig;
+    configured: boolean;
+  }) => string[] | Promise<string[]>;
+}): ChannelSetupWizardStatus {
+  const status: ChannelSetupWizardStatus = {
+    configuredLabel: params.configuredLabel,
+    unconfiguredLabel: params.unconfiguredLabel,
+    resolveConfigured: params.resolveConfigured,
+    ...(params.configuredHint ? { configuredHint: params.configuredHint } : {}),
+    ...(params.unconfiguredHint ? { unconfiguredHint: params.unconfiguredHint } : {}),
+    ...(typeof params.configuredScore === "number"
+      ? { configuredScore: params.configuredScore }
+      : {}),
+    ...(typeof params.unconfiguredScore === "number"
+      ? { unconfiguredScore: params.unconfiguredScore }
+      : {}),
+  };
+
+  if (params.includeStatusLine || params.resolveExtraStatusLines) {
+    status.resolveStatusLines = async ({ cfg, configured }) => {
+      const lines = params.includeStatusLine
+        ? [
+            `${params.channelLabel}: ${configured ? params.configuredLabel : params.unconfiguredLabel}`,
+          ]
+        : [];
+      const extraLines = (await params.resolveExtraStatusLines?.({ cfg, configured })) ?? [];
+      return [...lines, ...extraLines];
+    };
+  }
+
+  return status;
 }
 
 export function resolveSetupAccountId(params: {
