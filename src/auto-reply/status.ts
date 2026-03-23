@@ -442,8 +442,21 @@ export function buildStatusMessage(args: StatusArgs): string {
   });
   const selectedProvider =
     entry?.providerOverride ?? entry?.modelProvider ?? resolved.provider ?? DEFAULT_PROVIDER;
+  // When a fallback has occurred, persistSessionUsageUpdate overwrites entry.model to the
+  // fallback target (entry.model === fallbackNoticeActiveModel). Detect this by comparing
+  // entry.model to fallbackNoticeActiveModel. If they match, a fallback is active and we must
+  // use fallbackNoticeSelectedModel as the originally selected model (not the fallback target).
+  // For non-fallback sessions, entry.model !== fallbackNoticeActiveModel so we fall through
+  // to entry.model (runtime model).
   const selectedModel =
-    entry?.modelOverride ?? entry?.model ?? resolved.model ?? DEFAULT_MODEL;
+    entry?.modelOverride
+    ?? (entry?.model !== undefined &&
+        entry?.fallbackNoticeActiveModel !== undefined &&
+        entry?.model === entry?.fallbackNoticeActiveModel
+        ? entry?.fallbackNoticeSelectedModel
+        : entry?.model)
+    ?? resolved.model
+    ?? DEFAULT_MODEL;
   const modelRefs = resolveSelectedAndActiveModel({
     selectedProvider,
     selectedModel,
