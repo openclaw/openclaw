@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ResolvedQQBotAccount, QQBotAccountConfig } from "./types.js";
 
@@ -19,7 +20,7 @@ export function listQQBotAccountIds(cfg: OpenClawConfig): string[] {
   const ids = new Set<string>();
   const qqbot = cfg.channels?.qqbot as QQBotChannelConfig | undefined;
 
-  if (qqbot?.appId) {
+  if (qqbot?.appId || process.env.QQBOT_APP_ID) {
     ids.add(DEFAULT_ACCOUNT_ID);
   }
 
@@ -96,8 +97,12 @@ export function resolveQQBotAccount(
     clientSecret = accountConfig.clientSecret;
     secretSource = "config";
   } else if (accountConfig.clientSecretFile) {
-    // 从文件读取（运行时处理）
-    secretSource = "file";
+    try {
+      clientSecret = fs.readFileSync(accountConfig.clientSecretFile, "utf8").trim();
+      secretSource = "file";
+    } catch {
+      secretSource = "none";
+    }
   } else if (process.env.QQBOT_CLIENT_SECRET && resolvedAccountId === DEFAULT_ACCOUNT_ID) {
     clientSecret = process.env.QQBOT_CLIENT_SECRET;
     secretSource = "env";
