@@ -3,8 +3,9 @@
 // 自动部署脚本
 
 import { execSync } from "child_process";
+import { readFileSync } from "fs";
 import { dirname, resolve } from "path";
-import { fileURLToPath, readFileSync } from "url";
+import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
