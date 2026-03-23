@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildMistralCatalogModels,
   buildMistralModelDefinition,
   MISTRAL_DEFAULT_CONTEXT_WINDOW,
   MISTRAL_DEFAULT_COST,
@@ -22,5 +23,31 @@ describe("mistral model definitions", () => {
       cacheRead: 0,
       cacheWrite: 0,
     });
+  });
+
+  it("publishes a curated set of current Mistral catalog models", () => {
+    expect(buildMistralCatalogModels()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "codestral-latest",
+          input: ["text"],
+          contextWindow: 256000,
+          maxTokens: 4096,
+        }),
+        expect.objectContaining({
+          id: "magistral-small",
+          reasoning: true,
+          input: ["text"],
+          contextWindow: 128000,
+          maxTokens: 128000,
+        }),
+        expect.objectContaining({
+          id: "pixtral-large-latest",
+          input: ["text", "image"],
+          contextWindow: 128000,
+          maxTokens: 128000,
+        }),
+      ]),
+    );
   });
 });
