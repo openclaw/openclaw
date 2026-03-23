@@ -10,6 +10,7 @@ import {
   readFileWithinRoot,
   writeFileWithinRoot,
 } from "../infra/fs-safe.js";
+import { sensitivePathReason } from "../security/sensitive-paths.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
@@ -723,12 +724,23 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
 
   if (!workspaceOnly) {
     // When workspaceOnly is false, allow writes anywhere on the host
+    // but still block sensitive credential/key paths.
     return {
       mkdir: async (dir: string) => {
         const resolved = path.resolve(dir);
+        const reason = sensitivePathReason(resolved);
+        if (reason) {
+          throw new Error(reason);
+        }
         await fs.mkdir(resolved, { recursive: true });
       },
-      writeFile: writeHostFile,
+      writeFile: async (absolutePath: string, content: string) => {
+        const reason = sensitivePathReason(absolutePath);
+        if (reason) {
+          throw new Error(reason);
+        }
+        await writeHostFile(absolutePath, content);
+      },
     } as const;
   }
 
@@ -757,14 +769,29 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
 
   if (!workspaceOnly) {
     // When workspaceOnly is false, allow edits anywhere on the host
+    // but still block sensitive credential/key paths.
     return {
       readFile: async (absolutePath: string) => {
         const resolved = path.resolve(absolutePath);
+        const reason = sensitivePathReason(resolved);
+        if (reason) {
+          throw new Error(reason);
+        }
         return await fs.readFile(resolved);
       },
-      writeFile: writeHostFile,
+      writeFile: async (absolutePath: string, content: string) => {
+        const reason = sensitivePathReason(absolutePath);
+        if (reason) {
+          throw new Error(reason);
+        }
+        await writeHostFile(absolutePath, content);
+      },
       access: async (absolutePath: string) => {
         const resolved = path.resolve(absolutePath);
+        const reason = sensitivePathReason(resolved);
+        if (reason) {
+          throw new Error(reason);
+        }
         await fs.access(resolved);
       },
     } as const;
