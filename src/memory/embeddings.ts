@@ -456,18 +456,9 @@ export async function createEmbeddingProvider(
     for (const pid of REMOTE_EMBEDDING_PROVIDER_IDS) {
       const pp = pluginProviders[pid];
       if (pp) {
-        try {
-          const apiKey = await resolveApiKeyForProvider({
-            cfg: options.config,
-            provider: pid,
-            agentDir: options.agentDir,
-          });
-          if (apiKey !== undefined) {
-            return { provider: pp, requestedProvider };
-          }
-        } catch {
-          // No API key for plugin - fall through to try built-in
-        }
+        // Return plugin provider - let runtime call surface errors if keyless/unconfigured
+        // This allows keyless plugins to work without upfront API key validation
+        return { provider: pp, requestedProvider };
       }
       // Try built-in
       try {
@@ -483,20 +474,9 @@ export async function createEmbeddingProvider(
 
     // Built-ins failed or unavailable - try custom plugins as fallback
     // Only reach here if all built-ins failed
-    // Iterate through custom plugins and try each one until we find a viable one
+    // Return first custom plugin - let runtime call surface errors if unconfigured
     for (const cp of customPlugins) {
-      try {
-        const apiKey = await resolveApiKeyForProvider({
-          cfg: options.config,
-          provider: cp.id,
-          agentDir: options.agentDir,
-        });
-        if (apiKey !== undefined) {
-          return { provider: cp.provider, requestedProvider };
-        }
-      } catch {
-        // No API key for this plugin - try next one
-      }
+      return { provider: cp.provider, requestedProvider };
     }
 
     // All failed - return null for FTS-only mode
