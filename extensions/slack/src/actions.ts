@@ -259,6 +259,76 @@ export async function listSlackEmojis(opts: SlackActionClientOpts = {}) {
   return await client.emoji.list();
 }
 
+type SlackChannelListResponse = {
+  channels?: Array<{
+    id?: string;
+    name?: string;
+    is_channel?: boolean;
+    is_group?: boolean;
+    is_im?: boolean;
+    is_mpim?: boolean;
+    is_private?: boolean;
+    is_archived?: boolean;
+    num_members?: number;
+  }>;
+  response_metadata?: { next_cursor?: string };
+};
+
+export async function listSlackChannels(
+  opts: SlackActionClientOpts & { types?: string } = {},
+): Promise<SlackChannelListResponse> {
+  const client = await getClient(opts);
+  const channels: SlackChannelListResponse["channels"] = [];
+  const types = opts.types ?? "public_channel,private_channel,mpim,im";
+  let cursor: string | undefined;
+
+  do {
+    const res = (await client.conversations.list({
+      types,
+      exclude_archived: false,
+      limit: 1000,
+      cursor,
+    })) as SlackChannelListResponse;
+    if (Array.isArray(res.channels)) {
+      channels.push(...res.channels);
+    }
+    const next = res.response_metadata?.next_cursor?.trim();
+    cursor = next ? next : undefined;
+  } while (cursor);
+
+  return { channels };
+}
+
+type SlackSearchMessagesResponse = {
+  ok?: boolean;
+  messages?: Array<{
+    type?: string;
+    ts?: string;
+    text?: string;
+    user?: string;
+    username?: string;
+    channel?: {
+      id?: string;
+      name?: string;
+    };
+  }>;
+  total?: number;
+  error?: string;
+};
+
+export async function searchSlackMessages(
+  query: string,
+  opts: SlackActionClientOpts & { limit?: number } = {},
+): Promise<SlackSearchMessagesResponse> {
+  const client = await getClient(opts);
+  const limit = opts.limit ?? 20;
+  const result = (await client.search.messages({
+    query,
+    count: limit,
+  })) as SlackSearchMessagesResponse;
+  return result;
+}
+
 export async function pinSlackMessage(
   channelId: string,
   messageId: string,
