@@ -1,6 +1,6 @@
 import { type Bot, GrammyError } from "grammy";
-import { formatErrorMessage } from "../../../../src/infra/errors.js";
-import type { RuntimeEnv } from "../../../../src/runtime.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
 import { markdownToTelegramHtml } from "../format.js";
 import { buildInlineKeyboard } from "../send.js";
@@ -9,9 +9,11 @@ import { buildTelegramThreadParams, type TelegramThreadSpec } from "./helpers.js
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const EMPTY_TEXT_ERR_RE = /message text is empty/i;
 const THREAD_NOT_FOUND_RE = /message thread not found/i;
+const GrammyErrorCtor: typeof GrammyError | undefined =
+  typeof GrammyError === "function" ? GrammyError : undefined;
 
 function isTelegramThreadNotFoundError(err: unknown): boolean {
-  if (err instanceof GrammyError) {
+  if (GrammyErrorCtor && err instanceof GrammyErrorCtor) {
     return THREAD_NOT_FOUND_RE.test(err.description);
   }
   return THREAD_NOT_FOUND_RE.test(formatErrorMessage(err));
@@ -82,6 +84,7 @@ export function buildTelegramSendParams(opts?: {
   const params: Record<string, unknown> = {};
   if (opts?.replyToMessageId) {
     params.reply_to_message_id = opts.replyToMessageId;
+    params.allow_sending_without_reply = true;
   }
   if (threadParams) {
     params.message_thread_id = threadParams.message_thread_id;

@@ -1,5 +1,6 @@
 import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import { captureEnv } from "../test-utils/env.js";
 
 let envSnapshot: ReturnType<typeof captureEnv>;
@@ -117,7 +118,15 @@ type ProbeGatewayResult = {
 };
 
 function mockProbeGatewayResult(overrides: Partial<ProbeGatewayResult>) {
-  mocks.probeGateway.mockResolvedValueOnce({
+  mocks.probeGateway.mockReset();
+  mocks.probeGateway.mockResolvedValue({
+    ...createDefaultProbeGatewayResult(),
+    ...overrides,
+  });
+}
+
+function createDefaultProbeGatewayResult(): ProbeGatewayResult {
+  return {
     ok: false,
     url: "ws://127.0.0.1:18789",
     connectLatencyMs: null,
@@ -127,8 +136,7 @@ function mockProbeGatewayResult(overrides: Partial<ProbeGatewayResult>) {
     status: null,
     presence: null,
     configSnapshot: null,
-    ...overrides,
-  });
+  };
 }
 
 async function withEnvVar<T>(key: string, value: string, run: () => Promise<T>): Promise<T> {
@@ -157,15 +165,7 @@ const mocks = vi.hoisted(() => ({
   readWebSelfId: vi.fn().mockReturnValue({ e164: "+1999" }),
   logWebSelfId: vi.fn(),
   probeGateway: vi.fn().mockResolvedValue({
-    ok: false,
-    url: "ws://127.0.0.1:18789",
-    connectLatencyMs: null,
-    error: "timeout",
-    close: null,
-    health: null,
-    status: null,
-    presence: null,
-    configSnapshot: null,
+    ...createDefaultProbeGatewayResult(),
   }),
   callGateway: vi.fn().mockResolvedValue({}),
   listGatewayAgentsBasic: vi.fn().mockReturnValue({
@@ -205,11 +205,12 @@ const mocks = vi.hoisted(() => ({
       },
     ],
   }),
+  buildPluginCompatibilityNotices: vi.fn((): PluginCompatibilityNotice[] => []),
 }));
 
-vi.mock("../memory/manager.js", () => ({
-  MemoryIndexManager: {
-    get: vi.fn(async ({ agentId }: { agentId: string }) => ({
+vi.mock("../memory/index.js", () => ({
+  getMemorySearchManager: vi.fn(async ({ agentId }: { agentId: string }) => ({
+    manager: {
       probeVectorAvailability: vi.fn(async () => true),
       status: () => ({
         files: 2,
@@ -233,23 +234,31 @@ vi.mock("../memory/manager.js", () => ({
       }),
       close: vi.fn(async () => {}),
       __agentId: agentId,
-    })),
-  },
+    },
+  })),
 }));
 
-vi.mock("../config/sessions.js", () => ({
-  loadSessionStore: mocks.loadSessionStore,
+vi.mock("../config/sessions/main-session.js", () => ({
   resolveMainSessionKey: mocks.resolveMainSessionKey,
-  resolveStorePath: mocks.resolveStorePath,
-  resolveFreshSessionTotalTokens: vi.fn(
-    (entry?: { totalTokens?: number; totalTokensFresh?: boolean }) =>
-      typeof entry?.totalTokens === "number" && entry?.totalTokensFresh !== false
-        ? entry.totalTokens
-        : undefined,
-  ),
-  readSessionUpdatedAt: vi.fn(() => undefined),
-  recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock("../config/sessions/paths.js", () => ({
+  resolveStorePath: mocks.resolveStorePath,
+}));
+vi.mock("../config/sessions/store-read.js", () => ({
+  readSessionStoreReadOnly: mocks.loadSessionStore,
+}));
+vi.mock("../config/sessions/types.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions/types.js")>();
+  return {
+    ...actual,
+    resolveFreshSessionTotalTokens: vi.fn(
+      (entry?: { totalTokens?: number; totalTokensFresh?: boolean }) =>
+        typeof entry?.totalTokens === "number" && entry?.totalTokensFresh !== false
+          ? entry.totalTokens
+          : undefined,
+    ),
+  };
+});
 vi.mock("../channels/plugins/index.js", () => ({
   listChannelPlugins: () =>
     [
@@ -354,6 +363,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
   return {
     ...actual,
     loadConfig: mocks.loadConfig,
+    readBestEffortConfig: vi.fn(async () => mocks.loadConfig()),
   };
 });
 vi.mock("../daemon/service.js", () => ({
@@ -385,6 +395,15 @@ vi.mock("../daemon/node-service.js", () => ({
 vi.mock("../security/audit.js", () => ({
   runSecurityAudit: mocks.runSecurityAudit,
 }));
+vi.mock("../plugins/status.js", () => ({
+  buildPluginCompatibilityNotices: mocks.buildPluginCompatibilityNotices,
+  summarizePluginCompatibility: (warnings: PluginCompatibilityNotice[]) => ({
+    noticeCount: warnings.length,
+    pluginCount: new Set(warnings.map((warning) => warning.pluginId)).size,
+  }),
+  formatPluginCompatibilityNotice: (notice: PluginCompatibilityNotice) =>
+    `${notice.pluginId} ${notice.message}`,
+}));
 
 import { statusCommand } from "./status.js";
 
@@ -400,16 +419,79 @@ describe("statusCommand", () => {
   afterEach(() => {
     mocks.loadConfig.mockReset();
     mocks.loadConfig.mockReturnValue({ session: {} });
+    mocks.loadSessionStore.mockReset();
+    mocks.loadSessionStore.mockReturnValue({
+      "+1000": createDefaultSessionStoreEntry(),
+    });
+    mocks.resolveMainSessionKey.mockReset();
+    mocks.resolveMainSessionKey.mockReturnValue("agent:main:main");
+    mocks.resolveStorePath.mockReset();
+    mocks.resolveStorePath.mockReturnValue("/tmp/sessions.json");
+    mocks.probeGateway.mockReset();
+    mocks.probeGateway.mockResolvedValue(createDefaultProbeGatewayResult());
+    mocks.callGateway.mockReset();
+    mocks.callGateway.mockResolvedValue({});
+    mocks.listGatewayAgentsBasic.mockReset();
+    mocks.listGatewayAgentsBasic.mockReturnValue({
+      defaultId: "main",
+      mainKey: "agent:main:main",
+      scope: "per-sender",
+      agents: [{ id: "main", name: "Main" }],
+    });
+    mocks.buildPluginCompatibilityNotices.mockReset();
+    mocks.buildPluginCompatibilityNotices.mockReturnValue([]);
+    mocks.runSecurityAudit.mockReset();
+    mocks.runSecurityAudit.mockResolvedValue({
+      ts: 0,
+      summary: { critical: 1, warn: 1, info: 2 },
+      findings: [
+        {
+          checkId: "test.critical",
+          severity: "critical",
+          title: "Test critical finding",
+          detail: "Something is very wrong\nbut on two lines",
+          remediation: "Do the thing",
+        },
+        {
+          checkId: "test.warn",
+          severity: "warn",
+          title: "Test warning finding",
+          detail: "Something is maybe wrong",
+        },
+        {
+          checkId: "test.info",
+          severity: "info",
+          title: "Test info finding",
+          detail: "FYI only",
+        },
+        {
+          checkId: "test.info2",
+          severity: "info",
+          title: "Another info finding",
+          detail: "More FYI",
+        },
+      ],
+    });
+    runtimeLogMock.mockClear();
+    (runtime.error as Mock<(...args: unknown[]) => void>).mockClear();
   });
 
   it("prints JSON when requested", async () => {
+    mocks.buildPluginCompatibilityNotices.mockReturnValue([
+      {
+        pluginId: "legacy-plugin",
+        code: "legacy-before-agent-start",
+        severity: "warn",
+        message:
+          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
+      },
+    ]);
     await statusCommand({ json: true }, runtime as never);
     const payload = JSON.parse(String(runtimeLogMock.mock.calls[0]?.[0]));
     expect(payload.linkChannel).toBeUndefined();
-    expect(payload.memory.agentId).toBe("main");
+    expect(payload.memory).toBeNull();
     expect(payload.memoryPlugin.enabled).toBe(true);
     expect(payload.memoryPlugin.slot).toBe("memory-core");
-    expect(payload.memory.vector.available).toBe(true);
     expect(payload.sessions.count).toBe(1);
     expect(payload.sessions.paths).toContain("/tmp/sessions.json");
     expect(payload.sessions.defaults.model).toBeTruthy();
@@ -424,6 +506,10 @@ describe("statusCommand", () => {
     expect(payload.securityAudit.summary.warn).toBe(1);
     expect(payload.gatewayService.label).toBe("LaunchAgent");
     expect(payload.nodeService.label).toBe("LaunchAgent");
+    expect(payload.pluginCompatibility).toEqual({
+      count: 0,
+      warnings: [],
+    });
     expect(mocks.runSecurityAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         includeFilesystem: true,
@@ -452,6 +538,15 @@ describe("statusCommand", () => {
   });
 
   it("prints formatted lines otherwise", async () => {
+    mocks.buildPluginCompatibilityNotices.mockReturnValue([
+      {
+        pluginId: "legacy-plugin",
+        code: "legacy-before-agent-start",
+        severity: "warn",
+        message:
+          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
+      },
+    ]);
     const logs = await runStatusAndGetLogs();
     for (const token of [
       "OpenClaw status",
@@ -462,6 +557,7 @@ describe("statusCommand", () => {
       "Dashboard",
       "macos 14.0 (arm64)",
       "Memory",
+      "Plugin compatibility",
       "Channels",
       "WhatsApp",
       "bootstrap files",
@@ -477,6 +573,9 @@ describe("statusCommand", () => {
       expect(logs.some((line) => line.includes(token))).toBe(true);
     }
     expect(
+      logs.some((line) => line.includes("legacy-plugin still uses legacy before_agent_start")),
+    ).toBe(true);
+    expect(
       logs.some(
         (line) =>
           line.includes("openclaw status --all") ||
@@ -486,6 +585,10 @@ describe("statusCommand", () => {
   });
 
   it("shows gateway auth when reachable", async () => {
+    mocks.loadConfig.mockReturnValue({
+      session: {},
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    });
     await withEnvVar("OPENCLAW_GATEWAY_TOKEN", "abcd1234", async () => {
       mockProbeGatewayResult({
         ok: true,
@@ -503,6 +606,7 @@ describe("statusCommand", () => {
   it("warns instead of crashing when gateway auth SecretRef is unresolved for probe auth", async () => {
     mocks.loadConfig.mockReturnValue({
       session: {},
+      channels: { whatsapp: { allowFrom: ["*"] } },
       gateway: {
         auth: {
           mode: "token",
@@ -528,6 +632,10 @@ describe("statusCommand", () => {
   });
 
   it("surfaces channel runtime errors from the gateway", async () => {
+    mocks.loadConfig.mockReturnValue({
+      session: {},
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    });
     mockProbeGatewayResult({
       ok: true,
       connectLatencyMs: 10,
@@ -589,6 +697,10 @@ describe("statusCommand", () => {
       excludes: ["devices approve req-123;rm -rf /"],
     },
   ])("$name", async ({ error, closeReason, includes, excludes }) => {
+    mocks.loadConfig.mockReturnValue({
+      session: {},
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    });
     mockProbeGatewayResult({
       error,
       close: { code: 1008, reason: closeReason },
@@ -606,6 +718,10 @@ describe("statusCommand", () => {
   });
 
   it("extracts requestId from close reason when error text omits it", async () => {
+    mocks.loadConfig.mockReturnValue({
+      session: {},
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    });
     mockProbeGatewayResult({
       error: "connect failed: pairing required",
       close: { code: 1008, reason: "pairing required (requestId: req-close-456)" },

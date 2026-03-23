@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createStartAccountContext } from "../../test-utils/start-account-context.js";
+import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
 import {
   expectStopPendingUntilAbort,
   startAccountAndTrackLifecycle,
-} from "../../test-utils/start-account-lifecycle.js";
+  waitForStartedMocks,
+} from "../../../test/helpers/extensions/start-account-lifecycle.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -36,23 +37,34 @@ function buildAccount(): ResolvedNextcloudTalkAccount {
   };
 }
 
+function mockStartedMonitor() {
+  const stop = vi.fn();
+  hoisted.monitorNextcloudTalkProvider.mockResolvedValue({ stop });
+  return stop;
+}
+
+function startNextcloudAccount(abortSignal?: AbortSignal) {
+  return nextcloudTalkPlugin.gateway!.startAccount!(
+    createStartAccountContext({
+      account: buildAccount(),
+      abortSignal,
+    }),
+  );
+}
+
 describe("nextcloudTalkPlugin gateway.startAccount", () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
 
   it("keeps startAccount pending until abort, then stops the monitor", async () => {
-    const stop = vi.fn();
-    hoisted.monitorNextcloudTalkProvider.mockResolvedValue({ stop });
+    const stop = mockStartedMonitor();
     const { abort, task, isSettled } = startAccountAndTrackLifecycle({
       startAccount: nextcloudTalkPlugin.gateway!.startAccount!,
       account: buildAccount(),
     });
     await expectStopPendingUntilAbort({
-      waitForStarted: () =>
-        vi.waitFor(() => {
-          expect(hoisted.monitorNextcloudTalkProvider).toHaveBeenCalledOnce();
-        }),
+      waitForStarted: waitForStartedMocks(hoisted.monitorNextcloudTalkProvider),
       isSettled,
       abort,
       task,
@@ -61,17 +73,11 @@ describe("nextcloudTalkPlugin gateway.startAccount", () => {
   });
 
   it("stops immediately when startAccount receives an already-aborted signal", async () => {
-    const stop = vi.fn();
-    hoisted.monitorNextcloudTalkProvider.mockResolvedValue({ stop });
+    const stop = mockStartedMonitor();
     const abort = new AbortController();
     abort.abort();
 
-    await nextcloudTalkPlugin.gateway!.startAccount!(
-      createStartAccountContext({
-        account: buildAccount(),
-        abortSignal: abort.signal,
-      }),
-    );
+    await startNextcloudAccount(abort.signal);
 
     expect(hoisted.monitorNextcloudTalkProvider).toHaveBeenCalledOnce();
     expect(stop).toHaveBeenCalledOnce();

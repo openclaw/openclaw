@@ -1,6 +1,7 @@
-import { formatCliCommand } from "../../../src/cli/command-format.js";
-import type { PollInput } from "../../../src/polls.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
+import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
+import type { PollInput } from "openclaw/plugin-sdk/media-runtime";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/text-runtime";
 
 export type ActiveWebSendOptions = {
   gifPlayback?: boolean;
@@ -28,9 +29,30 @@ export type ActiveWebListener = {
   close?: () => Promise<void>;
 };
 
-let _currentListener: ActiveWebListener | null = null;
+// Use process-global symbol keys to survive bundler code-splitting and loader
+// cache splits without depending on fragile string property names.
+const WHATSAPP_ACTIVE_LISTENER_STATE_KEY = Symbol.for("openclaw.whatsapp.activeListenerState");
 
-const listeners = new Map<string, ActiveWebListener>();
+type ActiveListenerState = {
+  listeners: Map<string, ActiveWebListener>;
+  current: ActiveWebListener | null;
+};
+
+const state = resolveGlobalSingleton<ActiveListenerState>(
+  WHATSAPP_ACTIVE_LISTENER_STATE_KEY,
+  () => ({
+    listeners: new Map<string, ActiveWebListener>(),
+    current: null,
+  }),
+);
+
+function getCurrentListener(): ActiveWebListener | null {
+  return state.current;
+}
+
+function setCurrentListener(listener: ActiveWebListener | null): void {
+  state.current = listener;
+}
 
 export function resolveWebAccountId(accountId?: string | null): string {
   return (accountId ?? "").trim() || DEFAULT_ACCOUNT_ID;
@@ -41,7 +63,7 @@ export function requireActiveWebListener(accountId?: string | null): {
   listener: ActiveWebListener;
 } {
   const id = resolveWebAccountId(accountId);
-  const listener = listeners.get(id) ?? null;
+  const listener = state.listeners.get(id) ?? null;
   if (!listener) {
     throw new Error(
       `No active WhatsApp Web listener (account: ${id}). Start the gateway, then link WhatsApp with: ${formatCliCommand(`openclaw channels login --channel whatsapp --account ${id}`)}.`,
@@ -69,16 +91,16 @@ export function setActiveWebListener(
 
   const id = resolveWebAccountId(accountId);
   if (!listener) {
-    listeners.delete(id);
+    state.listeners.delete(id);
   } else {
-    listeners.set(id, listener);
+    state.listeners.set(id, listener);
   }
   if (id === DEFAULT_ACCOUNT_ID) {
-    _currentListener = listener;
+    setCurrentListener(listener);
   }
 }
 
 export function getActiveWebListener(accountId?: string | null): ActiveWebListener | null {
   const id = resolveWebAccountId(accountId);
-  return listeners.get(id) ?? null;
+  return state.listeners.get(id) ?? null;
 }

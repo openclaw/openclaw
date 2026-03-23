@@ -1,10 +1,13 @@
-import { normalizeChatType } from "../../../src/channels/chat-type.js";
-import { createAccountListHelpers } from "../../../src/channels/plugins/account-helpers.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { SlackAccountConfig } from "../../../src/config/types.js";
-import { resolveAccountEntry } from "../../../src/routing/account-lookup.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
+import {
+  createAccountListHelpers,
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeChatType,
+  resolveMergedAccountConfig,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/account-resolution";
 import type { SlackAccountSurfaceFields } from "./account-surface-fields.js";
+import type { SlackAccountConfig } from "./runtime-api.js";
 import { resolveSlackAppToken, resolveSlackBotToken, resolveSlackUserToken } from "./token.js";
 
 export type SlackTokenSource = "env" | "config" | "none";
@@ -26,22 +29,17 @@ const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("sl
 export const listSlackAccountIds = listAccountIds;
 export const resolveDefaultSlackAccountId = resolveDefaultAccountId;
 
-function resolveAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): SlackAccountConfig | undefined {
-  return resolveAccountEntry(cfg.channels?.slack?.accounts, accountId);
-}
-
 export function mergeSlackAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): SlackAccountConfig {
-  const { accounts: _ignored, ...base } = (cfg.channels?.slack ?? {}) as SlackAccountConfig & {
-    accounts?: unknown;
-  };
-  const account = resolveAccountConfig(cfg, accountId) ?? {};
-  return { ...base, ...account };
+  return resolveMergedAccountConfig<SlackAccountConfig>({
+    channelConfig: cfg.channels?.slack as SlackAccountConfig | undefined,
+    accounts: cfg.channels?.slack?.accounts as
+      | Record<string, Partial<SlackAccountConfig>>
+      | undefined,
+    accountId,
+  });
 }
 
 export function resolveSlackAccount(params: {

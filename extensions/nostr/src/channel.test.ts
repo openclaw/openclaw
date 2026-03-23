@@ -1,5 +1,38 @@
 import { describe, expect, it } from "vitest";
 import { nostrPlugin } from "./channel.js";
+import { TEST_HEX_PRIVATE_KEY, createConfiguredNostrCfg } from "./test-fixtures.js";
+
+function requireNostrLooksLikeId() {
+  const looksLikeId = nostrPlugin.messaging?.targetResolver?.looksLikeId;
+  if (!looksLikeId) {
+    throw new Error("nostr messaging.targetResolver.looksLikeId missing");
+  }
+  return looksLikeId;
+}
+
+function requireNostrNormalizeTarget() {
+  const normalize = nostrPlugin.messaging?.normalizeTarget;
+  if (!normalize) {
+    throw new Error("nostr messaging.normalizeTarget missing");
+  }
+  return normalize;
+}
+
+function requireNostrPairingNormalizer() {
+  const normalize = nostrPlugin.pairing?.normalizeAllowEntry;
+  if (!normalize) {
+    throw new Error("nostr pairing.normalizeAllowEntry missing");
+  }
+  return normalize;
+}
+
+function requireNostrResolveDmPolicy() {
+  const resolveDmPolicy = nostrPlugin.security?.resolveDmPolicy;
+  if (!resolveDmPolicy) {
+    throw new Error("nostr security.resolveDmPolicy missing");
+  }
+  return resolveDmPolicy;
+}
 
 describe("nostrPlugin", () => {
   describe("meta", () => {
@@ -29,12 +62,6 @@ describe("nostrPlugin", () => {
   });
 
   describe("config adapter", () => {
-    it("has required config functions", () => {
-      expect(nostrPlugin.config.listAccountIds).toBeTypeOf("function");
-      expect(nostrPlugin.config.resolveAccount).toBeTypeOf("function");
-      expect(nostrPlugin.config.isConfigured).toBeTypeOf("function");
-    });
-
     it("listAccountIds returns empty array for unconfigured", () => {
       const cfg = { channels: {} };
       const ids = nostrPlugin.config.listAccountIds(cfg);
@@ -42,60 +69,37 @@ describe("nostrPlugin", () => {
     });
 
     it("listAccountIds returns default for configured", () => {
-      const cfg = {
-        channels: {
-          nostr: {
-            privateKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-          },
-        },
-      };
+      const cfg = createConfiguredNostrCfg();
       const ids = nostrPlugin.config.listAccountIds(cfg);
       expect(ids).toContain("default");
     });
   });
 
   describe("messaging", () => {
-    it("has target resolver", () => {
-      expect(nostrPlugin.messaging?.targetResolver?.looksLikeId).toBeTypeOf("function");
-    });
-
     it("recognizes npub as valid target", () => {
-      const looksLikeId = nostrPlugin.messaging?.targetResolver?.looksLikeId;
-      if (!looksLikeId) {
-        return;
-      }
+      const looksLikeId = requireNostrLooksLikeId();
 
       expect(looksLikeId("npub1xyz123")).toBe(true);
     });
 
     it("recognizes hex pubkey as valid target", () => {
-      const looksLikeId = nostrPlugin.messaging?.targetResolver?.looksLikeId;
-      if (!looksLikeId) {
-        return;
-      }
+      const looksLikeId = requireNostrLooksLikeId();
 
-      const hexPubkey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-      expect(looksLikeId(hexPubkey)).toBe(true);
+      expect(looksLikeId(TEST_HEX_PRIVATE_KEY)).toBe(true);
     });
 
     it("rejects invalid input", () => {
-      const looksLikeId = nostrPlugin.messaging?.targetResolver?.looksLikeId;
-      if (!looksLikeId) {
-        return;
-      }
+      const looksLikeId = requireNostrLooksLikeId();
 
       expect(looksLikeId("not-a-pubkey")).toBe(false);
       expect(looksLikeId("")).toBe(false);
     });
 
-    it("normalizeTarget strips nostr: prefix", () => {
-      const normalize = nostrPlugin.messaging?.normalizeTarget;
-      if (!normalize) {
-        return;
-      }
+    it("normalizeTarget strips spaced nostr prefixes", () => {
+      const normalize = requireNostrNormalizeTarget();
 
-      const hexPubkey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-      expect(normalize(`nostr:${hexPubkey}`)).toBe(hexPubkey);
+      expect(normalize(`nostr:${TEST_HEX_PRIVATE_KEY}`)).toBe(TEST_HEX_PRIVATE_KEY);
+      expect(normalize(`  nostr:${TEST_HEX_PRIVATE_KEY}  `)).toBe(TEST_HEX_PRIVATE_KEY);
     });
   });
 
@@ -114,38 +118,46 @@ describe("nostrPlugin", () => {
       expect(nostrPlugin.pairing?.idLabel).toBe("nostrPubkey");
     });
 
-    it("normalizes nostr: prefix in allow entries", () => {
-      const normalize = nostrPlugin.pairing?.normalizeAllowEntry;
-      if (!normalize) {
-        return;
-      }
+    it("normalizes spaced nostr prefixes in allow entries", () => {
+      const normalize = requireNostrPairingNormalizer();
 
-      const hexPubkey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-      expect(normalize(`nostr:${hexPubkey}`)).toBe(hexPubkey);
+      expect(normalize(`nostr:${TEST_HEX_PRIVATE_KEY}`)).toBe(TEST_HEX_PRIVATE_KEY);
+      expect(normalize(`  nostr:${TEST_HEX_PRIVATE_KEY}  `)).toBe(TEST_HEX_PRIVATE_KEY);
     });
   });
 
   describe("security", () => {
-    it("has resolveDmPolicy function", () => {
-      expect(nostrPlugin.security?.resolveDmPolicy).toBeTypeOf("function");
-    });
-  });
+    it("normalizes dm allowlist entries through the dm policy adapter", () => {
+      const resolveDmPolicy = requireNostrResolveDmPolicy();
 
-  describe("gateway", () => {
-    it("has startAccount function", () => {
-      expect(nostrPlugin.gateway?.startAccount).toBeTypeOf("function");
+      const cfg = createConfiguredNostrCfg({
+        dmPolicy: "allowlist",
+        allowFrom: [`  nostr:${TEST_HEX_PRIVATE_KEY}  `],
+      });
+      const account = nostrPlugin.config.resolveAccount(cfg, "default");
+
+      const result = resolveDmPolicy({ cfg, account });
+      if (!result) {
+        throw new Error("nostr resolveDmPolicy returned null");
+      }
+
+      expect(result.policy).toBe("allowlist");
+      expect(result.allowFrom).toEqual([`  nostr:${TEST_HEX_PRIVATE_KEY}  `]);
+      expect(result.normalizeEntry?.(`  nostr:${TEST_HEX_PRIVATE_KEY}  `)).toBe(
+        TEST_HEX_PRIVATE_KEY,
+      );
     });
   });
 
   describe("status", () => {
     it("has default runtime", () => {
-      expect(nostrPlugin.status?.defaultRuntime).toBeDefined();
-      expect(nostrPlugin.status?.defaultRuntime?.accountId).toBe("default");
-      expect(nostrPlugin.status?.defaultRuntime?.running).toBe(false);
-    });
-
-    it("has buildAccountSnapshot function", () => {
-      expect(nostrPlugin.status?.buildAccountSnapshot).toBeTypeOf("function");
+      expect(nostrPlugin.status?.defaultRuntime).toEqual({
+        accountId: "default",
+        running: false,
+        lastStartAt: null,
+        lastStopAt: null,
+        lastError: null,
+      });
     });
   });
 });

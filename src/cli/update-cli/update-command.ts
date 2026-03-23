@@ -73,9 +73,7 @@ const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
 const SERVICE_REFRESH_PATH_ENV_KEYS = [
   "OPENCLAW_HOME",
   "OPENCLAW_STATE_DIR",
-  "CLAWDBOT_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
-  "CLAWDBOT_CONFIG_PATH",
 ] as const;
 
 const UPDATE_QUIPS = [
@@ -178,7 +176,7 @@ type UpdateDryRunPreview = {
 
 function printDryRunPreview(preview: UpdateDryRunPreview, jsonMode: boolean): void {
   if (jsonMode) {
-    defaultRuntime.log(JSON.stringify(preview, null, 2));
+    defaultRuntime.writeJson(preview);
     return;
   }
 

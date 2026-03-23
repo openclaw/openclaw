@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  __testing as abortTesting,
   getAbortMemory,
   getAbortMemorySizeForTest,
   isAbortRequestText,
@@ -17,6 +18,7 @@ import {
   tryFastAbortFromMessage,
 } from "./abort.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./queue.js";
+import { __testing as queueCleanupTesting } from "./queue/cleanup.js";
 import { initSessionState } from "./session.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -26,7 +28,7 @@ vi.mock("../../agents/pi-embedded.js", () => ({
 }));
 
 const commandQueueMocks = vi.hoisted(() => ({
-  clearCommandLane: vi.fn(),
+  clearCommandLane: vi.fn(() => 1),
 }));
 
 vi.mock("../../process/command-queue.js", () => commandQueueMocks);
@@ -40,6 +42,7 @@ const subagentRegistryMocks = vi.hoisted(() => ({
 
 vi.mock("../../agents/subagent-registry.js", () => ({
   listSubagentRunsForRequester: subagentRegistryMocks.listSubagentRunsForRequester,
+  listSubagentRunsForController: subagentRegistryMocks.listSubagentRunsForRequester,
   markSubagentRunTerminated: subagentRegistryMocks.markSubagentRunTerminated,
 }));
 
@@ -161,8 +164,29 @@ describe("abort detection", () => {
     expect(commandQueueMocks.clearCommandLane).toHaveBeenCalledWith(`session:${sessionKey}`);
   }
 
+  beforeEach(() => {
+    abortTesting.setDepsForTests({
+      getAcpSessionManager: (() =>
+        ({
+          resolveSession: acpManagerMocks.resolveSession,
+          cancelSession: acpManagerMocks.cancelSession,
+        }) as never) as never,
+      abortEmbeddedPiRun: () => true,
+      listSubagentRunsForController: subagentRegistryMocks.listSubagentRunsForRequester,
+      markSubagentRunTerminated: subagentRegistryMocks.markSubagentRunTerminated,
+    });
+    queueCleanupTesting.setDepsForTests({
+      resolveEmbeddedSessionLane: (key) => `session:${key.trim() || "main"}`,
+      clearCommandLane: commandQueueMocks.clearCommandLane,
+    });
+    commandQueueMocks.clearCommandLane.mockClear().mockReturnValue(1);
+  });
+
   afterEach(() => {
     resetAbortMemoryForTest();
+    abortTesting.resetDepsForTests();
+    queueCleanupTesting.resetDepsForTests();
+    commandQueueMocks.clearCommandLane.mockClear().mockReturnValue(1);
     acpManagerMocks.resolveSession.mockReset().mockReturnValue({ kind: "none" });
     acpManagerMocks.cancelSession.mockReset().mockResolvedValue(undefined);
   });

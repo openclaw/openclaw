@@ -1,6 +1,8 @@
-import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/zalouser";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import "./monitor.send-mocks.js";
+import "./zalo-js.test-mocks.js";
+import { resolveZalouserAccountSync } from "./accounts.js";
 import { __testing } from "./monitor.js";
 import {
   sendDeliveredZalouserMock,
@@ -374,6 +376,34 @@ describe("zalouser monitor group mention gating", () => {
 
   it("skips unmentioned group messages when requireMention=true", async () => {
     await expectSkippedGroupMessage();
+  });
+
+  it("blocks mentioned group messages by default when groupPolicy is omitted", async () => {
+    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
+      commandAuthorized: false,
+    });
+    const cfg: OpenClawConfig = {
+      channels: {
+        zalouser: {
+          enabled: true,
+        },
+      },
+    };
+    const account = resolveZalouserAccountSync({ cfg, accountId: "default" });
+
+    await __testing.processMessage({
+      message: createGroupMessage({
+        content: "ping @bot",
+        hasAnyMention: true,
+        wasExplicitlyMentioned: true,
+      }),
+      account,
+      config: cfg,
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(account.config.groupPolicy).toBe("allowlist");
+    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 
   it("fails closed when requireMention=true but mention detection is unavailable", async () => {
