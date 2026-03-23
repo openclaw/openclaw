@@ -1,0 +1,55 @@
+name: CodeScene Code Coverage
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('codescene-pr-{0}', github.event.pull_request.number) || format('codescene-push-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  coverage:
+    name: "Upload Coverage"
+    # Skip draft PRs to save CI minutes
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    env:
+      OPENCLAW_TEST_WORKERS: 2
+      OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB: 6144
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # CodeScene requires the full history to identify the branching point for delta analysis
+          fetch-depth: 0
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Run Tests with Coverage
+        # test:coverage is defined in package.json and uses @vitest/coverage-v8
+        run: pnpm test:coverage
+
+      - name: Install CodeScene Coverage Tool
+        run: |
+          curl -s https://downloads.codescene.io/cs-coverage/cs-coverage.sh | bash
+
+      - name: Upload Coverage to CodeScene
+        env:
+          # CodeScene API Token must be set as a GitHub Action Secret
+          CS_ACCESS_TOKEN: ${{ secrets.CODESCENE_ACCESS_TOKEN }}
+        run: |
+          # Verify file exists before upload
+          if [ ! -f "coverage/lcov.info" ]; then
+            echo "::error::Coverage file coverage/lcov.info not found!"
+            exit 1
+          fi
+          
+          echo "Uploading coverage/lcov.info to CodeScene..."
+          cs-coverage upload --format "lcov" --metric "line-coverage" "coverage/lcov.info"
