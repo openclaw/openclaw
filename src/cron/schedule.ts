@@ -123,8 +123,9 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
         return retryMs;
       }
     }
-    // Still in the past — try from start of tomorrow (local time) as a broader reset.
-    const tomorrowMs = new Date(nowMs).setHours(24, 0, 0, 0);
+    // Still in the past — try from 48h in the future as a guaranteed fresh reference
+    // point, independent of any timezone.
+    const tomorrowMs = nowMs + 48 * 60 * 60 * 1000;
     const retry2 = cron.nextRun(new Date(tomorrowMs));
     if (retry2) {
       const retry2Ms = retry2.getTime();
