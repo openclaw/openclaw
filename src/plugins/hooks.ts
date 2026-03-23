@@ -150,10 +150,18 @@ const DEFAULT_HOOK_TIMEOUT_MS = 30_000;
  */
 const MEMORY_HOOK_TIMEOUT_MS = 120_000;
 
-/** Hooks that use at least `MEMORY_HOOK_TIMEOUT_MS` as their timeout floor. */
+/**
+ * Hooks that use at least `MEMORY_HOOK_TIMEOUT_MS` as their timeout floor.
+ *
+ * - before_agent_start / agent_end — memory-lancedb does live embedding
+ *   requests budgeted up to 60s remote / 5m local.
+ * - subagent_spawning — channel thread-binding hooks (e.g. Discord) make
+ *   several REST calls that can exceed the generic 30s cap.
+ */
 const MEMORY_HOOK_NAMES: ReadonlySet<PluginHookName> = new Set([
   "before_agent_start",
   "agent_end",
+  "subagent_spawning",
 ]);
 
 /**
