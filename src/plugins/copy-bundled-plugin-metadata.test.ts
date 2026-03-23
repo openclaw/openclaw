@@ -373,7 +373,13 @@ describe("copyBundledPluginMetadata", () => {
     });
     writeJson(path.join(pluginDir, "package.json"), {
       name: "@openclaw/whatsapp",
-      openclaw: { extensions: ["./index.ts"] },
+      openclaw: {
+        extensions: ["./index.ts"],
+        bundle: { stageRuntimeDependencies: true },
+      },
+      dependencies: {
+        "@whiskeysockets/baileys": "7.0.0-rc.9",
+      },
     });
 
     copyBundledPluginMetadataWithEnv({ repoRoot, env: {} });
@@ -386,5 +392,9 @@ describe("copyBundledPluginMetadata", () => {
       ),
     ) as { channels?: string[] };
     expect(bundledManifest.channels).toEqual(["whatsapp"]);
+    const bundledPackage = JSON.parse(
+      fs.readFileSync(path.join(repoRoot, "dist", "extensions", "whatsapp", "package.json"), "utf8"),
+    ) as { openclaw?: { bundle?: { stageRuntimeDependencies?: boolean } } };
+    expect(bundledPackage.openclaw?.bundle?.stageRuntimeDependencies).toBe(true);
   });
 });
