@@ -555,16 +555,16 @@ describe("setupSearch", () => {
     expect(pluginWebSearchApiKey(result, "brave")).toBe("BSA-plain");
   });
 
-  it("exports all 7 providers in SEARCH_PROVIDER_OPTIONS", () => {
+  it("exports all 7 providers in alphabetical order", () => {
     const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.id);
     expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(7);
     expect(values).toEqual([
       "brave",
+      "firecrawl",
       "gemini",
       "grok",
       "kimi",
       "perplexity",
-      "firecrawl",
       "tavily",
     ]);
   });

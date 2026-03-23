@@ -8,6 +8,7 @@ import type {
 import { resolveBundledPluginWebSearchProviders } from "../plugins/web-search-providers.js";
 import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
 import { resolveRuntimeWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
+import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 
@@ -116,12 +117,13 @@ export function resolveWebSearchProviderId(params: {
   config?: OpenClawConfig;
   providers?: PluginWebSearchProviderEntry[];
 }): string {
-  const providers =
+  const providers = sortWebSearchProvidersForAutoDetect(
     params.providers ??
-    resolveBundledPluginWebSearchProviders({
-      config: params.config,
-      bundledAllowlistCompat: true,
-    });
+      resolveBundledPluginWebSearchProviders({
+        config: params.config,
+        bundledAllowlistCompat: true,
+      }),
+  );
   const raw =
     params.search && "provider" in params.search && typeof params.search.provider === "string"
       ? params.search.provider.trim().toLowerCase()
@@ -168,7 +170,7 @@ export function resolveWebSearchDefinition(
     return null;
   }
 
-  const providers = (
+  const providers = sortWebSearchProvidersForAutoDetect(
     options?.preferRuntimeProviders
       ? resolveRuntimeWebSearchProviders({
           config: options?.config,
@@ -177,7 +179,7 @@ export function resolveWebSearchDefinition(
       : resolveBundledPluginWebSearchProviders({
           config: options?.config,
           bundledAllowlistCompat: true,
-        })
+        }),
   ).filter(Boolean);
   if (providers.length === 0) {
     return null;
