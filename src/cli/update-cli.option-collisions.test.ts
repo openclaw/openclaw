@@ -16,6 +16,8 @@ const defaultRuntime = {
     defaultRuntime.log(JSON.stringify(value, null, space));
   }),
   exit: vi.fn(),
+  writeStdout: vi.fn(),
+  writeJson: vi.fn(),
 };
 
 vi.mock("./update-cli/update-command.js", () => ({
