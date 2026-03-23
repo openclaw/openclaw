@@ -1,6 +1,6 @@
 import {
   MAX_DISPATCH_WRAPPER_DEPTH,
-  resolveDispatchWrapperExecutionPlan,
+  resolveDispatchWrapperTrustPlan,
   unwrapKnownDispatchWrapperInvocation,
 } from "./dispatch-wrapper-resolution.js";
 import {
@@ -59,10 +59,7 @@ export function resolveExecWrapperTrustPlan(
   let current = argv;
   const wrapperChain: string[] = [];
   for (let depth = 0; depth < maxDepth; depth += 1) {
-    const dispatchPlan = resolveDispatchWrapperExecutionPlan(
-      current,
-      maxDepth - wrapperChain.length,
-    );
+    const dispatchPlan = resolveDispatchWrapperTrustPlan(current, maxDepth - wrapperChain.length);
     if (dispatchPlan.policyBlocked) {
       return blockedExecWrapperTrustPlan({
         argv: dispatchPlan.argv,
