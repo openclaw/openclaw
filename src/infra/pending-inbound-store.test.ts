@@ -645,20 +645,23 @@ describe("pending-inbound-store", () => {
 
   // --- File permission tests (Aisle Low #3) ---
 
-  it.runIf(process.platform !== "win32")("pending-inbound.json is written with mode 0o600", async () => {
-    await writePendingInbound(stateDir, {
-      channel: "telegram",
-      id: "perm-test-1",
-      payload: { text: "secret" },
-      capturedAt: Date.now(),
-    });
+  it.runIf(process.platform !== "win32")(
+    "pending-inbound.json is written with mode 0o600",
+    async () => {
+      await writePendingInbound(stateDir, {
+        channel: "telegram",
+        id: "perm-test-1",
+        payload: { text: "secret" },
+        capturedAt: Date.now(),
+      });
 
-    const filePath = path.join(stateDir, "pending-inbound.json");
-    const stat = await fsp.stat(filePath);
-    // Mask to the low 9 permission bits (strip file type bits)
-    const mode = stat.mode & 0o777;
-    expect(mode).toBe(0o600);
-  });
+      const filePath = path.join(stateDir, "pending-inbound.json");
+      const stat = await fsp.stat(filePath);
+      // Mask to the low 9 permission bits (strip file type bits)
+      const mode = stat.mode & 0o777;
+      expect(mode).toBe(0o600);
+    },
+  );
 
   it.runIf(process.platform !== "win32")("state dir is created with mode 0o700", async () => {
     // Use a sub-directory that does not yet exist
