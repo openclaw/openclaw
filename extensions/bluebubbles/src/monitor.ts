@@ -264,11 +264,10 @@ function buildInboundReplayKey(params: {
   const { target, message } = params;
   const messageId = message.messageId?.trim();
   const associatedMessageGuid = message.associatedMessageGuid?.trim();
-  const stableIdentity = messageId || associatedMessageGuid;
+  const stableIdentity = associatedMessageGuid || messageId;
   if (!stableIdentity) {
     return undefined;
   }
-  const stableIdentityKind = messageId ? "msg" : "assoc";
 
   const chatKey =
     message.chatGuid?.trim() ??
@@ -301,7 +300,6 @@ function buildInboundReplayKey(params: {
     target.account.accountId,
     message.senderId,
     chatKey,
-    stableIdentityKind,
     stableIdentity,
     itemType,
     dateEdited,
@@ -323,25 +321,19 @@ function buildInboundReplayScopeKey(params: {
   const { target, message } = params;
   const messageId = message.messageId?.trim();
   const associatedMessageGuid = message.associatedMessageGuid?.trim();
-  const stableIdentity = messageId || associatedMessageGuid;
+  const stableIdentity = associatedMessageGuid || messageId;
   if (!stableIdentity) {
     return undefined;
   }
-  const stableIdentityKind = messageId ? "msg" : "assoc";
   const chatKey =
     message.chatGuid?.trim() ??
     message.chatIdentifier?.trim() ??
     (typeof message.chatId === "number" && Number.isFinite(message.chatId)
       ? String(message.chatId)
       : "");
-  return [
-    "bluebubbles",
-    target.account.accountId,
-    message.senderId,
-    chatKey,
-    stableIdentityKind,
-    stableIdentity,
-  ].join("|");
+  return ["bluebubbles", target.account.accountId, message.senderId, chatKey, stableIdentity].join(
+    "|",
+  );
 }
 
 function pruneRecentInboundWebhookReplayScopes(now: number): void {

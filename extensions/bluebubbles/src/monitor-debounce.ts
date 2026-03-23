@@ -139,13 +139,13 @@ export function createBlueBubblesDebounceRegistry(params: {
   const targetDebouncers = new Map<WebhookTarget, BlueBubblesDebouncer>();
   const stableUpdatedMessageTails = new Map<string, Promise<void>>();
   const resolveStableUpdatedMessageIdentity = (message: NormalizedWebhookMessage) => {
-    const messageId = message.messageId?.trim();
-    if (messageId) {
-      return `msg:${messageId}`;
-    }
     const associatedMessageGuid = message.associatedMessageGuid?.trim();
     if (associatedMessageGuid) {
       return `assoc:${associatedMessageGuid}`;
+    }
+    const messageId = message.messageId?.trim();
+    if (messageId) {
+      return `msg:${messageId}`;
     }
     return undefined;
   };
@@ -303,6 +303,9 @@ export function createBlueBubblesDebounceRegistry(params: {
               if (associatedMessageGuid) {
                 await debouncer.flushKey(
                   `bluebubbles:${account.accountId}:balloon:${associatedMessageGuid}`,
+                );
+                await debouncer.flushKey(
+                  `bluebubbles:${account.accountId}:msg:${associatedMessageGuid}`,
                 );
               }
             }

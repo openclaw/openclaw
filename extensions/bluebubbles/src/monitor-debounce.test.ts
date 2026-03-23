@@ -81,6 +81,43 @@ describe("createBlueBubblesDebounceRegistry", () => {
     expect(createdDebouncer.enqueue).toHaveBeenCalledTimes(1);
   });
 
+  it("flushes the pending msg bucket before assoc-only edits bypass debounce", async () => {
+    const registry = createBlueBubblesDebounceRegistry({
+      processMessage: async () => undefined,
+    });
+    const target = createTarget();
+
+    const debouncer = registry.getOrCreateDebouncer(target);
+    await debouncer.enqueue({
+      target,
+      eventType: "updated-message",
+      message: createMessage({
+        text: "edited",
+        associatedMessageGuid: "assoc-2",
+      }),
+    });
+
+    const createdDebouncer = (
+      target as unknown as {
+        core: {
+          channel: {
+            debounce: {
+              createInboundDebouncer: ReturnType<typeof vi.fn>;
+            };
+          };
+        };
+      }
+    ).core.channel.debounce.createInboundDebouncer.mock.results[0]?.value as {
+      enqueue: ReturnType<typeof vi.fn>;
+      flushKey: ReturnType<typeof vi.fn>;
+    };
+    expect(createdDebouncer.flushKey).toHaveBeenNthCalledWith(
+      1,
+      "bluebubbles:default:balloon:assoc-2",
+    );
+    expect(createdDebouncer.flushKey).toHaveBeenNthCalledWith(2, "bluebubbles:default:msg:assoc-2");
+  });
+
   it("serializes stable updated-message edits for the same identity", async () => {
     const order: string[] = [];
     let releaseFirst: (() => void) | undefined;
