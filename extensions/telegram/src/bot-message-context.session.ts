@@ -261,20 +261,27 @@ export async function buildTelegramInboundContextPayload(params: {
     route,
     sessionKey: route.sessionKey,
   });
+  const updateLastRouteThreadId = isGroup
+    ? resolvedThreadId != null
+      ? String(resolvedThreadId)
+      : undefined
+    : dmThreadId != null
+      ? String(dmThreadId)
+      : undefined;
 
   await recordInboundSession({
     storePath,
     sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
     ctx: ctxPayload,
-    updateLastRoute: !isGroup
+    updateLastRoute: !isGroup || updateLastRouteThreadId != null
       ? {
           sessionKey: updateLastRouteSessionKey,
           channel: "telegram",
           to: `telegram:${chatId}`,
           accountId: route.accountId,
-          threadId: dmThreadId != null ? String(dmThreadId) : undefined,
+          threadId: updateLastRouteThreadId,
           mainDmOwnerPin:
-            updateLastRouteSessionKey === route.mainSessionKey && pinnedMainDmOwner && senderId
+            !isGroup && updateLastRouteSessionKey === route.mainSessionKey && pinnedMainDmOwner && senderId
               ? {
                   ownerRecipient: pinnedMainDmOwner,
                   senderRecipient: senderId,
