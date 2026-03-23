@@ -60,12 +60,76 @@ function createMockSessionContent(
     .join("\n");
 }
 
+function formatTimestampInTimezone(
+  timestamp: Date,
+  timezone: string,
+): {
+  dateStr: string;
+  timeStr: string;
+} {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(timestamp);
+
+  const readPart = (type: string) => parts.find((part) => part.type === type)?.value ?? "00";
+
+  return {
+    dateStr: `${readPart("year")}-${readPart("month")}-${readPart("day")}`,
+    timeStr: `${readPart("hour")}:${readPart("minute")}:${readPart("second")}`,
+  };
+}
+
+function pickTimezoneForUtcDateRegression(timestamp: Date): {
+  userTimezone: string;
+  dateStr: string;
+  timeStr: string;
+} {
+  const hostTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone?.trim();
+  const hostFormatted = hostTimezone
+    ? formatTimestampInTimezone(timestamp, hostTimezone)
+    : undefined;
+  const utcFormatted = formatTimestampInTimezone(timestamp, "UTC");
+
+  // Pick a negative-offset zone whose local date differs from UTC for this
+  // timestamp, and whose rendered date/time also differs from the host.
+  for (const candidate of ["America/Los_Angeles", "America/Anchorage", "Pacific/Honolulu"]) {
+    if (candidate === hostTimezone) {
+      continue;
+    }
+
+    const expected = formatTimestampInTimezone(timestamp, candidate);
+    if (expected.dateStr === utcFormatted.dateStr) {
+      continue;
+    }
+    if (
+      !hostFormatted ||
+      expected.dateStr !== hostFormatted.dateStr ||
+      expected.timeStr !== hostFormatted.timeStr
+    ) {
+      return {
+        userTimezone: candidate,
+        ...expected,
+      };
+    }
+  }
+
+  throw new Error("Unable to find a timezone that differs from both UTC and the host");
+}
+
 async function runNewWithPreviousSessionEntry(params: {
   tempDir: string;
   previousSessionEntry: { sessionId: string; sessionFile?: string };
   cfg?: OpenClawConfig;
   action?: "new" | "reset";
   sessionKey?: string;
+  timestamp?: Date;
   workspaceDirOverride?: string;
 }): Promise<{ files: string[]; memoryContent: string }> {
   const event = createHookEvent(
@@ -82,6 +146,9 @@ async function runNewWithPreviousSessionEntry(params: {
       ...(params.workspaceDirOverride ? { workspaceDir: params.workspaceDirOverride } : {}),
     },
   );
+  if (params.timestamp) {
+    event.timestamp = params.timestamp;
+  }
 
   await handler(event);
 
@@ -248,6 +315,45 @@ describe("session-memory hook", () => {
     expect(files.length).toBe(1);
     expect(memoryContent).toContain("user: Please reset and keep notes");
     expect(memoryContent).toContain("assistant: Captured before reset");
+  });
+
+  it("uses the user's local timezone for the memory filename and header", async () => {
+    const timestamp = new Date("2026-03-15T01:17:00.000Z");
+    const { userTimezone, dateStr, timeStr } = pickTimezoneForUtcDateRegression(timestamp);
+    const tempDir = await createCaseWorkspace("workspace");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl",
+      content: createMockSessionContent([
+        { role: "user", content: "Keep the local date" },
+        { role: "assistant", content: "Using local timezone for memory output" },
+      ]),
+    });
+
+    const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+      tempDir,
+      cfg: {
+        agents: {
+          defaults: {
+            workspace: tempDir,
+            userTimezone,
+          },
+        },
+      } satisfies OpenClawConfig,
+      previousSessionEntry: {
+        sessionId: "test-123",
+        sessionFile,
+      },
+      timestamp,
+    });
+
+    expect(files).toHaveLength(1);
+    expect(files[0]?.startsWith(`${dateStr}-`)).toBe(true);
+    expect(files[0]?.endsWith(".md")).toBe(true);
+    expect(memoryContent).toContain(`# Session: ${dateStr} ${timeStr} (${userTimezone})`);
   });
 
   it("prefers workspaceDir from hook context when sessionKey points at main", async () => {
