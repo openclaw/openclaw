@@ -249,6 +249,123 @@ describe("resolveAllowAlwaysPatterns", () => {
     expect(second.allowlistSatisfied).toBe(true);
   });
 
+  it("persists carried executables for exec -- positional argv carriers", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const touch = makeExecutable(dir, "touch");
+    const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
+    const safeBins = resolveSafeBins(undefined);
+
+    const { persisted } = resolvePersistedPatterns({
+      command: `sh -lc 'exec -- "$0" "$1"' touch ${path.join(dir, "marker")}`,
+      dir,
+      env,
+      safeBins,
+    });
+    expect(persisted).toEqual([touch]);
+
+    const second = evaluateShellAllowlist({
+      command: `sh -lc 'exec -- "$0" "$1"' touch ${path.join(dir, "second-marker")}`,
+      allowlist: [{ pattern: touch }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(true);
+  });
+
+  it("rejects positional argv carriers when $0 is single-quoted", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const touch = makeExecutable(dir, "touch");
+    const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
+    const safeBins = resolveSafeBins(undefined);
+    const marker = path.join(dir, "marker");
+
+    const { persisted } = resolvePersistedPatterns({
+      command: `sh -lc "'$0' \"$1\"" touch ${marker}`,
+      dir,
+      env,
+      safeBins,
+    });
+    expect(persisted).not.toContain(touch);
+
+    const second = evaluateShellAllowlist({
+      command: `sh -lc "'$0' \"$1\"" touch ${marker}`,
+      allowlist: [{ pattern: touch }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(false);
+  });
+
+  it("rejects positional argv carriers when exec is separated from $0 by a newline", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const touch = makeExecutable(dir, "touch");
+    const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
+    const safeBins = resolveSafeBins(undefined);
+    const marker = path.join(dir, "marker");
+
+    const { persisted } = resolvePersistedPatterns({
+      command: `sh -lc "exec
+$0 \\"$1\\"" touch ${marker}`,
+      dir,
+      env,
+      safeBins,
+    });
+    expect(persisted).not.toContain(touch);
+
+    const second = evaluateShellAllowlist({
+      command: `sh -lc "exec
+$0 \\"$1\\"" touch ${marker}`,
+      allowlist: [{ pattern: touch }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(false);
+  });
+
+  it("rejects positional argv carriers when inline command contains extra shell operations", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const touch = makeExecutable(dir, "touch");
+    const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
+    const safeBins = resolveSafeBins(undefined);
+    const marker = path.join(dir, "marker");
+
+    const { persisted } = resolvePersistedPatterns({
+      command: `sh -lc 'echo blocked; $0 "$1"' touch ${marker}`,
+      dir,
+      env,
+      safeBins,
+    });
+    expect(persisted).not.toContain(touch);
+
+    const second = evaluateShellAllowlist({
+      command: `sh -lc 'echo blocked; $0 "$1"' touch ${marker}`,
+      allowlist: [{ pattern: touch }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(false);
+  });
+
   it("does not treat inline shell commands as persisted script paths", () => {
     if (process.platform === "win32") {
       return;
