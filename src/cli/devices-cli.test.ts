@@ -21,8 +21,6 @@ const runtime = {
     runtime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
   }),
   exit: vi.fn(),
-  writeStdout: vi.fn((value: string) => runtime.log(value)),
-  writeJson: vi.fn((value: unknown, space = 2) => runtime.log(JSON.stringify(value, null, space))),
 };
 
 vi.mock("../gateway/call.js", () => ({

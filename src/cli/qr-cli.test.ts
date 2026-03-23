@@ -15,10 +15,6 @@ const mocks = vi.hoisted(() => ({
     exit: vi.fn(() => {
       throw new Error("exit");
     }),
-    writeStdout: vi.fn((value: string) => mocks.runtime.log(value)),
-    writeJson: vi.fn((value: unknown, space = 2) =>
-      mocks.runtime.log(JSON.stringify(value, null, space)),
-    ),
   },
   loadConfig: vi.fn(),
   runCommandWithTimeout: vi.fn(),

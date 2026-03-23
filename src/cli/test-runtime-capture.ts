@@ -30,12 +30,6 @@ export function createCliRuntimeCapture(): CliRuntimeCapture {
       exit: (code: number) => {
         throw new Error(`__exit__:${code}`);
       },
-      writeStdout: (value: string) => {
-        runtimeLogs.push(value);
-      },
-      writeJson: (value: unknown, space = 2) => {
-        runtimeLogs.push(JSON.stringify(value, null, space > 0 ? space : undefined));
-      },
     },
     resetRuntimeCapture: () => {
       runtimeLogs.length = 0;
