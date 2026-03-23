@@ -1303,18 +1303,33 @@ describe("buildCommandsMessagePaginated", () => {
     expect(result.text).toContain("/stop - Stop the current run.");
   });
 
-  it("includes plugin commands in the paginated list", () => {
-    listPluginCommands.mockReturnValue([
+  it("includes plugin commands in the paginated list", async () => {
+    const pluginCommands = [
       { name: "plugin_cmd", description: "Plugin command", pluginId: "demo-plugin" },
-    ]);
-    const result = buildCommandsMessagePaginated(
+    ];
+    listPluginCommands.mockImplementation(() => pluginCommands);
+    expect(listPluginCommands()).toEqual(pluginCommands);
+    vi.resetModules();
+    const { buildCommandsMessagePaginated: buildPaginatedCommands } = await import("./status.js");
+    const firstPage = buildPaginatedCommands(
       {
         commands: { config: false, debug: false },
       } as unknown as OpenClawConfig,
       undefined,
-      { surface: "telegram", page: 99 },
+      { surface: "telegram", page: 1 },
     );
-    expect(result.text).toContain("Plugins");
-    expect(result.text).toContain("/plugin_cmd (demo-plugin) - Plugin command");
+    const pages = Array.from({ length: firstPage.totalPages }, (_, index) =>
+      buildPaginatedCommands(
+        {
+          commands: { config: false, debug: false },
+        } as unknown as OpenClawConfig,
+        undefined,
+        { surface: "telegram", page: index + 1 },
+      ),
+    );
+    const pluginPage = pages.find((page) => page.text.includes("/plugin_cmd (demo-plugin)"));
+    expect(pluginPage).toBeTruthy();
+    expect(pluginPage?.text).toContain("Plugins");
+    expect(pluginPage?.text).toContain("/plugin_cmd (demo-plugin) - Plugin command");
   });
 });
