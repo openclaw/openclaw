@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/pythia-oracle",
+  "version": "2026.2.19",
+  "description": "Pythia Oracle tool plugin with x402 payment support",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

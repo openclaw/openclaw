@@ -1,0 +1,51 @@
+{
+  "id": "pythia-oracle",
+  "name": "Pythia Oracle",
+  "description": "Native Pythia Oracle tool with x402 payment support and chat approvals.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "url": {
+        "type": "string",
+        "description": "Remote MCP endpoint for the Pythia Oracle service."
+      },
+      "serviceName": {
+        "type": "string",
+        "description": "Human-friendly label shown in approval prompts."
+      },
+      "walletPrivateKeyEnvVar": {
+        "type": "string",
+        "description": "Environment variable that holds the Base wallet private key used for x402 payments."
+      },
+      "defaultAgentId": {
+        "type": "string",
+        "description": "Fallback agent_id when the runtime does not provide one."
+      },
+      "expectedPriceUsd": {
+        "type": "number",
+        "description": "Expected price per paid reading in USD for approval and budget checks."
+      },
+      "autoApproveUnderUsd": {
+        "type": "number",
+        "description": "Automatically approve paid requests at or below this USD threshold."
+      },
+      "dailyBudgetUsd": {
+        "type": "number",
+        "description": "Maximum USD spend per UTC day for this agent."
+      },
+      "totalBudgetUsd": {
+        "type": "number",
+        "description": "Maximum lifetime USD spend for this agent."
+      },
+      "approvalTimeoutMs": {
+        "type": "number",
+        "description": "How long to wait for an in-channel payment approval before aborting."
+      },
+      "allowAlwaysCache": {
+        "type": "boolean",
+        "description": "Persist allow-always approvals for the same payment destination."
+      }
+    }
+  }
+}
