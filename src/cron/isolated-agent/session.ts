@@ -65,15 +65,40 @@ export function resolveCronSession(params: {
   });
 
   // Build session entry based on mode:
-  // - Isolated mode (forceNew): completely fresh entry, no inherited context
+  // - Isolated mode (forceNew): fresh runtime context but preserve user config
   // - New session (expired): preserve user config, clear routing metadata
   // - Reuse session: preserve everything, clear routing metadata only
   const sessionEntry: SessionEntry = params.forceNew
     ? {
-        // Isolated mode: completely fresh entry
+        // Isolated mode: fresh runtime context but preserve user-managed overrides
         sessionId,
         updatedAt: params.nowMs,
         systemSent,
+        // Preserve user config from previous session
+        modelOverride: entry?.modelOverride,
+        providerOverride: entry?.providerOverride,
+        authProfileOverride: entry?.authProfileOverride,
+        authProfileOverrideSource: entry?.authProfileOverrideSource,
+        authProfileOverrideCompactionCount: entry?.authProfileOverrideCompactionCount,
+        sendPolicy: entry?.sendPolicy,
+        queueMode: entry?.queueMode,
+        queueDebounceMs: entry?.queueDebounceMs,
+        queueCap: entry?.queueCap,
+        queueDrop: entry?.queueDrop,
+        thinkingLevel: entry?.thinkingLevel,
+        fastMode: entry?.fastMode,
+        verboseLevel: entry?.verboseLevel,
+        reasoningLevel: entry?.reasoningLevel,
+        elevatedLevel: entry?.elevatedLevel,
+        ttsAuto: entry?.ttsAuto,
+        responseUsage: entry?.responseUsage,
+        execHost: entry?.execHost,
+        execSecurity: entry?.execSecurity,
+        execAsk: entry?.execAsk,
+        execNode: entry?.execNode,
+        chatType: entry?.chatType,
+        groupActivation: entry?.groupActivation,
+        groupActivationNeedsSystemIntro: entry?.groupActivationNeedsSystemIntro,
       }
     : isNewSession
       ? {
