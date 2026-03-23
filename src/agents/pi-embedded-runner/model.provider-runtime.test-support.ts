@@ -339,17 +339,19 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
       provider: string;
       context: { modelId: string; modelRegistry: ModelRegistryLike };
     }) =>
-      buildDynamicModel(
-        {
-          provider: params.provider,
-          modelId: params.context.modelId,
-          modelRegistry: params.context.modelRegistry,
-        },
-        {
-          getOpenRouterModelCapabilities,
-          loadOpenRouterModelCapabilities,
-        },
-      ),
+      handledDynamicProviders.has(params.provider)
+        ? buildDynamicModel(
+            {
+              provider: params.provider,
+              modelId: params.context.modelId,
+              modelRegistry: params.context.modelRegistry,
+            },
+            {
+              getOpenRouterModelCapabilities,
+              loadOpenRouterModelCapabilities,
+            },
+          )
+        : undefined,
     prepareProviderDynamicModel: async (params: {
       provider: string;
       context: { modelId: string };
