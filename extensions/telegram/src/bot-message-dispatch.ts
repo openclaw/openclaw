@@ -273,6 +273,25 @@ export const dispatchTelegramMessage = async ({
   let splitReasoningOnNextStream = false;
   let skipNextAnswerMessageStartRotation = false;
   let draftLaneEventQueue = Promise.resolve();
+  /** Tracks in-flight fire-and-forget `deliver()` calls so cleanup can await them. */
+  let pendingDeliveryCount = 0;
+  let pendingDeliveryResolve: (() => void) | undefined;
+  const pendingDeliveriesDrained = () =>
+    pendingDeliveryCount === 0
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => {
+          pendingDeliveryResolve = resolve;
+        });
+  const trackPendingDelivery = () => {
+    pendingDeliveryCount++;
+    return () => {
+      pendingDeliveryCount--;
+      if (pendingDeliveryCount === 0 && pendingDeliveryResolve) {
+        pendingDeliveryResolve();
+        pendingDeliveryResolve = undefined;
+      }
+    };
+  };
   const reasoningStepState = createTelegramReasoningStepState();
   const enqueueDraftLaneEvent = (task: () => Promise<void>): Promise<void> => {
     const next = draftLaneEventQueue.then(task);
@@ -596,123 +615,170 @@ export const dispatchTelegramMessage = async ({
       dispatcherOptions: {
         ...replyPipeline,
         deliver: async (payload, info) => {
-          if (payload.isError === true) {
-            hadErrorReplyFailureOrSkip = true;
-          }
-          if (info.kind === "final") {
-            // Assistant callbacks are fire-and-forget; ensure queued boundary
-            // rotations/partials are applied before final delivery mapping.
-            await enqueueDraftLaneEvent(async () => {});
-          }
-          if (
-            shouldSuppressLocalTelegramExecApprovalPrompt({
-              cfg,
-              accountId: route.accountId,
-              payload,
-            })
-          ) {
-            queuedFinal = true;
-            return;
-          }
-          const previewButtons = (
-            payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined
-          )?.buttons;
-          const split = splitTextIntoLaneSegments(payload.text);
-          const segments = split.segments;
-          const reply = resolveSendableOutboundReplyParts(payload);
-          const hasMedia = reply.hasMedia;
-
-          const flushBufferedFinalAnswer = async () => {
-            const buffered = reasoningStepState.takeBufferedFinalAnswer();
-            if (!buffered) {
+          const completePendingDelivery = trackPendingDelivery();
+          try {
+            if (payload.isError === true) {
+              hadErrorReplyFailureOrSkip = true;
+            }
+            if (info.kind === "final") {
+              // Assistant callbacks are fire-and-forget; ensure queued boundary
+              // rotations/partials are applied before final delivery mapping.
+              await enqueueDraftLaneEvent(async () => {});
+            }
+            if (
+              shouldSuppressLocalTelegramExecApprovalPrompt({
+                cfg,
+                accountId: route.accountId,
+                payload,
+              })
+            ) {
+              queuedFinal = true;
               return;
             }
-            const bufferedButtons = (
-              buffered.payload.channelData?.telegram as
-                | { buttons?: TelegramInlineButtons }
-                | undefined
+            const previewButtons = (
+              payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined
             )?.buttons;
-            await deliverLaneText({
-              laneName: "answer",
-              text: buffered.text,
-              payload: buffered.payload,
-              infoKind: "final",
-              previewButtons: bufferedButtons,
-            });
-            reasoningStepState.resetForNextStep();
-          };
+            const split = splitTextIntoLaneSegments(payload.text);
+            const segments = split.segments;
+            const reply = resolveSendableOutboundReplyParts(payload);
+            const hasMedia = reply.hasMedia;
 
-          for (const segment of segments) {
-            if (
-              segment.lane === "answer" &&
-              info.kind === "final" &&
-              reasoningStepState.shouldBufferFinalAnswer()
-            ) {
-              reasoningStepState.bufferFinalAnswer({
-                payload,
-                text: segment.text,
+            const flushBufferedFinalAnswer = async () => {
+              const buffered = reasoningStepState.takeBufferedFinalAnswer();
+              if (!buffered) {
+                return;
+              }
+              const bufferedButtons = (
+                buffered.payload.channelData?.telegram as
+                  | { buttons?: TelegramInlineButtons }
+                  | undefined
+              )?.buttons;
+              await deliverLaneText({
+                laneName: "answer",
+                text: buffered.text,
+                payload: buffered.payload,
+                infoKind: "final",
+                previewButtons: bufferedButtons,
               });
-              continue;
+              reasoningStepState.resetForNextStep();
+            };
+
+            for (const segment of segments) {
+              if (
+                segment.lane === "answer" &&
+                info.kind === "final" &&
+                reasoningStepState.shouldBufferFinalAnswer()
+              ) {
+                reasoningStepState.bufferFinalAnswer({
+                  payload,
+                  text: segment.text,
+                });
+                continue;
+              }
+              if (segment.lane === "reasoning") {
+                reasoningStepState.noteReasoningHint();
+              }
+              const result = await deliverLaneText({
+                laneName: segment.lane,
+                text: segment.text,
+                payload,
+                infoKind: info.kind,
+                previewButtons,
+                allowPreviewUpdateForNonFinal: segment.lane === "reasoning",
+              });
+              if (info.kind === "final") {
+                emitPreviewFinalizedHook(result);
+              }
+              if (segment.lane === "reasoning") {
+                if (result.kind !== "skipped") {
+                  reasoningStepState.noteReasoningDelivered();
+                  await flushBufferedFinalAnswer();
+                }
+                continue;
+              }
+              if (info.kind === "final") {
+                if (reasoningLane.hasStreamedMessage) {
+                  activePreviewLifecycleByLane.reasoning = "complete";
+                  retainPreviewOnCleanupByLane.reasoning = true;
+                }
+                reasoningStepState.resetForNextStep();
+              }
             }
-            if (segment.lane === "reasoning") {
-              reasoningStepState.noteReasoningHint();
+            if (segments.length > 0) {
+              return;
             }
-            const result = await deliverLaneText({
-              laneName: segment.lane,
-              text: segment.text,
-              payload,
-              infoKind: info.kind,
-              previewButtons,
-              allowPreviewUpdateForNonFinal: segment.lane === "reasoning",
-            });
-            if (info.kind === "final") {
-              emitPreviewFinalizedHook(result);
-            }
-            if (segment.lane === "reasoning") {
-              if (result.kind !== "skipped") {
-                reasoningStepState.noteReasoningDelivered();
+            if (split.suppressedReasoningOnly) {
+              if (reply.hasMedia) {
+                const payloadWithoutSuppressedReasoning =
+                  typeof payload.text === "string" ? { ...payload, text: "" } : payload;
+                try {
+                  await sendPayload(payloadWithoutSuppressedReasoning);
+                } catch (mediaErr) {
+                  logVerbose(
+                    `telegram: media delivery failed (suppressed-reasoning path): ${String(mediaErr)}`,
+                  );
+                  const previewMsgId = answerLane.stream?.messageId();
+                  if (typeof previewMsgId === "number") {
+                    try {
+                      await (telegramDeps.editMessageTelegram ?? editMessageTelegram)(
+                        chatId,
+                        previewMsgId,
+                        "⚠️ Media delivery failed. Please try again.",
+                        { api: bot.api, cfg, accountId: route.accountId },
+                      );
+                    } catch {
+                      /* best-effort fallback */
+                    }
+                  }
+                  retainPreviewOnCleanupByLane.answer = true;
+                }
+              }
+              if (info.kind === "final") {
                 await flushBufferedFinalAnswer();
               }
-              continue;
+              return;
             }
+
             if (info.kind === "final") {
-              if (reasoningLane.hasStreamedMessage) {
-                activePreviewLifecycleByLane.reasoning = "complete";
-                retainPreviewOnCleanupByLane.reasoning = true;
-              }
+              await answerLane.stream?.stop();
+              await reasoningLane.stream?.stop();
               reasoningStepState.resetForNextStep();
             }
-          }
-          if (segments.length > 0) {
-            return;
-          }
-          if (split.suppressedReasoningOnly) {
+            const canSendAsIs = reply.hasMedia || reply.text.length > 0;
+            if (!canSendAsIs) {
+              if (info.kind === "final") {
+                await flushBufferedFinalAnswer();
+              }
+              return;
+            }
             if (reply.hasMedia) {
-              const payloadWithoutSuppressedReasoning =
-                typeof payload.text === "string" ? { ...payload, text: "" } : payload;
-              await sendPayload(payloadWithoutSuppressedReasoning);
+              try {
+                await sendPayload(payload);
+              } catch (mediaErr) {
+                logVerbose(`telegram: media delivery failed: ${String(mediaErr)}`);
+                const previewMsgId = answerLane.stream?.messageId();
+                if (typeof previewMsgId === "number") {
+                  try {
+                    await (telegramDeps.editMessageTelegram ?? editMessageTelegram)(
+                      chatId,
+                      previewMsgId,
+                      "⚠️ Media delivery failed. Please try again.",
+                      { api: bot.api, cfg, accountId: route.accountId },
+                    );
+                  } catch {
+                    /* best-effort fallback */
+                  }
+                }
+                retainPreviewOnCleanupByLane.answer = true;
+              }
+            } else {
+              await sendPayload(payload);
             }
             if (info.kind === "final") {
               await flushBufferedFinalAnswer();
             }
-            return;
-          }
-
-          if (info.kind === "final") {
-            await answerLane.stream?.stop();
-            await reasoningLane.stream?.stop();
-            reasoningStepState.resetForNextStep();
-          }
-          const canSendAsIs = reply.hasMedia || reply.text.length > 0;
-          if (!canSendAsIs) {
-            if (info.kind === "final") {
-              await flushBufferedFinalAnswer();
-            }
-            return;
-          }
-          await sendPayload(payload);
-          if (info.kind === "final") {
-            await flushBufferedFinalAnswer();
+          } finally {
+            completePendingDelivery();
           }
         },
         onSkip: (payload, info) => {
@@ -834,6 +900,10 @@ export const dispatchTelegramMessage = async ({
       }
       existing.shouldClear = existing.shouldClear && shouldClear;
     }
+    // Wait for any in-flight fire-and-forget deliver() calls to complete
+    // before clearing streams, so sendPayload() finishes before the preview
+    // message is deleted (#53124).
+    await pendingDeliveriesDrained();
     for (const [stream, cleanupState] of streamCleanupStates) {
       await stream.stop();
       if (cleanupState.shouldClear) {
