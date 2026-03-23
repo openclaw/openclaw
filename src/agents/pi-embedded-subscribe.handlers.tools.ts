@@ -549,6 +549,21 @@ export async function handleToolExecutionEnd(
     ctx.state.successfulCronAdds += 1;
   }
 
+  // Also track cron adds performed via exec/bash (e.g. `openclaw cron add --at ...`).
+  // Without this, the reminder guard note fires even when the cron was created
+  // successfully through the CLI tool path (#52972).
+  if (!isToolError && (toolName === "exec" || toolName === "bash")) {
+    const execArgs = startData?.args;
+    const rawCmd =
+      execArgs && typeof execArgs === "object"
+        ? (execArgs as Record<string, unknown>).command
+        : execArgs;
+    const command = typeof rawCmd === "string" ? rawCmd : "";
+    if (/\bcron\s+add\b/i.test(command)) {
+      ctx.state.successfulCronAdds += 1;
+    }
+  }
+
   emitAgentEvent({
     runId: ctx.params.runId,
     stream: "tool",
