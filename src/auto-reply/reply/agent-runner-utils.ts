@@ -8,6 +8,11 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { estimateUsageCost, formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import type { TemplateContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
+import {
+  resolveProviderScopedAuthProfile,
+  resolveRunAuthProfile,
+} from "./agent-runner-auth-profile.js";
+export { resolveProviderScopedAuthProfile, resolveRunAuthProfile };
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
 
@@ -237,15 +242,6 @@ export function buildTemplateSenderContext(sessionCtx: TemplateContext) {
   };
 }
 
-export function resolveRunAuthProfile(run: FollowupRun["run"], provider: string) {
-  return resolveProviderScopedAuthProfile({
-    provider,
-    primaryProvider: run.provider,
-    authProfileId: run.authProfileId,
-    authProfileIdSource: run.authProfileIdSource,
-  });
-}
-
 export function buildEmbeddedRunContexts(params: {
   run: FollowupRun["run"];
   sessionCtx: TemplateContext;
@@ -285,19 +281,5 @@ export function buildEmbeddedRunExecutionParams(params: {
     embeddedContext,
     senderContext,
     runBaseParams,
-  };
-}
-
-export function resolveProviderScopedAuthProfile(params: {
-  provider: string;
-  primaryProvider: string;
-  authProfileId?: string;
-  authProfileIdSource?: "auto" | "user";
-}): { authProfileId?: string; authProfileIdSource?: "auto" | "user" } {
-  const authProfileId =
-    params.provider === params.primaryProvider ? params.authProfileId : undefined;
-  return {
-    authProfileId,
-    authProfileIdSource: authProfileId ? params.authProfileIdSource : undefined,
   };
 }
