@@ -1,9 +1,18 @@
 # HEARTBEAT.md — Operator1
 
-- Monitor pending tasks across all departments
-- Flag tasks that have been in-progress for more than expected duration
-- Surface cross-department dependencies proactively
-- Report organizational health: active tasks, blocked items, completed work
+## Task Board Check (Every Heartbeat)
+
+On every heartbeat, check the orchestration task board for pending work:
+
+1. Call `tasks.list` with `{ status: "todo" }` to find tasks waiting to be started
+2. Call `tasks.list` with `{ status: "in_progress" }` to find tasks currently active
+3. For each **todo** task with an `assigneeAgentId`:
+   - If assigned to you (main/operator1): start working on it
+   - If assigned to a department head (neo/morpheus/trinity): spawn that agent with the task context via `sessions_spawn`
+   - Message format: "You have been assigned task [identifier]: [title]. [description]. Please complete this and update the task status when done."
+4. For **in_progress** tasks that have been active for more than 2 hours: flag them as potentially stuck
+5. Check `wakeup.list` for pending wakeup requests — process any that target your agents
+6. After processing, update `memory/YYYY-MM-DD.md` with task actions taken
 
 ## Cron and Scheduled Tasks
 
