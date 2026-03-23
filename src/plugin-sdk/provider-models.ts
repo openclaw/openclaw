@@ -129,7 +129,10 @@ export {
   VERCEL_AI_GATEWAY_BASE_URL,
 } from "../agents/vercel-ai-gateway.js";
 export { DEEPINFRA_BASE_URL, DEEPINFRA_DEFAULT_MODEL_REF } from "../providers/deepinfra-shared.js";
-export { discoverDeepInfraModels } from "../agents/deepinfra-models.js";
+export {
+  buildStaticCatalog as buildDeepInfraStaticCatalog,
+  discoverDeepInfraModels,
+} from "../agents/deepinfra-models.js";
 
 export function buildKilocodeModelDefinition(): ModelDefinitionConfig {
   return {

@@ -22,9 +22,9 @@ export {
   buildKilocodeProviderWithDiscovery,
 } from "../../extensions/kilocode/provider-catalog.js";
 export {
-    buildDeepInfraProviderWithDiscovery,
-    buildDeepInfraStaticProvider,
- } from "../../extensions/deepinfra/provider-catalog.js";
+  buildDeepInfraProviderWithDiscovery,
+  buildDeepInfraStaticProvider,
+} from "../../extensions/deepinfra/provider-catalog.js";
 export {
   buildMinimaxPortalProvider,
   buildMinimaxProvider,

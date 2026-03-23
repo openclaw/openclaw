@@ -491,6 +491,48 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "deepinfra",
+    idHint: "deepinfra",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/deepinfra-provider",
+    packageVersion: "2026.3.14",
+    packageDescription: "OpenClaw DeepInfra provider plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "deepinfra",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      providers: ["deepinfra"],
+      providerAuthEnvVars: {
+        deepinfra: ["DEEPINFRA_API_KEY"],
+      },
+      providerAuthChoices: [
+        {
+          provider: "deepinfra",
+          method: "api-key",
+          choiceId: "deepinfra-api-key",
+          choiceLabel: "DeepInfra API key",
+          choiceHint: "Unified API for open source models",
+          groupId: "deepinfra",
+          groupLabel: "DeepInfra",
+          groupHint: "Unified API for open source models",
+          optionKey: "deepinfraApiKey",
+          cliFlag: "--deepinfra-api-key",
+          cliOption: "--deepinfra-api-key <key>",
+          cliDescription: "DeepInfra API key",
+        },
+      ],
+    },
+  },
+  {
     dirName: "diagnostics-otel",
     idHint: "diagnostics-otel",
     source: {
