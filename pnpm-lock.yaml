@@ -343,6 +343,8 @@ importers:
 
   extensions/elevenlabs: {}
 
+  extensions/exa: {}
+
   extensions/fal: {}
 
   extensions/feishu:

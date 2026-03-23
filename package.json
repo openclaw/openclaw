@@ -377,6 +377,10 @@
       "types": "./dist/plugin-sdk/line-core.d.ts",
       "default": "./dist/plugin-sdk/line-core.js"
     },
+    "./plugin-sdk/line-runtime": {
+      "types": "./dist/plugin-sdk/line-runtime.d.ts",
+      "default": "./dist/plugin-sdk/line-runtime.js"
+    },
     "./plugin-sdk/llm-task": {
       "types": "./dist/plugin-sdk/llm-task.d.ts",
       "default": "./dist/plugin-sdk/llm-task.js"
