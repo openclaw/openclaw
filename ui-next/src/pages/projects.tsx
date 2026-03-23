@@ -515,9 +515,16 @@ export function ProjectsPage() {
     }
     setArchiveSubmitting(true);
     try {
+      const archivedName = archiveTarget.name;
       await sendRpc("projects.archive", { id: archiveTarget.id });
       setArchiveTarget(null);
-      setActionMessage({ type: "success", text: "Project archived." });
+      // Switch to "active" filter so the newly archived project disappears from view,
+      // giving clear visual confirmation that the action took effect.
+      setScopeFilter("active");
+      setActionMessage({
+        type: "success",
+        text: `"${archivedName}" archived. Showing active projects.`,
+      });
       await loadData();
     } catch (err) {
       setActionMessage({

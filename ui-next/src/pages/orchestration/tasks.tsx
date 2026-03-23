@@ -1,5 +1,5 @@
 import { ListTodo, Plus, RefreshCw, Loader2 } from "lucide-react";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { DataTable, type Column } from "@/components/ui/custom/data/data-table";
@@ -173,6 +173,7 @@ function CreateTaskDialog({
               value={form.title}
               onChange={(e) => update({ title: e.target.value })}
               placeholder="Task title"
+              autoFocus
             />
           </div>
           <div className="grid gap-1.5">
@@ -261,7 +262,7 @@ export function TasksPage() {
   const { sendRpc } = useGateway();
   const isConnected = useGatewayStore((s) => s.connectionStatus === "connected");
 
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [allTasks, setAllTasks] = useState<Task[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [goals, setGoals] = useState<{ id: string; title: string }[]>([]);
   const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
@@ -270,10 +271,22 @@ export function TasksPage() {
 
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [workspaceFilter, setWorkspaceFilter] = useState<string>("all");
+  const [assigneeFilter, setAssigneeFilter] = useState<"all" | "mine" | "unassigned">("all");
 
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState<TaskForm>(EMPTY_TASK_FORM);
   const [createSubmitting, setCreateSubmitting] = useState(false);
+
+  // Client-side assignee filter applied on top of server-filtered results
+  const tasks = useMemo(() => {
+    if (assigneeFilter === "mine") {
+      return allTasks.filter((t) => t.assigneeAgentId === "main");
+    }
+    if (assigneeFilter === "unassigned") {
+      return allTasks.filter((t) => !t.assigneeAgentId);
+    }
+    return allTasks;
+  }, [allTasks, assigneeFilter]);
 
   const loadData = useCallback(() => {
     setLoading(true);
@@ -295,7 +308,7 @@ export function TasksPage() {
       })),
     ])
       .then(([taskRes, wsRes, goalsRes, projectsRes]) => {
-        setTasks(taskRes.tasks ?? []);
+        setAllTasks(taskRes.tasks ?? []);
         setWorkspaces(wsRes.workspaces ?? []);
         setGoals(goalsRes.goals ?? []);
         setProjects(projectsRes.projects ?? []);
@@ -442,6 +455,28 @@ export function TasksPage() {
               {s.replace("_", " ")}
             </Button>
           ))}
+        </div>
+
+        {/* Assignee quick-filters */}
+        <div className="flex flex-wrap gap-1 border-l border-border pl-2">
+          <Button
+            size="sm"
+            variant={assigneeFilter === "mine" ? "default" : "outline"}
+            className="h-7 px-2 text-xs"
+            onClick={() => setAssigneeFilter(assigneeFilter === "mine" ? "all" : "mine")}
+          >
+            My Tasks
+          </Button>
+          <Button
+            size="sm"
+            variant={assigneeFilter === "unassigned" ? "default" : "outline"}
+            className="h-7 px-2 text-xs"
+            onClick={() =>
+              setAssigneeFilter(assigneeFilter === "unassigned" ? "all" : "unassigned")
+            }
+          >
+            Unassigned
+          </Button>
         </div>
       </div>
 
