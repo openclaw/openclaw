@@ -36,10 +36,6 @@
         "reason": "Measured ~17% faster under threads than forks on this host while keeping the file green."
       },
       {
-        "file": "src/infra/outbound/outbound-policy.test.ts",
-        "reason": "Measured ~11% faster under threads than forks on this host while keeping the file green."
-      },
-      {
         "file": "src/media-understanding/runner.video.test.ts",
         "reason": "Measured ~25% faster under threads than forks on this host while keeping the file green."
       }
