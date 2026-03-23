@@ -11,6 +11,7 @@ import {
   DEFAULT_MEMORY_ALT_FILENAME,
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_SOUL_FILENAME,
+  DEFAULT_TONE_SKILLS_FILENAME,
   DEFAULT_TOOLS_FILENAME,
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
@@ -205,6 +206,11 @@ describe("ensureAgentWorkspace", () => {
         name: DEFAULT_HEARTBEAT_FILENAME,
         content: "# HEARTBEAT.md\ncustom heartbeat",
       });
+      await writeWorkspaceFile({
+        dir: sourceDir,
+        name: DEFAULT_TONE_SKILLS_FILENAME,
+        content: "# tone_skills.md\ncustom tone guidance",
+      });
       await fs.mkdir(path.join(sourceDir, "memory"), { recursive: true });
       await fs.writeFile(
         path.join(sourceDir, "memory", "heartbeat-state.json"),
@@ -231,6 +237,9 @@ describe("ensureAgentWorkspace", () => {
       await expect(
         fs.readFile(path.join(tempDir, DEFAULT_HEARTBEAT_FILENAME), "utf-8"),
       ).resolves.toBe("# HEARTBEAT.md\ncustom heartbeat");
+      await expect(
+        fs.readFile(path.join(tempDir, DEFAULT_TONE_SKILLS_FILENAME), "utf-8"),
+      ).resolves.toBe("# tone_skills.md\ncustom tone guidance");
       await expect(fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME))).rejects.toMatchObject(
         {
           code: "ENOENT",
@@ -271,6 +280,11 @@ describe("ensureAgentWorkspace", () => {
         name: DEFAULT_USER_FILENAME,
         content: "# USER.md\nseed user",
       });
+      await writeWorkspaceFile({
+        dir: sourceDir,
+        name: DEFAULT_TONE_SKILLS_FILENAME,
+        content: "# tone_skills.md\nseed tone",
+      });
       await fs.mkdir(path.join(sourceDir, "memory"), { recursive: true });
       await fs.writeFile(
         path.join(sourceDir, "memory", "heartbeat-state.json"),
@@ -285,6 +299,11 @@ describe("ensureAgentWorkspace", () => {
         "# USER.md\nkeep me\n",
         "utf-8",
       );
+      await fs.writeFile(
+        path.join(tempDir, DEFAULT_TONE_SKILLS_FILENAME),
+        "# tone_skills.md\nkeep my custom tone\n",
+        "utf-8",
+      );
 
       await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
@@ -297,6 +316,9 @@ describe("ensureAgentWorkspace", () => {
       await expect(fs.readFile(path.join(tempDir, DEFAULT_USER_FILENAME), "utf-8")).resolves.toBe(
         "# USER.md\nkeep me\n",
       );
+      await expect(
+        fs.readFile(path.join(tempDir, DEFAULT_TONE_SKILLS_FILENAME), "utf-8"),
+      ).resolves.toBe("# tone_skills.md\nkeep my custom tone\n");
       await expect(fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME))).rejects.toMatchObject(
         {
           code: "ENOENT",
