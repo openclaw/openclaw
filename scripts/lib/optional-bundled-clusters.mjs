@@ -26,6 +26,16 @@ export function shouldIncludeOptionalBundledClusters(env = process.env) {
   return env[OPTIONAL_BUNDLED_BUILD_ENV] === "1";
 }
 
-export function shouldBuildBundledCluster(cluster, env = process.env) {
+export function hasReleasedBundledInstall(packageJson) {
+  return (
+    typeof packageJson?.openclaw?.install?.npmSpec === "string" &&
+    packageJson.openclaw.install.npmSpec.trim().length > 0
+  );
+}
+
+export function shouldBuildBundledCluster(cluster, env = process.env, options = {}) {
+  if (hasReleasedBundledInstall(options.packageJson)) {
+    return true;
+  }
   return shouldIncludeOptionalBundledClusters(env) || !isOptionalBundledCluster(cluster);
 }
