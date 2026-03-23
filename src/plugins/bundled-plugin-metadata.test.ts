@@ -163,9 +163,7 @@ describe("bundled plugin metadata", () => {
   });
 
   it("forwards env through writeBundledPluginMetadataModule", () => {
-    const tempRoot = fs.mkdtempSync(
-      path.join(os.tmpdir(), "openclaw-bundled-plugin-write-env-"),
-    );
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-plugin-write-env-"));
     tempDirs.push(tempRoot);
 
     writeJson(path.join(tempRoot, "extensions", "acpx", "package.json"), {
