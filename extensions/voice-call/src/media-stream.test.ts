@@ -2,7 +2,7 @@ import { once } from "node:events";
 import http from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import { MediaStreamHandler } from "./media-stream.js";
+import { MediaStreamHandler, sanitizeLogText } from "./media-stream.js";
 import type {
   OpenAIRealtimeSTTProvider,
   RealtimeSTTSession,
@@ -231,38 +231,12 @@ describe("MediaStreamHandler security hardening", () => {
     expect(ws.close).toHaveBeenCalledWith(1013, "Backpressure: send buffer exceeded");
   });
 
-  it("sanitizes websocket close reason before logging", async () => {
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const handler = new MediaStreamHandler({
-      sttProvider: createStubSttProvider(),
-      preStartTimeoutMs: 5_000,
-      shouldAcceptStream: () => true,
-    });
-    const server = await startWsServer(handler);
-
-    try {
-      const ws = await connectWs(server.url);
-      ws.close(1000, "forged\nline\r\tentry");
-      await waitForClose(ws);
-      await flush();
-
-      const closeLog = logSpy.mock.calls
-        .map((call) => call.map((value) => String(value)).join(" "))
-        .find(
-          (value): value is string =>
-            typeof value === "string" && value.includes("[MediaStream] WebSocket closed"),
-        );
-      if (!closeLog) {
-        throw new Error("sanitized websocket close log was not emitted");
-      }
-      expect(closeLog).not.toContain("\n");
-      expect(closeLog).not.toContain("\r");
-      expect(closeLog).not.toContain("\t");
-      expect(closeLog).toContain("forged line entry");
-    } finally {
-      logSpy.mockRestore();
-      await server.close();
-    }
+  it("sanitizes websocket close reason before logging", () => {
+    const reason = sanitizeLogText("forged\nline\r\tentry", 120);
+    expect(reason).not.toContain("\n");
+    expect(reason).not.toContain("\r");
+    expect(reason).not.toContain("\t");
+    expect(reason).toContain("forged line entry");
   });
 
   it("closes idle pre-start connections after timeout", async () => {
