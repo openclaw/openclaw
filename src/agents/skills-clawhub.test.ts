@@ -95,6 +95,64 @@ describe("skills-clawhub", () => {
     });
   });
 
+  describe("normalizeSlug rejects non-ASCII homograph slugs", () => {
+    it("rejects Cyrillic homograph 'а' (U+0430) in slug", async () => {
+      const result = await installSkillFromClawHub({
+        workspaceDir: "/tmp/workspace",
+        slug: "re\u0430ct",
+      });
+      expect(result).toMatchObject({ ok: false, error: expect.stringContaining("Invalid skill slug") });
+    });
+
+    it("rejects Cyrillic homograph 'е' (U+0435) in slug", async () => {
+      const result = await installSkillFromClawHub({
+        workspaceDir: "/tmp/workspace",
+        slug: "r\u0435act",
+      });
+      expect(result).toMatchObject({ ok: false, error: expect.stringContaining("Invalid skill slug") });
+    });
+
+    it("rejects Cyrillic homograph 'о' (U+043E) in slug", async () => {
+      const result = await installSkillFromClawHub({
+        workspaceDir: "/tmp/workspace",
+        slug: "t\u043Edo",
+      });
+      expect(result).toMatchObject({ ok: false, error: expect.stringContaining("Invalid skill slug") });
+    });
+
+    it("rejects slug with mixed Unicode and ASCII", async () => {
+      const result = await installSkillFromClawHub({
+        workspaceDir: "/tmp/workspace",
+        slug: "cаlеndаr",
+      });
+      expect(result).toMatchObject({ ok: false, error: expect.stringContaining("Invalid skill slug") });
+    });
+
+    it("rejects slug with non-Latin scripts", async () => {
+      const result = await installSkillFromClawHub({
+        workspaceDir: "/tmp/workspace",
+        slug: "技能",
+      });
+      expect(result).toMatchObject({ ok: false, error: expect.stringContaining("Invalid skill slug") });
+    });
+
+    it("rejects slug starting with a hyphen", async () => {
+      const result = await installSkillFromClawHub({
+        workspaceDir: "/tmp/workspace",
+        slug: "-calendar",
+      });
+      expect(result).toMatchObject({ ok: false, error: expect.stringContaining("Invalid skill slug") });
+    });
+
+    it("accepts valid ASCII slugs", async () => {
+      const result = await installSkillFromClawHub({
+        workspaceDir: "/tmp/workspace",
+        slug: "calendar-2",
+      });
+      expect(result).toMatchObject({ ok: true });
+    });
+  });
+
   it("uses search for browse-all skill discovery", async () => {
     searchClawHubSkillsMock.mockResolvedValueOnce([
       {
