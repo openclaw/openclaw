@@ -457,8 +457,12 @@ export async function createEmbeddingProvider(
       const pp = pluginProviders[pid];
       if (pp) {
         try {
-          const apiKey = await resolveApiKeyForProvider({ cfg: options.config, provider: pid });
-          if (apiKey) {
+          const apiKey = await resolveApiKeyForProvider({
+            cfg: options.config,
+            provider: pid,
+            agentDir: options.agentDir,
+          });
+          if (apiKey !== undefined) {
             return { provider: pp, requestedProvider };
           }
         } catch {
@@ -487,14 +491,13 @@ export async function createEmbeddingProvider(
           provider: cp.id,
           agentDir: options.agentDir,
         });
-        if (apiKey) {
+        if (apiKey !== undefined) {
           return { provider: cp.provider, requestedProvider };
         }
       } catch {
         // No API key for this plugin - try next one
       }
     }
-    // All custom plugins failed or have no API key - fall through to return null
 
     // All failed - return null for FTS-only mode
     return {
