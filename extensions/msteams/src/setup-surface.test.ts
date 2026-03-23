@@ -64,7 +64,7 @@ describe("msteams setup surface", () => {
 
     hasConfiguredMSTeamsCredentials.mockReturnValue(false);
     expect(
-      msteamsSetupWizard.status.resolveStatusLines({
+      msteamsSetupWizard.status.resolveStatusLines?.({
         cfg: { channels: { msteams: {} } },
       } as never),
     ).toEqual(["MS Teams: needs app credentials"]);
