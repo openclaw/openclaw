@@ -19,7 +19,7 @@ Recommended config:
         enabled: true,
         config: {
           walletPrivateKeyEnvVar: "PYTHIA_BASE_PRIVATE_KEY",
-          dailyBudgetUsd: 1,
+          totalBudgetUsd: 1,
           expectedPriceUsd: 0.025,
         },
       },
