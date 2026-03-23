@@ -108,6 +108,9 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
 - The npm workflow and the private mac publish workflow accept
   `preflight_only=true` to run validation/build/package steps without uploading
   public release assets.
+- The private mac workflow also accepts `smoke_test_only=true` for branch-safe
+  workflow smoke tests that use ad-hoc signing, skip notarization, skip shared
+  appcast generation, and do not prove release readiness.
 - `preflight_only=true` on the npm workflow is also the right way to validate an
   existing tag after publish; it should keep running the build checks even when
   the npm version is already published.
@@ -122,6 +125,8 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
   SwiftPM cache because the Swift build/test/package path is CPU-heavy.
 - Private mac preflight uploads notarized build artifacts as workflow artifacts
   instead of uploading public GitHub release assets.
+- Private smoke-test runs upload ad-hoc, non-notarized build artifacts as
+  workflow artifacts and intentionally skip stable `appcast.xml` generation.
 - npm preflight, public mac validation, and private mac preflight must all pass
   before any real publish run starts.
 - Real publish runs must be dispatched from `main`; branch-dispatched publish
