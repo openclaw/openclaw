@@ -11,6 +11,7 @@ const srcRoot = path.join(repoRoot, "src");
 const extensionsRoot = path.join(repoRoot, "extensions");
 const testRoot = path.join(repoRoot, "test");
 const workspacePackagePaths = ["ui/package.json"];
+const MAX_SCAN_BYTES = 2 * 1024 * 1024;
 const compareStrings = (left, right) => left.localeCompare(right);
 const HELP_TEXT = `Usage: node scripts/audit-seams.mjs [--help]
 
@@ -40,6 +41,30 @@ async function collectWorkspacePackagePaths() {
 
 function normalizePath(filePath) {
   return path.relative(repoRoot, filePath).split(path.sep).join("/");
+}
+
+async function readScannableText(filePath, maxBytes = MAX_SCAN_BYTES) {
+  const stat = await fs.stat(filePath);
+  if (stat.size <= maxBytes) {
+    return fs.readFile(filePath, "utf8");
+  }
+  const handle = await fs.open(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(maxBytes);
+    const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
+function redactNpmSpec(npmSpec) {
+  if (typeof npmSpec !== "string") {
+    return npmSpec ?? null;
+  }
+  return npmSpec
+    .replace(/(https?:\/\/)([^/\s:@]+):([^/\s@]+)@/gi, "$1***:***@")
+    .replace(/(https?:\/\/)([^/\s:@]+)@/gi, "$1***@");
 }
 
 function isCodeFile(fileName) {
@@ -489,7 +514,7 @@ async function buildMissingPackages(params = {}) {
       decisionReason: classification.reason,
       packageName: pkg.name ?? meta.packageName,
       packagePath: relativePackagePath,
-      npmSpec: pkg.openclaw?.install?.npmSpec ?? null,
+      npmSpec: redactNpmSpec(pkg.openclaw?.install?.npmSpec),
       private: pkg.private === true,
       pluginSdkReachability:
         pluginSdkEntries.length > 0 ? { staticEntryPoints: pluginSdkEntries } : undefined,
@@ -509,11 +534,19 @@ function stemFromRelativePath(relativePath) {
 function describeSeamKinds(relativePath, source) {
   const seamKinds = [];
   const isReplyDeliveryPath =
-    /reply-delivery|reply-delivery\.ts|reply\/.*delivery|outbound\/deliver|outbound\/message/.test(
+    /reply-delivery|reply-dispatcher|reply\/.*delivery|monitor\/(?:replies|deliver)|outbound\/deliver|outbound\/message/.test(
       relativePath,
     );
+  const isChannelMediaAdapterPath =
+    (relativePath.startsWith("extensions/") &&
+      /(outbound|outbound-adapter|reply-delivery|send|delivery|messenger|channel(?:\.runtime)?)\.ts$/.test(
+        relativePath,
+      )) ||
+    /^src\/channels\/plugins\/outbound\/[^/]+\.ts$/.test(relativePath);
   if (
     relativePath.startsWith("src/agents/tools/") &&
+    source.includes("details") &&
+    source.includes("media") &&
     /details\s*:\s*{[\s\S]*\bmedia\b\s*:/.test(source)
   ) {
     seamKinds.push("tool-result-media");
@@ -525,10 +558,7 @@ function describeSeamKinds(relativePath, source) {
     seamKinds.push("reply-delivery-media");
   }
   if (
-    relativePath.startsWith("extensions/") &&
-    /(outbound|outbound-adapter|reply-delivery|send|delivery|messenger|channel(?:\.runtime)?)\.ts$/.test(
-      relativePath,
-    ) &&
+    isChannelMediaAdapterPath &&
     (/sendMedia\b/.test(source) || /\bmediaUrl\b|\bmediaUrls\b|filename|audioAsVoice/.test(source))
   ) {
     seamKinds.push("channel-media-adapter");
@@ -551,7 +581,7 @@ async function buildTestIndex(testFiles) {
         .replace(/\.test$/, "")
         .replace(/\.spec$/, "");
       const baseName = path.basename(stem);
-      const source = await fs.readFile(filePath, "utf8");
+      const source = await readScannableText(filePath);
       return {
         filePath,
         relativePath,
@@ -687,7 +717,7 @@ async function buildSeamTestInventory() {
 
   for (const filePath of productionFiles) {
     const relativePath = normalizePath(filePath);
-    const source = await fs.readFile(filePath, "utf8");
+    const source = await readScannableText(filePath);
     const seamKinds = describeSeamKinds(relativePath, source);
     if (seamKinds.length === 0) {
       continue;
