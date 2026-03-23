@@ -142,9 +142,6 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         clientSecret,
         clientSecretFile: input.tokenFile,
         name: input.name,
-        imageServerBaseUrl: (input as Record<string, unknown>).imageServerBaseUrl as
-          | string
-          | undefined,
       });
     },
   },

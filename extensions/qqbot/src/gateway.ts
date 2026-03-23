@@ -16,7 +16,6 @@ import {
   onMessageSent,
   PLUGIN_USER_AGENT,
 } from "./api.js";
-import { startImageServer, isImageServerRunning, type ImageServerConfig } from "./image-server.js";
 import { processAttachments, formatVoiceText } from "./inbound-attachments.js";
 import { recordKnownUser, flushKnownUsers } from "./known-users.js";
 import { createMessageQueue, type QueuedMessage } from "./message-queue.js";
@@ -58,7 +57,7 @@ import type {
 import { TypingKeepAlive, TYPING_INPUT_SECOND } from "./typing-keepalive.js";
 import { triggerUpdateCheck } from "./update-checker.js";
 import { resolveTTSConfig } from "./utils/audio-convert.js";
-import { getQQBotDataDir, runDiagnostics } from "./utils/platform.js";
+import { runDiagnostics } from "./utils/platform.js";
 import { parseFaceTags, parseRefIndices, buildAttachmentSummaries } from "./utils/text-parsing.js";
 
 // QQ Bot intents - 按权限级别分组
@@ -83,11 +82,6 @@ const MAX_RECONNECT_ATTEMPTS = 100;
 const MAX_QUICK_DISCONNECT_COUNT = 3; // 连续快速断开次数阈值
 const QUICK_DISCONNECT_THRESHOLD = 5000; // 5秒内断开视为快速断开
 
-// 图床服务器配置（可通过环境变量覆盖）
-const IMAGE_SERVER_PORT = parseInt(process.env.QQBOT_IMAGE_SERVER_PORT || "18765", 10);
-// 使用绝对路径，确保文件保存和读取使用同一目录
-const IMAGE_SERVER_DIR = process.env.QQBOT_IMAGE_SERVER_DIR || getQQBotDataDir("images");
-
 export interface GatewayContext {
   account: ResolvedQQBotAccount;
   abortSignal: AbortSignal;
@@ -101,39 +95,9 @@ export interface GatewayContext {
   };
 }
 
-/**
- * 启动图床服务器
- */
-async function ensureImageServer(
-  log?: GatewayContext["log"],
-  publicBaseUrl?: string,
-): Promise<string | null> {
-  if (isImageServerRunning()) {
-    return publicBaseUrl || `http://0.0.0.0:${IMAGE_SERVER_PORT}`;
-  }
-
-  try {
-    const config: Partial<ImageServerConfig> = {
-      port: IMAGE_SERVER_PORT,
-      storageDir: IMAGE_SERVER_DIR,
-      // 使用用户配置的公网地址，而不是 0.0.0.0
-      baseUrl: publicBaseUrl || `http://0.0.0.0:${IMAGE_SERVER_PORT}`,
-      ttlSeconds: 3600, // 1 小时过期
-    };
-    await startImageServer(config);
-    log?.info(
-      `[qqbot] Image server started on port ${IMAGE_SERVER_PORT}, baseUrl: ${config.baseUrl}`,
-    );
-    return config.baseUrl!;
-  } catch (err) {
-    log?.error(`[qqbot] Failed to start image server: ${err}`);
-    return null;
-  }
-}
-
-// 模块级变量：进程生命周期内只有首次为 true
+// 模块级变量：记录已完成首次 READY 的账号
 // 区分 gateway restart（进程重启）和 health-monitor 断线重连
-let isFirstReadyGlobal = true;
+const seenReadyAccounts = new Set<string>();
 
 /**
  * 启动 Gateway WebSocket 连接（带自动重连）
@@ -224,19 +188,6 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
     );
   }
 
-  // 如果配置了公网 URL，启动图床服务器
-  let imageServerBaseUrl: string | null = null;
-  if (account.imageServerBaseUrl) {
-    // 使用用户配置的公网地址作为 baseUrl
-    await ensureImageServer(log, account.imageServerBaseUrl);
-    imageServerBaseUrl = account.imageServerBaseUrl;
-    log?.info(`[qqbot:${account.accountId}] Image server enabled with URL: ${imageServerBaseUrl}`);
-  } else {
-    log?.info(
-      `[qqbot:${account.accountId}] Image server disabled (no imageServerBaseUrl configured)`,
-    );
-  }
-
   let reconnectAttempts = 0;
   let isAborted = false;
   let currentWs: WebSocket | null = null;
@@ -248,8 +199,8 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
   let isConnecting = false; // 防止并发连接
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null; // 重连定时器
   let shouldRefreshToken = false; // 下次连接是否需要刷新 token
-  // 使用模块级 isFirstReadyGlobal，确保只有进程级重启才发送问候语
-  // health-monitor 重连不会重新初始化为 true
+  // 使用模块级 seenReadyAccounts，确保每个账号只在首次 READY 发送问候语
+  // health-monitor 重连不会重新触发
 
   const adminCtx: AdminResolverContext = {
     accountId: account.accountId,
@@ -1356,20 +1307,20 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
 
                 // 仅 startGateway 后的首次 READY 才发送上线通知
                 // ws 断线重连（resume 失败后重新 Identify）产生的 READY 不发送
-                if (!isFirstReadyGlobal) {
+                if (seenReadyAccounts.has(account.accountId)) {
                   log?.info(
                     `[qqbot:${account.accountId}] Skipping startup greeting (reconnect READY, not first startup)`,
                   );
                 } else {
-                  isFirstReadyGlobal = false;
+                  seenReadyAccounts.add(account.accountId);
                   sendStartupGreetings(adminCtx, "READY");
                 } // end isFirstReady
               } else if (t === "RESUMED") {
                 log?.info(`[qqbot:${account.accountId}] Session resumed`);
                 onReady?.(d); // 通知框架连接已恢复，避免 health-monitor 误判 disconnected
                 // RESUMED 也属于首次启动（gateway restart 通常走 resume）
-                if (isFirstReadyGlobal) {
-                  isFirstReadyGlobal = false;
+                if (!seenReadyAccounts.has(account.accountId)) {
+                  seenReadyAccounts.add(account.accountId);
                   sendStartupGreetings(adminCtx, "RESUMED");
                 }
                 // P1-2: 更新 Session 连接时间
