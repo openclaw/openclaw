@@ -110,6 +110,7 @@ Docs: https://docs.openclaw.ai
 - Configure/startup: move outbound send-deps resolution into a lightweight helper so `openclaw configure` no longer stalls after the banner while eagerly loading channel plugins. (#46301) Thanks @scoootscooob.
 - Mattermost/threading: honor `replyToMode: "off"` for already-threaded inbound posts so threaded follow-ups can fall back to top-level replies when configured. (#52543) Thanks @RichardCao.
 - Security/exec approvals: escape blank Hangul filler code points in approval prompts across gateway/chat and the macOS native approval UI so visually empty Unicode padding cannot hide reviewed command text.
+- Security/network: harden explicit-proxy SSRF pinning by translating target-hop transport hints onto HTTPS proxy tunnels and failing closed for plain HTTP guarded fetches that cannot preserve pinned DNS.
 - Telegram/replies: set `allow_sending_without_reply` on reply-targeted sends and media-error notices so deleted parent messages no longer drop otherwise valid replies. (#52524) Thanks @moltbot886.
 - Gateway/status: resolve env-backed `gateway.auth.*` SecretRefs before read-only probe auth checks so status no longer reports false probe failures when auth is configured through SecretRef. (#52513) Thanks @CodeForgeNet.
 - Agents/exec: return plain-text failed tool output for timeouts and other non-success exec outcomes so models no longer parrot raw JSON error payloads back to users. (#52508) Thanks @martingarramon.
