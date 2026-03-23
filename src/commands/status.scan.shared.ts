@@ -66,7 +66,7 @@ export async function resolveGatewayProbeSnapshot(params: {
     typeof params.cfg.gateway?.remote?.url === "string" ? params.cfg.gateway.remote.url : "";
   const remoteUrlMissing = isRemoteMode && !remoteUrlRaw.trim();
   const gatewayMode = isRemoteMode ? "remote" : "local";
-  const gatewayProbeAuthResolution = resolveGatewayProbeAuthResolution(params.cfg);
+  const gatewayProbeAuthResolution = await resolveGatewayProbeAuthResolution(params.cfg);
   let gatewayProbeAuthWarning = gatewayProbeAuthResolution.warning;
   const gatewayProbe = remoteUrlMissing
     ? null
