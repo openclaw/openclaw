@@ -8,6 +8,7 @@ export * from "../media/ffmpeg-limits.js";
 export * from "../media/image-ops.js";
 export * from "../media/inbound-path-policy.js";
 export * from "../media/load-options.js";
+export * from "../media/local-media-access.js";
 export * from "../media/local-roots.js";
 export * from "../media/mime.js";
 export * from "../media/outbound-attachment.js";

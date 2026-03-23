@@ -213,6 +213,30 @@ describe("sendBlueBubblesMedia local-path hardening", () => {
     });
   });
 
+  it("rejects remote-host file:// media paths", async () => {
+    const allowedRoot = await makeTempDir();
+
+    await expectRejectedLocalMedia({
+      cfg: createConfig({ mediaLocalRoots: [allowedRoot] }),
+      mediaPath: "file://attacker/share/evil.txt",
+      error: /Invalid file:\/\/ URL/i,
+    });
+  });
+
+  it("rejects remote-host file:// mediaLocalRoots entries", async () => {
+    const { filePath: allowedFile } = await makeTempFile("allowed.txt", "allowed");
+
+    await expect(
+      sendBlueBubblesMedia({
+        cfg: createConfig({ mediaLocalRoots: ["file://attacker/share"] }),
+        to: "chat:123",
+        mediaPath: allowedFile,
+      }),
+    ).rejects.toThrow(/Invalid file:\/\/ URL in mediaLocalRoots/i);
+
+    expect(sendBlueBubblesAttachmentMock).not.toHaveBeenCalled();
+  });
+
   it("uses account-specific mediaLocalRoots over top-level roots", async () => {
     const baseRoot = await makeTempDir();
     const accountRoot = await makeTempDir();
