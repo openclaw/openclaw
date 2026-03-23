@@ -17,6 +17,7 @@ export type {
   LineChannelData,
   LineConfig,
   ListItem,
+  LineProbeResult,
   ResolvedLineAccount,
 } from "./runtime-api.js";
 export {
