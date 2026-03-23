@@ -1,14 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock config loading to control test inputs.
 vi.mock("../config.js", () => ({
   loadConfig: vi.fn().mockReturnValue({}),
 }));
 
-import { loadConfig } from "../config.js";
-import { resolveMaintenanceConfig } from "./store-maintenance.js";
-
-const mockLoadConfig = vi.mocked(loadConfig);
+let loadConfig: typeof import("../config.js").loadConfig;
+let resolveMaintenanceConfig: typeof import("./store-maintenance.js").resolveMaintenanceConfig;
+let mockLoadConfig: ReturnType<typeof vi.fn>;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -17,6 +16,16 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // ---------------------------------------------------------------------------
 
 describe("resolveMaintenanceConfig with agentId", () => {
+  beforeAll(async () => {
+    ({ loadConfig } = await import("../config.js"));
+    ({ resolveMaintenanceConfig } = await import("./store-maintenance.js"));
+    mockLoadConfig = vi.mocked(loadConfig) as ReturnType<typeof vi.fn>;
+  });
+
+  beforeEach(() => {
+    mockLoadConfig.mockClear();
+  });
+
   it("returns global config when no agentId is provided", () => {
     mockLoadConfig.mockReturnValue({
       session: {
@@ -34,7 +43,7 @@ describe("resolveMaintenanceConfig with agentId", () => {
           },
         ],
       },
-    } as ReturnType<typeof loadConfig>);
+    });
 
     const result = resolveMaintenanceConfig();
 
@@ -65,7 +74,7 @@ describe("resolveMaintenanceConfig with agentId", () => {
           },
         ],
       },
-    } as ReturnType<typeof loadConfig>);
+    });
 
     const result = resolveMaintenanceConfig("approval");
 
@@ -87,7 +96,7 @@ describe("resolveMaintenanceConfig with agentId", () => {
       agents: {
         list: [{ id: "worker" }],
       },
-    } as ReturnType<typeof loadConfig>);
+    });
 
     const result = resolveMaintenanceConfig("worker");
 
@@ -106,7 +115,7 @@ describe("resolveMaintenanceConfig with agentId", () => {
       agents: {
         list: [{ id: "other" }],
       },
-    } as ReturnType<typeof loadConfig>);
+    });
 
     const result = resolveMaintenanceConfig("nonexistent");
 
@@ -115,7 +124,7 @@ describe("resolveMaintenanceConfig with agentId", () => {
   });
 
   it("uses built-in defaults when no global or per-agent config exists", () => {
-    mockLoadConfig.mockReturnValue({} as ReturnType<typeof loadConfig>);
+    mockLoadConfig.mockReturnValue({});
 
     const result = resolveMaintenanceConfig("any-agent");
 
@@ -143,7 +152,7 @@ describe("resolveMaintenanceConfig with agentId", () => {
           },
         ],
       },
-    } as ReturnType<typeof loadConfig>);
+    });
 
     const result = resolveMaintenanceConfig("heavy");
 
@@ -165,7 +174,7 @@ describe("resolveMaintenanceConfig with agentId", () => {
           },
         ],
       },
-    } as ReturnType<typeof loadConfig>);
+    });
 
     const result = resolveMaintenanceConfig("standalone");
 
