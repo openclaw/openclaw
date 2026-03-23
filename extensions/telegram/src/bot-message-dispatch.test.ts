@@ -2129,6 +2129,38 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("does not fall back when the final reply is NO_REPLY after earlier skipped output", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      // Earlier skipped output should not force a visible fallback when the
+      // agent intentionally ends the turn with NO_REPLY after a tool-only action.
+      dispatcherOptions.onSkip?.({ text: "" }, { reason: "empty", kind: "block" });
+      dispatcherOptions.onSkip?.({ text: "NO_REPLY" }, { reason: "silent", kind: "final" });
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+    });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fall back when the final reply is HEARTBEAT_OK", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      dispatcherOptions.onSkip?.({ text: "" }, { reason: "empty", kind: "block" });
+      dispatcherOptions.onSkip?.({ text: "HEARTBEAT_OK" }, { reason: "heartbeat", kind: "final" });
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+    });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
   it("sends fallback and clears preview when deliver throws (dispatcher swallows error)", async () => {
     const draftStream = createDraftStream();
     createTelegramDraftStream.mockReturnValue(draftStream);

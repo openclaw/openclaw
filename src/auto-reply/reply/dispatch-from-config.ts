@@ -144,6 +144,7 @@ const resolveSessionStoreLookup = (
 export type DispatchFromConfigResult = {
   queuedFinal: boolean;
   counts: Record<ReplyDispatchKind, number>;
+  completedWithoutVisibleOutput?: boolean;
 };
 
 export async function dispatchReplyFromConfig(params: {
@@ -777,12 +778,14 @@ export async function dispatchReplyFromConfig(params: {
 
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
+    const completedWithoutVisibleOutput =
+      replies.length === 0 && counts.tool === 0 && counts.block === 0 && counts.final === 0;
     recordProcessed(
       "completed",
       pluginFallbackReason ? { reason: pluginFallbackReason } : undefined,
     );
     markIdle("message_completed");
-    return { queuedFinal, counts };
+    return { queuedFinal, counts, completedWithoutVisibleOutput };
   } catch (err) {
     recordProcessed("error", { error: String(err) });
     markIdle("message_error");

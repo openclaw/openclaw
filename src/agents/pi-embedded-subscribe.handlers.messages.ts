@@ -55,6 +55,53 @@ function emitReasoningEnd(ctx: EmbeddedPiSubscribeContext) {
   void ctx.params.onReasoningEnd?.();
 }
 
+const THINKING_ONLY_VISIBLE_FALLBACK = "I considered this, but I don't have anything to add.";
+
+function hasAssistantToolCalls(message: AgentMessage): boolean {
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const type = (block as { type?: unknown }).type;
+    return type === "toolCall" || type === "toolUse" || type === "functionCall";
+  });
+}
+
+function resolveThinkingOnlyVisibleFallbackText(params: {
+  message: AgentMessage;
+  text: string;
+  rawThinking: string;
+  messagingToolSentTexts: string[];
+  enforceFinalTag: boolean;
+}): string {
+  if (params.text.trim()) {
+    return params.text;
+  }
+  const stopReason = (params.message as { stopReason?: unknown }).stopReason;
+  if (stopReason !== "stop" || hasAssistantToolCalls(params.message)) {
+    return params.text;
+  }
+  if (!params.rawThinking.trim()) {
+    return params.text;
+  }
+  // When a messaging tool already delivered a visible reply earlier in the turn,
+  // the closing assistant message can legitimately be thinking-only.
+  if (params.messagingToolSentTexts.length > 0) {
+    return params.text;
+  }
+  // When enforceFinalTag is active, content outside <final> blocks is suppressed.
+  // The thinking-only fallback should respect this — if the model never opened a
+  // <final> block, we should not inject visible output.
+  if (params.enforceFinalTag) {
+    return params.text;
+  }
+  return THINKING_ONLY_VISIBLE_FALLBACK;
+}
+
 export function resolveSilentReplyFallbackText(params: {
   text: string;
   messagingToolSentTexts: string[];
@@ -345,22 +392,29 @@ export function handleMessageEnd(
   promoteThinkingTagsToBlocks(assistantMessage);
 
   const rawText = extractAssistantText(assistantMessage);
+  const extractedThinking = extractAssistantThinking(assistantMessage);
   appendRawStream({
     ts: Date.now(),
     event: "assistant_message_end",
     runId: ctx.params.runId,
     sessionId: (ctx.params.session as { id?: string }).id,
     rawText,
-    rawThinking: extractAssistantThinking(assistantMessage),
+    rawThinking: extractedThinking,
   });
 
-  const text = resolveSilentReplyFallbackText({
-    text: ctx.stripBlockTags(rawText, { thinking: false, final: false }),
+  const text = resolveThinkingOnlyVisibleFallbackText({
+    message: assistantMessage,
+    text: resolveSilentReplyFallbackText({
+      text: ctx.stripBlockTags(rawText, { thinking: false, final: false }),
+      messagingToolSentTexts: ctx.state.messagingToolSentTexts,
+    }),
+    rawThinking: extractedThinking,
     messagingToolSentTexts: ctx.state.messagingToolSentTexts,
+    enforceFinalTag: !!ctx.params.enforceFinalTag,
   });
   const rawThinking =
     ctx.state.includeReasoning || ctx.state.streamReasoning
-      ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText)
+      ? extractedThinking || extractThinkingFromTaggedText(rawText)
       : "";
   const formattedReasoning = rawThinking ? formatReasoningMessage(rawThinking) : "";
   const trimmedText = text.trim();
