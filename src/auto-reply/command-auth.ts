@@ -368,17 +368,25 @@ export function resolveCommandAuthorization(params: {
     providerId,
   });
 
-  const { allowFrom: allowFromRaw, hadResolutionError: allowFromResolutionFailed } =
-    resolveProviderAllowFrom({
-      plugin,
-      cfg,
-      accountId: ctx.AccountId,
-    });
+  const resolvedAllowFrom = providerResolutionError
+    ? {
+        allowFrom: resolveFallbackAllowFrom({
+          cfg,
+          providerId,
+          accountId: ctx.AccountId,
+        }),
+        hadResolutionError: true,
+      }
+    : resolveProviderAllowFrom({
+        plugin,
+        cfg,
+        accountId: ctx.AccountId,
+      });
   const allowFromList = formatAllowFromList({
     plugin,
     cfg,
     accountId: ctx.AccountId,
-    allowFrom: allowFromRaw,
+    allowFrom: resolvedAllowFrom.allowFrom,
   });
   const configOwnerAllowFromList = resolveOwnerAllowFromList({
     plugin,
@@ -395,7 +403,7 @@ export function resolveCommandAuthorization(params: {
     allowFrom: ctx.OwnerAllowFrom,
   });
   const allowAll =
-    !allowFromResolutionFailed &&
+    !resolvedAllowFrom.hadResolutionError &&
     (allowFromList.length === 0 || allowFromList.some((entry) => entry.trim() === "*"));
 
   const ownerCandidatesForCommands = allowAll ? [] : allowFromList.filter((entry) => entry !== "*");
