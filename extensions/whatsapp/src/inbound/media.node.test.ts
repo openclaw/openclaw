@@ -5,10 +5,15 @@ const { normalizeMessageContent, downloadMediaMessage } = vi.hoisted(() => ({
   downloadMediaMessage: vi.fn().mockResolvedValue(Buffer.from("fake-media-data")),
 }));
 
-vi.mock("@whiskeysockets/baileys", () => ({
-  normalizeMessageContent,
-  downloadMediaMessage,
-}));
+vi.mock("@whiskeysockets/baileys", async () => {
+  const actual =
+    await vi.importActual<typeof import("@whiskeysockets/baileys")>("@whiskeysockets/baileys");
+  return {
+    ...actual,
+    normalizeMessageContent,
+    downloadMediaMessage,
+  };
+});
 
 import { downloadInboundMedia } from "./media.js";
 

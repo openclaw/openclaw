@@ -12,6 +12,13 @@ vi.mock("./runtime-api.js", async () => {
 
   return {
     ...actual,
+    createWhatsAppOutboundBase: ({
+      resolveTarget,
+    }: {
+      resolveTarget: typeof actual.resolveWhatsAppOutboundTarget;
+    }) => ({
+      resolveTarget,
+    }),
     getChatChannelMeta: () => ({ id: "whatsapp", label: "WhatsApp" }),
     normalizeWhatsAppTarget,
     isWhatsAppGroupJid: (value: string) => value.endsWith("@g.us"),
@@ -60,10 +67,22 @@ vi.mock("./runtime.js", () => ({
       text: { chunkText: vi.fn() },
       whatsapp: {
         sendMessageWhatsApp: vi.fn(),
+        sendPollWhatsApp: vi.fn(),
         createLoginTool: vi.fn(),
+        webAuthExists: vi.fn(async () => true),
       },
     },
+    logging: {
+      shouldLogVerbose: vi.fn(() => false),
+    },
   })),
+}));
+
+vi.mock("./shared.js", () => ({
+  createWhatsAppPluginBase: vi.fn(() => ({})),
+  loadWhatsAppChannelRuntime: vi.fn(),
+  whatsappSetupWizardProxy: {},
+  WHATSAPP_CHANNEL: "whatsapp",
 }));
 
 import { whatsappPlugin } from "./channel.js";
