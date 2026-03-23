@@ -4,6 +4,7 @@ import {
   pickLastDeliverablePayload,
   pickLastNonEmptyTextFromPayloads,
   pickSummaryFromPayloads,
+  resolveCronPayloadOutcome,
 } from "./helpers.js";
 
 describe("pickSummaryFromPayloads", () => {
@@ -83,6 +84,32 @@ describe("pickLastDeliverablePayload", () => {
     const normal = { text: "ok", isError: undefined };
     const error = { text: "bad", isError: true as const };
     expect(pickLastDeliverablePayload([normal, error])).toBe(normal);
+  });
+});
+
+describe("resolveCronPayloadOutcome", () => {
+  it("treats a later non-error payload as recovery even when runLevelError is present", () => {
+    const outcome = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "⚠️ ✉️ Message failed", isError: true },
+        { text: "Reminder delivered to the user." },
+      ],
+      runLevelError: new Error("message tool failed"),
+    });
+
+    expect(outcome.hasFatalErrorPayload).toBe(false);
+    expect(outcome.embeddedRunError).toBeUndefined();
+    expect(outcome.summary).toBe("Reminder delivered to the user.");
+  });
+
+  it("keeps error payload fatal when no successful payload follows", () => {
+    const outcome = resolveCronPayloadOutcome({
+      payloads: [{ text: "⚠️ ✉️ Message failed", isError: true }],
+      runLevelError: new Error("message tool failed"),
+    });
+
+    expect(outcome.hasFatalErrorPayload).toBe(true);
+    expect(outcome.embeddedRunError).toBe("⚠️ ✉️ Message failed");
   });
 });
 

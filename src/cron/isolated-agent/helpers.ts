@@ -130,8 +130,10 @@ export function resolveCronPayloadOutcome(params: {
   const lastErrorPayloadIndex = params.payloads.findLastIndex(
     (payload) => payload?.isError === true,
   );
+  // Treat a later non-error payload as recovery, even when the runner surfaces
+  // a run-level error. Tool-level warnings can populate meta.error while the
+  // model still returns a successful final payload.
   const hasSuccessfulPayloadAfterLastError =
-    !params.runLevelError &&
     lastErrorPayloadIndex >= 0 &&
     params.payloads
       .slice(lastErrorPayloadIndex + 1)
