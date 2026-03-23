@@ -302,6 +302,14 @@ const moonshotProvider = {
 
 function installImageUnderstandingProviderStubs(...providers: MediaUnderstandingProvider[]) {
   imageProviderHarness.setProviders(providers);
+  __testing.setProviderDepsForTest({
+    buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+      imageProviderHarness.buildProviderRegistry(overrides),
+    getMediaUnderstandingProvider: (
+      id: string,
+      registry: Map<string, MediaUnderstandingProvider>,
+    ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+  });
 }
 
 function makeModelDefinition(id: string, input: Array<"text" | "image">): ModelDefinitionConfig {
@@ -410,6 +418,7 @@ describe("image tool implicit imageModel config", () => {
 
   afterEach(() => {
     imageProviderHarness.reset();
+    __testing.setProviderDepsForTest();
   });
 
   it("stays disabled without auth when no pairing is possible", async () => {
@@ -860,6 +869,7 @@ describe("image tool MiniMax VLM routing", () => {
 
   afterEach(() => {
     imageProviderHarness.reset();
+    __testing.setProviderDepsForTest();
   });
 
   async function createMinimaxVlmFixture(baseResp: { status_code: number; status_msg: string }) {
