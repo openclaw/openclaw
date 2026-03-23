@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import { resolvePairingPaths } from "./pairing-files.js";
 import {
   createAsyncLock,
@@ -24,6 +25,27 @@ export type DeviceBootstrapTokenRecord = {
 type DeviceBootstrapStateFile = Record<string, DeviceBootstrapTokenRecord>;
 
 const withLock = createAsyncLock();
+
+function normalizeBootstrapRoles(roles: readonly string[] | undefined): string[] {
+  if (!Array.isArray(roles)) {
+    return [];
+  }
+  const out = new Set<string>();
+  for (const role of roles) {
+    const trimmed = role.trim();
+    if (trimmed) {
+      out.add(trimmed);
+    }
+  }
+  return [...out].toSorted();
+}
+
+function sameStringSet(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  return left.every((value, index) => value === right[index]);
+}
 
 function resolveBootstrapPath(baseDir?: string): string {
   return path.join(resolvePairingPaths(baseDir, "devices").dir, "bootstrap.json");
@@ -63,15 +85,21 @@ async function persistState(state: DeviceBootstrapStateFile, baseDir?: string): 
 export async function issueDeviceBootstrapToken(
   params: {
     baseDir?: string;
+    roles?: readonly string[];
+    scopes?: readonly string[];
   } = {},
 ): Promise<{ token: string; expiresAtMs: number }> {
   return await withLock(async () => {
     const state = await loadState(params.baseDir);
     const token = generatePairingToken();
     const issuedAtMs = Date.now();
+    const roles = normalizeBootstrapRoles(params.roles ?? ["node"]);
+    const scopes = normalizeDeviceAuthScopes(params.scopes ? [...params.scopes] : []);
     state[token] = {
       token,
       ts: issuedAtMs,
+      roles,
+      scopes,
       issuedAtMs,
     };
     await persistState(state, params.baseDir);
@@ -134,12 +162,25 @@ export async function verifyDeviceBootstrapToken(params: {
     if (!found) {
       return { ok: false, reason: "bootstrap_token_invalid" };
     }
-    const [tokenKey] = found;
+    const [tokenKey, record] = found;
 
     const deviceId = params.deviceId.trim();
     const publicKey = params.publicKey.trim();
     const role = params.role.trim();
     if (!deviceId || !publicKey || !role) {
+      return { ok: false, reason: "bootstrap_token_invalid" };
+    }
+    const requestedRoles = normalizeBootstrapRoles([role]);
+    const requestedScopes = normalizeDeviceAuthScopes([...params.scopes]);
+    const allowedRoles = normalizeBootstrapRoles(record.roles);
+    const allowedScopes = normalizeDeviceAuthScopes(record.scopes);
+    // Fail closed for unbound legacy setup codes and for any attempt to redeem
+    // the token outside the exact role/scope profile it was issued for.
+    if (
+      allowedRoles.length === 0 ||
+      !sameStringSet(requestedRoles, allowedRoles) ||
+      !sameStringSet(requestedScopes, allowedScopes)
+    ) {
       return { ok: false, reason: "bootstrap_token_invalid" };
     }
 
