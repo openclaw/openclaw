@@ -297,6 +297,16 @@ if (command === "prompt") {
     process.exit(0);
   }
 
+  if (stdinText.includes("done-then-exit-1")) {
+    emitUpdate(sessionFromOption, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "ok" },
+    });
+    emitJson({ type: "done", stopReason: "end_turn" });
+    process.stderr.write("backend exited after done\\n");
+    process.exit(1);
+  }
+
   emitUpdate(sessionFromOption, {
     sessionUpdate: "agent_thought_chunk",
     content: { type: "text", text: "thinking" },

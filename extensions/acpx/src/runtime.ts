@@ -635,12 +635,15 @@ export class AcpxRuntime implements AcpRuntime {
       }
 
       if ((exit.code ?? 0) !== 0 && !sawError) {
+        const exitMessage = formatAcpxExitMessage({
+          stderr,
+          exitCode: exit.code,
+        });
         yield {
           type: "error",
-          message: formatAcpxExitMessage({
-            stderr,
-            exitCode: exit.code,
-          }),
+          message: sawDone
+            ? `ACP backend exited after signaling done: ${exitMessage}`
+            : exitMessage,
         };
         return;
       }
