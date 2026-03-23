@@ -200,7 +200,6 @@ describe("runDaemonInstall", () => {
       NODE_USE_SYSTEM_CA: undefined,
     });
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.CLAWDBOT_GATEWAY_TOKEN;
   });
 
   afterEach(() => {

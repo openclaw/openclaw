@@ -41,9 +41,8 @@ beforeEach(() => {
     }) => {
       const configToken = params.config?.gateway?.auth?.token;
       const configPassword = params.config?.gateway?.auth?.password;
-      const envToken = params.env.OPENCLAW_GATEWAY_TOKEN ?? params.env.CLAWDBOT_GATEWAY_TOKEN;
-      const envPassword =
-        params.env.OPENCLAW_GATEWAY_PASSWORD ?? params.env.CLAWDBOT_GATEWAY_PASSWORD;
+      const envToken = params.env.OPENCLAW_GATEWAY_TOKEN;
+      const envPassword = params.env.OPENCLAW_GATEWAY_PASSWORD;
       return { token: envToken ?? configToken, password: envPassword ?? configPassword };
     },
   );
