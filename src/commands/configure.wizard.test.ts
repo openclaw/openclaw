@@ -291,7 +291,7 @@ describe("runConfigureWizard", () => {
     );
     expect(mocks.clackText).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: "Firecrawl API key",
+        message: "Firecrawl API key (paste it here; leave blank to use FIRECRAWL_API_KEY)",
       }),
     );
   });
@@ -372,7 +372,7 @@ describe("runConfigureWizard", () => {
     );
     expect(mocks.clackText).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: "Firecrawl API key (leave blank to keep current)",
+        message: "Firecrawl API key (leave blank to keep current or use FIRECRAWL_API_KEY)",
       }),
     );
   });

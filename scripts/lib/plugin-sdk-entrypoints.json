@@ -42,6 +42,7 @@
   "acp-runtime",
   "lazy-runtime",
   "testing",
+  "temp-path",
   "account-helpers",
   "account-id",
   "account-resolution",

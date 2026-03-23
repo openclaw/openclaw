@@ -828,7 +828,7 @@ describe("sessions tools", () => {
     );
     expect(replySteps).toHaveLength(2);
     expect(sendParams).toMatchObject({
-      to: "channel:target",
+      to: "group:target",
       channel: "discord",
       message: "announce now",
     });

@@ -616,7 +616,8 @@ describe("applyXaiProviderConfig", () => {
       expect.arrayContaining([
         "custom-model",
         "grok-4",
-        "grok-4-1-fast-reasoning",
+        "grok-4-1-fast",
+        "grok-4.20-beta-latest-reasoning",
         "grok-code-fast-1",
       ]),
     );
