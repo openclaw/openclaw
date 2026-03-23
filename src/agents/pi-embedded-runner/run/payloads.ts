@@ -61,11 +61,20 @@ function truncateErrorReason(error: string): string {
   // HTTP error instead of internal security markers (#46592).
   let stripped = error.replace(/<<<\s*(?:END_)?EXTERNAL_UNTRUSTED_CONTENT\b[^>]*>>>/g, "");
   stripped = stripped.replace(/SECURITY NOTICE:[\s\S]*?(?=\n\n|\n(?=[^\s-]))/g, "");
-  const firstLine =
-    stripped
-      .split("\n")
-      .map((l) => l.trim())
-      .find((l) => l.length > 0) ?? "";
+  // Skip web-fetch metadata lines prepended by wrapWebFetchContent() /
+  // wrapExternalContent() (e.g. "Source: …", "From: …", "Subject: …", "---")
+  // so the first-line extractor surfaces the actual error (#46592).
+  const lines = stripped.split("\n").map((l) => l.trim());
+  let startIdx = 0;
+  while (startIdx < lines.length) {
+    const line = lines[startIdx];
+    if (line.length === 0 || /^(?:Source|From|Subject):\s/i.test(line) || line === "---") {
+      startIdx++;
+      continue;
+    }
+    break;
+  }
+  const firstLine = lines.slice(startIdx).find((l) => l.length > 0) ?? "";
   // Strip internal tool-context prefixes (e.g. "agent=… node=… gateway=… action=…: ")
   // to avoid leaking implementation details into user-facing warnings (#46592).
   let cleaned = firstLine.replace(/^(?:\w+=\S+\s+)*\w+=\S+:\s*/, "");
@@ -86,6 +95,12 @@ function truncateErrorReason(error: string): string {
     /\/(?!dev\/null\b)[a-zA-Z0-9_][a-zA-Z0-9._+-]*(?:\/[a-zA-Z0-9._+-]+)+/g,
     "<path>",
   );
+  // Second pass: absorb space-bearing remnants left after the strict pass.
+  // When directory names contain spaces (e.g. "/home/user name/docs/f.txt")
+  // the first pass only matches up to the space ("/home/user" → "<path>")
+  // leaving " name/docs/f.txt".  This pass detects "<path> word/..." tails
+  // and folds them back into the redacted token (#46592).
+  cleaned = cleaned.replace(/<path>(?:\s+[a-zA-Z0-9._+-]+)*(?:\/[a-zA-Z0-9._+ -]+)+/g, "<path>");
   // Windows paths may contain spaces (e.g. "C:\Users\Jane Doe\...") and parens
   // ("C:\Program Files (x86)\..."), so consume until end-of-string or a
   // delimiter that cannot appear in a path context.

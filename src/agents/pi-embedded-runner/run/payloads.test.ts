@@ -293,9 +293,6 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   });
 
   it("scrubs Unix paths with spaces from non-verbose error reasons", () => {
-    // Paths with spaces are partially redacted — each segment-run is replaced
-    // individually.  The space-delimited words ("My", "Documents") remain but
-    // the actual directory structure ("/home/user/...") is scrubbed.
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "read",
@@ -308,6 +305,22 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       title: "Read",
       detail: "<path>",
       absentDetail: "/home/user",
+    });
+  });
+
+  it("redacts Unix paths with spaces in directory names", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "read",
+        error: "Cannot read /home/user name/documents/file.txt",
+      },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Read",
+      detail: "<path>",
+      absentDetail: "user name",
     });
   });
 
@@ -432,6 +445,48 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   it("suppresses JSON NO_REPLY assistant payloads", () => {
     expectNoPayloads({
       assistantTexts: ['{"action":"NO_REPLY"}'],
+    });
+  });
+
+  it("skips web-fetch wrapper metadata before selecting first line", () => {
+    const wrappedError = ["Source: Web Page (fetch)", "---", "HTTP 404 Not Found"].join("\n");
+
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "web_fetch",
+        error: wrappedError,
+      },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Web Fetch",
+      detail: "HTTP 404 Not Found",
+      absentDetail: "Source:",
+    });
+  });
+
+  it("skips web-fetch metadata with From/Subject headers", () => {
+    const wrappedError = [
+      "Source: Email",
+      "From: sender@example.com",
+      "Subject: Test",
+      "---",
+      "SMTP 550 mailbox unavailable",
+    ].join("\n");
+
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "web_fetch",
+        error: wrappedError,
+      },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Web Fetch",
+      detail: "SMTP 550 mailbox unavailable",
+      absentDetail: "Source:",
     });
   });
 });
