@@ -38,7 +38,8 @@ vi.mock("../infra/device-pairing.js", () => ({
   summarizeDeviceTokens,
 }));
 
-vi.mock("../runtime.js", () => ({
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
   defaultRuntime: runtime,
 }));
 
