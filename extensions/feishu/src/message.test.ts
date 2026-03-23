@@ -31,15 +31,15 @@ describe("FeishuMessageSchema", () => {
     expect(result.action).toBe("delete");
   });
 
-  it("should validate optional time range for list", () => {
+  it("should validate optional time range for list (Unix timestamps)", () => {
     const result = FeishuMessageSchema.parse({
       action: "list",
       chat_id: "oc_123456",
-      start_time: "2026-03-23T00:00:00+08:00",
-      end_time: "2026-03-23T23:59:59+08:00",
+      start_time: "1609296809",
+      end_time: "1609383209",
     });
-    expect(result.start_time).toBe("2026-03-23T00:00:00+08:00");
-    expect(result.end_time).toBe("2026-03-23T23:59:59+08:00");
+    expect(result.start_time).toBe("1609296809");
+    expect(result.end_time).toBe("1609383209");
   });
 
   it("should validate page_size within range", () => {

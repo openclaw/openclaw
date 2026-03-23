@@ -69,20 +69,26 @@ async function listMessages(
 }
 
 /**
- * Recall (delete) a message.
+ * Execute message delete API call with action-specific response.
  * Reference: https://open.feishu.cn/document/server-docs/im-v1/message-content-description/delete_json
- * Note: Messages can only be recalled within 2 minutes of sending.
+ * Note: Messages can only be deleted/recalled within 2 minutes of sending.
  */
-async function recallMessage(client: Lark.Client, chatId: string, messageId: string) {
+async function executeMessageDelete(
+  client: Lark.Client,
+  chatId: string,
+  messageId: string,
+  actionLabel: "recalled" | "deleted",
+  expiredVerb: string,
+) {
   const res = await client.im.message.delete({
     path: { message_id: messageId },
     params: { chat_id: chatId },
   });
 
   if (res.code !== 0) {
-    // Check if it's the "message too old to recall" error
+    // Check if it's the "message too old" error (code 99991662)
     if (res.code === 99991662) {
-      throw new Error("消息发送超过 2 分钟，无法撤回");
+      throw new Error(`消息发送超过 2 分钟，${expiredVerb}`);
     }
     throw new Error(res.msg);
   }
@@ -91,16 +97,27 @@ async function recallMessage(client: Lark.Client, chatId: string, messageId: str
     success: true,
     message_id: messageId,
     chat_id: chatId,
-    action: "recalled",
+    action: actionLabel,
   };
 }
 
 /**
- * Delete a message (alias for recall, but may have different permissions).
- * Same API as recall in Feishu.
+ * Recall a message.
+ * Reference: https://open.feishu.cn/document/server-docs/im-v1/message-content-description/delete_json
+ * Note: Messages can only be recalled within 2 minutes of sending.
+ */
+async function recallMessage(client: Lark.Client, chatId: string, messageId: string) {
+  return await executeMessageDelete(client, chatId, messageId, "recalled", "无法撤回");
+}
+
+/**
+ * Delete a message.
+ * Reference: https://open.feishu.cn/document/server-docs/im-v1/message-content-description/delete_json
+ * Note: Messages can only be deleted within 2 minutes of sending.
+ * Uses same API as recall but with action-specific response.
  */
 async function deleteMessage(client: Lark.Client, chatId: string, messageId: string) {
-  return await recallMessage(client, chatId, messageId);
+  return await executeMessageDelete(client, chatId, messageId, "deleted", "无法删除");
 }
 
 export function registerFeishuMessageTools(api: OpenClawPluginApi) {
