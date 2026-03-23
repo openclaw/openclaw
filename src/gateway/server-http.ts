@@ -28,6 +28,7 @@ import {
   type ResolvedGatewayAuth,
 } from "./auth.js";
 import { normalizeCanvasScopedUrl } from "./canvas-capability.js";
+import { handleControlPlaneHttpRequest } from "./control-plane-http.js";
 import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
@@ -882,6 +883,12 @@ export function createGatewayHttpServer(opts: {
           rateLimiter,
         }),
       );
+
+      // AGENT_BOT_COMPAT: keep the control-plane bridge outside Control UI routing.
+      requestStages.push({
+        name: "control-plane-http",
+        run: () => handleControlPlaneHttpRequest(req, res),
+      });
 
       if (controlUiEnabled) {
         requestStages.push({
