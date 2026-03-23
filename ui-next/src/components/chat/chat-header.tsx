@@ -772,6 +772,7 @@ export function ChatHeader({
       return;
     }
     const sessionState = store.getSessionState(sessionKey);
+    const entry = store.sessions.find((s) => s.key === sessionKey);
     const msgCount = sessionState.messages.length;
     const firstMsg = sessionState.messages[0];
     const lastMsg = sessionState.messages[msgCount - 1];
@@ -782,12 +783,46 @@ export function ChatHeader({
       ? new Date(lastMsg.timestamp).toISOString().slice(0, 19)
       : "—";
 
+    // Extract channel from session key (agent:main:telegram:group:... → telegram)
+    const keyParts = sessionKey.split(":");
+    const channel = keyParts.length >= 3 ? keyParts[2] : "web";
+
+    // Find last assistant message
+    const lastAssistantMsg = [...sessionState.messages]
+      .toReversed()
+      .find((m) => m.role === "assistant");
+    let lastAssistantText = "—";
+    if (lastAssistantMsg) {
+      if (typeof lastAssistantMsg.content === "string") {
+        lastAssistantText = lastAssistantMsg.content.slice(0, 150);
+      } else if (Array.isArray(lastAssistantMsg.content)) {
+        const textBlock = lastAssistantMsg.content.find(
+          (b: Record<string, unknown>) => b.type === "text",
+        ) as { text?: string } | undefined;
+        lastAssistantText = (textBlock?.text ?? "").slice(0, 150);
+      }
+    }
+
+    const totalInput = entry?.tokenCounts?.totalInput ?? 0;
+    const totalOutput = entry?.tokenCounts?.totalOutput ?? 0;
+
     const lines = [
       `Session Key: ${sessionKey}`,
+      entry?.sessionId ? `Session ID: ${entry.sessionId}` : null,
+      entry?.agentId ? `Agent: ${entry.agentId}` : null,
+      `Channel: ${channel}`,
+      entry?.model ? `Model: ${entry.model}` : null,
+      entry?.derivedTitle ? `Title: ${entry.derivedTitle}` : null,
       `Messages: ${msgCount}`,
+      `Tokens: ${totalInput + totalOutput} (in: ${totalInput}, out: ${totalOutput})`,
       `Started: ${startTime}`,
       `Last Activity: ${lastTime}`,
-    ];
+      ``,
+      `Last Agent Message:`,
+      lastAssistantText
+        ? `  ${lastAssistantText}${lastAssistantText.length >= 150 ? "..." : ""}`
+        : "  —",
+    ].filter(Boolean);
 
     navigator.clipboard.writeText(lines.join("\n")).then(
       () => toast("Session details copied", "success"),
