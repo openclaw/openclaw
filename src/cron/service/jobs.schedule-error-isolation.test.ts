@@ -310,7 +310,7 @@ describe("cron schedule error isolation", () => {
     expect(badJob.state.lastError).toBe("schedule error: previous");
   });
 
-  it("does not fast-wake malformed every schedules that already have schedule errors", () => {
+  it("keeps polling malformed every schedules with schedule errors on a slow cadence", () => {
     const badJob = createJob({
       id: "bad-every-wake",
       name: "Bad Every Wake",
@@ -323,7 +323,23 @@ describe("cron schedule error isolation", () => {
     });
     const state = createMockState([badJob]);
 
-    expect(nextWakeAtMs(state)).toBeUndefined();
+    expect(nextWakeAtMs(state)).toBe(Date.now() + 60_000);
+  });
+
+  it("keeps polling malformed at schedules with schedule errors on a slow cadence", () => {
+    const badJob = createJob({
+      id: "bad-at-wake",
+      name: "Bad At Wake",
+      schedule: { kind: "at", at: "not-a-timestamp" },
+      state: {
+        nextRunAtMs: undefined,
+        scheduleErrorCount: 1,
+        lastError: "schedule error: previous",
+      },
+    });
+    const state = createMockState([badJob]);
+
+    expect(nextWakeAtMs(state)).toBe(Date.now() + 60_000);
   });
 
   it("still fast-wakes malformed cron schedules that have schedule errors", () => {
@@ -338,6 +354,32 @@ describe("cron schedule error isolation", () => {
       },
     });
     const state = createMockState([badJob]);
+
+    expect(nextWakeAtMs(state)).toBe(Date.now() + 2_000);
+  });
+
+  it("keeps the earliest wake when cron and malformed fixed schedules both need polling", () => {
+    const badCronJob = createJob({
+      id: "bad-cron-wake",
+      name: "Bad Cron Wake",
+      schedule: { kind: "cron", expr: "bad cron" },
+      state: {
+        nextRunAtMs: undefined,
+        scheduleErrorCount: 1,
+        lastError: "schedule error: previous",
+      },
+    });
+    const badAtJob = createJob({
+      id: "bad-at-wake",
+      name: "Bad At Wake",
+      schedule: { kind: "at", at: "not-a-timestamp" },
+      state: {
+        nextRunAtMs: undefined,
+        scheduleErrorCount: 1,
+        lastError: "schedule error: previous",
+      },
+    });
+    const state = createMockState([badCronJob, badAtJob]);
 
     expect(nextWakeAtMs(state)).toBe(Date.now() + 2_000);
   });

@@ -34,6 +34,7 @@ import type { CronServiceState } from "./state.js";
 
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 const MISSING_NEXT_RUN_WAKE_MS = 2_000;
+const SCHEDULE_ERROR_RELOAD_POLL_MS = 60_000;
 const STAGGER_OFFSET_CACHE_MAX = 4096;
 const staggerOffsetCache = new Map<string, number>();
 
@@ -610,7 +611,7 @@ export function recomputeNextRunsForMaintenance(
 export function nextWakeAtMs(state: CronServiceState) {
   const jobs = state.store?.jobs ?? [];
   let minEnabledNextRunAtMs: number | undefined;
-  let hasEnabledRepairableMissingNextRun = false;
+  let minMissingNextRunWakeAtMs: number | undefined;
   const nowMs = state.deps.nowMs();
 
   for (const job of jobs) {
@@ -625,30 +626,39 @@ export function nextWakeAtMs(state: CronServiceState) {
           : Math.min(minEnabledNextRunAtMs, nextRunAtMs);
       continue;
     }
-    // Only wake for missing nextRun values that can be repaired by recompute.
-    // Non-repairable malformed schedules (e.g. invalid every/at payloads)
-    // should not keep the scheduler in a perpetual 2s poll loop.
+    const recordMissingWake = (wakeAtMs: number) => {
+      minMissingNextRunWakeAtMs =
+        minMissingNextRunWakeAtMs === undefined
+          ? wakeAtMs
+          : Math.min(minMissingNextRunWakeAtMs, wakeAtMs);
+    };
+
+    // Keep polling missing nextRun values so later external schedule fixes are
+    // eventually observed, but avoid re-arming malformed every/at schedules on
+    // the same 2s fast-wake loop used for repairable cron recomputes.
     if ((job.state.scheduleErrorCount ?? 0) > 0) {
-      hasEnabledRepairableMissingNextRun = job.schedule.kind === "cron";
+      recordMissingWake(
+        nowMs +
+          (job.schedule.kind === "cron" ? MISSING_NEXT_RUN_WAKE_MS : SCHEDULE_ERROR_RELOAD_POLL_MS),
+      );
       continue;
     }
     try {
       if (computeJobNextRunAtMs(job, nowMs) !== undefined) {
-        hasEnabledRepairableMissingNextRun = true;
+        recordMissingWake(nowMs + MISSING_NEXT_RUN_WAKE_MS);
       }
     } catch {
-      hasEnabledRepairableMissingNextRun = true;
+      recordMissingWake(nowMs + MISSING_NEXT_RUN_WAKE_MS);
     }
   }
 
-  if (!hasEnabledRepairableMissingNextRun) {
+  if (minMissingNextRunWakeAtMs === undefined) {
     return minEnabledNextRunAtMs;
   }
 
-  const wakeForMissingNextRunAtMs = nowMs + MISSING_NEXT_RUN_WAKE_MS;
   return minEnabledNextRunAtMs === undefined
-    ? wakeForMissingNextRunAtMs
-    : Math.min(minEnabledNextRunAtMs, wakeForMissingNextRunAtMs);
+    ? minMissingNextRunWakeAtMs
+    : Math.min(minEnabledNextRunAtMs, minMissingNextRunWakeAtMs);
 }
 
 export function createJob(state: CronServiceState, input: CronJobCreate): CronJob {
