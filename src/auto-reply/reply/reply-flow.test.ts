@@ -1496,6 +1496,45 @@ describe("followup queue drain restart after idle window", () => {
     expect(calls[1]?.prompt).toBe("after-idle");
   });
 
+  it("restarts an idle drain with the newest followup callback", async () => {
+    const key = `test-idle-window-fresh-callback-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const staleCalls: FollowupRun[] = [];
+    const freshCalls: FollowupRun[] = [];
+    const firstProcessed = createDeferred<void>();
+    const secondProcessed = createDeferred<void>();
+
+    const staleFollowup = async (run: FollowupRun) => {
+      staleCalls.push(run);
+      if (staleCalls.length === 1) {
+        firstProcessed.resolve();
+      }
+    };
+    const freshFollowup = async (run: FollowupRun) => {
+      freshCalls.push(run);
+      secondProcessed.resolve();
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "before-idle" }), settings);
+    scheduleFollowupDrain(key, staleFollowup);
+    await firstProcessed.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "after-idle" }),
+      settings,
+      "message-id",
+      freshFollowup,
+    );
+    await secondProcessed.promise;
+
+    expect(staleCalls).toHaveLength(1);
+    expect(staleCalls[0]?.prompt).toBe("before-idle");
+    expect(freshCalls).toHaveLength(1);
+    expect(freshCalls[0]?.prompt).toBe("after-idle");
+  });
+
   it("restarts an idle drain across distinct enqueue and drain module instances", async () => {
     const drainA = await importFreshModule<typeof import("./queue/drain.js")>(
       import.meta.url,
