@@ -7,6 +7,7 @@ import {
   definePluginEntry,
   issueDeviceBootstrapToken,
   listDevicePairing,
+  PAIRING_SETUP_BOOTSTRAP_PROFILE,
   renderQrPngBase64,
   revokeDeviceBootstrapToken,
   resolveGatewayBindUrl,
@@ -515,7 +516,9 @@ function resolveQrReplyTarget(ctx: QrCommandContext): string {
 }
 
 async function issueSetupPayload(url: string): Promise<SetupPayload> {
-  const issuedBootstrap = await issueDeviceBootstrapToken();
+  const issuedBootstrap = await issueDeviceBootstrapToken({
+    profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  });
   return {
     url,
     bootstrapToken: issuedBootstrap.token,

@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
+import type { ResolvedSynologyChatAccount } from "./types.js";
 
 export type RegisteredRoute = {
   path: string;
@@ -75,7 +76,7 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", async () => {
 vi.mock("./client.js", () => ({
   sendMessage: vi.fn().mockResolvedValue(true),
   sendFileUrl: vi.fn().mockResolvedValue(true),
-  resolveChatUserId: vi.fn().mockResolvedValue(undefined),
+  resolveLegacyWebhookNameToChatUserId: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./runtime.js", () => ({
@@ -93,7 +94,9 @@ vi.mock("./runtime.js", () => ({
   })),
 }));
 
-export function makeSecurityAccount(overrides: Record<string, unknown> = {}) {
+export function makeSecurityAccount(
+  overrides: Partial<ResolvedSynologyChatAccount> = {},
+): ResolvedSynologyChatAccount {
   return {
     accountId: "default",
     enabled: true,
@@ -101,6 +104,9 @@ export function makeSecurityAccount(overrides: Record<string, unknown> = {}) {
     incomingUrl: "https://nas/incoming",
     nasHost: "h",
     webhookPath: "/w",
+    webhookPathSource: "default",
+    dangerouslyAllowNameMatching: false,
+    dangerouslyAllowInheritedWebhookPath: false,
     dmPolicy: "allowlist" as const,
     allowedUserIds: [],
     rateLimitPerMinute: 30,
