@@ -1,12 +1,13 @@
-import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
-import type { ImageGenerationProviderPlugin } from "../../plugins/types.js";
-import { OPENAI_DEFAULT_IMAGE_MODEL as DEFAULT_OPENAI_IMAGE_MODEL } from "../../providers/openai-defaults.js";
+import type { ImageGenerationProviderPlugin } from "openclaw/plugin-sdk/image-generation-core";
+import {
+  OPENAI_DEFAULT_IMAGE_MODEL as DEFAULT_OPENAI_IMAGE_MODEL,
+  resolveApiKeyForProvider,
+} from "openclaw/plugin-sdk/image-generation-core";
 
 const DEFAULT_OPENAI_IMAGE_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OUTPUT_MIME = "image/png";
 const DEFAULT_SIZE = "1024x1024";
 const OPENAI_SUPPORTED_SIZES = ["1024x1024", "1024x1536", "1536x1024"] as const;
-// Only advertise ratios we can satisfy exactly with OpenAI's supported size presets.
 const OPENAI_SUPPORTED_ASPECT_RATIOS = ["1:1", "2:3", "3:2"] as const;
 
 type OpenAIImageApiResponse = {

@@ -1,12 +1,14 @@
-import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
-import { normalizeGoogleModelId } from "../../agents/model-id-normalization.js";
-import { parseGeminiAuth } from "../../infra/gemini-auth.js";
+import type { ImageGenerationProviderPlugin } from "openclaw/plugin-sdk/image-generation-core";
+import {
+  normalizeGoogleModelId,
+  parseGeminiAuth,
+  resolveApiKeyForProvider,
+} from "openclaw/plugin-sdk/image-generation-core";
 import {
   assertOkOrThrowHttpError,
   normalizeBaseUrl,
   postJsonRequest,
-} from "../../media-understanding/providers/shared.js";
-import type { ImageGenerationProviderPlugin } from "../../plugins/types.js";
+} from "openclaw/plugin-sdk/media-understanding";
 
 const DEFAULT_GOOGLE_IMAGE_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_GOOGLE_IMAGE_MODEL = "gemini-3.1-flash-image-preview";
