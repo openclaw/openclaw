@@ -71,10 +71,12 @@ operon-guard test path/to/skill/
 > injection or PII problems are detected). Use `operon-guard test` for gating — it
 > exits 1 when the trust score fails.
 >
-> **Warning:** The injection check fires **47 adversarial prompts** at the agent. If
-> your agent has side effects — sending messages, writing to a database, calling paid
-> APIs — those side effects will be triggered up to 47 times during the scan. Do not
-> run `scan` against agents with side effects outside a sandboxed environment.
+> **Warning:** `scan` runs a hallucination check **in addition to** 47 adversarial
+> injection payloads — your agent is invoked **at least 48 times**, and the report
+> includes hallucination findings alongside injection and PII results. If your agent
+> has side effects — sending messages, writing to a database, calling paid APIs —
+> those side effects will trigger at least 48 times during the scan. Do not run
+> `scan` against agents with side effects outside a sandboxed environment.
 
 ```bash
 operon-guard scan path/to/agent.py
@@ -243,7 +245,11 @@ Produces a score from 0-100 with a letter grade:
 - **D (40-59)**: Unsafe. Significant issues.
 - **F (0-39)**: Do not deploy.
 
-**Rule: Only grant dangerous tool permissions to agents scoring A or B.**
+**Rule: Do not rely on the letter grade alone.** The grade is a weighted average across
+all checks — an agent can score B overall even when an individual check (such as Safety)
+fails below threshold. Before granting dangerous tool permissions, inspect the per-check
+scores in the report and confirm no individual check has a failing result, not just the
+overall grade.
 
 ## Default Thresholds
 
