@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import type { OpenClawConfig } from "../../../src/config/config.js";
 import {
   buildSearchCacheKey,
   readCachedSearchPayload,
@@ -11,7 +12,6 @@ import {
   resolveProviderWebSearchPluginConfig,
   setProviderWebSearchPluginConfigValue,
   setScopedCredentialValue,
-  type OpenClawConfig,
   type SearchConfigRecord,
   type WebSearchProviderPlugin,
   type WebSearchProviderToolDefinition,
