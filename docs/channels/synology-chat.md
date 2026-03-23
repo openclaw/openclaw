@@ -103,6 +103,11 @@ Multiple Synology Chat accounts are supported under `channels.synology-chat.acco
 Each account can override token, incoming URL, webhook path, DM policy, and limits.
 Direct-message sessions are isolated per account and user, so the same numeric `user_id`
 on two different Synology accounts does not share transcript state.
+Give each enabled account a distinct `webhookPath`. OpenClaw now rejects duplicate exact paths
+and refuses to start named accounts that only inherit a shared webhook path in multi-account setups.
+If you need legacy inheritance for a named account, set
+`dangerouslyAllowInheritedWebhookPath: true` on that account or at `channels.synology-chat`,
+but duplicate exact paths are still rejected fail-closed.
 
 ```json5
 {
