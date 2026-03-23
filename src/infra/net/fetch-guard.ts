@@ -1,4 +1,4 @@
-import { EnvHttpProxyAgent, type Dispatcher } from "undici";
+import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
 import { bindAbortRelay } from "../../utils/fetch-timeout.js";
 import { hasProxyEnvConfigured } from "./proxy-env.js";
@@ -11,6 +11,7 @@ import {
   SsrFBlockedError,
   type SsrFPolicy,
 } from "./ssrf.js";
+import { loadUndiciRuntimeDeps } from "./undici-runtime.js";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -88,6 +89,22 @@ function resolveGuardedFetchMode(params: GuardedFetchOptions): GuardedFetchMode 
     return GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY;
   }
   return GUARDED_FETCH_MODE.STRICT;
+}
+
+function assertExplicitProxySupportsPinnedDns(
+  url: URL,
+  dispatcherPolicy?: PinnedDispatcherPolicy,
+  pinDns?: boolean,
+): void {
+  if (
+    pinDns !== false &&
+    dispatcherPolicy?.mode === "explicit-proxy" &&
+    url.protocol !== "https:"
+  ) {
+    throw new Error(
+      "Explicit proxy SSRF pinning requires HTTPS targets; plain HTTP targets are not supported",
+    );
+  }
 }
 
 function isRedirectStatus(status: number): boolean {
@@ -189,6 +206,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
 
     let dispatcher: Dispatcher | null = null;
     try {
+      assertExplicitProxySupportsPinnedDns(parsedUrl, params.dispatcherPolicy, params.pinDns);
       const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
         lookupFn: params.lookupFn,
         policy: params.policy,
@@ -196,6 +214,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       const canUseTrustedEnvProxy =
         mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasProxyEnvConfigured();
       if (canUseTrustedEnvProxy) {
+        const { EnvHttpProxyAgent } = loadUndiciRuntimeDeps();
         dispatcher = new EnvHttpProxyAgent();
       } else if (params.pinDns !== false) {
         dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.policy);

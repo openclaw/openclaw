@@ -1,4 +1,4 @@
-import { createDedupeCache } from "../infra/dedupe.js";
+import { createDedupeCache, resolveGlobalDedupeCache } from "../infra/dedupe.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   dispatchDiscordInteractiveHandler,
@@ -43,7 +43,7 @@ const PLUGIN_INTERACTIVE_STATE_KEY = Symbol.for("openclaw.pluginInteractiveState
 
 const state = resolveGlobalSingleton<InteractiveState>(PLUGIN_INTERACTIVE_STATE_KEY, () => ({
   interactiveHandlers: new Map<string, RegisteredInteractiveHandler>(),
-  callbackDedupe: createDedupeCache({
+  callbackDedupe: resolveGlobalDedupeCache(Symbol.for("openclaw.pluginInteractiveCallbackDedupe"), {
     ttlMs: 5 * 60_000,
     maxSize: 4096,
   }),

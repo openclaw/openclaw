@@ -23,6 +23,7 @@ import {
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
+import { clearGatewaySubagentRuntime } from "../plugins/runtime/index.js";
 import { DEFAULT_AGENT_ID, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
@@ -34,7 +35,10 @@ import {
   agentCommand,
   cronIsolatedRun,
   embeddedRunMock,
+  getReplyFromConfig,
   piSdkMock,
+  resetTestPluginRegistry,
+  sendWhatsAppMock,
   sessionStoreSaveDelayMs,
   setTestConfigRoot,
   testIsNixMode,
@@ -187,20 +191,42 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
     throw new Error("resetGatewayTestState called before temp home was initialized");
   }
   applyGatewaySkipEnv();
+  const stateDir = process.env.OPENCLAW_STATE_DIR;
+  if (stateDir) {
+    await fs.rm(stateDir, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 25,
+    });
+    await fs.mkdir(stateDir, { recursive: true });
+  }
   if (options.uniqueConfigRoot) {
     const suiteRoot = path.join(tempHome, ".openclaw-test-suite");
     await fs.mkdir(suiteRoot, { recursive: true });
     tempConfigRoot = path.join(suiteRoot, `case-${suiteConfigRootSeq++}`);
-    await fs.rm(tempConfigRoot, { recursive: true, force: true });
+    await fs.rm(tempConfigRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 25,
+    });
     await fs.mkdir(tempConfigRoot, { recursive: true });
   } else {
     tempConfigRoot = path.join(tempHome, ".openclaw-test");
-    await fs.rm(tempConfigRoot, { recursive: true, force: true });
+    await fs.rm(tempConfigRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 25,
+    });
     await fs.mkdir(tempConfigRoot, { recursive: true });
   }
   setTestConfigRoot(tempConfigRoot);
   clearRuntimeConfigSnapshot();
   clearConfigCache();
+  resetTestPluginRegistry();
+  clearGatewaySubagentRuntime();
   sessionStoreSaveDelayMs.value = 0;
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
@@ -223,8 +249,14 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   testState.channelsConfig = undefined;
   testState.allowFrom = undefined;
   testIsNixMode.value = false;
-  cronIsolatedRun.mockClear();
-  agentCommand.mockClear();
+  cronIsolatedRun.mockReset();
+  cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "ok" });
+  agentCommand.mockReset();
+  agentCommand.mockResolvedValue(undefined);
+  getReplyFromConfig.mockReset();
+  getReplyFromConfig.mockResolvedValue(undefined);
+  sendWhatsAppMock.mockReset();
+  sendWhatsAppMock.mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" });
   embeddedRunMock.activeIds.clear();
   embeddedRunMock.abortCalls = [];
   embeddedRunMock.waitCalls = [];
@@ -240,6 +272,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
 
 async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
   vi.useRealTimers();
+  clearGatewaySubagentRuntime();
   resetLogger();
   if (options.restoreEnv) {
     gatewayEnvSnapshot?.restore();

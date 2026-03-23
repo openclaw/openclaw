@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/mattermost",
-  "version": "2026.3.14",
+  "version": "2026.3.22",
   "description": "OpenClaw Mattermost channel plugin",
   "type": "module",
   "dependencies": {
@@ -11,7 +11,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.3.14"
+    "openclaw": ">=2026.3.22"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -35,7 +35,8 @@
     "install": {
       "npmSpec": "@openclaw/mattermost",
       "localPath": "extensions/mattermost",
-      "defaultChoice": "npm"
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.3.22"
     }
   }
 }
