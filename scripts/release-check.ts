@@ -95,6 +95,8 @@ const requiredPathGroups = [
   "dist/plugin-sdk/test-utils.d.ts",
   "dist/plugin-sdk/thread-ownership.js",
   "dist/plugin-sdk/thread-ownership.d.ts",
+  "dist/plugin-sdk/tinyfish.js",
+  "dist/plugin-sdk/tinyfish.d.ts",
   "dist/plugin-sdk/tlon.js",
   "dist/plugin-sdk/tlon.d.ts",
   "dist/plugin-sdk/twitch.js",

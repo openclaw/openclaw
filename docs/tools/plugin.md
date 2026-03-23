@@ -52,6 +52,7 @@ Looking for third-party listings? See [Community plugins](/plugins/community).
 - [Zalo Personal](/plugins/zalouser) — `@openclaw/zalouser`
 - [Matrix](/channels/matrix) — `@openclaw/matrix`
 - [Nostr](/channels/nostr) — `@openclaw/nostr`
+- [TinyFish](/plugins/tinyfish) — bundled browser automation plugin (disabled by default)
 - [Zalo](/channels/zalo) — `@openclaw/zalo`
 - [Microsoft Teams](/channels/msteams) — `@openclaw/msteams`
 - Google Antigravity OAuth (provider auth) — bundled as `google-antigravity-auth` (disabled by default)
@@ -173,6 +174,7 @@ authoring plugins:
   `openclaw/plugin-sdk/open-prose`, `openclaw/plugin-sdk/phone-control`,
   `openclaw/plugin-sdk/qwen-portal-auth`, `openclaw/plugin-sdk/synology-chat`,
   `openclaw/plugin-sdk/talk-voice`, `openclaw/plugin-sdk/test-utils`,
+  `openclaw/plugin-sdk/tinyfish`,
   `openclaw/plugin-sdk/thread-ownership`, `openclaw/plugin-sdk/tlon`,
   `openclaw/plugin-sdk/twitch`, `openclaw/plugin-sdk/voice-call`,
   `openclaw/plugin-sdk/zalo`, and `openclaw/plugin-sdk/zalouser`.

@@ -31,6 +31,9 @@ Beginner view:
 This browser is **not** your daily driver. It is a safe, isolated surface for
 agent automation and verification.
 
+If you want a hosted browser automation service instead of direct CDP control,
+see the [TinyFish plugin](/plugins/tinyfish).
+
 ## Quick start
 
 ```bash

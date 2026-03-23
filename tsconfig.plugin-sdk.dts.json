@@ -50,6 +50,7 @@
     "src/plugin-sdk/talk-voice.ts",
     "src/plugin-sdk/test-utils.ts",
     "src/plugin-sdk/thread-ownership.ts",
+    "src/plugin-sdk/tinyfish.ts",
     "src/plugin-sdk/tlon.ts",
     "src/plugin-sdk/twitch.ts",
     "src/plugin-sdk/voice-call.ts",

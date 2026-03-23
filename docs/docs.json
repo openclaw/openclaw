@@ -1041,6 +1041,7 @@
                 "group": "Extensions",
                 "pages": [
                   "plugins/community",
+                  "plugins/tinyfish",
                   "plugins/voice-call",
                   "plugins/zalouser",
                   "plugins/manifest",

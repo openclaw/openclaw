@@ -184,6 +184,10 @@
       "types": "./dist/plugin-sdk/thread-ownership.d.ts",
       "default": "./dist/plugin-sdk/thread-ownership.js"
     },
+    "./plugin-sdk/tinyfish": {
+      "types": "./dist/plugin-sdk/tinyfish.d.ts",
+      "default": "./dist/plugin-sdk/tinyfish.js"
+    },
     "./plugin-sdk/tlon": {
       "types": "./dist/plugin-sdk/tlon.d.ts",
       "default": "./dist/plugin-sdk/tlon.js"
