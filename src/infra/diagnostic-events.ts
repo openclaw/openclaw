@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { notifyListeners, registerListener } from "../shared/listeners.js";
+
+const diagnosticCheckpointLogsEnabled = process.env.OPENCLAW_DIAGNOSTIC_CHECKPOINTS === "1";
 
 export type DiagnosticSessionState = "idle" | "processing" | "waiting";
 
@@ -176,22 +176,26 @@ type DiagnosticEventsGlobalState = {
   dispatchDepth: number;
 };
 
-const DIAGNOSTIC_EVENTS_STATE_KEY = Symbol.for("openclaw.diagnosticEvents.state");
-
-const state = resolveGlobalSingleton<DiagnosticEventsGlobalState>(
-  DIAGNOSTIC_EVENTS_STATE_KEY,
-  () => ({
-    seq: 0,
-    listeners: new Set<(evt: DiagnosticEventPayload) => void>(),
-    dispatchDepth: 0,
-  }),
-);
+function getDiagnosticEventsState(): DiagnosticEventsGlobalState {
+  const globalStore = globalThis as typeof globalThis & {
+    __openclawDiagnosticEventsState?: DiagnosticEventsGlobalState;
+  };
+  if (!globalStore.__openclawDiagnosticEventsState) {
+    globalStore.__openclawDiagnosticEventsState = {
+      seq: 0,
+      listeners: new Set<(evt: DiagnosticEventPayload) => void>(),
+      dispatchDepth: 0,
+    };
+  }
+  return globalStore.__openclawDiagnosticEventsState;
+}
 
 export function isDiagnosticsEnabled(config?: OpenClawConfig): boolean {
   return config?.diagnostics?.enabled === true;
 }
 
 export function emitDiagnosticEvent(event: DiagnosticEventInput) {
+  const state = getDiagnosticEventsState();
   if (state.dispatchDepth > 100) {
     console.error(
       `[diagnostic-events] recursion guard tripped at depth=${state.dispatchDepth}, dropping type=${event.type}`,
@@ -204,27 +208,49 @@ export function emitDiagnosticEvent(event: DiagnosticEventInput) {
     seq: (state.seq += 1),
     ts: Date.now(),
   } satisfies DiagnosticEventPayload;
-  state.dispatchDepth += 1;
-  notifyListeners(state.listeners, enriched, (err) => {
-    const errorMessage =
-      err instanceof Error
-        ? (err.stack ?? err.message)
-        : typeof err === "string"
-          ? err
-          : String(err);
-    console.error(
-      `[diagnostic-events] listener error type=${enriched.type} seq=${enriched.seq}: ${errorMessage}`,
+  if (diagnosticCheckpointLogsEnabled) {
+    console.warn(
+      `[diagnostic-events][checkpoints] emit type=${enriched.type} seq=${enriched.seq} listeners=${state.listeners.size}${"sessionKey" in enriched && typeof enriched.sessionKey === "string" ? ` sessionKey=${enriched.sessionKey}` : ""}`,
     );
-    // Ignore listener failures.
-  });
+  }
+  state.dispatchDepth += 1;
+  for (const listener of state.listeners) {
+    try {
+      listener(enriched);
+    } catch (err) {
+      const errorMessage =
+        err instanceof Error
+          ? (err.stack ?? err.message)
+          : typeof err === "string"
+            ? err
+            : String(err);
+      console.error(
+        `[diagnostic-events] listener error type=${enriched.type} seq=${enriched.seq}: ${errorMessage}`,
+      );
+      // Ignore listener failures.
+    }
+  }
   state.dispatchDepth -= 1;
 }
 
 export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => void): () => void {
-  return registerListener(state.listeners, listener);
+  const state = getDiagnosticEventsState();
+  state.listeners.add(listener);
+  if (diagnosticCheckpointLogsEnabled) {
+    console.warn(`[diagnostic-events][checkpoints] subscribe listeners=${state.listeners.size}`);
+  }
+  return () => {
+    state.listeners.delete(listener);
+    if (diagnosticCheckpointLogsEnabled) {
+      console.warn(
+        `[diagnostic-events][checkpoints] unsubscribe listeners=${state.listeners.size}`,
+      );
+    }
+  };
 }
 
 export function resetDiagnosticEventsForTest(): void {
+  const state = getDiagnosticEventsState();
   state.seq = 0;
   state.listeners.clear();
   state.dispatchDepth = 0;
