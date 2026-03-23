@@ -1256,11 +1256,7 @@ export async function handleFeishuMessage(params: {
           // Download media from quoted message (image/file)
           if (quotedMsg.imageKey || quotedMsg.fileKey) {
             const quotedMediaType = quotedMsg.contentType === "image" ? "image" : "file";
-            const quotedMediaKeys = {
-              imageKey: quotedMsg.imageKey,
-              fileKey: quotedMsg.fileKey,
-            };
-            const fileKey = quotedMediaKeys.fileKey || quotedMediaKeys.imageKey;
+            const fileKey = quotedMsg.fileKey || quotedMsg.imageKey;
             if (fileKey) {
               try {
                 const result = await downloadMessageResourceFeishu({
