@@ -79,7 +79,7 @@ function makeToolResultMessage(
 }
 
 async function collectEvents(
-  stream: ReturnType<ReturnType<typeof createOpenAIWebSocketStreamFn>>,
+  stream: ReturnType<ReturnType<StreamFactory>>,
 ): Promise<Array<{ type: string; message?: AssistantMessage }>> {
   const events: Array<{ type: string; message?: AssistantMessage }> = [];
   for await (const event of stream as AsyncIterable<{ type: string; message?: AssistantMessage }>) {

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createFeishuClientMockModule,
   createFeishuRuntimeMockModule,
@@ -27,20 +27,35 @@ vi.mock("@larksuiteoapi/node-sdk", () => ({
   ),
 }));
 
-import {
-  clearFeishuWebhookRateLimitStateForTest,
-  getFeishuWebhookRateLimitStateSizeForTest,
-  isWebhookRateLimitedForTest,
-  monitorFeishuProvider,
-  stopFeishuMonitor,
-} from "./monitor.js";
+let clearFeishuWebhookRateLimitStateForTest:
+  | typeof import("./monitor.js").clearFeishuWebhookRateLimitStateForTest
+  | undefined;
+let getFeishuWebhookRateLimitStateSizeForTest:
+  | typeof import("./monitor.js").getFeishuWebhookRateLimitStateSizeForTest
+  | undefined;
+let isWebhookRateLimitedForTest:
+  | typeof import("./monitor.js").isWebhookRateLimitedForTest
+  | undefined;
+let monitorFeishuProvider: typeof import("./monitor.js").monitorFeishuProvider;
+let stopFeishuMonitor: typeof import("./monitor.js").stopFeishuMonitor | undefined;
 
 afterEach(() => {
-  clearFeishuWebhookRateLimitStateForTest();
-  stopFeishuMonitor();
+  clearFeishuWebhookRateLimitStateForTest?.();
+  stopFeishuMonitor?.();
 });
 
 describe("Feishu webhook security hardening", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({
+      clearFeishuWebhookRateLimitStateForTest,
+      getFeishuWebhookRateLimitStateSizeForTest,
+      isWebhookRateLimitedForTest,
+      monitorFeishuProvider,
+      stopFeishuMonitor,
+    } = await import("./monitor.js"));
+  });
+
   it("rejects webhook mode without verificationToken", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
 
@@ -124,19 +139,19 @@ describe("Feishu webhook security hardening", () => {
   it("caps tracked webhook rate-limit keys to prevent unbounded growth", () => {
     const now = 1_000_000;
     for (let i = 0; i < 4_500; i += 1) {
-      isWebhookRateLimitedForTest(`/feishu-rate-limit:key-${i}`, now);
+      isWebhookRateLimitedForTest?.(`/feishu-rate-limit:key-${i}`, now);
     }
-    expect(getFeishuWebhookRateLimitStateSizeForTest()).toBeLessThanOrEqual(4_096);
+    expect(getFeishuWebhookRateLimitStateSizeForTest?.()).toBeLessThanOrEqual(4_096);
   });
 
   it("prunes stale webhook rate-limit state after window elapses", () => {
     const now = 2_000_000;
     for (let i = 0; i < 100; i += 1) {
-      isWebhookRateLimitedForTest(`/feishu-rate-limit-stale:key-${i}`, now);
+      isWebhookRateLimitedForTest?.(`/feishu-rate-limit-stale:key-${i}`, now);
     }
-    expect(getFeishuWebhookRateLimitStateSizeForTest()).toBe(100);
+    expect(getFeishuWebhookRateLimitStateSizeForTest?.()).toBe(100);
 
-    isWebhookRateLimitedForTest("/feishu-rate-limit-stale:fresh", now + 60_001);
-    expect(getFeishuWebhookRateLimitStateSizeForTest()).toBe(1);
+    isWebhookRateLimitedForTest?.("/feishu-rate-limit-stale:fresh", now + 60_001);
+    expect(getFeishuWebhookRateLimitStateSizeForTest?.()).toBe(1);
   });
 });
