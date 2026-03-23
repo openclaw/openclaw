@@ -14,6 +14,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       "firecrawl:firecrawl",
       "exa:exa",
       "tavily:tavily",
+      "duckduckgo:duckduckgo",
     ]);
     expect(providers.map((provider) => provider.credentialPath)).toEqual([
       "plugins.entries.brave.config.webSearch.apiKey",
@@ -24,6 +25,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       "plugins.entries.firecrawl.config.webSearch.apiKey",
       "plugins.entries.exa.config.webSearch.apiKey",
       "plugins.entries.tavily.config.webSearch.apiKey",
+      "",
     ]);
     expect(providers.find((provider) => provider.id === "firecrawl")?.applySelectionConfig).toEqual(
       expect.any(Function),
@@ -52,6 +54,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       "firecrawl",
       "exa",
       "tavily",
+      "duckduckgo",
     ]);
   });
 
@@ -107,6 +110,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       "firecrawl:firecrawl",
       "exa:exa",
       "tavily:tavily",
+      "duckduckgo:duckduckgo",
     ]);
   });
 

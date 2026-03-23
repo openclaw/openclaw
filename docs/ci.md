@@ -12,20 +12,21 @@ The CI runs on every push to `main` and every pull request. It uses smart scopin
 
 ## Job Overview
 
-| Job               | Purpose                                                 | When it runs                       |
-| ----------------- | ------------------------------------------------------- | ---------------------------------- |
-| `docs-scope`      | Detect docs-only changes                                | Always                             |
-| `changed-scope`   | Detect which areas changed (node/macos/android/windows) | Non-doc changes                    |
-| `check`           | TypeScript types, lint, format                          | Non-docs, node changes             |
-| `check-docs`      | Markdown lint + broken link check                       | Docs changed                       |
-| `secrets`         | Detect leaked secrets                                   | Always                             |
-| `build-artifacts` | Build dist once, share with `release-check`             | Pushes to `main`, node changes     |
-| `release-check`   | Validate npm pack contents                              | Pushes to `main` after build       |
-| `checks`          | Node tests + protocol check on PRs; Bun compat on push  | Non-docs, node changes             |
-| `compat-node22`   | Minimum supported Node runtime compatibility            | Pushes to `main`, node changes     |
-| `checks-windows`  | Windows-specific tests                                  | Non-docs, windows-relevant changes |
-| `macos`           | Swift lint/build/test + TS tests                        | PRs with macos changes             |
-| `android`         | Gradle build + tests                                    | Non-docs, android changes          |
+| Job               | Purpose                                                                   | When it runs                                     |
+| ----------------- | ------------------------------------------------------------------------- | ------------------------------------------------ |
+| `preflight`       | Docs scope, change scope, key scan, workflow audit, prod dependency audit | Always; node-based audit only on non-doc changes |
+| `docs-scope`      | Detect docs-only changes                                                  | Always                                           |
+| `changed-scope`   | Detect which areas changed (node/macos/android/windows)                   | Non-doc changes                                  |
+| `check`           | TypeScript types, lint, format                                            | Non-docs, node changes                           |
+| `check-docs`      | Markdown lint + broken link check                                         | Docs changed                                     |
+| `secrets`         | Detect leaked secrets                                                     | Always                                           |
+| `build-artifacts` | Build dist once, share with `release-check`                               | Pushes to `main`, node changes                   |
+| `release-check`   | Validate npm pack contents                                                | Pushes to `main` after build                     |
+| `checks`          | Node tests + protocol check on PRs; Bun compat on push                    | Non-docs, node changes                           |
+| `compat-node22`   | Minimum supported Node runtime compatibility                              | Pushes to `main`, node changes                   |
+| `checks-windows`  | Windows-specific tests                                                    | Non-docs, windows-relevant changes               |
+| `macos`           | Swift lint/build/test + TS tests                                          | PRs with macos changes                           |
+| `android`         | Gradle build + tests                                                      | Non-docs, android changes                        |
 
 ## Fail-Fast Order
 
