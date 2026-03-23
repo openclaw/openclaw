@@ -905,6 +905,7 @@ export type WebSearchProviderPlugin = {
   id: WebSearchProviderId;
   label: string;
   hint: string;
+  requiresCredential?: boolean;
   credentialLabel?: string;
   envVars: string[];
   placeholder: string;

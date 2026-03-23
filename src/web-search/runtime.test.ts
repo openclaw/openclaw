@@ -121,4 +121,42 @@ describe("web search runtime", () => {
       result: { query: "hello", ok: true },
     });
   });
+
+  it("falls back to a keyless provider when no credentials are available", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.webSearchProviders.push({
+      pluginId: "duckduckgo",
+      pluginName: "DuckDuckGo",
+      provider: {
+        id: "duckduckgo",
+        label: "DuckDuckGo Search",
+        hint: "Keyless fallback",
+        requiresCredential: false,
+        envVars: [],
+        placeholder: "(no key needed)",
+        signupUrl: "https://duckduckgo.com/",
+        credentialPath: "",
+        autoDetectOrder: 100,
+        getCredentialValue: () => "duckduckgo-no-key-needed",
+        setCredentialValue: () => {},
+        createTool: () => ({
+          description: "duckduckgo",
+          parameters: {},
+          execute: async (args) => ({ ...args, provider: "duckduckgo" }),
+        }),
+      },
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runWebSearch({
+        config: {},
+        args: { query: "fallback" },
+      }),
+    ).resolves.toEqual({
+      provider: "duckduckgo",
+      result: { query: "fallback", provider: "duckduckgo" },
+    });
+  });
 });
