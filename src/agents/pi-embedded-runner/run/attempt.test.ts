@@ -321,6 +321,8 @@ describe("shouldInjectHeartbeatPrompt", () => {
   it("injects the heartbeat prompt for default-agent non-cron runs", () => {
     expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "user" })).toBe(true);
     expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "heartbeat" })).toBe(true);
+    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "memory" })).toBe(true);
+    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: undefined })).toBe(true);
   });
 
   it("suppresses the heartbeat prompt for cron-triggered runs", () => {
