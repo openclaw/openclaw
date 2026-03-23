@@ -182,6 +182,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Allowlist of ACP target agent ids permitted for ACP runtime sessions. Empty means no additional allowlist restriction.",
   "acp.maxConcurrentSessions":
     "Maximum concurrently active ACP sessions across this gateway process.",
+  "acp.sessionLane":
+    "ACP per-session lane controls for serial actor tasks such as initialize, status, cancel, and close.",
+  "acp.sessionLane.taskTimeoutMs":
+    "Maximum milliseconds a single ACP session-lane task may hold the lane before OpenClaw releases it and lets the next queued task run. Default: 600000. Set 0 to disable.",
   "acp.stream":
     "ACP streaming projection controls for chunk sizing, metadata visibility, and deduped delivery behavior.",
   "acp.stream.coalesceIdleMs":

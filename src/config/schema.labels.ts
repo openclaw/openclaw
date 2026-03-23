@@ -406,6 +406,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "acp.defaultAgent": "ACP Default Agent",
   "acp.allowedAgents": "ACP Allowed Agents",
   "acp.maxConcurrentSessions": "ACP Max Concurrent Sessions",
+  "acp.sessionLane": "ACP Session Lane",
+  "acp.sessionLane.taskTimeoutMs": "ACP Session Lane Task Timeout (ms)",
   "acp.stream": "ACP Stream",
   "acp.stream.coalesceIdleMs": "ACP Stream Coalesce Idle (ms)",
   "acp.stream.maxChunkChars": "ACP Stream Max Chunk Chars",

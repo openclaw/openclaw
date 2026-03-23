@@ -435,6 +435,100 @@ describe("AcpSessionManager", () => {
     }
   });
 
+  it("times out a hung initializeSession actor task and lets the next queued initialize run", async () => {
+    vi.useFakeTimers();
+    try {
+      const runtimeState = createRuntime();
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+        const params = paramsUnknown as {
+          sessionKey: string;
+          mutate: (
+            current: SessionAcpMeta | undefined,
+            entry: { acp?: SessionAcpMeta } | undefined,
+          ) => SessionAcpMeta | null | undefined;
+        };
+        const next = params.mutate(undefined, undefined);
+        return next
+          ? {
+              sessionKey: params.sessionKey,
+              storeSessionKey: params.sessionKey,
+              acp: next,
+            }
+          : null;
+      });
+
+      let firstEnsureStarted = false;
+      let ensureCalls = 0;
+      runtimeState.ensureSession.mockImplementation(
+        async (input: { sessionKey: string; agent: string; mode: "persistent" | "oneshot" }) => {
+          ensureCalls += 1;
+          if (ensureCalls === 1) {
+            firstEnsureStarted = true;
+            await new Promise(() => {});
+          }
+          return {
+            sessionKey: input.sessionKey,
+            backend: "acpx",
+            runtimeSessionName: `${input.sessionKey}:${input.mode}:runtime:${ensureCalls}`,
+          };
+        },
+      );
+
+      const manager = new AcpSessionManager();
+      const cfg = {
+        ...baseCfg,
+        acp: {
+          ...baseCfg.acp,
+          sessionLane: {
+            taskTimeoutMs: 100,
+          },
+        },
+      } as OpenClawConfig;
+
+      const first = manager.initializeSession({
+        cfg,
+        sessionKey: "agent:codex:acp:session-1",
+        agent: "codex",
+        mode: "persistent",
+      });
+      void first.catch(() => undefined);
+      await vi.waitFor(() => {
+        expect(firstEnsureStarted).toBe(true);
+      });
+
+      const second = manager.initializeSession({
+        cfg,
+        sessionKey: "agent:codex:acp:session-1",
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      await vi.advanceTimersByTimeAsync(150);
+
+      await expect(first).rejects.toMatchObject({
+        code: "ACP_SESSION_INIT_FAILED",
+        message: "ACP session lane task timed out after 100ms for agent:codex:acp:session-1.",
+      });
+      await expect(second).resolves.toMatchObject({
+        handle: expect.objectContaining({
+          runtimeSessionName: "agent:codex:acp:session-1:persistent:runtime:2",
+        }),
+        meta: expect.objectContaining({
+          state: "idle",
+        }),
+      });
+
+      expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+      expect(manager.getObservabilitySnapshot(cfg).turns.queueDepth).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps timed-out runtime handles counted until timeout cleanup finishes", async () => {
     vi.useFakeTimers();
     try {

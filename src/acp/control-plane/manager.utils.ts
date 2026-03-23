@@ -12,6 +12,8 @@ import {
 import { ACP_ERROR_CODES, AcpRuntimeError } from "../runtime/errors.js";
 import type { AcpSessionResolution } from "./manager.types.js";
 
+export const DEFAULT_ACP_SESSION_LANE_TASK_TIMEOUT_MS = 600_000;
+
 export function resolveAcpAgentFromSessionKey(sessionKey: string, fallback = "main"): string {
   const parsed = parseAgentSessionKey(sessionKey);
   return normalizeAgentId(parsed?.agentId ?? fallback);
@@ -110,6 +112,17 @@ export function resolveRuntimeIdleTtlMs(cfg: OpenClawConfig): number {
     return 0;
   }
   return Math.round(ttlMinutes * 60 * 1000);
+}
+
+export function resolveSessionLaneTaskTimeoutMs(cfg: OpenClawConfig): number {
+  const timeoutMs = cfg.acp?.sessionLane?.taskTimeoutMs;
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
+    return DEFAULT_ACP_SESSION_LANE_TASK_TIMEOUT_MS;
+  }
+  if (timeoutMs <= 0) {
+    return 0;
+  }
+  return Math.round(timeoutMs);
 }
 
 export function hasLegacyAcpIdentityProjection(meta: SessionAcpMeta): boolean {

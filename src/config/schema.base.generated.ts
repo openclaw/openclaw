@@ -824,6 +824,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             exclusiveMinimum: 0,
             maximum: 9007199254740991,
           },
+          sessionLane: {
+            type: "object",
+            properties: {
+              taskTimeoutMs: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+            },
+            additionalProperties: false,
+          },
           stream: {
             type: "object",
             properties: {
@@ -13773,6 +13784,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "acp.maxConcurrentSessions": {
       label: "ACP Max Concurrent Sessions",
       help: "Maximum concurrently active ACP sessions across this gateway process.",
+      tags: ["performance", "storage"],
+    },
+    "acp.sessionLane": {
+      label: "ACP Session Lane",
+      help: "ACP per-session lane controls for serial actor tasks such as initialize, status, cancel, and close.",
+      tags: ["storage"],
+    },
+    "acp.sessionLane.taskTimeoutMs": {
+      label: "ACP Session Lane Task Timeout (ms)",
+      help: "Maximum milliseconds a single ACP session-lane task may hold the lane before OpenClaw releases it and lets the next queued task run. Default: 600000. Set 0 to disable.",
       tags: ["performance", "storage"],
     },
     "acp.stream": {
