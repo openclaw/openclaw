@@ -30,9 +30,6 @@ openclaw_live_should_include_auth_dir_for_provider() {
     minimax | minimax-portal)
       printf '%s\n' ".minimax"
       ;;
-    qwen | qwen-portal-auth)
-      printf '%s\n' ".qwen"
-      ;;
   esac
 }
 
