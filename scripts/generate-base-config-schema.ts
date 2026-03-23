@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { computeBaseConfigSchemaResponse } from "../src/config/schema-base.js";
 import { formatGeneratedModule } from "./lib/format-generated-module.mjs";
 
@@ -70,7 +70,7 @@ if (args.has("--check") && args.has("--write")) {
   throw new Error("Use either --check or --write, not both.");
 }
 
-if (import.meta.url === new URL(process.argv[1] ?? "", "file://").href) {
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const result = writeBaseConfigSchemaModule({ check: args.has("--check") });
   if (result.changed) {
     if (args.has("--check")) {
