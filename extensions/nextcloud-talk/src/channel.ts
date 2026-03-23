@@ -31,6 +31,7 @@ import {
   resolveNextcloudTalkAccount,
   type ResolvedNextcloudTalkAccount,
 } from "./accounts.js";
+import { nextcloudTalkMessageActions } from "./channel-actions.js";
 import { NextcloudTalkConfigSchema } from "./config-schema.js";
 import { monitorNextcloudTalkProvider } from "./monitor.js";
 import {
@@ -170,6 +171,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
         },
       },
       setup: nextcloudTalkSetupAdapter,
+      actions: nextcloudTalkMessageActions,
       status: createComputedAccountStatusAdapter<ResolvedNextcloudTalkAccount>({
         defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
         buildChannelSummary: ({ snapshot }) =>

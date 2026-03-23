@@ -129,10 +129,11 @@ export type NextcloudTalkTarget = {
 
 /** Incoming webhook payload from Nextcloud Talk. */
 export type NextcloudTalkWebhookPayload = {
-  type: "Create" | "Update" | "Delete";
+  type: "Create" | "Update" | "Delete" | "Like" | "Dislike";
   actor: NextcloudTalkActor;
   object: NextcloudTalkObject;
   target: NextcloudTalkTarget;
+  content?: string;
 };
 
 /** Result from sending a message to Nextcloud Talk. */
@@ -153,6 +154,17 @@ export type NextcloudTalkInboundMessage = {
   mediaType: string;
   timestamp: number;
   isGroupChat: boolean;
+};
+
+export type NextcloudTalkInboundReaction = {
+  messageId: string;
+  roomToken: string;
+  roomName: string;
+  actorId: string;
+  actorName: string;
+  emoji: string;
+  operation: "added" | "removed";
+  timestamp: number;
 };
 
 /** Headers sent by Nextcloud Talk webhook. */
@@ -176,6 +188,7 @@ export type NextcloudTalkWebhookServerOptions = {
   isBackendAllowed?: (backend: string) => boolean;
   shouldProcessMessage?: (message: NextcloudTalkInboundMessage) => boolean | Promise<boolean>;
   onMessage: (message: NextcloudTalkInboundMessage) => void | Promise<void>;
+  onReaction?: (reaction: NextcloudTalkInboundReaction) => void | Promise<void>;
   onError?: (error: Error) => void;
   abortSignal?: AbortSignal;
 };
