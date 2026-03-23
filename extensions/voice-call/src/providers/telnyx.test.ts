@@ -22,6 +22,51 @@ function decodeBase64Url(input: string): Buffer {
   return Buffer.from(padded, "base64");
 }
 
+function createSignedTelnyxCtx(params: {
+  privateKey: crypto.KeyObject;
+  rawBody: string;
+}): WebhookContext {
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const signedPayload = `${timestamp}|${params.rawBody}`;
+  const signature = crypto
+    .sign(null, Buffer.from(signedPayload), params.privateKey)
+    .toString("base64");
+
+  return createCtx({
+    rawBody: params.rawBody,
+    headers: {
+      "telnyx-signature-ed25519": signature,
+      "telnyx-timestamp": timestamp,
+    },
+  });
+}
+
+function expectReplayVerification(
+  results: Array<{ ok: boolean; isReplay?: boolean; verifiedRequestKey?: string }>,
+) {
+  expect(results.map((result) => result.ok)).toEqual([true, true]);
+  expect(results.map((result) => Boolean(result.isReplay))).toEqual([false, true]);
+  const firstResult = results[0];
+  if (!firstResult?.verifiedRequestKey) {
+    throw new Error("expected Telnyx verification to produce a request key");
+  }
+  const secondResult = results[1];
+  if (!secondResult?.verifiedRequestKey) {
+    throw new Error("expected replayed Telnyx verification to preserve the request key");
+  }
+  const firstKey = firstResult.verifiedRequestKey;
+  const secondKey = secondResult.verifiedRequestKey;
+  expect(firstKey.length).toBeGreaterThan(0);
+  expect(secondKey).toBe(firstKey);
+}
+
+function requireJwkX(jwk: JsonWebKey) {
+  if (typeof jwk.x !== "string" || jwk.x.length === 0) {
+    throw new Error("expected Ed25519 JWK export to expose x");
+  }
+  return jwk.x;
+}
+
 function expectWebhookVerificationSucceeds(params: {
   publicKey: string;
   privateKey: crypto.KeyObject;
@@ -35,20 +80,8 @@ function expectWebhookVerificationSucceeds(params: {
     event_type: "call.initiated",
     payload: { call_control_id: "x" },
   });
-  const timestamp = String(Math.floor(Date.now() / 1000));
-  const signedPayload = `${timestamp}|${rawBody}`;
-  const signature = crypto
-    .sign(null, Buffer.from(signedPayload), params.privateKey)
-    .toString("base64");
-
   const result = provider.verifyWebhook(
-    createCtx({
-      rawBody,
-      headers: {
-        "telnyx-signature-ed25519": signature,
-        "telnyx-timestamp": timestamp,
-      },
-    }),
+    createSignedTelnyxCtx({ privateKey: params.privateKey, rawBody }),
   );
   expect(result.ok).toBe(true);
 }
@@ -90,9 +123,8 @@ describe("TelnyxProvider.verifyWebhook", () => {
     const jwk = publicKey.export({ format: "jwk" }) as JsonWebKey;
     expect(jwk.kty).toBe("OKP");
     expect(jwk.crv).toBe("Ed25519");
-    expect(typeof jwk.x).toBe("string");
 
-    const rawPublicKey = decodeBase64Url(jwk.x as string);
+    const rawPublicKey = decodeBase64Url(requireJwkX(jwk));
     const rawPublicKeyBase64 = rawPublicKey.toString("base64");
     expectWebhookVerificationSucceeds({ publicKey: rawPublicKeyBase64, privateKey });
   });
@@ -117,26 +149,12 @@ describe("TelnyxProvider.verifyWebhook", () => {
       payload: { call_control_id: "call-replay-test" },
       nonce: crypto.randomUUID(),
     });
-    const timestamp = String(Math.floor(Date.now() / 1000));
-    const signedPayload = `${timestamp}|${rawBody}`;
-    const signature = crypto.sign(null, Buffer.from(signedPayload), privateKey).toString("base64");
-    const ctx = createCtx({
-      rawBody,
-      headers: {
-        "telnyx-signature-ed25519": signature,
-        "telnyx-timestamp": timestamp,
-      },
-    });
+    const ctx = createSignedTelnyxCtx({ privateKey, rawBody });
 
     const first = provider.verifyWebhook(ctx);
     const second = provider.verifyWebhook(ctx);
 
-    expect(first.ok).toBe(true);
-    expect(first.isReplay).toBeFalsy();
-    expect(first.verifiedRequestKey).toBeTruthy();
-    expect(second.ok).toBe(true);
-    expect(second.isReplay).toBe(true);
-    expect(second.verifiedRequestKey).toBe(first.verifiedRequestKey);
+    expectReplayVerification([first, second]);
   });
 });
 
@@ -161,6 +179,10 @@ describe("TelnyxProvider.parseWebhookEvent", () => {
     );
 
     expect(result.events).toHaveLength(1);
-    expect(result.events[0]?.dedupeKey).toBe("telnyx:req:abc");
+    const event = result.events[0];
+    if (!event) {
+      throw new Error("expected Telnyx parseWebhookEvent to produce one event");
+    }
+    expect(event.dedupeKey).toBe("telnyx:req:abc");
   });
 });

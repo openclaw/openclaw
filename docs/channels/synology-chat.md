@@ -27,13 +27,17 @@ Details: [Plugins](/tools/plugin)
 ## Quick setup
 
 1. Install and enable the Synology Chat plugin.
+   - `openclaw onboard` now shows Synology Chat in the same channel setup list as `openclaw channels add`.
+   - Non-interactive setup: `openclaw channels add --channel synology-chat --token <token> --url <incoming-webhook-url>`
 2. In Synology Chat integrations:
    - Create an incoming webhook and copy its URL.
    - Create an outgoing webhook with your secret token.
 3. Point the outgoing webhook URL to your OpenClaw gateway:
    - `https://gateway-host/webhook/synology` by default.
    - Or your custom `channels.synology-chat.webhookPath`.
-4. Configure `channels.synology-chat` in OpenClaw.
+4. Finish setup in OpenClaw.
+   - Guided: `openclaw onboard`
+   - Direct: `openclaw channels add --channel synology-chat --token <token> --url <incoming-webhook-url>`
 5. Restart gateway and send a DM to the Synology Chat bot.
 
 Minimal config:
@@ -96,6 +100,8 @@ Media sends are supported by URL-based file delivery.
 
 Multiple Synology Chat accounts are supported under `channels.synology-chat.accounts`.
 Each account can override token, incoming URL, webhook path, DM policy, and limits.
+Direct-message sessions are isolated per account and user, so the same numeric `user_id`
+on two different Synology accounts does not share transcript state.
 
 ```json5
 {

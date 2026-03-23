@@ -1,10 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { MANIFEST_KEY } from "../../compat/legacy-names.js";
+import { resolveBundledPluginsDir } from "../../plugins/bundled-dir.js";
 import { discoverOpenClawPlugins } from "../../plugins/discovery.js";
+import { loadPluginManifest } from "../../plugins/manifest.js";
 import type { OpenClawPackageManifest } from "../../plugins/manifest.js";
+import type { PackageManifest as PluginPackageManifest } from "../../plugins/manifest.js";
 import type { PluginOrigin } from "../../plugins/types.js";
-import { CONFIG_DIR, isRecord, resolveUserPath } from "../../utils.js";
+import { isRecord, resolveConfigDir, resolveUserPath } from "../../utils.js";
 import type { ChannelMeta } from "./types.js";
 
 export type ChannelUiMetaEntry = {
@@ -25,6 +28,7 @@ export type ChannelUiCatalog = {
 
 export type ChannelPluginCatalogEntry = {
   id: string;
+  pluginId?: string;
   meta: ChannelMeta;
   install: {
     npmSpec: string;
@@ -36,6 +40,7 @@ export type ChannelPluginCatalogEntry = {
 type CatalogOptions = {
   workspaceDir?: string;
   catalogPaths?: string[];
+  env?: NodeJS.ProcessEnv;
 };
 
 const ORIGIN_PRIORITY: Record<PluginOrigin, number> = {
@@ -50,12 +55,6 @@ type ExternalCatalogEntry = {
   version?: string;
   description?: string;
 } & Partial<Record<ManifestKey, OpenClawPackageManifest>>;
-
-const DEFAULT_CATALOG_PATHS = [
-  path.join(CONFIG_DIR, "mpm", "plugins.json"),
-  path.join(CONFIG_DIR, "mpm", "catalog.json"),
-  path.join(CONFIG_DIR, "plugins", "catalog.json"),
-];
 
 const ENV_CATALOG_PATHS = ["OPENCLAW_PLUGIN_CATALOG_PATHS", "OPENCLAW_MPM_CATALOG_PATHS"];
 
@@ -87,24 +86,35 @@ function splitEnvPaths(value: string): string[] {
     .filter(Boolean);
 }
 
+function resolveDefaultCatalogPaths(env: NodeJS.ProcessEnv): string[] {
+  const configDir = resolveConfigDir(env);
+  return [
+    path.join(configDir, "mpm", "plugins.json"),
+    path.join(configDir, "mpm", "catalog.json"),
+    path.join(configDir, "plugins", "catalog.json"),
+  ];
+}
+
 function resolveExternalCatalogPaths(options: CatalogOptions): string[] {
   if (options.catalogPaths && options.catalogPaths.length > 0) {
     return options.catalogPaths.map((entry) => entry.trim()).filter(Boolean);
   }
+  const env = options.env ?? process.env;
   for (const key of ENV_CATALOG_PATHS) {
-    const raw = process.env[key];
+    const raw = env[key];
     if (raw && raw.trim()) {
       return splitEnvPaths(raw);
     }
   }
-  return DEFAULT_CATALOG_PATHS;
+  return resolveDefaultCatalogPaths(env);
 }
 
 function loadExternalCatalogEntries(options: CatalogOptions): ExternalCatalogEntry[] {
   const paths = resolveExternalCatalogPaths(options);
+  const env = options.env ?? process.env;
   const entries: ExternalCatalogEntry[] = [];
   for (const rawPath of paths) {
-    const resolved = resolveUserPath(rawPath);
+    const resolved = resolveUserPath(rawPath, env);
     if (!fs.existsSync(resolved)) {
       continue;
     }
@@ -190,9 +200,26 @@ function resolveInstallInfo(params: {
   };
 }
 
+function resolveCatalogPluginId(params: {
+  packageDir?: string;
+  rootDir?: string;
+  origin?: PluginOrigin;
+}): string | undefined {
+  const manifestDir = params.packageDir ?? params.rootDir;
+  if (manifestDir) {
+    const manifest = loadPluginManifest(manifestDir, params.origin !== "bundled");
+    if (manifest.ok) {
+      return manifest.manifest.id;
+    }
+  }
+  return undefined;
+}
+
 function buildCatalogEntry(candidate: {
   packageName?: string;
   packageDir?: string;
+  rootDir?: string;
+  origin?: PluginOrigin;
   workspaceDir?: string;
   packageManifest?: OpenClawPackageManifest;
 }): ChannelPluginCatalogEntry | null {
@@ -217,7 +244,17 @@ function buildCatalogEntry(candidate: {
   if (!install) {
     return null;
   }
-  return { id, meta, install };
+  const pluginId = resolveCatalogPluginId({
+    packageDir: candidate.packageDir,
+    rootDir: candidate.rootDir,
+    origin: candidate.origin,
+  });
+  return {
+    id,
+    ...(pluginId ? { pluginId } : {}),
+    meta,
+    install,
+  };
 }
 
 function buildExternalCatalogEntry(entry: ExternalCatalogEntry): ChannelPluginCatalogEntry | null {
@@ -226,6 +263,46 @@ function buildExternalCatalogEntry(entry: ExternalCatalogEntry): ChannelPluginCa
     packageName: entry.name,
     packageManifest: manifest,
   });
+}
+
+function loadBundledMetadataCatalogEntries(options: CatalogOptions): ChannelPluginCatalogEntry[] {
+  const bundledDir = resolveBundledPluginsDir(options.env ?? process.env);
+  if (!bundledDir || !fs.existsSync(bundledDir)) {
+    return [];
+  }
+
+  const entries: ChannelPluginCatalogEntry[] = [];
+  for (const dirent of fs.readdirSync(bundledDir, { withFileTypes: true })) {
+    if (!dirent.isDirectory()) {
+      continue;
+    }
+    const pluginDir = path.join(bundledDir, dirent.name);
+    const packageJsonPath = path.join(pluginDir, "package.json");
+    if (!fs.existsSync(packageJsonPath)) {
+      continue;
+    }
+
+    let packageJson: PluginPackageManifest;
+    try {
+      packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as PluginPackageManifest;
+    } catch {
+      continue;
+    }
+
+    const entry = buildCatalogEntry({
+      packageName: packageJson.name,
+      packageDir: pluginDir,
+      rootDir: pluginDir,
+      origin: "bundled",
+      workspaceDir: options.workspaceDir,
+      packageManifest: packageJson.openclaw,
+    });
+    if (entry) {
+      entries.push(entry);
+    }
+  }
+
+  return entries;
 }
 
 export function buildChannelUiCatalog(
@@ -259,7 +336,10 @@ export function buildChannelUiCatalog(
 export function listChannelPluginCatalogEntries(
   options: CatalogOptions = {},
 ): ChannelPluginCatalogEntry[] {
-  const discovery = discoverOpenClawPlugins({ workspaceDir: options.workspaceDir });
+  const discovery = discoverOpenClawPlugins({
+    workspaceDir: options.workspaceDir,
+    env: options.env,
+  });
   const resolved = new Map<string, { entry: ChannelPluginCatalogEntry; priority: number }>();
 
   for (const candidate of discovery.candidates) {
@@ -268,6 +348,14 @@ export function listChannelPluginCatalogEntries(
       continue;
     }
     const priority = ORIGIN_PRIORITY[candidate.origin] ?? 99;
+    const existing = resolved.get(entry.id);
+    if (!existing || priority < existing.priority) {
+      resolved.set(entry.id, { entry, priority });
+    }
+  }
+
+  for (const entry of loadBundledMetadataCatalogEntries(options)) {
+    const priority = ORIGIN_PRIORITY.bundled ?? 99;
     const existing = resolved.get(entry.id);
     if (!existing || priority < existing.priority) {
       resolved.set(entry.id, { entry, priority });

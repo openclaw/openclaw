@@ -1,7 +1,7 @@
-import { EventEmitter } from "node:events";
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { makeFormBody, makeReq, makeRes, makeStalledReq } from "./test-http-utils.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
+import type { WebhookHandlerDeps } from "./webhook-handler.js";
 import {
   clearSynologyWebhookRateLimiterStateForTest,
   createWebhookHandler,
@@ -32,76 +32,6 @@ function makeAccount(
   };
 }
 
-function makeReq(
-  method: string,
-  body: string,
-  opts: { headers?: Record<string, string>; url?: string } = {},
-): IncomingMessage {
-  const req = new EventEmitter() as IncomingMessage & {
-    destroyed: boolean;
-  };
-  req.method = method;
-  req.headers = opts.headers ?? {};
-  req.url = opts.url ?? "/webhook/synology";
-  req.socket = { remoteAddress: "127.0.0.1" } as any;
-  req.destroyed = false;
-  req.destroy = ((_: Error | undefined) => {
-    if (req.destroyed) {
-      return req;
-    }
-    req.destroyed = true;
-    return req;
-  }) as IncomingMessage["destroy"];
-
-  // Simulate body delivery
-  process.nextTick(() => {
-    if (req.destroyed) {
-      return;
-    }
-    req.emit("data", Buffer.from(body));
-    req.emit("end");
-  });
-
-  return req;
-}
-function makeStalledReq(method: string): IncomingMessage {
-  const req = new EventEmitter() as IncomingMessage & {
-    destroyed: boolean;
-  };
-  req.method = method;
-  req.headers = {};
-  req.socket = { remoteAddress: "127.0.0.1" } as any;
-  req.destroyed = false;
-  req.destroy = ((_: Error | undefined) => {
-    if (req.destroyed) {
-      return req;
-    }
-    req.destroyed = true;
-    return req;
-  }) as IncomingMessage["destroy"];
-  return req;
-}
-
-function makeRes(): ServerResponse & { _status: number; _body: string } {
-  const res = {
-    _status: 0,
-    _body: "",
-    writeHead(statusCode: number, _headers?: Record<string, string>) {
-      res._status = statusCode;
-    },
-    end(body?: string) {
-      res._body = body ?? "";
-    },
-  } as any;
-  return res;
-}
-
-function makeFormBody(fields: Record<string, string>): string {
-  return Object.entries(fields)
-    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-    .join("&");
-}
-
 const validBody = makeFormBody({
   token: "valid-token",
   user_id: "123",
@@ -124,10 +54,12 @@ describe("createWebhookHandler", () => {
   async function expectForbiddenByPolicy(params: {
     account: Partial<ResolvedSynologyChatAccount>;
     bodyContains: string;
+    deliver?: WebhookHandlerDeps["deliver"];
   }) {
+    const deliver = params.deliver ?? vi.fn();
     const handler = createWebhookHandler({
       account: makeAccount(params.account),
-      deliver: vi.fn(),
+      deliver,
       log,
     });
 
@@ -137,6 +69,7 @@ describe("createWebhookHandler", () => {
 
     expect(res._status).toBe(403);
     expect(res._body).toContain(params.bodyContains);
+    expect(deliver).not.toHaveBeenCalled();
   }
 
   it("rejects non-POST methods with 405", async () => {
@@ -302,22 +235,14 @@ describe("createWebhookHandler", () => {
 
   it("returns 403 when allowlist policy is set with empty allowedUserIds", async () => {
     const deliver = vi.fn();
-    const handler = createWebhookHandler({
-      account: makeAccount({
+    await expectForbiddenByPolicy({
+      account: {
         dmPolicy: "allowlist",
         allowedUserIds: [],
-      }),
+      },
+      bodyContains: "Allowlist is empty",
       deliver,
-      log,
     });
-
-    const req = makeReq("POST", validBody);
-    const res = makeRes();
-    await handler(req, res);
-
-    expect(res._status).toBe(403);
-    expect(res._body).toContain("Allowlist is empty");
-    expect(deliver).not.toHaveBeenCalled();
   });
 
   it("returns 403 when DMs are disabled", async () => {

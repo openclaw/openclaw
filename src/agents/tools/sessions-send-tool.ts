@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
-import { loadConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
@@ -17,7 +17,7 @@ import {
   extractAssistantText,
   resolveEffectiveSessionToolsVisibility,
   resolveSessionReference,
-  resolveSandboxedSessionToolContext,
+  resolveSessionToolContext,
   resolveVisibleSessionReference,
   stripToolMessages,
 } from "./sessions-helpers.js";
@@ -32,10 +32,41 @@ const SessionsSendToolSchema = Type.Object({
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
 });
 
+async function startAgentRun(params: {
+  runId: string;
+  sendParams: Record<string, unknown>;
+  sessionKey: string;
+}): Promise<{ ok: true; runId: string } | { ok: false; result: ReturnType<typeof jsonResult> }> {
+  try {
+    const response = await callGateway<{ runId: string }>({
+      method: "agent",
+      params: params.sendParams,
+      timeoutMs: 10_000,
+    });
+    return {
+      ok: true,
+      runId: typeof response?.runId === "string" && response.runId ? response.runId : params.runId,
+    };
+  } catch (err) {
+    const messageText =
+      err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+    return {
+      ok: false,
+      result: jsonResult({
+        runId: params.runId,
+        status: "error",
+        error: messageText,
+        sessionKey: params.sessionKey,
+      }),
+    };
+  }
+}
+
 export function createSessionsSendTool(opts?: {
   agentSessionKey?: string;
   agentChannel?: GatewayMessageChannel;
   sandboxed?: boolean;
+  config?: OpenClawConfig;
 }): AnyAgentTool {
   return {
     label: "Session Send",
@@ -46,13 +77,8 @@ export function createSessionsSendTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const message = readStringParam(params, "message", { required: true });
-      const cfg = loadConfig();
-      const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
-        resolveSandboxedSessionToolContext({
-          cfg,
-          agentSessionKey: opts?.agentSessionKey,
-          sandboxed: opts?.sandboxed,
-        });
+      const { cfg, mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
+        resolveSessionToolContext(opts);
 
       const a2aPolicy = createAgentToAgentPolicy(cfg);
       const sessionVisibility = resolveEffectiveSessionToolsVisibility({
@@ -251,53 +277,33 @@ export function createSessionsSendTool(opts?: {
       };
 
       if (timeoutSeconds === 0) {
-        try {
-          const response = await callGateway<{ runId: string }>({
-            method: "agent",
-            params: sendParams,
-            timeoutMs: 10_000,
-          });
-          if (typeof response?.runId === "string" && response.runId) {
-            runId = response.runId;
-          }
-          startA2AFlow(undefined, runId);
-          return jsonResult({
-            runId,
-            status: "accepted",
-            sessionKey: displayKey,
-            delivery,
-          });
-        } catch (err) {
-          const messageText =
-            err instanceof Error ? err.message : typeof err === "string" ? err : "error";
-          return jsonResult({
-            runId,
-            status: "error",
-            error: messageText,
-            sessionKey: displayKey,
-          });
-        }
-      }
-
-      try {
-        const response = await callGateway<{ runId: string }>({
-          method: "agent",
-          params: sendParams,
-          timeoutMs: 10_000,
-        });
-        if (typeof response?.runId === "string" && response.runId) {
-          runId = response.runId;
-        }
-      } catch (err) {
-        const messageText =
-          err instanceof Error ? err.message : typeof err === "string" ? err : "error";
-        return jsonResult({
+        const start = await startAgentRun({
           runId,
-          status: "error",
-          error: messageText,
+          sendParams,
           sessionKey: displayKey,
         });
+        if (!start.ok) {
+          return start.result;
+        }
+        runId = start.runId;
+        startA2AFlow(undefined, runId);
+        return jsonResult({
+          runId,
+          status: "accepted",
+          sessionKey: displayKey,
+          delivery,
+        });
       }
+
+      const start = await startAgentRun({
+        runId,
+        sendParams,
+        sessionKey: displayKey,
+      });
+      if (!start.ok) {
+        return start.result;
+      }
+      runId = start.runId;
 
       let waitStatus: string | undefined;
       let waitError: string | undefined;

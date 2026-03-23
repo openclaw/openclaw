@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -17,17 +17,23 @@ const catalog = [
   },
 ];
 
+const loadModelCatalog = vi.hoisted(() => vi.fn(async () => catalog));
+
 vi.mock("../agents/model-catalog.js", async () => {
   const actual = await vi.importActual<typeof import("../agents/model-catalog.js")>(
     "../agents/model-catalog.js",
   );
   return {
     ...actual,
-    loadModelCatalog: vi.fn(async () => catalog),
+    loadModelCatalog,
   };
 });
 
 describe("runCapability image skip", () => {
+  beforeEach(() => {
+    loadModelCatalog.mockClear();
+  });
+
   it("skips image understanding when the active model supports vision", async () => {
     const ctx: MsgContext = { MediaPath: "/tmp/image.png", MediaType: "image/png" };
     const media = normalizeMediaAttachments(ctx);

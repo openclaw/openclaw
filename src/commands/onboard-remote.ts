@@ -4,11 +4,9 @@ import { isSecureWebSocketUrl } from "../gateway/net.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
 import { discoverGatewayBeacons } from "../infra/bonjour-discovery.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
+import { resolveSecretInputModeForEnvSelection } from "../plugins/provider-auth-mode.js";
+import { promptSecretRefForSetup } from "../plugins/provider-auth-ref.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import {
-  promptSecretRefForOnboarding,
-  resolveSecretInputModeForEnvSelection,
-} from "./auth-choice.apply-helpers.js";
 import { detectBinary } from "./onboard-helpers.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
@@ -175,7 +173,7 @@ export async function promptRemoteGatewayConfig(
       },
     });
     if (selectedMode === "ref") {
-      const resolved = await promptSecretRefForOnboarding({
+      const resolved = await promptSecretRefForSetup({
         provider: "gateway-remote-token",
         config: cfg,
         prompter,
@@ -207,7 +205,7 @@ export async function promptRemoteGatewayConfig(
       },
     });
     if (selectedMode === "ref") {
-      const resolved = await promptSecretRefForOnboarding({
+      const resolved = await promptSecretRefForSetup({
         provider: "gateway-remote-password",
         config: cfg,
         prompter,

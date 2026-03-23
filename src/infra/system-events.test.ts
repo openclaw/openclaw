@@ -3,7 +3,23 @@ import { drainFormattedSystemEvents } from "../auto-reply/reply/session-updates.
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { isCronSystemEvent } from "./heartbeat-runner.js";
-import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
+import {
+  drainSystemEventEntries,
+  enqueueSystemEvent,
+  hasSystemEvents,
+  isSystemEventContextChanged,
+  peekSystemEventEntries,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "./system-events.js";
+
+type SystemEventsModule = typeof import("./system-events.js");
+
+const systemEventsModuleUrl = new URL("./system-events.ts", import.meta.url).href;
+
+async function importSystemEventsModule(cacheBust: string): Promise<SystemEventsModule> {
+  return (await import(`${systemEventsModuleUrl}?t=${cacheBust}`)) as SystemEventsModule;
+}
 
 const cfg = {} as unknown as OpenClawConfig;
 const mainKey = resolveMainSessionKey(cfg);
@@ -54,6 +70,70 @@ describe("system events (session routing)", () => {
 
     expect(first).toBe(true);
     expect(second).toBe(false);
+  });
+
+  it("normalizes context keys when checking for context changes", () => {
+    const key = "agent:main:test-context";
+    expect(isSystemEventContextChanged(key, " build:123 ")).toBe(true);
+
+    enqueueSystemEvent("Node connected", {
+      sessionKey: key,
+      contextKey: " BUILD:123 ",
+    });
+
+    expect(isSystemEventContextChanged(key, "build:123")).toBe(false);
+    expect(isSystemEventContextChanged(key, "build:456")).toBe(true);
+    expect(isSystemEventContextChanged(key)).toBe(true);
+  });
+
+  it("returns cloned event entries and resets duplicate suppression after drain", () => {
+    const key = "agent:main:test-entry-clone";
+    enqueueSystemEvent("Node connected", {
+      sessionKey: key,
+      contextKey: "build:123",
+    });
+
+    const peeked = peekSystemEventEntries(key);
+    expect(hasSystemEvents(key)).toBe(true);
+    expect(peeked).toHaveLength(1);
+    peeked[0].text = "mutated";
+    expect(peekSystemEvents(key)).toEqual(["Node connected"]);
+
+    expect(drainSystemEventEntries(key).map((entry) => entry.text)).toEqual(["Node connected"]);
+    expect(hasSystemEvents(key)).toBe(false);
+
+    expect(enqueueSystemEvent("Node connected", { sessionKey: key })).toBe(true);
+  });
+
+  it("keeps only the newest 20 queued events", () => {
+    const key = "agent:main:test-max-events";
+    for (let index = 1; index <= 22; index += 1) {
+      enqueueSystemEvent(`event ${index}`, { sessionKey: key });
+    }
+
+    expect(peekSystemEvents(key)).toEqual(
+      Array.from({ length: 20 }, (_, index) => `event ${index + 3}`),
+    );
+  });
+
+  it("shares queued events across duplicate module instances", async () => {
+    const first = await importSystemEventsModule(`first-${Date.now()}`);
+    const second = await importSystemEventsModule(`second-${Date.now()}`);
+    const key = "agent:main:test-duplicate-module";
+
+    first.resetSystemEventsForTest();
+    second.enqueueSystemEvent("Node connected", { sessionKey: key, contextKey: "build:123" });
+
+    expect(first.peekSystemEventEntries(key)).toEqual([
+      expect.objectContaining({
+        text: "Node connected",
+        contextKey: "build:123",
+      }),
+    ]);
+    expect(first.isSystemEventContextChanged(key, "build:123")).toBe(false);
+    expect(first.drainSystemEvents(key)).toEqual(["Node connected"]);
+
+    first.resetSystemEventsForTest();
   });
 
   it("filters heartbeat/noise lines, returning undefined", async () => {

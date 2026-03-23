@@ -1,4 +1,3 @@
-import type { Server } from "node:http";
 import type { Request, Response } from "express";
 import {
   DEFAULT_WEBHOOK_MAX_BODY_BYTES,
@@ -7,7 +6,7 @@ import {
   summarizeMapping,
   type OpenClawConfig,
   type RuntimeEnv,
-} from "openclaw/plugin-sdk/msteams";
+} from "../runtime-api.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
@@ -21,6 +20,10 @@ import {
 import { getMSTeamsRuntime } from "./runtime.js";
 import { createMSTeamsAdapter, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { resolveMSTeamsCredentials } from "./token.js";
+import {
+  applyMSTeamsWebhookTimeouts,
+  type ApplyMSTeamsWebhookTimeoutsOpts,
+} from "./webhook-timeouts.js";
 
 export type MonitorMSTeamsOpts = {
   cfg: OpenClawConfig;
@@ -36,32 +39,6 @@ export type MonitorMSTeamsResult = {
 };
 
 const MSTEAMS_WEBHOOK_MAX_BODY_BYTES = DEFAULT_WEBHOOK_MAX_BODY_BYTES;
-const MSTEAMS_WEBHOOK_INACTIVITY_TIMEOUT_MS = 30_000;
-const MSTEAMS_WEBHOOK_REQUEST_TIMEOUT_MS = 30_000;
-const MSTEAMS_WEBHOOK_HEADERS_TIMEOUT_MS = 15_000;
-
-export type ApplyMSTeamsWebhookTimeoutsOpts = {
-  inactivityTimeoutMs?: number;
-  requestTimeoutMs?: number;
-  headersTimeoutMs?: number;
-};
-
-export function applyMSTeamsWebhookTimeouts(
-  httpServer: Server,
-  opts?: ApplyMSTeamsWebhookTimeoutsOpts,
-): void {
-  const inactivityTimeoutMs = opts?.inactivityTimeoutMs ?? MSTEAMS_WEBHOOK_INACTIVITY_TIMEOUT_MS;
-  const requestTimeoutMs = opts?.requestTimeoutMs ?? MSTEAMS_WEBHOOK_REQUEST_TIMEOUT_MS;
-  const headersTimeoutMs = Math.min(
-    opts?.headersTimeoutMs ?? MSTEAMS_WEBHOOK_HEADERS_TIMEOUT_MS,
-    requestTimeoutMs,
-  );
-
-  httpServer.setTimeout(inactivityTimeoutMs);
-  httpServer.requestTimeout = requestTimeoutMs;
-  httpServer.headersTimeout = headersTimeoutMs;
-}
-
 export async function monitorMSTeamsProvider(
   opts: MonitorMSTeamsOpts,
 ): Promise<MonitorMSTeamsResult> {
@@ -269,6 +246,7 @@ export async function monitorMSTeamsProvider(
 
   // Create Express server
   const expressApp = express.default();
+  expressApp.use(authorizeJWT(authConfig));
   expressApp.use(express.json({ limit: MSTEAMS_WEBHOOK_MAX_BODY_BYTES }));
   expressApp.use((err: unknown, _req: Request, res: Response, next: (err?: unknown) => void) => {
     if (err && typeof err === "object" && "status" in err && err.status === 413) {
@@ -277,7 +255,6 @@ export async function monitorMSTeamsProvider(
     }
     next(err);
   });
-  expressApp.use(authorizeJWT(authConfig));
 
   // Set up the messages endpoint - use configured path and /api/messages as fallback
   const configuredPath = msteamsCfg.webhook?.path ?? "/api/messages";
