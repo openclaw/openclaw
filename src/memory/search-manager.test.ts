@@ -232,7 +232,15 @@ describe("getMemorySearchManager caching", () => {
     process.env.OPENCLAW_STATE_DIR = stateDir;
 
     try {
-      const dbPath = path.join(stateDir, "agents", agentId, "qmd", "xdg-cache", "qmd", "index.sqlite");
+      const dbPath = path.join(
+        stateDir,
+        "agents",
+        agentId,
+        "qmd",
+        "xdg-cache",
+        "qmd",
+        "index.sqlite",
+      );
       fs.mkdirSync(path.dirname(dbPath), { recursive: true });
       const db = new DatabaseSync(dbPath);
       try {
@@ -247,15 +255,18 @@ describe("getMemorySearchManager caching", () => {
             modified_at TEXT NOT NULL,
             active INTEGER NOT NULL DEFAULT 1
           );
-          CREATE TABLE content_vectors (
-            rowid INTEGER PRIMARY KEY,
-            embedding BLOB
-          );
         `);
         const insert = db.prepare(
           "INSERT INTO documents (collection, path, title, hash, created_at, modified_at, active) VALUES (?, ?, ?, ?, ?, ?, 1)",
         );
-        insert.run("memory-dir-main", "2026-03-23.md", "daily", "hash-1", "2026-03-23", "2026-03-23");
+        insert.run(
+          "memory-dir-main",
+          "2026-03-23.md",
+          "daily",
+          "hash-1",
+          "2026-03-23",
+          "2026-03-23",
+        );
         insert.run("memory-root-main", "MEMORY.md", "memory", "hash-2", "2026-03-23", "2026-03-23");
       } finally {
         db.close();
@@ -276,8 +287,11 @@ describe("getMemorySearchManager caching", () => {
         },
       });
     } finally {
-      if (previousStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
-      else process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
       await closeAllMemorySearchManagers();
       fs.rmSync(stateDir, { recursive: true, force: true });
     }

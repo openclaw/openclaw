@@ -167,16 +167,13 @@ class QmdStatusOnlyManager implements MemorySearchManager {
     }));
 
     try {
-      const db = new DatabaseSync(this.indexPath, { readonly: true });
+      const db = new DatabaseSync(this.indexPath, { readOnly: true });
       try {
         const docRows = db
-          .prepare("SELECT collection, COUNT(*) as c FROM documents WHERE active = 1 GROUP BY collection")
+          .prepare(
+            "SELECT collection, COUNT(*) as c FROM documents WHERE active = 1 GROUP BY collection",
+          )
           .all() as Array<{ collection: string; c: number }>;
-
-        // Read vector rows once so the status path can report a database-backed snapshot without
-        // constructing the full QMD manager. We still keep the legacy chunk=count semantics here,
-        // matching the full QMD manager and existing CLI formatting expectations.
-        db.prepare("SELECT COUNT(*) as c FROM content_vectors").get() as { c: number } | undefined;
 
         const bySource = new Map<"memory" | "sessions", { files: number; chunks: number }>(
           zeroSourceCounts.map((entry) => [entry.source, { files: 0, chunks: 0 }]),
@@ -187,11 +184,9 @@ class QmdStatusOnlyManager implements MemorySearchManager {
           const count = row.c ?? 0;
           const entry = bySource.get(source) ?? { files: 0, chunks: 0 };
           entry.files += count;
+          entry.chunks += count;
           bySource.set(source, entry);
           totalFiles += count;
-        }
-        for (const entry of bySource.values()) {
-          entry.chunks = totalFiles;
         }
         return {
           totalFiles,
