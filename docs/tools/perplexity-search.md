@@ -170,5 +170,9 @@ await web_search({
 - OpenRouter or explicit `plugins.entries.perplexity.config.webSearch.baseUrl` / `model` switches Perplexity back to Sonar chat completions for compatibility
 - Results are cached for 15 minutes by default (configurable via `cacheTtlMinutes`)
 
-See [Web tools](/tools/web) for the full web_search configuration.
-See [Perplexity Search API docs](https://docs.perplexity.ai/docs/search/quickstart) for more details.
+## Related
+
+- [Web Search overview](/tools/web) -- all providers and auto-detection
+- [Perplexity Search API docs](https://docs.perplexity.ai/docs/search/quickstart) -- official Perplexity documentation
+- [Brave Search](/tools/brave-search) -- structured results with country/language filters
+- [Exa Search](/tools/exa-search) -- neural search with content extraction
