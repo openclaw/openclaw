@@ -536,9 +536,19 @@ function resolveModelOverrideValue(state: AppViewState): string {
     return "";
   }
   // No local override recorded yet — fall back to server data.
-  // Include provider prefix so the value matches option keys (provider/model).
+  // Use the bare model name and resolve provider from the catalog rather than
+  // trusting the session's modelProvider, which may be the session default and
+  // not the model's actual provider (e.g. "zai" for a "deepseek-chat" model).
   const activeRow = resolveActiveSessionRow(state);
   if (activeRow && typeof activeRow.model === "string" && activeRow.model.trim()) {
+    const rawOverride = createChatModelOverride(activeRow.model.trim());
+    if (rawOverride) {
+      const normalized = normalizeChatModelOverrideValue(rawOverride, state.chatModelCatalog ?? []);
+      if (normalized) {
+        return normalized;
+      }
+    }
+    // Fallback: use server-provided provider if catalog lookup fails.
     return resolveServerChatModelValue(activeRow.model, activeRow.modelProvider);
   }
   return "";
@@ -546,7 +556,18 @@ function resolveModelOverrideValue(state: AppViewState): string {
 
 function resolveDefaultModelValue(state: AppViewState): string {
   const defaults = state.sessionsResult?.defaults;
-  return resolveServerChatModelValue(defaults?.model, defaults?.modelProvider);
+  const model = defaults?.model;
+  if (typeof model !== "string" || !model.trim()) {
+    return "";
+  }
+  const rawOverride = createChatModelOverride(model.trim());
+  if (rawOverride) {
+    const normalized = normalizeChatModelOverrideValue(rawOverride, state.chatModelCatalog ?? []);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return resolveServerChatModelValue(model, defaults?.modelProvider);
 }
 
 function buildChatModelOptions(
