@@ -322,9 +322,16 @@ export async function sendProactive(
     if (imageUrl) {
       try {
         if (type === "c2c") {
-          await sendC2CImageMessage(accessToken, to, imageUrl, undefined, undefined);
+          await sendC2CImageMessage(account.appId, accessToken, to, imageUrl, undefined, undefined);
         } else if (type === "group") {
-          await sendGroupImageMessage(accessToken, to, imageUrl, undefined, undefined);
+          await sendGroupImageMessage(
+            account.appId,
+            accessToken,
+            to,
+            imageUrl,
+            undefined,
+            undefined,
+          );
         }
         console.log(`[qqbot:proactive] Sent image to ${type}:${to}`);
       } catch (err) {
@@ -337,9 +344,9 @@ export async function sendProactive(
     let result: { id: string; timestamp: number | string };
 
     if (type === "c2c") {
-      result = await sendProactiveC2CMessage(accessToken, to, text);
+      result = await sendProactiveC2CMessage(account.appId, accessToken, to, text);
     } else if (type === "group") {
-      result = await sendProactiveGroupMessage(accessToken, to, text);
+      result = await sendProactiveGroupMessage(account.appId, accessToken, to, text);
     } else if (type === "channel") {
       // 频道消息需要 channel_id，这里暂时不支持主动发送
       return {
@@ -497,9 +504,9 @@ export async function sendProactiveMessageDirect(
     let result: { id: string; timestamp: number | string };
 
     if (type === "c2c") {
-      result = await sendProactiveC2CMessage(accessToken, to, text);
+      result = await sendProactiveC2CMessage(account.appId, accessToken, to, text);
     } else {
-      result = await sendProactiveGroupMessage(accessToken, to, text);
+      result = await sendProactiveGroupMessage(account.appId, accessToken, to, text);
     }
 
     return {

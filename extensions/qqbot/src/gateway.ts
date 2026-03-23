@@ -158,7 +158,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
   triggerUpdateCheck(log);
 
   // 初始化 API 配置（markdown 支持）
-  initApiConfig({
+  initApiConfig(account.appId, {
     markdownSupport: account.markdownSupport,
   });
   log?.info(
@@ -167,7 +167,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
 
   // 注册出站消息 refIdx 缓存钩子
   // 所有消息发送函数在拿到 QQ 回包后，如果含 ref_idx 则自动回调此处缓存
-  onMessageSent((refIdx, meta) => {
+  onMessageSent(account.appId, (refIdx, meta) => {
     log?.info(
       `[qqbot:${account.accountId}] onMessageSent called: refIdx=${refIdx}, mediaType=${meta.mediaType}, ttsText=${meta.ttsText?.slice(0, 30)}`,
     );
@@ -348,13 +348,13 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
 
       // 先发送文本回复
       if (msg.type === "c2c") {
-        await sendC2CMessage(token, msg.senderId, replyText, msg.messageId);
+        await sendC2CMessage(account.appId, token, msg.senderId, replyText, msg.messageId);
       } else if (msg.type === "group" && msg.groupOpenid) {
-        await sendGroupMessage(token, msg.groupOpenid, replyText, msg.messageId);
+        await sendGroupMessage(account.appId, token, msg.groupOpenid, replyText, msg.messageId);
       } else if (msg.channelId) {
         await sendChannelMessage(token, msg.channelId, replyText, msg.messageId);
       } else if (msg.type === "dm") {
-        await sendC2CMessage(token, msg.senderId, replyText, msg.messageId);
+        await sendC2CMessage(account.appId, token, msg.senderId, replyText, msg.messageId);
       }
 
       // 如果有文件需要发送

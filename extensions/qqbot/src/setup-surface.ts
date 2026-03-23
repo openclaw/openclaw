@@ -61,8 +61,7 @@ export const qqbotSetupWizard: ChannelSetupWizard = {
               : undefined,
         };
       },
-      applyUseEnv: ({ cfg, accountId }) =>
-        applyQQBotAccountConfig(cfg, accountId, {}),
+      applyUseEnv: ({ cfg, accountId }) => applyQQBotAccountConfig(cfg, accountId, {}),
       applySet: ({ cfg, accountId, resolvedValue }) =>
         applyQQBotAccountConfig(cfg, accountId, { appId: resolvedValue }),
     },
@@ -89,8 +88,7 @@ export const qqbotSetupWizard: ChannelSetupWizard = {
               : undefined,
         };
       },
-      applyUseEnv: ({ cfg, accountId }) =>
-        applyQQBotAccountConfig(cfg, accountId, {}),
+      applyUseEnv: ({ cfg, accountId }) => applyQQBotAccountConfig(cfg, accountId, {}),
       applySet: ({ cfg, accountId, resolvedValue }) =>
         applyQQBotAccountConfig(cfg, accountId, { clientSecret: resolvedValue }),
     },

@@ -83,7 +83,6 @@ Docs: https://docs.openclaw.ai
 - Docs/plugins: add the community wecom plugin listing to the docs catalog. (#29905) Thanks @sliverp.
 - Channels/QQ Bot: add a bundled QQ Bot channel extension with WebSocket gateway, multi-account support, C2C messaging, media handling (image/voice/video/file). (#52721) Thanks @sliverp.
 
-
 ### Fixes
 
 - Media/Windows security: block remote-host `file://` media URLs and UNC/network paths before local filesystem resolution in core media loading and adjacent prompt/sandbox attachment seams, so the next release no longer allows structured local-media inputs to trigger outbound SMB credential handshakes on Windows. Thanks @RacerZ-fighting for reporting.
