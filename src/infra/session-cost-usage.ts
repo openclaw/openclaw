@@ -211,7 +211,7 @@ export async function loadCostUsageSummary(params?: {
         .filter(
           (entry) =>
             entry.isFile() &&
-            (entry.name.endsWith(".jsonl") || entry.name.match(/\.jsonl\.reset\.\d+$/)),
+            (entry.name.endsWith(".jsonl") || /\.jsonl\.reset\.[^/]+$/.test(entry.name)),
         )
         .map(async (entry) => {
           const filePath = path.join(sessionsDir, entry.name);

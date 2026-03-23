@@ -65,11 +65,11 @@ function run(cmd, args) {
   });
 }
 
-function runSync(cmd, args, envOverride) {
+function runSync(cmd, args) {
   const result = spawnSync(cmd, args, {
     cwd: uiDir,
     stdio: "inherit",
-    env: envOverride ?? process.env,
+    env: process.env,
     shell: process.platform === "win32",
   });
   if (result.signal) {
