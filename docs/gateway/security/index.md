@@ -1180,10 +1180,13 @@ If your AI does something bad:
 
 ## Secret Scanning (detect-secrets)
 
-CI runs the `detect-secrets` pre-commit hook in the `secrets` job.
-Pushes to `main` always run an all-files scan. Pull requests use a changed-file
-fast path when a base commit is available, and fall back to an all-files scan
-otherwise. If it fails, there are new candidates not yet in the baseline.
+CI runs both secret-focused checks in the `secrets` job:
+
+- `detect-private-key` for committed private key material
+- `detect-secrets` for baseline-backed secret candidate scanning
+
+The `detect-secrets` hook runs as an all-files scan in CI. If it fails, there
+are new candidates not yet reflected in `.secrets.baseline`.
 
 ### If CI fails
 
@@ -1194,6 +1197,7 @@ otherwise. If it fails, there are new candidates not yet in the baseline.
    ```
 
 2. Understand the tools:
+   - `detect-private-key` is a narrow hard fail for committed private key material.
    - `detect-secrets` in pre-commit runs `detect-secrets-hook` with the repo's
      baseline and excludes.
    - `detect-secrets audit` opens an interactive review to mark each baseline
