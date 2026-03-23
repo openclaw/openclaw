@@ -346,6 +346,10 @@ export async function monitorWebInbox(options: {
         mediaType: enriched.mediaType,
         mediaFileName: enriched.mediaFileName,
         timestamp,
+        senderName,
+        senderE164: inbound.senderE164,
+        participantJid: inbound.participantJid,
+        groupSubject: inbound.groupSubject,
       },
       "inbound message",
     );
