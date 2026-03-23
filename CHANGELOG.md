@@ -16,6 +16,8 @@ Docs: https://docs.openclaw.ai
 - Gateway/supervision: stop lock conflicts from crash-looping under launchd and systemd by keeping the duplicate process in a retry wait instead of exiting as a failure while another healthy gateway still owns the lock. Fixes #52922. Thanks @vincentkoc.
 - Browser/Chrome MCP: wait for existing-session browser tabs to become usable after attach instead of treating the initial Chrome MCP handshake as ready, which reduces user-profile timeouts and repeated consent churn on macOS Chrome attach flows. Fixes #52930. Thanks @vincentkoc.
 - Gateway/probe: stop successful gateway handshakes from timing out as unreachable while post-connect detail RPCs are still loading, so slow devices report a reachable RPC failure instead of a false negative dead gateway. Fixes #52927. Thanks @vincentkoc.
+- Plugins/message tool: make Discord `components` and Slack `blocks` optional again so pin/unpin/react flows stop failing schema validation and Slack media sends are no longer forced into an invalid blocks-plus-media payload. Fixes #52970 and #52962. Thanks @vincentkoc.
+- Plugins/Feishu: route `message(..., media=...)` sends through the Feishu outbound media path so file and image attachments actually send instead of being silently dropped. Fixes #52962. Thanks @vincentkoc.
 
 ## 2026.3.22
 

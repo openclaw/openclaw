@@ -1,3 +1,4 @@
+import { Type } from "@sinclair/typebox";
 import { describe, expect, it, vi } from "vitest";
 import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import { slackOutbound } from "./outbound-adapter.js";
@@ -94,6 +95,25 @@ describe("slackPlugin actions", () => {
         blocks: expect.any(Object),
       },
     });
+  });
+
+  it("keeps blocks optional in the message tool schema", () => {
+    const discovery = slackPlugin.actions?.describeMessageTool({
+      cfg: {
+        channels: {
+          slack: {
+            botToken: "xoxb-test",
+            appToken: "xapp-test",
+          },
+        },
+      } as OpenClawConfig,
+    });
+    const schema = discovery?.schema;
+    if (!schema || Array.isArray(schema)) {
+      throw new Error("expected slack message-tool schema");
+    }
+
+    expect(Type.Object(schema.properties).required).toBeUndefined();
   });
 
   it("forwards read threadId to Slack action handler", async () => {
