@@ -184,6 +184,8 @@ export type CreatePluginRuntimeOptions = {
 export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): PluginRuntime {
   const mediaUnderstanding = createRuntimeMediaUnderstandingFacade();
   const runtime = {
+    // Sourced from the shared OpenClaw version resolver (#52899) so plugins
+    // always see the same version the CLI reports, avoiding API-version drift.
     version: VERSION,
     config: createRuntimeConfig(),
     agent: createRuntimeAgent(),
