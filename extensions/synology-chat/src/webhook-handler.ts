@@ -369,7 +369,7 @@ async function parseAndAuthorizeSynologyWebhook(params: {
   };
 }
 
-async function resolveSynologyDeliveryUserId(params: {
+async function resolveSynologyReplyDeliveryUserId(params: {
   account: ResolvedSynologyChatAccount;
   payload: SynologyWebhookPayload;
   log?: WebhookHandlerDeps["log"];
@@ -378,12 +378,12 @@ async function resolveSynologyDeliveryUserId(params: {
     return params.payload.user_id;
   }
 
-  const resolvedChatApiUserId = await resolveLegacyWebhookNameToChatUserId(
-    params.account.incomingUrl,
-    params.payload.username,
-    params.account.allowInsecureSsl,
-    params.log,
-  );
+  const resolvedChatApiUserId = await resolveLegacyWebhookNameToChatUserId({
+    incomingUrl: params.account.incomingUrl,
+    mutableWebhookUsername: params.payload.username,
+    allowInsecureSsl: params.account.allowInsecureSsl,
+    log: params.log,
+  });
   if (resolvedChatApiUserId !== undefined) {
     return String(resolvedChatApiUserId);
   }
@@ -402,7 +402,7 @@ async function processAuthorizedSynologyWebhook(params: {
   const authorizedWebhookUserId = params.message.payload.user_id;
   let deliveryUserId = authorizedWebhookUserId;
   try {
-    deliveryUserId = await resolveSynologyDeliveryUserId({
+    deliveryUserId = await resolveSynologyReplyDeliveryUserId({
       account: params.account,
       payload: params.message.payload,
       log: params.log,
