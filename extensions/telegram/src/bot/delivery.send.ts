@@ -116,6 +116,8 @@ export async function sendTelegramText(
     thread: opts?.thread,
     silent: opts?.silent,
   });
+  const threadLogSuffix =
+    baseParams.message_thread_id != null ? ` thread=${baseParams.message_thread_id}` : "";
   // Add link_preview_options when link preview is disabled.
   const linkPreviewEnabled = opts?.linkPreview ?? true;
   const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
@@ -136,7 +138,9 @@ export async function sendTelegramText(
           ...effectiveParams,
         }),
     });
-    runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id} (plain)`);
+    runtime.log?.(
+      `telegram sendMessage ok chat=${chatId} message=${res.message_id}${threadLogSuffix} (plain)`,
+    );
     return res.message_id;
   };
 
@@ -165,7 +169,9 @@ export async function sendTelegramText(
           ...effectiveParams,
         }),
     });
-    runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id}`);
+    runtime.log?.(
+      `telegram sendMessage ok chat=${chatId} message=${res.message_id}${threadLogSuffix}`,
+    );
     return res.message_id;
   } catch (err) {
     const errText = formatErrorMessage(err);

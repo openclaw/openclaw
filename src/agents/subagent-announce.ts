@@ -606,7 +606,17 @@ function resolveAnnounceOrigin(
           return rest;
         })()
       : normalizedEntry;
-  return mergeDeliveryContext(normalizedRequester, entryForMerge);
+  const merged = mergeDeliveryContext(normalizedRequester, entryForMerge);
+  // Defensive: requester threadId (captured at spawn) must never be lost or
+  // overridden by a stale session entry threadId during the merge.
+  if (
+    normalizedRequester?.threadId != null &&
+    merged &&
+    merged.threadId !== normalizedRequester.threadId
+  ) {
+    return { ...merged, threadId: normalizedRequester.threadId };
+  }
+  return merged;
 }
 
 async function resolveSubagentCompletionOrigin(params: {
@@ -625,11 +635,14 @@ async function resolveSubagentCompletionOrigin(params: {
     requesterOrigin?.threadId != null && requesterOrigin.threadId !== ""
       ? String(requesterOrigin.threadId).trim()
       : undefined;
+  // Prefer the chat-level ID derived from `to` so bound-route lookups match
+  // the conversation (e.g. a Telegram chat), not the topic thread inside it.
+  // threadId is a delivery modifier, not a conversation identifier.
   const conversationId =
-    threadId ||
     resolveConversationIdFromTargets({
       targets: [to],
     }) ||
+    threadId ||
     "";
   const requesterConversation: ConversationRef | undefined =
     channel && conversationId ? { channel, accountId, conversationId } : undefined;

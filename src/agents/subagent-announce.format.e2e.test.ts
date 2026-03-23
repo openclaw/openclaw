@@ -1202,6 +1202,125 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.threadId).toBe("42");
   });
 
+  it("preserves requesterOrigin threadId when session entry has no threadId", async () => {
+    sendSpy.mockClear();
+    agentSpy.mockClear();
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-no-entry-thread",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-no-entry-thread",
+        lastChannel: "telegram",
+        lastTo: "123",
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-no-entry-thread",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "telegram",
+        to: "123",
+        threadId: 42,
+      },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.channel).toBe("telegram");
+    expect(call?.params?.to).toBe("123");
+    expect(call?.params?.threadId).toBe("42");
+  });
+
+  it("does not inject spurious threadId when neither requester nor entry has one", async () => {
+    sendSpy.mockClear();
+    agentSpy.mockClear();
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-no-thread",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-no-thread",
+        lastChannel: "telegram",
+        lastTo: "123",
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-no-thread-at-all",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "telegram",
+        to: "123",
+      },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.channel).toBe("telegram");
+    expect(call?.params?.to).toBe("123");
+    expect(call?.params?.threadId).toBeUndefined();
+  });
+
+  it("preserves requesterOrigin threadId over stale entry threadId in queue path", async () => {
+    sendSpy.mockClear();
+    agentSpy.mockClear();
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-queue-thread",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-queue-thread",
+        lastChannel: "telegram",
+        lastTo: "123",
+        lastThreadId: 999,
+        queueMode: "collect",
+        queueDebounceMs: 0,
+      },
+    };
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-queue-thread",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "telegram",
+        to: "123",
+        threadId: 42,
+      },
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.channel).toBe("telegram");
+    expect(call?.params?.to).toBe("123");
+    expect(call?.params?.threadId).toBe("42");
+
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
+  });
+
   it("uses hook-provided thread target across requester thread variants", async () => {
     const cases = [
       {
