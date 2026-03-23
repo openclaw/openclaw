@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -113,6 +114,7 @@ class QmdStatusOnlyManager implements MemorySearchManager {
   private readonly workspaceDir: string;
   private readonly indexPath: string;
   private readonly sourceSet: Set<"memory" | "sessions">;
+  private readonly collectionKinds: Map<string, "memory" | "sessions">;
 
   constructor(
     private readonly params: {
@@ -137,6 +139,12 @@ class QmdStatusOnlyManager implements MemorySearchManager {
         collection.kind === "sessions" ? "sessions" : "memory",
       ),
     );
+    this.collectionKinds = new Map(
+      params.resolved.collections.map((collection) => [
+        collection.name,
+        collection.kind === "sessions" ? "sessions" : "memory",
+      ]),
+    );
   }
 
   async search(): Promise<never> {
@@ -147,18 +155,80 @@ class QmdStatusOnlyManager implements MemorySearchManager {
     throw new Error("memory read unavailable in status-only mode");
   }
 
+  private readCounts(): {
+    totalFiles: number;
+    totalChunks: number;
+    sourceCounts: Array<{ source: "memory" | "sessions"; files: number; chunks: number }>;
+  } {
+    const zeroSourceCounts = Array.from(this.sourceSet).map((source) => ({
+      source,
+      files: 0,
+      chunks: 0,
+    }));
+
+    try {
+      const db = new DatabaseSync(this.indexPath, { readonly: true });
+      try {
+        const docRows = db
+          .prepare("SELECT collection, COUNT(*) as c FROM documents WHERE active = 1 GROUP BY collection")
+          .all() as Array<{ collection: string; c: number }>;
+
+        // Read vector rows once so the status path can report a database-backed snapshot without
+        // constructing the full QMD manager. We still keep the legacy chunk=count semantics here,
+        // matching the full QMD manager and existing CLI formatting expectations.
+        db.prepare("SELECT COUNT(*) as c FROM content_vectors").get() as { c: number } | undefined;
+
+        const bySource = new Map<"memory" | "sessions", { files: number; chunks: number }>(
+          zeroSourceCounts.map((entry) => [entry.source, { files: 0, chunks: 0 }]),
+        );
+        let totalFiles = 0;
+        for (const row of docRows) {
+          const source = this.collectionKinds.get(row.collection) ?? "memory";
+          const count = row.c ?? 0;
+          const entry = bySource.get(source) ?? { files: 0, chunks: 0 };
+          entry.files += count;
+          bySource.set(source, entry);
+          totalFiles += count;
+        }
+        for (const entry of bySource.values()) {
+          entry.chunks = totalFiles;
+        }
+        return {
+          totalFiles,
+          totalChunks: totalFiles,
+          sourceCounts: Array.from(bySource.entries()).map(([source, value]) => ({
+            source,
+            files: value.files,
+            chunks: value.chunks,
+          })),
+        };
+      } finally {
+        db.close();
+      }
+    } catch (err) {
+      log.warn(`failed to read qmd lightweight status: ${String(err)}`);
+      return {
+        totalFiles: 0,
+        totalChunks: 0,
+        sourceCounts: zeroSourceCounts,
+      };
+    }
+  }
+
   status() {
+    const counts = this.readCounts();
     return {
       backend: "qmd" as const,
       provider: "qmd",
       model: "qmd",
       requestedProvider: "qmd",
-      files: 0,
-      chunks: 0,
+      files: counts.totalFiles,
+      chunks: counts.totalChunks,
       dirty: false,
       workspaceDir: this.workspaceDir,
       dbPath: this.indexPath,
       sources: Array.from(this.sourceSet),
+      sourceCounts: counts.sourceCounts,
       vector: { enabled: true, available: true },
       batch: {
         enabled: false,

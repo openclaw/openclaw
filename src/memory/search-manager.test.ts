@@ -1,3 +1,7 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
@@ -219,6 +223,64 @@ describe("getMemorySearchManager caching", () => {
     expect(createQmdManagerMock).not.toHaveBeenCalled();
     expect(mockMemoryIndexGet).not.toHaveBeenCalled();
     expect(second.manager).toBe(first.manager);
+  });
+
+  it("reads sqlite-backed counts for status-only qmd requests", async () => {
+    const agentId = "status-agent-db";
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-qmd-status-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    try {
+      const dbPath = path.join(stateDir, "agents", agentId, "qmd", "xdg-cache", "qmd", "index.sqlite");
+      fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+      const db = new DatabaseSync(dbPath);
+      try {
+        db.exec(`
+          CREATE TABLE documents (
+            id INTEGER PRIMARY KEY,
+            collection TEXT NOT NULL,
+            path TEXT NOT NULL,
+            title TEXT NOT NULL,
+            hash TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            modified_at TEXT NOT NULL,
+            active INTEGER NOT NULL DEFAULT 1
+          );
+          CREATE TABLE content_vectors (
+            rowid INTEGER PRIMARY KEY,
+            embedding BLOB
+          );
+        `);
+        const insert = db.prepare(
+          "INSERT INTO documents (collection, path, title, hash, created_at, modified_at, active) VALUES (?, ?, ?, ?, ?, ?, 1)",
+        );
+        insert.run("memory-dir-main", "2026-03-23.md", "daily", "hash-1", "2026-03-23", "2026-03-23");
+        insert.run("memory-root-main", "MEMORY.md", "memory", "hash-2", "2026-03-23", "2026-03-23");
+      } finally {
+        db.close();
+      }
+
+      const cfg = createQmdCfg(agentId);
+      const result = await getMemorySearchManager({ cfg, agentId, purpose: "status" });
+      const manager = requireManager(result);
+      expect(manager.status()).toMatchObject({
+        backend: "qmd",
+        files: 2,
+        chunks: 2,
+        sourceCounts: [{ source: "memory", files: 2, chunks: 2 }],
+        custom: {
+          qmd: {
+            lightweightStatus: true,
+          },
+        },
+      });
+    } finally {
+      if (previousStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
+      else process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      await closeAllMemorySearchManagers();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("does not evict a newer cached wrapper when closing an older failed wrapper", async () => {
