@@ -105,9 +105,9 @@ Direct-message sessions are isolated per account and user, so the same numeric `
 on two different Synology accounts does not share transcript state.
 Give each enabled account a distinct `webhookPath`. OpenClaw now rejects duplicate exact paths
 and refuses to start named accounts that only inherit a shared webhook path in multi-account setups.
-If you need legacy inheritance for a named account, set
+If you intentionally need legacy inheritance for a named account, set
 `dangerouslyAllowInheritedWebhookPath: true` on that account or at `channels.synology-chat`,
-but duplicate exact paths are still rejected fail-closed.
+but duplicate exact paths are still rejected fail-closed. Prefer explicit per-account paths.
 
 ```json5
 {
@@ -139,3 +139,4 @@ but duplicate exact paths are still rejected fail-closed.
 - Inbound webhook requests are token-verified and rate-limited per sender.
 - Prefer `dmPolicy: "allowlist"` for production.
 - Keep `dangerouslyAllowNameMatching` off unless you explicitly need legacy username-based reply delivery.
+- Keep `dangerouslyAllowInheritedWebhookPath` off unless you explicitly accept shared-path routing risk in a multi-account setup.
