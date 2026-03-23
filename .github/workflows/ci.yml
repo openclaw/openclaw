@@ -254,7 +254,7 @@ jobs:
             command: pnpm protocol:check
           - runtime: bun
             task: test
-            command: pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts
+            command: pnpm canvas:a2ui:bundle && OPENCLAW_TEST_ISOLATE=1 bunx vitest run --config vitest.unit.config.ts
           - runtime: node
             task: compat-node22
             node_version: "22.x"

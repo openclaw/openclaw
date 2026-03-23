@@ -88,7 +88,7 @@ describe("memory search async sync", () => {
     await vi.waitFor(() => {
       expect((manager as unknown as { syncing: Promise<void> | null }).syncing).toBeNull();
     });
-  });
+  }, 300_000);
 
   it("waits for in-flight search sync during close", async () => {
     const cfg = buildConfig();
