@@ -179,19 +179,16 @@ export async function fetchChatUsers(
  * Chat-internal user_id needed by the chatbot API (method=chatbot).
  * The webhook's "username" field corresponds to the Chat user's "nickname".
  *
- * @param incomingUrl - Bot incoming webhook URL (used to derive user_list URL)
- * @param mutableWebhookUsername - The username from the outgoing webhook payload
- * @param allowInsecureSsl - Skip TLS verification
  * @returns The correct Chat user_id, or undefined if not found
  */
-export async function resolveLegacyWebhookNameToChatUserId(
-  incomingUrl: string,
-  mutableWebhookUsername: string,
-  allowInsecureSsl = true,
-  log?: { warn: (...args: unknown[]) => void },
-): Promise<number | undefined> {
-  const users = await fetchChatUsers(incomingUrl, allowInsecureSsl, log);
-  const lower = mutableWebhookUsername.toLowerCase();
+export async function resolveLegacyWebhookNameToChatUserId(params: {
+  incomingUrl: string;
+  mutableWebhookUsername: string;
+  allowInsecureSsl?: boolean;
+  log?: { warn: (...args: unknown[]) => void };
+}): Promise<number | undefined> {
+  const users = await fetchChatUsers(params.incomingUrl, params.allowInsecureSsl, params.log);
+  const lower = params.mutableWebhookUsername.toLowerCase();
 
   // Match by nickname first (webhook "username" field = Chat "nickname")
   const byNickname = users.find((u) => u.nickname.toLowerCase() === lower);
