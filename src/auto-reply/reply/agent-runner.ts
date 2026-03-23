@@ -3,7 +3,6 @@ import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
   resolveSessionFilePath,
@@ -58,6 +57,14 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+let piEmbeddedQueueRuntimePromise: Promise<
+  typeof import("../../agents/pi-embedded-queue.runtime.js")
+> | null = null;
+
+function loadPiEmbeddedQueueRuntime() {
+  piEmbeddedQueueRuntimePromise ??= import("../../agents/pi-embedded-queue.runtime.js");
+  return piEmbeddedQueueRuntimePromise;
+}
 
 export async function runReplyAgent(params: {
   commandBody: string;
@@ -194,6 +201,7 @@ export async function runReplyAgent(params: {
   };
 
   if (shouldSteer && isStreaming) {
+    const { queueEmbeddedPiMessage } = await loadPiEmbeddedQueueRuntime();
     const steered = queueEmbeddedPiMessage(followupRun.run.sessionId, followupRun.prompt);
     if (steered && !shouldFollowup) {
       await touchActiveSessionEntry();
