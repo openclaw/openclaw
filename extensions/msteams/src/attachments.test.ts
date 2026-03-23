@@ -767,5 +767,4 @@ describe("msteams attachments", () => {
       expect(calledUrls).not.toContain(escapedUrl);
     });
   });
-
 });
