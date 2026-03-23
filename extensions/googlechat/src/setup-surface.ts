@@ -2,6 +2,7 @@ import {
   applySetupAccountConfigPatch,
   createNestedChannelParsedAllowFromPrompt,
   createNestedChannelDmPolicy,
+  createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
   mergeAllowFromEntries,
@@ -51,22 +52,18 @@ export { googlechatSetupAdapter } from "./setup-core.js";
 
 export const googlechatSetupWizard: ChannelSetupWizard = {
   channel,
-  status: {
+  status: createStandardChannelSetupStatus({
+    channelLabel: "Google Chat",
     configuredLabel: "configured",
     unconfiguredLabel: "needs service account",
     configuredHint: "configured",
     unconfiguredHint: "needs auth",
+    includeStatusLine: true,
     resolveConfigured: ({ cfg }) =>
       listGoogleChatAccountIds(cfg).some(
         (accountId) => resolveGoogleChatAccount({ cfg, accountId }).credentialSource !== "none",
       ),
-    resolveStatusLines: ({ cfg }) => {
-      const configured = listGoogleChatAccountIds(cfg).some(
-        (accountId) => resolveGoogleChatAccount({ cfg, accountId }).credentialSource !== "none",
-      );
-      return [`Google Chat: ${configured ? "configured" : "needs service account"}`];
-    },
-  },
+  }),
   introNote: {
     title: "Google Chat setup",
     lines: [
