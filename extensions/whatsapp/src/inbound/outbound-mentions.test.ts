@@ -58,6 +58,11 @@ describe("extractOutboundMentions", () => {
     ]);
   });
 
+  it("ignores email-like patterns where @ is not at token start", () => {
+    expect(extractOutboundMentions("contact@1234567890 for info")).toEqual([]);
+    expect(extractOutboundMentions("user@+9876543210")).toEqual([]);
+  });
+
   describe("with participantJidMap", () => {
     it("uses original JID from map for phone-based participants", () => {
       const jidMap = new Map([["+1234567890", "1234567890:0@s.whatsapp.net"]]);

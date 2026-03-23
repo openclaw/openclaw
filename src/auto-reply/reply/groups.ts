@@ -162,8 +162,8 @@ export function buildGroupChatContext(params: { sessionCtx: TemplateContext }): 
   }
   if (members) {
     lines.push(`Participants: ${members}.`);
-    const rawProvider = params.sessionCtx.Provider?.trim().toLowerCase();
-    if (rawProvider === "whatsapp") {
+    const providerId = resolveDockChannelId(params.sessionCtx.Provider?.trim());
+    if (providerId === "whatsapp") {
       lines.push(
         "To @mention a participant, write @<their phone number> in your reply (e.g. @+1234567890). This sends a native mention notification.",
       );

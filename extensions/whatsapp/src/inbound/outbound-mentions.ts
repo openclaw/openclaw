@@ -13,7 +13,7 @@ export function extractOutboundMentions(
   text: string,
   participantJidMap?: Map<string, string>,
 ): string[] {
-  const pattern = /@\+?(\d{7,25})/g;
+  const pattern = /(?<![^\s])@\+?(\d{7,25})/g;
   const jids = new Set<string>();
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(text)) !== null) {
