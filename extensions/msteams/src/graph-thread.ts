@@ -50,9 +50,20 @@ export async function resolveTeamGroupId(
 
   // The team ID in channelData is typically the group ID itself for standard teams.
   // Validate by fetching /teams/{id} and returning the confirmed id.
-  const path = `/teams/${encodeURIComponent(conversationTeamId)}?$select=id`;
-  const team = await fetchGraphJson<{ id?: string }>({ token, path });
-  const groupId = team.id ?? conversationTeamId;
+  // Requires Team.ReadBasic.All permission; fall back to raw ID if missing.
+  let groupId: string;
+  try {
+    const path = `/teams/${encodeURIComponent(conversationTeamId)}?$select=id`;
+    const team = await fetchGraphJson<{ id?: string }>({ token, path });
+    groupId = team.id ?? conversationTeamId;
+  } catch (err) {
+    console.warn(
+      `[msteams] resolveTeamGroupId: Graph /teams/${conversationTeamId} failed — ` +
+        `Team.ReadBasic.All permission may be missing. Falling back to raw conversationTeamId.`,
+      err,
+    );
+    groupId = conversationTeamId;
+  }
 
   teamGroupIdCache.set(conversationTeamId, {
     groupId,
@@ -82,6 +93,13 @@ export async function fetchChannelMessage(
 
 /**
  * Fetch thread replies for a channel message, ordered chronologically.
+ *
+ * **Limitation:** The Graph API replies endpoint (`/messages/{id}/replies`) does not
+ * support `$orderby`, so results are always returned in ascending (oldest-first) order.
+ * Combined with the `$top` cap of 50, this means only the **oldest 50 replies** are
+ * returned for long threads — newer replies are silently omitted. There is currently no
+ * Graph API workaround for this; pagination via `@odata.nextLink` can retrieve more
+ * replies but still in ascending order only.
  */
 export async function fetchThreadReplies(
   token: string,
@@ -95,22 +113,6 @@ export async function fetchThreadReplies(
   const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/replies?$top=${top}&$select=id,from,body,createdDateTime`;
   const res = await fetchGraphJson<GraphResponse<GraphThreadMessage>>({ token, path });
   return res.value ?? [];
-}
-
-/**
- * Fetch recent messages for a group chat (non-channel conversation).
- * Returns messages in chronological order (oldest first).
- */
-export async function fetchChatMessages(
-  token: string,
-  chatId: string,
-  limit = 50,
-): Promise<GraphThreadMessage[]> {
-  const top = Math.min(Math.max(limit, 1), 50);
-  // Fetch descending and reverse to get chronological order.
-  const path = `/chats/${encodeURIComponent(chatId)}/messages?$top=${top}&$select=id,from,body,createdDateTime&$orderby=createdDateTime desc`;
-  const res = await fetchGraphJson<GraphResponse<GraphThreadMessage>>({ token, path });
-  return (res.value ?? []).reverse();
 }
 
 /**
