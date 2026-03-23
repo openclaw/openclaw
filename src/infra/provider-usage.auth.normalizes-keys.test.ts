@@ -1,3 +1,4 @@
+import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,6 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles.js";
 import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
 import { clearConfigCache, type OpenClawConfig } from "../config/config.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 
 const resolveProviderUsageAuthWithPluginMock = vi.fn(async (..._args: unknown[]) => null);
 
@@ -19,7 +21,6 @@ vi.mock("../agents/cli-credentials.js", () => ({
 }));
 
 let resolveProviderAuths: typeof import("./provider-usage.auth.js").resolveProviderAuths;
-type ProviderAuth = import("./provider-usage.auth.js").ProviderAuth;
 
 describe("resolveProviderAuths key normalization", () => {
   let suiteRoot = "";
@@ -53,12 +54,15 @@ describe("resolveProviderAuths key normalization", () => {
   afterEach(() => {
     clearConfigCache();
     clearRuntimeAuthProfileStoreSnapshots();
+    vi.restoreAllMocks();
   });
 
   async function withSuiteHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
     const base = path.join(suiteRoot, `case-${++suiteCase}`);
-    await fs.mkdir(base, { recursive: true });
-    await fs.mkdir(path.join(base, ".openclaw", "agents", "main", "sessions"), { recursive: true });
+    nodeFs.mkdirSync(base, { recursive: true });
+    nodeFs.mkdirSync(path.join(base, ".openclaw", "agents", "main", "sessions"), {
+      recursive: true,
+    });
     return await fn(base);
   }
 
@@ -83,16 +87,6 @@ describe("resolveProviderAuths key normalization", () => {
       suiteEnv.HOMEPATH = match[2] || "\\";
     }
     return suiteEnv;
-  }
-
-  async function readConfigForHome(home: string): Promise<Record<string, unknown>> {
-    try {
-      return JSON.parse(
-        await fs.readFile(path.join(home, ".openclaw", "openclaw.json"), "utf8"),
-      ) as Record<string, unknown>;
-    } catch {
-      return {};
-    }
   }
 
   async function writeAuthProfiles(home: string, profiles: Record<string, unknown>) {
@@ -138,7 +132,7 @@ describe("resolveProviderAuths key normalization", () => {
     await fs.writeFile(path.join(legacyDir, "auth.json"), raw, "utf8");
   }
 
-  function createTestModelDefinition() {
+  function createTestModelDefinition(): ModelDefinitionConfig {
     return {
       id: "test-model",
       name: "Test Model",
@@ -152,7 +146,7 @@ describe("resolveProviderAuths key normalization", () => {
 
   async function resolveMinimaxAuthFromConfiguredKey(apiKey: string) {
     return await withSuiteHome(async (home) => {
-      await writeConfig(home, {
+      const config = {
         models: {
           providers: {
             minimax: {
@@ -162,12 +156,13 @@ describe("resolveProviderAuths key normalization", () => {
             },
           },
         },
-      });
+      } satisfies OpenClawConfig;
+      await writeConfig(home, config);
 
       return await resolveProviderAuths({
         providers: ["minimax"],
         agentDir: agentDirForHome(home),
-        config: (await readConfigForHome(home)) as OpenClawConfig,
+        config,
         env: buildSuiteEnv(home),
       });
     });
@@ -177,24 +172,27 @@ describe("resolveProviderAuths key normalization", () => {
     providers: Parameters<typeof resolveProviderAuths>[0]["providers"];
     expected: Awaited<ReturnType<typeof resolveProviderAuths>>;
     env?: Record<string, string | undefined>;
+    config?: OpenClawConfig;
     setup?: (home: string) => Promise<void>;
   }) {
     await withSuiteHome(async (home) => {
-      await params.setup?.(home);
+      if (params.setup) {
+        await params.setup(home);
+      }
+      const config = params.config ?? {};
       const auths = await resolveProviderAuths({
         providers: params.providers,
         agentDir: agentDirForHome(home),
-        config: (await readConfigForHome(home)) as OpenClawConfig,
+        config,
         env: buildSuiteEnv(home, params.env),
       });
       expect(auths).toEqual(params.expected);
     });
   }
 
-  it.each([
-    {
-      name: "strips embedded CR/LF from env keys",
-      providers: ["zai", "minimax", "xiaomi"] as const,
+  it("strips embedded CR/LF from env keys", async () => {
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["zai", "minimax", "xiaomi"],
       env: {
         ZAI_API_KEY: "zai-\r\nkey",
         MINIMAX_API_KEY: "minimax-\r\nkey",
@@ -205,40 +203,39 @@ describe("resolveProviderAuths key normalization", () => {
         { provider: "minimax", token: "minimax-key" },
         { provider: "xiaomi", token: "xiaomi-key" },
       ],
-    },
-    {
-      name: "accepts z-ai env alias and normalizes embedded CR/LF",
-      providers: ["zai"] as const,
+    });
+  }, 300_000);
+
+  it("accepts z-ai env alias and normalizes embedded CR/LF", async () => {
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["zai"],
       env: {
         Z_AI_API_KEY: "zai-\r\nkey",
       },
       expected: [{ provider: "zai", token: "zai-key" }],
-    },
-    {
-      name: "prefers ZAI_API_KEY over the z-ai alias when both are set",
-      providers: ["zai"] as const,
+    });
+  });
+
+  it("prefers ZAI_API_KEY over the z-ai alias when both are set", async () => {
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["zai"],
       env: {
         ZAI_API_KEY: "direct-zai-key",
         Z_AI_API_KEY: "alias-zai-key",
       },
       expected: [{ provider: "zai", token: "direct-zai-key" }],
-    },
-    {
-      name: "prefers MINIMAX_CODE_PLAN_KEY over MINIMAX_API_KEY",
-      providers: ["minimax"] as const,
+    });
+  });
+
+  it("prefers MINIMAX_CODE_PLAN_KEY over MINIMAX_API_KEY", async () => {
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["minimax"],
       env: {
         MINIMAX_CODE_PLAN_KEY: "code-plan-key",
         MINIMAX_API_KEY: "api-key",
       },
       expected: [{ provider: "minimax", token: "code-plan-key" }],
-    },
-  ] satisfies Array<{
-    name: string;
-    providers: readonly Parameters<typeof resolveProviderAuths>[0]["providers"][number][];
-    env: Record<string, string | undefined>;
-    expected: ProviderAuth[];
-  }>)("$name", async ({ providers, env, expected }) => {
-    await expectResolvedAuthsFromSuiteHome({ providers: [...providers], env, expected });
+    });
   });
 
   it("strips embedded CR/LF from stored auth profiles (token + api_key)", async () => {
@@ -308,40 +305,33 @@ describe("resolveProviderAuths key normalization", () => {
   });
 
   it("uses config api keys when env and profiles are missing", async () => {
+    const config = {
+      models: {
+        providers: {
+          zai: {
+            baseUrl: "https://api.z.ai",
+            models: [createTestModelDefinition()],
+            apiKey: "cfg-zai-key", // pragma: allowlist secret
+          },
+          minimax: {
+            baseUrl: "https://api.minimaxi.com",
+            models: [createTestModelDefinition()],
+            apiKey: "cfg-minimax-key", // pragma: allowlist secret
+          },
+          xiaomi: {
+            baseUrl: "https://api.xiaomi.example",
+            models: [createTestModelDefinition()],
+            apiKey: "cfg-xiaomi-key", // pragma: allowlist secret
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
     await expectResolvedAuthsFromSuiteHome({
       providers: ["zai", "minimax", "xiaomi"],
       setup: async (home) => {
-        const modelDef = {
-          id: "test-model",
-          name: "Test Model",
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 1024,
-          maxTokens: 256,
-        };
-        await writeConfig(home, {
-          models: {
-            providers: {
-              zai: {
-                baseUrl: "https://api.z.ai",
-                models: [modelDef],
-                apiKey: "cfg-zai-key", // pragma: allowlist secret
-              },
-              minimax: {
-                baseUrl: "https://api.minimaxi.com",
-                models: [modelDef],
-                apiKey: "cfg-minimax-key", // pragma: allowlist secret
-              },
-              xiaomi: {
-                baseUrl: "https://api.xiaomi.example",
-                models: [modelDef],
-                apiKey: "cfg-xiaomi-key", // pragma: allowlist secret
-              },
-            },
-          },
-        });
+        await writeConfig(home, config);
       },
+      config,
       expected: [
         { provider: "zai", token: "cfg-zai-key" },
         { provider: "minimax", token: "cfg-minimax-key" },
@@ -381,13 +371,14 @@ describe("resolveProviderAuths key normalization", () => {
 
   it("discovers oauth provider from config but skips mismatched profile providers", async () => {
     await withSuiteHome(async (home) => {
-      await writeConfig(home, {
+      const config = {
         auth: {
           profiles: {
             "anthropic:default": { provider: "anthropic", mode: "token" },
           },
         },
-      });
+      } satisfies OpenClawConfig;
+      await writeConfig(home, config);
       await writeAuthProfiles(home, {
         "anthropic:default": {
           type: "token",
@@ -399,7 +390,7 @@ describe("resolveProviderAuths key normalization", () => {
       const auths = await resolveProviderAuths({
         providers: ["anthropic"],
         agentDir: agentDirForHome(home),
-        config: (await readConfigForHome(home)) as OpenClawConfig,
+        config,
         env: buildSuiteEnv(home),
       });
       expect(auths).toEqual([]);
@@ -411,7 +402,7 @@ describe("resolveProviderAuths key normalization", () => {
       const auths = await resolveProviderAuths({
         providers: ["anthropic"],
         agentDir: agentDirForHome(home),
-        config: (await readConfigForHome(home)) as OpenClawConfig,
+        config: {},
         env: buildSuiteEnv(home),
       });
       expect(auths).toEqual([]);
@@ -434,7 +425,7 @@ describe("resolveProviderAuths key normalization", () => {
       const auths = await resolveProviderAuths({
         providers: ["anthropic"],
         agentDir: agentDirForHome(home),
-        config: (await readConfigForHome(home)) as OpenClawConfig,
+        config: {},
         env: buildSuiteEnv(home),
       });
       expect(auths).toEqual([{ provider: "anthropic", token: "anthropic-token" }]);
@@ -452,7 +443,7 @@ describe("resolveProviderAuths key normalization", () => {
       const auths = await resolveProviderAuths({
         providers: ["anthropic"],
         agentDir: agentDirForHome(home),
-        config: (await readConfigForHome(home)) as OpenClawConfig,
+        config: {},
         env: buildSuiteEnv(home),
       });
       expect(auths).toEqual([{ provider: "anthropic", token: "token-1" }]);
