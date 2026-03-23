@@ -20,12 +20,13 @@ export function applyLocalSetupWorkspaceConfig(
   baseConfig: OpenClawConfig,
   workspaceDir: string,
 ): OpenClawConfig {
+  const agentDefaults = applyOnboardAgentDefaults(baseConfig);
   return {
     ...baseConfig,
     agents: {
-      ...applyOnboardAgentDefaults(baseConfig),
+      ...agentDefaults,
       defaults: {
-        ...applyOnboardAgentDefaults(baseConfig)?.defaults,
+        ...agentDefaults?.defaults,
         workspace: workspaceDir,
       },
     },

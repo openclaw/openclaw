@@ -2258,7 +2258,7 @@
           "exportName": "createTopLevelChannelDmPolicy",
           "kind": "function",
           "source": {
-            "line": 363,
+            "line": 411,
             "path": "src/channels/plugins/setup-wizard-helpers.ts"
           }
         },
@@ -2276,7 +2276,7 @@
           "exportName": "setSetupChannelEnabled",
           "kind": "function",
           "source": {
-            "line": 765,
+            "line": 813,
             "path": "src/channels/plugins/setup-wizard-helpers.ts"
           }
         },
@@ -2285,7 +2285,7 @@
           "exportName": "splitSetupEntries",
           "kind": "function",
           "source": {
-            "line": 76,
+            "line": 80,
             "path": "src/channels/plugins/setup-wizard-helpers.ts"
           }
         },
@@ -4282,7 +4282,7 @@
           "exportName": "applyProviderConfigWithDefaultModelsPreset",
           "kind": "function",
           "source": {
-            "line": 177,
+            "line": 230,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4291,7 +4291,7 @@
           "exportName": "applyProviderConfigWithModelCatalog",
           "kind": "function",
           "source": {
-            "line": 202,
+            "line": 272,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4300,7 +4300,34 @@
           "exportName": "applyProviderConfigWithModelCatalogPreset",
           "kind": "function",
           "source": {
-            "line": 234,
+            "line": 304,
+            "path": "src/plugins/provider-onboarding-config.ts"
+          }
+        },
+        {
+          "declaration": "export function createDefaultModelPresetAppliers<TArgs extends unknown[]>(params: { resolveParams: (cfg: OpenClawConfig, ...args: TArgs) => Omit<{ providerId: string; api: \"github-copilot\" | \"openai-completions\" | \"openai-responses\" | ... 4 more ... | \"ollama\"; ... 4 more ...; primaryModelRef?: string | undefined; }, \"primaryModelRef\"> | null | undefined; primaryModelRef: string; }): ProviderOnboardPresetAppliers<...>;",
+          "exportName": "createDefaultModelPresetAppliers",
+          "kind": "function",
+          "source": {
+            "line": 213,
+            "path": "src/plugins/provider-onboarding-config.ts"
+          }
+        },
+        {
+          "declaration": "export function createDefaultModelsPresetAppliers<TArgs extends unknown[]>(params: { resolveParams: (cfg: OpenClawConfig, ...args: TArgs) => Omit<{ providerId: string; api: \"github-copilot\" | \"openai-completions\" | \"openai-responses\" | ... 4 more ... | \"ollama\"; ... 4 more ...; primaryModelRef?: string | undefined; }, \"primaryModelRef\"> | null | undefined; primaryModelRef: string; }): ProviderOnboardPresetAppliers<...>;",
+          "exportName": "createDefaultModelsPresetAppliers",
+          "kind": "function",
+          "source": {
+            "line": 255,
+            "path": "src/plugins/provider-onboarding-config.ts"
+          }
+        },
+        {
+          "declaration": "export function createModelCatalogPresetAppliers<TArgs extends unknown[]>(params: { resolveParams: (cfg: OpenClawConfig, ...args: TArgs) => Omit<{ providerId: string; api: \"github-copilot\" | \"openai-completions\" | \"openai-responses\" | ... 4 more ... | \"ollama\"; baseUrl: string; catalogModels: ModelDefinitionConfig[]; aliases?: readonly AgentModelAliasEntry[] | undefined; primaryModelRef?: string | undefined; }, \"primaryModelRef\"> | null | undefined; primaryModelRef: string; }): ProviderOnboardPresetAppliers<...>;",
+          "exportName": "createModelCatalogPresetAppliers",
+          "kind": "function",
+          "source": {
+            "line": 327,
             "path": "src/plugins/provider-onboarding-config.ts"
           }
         },
@@ -4365,6 +4392,15 @@
           "source": {
             "line": 32,
             "path": "src/config/types.openclaw.ts"
+          }
+        },
+        {
+          "declaration": "export type ProviderOnboardPresetAppliers = ProviderOnboardPresetAppliers<TArgs>;",
+          "exportName": "ProviderOnboardPresetAppliers",
+          "kind": "type",
+          "source": {
+            "line": 177,
+            "path": "src/plugins/provider-onboarding-config.ts"
           }
         }
       ],

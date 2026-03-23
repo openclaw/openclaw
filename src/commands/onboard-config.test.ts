@@ -7,22 +7,7 @@ import {
   ONBOARDING_DEFAULT_TOOLS_PROFILE,
 } from "./onboard-config.js";
 
-describe("applyLocalSetupWorkspaceConfig", () => {
-  it("defaults local setup tool profile to coding", () => {
-    expect(ONBOARDING_DEFAULT_TOOLS_PROFILE).toBe("coding");
-  });
-
-  it("sets secure dmScope default when unset", () => {
-    const baseConfig: OpenClawConfig = {};
-    const result = applyLocalSetupWorkspaceConfig(baseConfig, "/tmp/workspace");
-
-    expect(result.session?.dmScope).toBe(ONBOARDING_DEFAULT_DM_SCOPE);
-    expect(result.gateway?.mode).toBe("local");
-    expect(result.agents?.defaults?.workspace).toBe("/tmp/workspace");
-    expect(result.agents?.defaults?.userTimezone).toBeDefined();
-    expect(result.tools?.profile).toBe(ONBOARDING_DEFAULT_TOOLS_PROFILE);
-  });
-
+describe("applyOnboardAgentDefaults", () => {
   it("sets a detected user timezone during onboarding when unset", () => {
     const result = applyOnboardAgentDefaults({});
 
@@ -39,6 +24,23 @@ describe("applyLocalSetupWorkspaceConfig", () => {
     });
 
     expect(result?.defaults?.userTimezone).toBe("America/Denver");
+  });
+});
+
+describe("applyLocalSetupWorkspaceConfig", () => {
+  it("defaults local setup tool profile to coding", () => {
+    expect(ONBOARDING_DEFAULT_TOOLS_PROFILE).toBe("coding");
+  });
+
+  it("sets secure dmScope default when unset", () => {
+    const baseConfig: OpenClawConfig = {};
+    const result = applyLocalSetupWorkspaceConfig(baseConfig, "/tmp/workspace");
+
+    expect(result.session?.dmScope).toBe(ONBOARDING_DEFAULT_DM_SCOPE);
+    expect(result.gateway?.mode).toBe("local");
+    expect(result.agents?.defaults?.workspace).toBe("/tmp/workspace");
+    expect(result.agents?.defaults?.userTimezone).toBeDefined();
+    expect(result.tools?.profile).toBe(ONBOARDING_DEFAULT_TOOLS_PROFILE);
   });
 
   it("preserves existing dmScope when already configured", () => {
