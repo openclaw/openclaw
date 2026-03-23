@@ -630,4 +630,27 @@ describe("loadChatHistory", () => {
     expect(state.chatLoading).toBe(false);
     expect(state.lastError).toBeNull();
   });
+
+  it("shows a targeted message when chat history is unauthorized", async () => {
+    const request = vi.fn().mockRejectedValue(
+      new GatewayRequestError({
+        code: "PERMISSION_DENIED",
+        message: "not allowed",
+        details: { code: "AUTH_UNAUTHORIZED" },
+      }),
+    );
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [{ role: "assistant", content: [{ type: "text", text: "old" }] }],
+      chatThinkingLevel: "high",
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([]);
+    expect(state.chatThinkingLevel).toBeNull();
+    expect(state.lastError).toContain("operator.read");
+    expect(state.chatLoading).toBe(false);
+  });
 });

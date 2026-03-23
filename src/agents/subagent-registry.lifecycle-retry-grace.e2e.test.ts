@@ -27,9 +27,23 @@ type SessionStoreEntry = {
   accountId?: string;
 };
 
+type GatewayAgentInternalEvent = {
+  status?: string;
+  statusLabel?: string;
+  result?: string;
+};
+
+type GatewayAgentRequestParams = {
+  sessionKey?: string;
+  inputProvenance?: {
+    sourceSessionKey?: string;
+  };
+  internalEvents?: GatewayAgentInternalEvent[];
+};
+
 type GatewayRequest = {
   method?: string;
-  params?: Record<string, unknown>;
+  params?: GatewayAgentRequestParams;
   timeoutMs?: number;
   expectFinal?: boolean;
 };
@@ -271,9 +285,11 @@ describe("subagent registry lifecycle error grace", () => {
 
   function readFirstAnnounceOutcome() {
     const first = getAgentCalls()[0];
-    const event = first?.params?.internalEvents?.[0] as
-      | { status?: string; statusLabel?: string }
-      | undefined;
+    const internalEvents = first?.params?.internalEvents;
+    const event =
+      Array.isArray(internalEvents) && internalEvents[0] && typeof internalEvents[0] === "object"
+        ? (internalEvents[0] as { status?: string; statusLabel?: string })
+        : undefined;
     return {
       status: event?.status,
       error: event?.statusLabel,
@@ -290,16 +306,30 @@ describe("subagent registry lifecycle error grace", () => {
   }
 
   function getAgentCalls() {
-    return callGatewayMock.mock.calls
+    return (callGatewayMock.mock.calls as [GatewayRequest][])
       .map(([request]) => request)
-      .filter((request) => request.method === "agent");
+      .filter((request): request is GatewayRequest => request.method === "agent");
   }
 
   function getAgentResultsForChildSession(childSessionKey: string): string[] {
     return getAgentCalls()
-      .filter((request) => request.params?.inputProvenance?.sourceSessionKey === childSessionKey)
+      .filter((request) => {
+        const inputProvenance = request.params?.inputProvenance;
+        if (!inputProvenance || typeof inputProvenance !== "object") {
+          return false;
+        }
+        return (
+          (inputProvenance as { sourceSessionKey?: unknown }).sourceSessionKey === childSessionKey
+        );
+      })
       .map((request) => {
-        const event = request.params?.internalEvents?.[0] as { result?: string } | undefined;
+        const internalEvents = request.params?.internalEvents;
+        const event =
+          Array.isArray(internalEvents) &&
+          internalEvents[0] &&
+          typeof internalEvents[0] === "object"
+            ? (internalEvents[0] as { result?: string })
+            : undefined;
         return event?.result ?? "";
       });
   }
@@ -330,6 +360,7 @@ describe("subagent registry lifecycle error grace", () => {
 
     await waitForAgentCallCount(1);
     expect(readFirstAnnounceOutcome()?.status).toBe("ok");
+    await waitForCleanupCompleted("run-transient-error");
   });
 
   it("announces error when lifecycle error remains terminal after grace window", async () => {
@@ -350,6 +381,7 @@ describe("subagent registry lifecycle error grace", () => {
     await waitForAgentCallCount(1);
     expect(readFirstAnnounceOutcome()?.status).toBe("error");
     expect(readFirstAnnounceOutcome()?.error).toContain("fatal failure");
+    await waitForCleanupCompleted("run-terminal-error");
   });
 
   it("freezes completion result at run termination across deferred announce retries", async () => {
