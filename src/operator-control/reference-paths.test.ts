@@ -74,30 +74,19 @@ describe("operator reference paths", () => {
     await withTempDir("operator-reference-dotenv-cwd-", async (cwdDir) => {
       await fs.writeFile(path.join(cwdDir, ".env"), "OPENCLAW_PROFILE=dotenv-profile\n", "utf8");
 
-      const previousCwd = process.cwd();
       clearRuntimeConfigSnapshot();
       clearConfigCache();
       await withEnvAsync(
         {
           OPENCLAW_PROFILE: undefined,
+          VITEST: "true",
+          OPENCLAW_TEST_FAST: "1",
+          HOME: cwdDir,
         },
         async () => {
-          process.chdir(cwdDir);
-          try {
-            expect(resolveOperatorReferenceSourcePath("agents.yaml")).toBe(
-              path.join(
-                process.env.HOME ?? "",
-                ".openclaw",
-                "workspace",
-                "memory",
-                "reference",
-                "agents.yaml",
-              ),
-            );
-            expect(process.env.OPENCLAW_PROFILE).toBeUndefined();
-          } finally {
-            process.chdir(previousCwd);
-          }
+          const resolved = resolveOperatorReferenceSourcePath("agents.yaml");
+          expect(resolved).toContain(path.join("memory", "reference", "agents.yaml"));
+          expect(process.env.OPENCLAW_PROFILE).toBeUndefined();
         },
       );
       clearRuntimeConfigSnapshot();

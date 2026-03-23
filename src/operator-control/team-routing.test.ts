@@ -1,13 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { invalidateRegistryCache } from "./agent-registry.js";
 import { resolveOperatorReferenceSourcePath } from "./reference-paths.js";
 import { resolveOperatorTaskEnvelope } from "./team-routing.js";
 
-async function seedOperatorRegistryFixture(): Promise<void> {
-  const sourcePath = resolveOperatorReferenceSourcePath("agents.yaml");
+async function seedOperatorRegistryFixture(workspaceDir?: string): Promise<void> {
+  const sourcePath = resolveOperatorReferenceSourcePath("agents.yaml", { workspaceDir });
   await fs.mkdir(path.dirname(sourcePath), { recursive: true });
   await fs.writeFile(
     sourcePath,
@@ -70,13 +70,25 @@ async function seedOperatorRegistryFixture(): Promise<void> {
   invalidateRegistryCache({ sourcePath });
 }
 
-describe("operator team routing", () => {
-  beforeEach(async () => {
-    await seedOperatorRegistryFixture();
+async function withSeededStateDirEnv<T>(
+  prefix: string,
+  fn: (ctx: { tempRoot: string; stateDir: string; workspaceDir: string }) => Promise<T>,
+): Promise<T> {
+  return withStateDirEnv(prefix, async (ctx) => {
+    const workspaceDir = path.join(ctx.stateDir, "workspace");
+    await seedOperatorRegistryFixture(workspaceDir);
+    process.env.OPENCLAW_HOME = ctx.stateDir;
+    try {
+      return await fn({ ...ctx, workspaceDir });
+    } finally {
+      delete process.env.OPENCLAW_HOME;
+    }
   });
+}
 
+describe("operator team routing", () => {
   it("resolves execution-fleet backend work to raekwon", async () => {
-    await withStateDirEnv("operator-team-routing-exec-", async () => {
+    await withSeededStateDirEnv("operator-team-routing-exec-", async () => {
       const envelope = resolveOperatorTaskEnvelope({
         task_id: "task-team-1",
         idempotency_key: "idem-team-1",
@@ -94,7 +106,7 @@ describe("operator team routing", () => {
   });
 
   it("resolves project-ops work to deb and defaults to deb-http", async () => {
-    await withStateDirEnv("operator-team-routing-deb-", async () => {
+    await withSeededStateDirEnv("operator-team-routing-deb-", async () => {
       const envelope = resolveOperatorTaskEnvelope({
         task_id: "task-team-2",
         idempotency_key: "idem-team-2",
@@ -111,7 +123,7 @@ describe("operator team routing", () => {
   });
 
   it("preserves explicit transport overrides for team-targeted tasks", async () => {
-    await withStateDirEnv("operator-team-routing-manual-", async () => {
+    await withSeededStateDirEnv("operator-team-routing-manual-", async () => {
       const envelope = resolveOperatorTaskEnvelope({
         task_id: "task-team-3",
         idempotency_key: "idem-team-3",
@@ -132,7 +144,7 @@ describe("operator team routing", () => {
   });
 
   it("resolves marketing work to the delegated transport by default", async () => {
-    await withStateDirEnv("operator-team-routing-angela-", async () => {
+    await withSeededStateDirEnv("operator-team-routing-angela-", async () => {
       const envelope = resolveOperatorTaskEnvelope({
         task_id: "task-team-5",
         idempotency_key: "idem-team-5",
@@ -150,7 +162,7 @@ describe("operator team routing", () => {
   });
 
   it("accepts target.role as an alias for target.capability", async () => {
-    await withStateDirEnv("operator-team-routing-role-", async () => {
+    await withSeededStateDirEnv("operator-team-routing-role-", async () => {
       const envelope = resolveOperatorTaskEnvelope({
         task_id: "task-team-role",
         idempotency_key: "idem-team-role",
@@ -167,7 +179,7 @@ describe("operator team routing", () => {
   });
 
   it("routes engineering work through Bobby before specialists", async () => {
-    await withStateDirEnv("operator-team-routing-engineering-", async () => {
+    await withSeededStateDirEnv("operator-team-routing-engineering-", async () => {
       const envelope = resolveOperatorTaskEnvelope({
         task_id: "task-team-6",
         idempotency_key: "idem-team-6",
@@ -185,7 +197,7 @@ describe("operator team routing", () => {
   });
 
   it("rejects aliases outside the selected team", async () => {
-    await withStateDirEnv("operator-team-routing-invalid-alias-", async () => {
+    await withSeededStateDirEnv("operator-team-routing-invalid-alias-", async () => {
       expect(() =>
         resolveOperatorTaskEnvelope({
           task_id: "task-team-4",

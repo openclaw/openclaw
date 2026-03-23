@@ -110,8 +110,8 @@ function getDispatchMessage(dispatch: {
     : (dispatch.reason ?? "");
 }
 
-async function seedOperatorRegistryFixture(): Promise<void> {
-  const sourcePath = resolveOperatorReferenceSourcePath("agents.yaml");
+async function seedOperatorRegistryFixture(workspaceDir?: string): Promise<void> {
+  const sourcePath = resolveOperatorReferenceSourcePath("agents.yaml", { workspaceDir });
   await fs.mkdir(path.dirname(sourcePath), { recursive: true });
   await fs.writeFile(
     sourcePath,
@@ -174,13 +174,28 @@ async function seedOperatorRegistryFixture(): Promise<void> {
   invalidateRegistryCache({ sourcePath });
 }
 
+async function withSeededStateDirEnv<T>(
+  prefix: string,
+  fn: (ctx: { tempRoot: string; stateDir: string; workspaceDir: string }) => Promise<T>,
+): Promise<T> {
+  return withStateDirEnv(prefix, async (ctx) => {
+    const workspaceDir = path.join(ctx.stateDir, "workspace");
+    await seedOperatorRegistryFixture(workspaceDir);
+    process.env.OPENCLAW_HOME = ctx.stateDir;
+    try {
+      return await fn({ ...ctx, workspaceDir });
+    } finally {
+      delete process.env.OPENCLAW_HOME;
+    }
+  });
+}
+
 describe("operator task dispatch", () => {
   const originalFetch = globalThis.fetch;
 
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.restoreAllMocks();
     resetOperatorTransportCircuitBreakers();
-    await seedOperatorRegistryFixture();
   });
 
   afterEach(() => {
@@ -188,7 +203,7 @@ describe("operator task dispatch", () => {
   });
 
   it("submits and dispatches operator tasks to 2Tony when configured", async () => {
-    await withStateDirEnv("operator-dispatch-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-", async () => {
       const fetchMock = create2TonyFetchMock();
       globalThis.fetch = fetchMock as unknown as typeof fetch;
 
@@ -250,7 +265,7 @@ describe("operator task dispatch", () => {
   });
 
   it("returns a non-attempted dispatch result when 2Tony is not configured", async () => {
-    await withStateDirEnv("operator-dispatch-unconfigured-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-unconfigured-", async () => {
       submitOperatorTask({
         task_id: "task-dispatch-2",
         idempotency_key: "task-dispatch-2",
@@ -284,7 +299,7 @@ describe("operator task dispatch", () => {
   });
 
   it("omits 2Tony bearer auth when no shared secret is configured", async () => {
-    await withStateDirEnv("operator-dispatch-no-2tony-secret-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-no-2tony-secret-", async () => {
       const fetchMock = create2TonyFetchMock({
         taskId: "task-dispatch-2tony-no-secret",
         status: "accepted",
@@ -328,7 +343,7 @@ describe("operator task dispatch", () => {
   });
 
   it("infers a concrete 2Tony task type from operator inputs", async () => {
-    await withStateDirEnv("operator-dispatch-2tony-infer-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-2tony-infer-", async () => {
       const fetchMock = create2TonyFetchMock({
         taskId: "task-dispatch-infer",
         status: "accepted",
@@ -381,7 +396,7 @@ describe("operator task dispatch", () => {
   });
 
   it("blocks unmappable execution-fleet capabilities before 2Tony dead-letters them", async () => {
-    await withStateDirEnv("operator-dispatch-2tony-unmappable-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-2tony-unmappable-", async () => {
       const fetchMock = vi.fn();
       globalThis.fetch = fetchMock as unknown as typeof fetch;
 
@@ -422,7 +437,7 @@ describe("operator task dispatch", () => {
   });
 
   it("treats generic operator taskType as intent and blocks with unmapped_task_type", async () => {
-    await withStateDirEnv("operator-dispatch-generic-engineering-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-generic-engineering-", async () => {
       const fetchMock = vi.fn();
       globalThis.fetch = fetchMock as unknown as typeof fetch;
 
@@ -460,7 +475,7 @@ describe("operator task dispatch", () => {
   });
 
   it("blocks dispatch when the operator runtime freshness policy is not satisfied", async () => {
-    await withStateDirEnv("operator-dispatch-stale-runtime-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-stale-runtime-", async () => {
       const fetchMock = vi.fn();
       globalThis.fetch = fetchMock as unknown as typeof fetch;
 
@@ -501,7 +516,7 @@ describe("operator task dispatch", () => {
   });
 
   it("blocks dispatch when 2Tony exposes stale runtime identity", async () => {
-    await withStateDirEnv("operator-dispatch-stale-worker-runtime-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-stale-worker-runtime-", async () => {
       const fetchMock = create2TonyFetchMock(undefined, {
         identity: {
           version: "2026.3.11",
@@ -551,7 +566,7 @@ describe("operator task dispatch", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-13T12:00:00.000Z"));
 
-    await withStateDirEnv("operator-dispatch-delegated-circuit-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-delegated-circuit-", async () => {
       const failingFetch = createHttpDelegateFetchMock({
         actionResponse: { ok: true },
         actionStatus: 200,
@@ -644,7 +659,7 @@ describe("operator task dispatch", () => {
   });
 
   it("dispatches project-ops tasks to Deb when team routing selects deb-http", async () => {
-    await withStateDirEnv("operator-dispatch-deb-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-deb-", async () => {
       const fetchMock = createHttpDelegateFetchMock({
         actionResponse: {
           ok: true,
@@ -692,7 +707,7 @@ describe("operator task dispatch", () => {
   });
 
   it("routes project-ops tasks through the Tonya control plane when configured", async () => {
-    await withStateDirEnv("operator-dispatch-project-ops-proxy-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-project-ops-proxy-", async () => {
       const fetchMock = createHttpDelegateFetchMock({
         actionResponse: {
           ok: true,
@@ -742,7 +757,7 @@ describe("operator task dispatch", () => {
   });
 
   it("blocks legacy 2Tony dispatch when a task requests subagent runtime", async () => {
-    await withStateDirEnv("operator-dispatch-2tony-subagent-runtime-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-2tony-subagent-runtime-", async () => {
       const fetchMock = vi.fn();
       globalThis.fetch = fetchMock as unknown as typeof fetch;
 
@@ -782,7 +797,7 @@ describe("operator task dispatch", () => {
   });
 
   it("sends the Deb shared secret when configured", async () => {
-    await withStateDirEnv("operator-dispatch-deb-secret-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-deb-secret-", async () => {
       const fetchMock = createHttpDelegateFetchMock({
         actionResponse: {
           ok: true,
@@ -820,7 +835,7 @@ describe("operator task dispatch", () => {
   });
 
   it("dispatches Paw and Order specialist tasks to Deb /task with structured payload", async () => {
-    await withStateDirEnv("operator-dispatch-paw-and-order-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-paw-and-order-", async () => {
       const fetchMock = createHttpDelegateFetchMock({
         actionResponse: {
           ok: true,
@@ -886,7 +901,7 @@ describe("operator task dispatch", () => {
   });
 
   it("preserves explicit Deb command overrides even when project-ops routing selects a Paw and Order alias", async () => {
-    await withStateDirEnv("operator-dispatch-deb-explicit-command-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-deb-explicit-command-", async () => {
       const fetchMock = createHttpDelegateFetchMock({
         actionResponse: {
           ok: true,
@@ -928,7 +943,7 @@ describe("operator task dispatch", () => {
   });
 
   it("ignores generic command fields when inferring Deb Paw and Order dispatch", async () => {
-    await withStateDirEnv("operator-dispatch-deb-generic-command-ignored-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-deb-generic-command-ignored-", async () => {
       const fetchMock = createHttpDelegateFetchMock({
         actionResponse: {
           ok: true,
@@ -972,7 +987,7 @@ describe("operator task dispatch", () => {
   });
 
   it("reports the inferred Deb endpoint when Paw and Order dispatch fails before fetch returns", async () => {
-    await withStateDirEnv("operator-dispatch-deb-failure-endpoint-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-deb-failure-endpoint-", async () => {
       const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
         const url =
           typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -1022,7 +1037,7 @@ describe("operator task dispatch", () => {
   });
 
   it("blocks Deb dispatch when the delegate readiness probe fails", async () => {
-    await withStateDirEnv("operator-dispatch-deb-not-ready-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-deb-not-ready-", async () => {
       const fetchMock = createHttpDelegateFetchMock({
         actionResponse: { ok: true },
         actionStatus: 200,
@@ -1061,7 +1076,7 @@ describe("operator task dispatch", () => {
   });
 
   it("blocks Deb dispatch when the delegate runtime identity is stale", async () => {
-    await withStateDirEnv("operator-dispatch-deb-stale-runtime-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-deb-stale-runtime-", async () => {
       const fetchMock = createHttpDelegateFetchMock({
         actionResponse: { ok: true },
         actionStatus: 200,
@@ -1109,7 +1124,7 @@ describe("operator task dispatch", () => {
   });
 
   it("blocks Deb dispatch when a 2xx response does not satisfy the expected contract", async () => {
-    await withStateDirEnv("operator-dispatch-deb-invalid-contract-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-deb-invalid-contract-", async () => {
       const fetchMock = createHttpDelegateFetchMock({
         actionResponse: { status: "ok" },
         actionStatus: 200,
@@ -1145,7 +1160,7 @@ describe("operator task dispatch", () => {
   });
 
   it("dispatches marketing tasks through the delegated lead boundary", async () => {
-    await withStateDirEnv("operator-dispatch-angela-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-angela-", async () => {
       const fetchMock = createHttpDelegateFetchMock({
         actionResponse: {
           status: "accepted",
@@ -1207,7 +1222,7 @@ describe("operator task dispatch", () => {
   });
 
   it("dispatches engineering tasks to Bobby through the delegated lead boundary", async () => {
-    await withStateDirEnv("operator-dispatch-engineering-bobby-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-engineering-bobby-", async () => {
       const fetchMock = createHttpDelegateFetchMock({
         actionResponse: {
           status: "accepted",
@@ -1265,7 +1280,7 @@ describe("operator task dispatch", () => {
   });
 
   it("uses the global delegated default alias when a delegated task has no team or alias", async () => {
-    await withStateDirEnv("operator-dispatch-angela-global-default-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-angela-global-default-", async () => {
       const fetchMock = createHttpDelegateFetchMock({
         actionResponse: {
           status: "accepted",
@@ -1320,7 +1335,7 @@ describe("operator task dispatch", () => {
   });
 
   it("allows delegated first-class-agent dispatch when a task explicitly requests subagent runtime", async () => {
-    await withStateDirEnv("operator-dispatch-angela-subagent-runtime-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-angela-subagent-runtime-", async () => {
       const fetchMock = createHttpDelegateFetchMock({
         actionResponse: {
           status: "accepted",
@@ -1373,7 +1388,7 @@ describe("operator task dispatch", () => {
   });
 
   it("sends the Angela shared secret when configured", async () => {
-    await withStateDirEnv("operator-dispatch-angela-secret-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-angela-secret-", async () => {
       const fetchMock = createHttpDelegateFetchMock({
         actionResponse: {
           status: "accepted",
@@ -1410,7 +1425,7 @@ describe("operator task dispatch", () => {
   });
 
   it("blocks Angela dispatch when the delegate readiness probe fails", async () => {
-    await withStateDirEnv("operator-dispatch-angela-not-ready-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-angela-not-ready-", async () => {
       const fetchMock = createHttpDelegateFetchMock({
         actionResponse: { status: "accepted" },
         actionStatus: 202,
@@ -1448,7 +1463,7 @@ describe("operator task dispatch", () => {
   });
 
   it("blocks Angela dispatch when the delegate runtime identity is stale", async () => {
-    await withStateDirEnv("operator-dispatch-angela-stale-runtime-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-angela-stale-runtime-", async () => {
       const fetchMock = createHttpDelegateFetchMock({
         actionResponse: { status: "accepted" },
         actionStatus: 202,
@@ -1495,7 +1510,7 @@ describe("operator task dispatch", () => {
   });
 
   it("blocks Angela dispatch when a 2xx response does not satisfy the expected contract", async () => {
-    await withStateDirEnv("operator-dispatch-angela-invalid-contract-", async () => {
+    await withSeededStateDirEnv("operator-dispatch-angela-invalid-contract-", async () => {
       const fetchMock = createHttpDelegateFetchMock({
         actionResponse: { message: "queued maybe" },
         actionStatus: 202,
