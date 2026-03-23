@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { resolveAgentConfig, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import { runBeforeToolCallHook } from "../agents/pi-tools.before-tool-call.js";
 import { resolveToolLoopDetectionConfig } from "../agents/pi-tools.js";
@@ -18,7 +19,7 @@ import {
 } from "../agents/tool-policy.js";
 import { ToolInputError } from "../agents/tools/common.js";
 import { loadConfig } from "../config/config.js";
-import { resolveMainSessionKey } from "../config/sessions.js";
+import { resolveAgentMainSessionKey, resolveMainSessionKey } from "../config/sessions.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -44,6 +45,7 @@ type ToolsInvokeBody = {
   action?: unknown;
   args?: unknown;
   sessionKey?: unknown;
+  agentId?: unknown;
   dryRun?: unknown;
 };
 
@@ -206,9 +208,31 @@ export async function handleToolsInvokeHttpRequest(
       ? (argsRaw as Record<string, unknown>)
       : {};
 
+  // Resolve explicit agentId from the request body.
+  const explicitAgentId =
+    typeof body.agentId === "string" && body.agentId.trim() ? body.agentId.trim() : undefined;
+
+  // When agentId is provided, validate that the agent exists and resolve its workspace.
+  let agentWorkspaceDir: string | undefined;
+  if (explicitAgentId) {
+    const agentConfig = resolveAgentConfig(cfg, explicitAgentId);
+    if (!agentConfig) {
+      sendJson(res, 404, {
+        ok: false,
+        error: { type: "not_found", message: `Agent not found: ${explicitAgentId}` },
+      });
+      return true;
+    }
+    agentWorkspaceDir = resolveAgentWorkspaceDir(cfg, explicitAgentId);
+  }
+
   const rawSessionKey = resolveSessionKeyFromBody(body);
   const sessionKey =
-    !rawSessionKey || rawSessionKey === "main" ? resolveMainSessionKey(cfg) : rawSessionKey;
+    !rawSessionKey || rawSessionKey === "main"
+      ? explicitAgentId
+        ? resolveAgentMainSessionKey({ cfg, agentId: explicitAgentId })
+        : resolveMainSessionKey(cfg)
+      : rawSessionKey;
 
   // Resolve message channel/account hints (optional headers) for policy inheritance.
   const messageChannel = normalizeMessageChannel(
@@ -228,7 +252,7 @@ export async function handleToolsInvokeHttpRequest(
     providerProfile,
     profileAlsoAllow,
     providerProfileAlsoAllow,
-  } = resolveEffectiveToolPolicy({ config: cfg, sessionKey });
+  } = resolveEffectiveToolPolicy({ config: cfg, sessionKey, agentId: explicitAgentId });
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
 
@@ -257,6 +281,9 @@ export async function handleToolsInvokeHttpRequest(
     allowGatewaySubagentBinding: true,
     // HTTP callers consume tool output directly; preserve raw media invoke payloads.
     allowMediaInvokeCommands: true,
+    workspaceDir: agentWorkspaceDir,
+    // Include file tools (read/write/edit) when an explicit agentId targets a workspace.
+    includeFileTools: Boolean(explicitAgentId && agentWorkspaceDir),
     config: cfg,
     pluginToolAllowlist: collectExplicitAllowlist([
       profilePolicy,

@@ -27,6 +27,16 @@ vi.mock("../config/config.js", () => ({
   loadConfig: () => cfg,
 }));
 
+vi.mock("../agents/agent-scope.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/agent-scope.js")>();
+  return {
+    ...actual,
+    // Override workspace resolution with a deterministic mock path.
+    resolveAgentWorkspaceDir: (_cfgParam: unknown, agentId: string) =>
+      `/mock/workspace/${agentId.trim().toLowerCase()}`,
+  };
+});
+
 vi.mock("../config/sessions.js", () => ({
   resolveMainSessionKey: (params?: {
     session?: { scope?: string; mainKey?: string };
@@ -46,6 +56,16 @@ vi.mock("../config/sessions.js", () => ({
       .toLowerCase();
     const mainKey = mainKeyRaw || "main";
     return `agent:${agentId}:${mainKey}`;
+  },
+  resolveAgentMainSessionKey: (params: {
+    cfg?: { session?: { mainKey?: string } };
+    agentId: string;
+  }) => {
+    const mainKeyRaw = String(params.cfg?.session?.mainKey ?? "main")
+      .trim()
+      .toLowerCase();
+    const mainKey = mainKeyRaw || "main";
+    return `agent:${params.agentId.trim().toLowerCase()}:${mainKey}`;
   },
 }));
 
@@ -159,10 +179,28 @@ vi.mock("../agents/openclaw-tools.js", () => {
     },
   ];
 
+  const fileTools = [
+    {
+      name: "read",
+      parameters: { type: "object", properties: { path: { type: "string" } } },
+      execute: async () => ({ ok: true, content: "mock file content" }),
+    },
+    {
+      name: "write",
+      parameters: { type: "object", properties: { path: { type: "string" } } },
+      execute: async () => ({ ok: true }),
+    },
+    {
+      name: "edit",
+      parameters: { type: "object", properties: { path: { type: "string" } } },
+      execute: async () => ({ ok: true }),
+    },
+  ];
+
   return {
     createOpenClawTools: (ctx: Record<string, unknown>) => {
       lastCreateOpenClawToolsContext = ctx;
-      return tools;
+      return ctx.includeFileTools ? [...tools, ...fileTools] : tools;
     },
   };
 });
@@ -684,5 +722,130 @@ describe("POST /tools/invoke", () => {
     const body = await expectOkInvokeResponse(res);
     expect(body.result?.observedFormat).toBe("pdf");
     expect(body.result?.observedFileFormat).toBeUndefined();
+  });
+
+  // --- agentId support ---
+
+  it("returns 404 when agentId does not exist in config", async () => {
+    cfg = {
+      agents: {
+        list: [{ id: "main", default: true, tools: { allow: ["agents_list"] } }],
+      },
+    };
+
+    const res = await postToolsInvoke({
+      port: sharedPort,
+      headers: gatewayAuthHeaders(),
+      body: { tool: "agents_list", agentId: "nonexistent" },
+    });
+
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error?.type).toBe("not_found");
+    expect(body.error?.message).toContain("nonexistent");
+  });
+
+  it("resolves workspaceDir when agentId is provided", async () => {
+    cfg = {
+      agents: {
+        list: [
+          { id: "main", default: true, tools: { allow: ["agents_list"] } },
+          { id: "filebot", tools: { allow: ["agents_list"] } },
+        ],
+      },
+    };
+
+    const res = await postToolsInvoke({
+      port: sharedPort,
+      headers: gatewayAuthHeaders(),
+      body: { tool: "agents_list", agentId: "filebot" },
+    });
+
+    expect(res.status).toBe(200);
+    expect(lastCreateOpenClawToolsContext?.workspaceDir).toBe("/mock/workspace/filebot");
+  });
+
+  it("derives sessionKey from agentId when sessionKey is omitted", async () => {
+    cfg = {
+      agents: {
+        list: [
+          { id: "main", default: true },
+          { id: "ops", tools: { allow: ["agents_list"] } },
+        ],
+      },
+    };
+
+    const res = await postToolsInvoke({
+      port: sharedPort,
+      headers: gatewayAuthHeaders(),
+      body: { tool: "agents_list", agentId: "ops" },
+    });
+
+    expect(res.status).toBe(200);
+    expect(lastCreateOpenClawToolsContext?.agentSessionKey).toBe("agent:ops:main");
+  });
+
+  it("uses explicit sessionKey over agentId-derived sessionKey", async () => {
+    cfg = {
+      agents: {
+        list: [
+          { id: "main", default: true },
+          { id: "ops", tools: { allow: ["agents_list"] } },
+        ],
+      },
+    };
+
+    const res = await postToolsInvoke({
+      port: sharedPort,
+      headers: gatewayAuthHeaders(),
+      body: { tool: "agents_list", agentId: "ops", sessionKey: "agent:ops:custom" },
+    });
+
+    expect(res.status).toBe(200);
+    expect(lastCreateOpenClawToolsContext?.agentSessionKey).toBe("agent:ops:custom");
+  });
+
+  it("does not set workspaceDir when agentId is omitted", async () => {
+    allowAgentsListForMain();
+
+    const res = await invokeAgentsListAuthed({ sessionKey: "main" });
+
+    expect(res.status).toBe(200);
+    expect(lastCreateOpenClawToolsContext?.workspaceDir).toBeUndefined();
+    expect(lastCreateOpenClawToolsContext?.includeFileTools).toBeFalsy();
+  });
+
+  it("includes file tools (read/write/edit) when agentId is provided", async () => {
+    cfg = {
+      agents: {
+        list: [
+          { id: "main", default: true },
+          { id: "filebot", tools: { allow: ["read", "write", "edit"] } },
+        ],
+      },
+    };
+
+    const res = await postToolsInvoke({
+      port: sharedPort,
+      headers: gatewayAuthHeaders(),
+      body: { tool: "read", agentId: "filebot", args: { path: "test.txt" } },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(lastCreateOpenClawToolsContext?.includeFileTools).toBe(true);
+  });
+
+  it("does not include file tools when agentId is omitted", async () => {
+    setMainAllowedTools({ allow: ["agents_list"] });
+
+    const readRes = await postToolsInvoke({
+      port: sharedPort,
+      headers: gatewayAuthHeaders(),
+      body: { tool: "read", args: { path: "test.txt" } },
+    });
+    expect(readRes.status).toBe(404);
   });
 });

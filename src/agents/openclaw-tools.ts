@@ -1,8 +1,14 @@
+import { createReadTool } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
+import {
+  createHostWorkspaceEditTool,
+  createHostWorkspaceWriteTool,
+  createOpenClawReadTool,
+} from "./pi-tools.read.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
@@ -83,6 +89,8 @@ export function createOpenClawTools(
     onYield?: (message: string) => Promise<void> | void;
     /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
     allowGatewaySubagentBinding?: boolean;
+    /** If true, include file tools (read/write/edit) scoped to workspaceDir. */
+    includeFileTools?: boolean;
   } & SpawnedToolContext,
 ): AnyAgentTool[] {
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
@@ -227,6 +235,17 @@ export function createOpenClawTools(
     ...(imageTool ? [imageTool] : []),
     ...(pdfTool ? [pdfTool] : []),
   ];
+
+  // Optionally include file tools (read/write/edit) scoped to the resolved workspace.
+  // Used by /tools/invoke with explicit agentId for CP file operations.
+  if (options?.includeFileTools && workspaceDir) {
+    const readBase = createReadTool(workspaceDir) as unknown as AnyAgentTool;
+    tools.push(
+      createOpenClawReadTool(readBase),
+      createHostWorkspaceWriteTool(workspaceDir),
+      createHostWorkspaceEditTool(workspaceDir),
+    );
+  }
 
   const pluginTools = resolvePluginTools({
     context: {
