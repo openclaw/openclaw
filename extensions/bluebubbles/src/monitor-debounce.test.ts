@@ -43,6 +43,51 @@ function createTarget(overrides: Partial<WebhookTarget> = {}): WebhookTarget {
 }
 
 describe("createBlueBubblesDebounceRegistry", () => {
+  it("keeps guid-less fallback debounce keys stable across timestamp churn", () => {
+    const registry = createBlueBubblesDebounceRegistry({
+      processMessage: async () => undefined,
+    });
+    const target = createTarget();
+
+    registry.getOrCreateDebouncer(target);
+
+    const buildKey = (
+      target as unknown as {
+        core: {
+          channel: {
+            debounce: {
+              createInboundDebouncer: ReturnType<typeof vi.fn>;
+            };
+          };
+        };
+      }
+    ).core.channel.debounce.createInboundDebouncer.mock.calls[0]?.[0]?.buildKey as (entry: {
+      message: NormalizedWebhookMessage;
+      target: WebhookTarget;
+      eventType?: string;
+    }) => string;
+
+    const keyA = buildKey({
+      target,
+      eventType: "new-message",
+      message: createMessage({
+        messageId: undefined,
+        timestamp: 1_000,
+      }),
+    });
+    const keyB = buildKey({
+      target,
+      eventType: "updated-message",
+      message: createMessage({
+        messageId: undefined,
+        timestamp: 2_000,
+      }),
+    });
+
+    expect(keyA).toBe("bluebubbles:default:dm:+15551234567");
+    expect(keyB).toBe(keyA);
+  });
+
   it("reuses the wrapped debouncer for later updated-message webhooks", async () => {
     const registry = createBlueBubblesDebounceRegistry({
       processMessage: async () => undefined,

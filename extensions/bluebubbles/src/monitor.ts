@@ -264,7 +264,7 @@ function buildInboundReplayKey(params: {
   const { target, message } = params;
   const messageId = message.messageId?.trim();
   const associatedMessageGuid = message.associatedMessageGuid?.trim();
-  const stableIdentity = associatedMessageGuid || messageId;
+  const stableIdentity = messageId || associatedMessageGuid;
   if (!stableIdentity) {
     return undefined;
   }
@@ -321,7 +321,7 @@ function buildInboundReplayScopeKey(params: {
   const { target, message } = params;
   const messageId = message.messageId?.trim();
   const associatedMessageGuid = message.associatedMessageGuid?.trim();
-  const stableIdentity = associatedMessageGuid || messageId;
+  const stableIdentity = messageId || associatedMessageGuid;
   if (!stableIdentity) {
     return undefined;
   }
