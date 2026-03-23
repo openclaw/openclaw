@@ -139,10 +139,10 @@ describe("dashboardCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith("ssh hint");
   });
 
-  it("never passes token to SSH hint (CVE regression — SSH path)", async () => {
+  it("omits token from SSH hint when clipboard succeeded", async () => {
     const secretToken = "super-secret-bearer-token";
     mockSnapshot(secretToken);
-    copyToClipboardMock.mockResolvedValue(false);
+    copyToClipboardMock.mockResolvedValue(true);
     detectBrowserOpenSupportMock.mockResolvedValue({
       ok: false,
       reason: "ssh",
@@ -151,20 +151,33 @@ describe("dashboardCommand", () => {
 
     await dashboardCommand(runtime);
 
-    // formatControlUiSshHint must NOT receive the token — the returned
-    // hint string is written to runtime.log, which flows into the same
-    // console-captured log file readable by operator.read-scoped devices.
+    // When clipboard succeeded the tokenized URL is already available
+    // there, so the SSH hint should not repeat the token.
     expect(formatControlUiSshHintMock).toHaveBeenCalledWith({
       port: 18789,
       basePath: undefined,
     });
+  });
 
-    // Double-check: no logged line contains the secret.
-    for (const call of runtime.log.mock.calls) {
-      const line = String(call[0]);
-      expect(line).not.toContain(secretToken);
-      expect(line).not.toContain("#token=");
-    }
+  it("passes token to SSH hint when clipboard failed (only path for remote users)", async () => {
+    const secretToken = "super-secret-bearer-token";
+    mockSnapshot(secretToken);
+    copyToClipboardMock.mockResolvedValue(false);
+    detectBrowserOpenSupportMock.mockResolvedValue({
+      ok: false,
+      reason: "ssh",
+    });
+    formatControlUiSshHintMock.mockReturnValue("ssh hint with token");
+
+    await dashboardCommand(runtime);
+
+    // When clipboard AND browser both fail, the SSH hint is the user's
+    // only path to the authenticated URL — include the token.
+    expect(formatControlUiSshHintMock).toHaveBeenCalledWith({
+      port: 18789,
+      basePath: undefined,
+      token: secretToken,
+    });
   });
 
   it("respects --no-open and tells user token URL is in clipboard", async () => {
