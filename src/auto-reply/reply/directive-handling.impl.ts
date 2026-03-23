@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import {
   resolveAgentConfig,
   resolveAgentDir,
@@ -10,12 +9,16 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import {
-  applyFutureThreadModelDefaultToSessionEntry,
-  applyModelOverrideToSessionEntry,
-} from "../../sessions/model-overrides.js";
-import { resolveFutureThreadParentSessionKey } from "../../sessions/session-key-utils.js";
+  applyFutureThreadModelDefault,
+  applyFutureThreadThinkingDefault,
+} from "../../sessions/future-thread-defaults.js";
+import { applyVerboseOverride } from "../../sessions/level-overrides.js";
+import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import {
+  resolveFutureThreadParentSessionKey,
+  resolveTelegramThreadParentSessionKey,
+} from "../../sessions/session-key-utils.js";
 import { formatThinkingLevels, formatXHighModelHint, supportsXHighThinking } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -319,10 +322,24 @@ export async function handleDirectiveOnly(
     directives.fastMode !== undefined &&
     directives.fastMode !== currentFastMode;
   const telegramChannelHint = sessionEntry.channel ?? sessionEntry.lastChannel;
+  const currentThreadId = sessionEntry.lastThreadId;
+  const futureThreadParentSessionKey = resolveFutureThreadParentSessionKey({
+    sessionKey,
+    parentSessionKey: params.parentSessionKey,
+    channelHint: telegramChannelHint,
+  });
   let reasoningChanged =
     directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
   if (directives.hasThinkDirective && directives.thinkLevel) {
     sessionEntry.thinkingLevel = directives.thinkLevel;
+    if (futureThreadParentSessionKey) {
+      applyFutureThreadThinkingDefault({
+        store: sessionStore,
+        parentSessionKey: futureThreadParentSessionKey,
+        level: directives.thinkLevel,
+        afterThreadId: currentThreadId,
+      });
+    }
   }
   if (directives.hasFastDirective && directives.fastMode !== undefined) {
     sessionEntry.fastMode = directives.fastMode;
@@ -372,29 +389,17 @@ export async function handleDirectiveOnly(
       profileOverride,
     });
 
-    const futureThreadParentSessionKey = resolveFutureThreadParentSessionKey({
-      sessionKey,
-      parentSessionKey: params.parentSessionKey,
-      channelHint: telegramChannelHint,
-    });
     if (futureThreadParentSessionKey) {
-      const parentEntry =
-        sessionStore[futureThreadParentSessionKey] ??
-        ({
-          sessionId: crypto.randomUUID(),
-          updatedAt: Date.now(),
-        } satisfies SessionEntry);
-      const { updated: parentUpdated } = applyFutureThreadModelDefaultToSessionEntry({
-        entry: parentEntry,
+      applyFutureThreadModelDefault({
+        store: sessionStore,
+        parentSessionKey: futureThreadParentSessionKey,
         selection: {
           provider: modelSelection.provider,
           model: modelSelection.model,
           isDefault: modelSelection.isDefault,
         },
+        afterThreadId: currentThreadId,
       });
-      if (parentUpdated) {
-        sessionStore[futureThreadParentSessionKey] = parentEntry;
-      }
     }
   }
   if (directives.hasQueueDirective && directives.queueReset) {

@@ -35,7 +35,7 @@ import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenanc
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
-import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { seedSessionEntryFromFutureThreadDefaults } from "../../sessions/future-thread-defaults.js";
 import { resolveFutureThreadParentSessionKey } from "../../sessions/session-key-utils.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -474,25 +474,14 @@ export async function initSessionState(params: {
   });
   if (!hasExistingSessionEntry && futureThreadParentSessionKey) {
     const parentEntry = sessionStore[futureThreadParentSessionKey];
-    const parentProvider = parentEntry?.futureThreadProviderOverride?.trim();
-    const parentModel = parentEntry?.futureThreadModelOverride?.trim();
-    // Seed brand-new thread/topic sessions from the parent chat's
-    // future-thread default. Existing thread sessions are intentionally left
-    // untouched so model history remains stable.
-    if (
-      parentProvider &&
-      parentModel &&
-      !sessionEntry.providerOverride &&
-      !sessionEntry.modelOverride
-    ) {
-      applyModelOverrideToSessionEntry({
-        entry: sessionEntry,
-        selection: {
-          provider: parentProvider,
-          model: parentModel,
-        },
-      });
-    }
+    // Seed brand-new Telegram thread sessions from the parent chat's
+    // future-thread defaults. Existing thread sessions are intentionally left
+    // untouched so model/think history remains stable.
+    seedSessionEntryFromFutureThreadDefaults({
+      entry: sessionEntry,
+      parentEntry,
+      childThreadId: ctx.MessageThreadId ?? lastThreadId,
+    });
   }
   const alreadyForked = sessionEntry.forkedFromParent === true;
   if (
@@ -592,6 +581,10 @@ export async function initSessionState(params: {
 
   const sessionCtx: TemplateContext = {
     ...ctx,
+    // Native slash commands are routed through a synthetic wrapper session
+    // (for approvals/history), but all reply/session state should reflect the
+    // real target conversation once initSessionState resolves it.
+    SessionKey: sessionKey,
     // Keep BodyStripped aligned with Body (best default for agent prompts).
     // RawBody is reserved for command/directive parsing and may omit context.
     BodyStripped: normalizeInboundTextNewlines(

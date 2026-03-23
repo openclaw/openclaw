@@ -65,6 +65,18 @@ export type AcpSessionRuntimeOptions = {
   backendExtras?: Record<string, string>;
 };
 
+export type FutureThreadDefaultsHistoryEntry = {
+  /**
+   * Future-thread defaults written inside thread/topic N only apply to later
+   * siblings. Older siblings with ids <= N must not retroactively inherit it.
+   */
+  afterThreadId: number;
+  providerOverride?: string;
+  modelOverride?: string;
+  thinkingLevelOverride?: string;
+  updatedAt: number;
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -119,6 +131,16 @@ export type SessionEntry = {
    */
   futureThreadProviderOverride?: string;
   futureThreadModelOverride?: string;
+  /**
+   * Parent-chat default thinking level for future thread/topic sessions.
+   * Existing threads intentionally remain unchanged.
+   */
+  futureThreadThinkingLevelOverride?: string;
+  /**
+   * Historical snapshots for Telegram thread/topic inheritance when Telegram
+   * does not deliver topic-create service messages to the bot.
+   */
+  futureThreadDefaultsHistory?: FutureThreadDefaultsHistoryEntry[];
   authProfileOverride?: string;
   authProfileOverrideSource?: "auto" | "user";
   authProfileOverrideCompactionCount?: number;

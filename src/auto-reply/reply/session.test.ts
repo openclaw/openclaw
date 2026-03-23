@@ -401,6 +401,40 @@ describe("initSessionState thread forking", () => {
   });
 });
 
+describe("initSessionState native target session routing", () => {
+  it("retargets native slash session context to CommandTargetSessionKey", async () => {
+    const storePath = await createStorePath("native-target-session-");
+    const cfg = {
+      session: { store: storePath },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/model anthropic/claude-sonnet-4-6",
+        RawBody: "/model anthropic/claude-sonnet-4-6",
+        CommandBody: "/model anthropic/claude-sonnet-4-6",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "group",
+        SessionKey: "agent:main:telegram:slash:12345",
+        CommandSource: "native",
+        CommandTargetSessionKey: "agent:main:telegram:group:-100999:topic:42",
+        MessageThreadId: "42",
+        IsForum: true,
+        From: "telegram:group:-100999",
+        To: "slash:12345",
+        SenderId: "12345",
+        MessageSid: "1",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionKey).toBe("agent:main:telegram:group:-100999:topic:42");
+    expect(result.sessionCtx.SessionKey).toBe("agent:main:telegram:group:-100999:topic:42");
+  });
+});
+
 describe("initSessionState RawBody", () => {
   it("uses RawBody for command extraction and reset triggers when Body contains wrapped context", async () => {
     const root = await makeCaseDir("openclaw-rawbody-");
@@ -2245,6 +2279,35 @@ describe("initSessionState Telegram future-thread model defaults", () => {
     expect(result.sessionEntry.modelOverride).toBe("gpt-5.3-codex");
   });
 
+  it("seeds new forum topic sessions from parent adaptive thinking defaults", async () => {
+    const storePath = await createStorePath("telegram-topic-future-adaptive-default-");
+    const parentSessionKey = "agent:main:telegram:group:-100123";
+    const topicSessionKey = "agent:main:telegram:group:-100123:topic:84";
+    await writeSessionStoreFast(storePath, {
+      [parentSessionKey]: {
+        sessionId: "parent-topic-adaptive",
+        updatedAt: Date.now(),
+        futureThreadProviderOverride: "anthropic",
+        futureThreadModelOverride: "claude-sonnet-4-6",
+        futureThreadThinkingLevelOverride: "adaptive",
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello adaptive topic",
+        SessionKey: topicSessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.providerOverride).toBe("anthropic");
+    expect(result.sessionEntry.modelOverride).toBe("claude-sonnet-4-6");
+    expect(result.sessionEntry.thinkingLevel).toBe("adaptive");
+  });
+
   it("seeds new Telegram DM threaded sessions from parent future-thread defaults", async () => {
     const storePath = await createStorePath("telegram-dm-thread-future-model-default-");
     const parentSessionKey = "agent:main:telegram:default:direct:12345";
@@ -2357,6 +2420,52 @@ describe("initSessionState Telegram future-thread model defaults", () => {
     expect(result.isNewSession).toBe(false);
     expect(result.sessionEntry.providerOverride).toBeUndefined();
     expect(result.sessionEntry.modelOverride).toBeUndefined();
+  });
+
+  it("uses historical parent defaults for untouched older forum topics", async () => {
+    const storePath = await createStorePath("telegram-untouched-older-topic-history-");
+    const parentSessionKey = "agent:main:telegram:group:-100123";
+    const topicSessionKey = "agent:main:telegram:group:-100123:topic:89";
+    await writeSessionStoreFast(storePath, {
+      [parentSessionKey]: {
+        sessionId: "parent-topic-history",
+        updatedAt: Date.now(),
+        futureThreadProviderOverride: "anthropic",
+        futureThreadModelOverride: "claude-sonnet-4-6",
+        futureThreadThinkingLevelOverride: "adaptive",
+        futureThreadDefaultsHistory: [
+          {
+            afterThreadId: 84,
+            providerOverride: "openai-codex",
+            modelOverride: "gpt-5.3-codex",
+            thinkingLevelOverride: "medium",
+            updatedAt: Date.now(),
+          },
+          {
+            afterThreadId: 90,
+            providerOverride: "anthropic",
+            modelOverride: "claude-sonnet-4-6",
+            thinkingLevelOverride: "adaptive",
+            updatedAt: Date.now(),
+          },
+        ],
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "older untouched topic ping",
+        SessionKey: topicSessionKey,
+        MessageThreadId: "89",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.providerOverride).toBe("openai-codex");
+    expect(result.sessionEntry.modelOverride).toBe("gpt-5.3-codex");
+    expect(result.sessionEntry.thinkingLevel).toBe("medium");
   });
 });
 
