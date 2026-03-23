@@ -11,6 +11,7 @@ public enum ErrorCode: String, Codable, Sendable {
     case invalidRequest = "INVALID_REQUEST"
     case approvalNotFound = "APPROVAL_NOT_FOUND"
     case unavailable = "UNAVAILABLE"
+    case permissionDenied = "PERMISSION_DENIED"
 }
 
 public struct ConnectParams: Codable, Sendable {
