@@ -27,9 +27,6 @@ Always import from a specific subpath:
 ```typescript
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
-
-// Deprecated — will be removed in the next major release
-import { definePluginEntry } from "openclaw/plugin-sdk";
 ```
 
 Each subpath is a small, self-contained module. This keeps startup fast and
