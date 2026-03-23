@@ -1,14 +1,11 @@
 import { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
 const backupCreateCommand = vi.fn();
 const backupVerifyCommand = vi.fn();
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 vi.mock("../../commands/backup.js", () => ({
   backupCreateCommand,
@@ -50,6 +47,7 @@ describe("registerBackupCommand", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetRuntimeCapture();
     backupCreateCommand.mockResolvedValue(undefined);
     backupVerifyCommand.mockResolvedValue(undefined);
   });

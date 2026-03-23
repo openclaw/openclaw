@@ -10,7 +10,6 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
   type AuthProfileStore,
   ensureAuthProfileStore,
-  resolveAuthProfileOrder,
   saveAuthProfileStore,
 } from "../agents/auth-profiles.js";
 import {
@@ -19,6 +18,7 @@ import {
   isAnthropicRateLimitError,
 } from "../agents/live-auth-keys.js";
 import { isModernModelRef } from "../agents/live-model-filter.js";
+import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
@@ -40,9 +40,8 @@ import {
 import { startGatewayServer } from "./server.js";
 import { loadSessionEntry, readSessionMessages } from "./session-utils.js";
 
-const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
-const GATEWAY_LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY);
 const ZAI_FALLBACK = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_ZAI_FALLBACK);
+const REQUIRE_PROFILE_KEYS = isTruthyEnvValue(process.env.OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS);
 const PROVIDERS = parseFilter(process.env.OPENCLAW_LIVE_GATEWAY_PROVIDERS);
 const THINKING_LEVEL = "high";
 const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
@@ -62,7 +61,7 @@ const GATEWAY_LIVE_HEARTBEAT_MS = Math.max(
 const GATEWAY_LIVE_MAX_MODELS = resolveGatewayLiveMaxModels();
 const GATEWAY_LIVE_SUITE_TIMEOUT_MS = resolveGatewayLiveSuiteTimeoutMs(GATEWAY_LIVE_MAX_MODELS);
 
-const describeLive = LIVE || GATEWAY_LIVE ? describe : describe.skip;
+const describeLive = isLiveTestEnabled(["OPENCLAW_LIVE_GATEWAY"]) ? describe : describe.skip;
 
 function parseFilter(raw?: string): Set<string> | null {
   const trimmed = raw?.trim();
@@ -1383,9 +1382,6 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       await ensureOpenClawModelsJson(cfg);
 
       const agentDir = resolveOpenClawAgentDir();
-      const authStore = ensureAuthProfileStore(agentDir, {
-        allowKeychainPrompt: false,
-      });
       const authStorage = discoverAuthStorage(agentDir);
       const modelRegistry = discoverModels(authStorage, agentDir);
       const all = modelRegistry.getAll();
@@ -1399,8 +1395,8 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         ? all.filter((m) => filter.has(`${m.provider}/${m.id}`))
         : all.filter((m) => isModernModelRef({ provider: m.provider, id: m.id }));
 
-      const providerProfileCache = new Map<string, boolean>();
       const candidates: Array<Model<Api>> = [];
+      const skipped: Array<{ model: string; error: string }> = [];
       for (const model of wanted) {
         if (shouldSuppressBuiltInModel({ provider: model.provider, id: model.id })) {
           continue;
@@ -1408,23 +1404,28 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         if (PROVIDERS && !PROVIDERS.has(model.provider)) {
           continue;
         }
-        let hasProfile = providerProfileCache.get(model.provider);
-        if (hasProfile === undefined) {
-          const order = resolveAuthProfileOrder({
-            cfg,
-            store: authStore,
-            provider: model.provider,
-          });
-          hasProfile = order.some((profileId) => Boolean(authStore.profiles[profileId]));
-          providerProfileCache.set(model.provider, hasProfile);
+        const modelRef = `${model.provider}/${model.id}`;
+        try {
+          const apiKeyInfo = await getApiKeyForModel({ model, cfg });
+          if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
+            skipped.push({
+              model: modelRef,
+              error: `non-profile credential source: ${apiKeyInfo.source}`,
+            });
+            continue;
+          }
+          candidates.push(model);
+        } catch (error) {
+          skipped.push({ model: modelRef, error: String(error) });
         }
-        if (!hasProfile) {
-          continue;
-        }
-        candidates.push(model);
       }
 
       if (candidates.length === 0) {
+        if (skipped.length > 0) {
+          logProgress(
+            `[all-models] auth lookup skipped candidates:\n${formatFailurePreview(skipped, 8)}`,
+          );
+        }
         logProgress("[all-models] no API keys found; skipping");
         return;
       }

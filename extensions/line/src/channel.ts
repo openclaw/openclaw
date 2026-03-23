@@ -1,7 +1,4 @@
-import {
-  createPairingPrefixStripper,
-  createTextPairingAdapter,
-} from "openclaw/plugin-sdk/channel-pairing";
+import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
 import {
   createAttachedChannelResultAdapter,
@@ -10,7 +7,10 @@ import {
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
-import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
+import {
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
 import {
   buildTokenChannelStatusSummary,
   clearAccountEntryFields,
@@ -77,13 +77,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
     directory: createEmptyChannelDirectoryAdapter(),
     setup: lineSetupAdapter,
     status: createComputedAccountStatusAdapter<ResolvedLineAccount>({
-      defaultRuntime: {
-        accountId: DEFAULT_ACCOUNT_ID,
-        running: false,
-        lastStartAt: null,
-        lastStopAt: null,
-        lastError: null,
-      },
+      defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
       collectStatusIssues: (accounts) => {
         const issues: ChannelStatusIssue[] = [];
         for (const account of accounts) {
@@ -283,22 +277,24 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
       ],
     },
   },
-  pairing: createTextPairingAdapter({
-    idLabel: "lineUserId",
-    message: "OpenClaw: your access has been approved.",
-    // LINE IDs are case-sensitive; only strip prefix variants (line: / line:user:).
-    normalizeAllowEntry: createPairingPrefixStripper(/^line:(?:user:)?/i),
-    notify: async ({ cfg, id, message }) => {
-      const line = getLineRuntime().channel.line;
-      const account = line.resolveLineAccount({ cfg });
-      if (!account.channelAccessToken) {
-        throw new Error("LINE channel access token not configured");
-      }
-      await line.pushMessageLine(id, message, {
-        channelAccessToken: account.channelAccessToken,
-      });
+  pairing: {
+    text: {
+      idLabel: "lineUserId",
+      message: "OpenClaw: your access has been approved.",
+      // LINE IDs are case-sensitive; only strip prefix variants (line: / line:user:).
+      normalizeAllowEntry: createPairingPrefixStripper(/^line:(?:user:)?/i),
+      notify: async ({ cfg, id, message }) => {
+        const line = getLineRuntime().channel.line;
+        const account = line.resolveLineAccount({ cfg });
+        if (!account.channelAccessToken) {
+          throw new Error("LINE channel access token not configured");
+        }
+        await line.pushMessageLine(id, message, {
+          channelAccessToken: account.channelAccessToken,
+        });
+      },
     },
-  }),
+  },
   security: lineSecurityAdapter,
   outbound: {
     deliveryMode: "direct",

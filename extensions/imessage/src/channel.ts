@@ -5,7 +5,10 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
 import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
-  buildComputedAccountStatusSnapshot,
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
+import {
   collectStatusIssuesFromLastError,
   DEFAULT_ACCOUNT_ID,
   formatTrimmedAllowFromEntries,
@@ -106,7 +109,7 @@ function resolveIMessageOutboundSessionRoute(params: {
 }
 
 export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProbe> =
-  createChatChannelPlugin({
+  createChatChannelPlugin<ResolvedIMessageAccount, IMessageProbe>({
     base: {
       ...createIMessagePluginBase({
         setupWizard: imessageSetupWizard,
@@ -149,16 +152,11 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
           },
         },
       },
-      status: {
-        defaultRuntime: {
-          accountId: DEFAULT_ACCOUNT_ID,
-          running: false,
-          lastStartAt: null,
-          lastStopAt: null,
-          lastError: null,
+      status: createComputedAccountStatusAdapter<ResolvedIMessageAccount, IMessageProbe>({
+        defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, {
           cliPath: null,
           dbPath: null,
-        },
+        }),
         collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("imessage", accounts),
         buildChannelSummary: ({ snapshot }) =>
           buildPassiveProbedChannelStatusSummary(snapshot, {
@@ -167,32 +165,30 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
           }),
         probeAccount: async ({ timeoutMs }) =>
           await (await loadIMessageChannelRuntime()).probeIMessageAccount(timeoutMs),
-        buildAccountSnapshot: ({ account, runtime, probe }) =>
-          buildComputedAccountStatusSnapshot(
-            {
-              accountId: account.accountId,
-              name: account.name,
-              enabled: account.enabled,
-              configured: account.configured,
-              runtime,
-              probe,
-            },
-            {
-              cliPath: runtime?.cliPath ?? account.config.cliPath ?? null,
-              dbPath: runtime?.dbPath ?? account.config.dbPath ?? null,
-            },
-          ),
+        resolveAccountSnapshot: ({ account, runtime }) => ({
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured: account.configured,
+          extra: {
+            cliPath: runtime?.cliPath ?? account.config.cliPath ?? null,
+            dbPath: runtime?.dbPath ?? account.config.dbPath ?? null,
+          },
+        }),
         resolveAccountState: ({ enabled }) => (enabled ? "enabled" : "disabled"),
-      },
+      }),
       gateway: {
         startAccount: async (ctx) =>
           await (await loadIMessageChannelRuntime()).startIMessageGatewayAccount(ctx),
       },
     },
     pairing: {
-      idLabel: "imessageSenderId",
-      notifyApproval: async ({ id }) =>
-        await (await loadIMessageChannelRuntime()).notifyIMessageApproval(id),
+      text: {
+        idLabel: "imessageSenderId",
+        message: "OpenClaw: your access has been approved.",
+        notify: async ({ id }) =>
+          await (await loadIMessageChannelRuntime()).notifyIMessageApproval(id),
+      },
     },
     security: imessageSecurityAdapter,
     outbound: {

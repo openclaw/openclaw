@@ -6,18 +6,18 @@ import {
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
-import {
-  createPairingPrefixStripper,
-  createTextPairingAdapter,
-} from "openclaw/plugin-sdk/channel-pairing";
+import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createOpenGroupPolicyRestrictSendersWarningCollector,
-  projectWarningCollector,
+  projectAccountWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
+import {
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
 import {
   listBlueBubblesAccountIds,
   type ResolvedBlueBubblesAccount,
@@ -104,8 +104,8 @@ const meta = {
   preferOver: ["imessage"],
 };
 
-export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = createChatChannelPlugin(
-  {
+export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBubblesProbe> =
+  createChatChannelPlugin<ResolvedBlueBubblesAccount, BlueBubblesProbe>({
     base: {
       id: "bluebubbles",
       meta,
@@ -231,13 +231,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = crea
       },
       setup: blueBubblesSetupAdapter,
       status: createComputedAccountStatusAdapter<ResolvedBlueBubblesAccount, BlueBubblesProbe>({
-        defaultRuntime: {
-          accountId: DEFAULT_ACCOUNT_ID,
-          running: false,
-          lastStartAt: null,
-          lastStopAt: null,
-          lastError: null,
-        },
+        defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
         collectStatusIssues: collectBlueBubblesStatusIssues,
         buildChannelSummary: ({ snapshot }) =>
           buildProbeChannelStatusSummary(snapshot, { baseUrl: snapshot.baseUrl ?? null }),
@@ -288,10 +282,10 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = crea
     },
     security: {
       resolveDmPolicy: resolveBlueBubblesDmPolicy,
-      collectWarnings: projectWarningCollector(
-        ({ account }: { account: ResolvedBlueBubblesAccount }) => account,
-        collectBlueBubblesSecurityWarnings,
-      ),
+      collectWarnings: projectAccountWarningCollector<
+        ResolvedBlueBubblesAccount,
+        { account: ResolvedBlueBubblesAccount }
+      >(collectBlueBubblesSecurityWarnings),
     },
     threading: {
       buildToolContext: ({ context, hasRepliedRef }) => ({
@@ -300,21 +294,23 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = crea
         hasRepliedRef,
       }),
     },
-    pairing: createTextPairingAdapter({
-      idLabel: "bluebubblesSenderId",
-      message: PAIRING_APPROVED_MESSAGE,
-      normalizeAllowEntry: createPairingPrefixStripper(
-        /^bluebubbles:/i,
-        normalizeBlueBubblesHandle,
-      ),
-      notify: async ({ cfg, id, message }) => {
-        await (
-          await loadBlueBubblesChannelRuntime()
-        ).sendMessageBlueBubbles(id, message, {
-          cfg: cfg,
-        });
+    pairing: {
+      text: {
+        idLabel: "bluebubblesSenderId",
+        message: PAIRING_APPROVED_MESSAGE,
+        normalizeAllowEntry: createPairingPrefixStripper(
+          /^bluebubbles:/i,
+          normalizeBlueBubblesHandle,
+        ),
+        notify: async ({ cfg, id, message }) => {
+          await (
+            await loadBlueBubblesChannelRuntime()
+          ).sendMessageBlueBubbles(id, message, {
+            cfg: cfg,
+          });
+        },
       },
-    }),
+    },
     outbound: {
       base: {
         deliveryMode: "direct",
@@ -369,5 +365,4 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = crea
         },
       },
     },
-  },
-);
+  });

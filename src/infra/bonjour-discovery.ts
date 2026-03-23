@@ -20,6 +20,16 @@ export type GatewayBonjourBeacon = {
   txt?: Record<string, string>;
 };
 
+export function pickResolvedGatewayHost(beacon: GatewayBonjourBeacon): string | null {
+  const host = beacon.host?.trim();
+  return host ? host : null;
+}
+
+export function pickResolvedGatewayPort(beacon: GatewayBonjourBeacon): number | null {
+  const port = beacon.port;
+  return typeof port === "number" && Number.isFinite(port) && port > 0 ? port : null;
+}
+
 export type GatewayBonjourDiscoverOpts = {
   timeoutMs?: number;
   domains?: string[];

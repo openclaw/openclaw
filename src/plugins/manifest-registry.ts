@@ -146,7 +146,8 @@ function isCompatiblePluginIdHint(idHint: string | undefined, manifestId: string
   return (
     normalizedHint === `${manifestId}-provider` ||
     normalizedHint === `${manifestId}-plugin` ||
-    normalizedHint === `${manifestId}-sandbox`
+    normalizedHint === `${manifestId}-sandbox` ||
+    normalizedHint === `${manifestId}-media-understanding`
   );
 }
 
