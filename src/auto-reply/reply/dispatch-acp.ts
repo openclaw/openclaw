@@ -23,11 +23,6 @@ import {
 } from "../../media-understanding/attachments.normalize.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
-  maybeApplyTtsToPayload,
-  resolveTtsConfig,
-  resolveTtsConfigForAccount,
-} from "../../tts/tts.js";
-import {
   isCommandEnabled,
   maybeResolveTextAlias,
   shouldHandleTextCommands,
@@ -44,6 +39,13 @@ type DispatchProcessedRecorder = (
     error?: string;
   },
 ) => void;
+
+let ttsRuntimePromise: Promise<typeof import("../../tts/tts.runtime.js")> | null = null;
+
+function loadTtsRuntime() {
+  ttsRuntimePromise ??= import("../../tts/tts.runtime.js");
+  return ttsRuntimePromise;
+}
 
 function resolveFirstContextText(
   ctx: FinalizedMsgContext,
@@ -318,6 +320,8 @@ export async function tryDispatchAcpReply(params: {
     });
 
     await projector.flush(true);
+    const { maybeApplyTtsToPayload, resolveTtsConfig, resolveTtsConfigForAccount } =
+      await loadTtsRuntime();
     const ttsMode =
       (params.ttsChannel && params.ctx.AccountId
         ? resolveTtsConfigForAccount(params.cfg, params.ttsChannel, params.ctx.AccountId)

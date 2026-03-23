@@ -1,1 +1,1 @@
-export { maybeApplyTtsToPayload } from "./tts.js";
+export { maybeApplyTtsToPayload, resolveTtsConfig, resolveTtsConfigForAccount } from "./tts.js";

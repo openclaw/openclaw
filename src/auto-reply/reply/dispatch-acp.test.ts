@@ -40,6 +40,9 @@ const ttsMocks = vi.hoisted(() => ({
     return params.payload;
   }),
   resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
+  resolveTtsConfigForAccount: vi.fn(
+    (_cfg: OpenClawConfig, _channel: string, _accountId: string) => ({ mode: "final" }),
+  ),
 }));
 
 const sessionMetaMocks = vi.hoisted(() => ({
@@ -74,6 +77,14 @@ vi.mock("../../infra/outbound/message-action-runner.js", () => ({
 vi.mock("../../tts/tts.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
   resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
+  resolveTtsConfigForAccount: (cfg: OpenClawConfig, channel: string, accountId: string) =>
+    ttsMocks.resolveTtsConfigForAccount(cfg, channel, accountId),
+}));
+vi.mock("../../tts/tts.runtime.js", () => ({
+  maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
+  resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
+  resolveTtsConfigForAccount: (cfg: OpenClawConfig, channel: string, accountId: string) =>
+    ttsMocks.resolveTtsConfigForAccount(cfg, channel, accountId),
 }));
 
 vi.mock("../../acp/runtime/session-meta.js", () => ({

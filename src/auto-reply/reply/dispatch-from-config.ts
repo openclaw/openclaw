@@ -39,7 +39,6 @@ import {
 import { getGlobalHookRunner, getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeTtsAutoMode } from "../../tts/tts-config.js";
-import { resolveTtsConfig, resolveTtsConfigForAccount } from "../../tts/tts.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { BlockReplyContext, GetReplyOptions, ReplyPayload } from "../types.js";
@@ -537,7 +536,8 @@ export async function dispatchReplyFromConfig(params: {
     // TTS audio separately from the accumulated block content.
     let accumulatedBlockText = "";
     let blockCount = 0;
-    const { maybeApplyTtsToPayload } = await loadTtsRuntime();
+    const { maybeApplyTtsToPayload, resolveTtsConfig, resolveTtsConfigForAccount } =
+      await loadTtsRuntime();
 
     const resolveToolDeliveryPayload = (payload: ReplyPayload): ReplyPayload | null => {
       if (
