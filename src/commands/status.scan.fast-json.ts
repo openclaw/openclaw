@@ -4,6 +4,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
+import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { getAgentLocalStatuses as getAgentLocalStatusesFn } from "./status.agent-local.js";
 import type { StatusScanResult } from "./status.scan.js";
@@ -17,7 +18,6 @@ import type { StatusSummary } from "./status.types.js";
 type AgentLocalStatuses = Awaited<ReturnType<typeof getAgentLocalStatusesFn>>;
 
 let pluginRegistryModulePromise: Promise<typeof import("../cli/plugin-registry.js")> | undefined;
-let pluginStatusModulePromise: Promise<typeof import("../plugins/status.js")> | undefined;
 let configIoModulePromise: Promise<typeof import("../config/io.js")> | undefined;
 let statusSummaryModulePromise: Promise<typeof import("./status.summary.js")> | undefined;
 let statusUpdateModulePromise: Promise<typeof import("./status.update.js")> | undefined;
@@ -38,11 +38,6 @@ let processExecModulePromise: Promise<typeof import("../process/exec.js")> | und
 function loadPluginRegistryModule() {
   pluginRegistryModulePromise ??= import("../cli/plugin-registry.js");
   return pluginRegistryModulePromise;
-}
-
-function loadPluginStatusModule() {
-  pluginStatusModulePromise ??= import("../plugins/status.js");
-  return pluginStatusModulePromise;
 }
 
 function loadConfigIoModule() {
@@ -267,13 +262,6 @@ function isMissingConfigColdStart(): boolean {
   return !shouldSkipMissingConfigFastPath() && !existsSync(resolveConfigPathFast(process.env));
 }
 
-function shouldCollectPluginCompatibility(cfg: OpenClawConfig): boolean {
-  if (hasPotentialConfiguredChannelsFast(cfg)) {
-    return true;
-  }
-  return existsSync(resolveConfigPathFast(process.env));
-}
-
 function resolveDefaultMemoryStorePath(agentId: string): string {
   return path.join(resolveStateDirFast(process.env), "memory", `${agentId}.sqlite`);
 }
@@ -420,7 +408,14 @@ export async function scanStatusJsonFast(
   const hasConfiguredChannels = hasPotentialConfiguredChannelsFast(cfg);
   if (hasConfiguredChannels) {
     const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
-    ensurePluginRegistryLoaded({ scope: "configured-channels" });
+    // Route plugin registration logs to stderr so they don't corrupt JSON on stdout.
+    const prev = loggingState.forceConsoleToStderr;
+    loggingState.forceConsoleToStderr = true;
+    try {
+      ensurePluginRegistryLoaded({ scope: "configured-channels" });
+    } finally {
+      loggingState.forceConsoleToStderr = prev;
+    }
   }
   const osSummary = resolveOsSummary();
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
@@ -501,14 +496,9 @@ export async function scanStatusJsonFast(
   const memory = opts.all
     ? await resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin })
     : null;
-  const pluginCompatibility = shouldCollectPluginCompatibility(cfg)
-    ? await loadPluginStatusModule().then(({ buildPluginCompatibilityNotices }) =>
-        // Keep plugin status loading off the empty-config `status --json` fast path.
-        // The plugin status module pulls in the full loader graph and materially bloats
-        // startup RSS even when plugin compatibility is never consulted.
-        buildPluginCompatibilityNotices({ config: cfg }),
-      )
-    : [];
+  // `status --json` does not serialize plugin compatibility notices, so keep the
+  // fast path off the full plugin status graph after the initial scoped preload.
+  const pluginCompatibility: StatusScanResult["pluginCompatibility"] = [];
 
   return {
     cfg,

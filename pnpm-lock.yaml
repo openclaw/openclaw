@@ -269,6 +269,8 @@ importers:
 
   extensions/copilot-proxy: {}
 
+  extensions/deepgram: {}
+
   extensions/diagnostics-otel:
     dependencies:
       '@opentelemetry/api':
@@ -339,7 +341,11 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/duckduckgo: {}
+
   extensions/elevenlabs: {}
+
+  extensions/exa: {}
 
   extensions/fal: {}
 
@@ -377,6 +383,8 @@ importers:
       openclaw:
         specifier: workspace:*
         version: link:../..
+
+  extensions/groq: {}
 
   extensions/huggingface: {}
 

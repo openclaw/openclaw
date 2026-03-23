@@ -3,12 +3,14 @@ import path from "node:path";
 import { parseMemoryTraceSummaryLines } from "./test-parallel-memory.mjs";
 import { normalizeTrackedRepoPath, tryReadJsonFile, writeJsonFile } from "./test-report-utils.mjs";
 import { unitMemoryHotspotManifestPath } from "./test-runner-manifest.mjs";
+import { matchesHotspotSummaryLane } from "./test-update-memory-hotspots-utils.mjs";
 
 function parseArgs(argv) {
   const args = {
     config: "vitest.unit.config.ts",
     out: unitMemoryHotspotManifestPath,
     lane: "unit-fast",
+    lanePrefixes: [],
     logs: [],
     minDeltaKb: 256 * 1024,
     limit: 64,
@@ -27,6 +29,14 @@ function parseArgs(argv) {
     }
     if (arg === "--lane") {
       args.lane = argv[i + 1] ?? args.lane;
+      i += 1;
+      continue;
+    }
+    if (arg === "--lane-prefix") {
+      const lanePrefix = argv[i + 1];
+      if (typeof lanePrefix === "string" && lanePrefix.length > 0) {
+        args.lanePrefixes.push(lanePrefix);
+      }
       i += 1;
       continue;
     }
@@ -109,8 +119,8 @@ if (existing) {
 }
 for (const logPath of opts.logs) {
   const text = fs.readFileSync(logPath, "utf8");
-  const summaries = parseMemoryTraceSummaryLines(text).filter(
-    (summary) => summary.lane === opts.lane,
+  const summaries = parseMemoryTraceSummaryLines(text).filter((summary) =>
+    matchesHotspotSummaryLane(summary.lane, opts.lane, opts.lanePrefixes),
   );
   for (const summary of summaries) {
     for (const record of summary.top) {
@@ -142,7 +152,10 @@ const output = {
   config: opts.config,
   generatedAt: new Date().toISOString(),
   defaultMinDeltaKb: opts.minDeltaKb,
-  lane: opts.lane,
+  lane:
+    opts.lanePrefixes.length === 0
+      ? opts.lane
+      : [opts.lane, ...opts.lanePrefixes.map((prefix) => String(prefix).concat("*"))].join(", "),
   files,
 };
 
