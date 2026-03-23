@@ -62,8 +62,9 @@
 2. Use short 2-3 word queries. Example: "email setup", "project status".
 3. If few results, rephrase and search again with different words.
 4. After search, use memory_get to read specific lines from the result files.
-5. Write important decisions and outcomes to memory/YYYY-MM-DD.md immediately after each completed task (not just at session end).
-6. Read MEMORY.md only in main session (direct chat with your human).
+5. If memory_search returns no results, use memory_get to read the specific date file (e.g., `memory/2026-03-22.md`) directly — NEVER use exec to list or read memory files.
+6. Write important decisions and outcomes to memory/YYYY-MM-DD.md immediately after each completed task (not just at session end).
+7. Read MEMORY.md only in main session (direct chat with your human).
 
 ## Channel Rules
 
