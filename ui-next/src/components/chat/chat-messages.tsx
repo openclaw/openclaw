@@ -662,7 +662,10 @@ export function ChatMessageBubble({
           <div className="bg-primary text-primary-foreground rounded-2xl rounded-br-sm shadow-lg shadow-primary/10 ring-1 ring-white/10 overflow-hidden">
             {/* Reply quote block — rendered when message starts with "> [Re: #N]" */}
             {(() => {
-              const replyMatch = text.match(/^> \[Re: #(\d+)\] (.+?)(\n\n([\s\S]*))?$/s);
+              // Match "> [Re: #N] quoted text" on the first line, rest is body
+              const firstLineEnd = text.indexOf("\n");
+              const firstLine = firstLineEnd >= 0 ? text.slice(0, firstLineEnd) : text;
+              const replyMatch = firstLine.match(/^> \[Re: #(\d+)\] (.+)/);
               if (!replyMatch) {
                 return (
                   <div className="px-5 py-3.5">
@@ -670,7 +673,10 @@ export function ChatMessageBubble({
                   </div>
                 );
               }
-              const [, seqNum, quotedText, , bodyText] = replyMatch;
+              const seqNum = replyMatch[1];
+              const quotedText = replyMatch[2];
+              const bodyText =
+                firstLineEnd >= 0 ? text.slice(firstLineEnd).replace(/^\n+/, "") : "";
               return (
                 <>
                   {/* Quoted reply block — dark contrast card */}
