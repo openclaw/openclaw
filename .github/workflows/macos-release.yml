@@ -117,26 +117,30 @@ jobs:
           exit 1
 
       - name: Package macOS release with ad-hoc signing
+        id: package_preflight
         env:
-          APP_VERSION: ${{ steps.package_version.outputs.value }}
           BUNDLE_ID: ai.openclaw.mac
           BUILD_CONFIG: release
           CODESIGN_TIMESTAMP: "off"
           SIGN_IDENTITY: "-"
-          SKIP_NOTARIZE: "1"
-          SKIP_DMG: "1"
-          SKIP_DSYM: "1"
           SKIP_PNPM_INSTALL: "1"
           SKIP_TSC: "1"
           SKIP_UI_BUILD: "1"
           SPARKLE_FEED_URL: ${{ env.SPARKLE_FEED_URL }}
-        run: scripts/package-mac-dist.sh
+        run: |
+          set -euo pipefail
+          scripts/package-mac-app.sh
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" dist/OpenClaw.app/Contents/Info.plist)
+          ZIP_PATH="dist/OpenClaw-${VERSION}.zip"
+          rm -f "$ZIP_PATH"
+          ditto -c -k --sequesterRsrc --keepParent dist/OpenClaw.app "$ZIP_PATH"
+          echo "zip_path=$ZIP_PATH" >> "$GITHUB_OUTPUT"
 
       - name: Upload preflight macOS artifacts
         uses: actions/upload-artifact@v7
         with:
           name: macos-preflight-${{ inputs.tag }}
-          path: dist/OpenClaw-${{ steps.package_version.outputs.value }}.zip
+          path: ${{ steps.package_preflight.outputs.zip_path }}
           if-no-files-found: error
 
   validate_publish_dispatch_ref:
