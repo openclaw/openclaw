@@ -442,6 +442,41 @@ describe("AcpxRuntime", () => {
     );
   });
 
+  it("applies updated permission flags when reusing an existing session handle", async () => {
+    const first = await createMockRuntimeFixture({
+      permissionMode: "approve-reads",
+    });
+    const handle = await first.runtime.ensureSession({
+      sessionKey: "agent:claude:acp:permission-updated",
+      agent: "claude",
+      mode: "persistent",
+    });
+
+    const second = await createMockRuntimeFixture({
+      permissionMode: "approve-all",
+    });
+    for await (const _event of second.runtime.runTurn({
+      handle,
+      text: "reuse-updated-permissions",
+      mode: "prompt",
+      requestId: "req-reuse-updated-permissions",
+    })) {
+      // Drain events; assertions inspect the mock runtime log.
+    }
+
+    const logs = await readMockRuntimeLogEntries(second.logPath);
+    const prompt = logs.find(
+      (entry) =>
+        entry.kind === "prompt" &&
+        String(entry.sessionName ?? "") === "agent:claude:acp:permission-updated",
+    );
+    expect(prompt).toBeDefined();
+    const promptArgs = (prompt?.args as string[]) ?? [];
+    expect(promptArgs).toContain("--approve-all");
+    expect(promptArgs).toContain("--non-interactive-permissions");
+    expect(promptArgs).toContain("fail");
+  });
+
   it("supports cancel and close using encoded runtime handle state", async () => {
     const { runtime, logPath, config } = await createMockRuntimeFixture();
     const handle = await runtime.ensureSession({
