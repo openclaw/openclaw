@@ -376,6 +376,30 @@ async function resolveKeyEntry(params: {
     return { type: "provider" as const, provider: providerId, model };
   };
 
+  // Helper to check all providers in registry for a given capability
+  const checkAllRegistryProviders = async (
+    cap: MediaUnderstandingCapability,
+  ): Promise<MediaUnderstandingModelConfig | null> => {
+    for (const [providerId, provider] of providerRegistry) {
+      const hasCapability =
+        cap === "audio"
+          ? !!provider.transcribeAudio
+          : cap === "image"
+            ? !!provider.describeImage
+            : cap === "video"
+              ? !!provider.describeVideo
+              : false;
+      if (!hasCapability) {
+        continue;
+      }
+      const entry = await checkProvider(providerId, undefined);
+      if (entry) {
+        return entry;
+      }
+    }
+    return null;
+  };
+
   if (capability === "image") {
     const activeProvider = params.activeModel?.provider?.trim();
     if (activeProvider) {
@@ -391,7 +415,7 @@ async function resolveKeyEntry(params: {
         return entry;
       }
     }
-    return null;
+    return await checkAllRegistryProviders("image");
   }
 
   if (capability === "video") {
@@ -408,7 +432,7 @@ async function resolveKeyEntry(params: {
         return entry;
       }
     }
-    return null;
+    return await checkAllRegistryProviders("video");
   }
 
   const activeProvider = params.activeModel?.provider?.trim();
@@ -424,7 +448,7 @@ async function resolveKeyEntry(params: {
       return entry;
     }
   }
-  return null;
+  return await checkAllRegistryProviders("audio");
 }
 
 function resolveImageModelFromAgentDefaults(cfg: OpenClawConfig): MediaUnderstandingModelConfig[] {

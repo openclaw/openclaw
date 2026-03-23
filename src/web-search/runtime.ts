@@ -159,7 +159,8 @@ export function resolveWebSearchProviderId(params: {
     }
   }
 
-  return providers[0]?.id ?? "";
+  // No configured provider and no viable auto-detected provider found
+  return "";
 }
 
 export function resolveWebSearchDefinition(
