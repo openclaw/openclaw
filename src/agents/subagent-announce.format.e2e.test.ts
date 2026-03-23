@@ -383,6 +383,63 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("completed successfully");
   });
 
+  it("rechecks timed-out waits before announcing timeout when the run finishes immediately after", async () => {
+    const waitStatuses = [
+      { status: "timeout", startedAt: 10, endedAt: 20 },
+      { status: "ok", startedAt: 10, endedAt: 30 },
+    ];
+    callGatewaySpy.mockImplementation(async (req: unknown) => {
+      const typed = req as { method?: string; params?: { sessionKey?: string } };
+      if (typed.method === "agent") {
+        return await agentSpy(typed);
+      }
+      if (typed.method === "send") {
+        return await sendSpy(typed);
+      }
+      if (typed.method === "agent.wait") {
+        return waitStatuses.shift() ?? { status: "ok", startedAt: 10, endedAt: 30 };
+      }
+      if (typed.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "Worker executed successfully" }],
+            },
+          ],
+        };
+      }
+      if (typed.method === "sessions.patch" || typed.method === "sessions.delete") {
+        return {};
+      }
+      return {};
+    });
+    readLatestAssistantReplyMock.mockResolvedValue("Worker executed successfully");
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-timeout-race",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: true,
+      startedAt: 10,
+      endedAt: 20,
+    });
+
+    const call = agentSpy.mock.calls[0]?.[0] as {
+      params?: {
+        message?: string;
+        internalEvents?: Array<{ status?: string; statusLabel?: string; result?: string }>;
+      };
+    };
+    expect(call?.params?.internalEvents?.[0]?.status).toBe("ok");
+    expect(call?.params?.internalEvents?.[0]?.statusLabel).toBe("completed successfully");
+    expect(call?.params?.internalEvents?.[0]?.result).toContain("Worker executed successfully");
+  });
+
   it("uses child-run announce identity for direct idempotency", async () => {
     await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:worker",
