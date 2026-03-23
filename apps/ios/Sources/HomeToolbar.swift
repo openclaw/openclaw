@@ -88,7 +88,6 @@ private struct HomeToolbarStatusButton: View {
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
-                        .minimumScaleFactor(0.92)
                 }
 
                 if let activity {

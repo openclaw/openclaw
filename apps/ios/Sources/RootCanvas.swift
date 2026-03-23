@@ -503,7 +503,6 @@ private struct CanvasContent: View {
                     self.openSettings()
                 })
                 .padding(.horizontal, 14)
-                .padding(.bottom, 0)
         }
         .overlay(alignment: .topLeading) {
             if let voiceWakeToastText, !voiceWakeToastText.isEmpty {
