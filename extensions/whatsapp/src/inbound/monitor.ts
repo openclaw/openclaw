@@ -175,7 +175,9 @@ export async function monitorWebInbox(options: {
               const resolved = mapped ?? p.id;
               // Map normalized display number → original JID so outbound mentions
               // use the correct JID type (phone @s.whatsapp.net vs LID @lid).
-              const normalized = normalizeE164(resolved);
+              // Strip device suffix before normalizing so LID JIDs like
+              // "123456:1@hosted.lid" don't merge the device digit into the number.
+              const normalized = normalizeE164(resolved.replace(/:[\d]+@/, "@"));
               if (normalized) {
                 participantJidMap.set(normalized, p.id);
               }
