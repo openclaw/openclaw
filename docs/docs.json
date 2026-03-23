@@ -89,6 +89,10 @@
       "destination": "/tools/web-fetch"
     },
     {
+      "source": "/duckduckgo-search",
+      "destination": "/tools/duckduckgo-search"
+    },
+    {
       "source": "/gemini-search",
       "destination": "/tools/gemini-search"
     },
@@ -1122,6 +1126,7 @@
                       "tools/web-fetch",
                       "tools/web",
                       "tools/brave-search",
+                      "tools/duckduckgo-search",
                       "tools/firecrawl",
                       "tools/gemini-search",
                       "tools/grok-search",
