@@ -2611,6 +2611,49 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "querit",
+    idHint: "querit-plugin",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/querit-plugin",
+    packageVersion: "2026.3.22",
+    packageDescription: "OpenClaw Querit plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "querit",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          webSearch: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              apiKey: {
+                type: ["string", "object"],
+              },
+            },
+          },
+        },
+      },
+      providerAuthEnvVars: {
+        querit: ["QUERIT_API_KEY"],
+      },
+      uiHints: {
+        "webSearch.apiKey": {
+          label: "Querit API Key",
+          help: "Querit API key for web search.",
+          sensitive: true,
+          placeholder: "querit-sk-...",
+        },
+      },
+    },
+  },
+  {
     dirName: "sglang",
     idHint: "sglang",
     source: {

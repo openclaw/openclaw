@@ -6,6 +6,7 @@ const BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS = {
   grok: "xai",
   kimi: "moonshot",
   perplexity: "perplexity",
+  querit: "querit",
   tavily: "tavily",
 } as const satisfies Record<string, string>;
 

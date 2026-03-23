@@ -30,7 +30,7 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
 }));
 
 function createTestProvider(params: {
-  id: "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl" | "tavily";
+  id: "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl" | "tavily" | "querit";
   pluginId: string;
   order: number;
 }): PluginWebSearchProviderEntry {
@@ -91,6 +91,7 @@ function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
     createTestProvider({ id: "perplexity", pluginId: "perplexity", order: 50 }),
     createTestProvider({ id: "firecrawl", pluginId: "firecrawl", order: 60 }),
     createTestProvider({ id: "tavily", pluginId: "tavily", order: 70 }),
+    createTestProvider({ id: "querit", pluginId: "querit", order: 80 }),
   ];
 }
 
@@ -207,6 +208,9 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
   }
   if (entry.id === "plugins.entries.tavily.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "tavily");
+  }
+  if (entry.id === "plugins.entries.querit.config.webSearch.apiKey") {
+    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "querit");
   }
   return config;
 }

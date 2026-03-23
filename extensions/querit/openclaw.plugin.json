@@ -1,0 +1,29 @@
+{
+  "id": "querit",
+  "providerAuthEnvVars": {
+    "querit": ["QUERIT_API_KEY"]
+  },
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "Querit API Key",
+      "help": "Querit API key for web search.",
+      "sensitive": true,
+      "placeholder": "querit-sk-..."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          }
+        }
+      }
+    }
+  }
+}

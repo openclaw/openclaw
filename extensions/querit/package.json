@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/querit-plugin",
+  "version": "2026.3.22",
+  "private": true,
+  "description": "OpenClaw Querit plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

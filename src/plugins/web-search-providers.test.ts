@@ -14,6 +14,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       "firecrawl:firecrawl",
       "exa:exa",
       "tavily:tavily",
+      "querit:querit",
       "duckduckgo:duckduckgo",
     ]);
     expect(providers.map((provider) => provider.credentialPath)).toEqual([
@@ -25,6 +26,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       "plugins.entries.firecrawl.config.webSearch.apiKey",
       "plugins.entries.exa.config.webSearch.apiKey",
       "plugins.entries.tavily.config.webSearch.apiKey",
+      "plugins.entries.querit.config.webSearch.apiKey",
       "",
     ]);
     expect(providers.find((provider) => provider.id === "firecrawl")?.applySelectionConfig).toEqual(
@@ -54,6 +56,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       "firecrawl",
       "exa",
       "tavily",
+      "querit",
       "duckduckgo",
     ]);
   });
@@ -110,6 +113,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       "firecrawl:firecrawl",
       "exa:exa",
       "tavily:tavily",
+      "querit:querit",
       "duckduckgo:duckduckgo",
     ]);
   });

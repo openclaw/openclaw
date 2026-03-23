@@ -293,6 +293,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/qianfan/**"
+"extensions: querit":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/querit/**"
 "extensions: synthetic":
   - changed-files:
       - any-glob-to-any-file:
