@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
-import { getSpeechProvider, listSpeechProviders, normalizeSpeechProviderId } from "./provider-registry.js";
+import {
+  getSpeechProvider,
+  listSpeechProviders,
+  normalizeSpeechProviderId,
+} from "./provider-registry.js";
 
 const loadOpenClawPluginsMock = vi.fn();
 

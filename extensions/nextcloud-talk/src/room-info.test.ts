@@ -85,9 +85,7 @@ describe("nextcloud talk room info", () => {
 
     expect(kind).toBeUndefined();
     expect(readFileSync).toHaveBeenCalledWith("/tmp/nextcloud-secret", "utf-8");
-    expect(log).toHaveBeenCalledWith(
-      "nextcloud-talk: room lookup failed (403) token=room-group",
-    );
+    expect(log).toHaveBeenCalledWith("nextcloud-talk: room lookup failed (403) token=room-group");
     expect(release).toHaveBeenCalledTimes(1);
   });
 

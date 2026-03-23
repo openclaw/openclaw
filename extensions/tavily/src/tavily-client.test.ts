@@ -12,9 +12,7 @@ describe("tavily client helpers", () => {
   });
 
   it("falls back to the default host for invalid base urls", () => {
-    expect(__testing.resolveEndpoint("not a url", "/search")).toBe(
-      "https://api.tavily.com/search",
-    );
+    expect(__testing.resolveEndpoint("not a url", "/search")).toBe("https://api.tavily.com/search");
     expect(__testing.resolveEndpoint("", "/extract")).toBe("https://api.tavily.com/extract");
   });
 });
