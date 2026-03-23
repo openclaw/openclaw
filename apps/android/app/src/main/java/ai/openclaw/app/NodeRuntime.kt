@@ -885,6 +885,10 @@ class NodeRuntime(context: Context) {
     }
   }
 
+  fun isTrustedCanvasActionUrl(rawUrl: String?): Boolean {
+    return a2uiHandler.isTrustedCanvasActionUrl(rawUrl)
+  }
+
   fun loadChat(sessionKey: String) {
     val key = sessionKey.trim().ifEmpty { resolveMainSessionKey() }
     chat.load(key)
