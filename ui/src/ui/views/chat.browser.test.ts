@@ -37,6 +37,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
           key: "main",
           kind: "direct",
           updatedAt: null,
+          totalTokens: 3_800,
           inputTokens: 3_800,
           contextTokens: 4_000,
         },
