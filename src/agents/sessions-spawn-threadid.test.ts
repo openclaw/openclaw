@@ -20,6 +20,7 @@ describe("sessions_spawn requesterOrigin threading", () => {
     });
     const result = await tool.execute("call", {
       task: "do thing",
+      agentId: "main",
       runTimeoutSeconds: 1,
     });
     expect(result.details).toMatchObject({ status: "accepted", runId: "run-1" });

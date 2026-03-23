@@ -44,7 +44,7 @@ describe("sessions_spawn default runTimeoutSeconds", () => {
     applySubagentTimeoutDefault(900);
     const gateway = sessionsHarness.setupSessionsSpawnGatewayMock({});
 
-    await spawnSubagent("call-1", { task: "hello" });
+    await spawnSubagent("call-1", { task: "hello", agentId: "test" });
 
     expect(getSubagentTimeout(gateway.calls)).toBe(900);
   });

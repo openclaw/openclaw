@@ -21,6 +21,7 @@ vi.mock("./pi-embedded.js", () => ({
   isEmbeddedPiRunStreaming: () => false,
   queueEmbeddedPiMessage: () => false,
   waitForEmbeddedPiRunEnd: async () => true,
+  resolveEmbeddedSessionLane: () => undefined,
 }));
 
 vi.mock("./tools/agent-step.js", () => ({
@@ -68,6 +69,7 @@ async function executeSpawnAndExpectAccepted(params: {
 }) {
   const result = await params.tool.execute(params.callId, {
     task: "do thing",
+    agentId: "main",
     runTimeoutSeconds: RUN_TIMEOUT_SECONDS,
     ...(params.cleanup ? { cleanup: params.cleanup } : {}),
     ...(params.label ? { label: params.label } : {}),

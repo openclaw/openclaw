@@ -24,7 +24,9 @@ const SessionsSpawnToolSchema = Type.Object({
   task: Type.String(),
   label: Type.Optional(Type.String()),
   runtime: optionalStringEnum(SESSIONS_SPAWN_RUNTIMES),
-  agentId: Type.Optional(Type.String()),
+  agentId: Type.String({
+    description: "The target agent ID to spawn. Use your own agent ID to spawn a copy of yourself.",
+  }),
   resumeSessionId: Type.Optional(
     Type.String({
       description:

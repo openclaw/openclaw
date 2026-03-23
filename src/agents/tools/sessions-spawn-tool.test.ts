@@ -87,6 +87,7 @@ describe("sessions_spawn tool", () => {
 
     await tool.execute("call-ws", {
       task: "inspect AGENTS",
+      agentId: "main",
       workspaceDir: "/tmp/attempted-override",
     });
 
@@ -185,6 +186,14 @@ describe("sessions_spawn tool", () => {
     );
   });
 
+  it("declares agentId as required in the tool schema", () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+    const schema = tool.parameters as { required?: string[] };
+    expect(schema.required).toContain("agentId");
+  });
+
   it("rejects resumeSessionId without runtime=acp", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
@@ -192,6 +201,7 @@ describe("sessions_spawn tool", () => {
 
     const result = await tool.execute("call-guard", {
       task: "resume prior work",
+      agentId: "main",
       resumeSessionId: "7f4a78e0-f6be-43fe-855c-c1c4fd229bc4",
     });
 
@@ -212,6 +222,7 @@ describe("sessions_spawn tool", () => {
     const result = await tool.execute("call-3", {
       runtime: "acp",
       task: "analyze file",
+      agentId: "main",
       attachments: [{ name: "a.txt", content: "hello", encoding: "utf8" }],
     });
 
@@ -232,6 +243,7 @@ describe("sessions_spawn tool", () => {
     const result = await tool.execute("call-3b", {
       runtime: "subagent",
       task: "analyze file",
+      agentId: "main",
       streamTo: "parent",
     });
 

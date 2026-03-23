@@ -4,7 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { addSubagentRunForTests, resetSubagentRegistryForTests } from "./subagent-registry.js";
 import { createPerSenderSessionConfig } from "./test-helpers/session-config.js";
-import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
+const { createSessionsSpawnTool } = await import("./tools/sessions-spawn-tool.js");
 
 const callGatewayMock = vi.fn();
 
@@ -19,6 +19,14 @@ let configOverride: Record<string, unknown> = {
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: () => configOverride,
+  };
+});
+
+vi.mock("../config/io.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/io.js")>();
   return {
     ...actual,
     loadConfig: () => configOverride,
@@ -89,7 +97,7 @@ describe("sessions_spawn depth + child limits", () => {
       agentSessionKey: "agent:main:subagent:parent",
       workspaceDir: "/parent/workspace",
     });
-    const result = await tool.execute("call-depth-reject", { task: "hello" });
+    const result = await tool.execute("call-depth-reject", { task: "hello", agentId: "main" });
 
     expect(result.details).toMatchObject({
       status: "forbidden",
@@ -101,7 +109,7 @@ describe("sessions_spawn depth + child limits", () => {
     setSubagentLimits({ maxSpawnDepth: 2 });
 
     const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:subagent:parent" });
-    const result = await tool.execute("call-depth-allow", { task: "hello" });
+    const result = await tool.execute("call-depth-allow", { task: "hello", agentId: "main" });
 
     expect(result.details).toMatchObject({
       status: "accepted",
@@ -141,7 +149,7 @@ describe("sessions_spawn depth + child limits", () => {
     });
 
     const tool = createSessionsSpawnTool({ agentSessionKey: callerKey });
-    const result = await tool.execute("call-depth-2-reject", { task: "hello" });
+    const result = await tool.execute("call-depth-2-reject", { task: "hello", agentId: "main" });
 
     expect(result.details).toMatchObject({
       status: "forbidden",
@@ -154,7 +162,10 @@ describe("sessions_spawn depth + child limits", () => {
     const { callerKey } = seedDepthTwoAncestryStore();
 
     const tool = createSessionsSpawnTool({ agentSessionKey: callerKey });
-    const result = await tool.execute("call-depth-ancestry-reject", { task: "hello" });
+    const result = await tool.execute("call-depth-ancestry-reject", {
+      task: "hello",
+      agentId: "main",
+    });
 
     expect(result.details).toMatchObject({
       status: "forbidden",
@@ -167,7 +178,10 @@ describe("sessions_spawn depth + child limits", () => {
     seedDepthTwoAncestryStore({ sessionIds: true });
 
     const tool = createSessionsSpawnTool({ agentSessionKey: "depth-2-session" });
-    const result = await tool.execute("call-depth-sessionid-reject", { task: "hello" });
+    const result = await tool.execute("call-depth-sessionid-reject", {
+      task: "hello",
+      agentId: "main",
+    });
 
     expect(result.details).toMatchObject({
       status: "forbidden",
@@ -200,7 +214,7 @@ describe("sessions_spawn depth + child limits", () => {
     });
 
     const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:subagent:parent" });
-    const result = await tool.execute("call-max-children", { task: "hello" });
+    const result = await tool.execute("call-max-children", { task: "hello", agentId: "main" });
 
     expect(result.details).toMatchObject({
       status: "forbidden",
@@ -223,7 +237,10 @@ describe("sessions_spawn depth + child limits", () => {
     };
 
     const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:subagent:parent" });
-    const result = await tool.execute("call-max-concurrent-independent", { task: "hello" });
+    const result = await tool.execute("call-max-concurrent-independent", {
+      task: "hello",
+      agentId: "main",
+    });
 
     expect(result.details).toMatchObject({
       status: "accepted",
@@ -250,6 +267,7 @@ describe("sessions_spawn depth + child limits", () => {
     const tool = createSessionsSpawnTool({ agentSessionKey: "main" });
     const result = await tool.execute("call-model-reject", {
       task: "hello",
+      agentId: "main",
       model: "bad-model",
     });
 

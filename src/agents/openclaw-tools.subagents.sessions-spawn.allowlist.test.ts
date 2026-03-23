@@ -18,6 +18,7 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
         scope: "per-sender",
       },
       agents: {
+        defaults: { subagents: { maxSpawnDepth: 10 } },
         list: [
           {
             id: "main",
@@ -62,15 +63,16 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
         scope: "per-sender",
       },
       agents: {
-        ...(params?.includeSandboxedDefault
-          ? {
-              defaults: {
+        defaults: {
+          subagents: { maxSpawnDepth: 10 },
+          ...(params?.includeSandboxedDefault
+            ? {
                 sandbox: {
                   mode: "all",
                 },
-              },
-            }
-          : {}),
+              }
+            : {}),
+        },
         list: [
           {
             id: "main",
@@ -111,6 +113,7 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     setSessionsSpawnConfigOverride({
       session: { mainKey: "main", scope: "per-sender" },
       agents: {
+        defaults: { subagents: { maxSpawnDepth: 10 } },
         list: [{ id: "main", subagents: { allowAgents: ["*"] } }],
       },
     });
@@ -236,6 +239,7 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     setSessionsSpawnConfigOverride({
       session: { mainKey: "main", scope: "per-sender" },
       agents: {
+        defaults: { subagents: { maxSpawnDepth: 10 } },
         list: [{ id: "main", subagents: { allowAgents: ["*"] } }, { id: "research" }],
       },
     });
@@ -266,6 +270,7 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     setSessionsSpawnConfigOverride({
       session: { mainKey: "main", scope: "per-sender" },
       agents: {
+        defaults: { subagents: { maxSpawnDepth: 10 } },
         list: [{ id: "main", subagents: { allowAgents: ["*"] } }, { id: "my-research_agent01" }],
       },
     });
@@ -279,6 +284,7 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     setSessionsSpawnConfigOverride({
       session: { mainKey: "main", scope: "per-sender" },
       agents: {
+        defaults: { subagents: { maxSpawnDepth: 10 } },
         list: [
           { id: "main", subagents: { allowAgents: ["research"] } },
           // "research" is NOT in agents.list — only in allowAgents

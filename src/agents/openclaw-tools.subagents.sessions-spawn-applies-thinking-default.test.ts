@@ -70,7 +70,7 @@ describe("sessions_spawn thinking defaults", () => {
   it("applies agents.defaults.subagents.thinking when thinking is omitted", async () => {
     await expectThinkingPropagation({
       callId: "call-1",
-      payload: { task: "hello" },
+      payload: { task: "hello", agentId: "test" },
       expected: "high",
     });
   });
