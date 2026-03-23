@@ -7,6 +7,7 @@ import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runt
 import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { wasSentByBot } from "./sent-message-cache.js";
 
 export type TelegramBotDeps = {
@@ -16,6 +17,7 @@ export type TelegramBotDeps = {
   upsertChannelPairingRequest: typeof upsertChannelPairingRequest;
   enqueueSystemEvent: typeof enqueueSystemEvent;
   dispatchReplyWithBufferedBlockDispatcher: typeof dispatchReplyWithBufferedBlockDispatcher;
+  loadWebMedia: typeof loadWebMedia;
   buildModelsProviderData: typeof buildModelsProviderData;
   listSkillCommandsForAgents: typeof listSkillCommandsForAgents;
   wasSentByBot: typeof wasSentByBot;
@@ -39,6 +41,9 @@ export const defaultTelegramBotDeps: TelegramBotDeps = {
   },
   get dispatchReplyWithBufferedBlockDispatcher() {
     return dispatchReplyWithBufferedBlockDispatcher;
+  },
+  get loadWebMedia() {
+    return loadWebMedia;
   },
   get buildModelsProviderData() {
     return buildModelsProviderData;
