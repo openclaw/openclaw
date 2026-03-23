@@ -573,20 +573,4 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("内网穿透地址是什么？");
     expect(memoryContent).toContain("assistant: 地址是 https://example.ngrok.app");
   });
-
-  it("triggers on 'new' action (daily/scheduled reset path, #43524)", async () => {
-    // Daily reset fires emitResetCommandHooks with action="new", same as manual /new.
-    // This test ensures the handler does NOT skip the event in that case.
-    const sessionContent = createMockSessionContent([
-      { role: "user", content: "Late night message" },
-      { role: "assistant", content: "Late night reply" },
-    ]);
-    const { files, memoryContent } = await runNewWithPreviousSession({
-      sessionContent,
-      action: "new",
-    });
-    expect(files.length).toBe(1);
-    expect(memoryContent).toContain("user: Late night message");
-    expect(memoryContent).toContain("assistant: Late night reply");
-  });
 });

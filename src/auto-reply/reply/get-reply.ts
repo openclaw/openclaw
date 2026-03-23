@@ -355,7 +355,9 @@ export async function getReplyFromConfig(
     }
     // Scheduled/daily reset: session became stale, not triggered by /new or /reset.
     // Fire the same hook so session-memory (and other hooks) can flush context (#43524).
-    if (scheduledResetTriggered) {
+    // Guard with isAuthorizedSender: hooks must not fire when triggered by an untrusted
+    // sender who happened to message right after a stale-session rollover.
+    if (scheduledResetTriggered && command.isAuthorizedSender) {
       await emitResetCommandHooks({
         action: "new",
         ctx,

@@ -49,7 +49,7 @@ function buildNativeResetContext(): MsgContext {
   };
 }
 
-function createContinueDirectivesResult(resetHookTriggered: boolean) {
+function createContinueDirectivesResult(resetHookTriggered: boolean, isAuthorizedSender = true) {
   return {
     kind: "continue" as const,
     result: {
@@ -59,8 +59,8 @@ function createContinueDirectivesResult(resetHookTriggered: boolean) {
         channel: "telegram",
         channelId: "telegram",
         ownerList: [],
-        senderIsOwner: true,
-        isAuthorizedSender: true,
+        senderIsOwner: isAuthorizedSender,
+        isAuthorizedSender,
         senderId: "123",
         abortKey: "telegram:slash:123",
         rawBodyNormalized: "/new",
@@ -185,6 +185,36 @@ describe("getReplyFromConfig reset-hook fallback", () => {
         sessionKey: "agent:main:telegram:direct:123",
       }),
     );
+  });
+
+  it("does not emit hooks on scheduled reset when sender is not authorized", async () => {
+    // Unauthorized senders must not trigger hook side-effects even when the
+    // session happens to be stale (group/shared chat scenario).
+    mocks.initSessionState.mockResolvedValue({
+      sessionCtx: buildNativeResetContext(),
+      sessionEntry: {},
+      previousSessionEntry: { sessionId: "old-session" },
+      sessionStore: {},
+      sessionKey: "agent:main:telegram:direct:123",
+      sessionId: "session-unauth",
+      isNewSession: true,
+      resetTriggered: false,
+      scheduledResetTriggered: true,
+      systemSent: false,
+      abortedLastRun: false,
+      storePath: "/tmp/sessions.json",
+      sessionScope: "per-sender",
+      groupResolution: undefined,
+      isGroup: false,
+      triggerBodyNormalized: "hello from stranger",
+      bodyStripped: undefined,
+    });
+    mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: undefined });
+    mocks.resolveReplyDirectives.mockResolvedValue(createContinueDirectivesResult(false, false));
+
+    await getReplyFromConfig(buildNativeResetContext(), undefined, {});
+
+    expect(mocks.emitResetCommandHooks).not.toHaveBeenCalled();
   });
 
   it("does not emit hooks when neither resetTriggered nor scheduledResetTriggered", async () => {
