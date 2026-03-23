@@ -20,17 +20,6 @@ const resolveOwningPluginIdsForProviderMock = vi.fn<ResolveOwningPluginIdsForPro
   (_) => undefined as string[] | undefined,
 );
 
-vi.mock("./providers.js", () => ({
-  resolveNonBundledProviderPluginIds: (params: unknown) =>
-    resolveNonBundledProviderPluginIdsMock(params as never),
-  resolveOwningPluginIdsForProvider: (params: unknown) =>
-    resolveOwningPluginIdsForProviderMock(params as never),
-}));
-
-vi.mock("./providers.runtime.js", () => ({
-  resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
-}));
-
 let augmentModelCatalogWithProviderPlugins: typeof import("./provider-runtime.js").augmentModelCatalogWithProviderPlugins;
 let buildProviderAuthDoctorHintWithPlugin: typeof import("./provider-runtime.js").buildProviderAuthDoctorHintWithPlugin;
 let buildProviderMissingAuthMessageWithPlugin: typeof import("./provider-runtime.js").buildProviderMissingAuthMessageWithPlugin;
@@ -70,6 +59,15 @@ const MODEL: ProviderRuntimeModel = {
 describe("provider-runtime", () => {
   beforeEach(async () => {
     vi.resetModules();
+    vi.doMock("./providers.js", () => ({
+      resolveNonBundledProviderPluginIds: (params: unknown) =>
+        resolveNonBundledProviderPluginIdsMock(params as never),
+      resolveOwningPluginIdsForProvider: (params: unknown) =>
+        resolveOwningPluginIdsForProviderMock(params as never),
+    }));
+    vi.doMock("./providers.runtime.js", () => ({
+      resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
+    }));
     ({
       augmentModelCatalogWithProviderPlugins,
       buildProviderAuthDoctorHintWithPlugin,
