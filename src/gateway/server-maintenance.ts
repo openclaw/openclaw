@@ -1,4 +1,5 @@
 import type { HealthSummary } from "../commands/health.js";
+import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { getStateDb } from "../infra/state-db/connection.js";
 import { cleanOldMedia } from "../media/store.js";
 import { reconcileBudgets } from "../orchestration/budget-cron.js";
@@ -198,8 +199,9 @@ export function startGatewayMaintenanceTimers(params: {
 
       if (isFirstDelegationRun) {
         isFirstDelegationRun = false;
-        // Warn about runs that appear orphaned from before a gateway restart
+        // Detect runs orphaned by a gateway restart (started but never ended, older than stale threshold)
         const nowMs = Date.now();
+        const orphanedRunIds: string[] = [];
         for (const row of rows) {
           if (
             row.started_at != null &&
@@ -211,6 +213,37 @@ export function startGatewayMaintenanceTimers(params: {
               `delegation: orphaned run ${row.run_id} (agent=${row.agent_id ?? "?"}, ` +
                 `task=${(row.task ?? "").slice(0, 80)}) — started_at set but no ended_at after restart`,
             );
+            orphanedRunIds.push(row.run_id);
+          }
+        }
+
+        if (orphanedRunIds.length > 0) {
+          // Mark each orphaned run as ended so they no longer show as stale.
+          // The heartbeat fired below will let the agent see pending work and re-delegate.
+          for (const runId of orphanedRunIds) {
+            try {
+              db.prepare(
+                `UPDATE op1_subagent_runs
+                 SET ended_at = ?, outcome_json = ?, ended_reason = ?
+                 WHERE run_id = ?`,
+              ).run(
+                nowMs,
+                JSON.stringify({ status: "interrupted", reason: "gateway_restart" }),
+                "gateway_restart",
+                runId,
+              );
+            } catch (updateErr) {
+              params.logHealth.error(
+                `delegation: failed to mark orphaned run ${runId} as ended: ${formatError(updateErr)}`,
+              );
+            }
+          }
+
+          // Fire a heartbeat so the agent can notice the stale delegations and re-spawn as needed
+          try {
+            requestHeartbeatNow({ reason: "delegation-resume" });
+          } catch {
+            // Non-fatal: heartbeat handler may not be registered yet (e.g. during tests)
           }
         }
       }

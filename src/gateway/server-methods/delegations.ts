@@ -1,3 +1,5 @@
+import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
+import { getStateDb } from "../../infra/state-db/connection.js";
 import { listActiveDelegations } from "../../orchestration/delegation-tracker-sqlite.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -25,6 +27,160 @@ export const delegationsHandlers: GatewayRequestHandlers = {
         limit,
       });
       respond(true, { delegations });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, msg));
+    }
+  },
+
+  "sessions.delegations.resume": async ({ params, respond }) => {
+    const p = params as { runId?: unknown };
+    const runId = typeof p.runId === "string" ? p.runId.trim() : "";
+    if (!runId) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "runId required"));
+      return;
+    }
+
+    try {
+      const db = getStateDb();
+      const row = db.prepare("SELECT * FROM op1_subagent_runs WHERE run_id = ?").get(runId) as
+        | { run_id: string }
+        | undefined;
+      if (!row) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `Run not found: ${runId}`),
+        );
+        return;
+      }
+
+      // Mark old run as ended with interrupted status
+      const now = Date.now();
+      db.prepare(
+        "UPDATE op1_subagent_runs SET ended_at = ?, outcome_json = ?, ended_reason = ? WHERE run_id = ?",
+      ).run(
+        now,
+        JSON.stringify({ status: "interrupted", reason: "manual_resume" }),
+        "manual_resume",
+        runId,
+      );
+
+      // Fire heartbeat to trigger agent to re-delegate
+      requestHeartbeatNow({ reason: "delegation-resume" });
+
+      respond(true, { ok: true, previousRunId: runId });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, msg));
+    }
+  },
+
+  "sessions.delegations.cancel": async ({ params, respond }) => {
+    const p = params as { runId?: unknown };
+    const runId = typeof p.runId === "string" ? p.runId.trim() : "";
+    if (!runId) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "runId required"));
+      return;
+    }
+
+    try {
+      const db = getStateDb();
+      const row = db.prepare("SELECT * FROM op1_subagent_runs WHERE run_id = ?").get(runId) as
+        | { run_id: string }
+        | undefined;
+      if (!row) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `Run not found: ${runId}`),
+        );
+        return;
+      }
+
+      const now = Date.now();
+      db.prepare(
+        "UPDATE op1_subagent_runs SET ended_at = ?, outcome_json = ?, ended_reason = ?, cleanup_completed_at = ? WHERE run_id = ?",
+      ).run(now, JSON.stringify({ status: "cancelled" }), "manual_cancel", now, runId);
+
+      respond(true, { ok: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, msg));
+    }
+  },
+
+  "sessions.delegations.retry": async ({ params, respond }) => {
+    const p = params as { runId?: unknown };
+    const runId = typeof p.runId === "string" ? p.runId.trim() : "";
+    if (!runId) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "runId required"));
+      return;
+    }
+
+    try {
+      const db = getStateDb();
+      const row = db.prepare("SELECT * FROM op1_subagent_runs WHERE run_id = ?").get(runId) as
+        | { run_id: string; task: string | null }
+        | undefined;
+      if (!row) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `Run not found: ${runId}`),
+        );
+        return;
+      }
+
+      // Mark old run as ended
+      const now = Date.now();
+      db.prepare(
+        "UPDATE op1_subagent_runs SET ended_at = ?, outcome_json = ?, ended_reason = ? WHERE run_id = ?",
+      ).run(
+        now,
+        JSON.stringify({ status: "interrupted", reason: "manual_retry" }),
+        "manual_retry",
+        runId,
+      );
+
+      // Fire heartbeat to trigger agent to re-delegate with the same task
+      requestHeartbeatNow({ reason: "delegation-retry" });
+
+      respond(true, { ok: true, previousRunId: runId });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, msg));
+    }
+  },
+
+  "sessions.delegations.markComplete": async ({ params, respond }) => {
+    const p = params as { runId?: unknown };
+    const runId = typeof p.runId === "string" ? p.runId.trim() : "";
+    if (!runId) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "runId required"));
+      return;
+    }
+
+    try {
+      const db = getStateDb();
+      const row = db.prepare("SELECT * FROM op1_subagent_runs WHERE run_id = ?").get(runId) as
+        | { run_id: string }
+        | undefined;
+      if (!row) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `Run not found: ${runId}`),
+        );
+        return;
+      }
+
+      const now = Date.now();
+      db.prepare(
+        "UPDATE op1_subagent_runs SET ended_at = ?, outcome_json = ?, cleanup_completed_at = ? WHERE run_id = ?",
+      ).run(now, JSON.stringify({ status: "ok", reason: "manual_complete" }), now, runId);
+
+      respond(true, { ok: true });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, msg));

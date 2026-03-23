@@ -130,13 +130,16 @@ function DelegationCard({ entry }: { entry: DelegationEntry }) {
                 : "border-border bg-muted/30",
       )}
     >
-      {/* Top row: dot + agent name + status badge + elapsed */}
+      {/* Top row: dot + agent name + status badge + actions + elapsed */}
       <div className="flex items-center gap-2 min-w-0">
         <StatusDot status={entry.status} />
         <span className="font-medium text-foreground/90 truncate max-w-[120px]">
           {agentDisplay}
         </span>
         <StatusBadge status={entry.status} />
+        {(entry.status === "stale" || entry.status === "failed") && (
+          <DelegationActions runId={entry.runId} />
+        )}
         <span className="ml-auto text-muted-foreground font-mono tabular-nums shrink-0">
           {formatElapsed(elapsed)}
         </span>
@@ -152,77 +155,51 @@ function DelegationCard({ entry }: { entry: DelegationEntry }) {
           {truncate(entry.resultPreview, 200)}
         </p>
       )}
-
-      {/* Action buttons for stale/failed delegations */}
-      {(entry.status === "stale" || entry.status === "failed") && (
-        <DelegationActions runId={entry.runId} status={entry.status} />
-      )}
     </div>
   );
 }
 
-function DelegationActions({ runId, status }: { runId: string; status: string }) {
+function DelegationActions({ runId }: { runId: string }) {
   const { sendRpc } = useGateway();
   const [acting, setActing] = useState(false);
 
-  const handleRetry = () => {
+  const handleRetry = (e: React.MouseEvent) => {
+    e.stopPropagation();
     setActing(true);
     sendRpc("sessions.delegations.retry", { runId })
       .catch(() => {})
       .finally(() => setActing(false));
   };
 
-  const handleCancel = () => {
+  const handleCancel = (e: React.MouseEvent) => {
+    e.stopPropagation();
     setActing(true);
     sendRpc("sessions.delegations.cancel", { runId })
       .catch(() => {})
       .finally(() => setActing(false));
   };
 
-  const handleResume = () => {
-    setActing(true);
-    sendRpc("sessions.delegations.resume", { runId })
-      .catch(() => {})
-      .finally(() => setActing(false));
-  };
-
   return (
-    <div className="flex items-center gap-1.5 pl-4 pt-1">
-      {status === "stale" && (
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-6 px-2 text-[10px] text-blue-400 border-blue-500/30 hover:bg-blue-500/10"
-          onClick={handleResume}
-          disabled={acting}
-        >
-          {acting ? (
-            <Loader2 className="h-3 w-3 animate-spin mr-1" />
-          ) : (
-            <RefreshCw className="h-3 w-3 mr-1" />
-          )}
-          Resume
-        </Button>
-      )}
+    <div className="flex items-center gap-1">
       <Button
         size="sm"
-        variant="outline"
-        className="h-6 px-2 text-[10px] text-amber-400 border-amber-500/30 hover:bg-amber-500/10"
+        variant="ghost"
+        className="h-5 px-1.5 text-[10px] text-amber-400 hover:bg-amber-500/10"
         onClick={handleRetry}
         disabled={acting}
+        title="Retry this delegation"
       >
-        <RefreshCw className="h-3 w-3 mr-1" />
-        Retry
+        {acting ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
       </Button>
       <Button
         size="sm"
-        variant="outline"
-        className="h-6 px-2 text-[10px] text-red-400 border-red-500/30 hover:bg-red-500/10"
+        variant="ghost"
+        className="h-5 px-1.5 text-[10px] text-red-400 hover:bg-red-500/10"
         onClick={handleCancel}
         disabled={acting}
+        title="Cancel this delegation"
       >
-        <X className="h-3 w-3 mr-1" />
-        Cancel
+        <X className="h-3 w-3" />
       </Button>
     </div>
   );
