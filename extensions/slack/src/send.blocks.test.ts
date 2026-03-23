@@ -48,6 +48,21 @@ describe("sendMessageSlack NO_REPLY guard", () => {
     expect(client.chat.postMessage).toHaveBeenCalled();
     expect(result.messageId).toBe("171234.567");
   });
+
+  it("preserves ampersands in plain outbound text", async () => {
+    const client = createSlackSendTestClient();
+    await sendMessageSlack("channel:C123", "R&D <plan>", {
+      token: "xoxb-test",
+      client,
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "C123",
+        text: "R&D &lt;plan&gt;",
+      }),
+    );
+  });
 });
 
 describe("sendMessageSlack blocks", () => {

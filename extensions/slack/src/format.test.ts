@@ -25,7 +25,7 @@ describe("markdownToSlackMrkdwn", () => {
         "see <https://example.com|docs>",
       ],
       ["does not duplicate bare URLs", "see https://example.com", "see https://example.com"],
-      ["escapes unsafe characters", "a & b < c > d", "a &amp; b &lt; c &gt; d"],
+      ["escapes angle brackets but preserves ampersands", "a & b < c > d", "a & b &lt; c &gt; d"],
       [
         "preserves Slack angle-bracket markup (mentions/links)",
         "hi <@U123> see <https://example.com|docs> and <!here>",
@@ -76,5 +76,9 @@ describe("escapeSlackMrkdwn", () => {
 describe("normalizeSlackOutboundText", () => {
   it("normalizes markdown for outbound send/update paths", () => {
     expect(normalizeSlackOutboundText(" **bold** ")).toBe("*bold*");
+  });
+
+  it("preserves raw ampersands in outbound text", () => {
+    expect(normalizeSlackOutboundText("R&D < Q&A >")).toBe("R&D &lt; Q&A &gt;");
   });
 });

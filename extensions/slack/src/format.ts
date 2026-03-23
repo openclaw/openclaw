@@ -9,7 +9,7 @@ import { renderMarkdownWithMarkers } from "openclaw/plugin-sdk/text-runtime";
 // Escape special characters for Slack mrkdwn format.
 // Preserve Slack's angle-bracket tokens so mentions and links stay intact.
 function escapeSlackMrkdwnSegment(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 const SLACK_ANGLE_TOKEN_RE = /<[^>\n]+>/g;
@@ -35,7 +35,7 @@ function escapeSlackMrkdwnContent(text: string): string {
   if (!text) {
     return "";
   }
-  if (!text.includes("&") && !text.includes("<") && !text.includes(">")) {
+  if (!text.includes("<") && !text.includes(">")) {
     return text;
   }
 
@@ -63,7 +63,7 @@ function escapeSlackMrkdwnText(text: string): string {
   if (!text) {
     return "";
   }
-  if (!text.includes("&") && !text.includes("<") && !text.includes(">")) {
+  if (!text.includes("<") && !text.includes(">")) {
     return text;
   }
 
