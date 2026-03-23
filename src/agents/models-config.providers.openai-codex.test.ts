@@ -5,12 +5,12 @@ import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
   installModelsConfigTestHooks,
   MODELS_CONFIG_IMPLICIT_ENV_VARS,
+  resolveImplicitProvidersForTest,
   unsetEnv,
   withModelsTempHome,
   withTempEnv,
 } from "./models-config.e2e-harness.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
-import { resolveImplicitProviders } from "./models-config.providers.js";
 import { readGeneratedModelsJson } from "./models-config.test-utils.js";
 
 installModelsConfigTestHooks();
@@ -50,7 +50,7 @@ describe("openai-codex implicit provider", () => {
         const agentDir = resolveOpenClawAgentDir();
         await writeCodexOauthProfile(agentDir);
 
-        const providers = await resolveImplicitProviders({ agentDir });
+        const providers = await resolveImplicitProvidersForTest({ agentDir });
         expect(providers?.["openai-codex"]).toMatchObject({
           baseUrl: "https://chatgpt.com/backend-api",
           api: "openai-codex-responses",

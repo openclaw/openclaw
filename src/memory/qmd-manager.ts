@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,11 +7,9 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { writeFileWithinRoot } from "../infra/fs-safe.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  materializeWindowsSpawnProgram,
-  resolveWindowsSpawnProgram,
-} from "../plugin-sdk/windows-spawn.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isFileMissingError, statRegularFile } from "./fs-utils.js";
+import { resolveCliSpawnInvocation, runCliCommand } from "./qmd-process.js";
 import { deriveQmdScopeChannel, deriveQmdScopeChatType, isQmdScopeAllowed } from "./qmd-scope.js";
 import {
   listSessionFilesForAgent,
@@ -48,54 +45,20 @@ const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
 const QMD_EMBED_BACKOFF_MAX_MS = 60 * 60 * 1000;
 const HAN_SCRIPT_RE = /[\u3400-\u9fff]/u;
 const QMD_BM25_HAN_KEYWORD_LIMIT = 12;
+const MCPORTER_STATE_KEY = Symbol.for("openclaw.mcporterState");
+
+type McporterState = {
+  coldStartWarned: boolean;
+  daemonStart: Promise<void> | null;
+};
 
 let qmdEmbedQueueTail: Promise<void> = Promise.resolve();
 
-function resolveWindowsCommandShim(command: string): string {
-  if (process.platform !== "win32") {
-    return command;
-  }
-  const trimmed = command.trim();
-  if (!trimmed) {
-    return command;
-  }
-  const ext = path.extname(trimmed).toLowerCase();
-  if (ext === ".cmd" || ext === ".exe" || ext === ".bat") {
-    return command;
-  }
-  const base = path.basename(trimmed).toLowerCase();
-  if (base === "qmd" || base === "mcporter") {
-    return `${trimmed}.cmd`;
-  }
-  return command;
-}
-
-function resolveSpawnInvocation(params: {
-  command: string;
-  args: string[];
-  env: NodeJS.ProcessEnv;
-  packageName: string;
-}) {
-  const program = resolveWindowsSpawnProgram({
-    command: resolveWindowsCommandShim(params.command),
-    platform: process.platform,
-    env: params.env,
-    execPath: process.execPath,
-    packageName: params.packageName,
-    allowShellFallback: true,
-  });
-  return materializeWindowsSpawnProgram(program, params.args);
-}
-
-function isWindowsCmdSpawnEinval(err: unknown, command: string): boolean {
-  if (process.platform !== "win32") {
-    return false;
-  }
-  const errno = err as NodeJS.ErrnoException | undefined;
-  if (errno?.code !== "EINVAL") {
-    return false;
-  }
-  return /(^|[\\/])mcporter\.cmd$/i.test(command);
+function getMcporterState(): McporterState {
+  return resolveGlobalSingleton<McporterState>(MCPORTER_STATE_KEY, () => ({
+    coldStartWarned: false,
+    daemonStart: null,
+  }));
 }
 
 function hasHanScript(value: string): boolean {
@@ -914,8 +877,12 @@ export class QmdMemoryManager implements MemorySearchManager {
   async sync(params?: {
     reason?: string;
     force?: boolean;
+    sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
+    if (params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
+      log.debug("qmd sync ignoring targeted sessionFiles hint; running regular update");
+    }
     if (params?.progress) {
       params.progress({ completed: 0, total: 1, label: "Updating QMD index…" });
     }
@@ -1235,70 +1202,20 @@ export class QmdMemoryManager implements MemorySearchManager {
     args: string[],
     opts?: { timeoutMs?: number; discardOutput?: boolean },
   ): Promise<{ stdout: string; stderr: string }> {
-    return await new Promise((resolve, reject) => {
-      const spawnInvocation = resolveSpawnInvocation({
+    return await runCliCommand({
+      commandSummary: `qmd ${args.join(" ")}`,
+      spawnInvocation: resolveCliSpawnInvocation({
         command: this.qmd.command,
         args,
         env: this.env,
         packageName: "qmd",
-      });
-      const child = spawn(spawnInvocation.command, spawnInvocation.argv, {
-        env: this.env,
-        cwd: this.workspaceDir,
-        shell: spawnInvocation.shell,
-        windowsHide: spawnInvocation.windowsHide,
-      });
-      let stdout = "";
-      let stderr = "";
-      let stdoutTruncated = false;
-      let stderrTruncated = false;
-      // When discardOutput is set, skip stdout accumulation entirely and keep
-      // only a small stderr tail for diagnostics -- never fail on truncation.
-      // This prevents large `qmd update` runs from hitting the output cap.
-      const discard = opts?.discardOutput === true;
-      const timer = opts?.timeoutMs
-        ? setTimeout(() => {
-            child.kill("SIGKILL");
-            reject(new Error(`qmd ${args.join(" ")} timed out after ${opts.timeoutMs}ms`));
-          }, opts.timeoutMs)
-        : null;
-      child.stdout.on("data", (data) => {
-        if (discard) {
-          return; // drain without accumulating
-        }
-        const next = appendOutputWithCap(stdout, data.toString("utf8"), this.maxQmdOutputChars);
-        stdout = next.text;
-        stdoutTruncated = stdoutTruncated || next.truncated;
-      });
-      child.stderr.on("data", (data) => {
-        const next = appendOutputWithCap(stderr, data.toString("utf8"), this.maxQmdOutputChars);
-        stderr = next.text;
-        stderrTruncated = stderrTruncated || next.truncated;
-      });
-      child.on("error", (err) => {
-        if (timer) {
-          clearTimeout(timer);
-        }
-        reject(err);
-      });
-      child.on("close", (code) => {
-        if (timer) {
-          clearTimeout(timer);
-        }
-        if (!discard && (stdoutTruncated || stderrTruncated)) {
-          reject(
-            new Error(
-              `qmd ${args.join(" ")} produced too much output (limit ${this.maxQmdOutputChars} chars)`,
-            ),
-          );
-          return;
-        }
-        if (code === 0) {
-          resolve({ stdout, stderr });
-        } else {
-          reject(new Error(`qmd ${args.join(" ")} failed (code ${code}): ${stderr || stdout}`));
-        }
-      });
+      }),
+      env: this.env,
+      cwd: this.workspaceDir,
+      timeoutMs: opts?.timeoutMs,
+      maxOutputChars: this.maxQmdOutputChars,
+      // Large `qmd update` runs can easily exceed the output cap; keep only stderr.
+      discardStdout: opts?.discardOutput,
     });
   }
 
@@ -1306,124 +1223,49 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (!mcporter.enabled) {
       return;
     }
+    const state = getMcporterState();
     if (!mcporter.startDaemon) {
-      type McporterWarnGlobal = typeof globalThis & {
-        __openclawMcporterColdStartWarned?: boolean;
-      };
-      const g: McporterWarnGlobal = globalThis;
-      if (!g.__openclawMcporterColdStartWarned) {
-        g.__openclawMcporterColdStartWarned = true;
+      if (!state.coldStartWarned) {
+        state.coldStartWarned = true;
         log.warn(
           "mcporter qmd bridge enabled but startDaemon=false; each query may cold-start QMD MCP. Consider setting memory.qmd.mcporter.startDaemon=true to keep it warm.",
         );
       }
       return;
     }
-    type McporterGlobal = typeof globalThis & {
-      __openclawMcporterDaemonStart?: Promise<void>;
-    };
-    const g: McporterGlobal = globalThis;
-    if (!g.__openclawMcporterDaemonStart) {
-      g.__openclawMcporterDaemonStart = (async () => {
+    if (!state.daemonStart) {
+      state.daemonStart = (async () => {
         try {
           await this.runMcporter(["daemon", "start"], { timeoutMs: 10_000 });
         } catch (err) {
           log.warn(`mcporter daemon start failed: ${String(err)}`);
           // Allow future searches to retry daemon start on transient failures.
-          delete g.__openclawMcporterDaemonStart;
+          state.daemonStart = null;
         }
       })();
     }
-    await g.__openclawMcporterDaemonStart;
+    await state.daemonStart;
   }
 
   private async runMcporter(
     args: string[],
     opts?: { timeoutMs?: number },
   ): Promise<{ stdout: string; stderr: string }> {
-    const runWithInvocation = async (spawnInvocation: {
-      command: string;
-      argv: string[];
-      shell?: boolean;
-      windowsHide?: boolean;
-    }): Promise<{ stdout: string; stderr: string }> =>
-      await new Promise((resolve, reject) => {
-        const commandSummary = `${spawnInvocation.command} ${spawnInvocation.argv.join(" ")}`;
-        const child = spawn(spawnInvocation.command, spawnInvocation.argv, {
-          // Keep mcporter and direct qmd commands on the same agent-scoped XDG state.
-          env: this.env,
-          cwd: this.workspaceDir,
-          shell: spawnInvocation.shell,
-          windowsHide: spawnInvocation.windowsHide,
-        });
-        let stdout = "";
-        let stderr = "";
-        let stdoutTruncated = false;
-        let stderrTruncated = false;
-        const timer = opts?.timeoutMs
-          ? setTimeout(() => {
-              child.kill("SIGKILL");
-              reject(new Error(`mcporter ${args.join(" ")} timed out after ${opts.timeoutMs}ms`));
-            }, opts.timeoutMs)
-          : null;
-        child.stdout.on("data", (data) => {
-          const next = appendOutputWithCap(stdout, data.toString("utf8"), this.maxQmdOutputChars);
-          stdout = next.text;
-          stdoutTruncated = stdoutTruncated || next.truncated;
-        });
-        child.stderr.on("data", (data) => {
-          const next = appendOutputWithCap(stderr, data.toString("utf8"), this.maxQmdOutputChars);
-          stderr = next.text;
-          stderrTruncated = stderrTruncated || next.truncated;
-        });
-        child.on("error", (err) => {
-          if (timer) {
-            clearTimeout(timer);
-          }
-          reject(err);
-        });
-        child.on("close", (code) => {
-          if (timer) {
-            clearTimeout(timer);
-          }
-          if (stdoutTruncated || stderrTruncated) {
-            reject(
-              new Error(
-                `mcporter ${args.join(" ")} produced too much output (limit ${this.maxQmdOutputChars} chars)`,
-              ),
-            );
-            return;
-          }
-          if (code === 0) {
-            resolve({ stdout, stderr });
-          } else {
-            reject(new Error(`${commandSummary} failed (code ${code}): ${stderr || stdout}`));
-          }
-        });
-      });
-
-    const primaryInvocation = resolveSpawnInvocation({
+    const spawnInvocation = resolveCliSpawnInvocation({
       command: "mcporter",
       args,
       env: this.env,
       packageName: "mcporter",
     });
-    try {
-      return await runWithInvocation(primaryInvocation);
-    } catch (err) {
-      if (!isWindowsCmdSpawnEinval(err, primaryInvocation.command)) {
-        throw err;
-      }
-      // Some Windows npm cmd shims can still throw EINVAL on spawn; retry through
-      // shell command resolution so PATH/PATHEXT can select a runnable entrypoint.
-      log.warn("mcporter.cmd spawn returned EINVAL on Windows; retrying with bare mcporter");
-      return await runWithInvocation({
-        command: "mcporter",
-        argv: args,
-        shell: true,
-        windowsHide: true,
-      });
-    }
+    return await runCliCommand({
+      commandSummary: `${spawnInvocation.command} ${spawnInvocation.argv.join(" ")}`,
+      spawnInvocation,
+      // Keep mcporter and direct qmd commands on the same agent-scoped XDG state.
+      env: this.env,
+      cwd: this.workspaceDir,
+      timeoutMs: opts?.timeoutMs,
+      maxOutputChars: this.maxQmdOutputChars,
+    });
   }
 
   private async runQmdSearchViaMcporter(params: {
@@ -2231,16 +2073,4 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     return [command, normalizedQuery, "--json", "-n", String(limit)];
   }
-}
-
-function appendOutputWithCap(
-  current: string,
-  chunk: string,
-  maxChars: number,
-): { text: string; truncated: boolean } {
-  const appended = current + chunk;
-  if (appended.length <= maxChars) {
-    return { text: appended, truncated: false };
-  }
-  return { text: appended.slice(-maxChars), truncated: true };
 }

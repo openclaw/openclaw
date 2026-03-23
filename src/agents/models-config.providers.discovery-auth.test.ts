@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
-import { resolveImplicitProviders } from "./models-config.providers.js";
+import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
+
+type AuthProfilesFile = {
+  version: 1;
+  profiles: Record<string, Record<string, unknown>>;
+};
 
 describe("provider discovery auth marker guardrails", () => {
   let originalVitest: string | undefined;
@@ -35,35 +40,37 @@ describe("provider discovery auth marker guardrails", () => {
     delete process.env.NODE_ENV;
   }
 
-  it("does not send marker value as vLLM bearer token during discovery", async () => {
-    enableDiscovery();
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ data: [] }),
-    });
+  function installFetchMock(response?: unknown) {
+    const fetchMock =
+      response === undefined
+        ? vi.fn()
+        : vi.fn().mockResolvedValue({ ok: true, json: async () => response });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
+    return fetchMock;
+  }
 
+  async function createAgentDirWithAuthProfiles(profiles: AuthProfilesFile["profiles"]) {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     await writeFile(
       join(agentDir, "auth-profiles.json"),
-      JSON.stringify(
-        {
-          version: 1,
-          profiles: {
-            "vllm:default": {
-              type: "api_key",
-              provider: "vllm",
-              keyRef: { source: "file", provider: "vault", id: "/vllm/apiKey" },
-            },
-          },
-        },
-        null,
-        2,
-      ),
+      JSON.stringify({ version: 1, profiles } satisfies AuthProfilesFile, null, 2),
       "utf8",
     );
+    return agentDir;
+  }
 
-    const providers = await resolveImplicitProviders({ agentDir, env: {} });
+  it("does not send marker value as vLLM bearer token during discovery", async () => {
+    enableDiscovery();
+    const fetchMock = installFetchMock({ data: [] });
+    const agentDir = await createAgentDirWithAuthProfiles({
+      "vllm:default": {
+        type: "api_key",
+        provider: "vllm",
+        keyRef: { source: "file", provider: "vault", id: "/vllm/apiKey" },
+      },
+    });
+
+    const providers = await resolveImplicitProvidersForTest({ agentDir, env: {} });
     expect(providers?.vllm?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
     const request = fetchMock.mock.calls[0]?.[1] as
       | { headers?: Record<string, string> }
@@ -73,30 +80,16 @@ describe("provider discovery auth marker guardrails", () => {
 
   it("does not call Hugging Face discovery with marker-backed credentials", async () => {
     enableDiscovery();
-    const fetchMock = vi.fn();
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const fetchMock = installFetchMock();
+    const agentDir = await createAgentDirWithAuthProfiles({
+      "huggingface:default": {
+        type: "api_key",
+        provider: "huggingface",
+        keyRef: { source: "exec", provider: "vault", id: "providers/hf/token" },
+      },
+    });
 
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    await writeFile(
-      join(agentDir, "auth-profiles.json"),
-      JSON.stringify(
-        {
-          version: 1,
-          profiles: {
-            "huggingface:default": {
-              type: "api_key",
-              provider: "huggingface",
-              keyRef: { source: "exec", provider: "vault", id: "providers/hf/token" },
-            },
-          },
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-
-    const providers = await resolveImplicitProviders({ agentDir, env: {} });
+    const providers = await resolveImplicitProvidersForTest({ agentDir, env: {} });
     expect(providers?.huggingface?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
     const huggingfaceCalls = fetchMock.mock.calls.filter(([url]) =>
       String(url).includes("router.huggingface.co"),
@@ -106,33 +99,16 @@ describe("provider discovery auth marker guardrails", () => {
 
   it("keeps all-caps plaintext API keys for authenticated discovery", async () => {
     enableDiscovery();
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ data: [{ id: "vllm/test-model" }] }),
+    const fetchMock = installFetchMock({ data: [{ id: "vllm/test-model" }] });
+    const agentDir = await createAgentDirWithAuthProfiles({
+      "vllm:default": {
+        type: "api_key",
+        provider: "vllm",
+        key: "ALLCAPS_SAMPLE",
+      },
     });
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    await writeFile(
-      join(agentDir, "auth-profiles.json"),
-      JSON.stringify(
-        {
-          version: 1,
-          profiles: {
-            "vllm:default": {
-              type: "api_key",
-              provider: "vllm",
-              key: "ALLCAPS_SAMPLE",
-            },
-          },
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-
-    await resolveImplicitProviders({ agentDir, env: {} });
+    await resolveImplicitProvidersForTest({ agentDir, env: {} });
     const vllmCall = fetchMock.mock.calls.find(([url]) => String(url).includes(":8000"));
     const request = vllmCall?.[1] as { headers?: Record<string, string> } | undefined;
     expect(request?.headers?.Authorization).toBe("Bearer ALLCAPS_SAMPLE");

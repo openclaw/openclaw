@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveGatewayService } from "./service.js";
+import { describeGatewayServiceRestart, resolveGatewayService } from "./service.js";
 
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
@@ -36,5 +36,14 @@ describe("resolveGatewayService", () => {
   it("throws for unsupported platforms", () => {
     setPlatform("aix");
     expect(() => resolveGatewayService()).toThrow("Gateway service install not supported on aix");
+  });
+
+  it("describes scheduled restart handoffs consistently", () => {
+    expect(describeGatewayServiceRestart("Gateway", { outcome: "scheduled" })).toEqual({
+      scheduled: true,
+      daemonActionResult: "scheduled",
+      message: "restart scheduled, gateway will restart momentarily",
+      progressMessage: "Gateway service restart scheduled.",
+    });
   });
 });
