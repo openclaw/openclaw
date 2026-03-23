@@ -207,6 +207,21 @@ describe("cron schedule error isolation", () => {
     expect(badJob.state.scheduleErrorCount).toBe(1);
   });
 
+  it("treats impossible cron expressions as schedule errors", () => {
+    const badJob = createJob({
+      id: "impossible-cron",
+      name: "Impossible Cron",
+      schedule: { kind: "cron", expr: "0 0 31 2 *" },
+    });
+    const state = createMockState([badJob]);
+
+    recomputeNextRuns(state);
+
+    expect(badJob.state.nextRunAtMs).toBeUndefined();
+    expect(badJob.state.scheduleErrorCount).toBe(1);
+    expect(badJob.state.lastError).toMatch(/^schedule error:/);
+  });
+
   it("keeps malformed every schedules on the schedule-error path", () => {
     const badJob = createJob({
       id: "bad-every",

@@ -3,6 +3,7 @@ import { normalizeStoredCronJobs } from "../store-migration.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import {
+  createUndefinedNextRunScheduleError,
   computeJobNextRunAtMs,
   recordScheduleComputeError,
   recomputeNextRuns,
@@ -114,12 +115,7 @@ function repairNextRunsAfterExternalReload(params: {
     try {
       nextRunAtMs = job.enabled ? computeJobNextRunAtMs(job, computeBaseMs) : undefined;
       if (nextRunAtMs === undefined && shouldTreatUndefinedNextRunAsScheduleError(job)) {
-        const err =
-          job.schedule.kind === "every"
-            ? new Error("invalid every schedule: everyMs must be a finite number")
-            : job.schedule.kind === "at"
-              ? new Error("invalid at schedule: at must be a valid absolute timestamp")
-              : new Error("invalid cron schedule: expr is required");
+        const err = createUndefinedNextRunScheduleError(job);
         if (recordScheduleComputeError({ state, job, err })) {
           changed = true;
         }
@@ -128,6 +124,9 @@ function repairNextRunsAfterExternalReload(params: {
       }
       if (job.enabled && job.state.scheduleErrorCount !== undefined) {
         job.state.scheduleErrorCount = undefined;
+        if (job.state.lastError?.startsWith("schedule error:")) {
+          job.state.lastError = undefined;
+        }
         changed = true;
       }
     } catch (err) {
@@ -141,11 +140,6 @@ function repairNextRunsAfterExternalReload(params: {
       job.state.nextRunAtMs = nextRunAtMs;
       changed = true;
     }
-    if (!job.enabled && job.state.runningAtMs !== undefined) {
-      job.state.runningAtMs = undefined;
-      changed = true;
-    }
-
     state.deps.log.debug(
       {
         jobId: job.id,

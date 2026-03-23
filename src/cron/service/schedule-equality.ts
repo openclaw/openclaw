@@ -1,3 +1,5 @@
+import { parseAbsoluteTimeMs } from "../parse.js";
+import { coerceFiniteScheduleNumber } from "../schedule.js";
 import { resolveCronStaggerMs } from "../stagger.js";
 import type { CronJob } from "../types.js";
 
@@ -21,15 +23,36 @@ function normalizeCronTimezone(tz: unknown): string | undefined {
     : undefined;
 }
 
+function normalizeAtTimestamp(value: unknown): string | undefined {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  if (!trimmed) {
+    return undefined;
+  }
+  const parsed = parseAbsoluteTimeMs(trimmed);
+  return parsed === null ? trimmed : new Date(parsed).toISOString();
+}
+
+function normalizeScheduleNumber(value: unknown, minimum: number): string | undefined {
+  const numeric = coerceFiniteScheduleNumber(value);
+  if (numeric !== undefined) {
+    return String(Math.max(minimum, Math.floor(numeric)));
+  }
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  return trimmed || undefined;
+}
+
 export function schedulesEqual(a: CronJob["schedule"], b: CronJob["schedule"]): boolean {
   if (a.kind !== b.kind) {
     return false;
   }
   if (a.kind === "at" && b.kind === "at") {
-    return a.at === b.at;
+    return normalizeAtTimestamp(a.at) === normalizeAtTimestamp(b.at);
   }
   if (a.kind === "every" && b.kind === "every") {
-    return a.everyMs === b.everyMs && a.anchorMs === b.anchorMs;
+    return (
+      normalizeScheduleNumber(a.everyMs, 1) === normalizeScheduleNumber(b.everyMs, 1) &&
+      normalizeScheduleNumber(a.anchorMs, 0) === normalizeScheduleNumber(b.anchorMs, 0)
+    );
   }
   if (a.kind === "cron" && b.kind === "cron") {
     return (

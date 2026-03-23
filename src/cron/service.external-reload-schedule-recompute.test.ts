@@ -878,6 +878,7 @@ describe("forceReload repairs externally changed schedules", () => {
 
     expect(await run(state, jobId, "force")).toEqual({ ok: true, ran: true });
     expect(state.store?.jobs[0]?.state.scheduleErrorCount).toBeUndefined();
+    expect(state.store?.jobs[0]?.state.lastError).toBeUndefined();
   });
 
   it("does not persist NaN updatedAtMs when manual-run reload sees an invalid timestamp", async () => {
@@ -1109,6 +1110,57 @@ describe("forceReload repairs externally changed schedules", () => {
     const reloaded = state.store?.jobs[0];
     expect(reloaded?.state.runningAtMs).toBe(runningAtMs);
     expect(reloaded?.state.nextRunAtMs).toBe(Date.parse("2026-03-19T12:02:00.000Z"));
+  });
+
+  it("keeps runningAtMs when an external reload disables a still-running job", async () => {
+    const store = await makeStorePath();
+    const nowMs = Date.parse("2026-03-19T12:10:00.000Z");
+    const jobId = "external-disable-running-job";
+    const runningAtMs = Date.parse("2026-03-19T12:00:00.000Z");
+
+    const createJob = (enabled: boolean): CronJob => ({
+      id: jobId,
+      name: jobId,
+      enabled,
+      createdAtMs: Date.parse("2026-03-18T00:30:00.000Z"),
+      updatedAtMs: Date.parse("2026-03-19T12:01:00.000Z"),
+      schedule: { kind: "cron", expr: "* * * * *", tz: "UTC", staggerMs: 0 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {
+        nextRunAtMs: Date.parse("2026-03-19T12:11:00.000Z"),
+        runningAtMs,
+      },
+    });
+
+    await writeCronStoreSnapshot({
+      storePath: store.storePath,
+      jobs: [createJob(true)],
+    });
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => nowMs,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    await ensureLoaded(state, { skipRecompute: true });
+
+    await writeCronStoreSnapshot({
+      storePath: store.storePath,
+      jobs: [createJob(false)],
+    });
+
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+
+    expect(state.store?.jobs[0]?.enabled).toBe(false);
+    expect(state.store?.jobs[0]?.state.runningAtMs).toBe(runningAtMs);
+    expect(state.store?.jobs[0]?.state.nextRunAtMs).toBeUndefined();
   });
 
   it("recomputes nextRunAtMs when an external every schedule changes", async () => {

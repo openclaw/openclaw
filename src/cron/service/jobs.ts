@@ -319,9 +319,21 @@ export function shouldTreatUndefinedNextRunAsScheduleError(job: CronJob): boolea
     return parseAbsoluteTimeMs(job.schedule.at) === null;
   }
   if (job.schedule.kind === "cron") {
-    return job.schedule.expr.trim().length === 0;
+    return true;
   }
   return false;
+}
+
+export function createUndefinedNextRunScheduleError(job: CronJob): Error {
+  if (job.schedule.kind === "every") {
+    return new Error("invalid every schedule: everyMs must be a finite number");
+  }
+  if (job.schedule.kind === "at") {
+    return new Error("invalid at schedule: at must be a valid absolute timestamp");
+  }
+  return job.schedule.expr.trim().length === 0
+    ? new Error("invalid cron schedule: expr is required")
+    : new Error("invalid cron schedule: no future run");
 }
 
 export function computeJobPreviousRunAtMs(job: CronJob, nowMs: number): number | undefined {
@@ -484,12 +496,7 @@ function recomputeJobNextRunAtMs(params: {
       newNext === undefined &&
       shouldTreatUndefinedNextRunAsScheduleError(params.job)
     ) {
-      const err =
-        params.job.schedule.kind === "every"
-          ? new Error("invalid every schedule: everyMs must be a finite number")
-          : params.job.schedule.kind === "at"
-            ? new Error("invalid at schedule: at must be a valid absolute timestamp")
-            : new Error("invalid cron schedule: expr is required");
+      const err = createUndefinedNextRunScheduleError(params.job);
       if (recordScheduleComputeError({ state: params.state, job: params.job, err })) {
         changed = true;
       }
@@ -502,6 +509,9 @@ function recomputeJobNextRunAtMs(params: {
     // Clear schedule error count on successful computation.
     if (treatUndefinedAsSuccess && params.job.state.scheduleErrorCount) {
       params.job.state.scheduleErrorCount = undefined;
+      if (params.job.state.lastError?.startsWith("schedule error:")) {
+        params.job.state.lastError = undefined;
+      }
       changed = true;
     }
   } catch (err) {
