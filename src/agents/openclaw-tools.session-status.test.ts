@@ -533,4 +533,35 @@ describe("session_status tool", () => {
     expect(saved.modelOverride).toBeUndefined();
     expect(saved.authProfileOverride).toBeUndefined();
   });
+
+  it("reports modelByChannel override instead of default model (#52189)", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+        channel: "irc",
+        groupId: "#dev",
+        groupChannel: "#dev",
+      },
+    });
+    mockConfig = {
+      ...createMockConfig(),
+      channels: {
+        modelByChannel: {
+          irc: {
+            "#dev": "openai-codex/gpt-5.4",
+          },
+        },
+      },
+    };
+
+    const tool = getSessionStatusTool();
+
+    const result = await tool.execute("call-chan-model", {});
+    const details = result.details as { ok?: boolean; statusText?: string };
+    expect(details.ok).toBe(true);
+    // Should show the channel-specific model, not the default anthropic/claude-opus-4-5.
+    expect(details.statusText).toContain("openai-codex");
+    expect(details.statusText).toContain("gpt-5.4");
+  });
 });

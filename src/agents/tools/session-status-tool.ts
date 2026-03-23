@@ -2,6 +2,7 @@ import { Type } from "@sinclair/typebox";
 import { normalizeGroupActivation } from "../../auto-reply/group-activation.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "../../auto-reply/reply/queue.js";
 import { buildStatusMessage } from "../../auto-reply/status.js";
+import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -417,8 +418,37 @@ export function createSessionStatusTool(opts?: {
         }
       }
 
+      // Resolve effective model: session override > channel override > agent default.
+      const channelForOverride = resolved.entry.channel ?? resolved.entry.lastChannel;
+      const channelModelOverride = resolveChannelModelOverride({
+        cfg,
+        channel: channelForOverride,
+        groupId: resolved.entry.groupId,
+        groupChannel: resolved.entry.groupChannel,
+      });
+      let effectiveProvider = configured.provider;
+      let effectiveModel = configured.model;
+      if (channelModelOverride?.model) {
+        const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: configured.provider });
+        const ref = resolveModelRefFromString({
+          raw: channelModelOverride.model,
+          defaultProvider: configured.provider,
+          aliasIndex,
+        });
+        if (ref) {
+          effectiveProvider = ref.ref.provider;
+          effectiveModel = ref.ref.model;
+        }
+      }
+      if (resolved.entry.providerOverride?.trim()) {
+        effectiveProvider = resolved.entry.providerOverride.trim();
+      }
+      if (resolved.entry.modelOverride?.trim()) {
+        effectiveModel = resolved.entry.modelOverride.trim();
+      }
+
       const agentDir = resolveAgentDir(cfg, agentId);
-      const providerForCard = resolved.entry.providerOverride?.trim() || configured.provider;
+      const providerForCard = effectiveProvider;
       const usageProvider = resolveUsageProviderId(providerForCard);
       let usageLine: string | undefined;
       if (usageProvider) {
@@ -472,11 +502,11 @@ export function createSessionStatusTool(opts?: {
         : `🕒 Time zone: ${userTimezone}`;
 
       const agentDefaults = cfg.agents?.defaults ?? {};
-      const defaultLabel = `${configured.provider}/${configured.model}`;
+      const effectiveLabel = `${effectiveProvider}/${effectiveModel}`;
       const agentModel =
         typeof agentDefaults.model === "object" && agentDefaults.model
-          ? { ...agentDefaults.model, primary: defaultLabel }
-          : { primary: defaultLabel };
+          ? { ...agentDefaults.model, primary: effectiveLabel }
+          : { primary: effectiveLabel };
       const statusText = buildStatusMessage({
         config: cfg,
         agent: {
