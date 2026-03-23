@@ -25,7 +25,6 @@ export {
 export * from "../../src/plugin-sdk/line-runtime.js";
 
 export * from "./src/accounts.js";
-export * from "./src/actions.js";
 export * from "./src/bot-access.js";
 export * from "./src/channel-access-token.js";
 export * from "./src/config-schema.js";
@@ -93,7 +92,29 @@ export type {
 } from "./src/rich-menu.js";
 export * from "./src/send.js";
 export * from "./src/signature.js";
-export * from "./src/template-messages.js";
+export {
+  buildTemplateMessageFromPayload,
+  createButtonMenu,
+  createButtonTemplate,
+  createCarouselColumn,
+  createConfirmTemplate,
+  createImageCarousel,
+  createImageCarouselColumn,
+  createLinkMenu,
+  createProductCarousel,
+  createTemplateCarousel,
+  createYesNoConfirm,
+} from "./src/template-messages.js";
+export type {
+  Action,
+  ButtonsTemplate,
+  CarouselColumn,
+  CarouselTemplate,
+  ConfirmTemplate,
+  ImageCarouselColumn,
+  ImageCarouselTemplate,
+  TemplateMessage,
+} from "./src/template-messages.js";
 export type {
   LineChannelData,
   LineConfig,
