@@ -1,5 +1,9 @@
 import crypto from "node:crypto";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import {
+  assertSafeMainSessionSystemEventText,
+  toMainSessionSystemEventToken,
+} from "../main-session-system-event.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import {
   coerceFiniteScheduleNumber,
@@ -136,8 +140,11 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
     job.sessionTarget === "isolated" ||
     job.sessionTarget === "current" ||
     job.sessionTarget.startsWith("session:");
-  if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
-    throw new Error('main cron jobs require payload.kind="systemEvent"');
+  if (job.sessionTarget === "main") {
+    if (job.payload.kind !== "systemEvent") {
+      throw new Error('main cron jobs require payload.kind="systemEvent"');
+    }
+    assertSafeMainSessionSystemEventText(job.payload.text);
   }
   if (isIsolatedLike && job.payload.kind !== "agentTurn") {
     throw new Error('isolated/current/session cron jobs require payload.kind="agentTurn"');
@@ -905,5 +912,5 @@ export function resolveJobPayloadTextForMain(job: CronJob): string | undefined {
     return undefined;
   }
   const text = normalizePayloadToSystemText(job.payload);
-  return text.trim() ? text : undefined;
+  return toMainSessionSystemEventToken(text);
 }

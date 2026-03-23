@@ -359,6 +359,32 @@ describe("normalizeCronJobCreate", () => {
     expect(typeof normalized.name).toBe("string");
   });
 
+  it("rejects rich main-session systemEvent reminder prose", () => {
+    expect(() =>
+      normalizeCronJobCreate({
+        name: "rich-main",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: {
+          kind: "systemEvent",
+          text: "Please relay this reminder to the user in a helpful and friendly way.",
+        },
+      }),
+    ).toThrow(
+      'cron main-session systemEvent text must be a short internal wake token; use sessionTarget="isolated" with payload.kind="agentTurn" for rich reminders or follow-up prose',
+    );
+  });
+
+  it("accepts short main-session wake tokens", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "wake-token",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: { kind: "systemEvent", text: "wake up" },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.sessionTarget).toBe("main");
+    expect((normalized.payload as Record<string, unknown>).text).toBe("wake up");
+  });
+
   it("maps top-level model/thinking/timeout into payload for legacy add params", () => {
     const normalized = normalizeCronJobCreate({
       name: "legacy root fields",
@@ -498,5 +524,18 @@ describe("normalizeCronJobPatch", () => {
 
     const schedule = normalized.schedule as Record<string, unknown>;
     expect(schedule.staggerMs).toBe(30_000);
+  });
+
+  it("rejects rich systemEvent payload patches", () => {
+    expect(() =>
+      normalizeCronJobPatch({
+        payload: {
+          kind: "systemEvent",
+          text: "Reminder: review the whole conversation and send the user an update",
+        },
+      }),
+    ).toThrow(
+      'cron main-session systemEvent text must be a short internal wake token; use sessionTarget="isolated" with payload.kind="agentTurn" for rich reminders or follow-up prose',
+    );
   });
 });
