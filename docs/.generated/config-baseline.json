@@ -1689,7 +1689,7 @@
       "tags": [
         "automation"
       ],
-      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage, line, bluebubbles, feishu, matrix, mattermost, msteams, nextcloud-talk, nostr, synology-chat, tlon, twitch, zalo, zalouser.",
+      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage, line, bluebubbles, feishu, matrix, mattermost, msteams, nextcloud-talk, nostr, synology-chat, tlon, twitch, vk, zalo, zalouser.",
       "hasChildren": false
     },
     {
@@ -4345,7 +4345,7 @@
       "tags": [
         "automation"
       ],
-      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage, line, bluebubbles, feishu, matrix, mattermost, msteams, nextcloud-talk, nostr, synology-chat, tlon, twitch, zalo, zalouser.",
+      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage, line, bluebubbles, feishu, matrix, mattermost, msteams, nextcloud-talk, nostr, synology-chat, tlon, twitch, vk, zalo, zalouser.",
       "hasChildren": false
     },
     {
@@ -36111,6 +36111,295 @@
       "hasChildren": false
     },
     {
+      "path": "channels.vk",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "VK",
+      "help": "VK group bot via Long Poll API for direct-message routing.",
+      "hasChildren": true
+    },
+    {
+      "path": "channels.vk.accounts",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.vk.accounts.*",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.vk.accounts.*.allowFrom",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.vk.accounts.*.allowFrom.*",
+      "kind": "channel",
+      "type": [
+        "number",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.vk.accounts.*.botToken",
+      "kind": "channel",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.vk.accounts.*.botToken.id",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.vk.accounts.*.botToken.provider",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.vk.accounts.*.botToken.source",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.vk.accounts.*.dmPolicy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "pairing",
+        "allowlist",
+        "open",
+        "disabled"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.vk.accounts.*.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.vk.accounts.*.name",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.vk.accounts.*.responsePrefix",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.vk.accounts.*.tokenFile",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.vk.allowFrom",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.vk.allowFrom.*",
+      "kind": "channel",
+      "type": [
+        "number",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.vk.botToken",
+      "kind": "channel",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.vk.botToken.id",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.vk.botToken.provider",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.vk.botToken.source",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.vk.defaultAccount",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.vk.dmPolicy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "pairing",
+        "allowlist",
+        "open",
+        "disabled"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.vk.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.vk.name",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.vk.responsePrefix",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.vk.tokenFile",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.whatsapp",
       "kind": "channel",
       "type": "object",
@@ -55883,6 +56172,127 @@
     },
     {
       "path": "plugins.entries.vercel-ai-gateway.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.vk",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/vk",
+      "help": "OpenClaw VK channel plugin (plugin: vk)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.vk.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/vk Config",
+      "help": "Plugin-defined config payload for vk.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.vk.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/vk",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.vk.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.vk.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.vk.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.vk.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.vk.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.vk.subagent.allowModelOverride",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
