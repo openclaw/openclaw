@@ -314,7 +314,7 @@ describe("applyAuthChoice", () => {
   it("stores GigaChat Basic credentials as an env ref when secret-input-mode is ref", async () => {
     await setupTempState();
 
-    process.env.GIGACHAT_CREDENTIALS = "env-oauth-credentials"; // pragma: allowlist secret
+    process.env.GIGACHAT_CREDENTIALS = "basic-user:basic-pass"; // pragma: allowlist secret
     delete process.env.GIGACHAT_USER;
     delete process.env.GIGACHAT_PASSWORD;
     delete process.env.GIGACHAT_BASE_URL;
@@ -322,8 +322,7 @@ describe("applyAuthChoice", () => {
     const text = vi
       .fn()
       .mockResolvedValueOnce("https://gigachat.ift.sberdevices.ru/v1")
-      .mockResolvedValueOnce("basic-user")
-      .mockResolvedValueOnce("basic-pass");
+      .mockResolvedValueOnce("GIGACHAT_CREDENTIALS");
     const { prompter, runtime } = createApiKeyPromptHarness({ text });
 
     const result = await applyAuthChoice({
@@ -352,6 +351,45 @@ describe("applyAuthChoice", () => {
     });
     expect((await readAuthProfile("gigachat:default"))?.metadata).not.toHaveProperty("insecureTls");
     expect((await readAuthProfile("gigachat:default"))?.key).toBeUndefined();
+    expect(text).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects GigaChat Basic secret refs that resolve to OAuth credentials", async () => {
+    await setupTempState();
+
+    process.env.GIGACHAT_CREDENTIALS = "env-oauth-credentials"; // pragma: allowlist secret
+    delete process.env.GIGACHAT_USER;
+    delete process.env.GIGACHAT_PASSWORD;
+    delete process.env.GIGACHAT_BASE_URL;
+
+    const text = vi
+      .fn()
+      .mockResolvedValueOnce("https://gigachat.ift.sberdevices.ru/v1")
+      .mockResolvedValueOnce("GIGACHAT_CREDENTIALS");
+    const { prompter } = createApiKeyPromptHarness({ text });
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit ${code}`);
+      }),
+    };
+
+    await expect(
+      applyAuthChoice({
+        authChoice: "gigachat-basic",
+        config: {},
+        prompter,
+        runtime,
+        setDefaultModel: false,
+        opts: { secretInputMode: "ref" },
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("did not resolve to user:password credentials"),
+    );
+    await expect(readAuthProfile("gigachat:default")).rejects.toThrow();
   });
 
   it("captures business scope for direct GigaChat Basic onboarding", async () => {

@@ -1,11 +1,14 @@
 import { resolveGigachatAuthMode } from "../agents/gigachat-auth.js";
+import type { SecretInput } from "../config/types.secrets.js";
 import { resolveManifestProviderApiKeyChoice } from "../plugins/provider-auth-choices.js";
 import { shouldResetGigachatBaseUrlForOAuthReauth } from "../plugins/provider-auth-helpers.js";
+import { resolveRefFallbackInput } from "../plugins/provider-auth-input.js";
 import { ensureApiKeyFromOptionEnvOrPrompt } from "./auth-choice.apply-helpers.js";
 import {
   createAuthChoiceDefaultModelApplierForMutableState,
   normalizeSecretInputModeInput,
   normalizeTokenProviderInput,
+  promptSecretRefForSetup,
 } from "./auth-choice.apply-helpers.js";
 import { applyLiteLlmApiKeyProvider } from "./auth-choice.apply.api-key-providers.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
@@ -221,31 +224,73 @@ export async function applyAuthChoiceApiProviders(
       baseUrl = String(value ?? "").trim();
     }
 
-    let username = envUser;
-    if (!username) {
-      const value = await params.prompter.text({
-        message: "Enter GigaChat username",
-        validate: (val) => (String(val ?? "").trim() ? undefined : "Username is required"),
-      });
-      username = String(value ?? "").trim();
-    }
-
-    let password = envPassword;
-    if (!password) {
-      const value = await params.prompter.text({
-        message: "Enter GigaChat password",
-        validate: (val) => (String(val ?? "").trim() ? undefined : "Password is required"),
-      });
-      password = String(value ?? "").trim();
-    }
-
     const basicMetadata: Record<string, string> = {
       authMode: "basic",
       ...(gigachatBasicScope ? { scope: gigachatBasicScope } : {}),
     };
 
+    let basicCredential: SecretInput;
+    const configuredCredentialSummary: string[] = [`Base URL: ${baseUrl}`];
+    if (requestedSecretInputMode === "ref") {
+      const resolvedRef =
+        typeof params.prompter.select === "function"
+          ? await promptSecretRefForSetup({
+              provider: "gigachat",
+              config: nextConfig,
+              prompter: params.prompter,
+              preferredEnvVar: "GIGACHAT_CREDENTIALS",
+              copy: {
+                sourceMessage: "Where are the GigaChat Basic credentials stored?",
+                envVarMessage: "Environment variable for GigaChat Basic credentials",
+                envVarPlaceholder: "GIGACHAT_CREDENTIALS",
+                envValidatedMessage: (envVar) =>
+                  `Validated environment variable ${envVar}. OpenClaw will store a reference to the combined GigaChat Basic credentials, not the plaintext value.`,
+                providerValidatedMessage: (provider, id, source) =>
+                  `Validated ${source} reference ${provider}:${id}. OpenClaw will store a reference to the combined GigaChat Basic credentials, not the plaintext value.`,
+              },
+            })
+          : resolveRefFallbackInput({
+              config: nextConfig,
+              provider: "gigachat",
+              preferredEnvVar: "GIGACHAT_CREDENTIALS",
+            });
+      if (resolveGigachatAuthMode({ apiKey: resolvedRef.resolvedValue }) !== "basic") {
+        params.runtime.error(
+          [
+            "The selected GigaChat Basic credential reference did not resolve to user:password credentials.",
+            "Choose a ref that resolves to combined Basic credentials, or rerun the OAuth flow instead.",
+          ].join("\n"),
+        );
+        params.runtime.exit(1);
+        return null;
+      }
+      basicCredential = resolvedRef.ref;
+      configuredCredentialSummary.push("Credentials: stored as reference");
+    } else {
+      let username = envUser;
+      if (!username) {
+        const value = await params.prompter.text({
+          message: "Enter GigaChat username",
+          validate: (val) => (String(val ?? "").trim() ? undefined : "Username is required"),
+        });
+        username = String(value ?? "").trim();
+      }
+
+      let password = envPassword;
+      if (!password) {
+        const value = await params.prompter.text({
+          message: "Enter GigaChat password",
+          validate: (val) => (String(val ?? "").trim() ? undefined : "Password is required"),
+        });
+        password = String(value ?? "").trim();
+      }
+
+      basicCredential = `${username}:${password}`;
+      configuredCredentialSummary.push(`Username: ${username}`);
+    }
+
     await setGigachatApiKey(
-      `${username}:${password}`,
+      basicCredential,
       params.agentDir,
       requestedSecretInputMode ? { secretInputMode: requestedSecretInputMode } : undefined,
       basicMetadata,
@@ -266,8 +311,7 @@ export async function applyAuthChoiceApiProviders(
     await params.prompter.note(
       [
         "GigaChat (Basic auth).",
-        `Base URL: ${baseUrl}`,
-        `Username: ${username}`,
+        ...configuredCredentialSummary,
         ...(gigachatBasicScope ? [`Scope: ${gigachatBasicScope}`] : []),
       ].join("\n"),
       "GigaChat configured",
