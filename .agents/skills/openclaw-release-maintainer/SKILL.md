@@ -12,6 +12,7 @@ Use this skill for release and publish-time workflow. Keep ordinary development 
 - Do not change version numbers without explicit operator approval.
 - Ask permission before any npm publish or release step.
 - Use the private maintainer release docs for the actual runbook and `docs/reference/RELEASING.md` for public policy.
+- Core `openclaw` publish is manual `workflow_dispatch`; creating or pushing a tag does not publish by itself.
 
 ## Keep release channel naming aligned
 
@@ -31,6 +32,8 @@ Use this skill for release and publish-time workflow. Keep ordinary development 
   - `apps/macos/Sources/OpenClaw/Resources/Info.plist`
   - `docs/install/updating.md`
   - Peekaboo Xcode project and plist version fields
+- Before creating a release tag, make every version location above match the version encoded by that tag.
+- For fallback correction tags like `vYYYY.M.D-N`, the repo version locations still stay at `YYYY.M.D`.
 - “Bump version everywhere” means all version locations above except `appcast.xml`.
 - Release signing and notary credentials live outside the repo in the private maintainer docs.
 
@@ -65,6 +68,8 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
 ## Use the right auth flow
 
 - Core `openclaw` publish uses GitHub trusted publishing.
+- The publish run must be started manually with `workflow_dispatch`.
+- The `npm-release` environment must be approved by `@openclaw/openclaw-release-managers` before publish continues.
 - Do not use `NPM_TOKEN` or the plugin OTP flow for core releases.
 - `@openclaw/*` plugin publishes use a separate maintainer-only flow.
 - Only publish plugins that already exist on npm; bundled disk-tree-only plugins stay unpublished.
