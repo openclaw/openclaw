@@ -8,7 +8,6 @@ import {
   createHybridChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
 import {
   createConditionalWarningCollector,
   projectAccountWarningCollector,
@@ -17,9 +16,9 @@ import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
-import { z } from "zod";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { sendMessage, sendFileUrl } from "./client.js";
+import { SynologyChatChannelConfigSchema } from "./config-schema.js";
 import {
   registerSynologyWebhookRoute,
   validateSynologyGatewayAccountStartup,
@@ -29,13 +28,6 @@ import { synologyChatSetupAdapter, synologyChatSetupWizard } from "./setup-surfa
 import type { ResolvedSynologyChatAccount } from "./types.js";
 
 const CHANNEL_ID = "synology-chat";
-const SynologyChatConfigSchema = buildChannelConfigSchema(
-  z
-    .object({
-      dangerouslyAllowNameMatching: z.boolean().optional(),
-    })
-    .passthrough(),
-);
 
 const resolveSynologyChatDmPolicy = createScopedDmSecurityResolver<ResolvedSynologyChatAccount>({
   channelKey: CHANNEL_ID,
@@ -180,7 +172,7 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
         blockStreaming: false,
       },
       reload: { configPrefixes: [`channels.${CHANNEL_ID}`] },
-      configSchema: SynologyChatConfigSchema,
+      configSchema: SynologyChatChannelConfigSchema,
       setup: synologyChatSetupAdapter,
       setupWizard: synologyChatSetupWizard,
       config: {
