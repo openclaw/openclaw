@@ -58,27 +58,36 @@ describe("telegram thread bindings", () => {
     expect(manager.getByConversationId("-100200300:topic:77")?.boundBy).toBe("user-1");
   });
 
-  it("does not support child placement", async () => {
-    createTelegramThreadBindingManager({
+  it("supports child placement by binding the current telegram conversation", async () => {
+    const manager = createTelegramThreadBindingManager({
       accountId: "default",
       persist: false,
       enableSweeper: false,
     });
 
-    await expect(
-      getSessionBindingService().bind({
-        targetSessionKey: "agent:main:subagent:child-1",
-        targetKind: "subagent",
-        conversation: {
-          channel: "telegram",
-          accountId: "default",
-          conversationId: "-100200300:topic:77",
-        },
-        placement: "child",
-      }),
-    ).rejects.toMatchObject({
-      code: "BINDING_CAPABILITY_UNSUPPORTED",
+    const bound = await getSessionBindingService().bind({
+      targetSessionKey: "agent:codex:acp:child-1",
+      targetKind: "session",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-100200300:topic:77",
+      },
+      placement: "child",
+      metadata: {
+        boundBy: "system",
+        agentId: "codex",
+      },
     });
+
+    expect(bound.conversation.channel).toBe("telegram");
+    expect(bound.conversation.accountId).toBe("default");
+    expect(bound.conversation.conversationId).toBe("-100200300:topic:77");
+    expect(bound.targetSessionKey).toBe("agent:codex:acp:child-1");
+    expect(bound.targetKind).toBe("session");
+    expect(manager.getByConversationId("-100200300:topic:77")?.targetSessionKey).toBe(
+      "agent:codex:acp:child-1",
+    );
   });
 
   it("shares binding state across distinct module instances", async () => {

@@ -37,6 +37,12 @@ function createDefaultSpawnConfig(): OpenClawConfig {
           spawnAcpSessions: true,
         },
       },
+      telegram: {
+        threadBindings: {
+          enabled: true,
+          spawnAcpSessions: true,
+        },
+      },
     },
   };
 }
@@ -119,15 +125,19 @@ function createSessionBindingCapabilities(): SessionBindingAdapterCapabilities {
 }
 
 function createSessionBinding(overrides?: Partial<SessionBindingRecord>): SessionBindingRecord {
+  const channel = overrides?.conversation?.channel ?? "discord";
+  const accountId = overrides?.conversation?.accountId ?? "default";
+  const conversationId = overrides?.conversation?.conversationId ?? "child-thread";
+  const parentConversationId = overrides?.conversation?.parentConversationId ?? "parent-channel";
   return {
     bindingId: "default:child-thread",
     targetSessionKey: "agent:codex:acp:s1",
     targetKind: "session",
     conversation: {
-      channel: "discord",
-      accountId: "default",
-      conversationId: "child-thread",
-      parentConversationId: "parent-channel",
+      channel,
+      accountId,
+      conversationId,
+      ...(parentConversationId ? { parentConversationId } : {}),
     },
     status: "active",
     boundAt: Date.now(),
@@ -298,16 +308,29 @@ describe("spawnAcpDirect", () => {
       .mockImplementation(
         async (input: {
           targetSessionKey: string;
-          conversation: { accountId: string };
+          conversation: {
+            channel: string;
+            accountId: string;
+            conversationId: string;
+            parentConversationId?: string;
+          };
           metadata?: Record<string, unknown>;
         }) =>
           createSessionBinding({
             targetSessionKey: input.targetSessionKey,
             conversation: {
-              channel: "discord",
+              channel: input.conversation.channel,
               accountId: input.conversation.accountId,
-              conversationId: "child-thread",
-              parentConversationId: "parent-channel",
+              conversationId:
+                input.conversation.channel === "telegram"
+                  ? input.conversation.conversationId
+                  : "child-thread",
+              ...(input.conversation.channel === "telegram"
+                ? {
+                    parentConversationId:
+                      input.conversation.parentConversationId ?? "telegram-parent",
+                  }
+                : { parentConversationId: "parent-channel" }),
             },
             metadata: {
               boundBy:
@@ -1137,6 +1160,43 @@ describe("spawnAcpDirect", () => {
       .find((request) => request.method === "agent");
     expect(agentCall?.params?.deliver).toBe(true);
     expect(agentCall?.params?.channel).toBe("telegram");
+  });
+
+  it("allows Telegram ACP thread spawn when telegram thread bindings enable child session placement", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:telegram:group:-1003342490704:topic:2",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentTo: "telegram:-1003342490704",
+        agentThreadId: "2",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.mode).toBe("session");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "child",
+        conversation: expect.objectContaining({
+          channel: "telegram",
+          conversationId: "-1003342490704:topic:2",
+        }),
+      }),
+    );
+    const agentCall = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "agent");
+    expect(agentCall?.params?.deliver).toBe(true);
+    expect(agentCall?.params?.channel).toBe("telegram");
+    expect(agentCall?.params?.to).toBe("channel:-1003342490704:topic:2");
+    expect(agentCall?.params?.threadId).toBe("-1003342490704:topic:2");
   });
 
   it("disposes pre-registered parent relay when initial ACP dispatch fails", async () => {
