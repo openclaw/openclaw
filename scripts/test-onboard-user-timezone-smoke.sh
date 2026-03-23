@@ -5,7 +5,6 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 TMP_HOME=$(mktemp -d)
 trap 'rm -rf "$TMP_HOME"' EXIT
 
-EXPECTED_TZ=$(node -e 'process.stdout.write(Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC")')
 LOCAL_WS="$TMP_HOME/local-workspace"
 REMOTE_URL="wss://example.com:18789"
 
@@ -24,11 +23,11 @@ read_user_timezone() {
   ' "$TMP_HOME/.openclaw/openclaw.json"
 }
 
-assert_timezone() {
+assert_timezone_unset() {
   local actual="$1"
   local label="$2"
-  if [[ "$actual" != "$EXPECTED_TZ" ]]; then
-    echo "[$label] expected userTimezone=$EXPECTED_TZ but got: ${actual:-<unset>}" >&2
+  if [[ -n "$actual" ]]; then
+    echo "[$label] expected userTimezone to be unset but got: $actual" >&2
     exit 1
   fi
 }
@@ -45,8 +44,8 @@ run_onboard \
   --workspace "$LOCAL_WS"
 
 LOCAL_TZ=$(read_user_timezone)
-assert_timezone "$LOCAL_TZ" "local"
-echo "local userTimezone: $LOCAL_TZ"
+assert_timezone_unset "$LOCAL_TZ" "local"
+echo "local userTimezone: ${LOCAL_TZ:-<unset>}"
 
 echo "== remote onboard smoke =="
 run_onboard \
@@ -57,7 +56,7 @@ run_onboard \
   --skip-health
 
 REMOTE_TZ=$(read_user_timezone)
-assert_timezone "$REMOTE_TZ" "remote"
-echo "remote userTimezone: $REMOTE_TZ"
+assert_timezone_unset "$REMOTE_TZ" "remote"
+echo "remote userTimezone: ${REMOTE_TZ:-<unset>}"
 
 echo "smoke ok"

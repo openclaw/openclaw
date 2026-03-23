@@ -8,10 +8,10 @@ import {
 } from "./onboard-config.js";
 
 describe("applyOnboardAgentDefaults", () => {
-  it("sets a detected user timezone during onboarding when unset", () => {
+  it("leaves user timezone unset during onboarding when unset", () => {
     const result = applyOnboardAgentDefaults({});
 
-    expect(result?.defaults?.userTimezone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+    expect(result?.defaults?.userTimezone).toBeUndefined();
   });
 
   it("preserves an explicit user timezone when already configured", () => {
@@ -39,7 +39,7 @@ describe("applyLocalSetupWorkspaceConfig", () => {
     expect(result.session?.dmScope).toBe(ONBOARDING_DEFAULT_DM_SCOPE);
     expect(result.gateway?.mode).toBe("local");
     expect(result.agents?.defaults?.workspace).toBe("/tmp/workspace");
-    expect(result.agents?.defaults?.userTimezone).toBeDefined();
+    expect(result.agents?.defaults?.userTimezone).toBeUndefined();
     expect(result.tools?.profile).toBe(ONBOARDING_DEFAULT_TOOLS_PROFILE);
   });
 

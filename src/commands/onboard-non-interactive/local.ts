@@ -126,7 +126,11 @@ export async function runNonInteractiveLocalSetup(params: {
   nextConfig = applyNonInteractiveSkillsConfig({ nextConfig, opts, runtime });
 
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
-  await writeConfigFile(nextConfig);
+  await writeConfigFile(nextConfig, {
+    unsetPaths: baseConfig.agents?.defaults?.userTimezone
+      ? undefined
+      : [["agents", "defaults", "userTimezone"]],
+  });
   logConfigUpdated(runtime);
 
   await ensureWorkspaceAndSessions(workspaceDir, runtime, {

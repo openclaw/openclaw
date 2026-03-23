@@ -19,7 +19,7 @@
           "exportName": "buildGoogleImageGenerationProvider",
           "kind": "function",
           "source": {
-            "line": 98,
+            "line": 95,
             "path": "extensions/google/image-generation-provider.ts"
           }
         },
@@ -28,7 +28,7 @@
           "exportName": "buildOpenAIImageGenerationProvider",
           "kind": "function",
           "source": {
-            "line": 43,
+            "line": 22,
             "path": "extensions/openai/image-generation-provider.ts"
           }
         },
@@ -1357,7 +1357,7 @@
           "kind": "function",
           "source": {
             "line": 17,
-            "path": "src/whatsapp/normalize.ts"
+            "path": "extensions/whatsapp/src/normalize-target.ts"
           }
         },
         {
@@ -1365,8 +1365,8 @@
           "exportName": "isWhatsAppUserTarget",
           "kind": "function",
           "source": {
-            "line": 33,
-            "path": "src/whatsapp/normalize.ts"
+            "line": 30,
+            "path": "extensions/whatsapp/src/normalize-target.ts"
           }
         },
         {
@@ -1455,8 +1455,8 @@
           "exportName": "normalizeWhatsAppTarget",
           "kind": "function",
           "source": {
-            "line": 55,
-            "path": "src/whatsapp/normalize.ts"
+            "line": 47,
+            "path": "extensions/whatsapp/src/normalize-target.ts"
           }
         },
         {
@@ -4924,6 +4924,15 @@
           "source": {
             "line": 47,
             "path": "src/infra/http-body.ts"
+          }
+        },
+        {
+          "declaration": "export function normalizePluginHttpPath(path?: string | null | undefined, fallback?: string | null | undefined): string | null;",
+          "exportName": "normalizePluginHttpPath",
+          "kind": "function",
+          "source": {
+            "line": 1,
+            "path": "src/plugins/http-path.ts"
           }
         },
         {

@@ -419,7 +419,11 @@ export async function runSetupWizard(
       agents: applyOnboardAgentDefaults(nextConfig),
     };
     nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
-    await writeConfigFile(nextConfig);
+    await writeConfigFile(nextConfig, {
+      unsetPaths: baseConfig.agents?.defaults?.userTimezone
+        ? undefined
+        : [["agents", "defaults", "userTimezone"]],
+    });
     logConfigUpdated(runtime);
     await prompter.outro("Remote gateway configured.");
     return;
@@ -579,7 +583,11 @@ export async function runSetupWizard(
   nextConfig = await setupInternalHooks(nextConfig, runtime, prompter);
 
   nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
-  await writeConfigFile(nextConfig);
+  await writeConfigFile(nextConfig, {
+    unsetPaths: baseConfig.agents?.defaults?.userTimezone
+      ? undefined
+      : [["agents", "defaults", "userTimezone"]],
+  });
 
   const { finalizeSetupWizard } = await import("./setup.finalize.js");
   const { launchedTui } = await finalizeSetupWizard({

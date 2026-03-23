@@ -1,4 +1,3 @@
-import { resolveUserTimezone } from "../agents/date-time.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { DmScope } from "../config/types.base.js";
 import type { ToolProfileId } from "../config/types.tools.js";
@@ -7,11 +6,14 @@ export const ONBOARDING_DEFAULT_DM_SCOPE: DmScope = "per-channel-peer";
 export const ONBOARDING_DEFAULT_TOOLS_PROFILE: ToolProfileId = "coding";
 
 export function applyOnboardAgentDefaults(baseConfig: OpenClawConfig): OpenClawConfig["agents"] {
+  // Intentionally does NOT set userTimezone — leave it unset so runtime detection
+  // (resolveUserTimezone in src/agents/date-time.ts) always reflects the current host
+  // timezone rather than snapshotting the onboarding-time value into config.
+  // An explicit user-configured value is preserved via the spread of baseConfig.agents?.defaults.
   return {
     ...baseConfig.agents,
     defaults: {
       ...baseConfig.agents?.defaults,
-      userTimezone: baseConfig.agents?.defaults?.userTimezone ?? resolveUserTimezone(undefined),
     },
   };
 }
