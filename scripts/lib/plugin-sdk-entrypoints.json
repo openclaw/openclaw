@@ -31,6 +31,7 @@
   "text-runtime",
   "agent-runtime",
   "speech-runtime",
+  "speech-core",
   "plugin-runtime",
   "security-runtime",
   "gateway-runtime",

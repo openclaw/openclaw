@@ -165,6 +165,10 @@
       "types": "./dist/plugin-sdk/speech-runtime.d.ts",
       "default": "./dist/plugin-sdk/speech-runtime.js"
     },
+    "./plugin-sdk/speech-core": {
+      "types": "./dist/plugin-sdk/speech-core.d.ts",
+      "default": "./dist/plugin-sdk/speech-core.js"
+    },
     "./plugin-sdk/plugin-runtime": {
       "types": "./dist/plugin-sdk/plugin-runtime.d.ts",
       "default": "./dist/plugin-sdk/plugin-runtime.js"
