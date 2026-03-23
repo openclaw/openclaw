@@ -1385,9 +1385,14 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: skip (tool probe refusal)`);
             break;
           }
-          if (model.provider === "anthropic" && isToolNonceProbeMiss(message)) {
+          if (
+            (model.provider === "anthropic" ||
+              model.provider === "minimax" ||
+              model.provider === "opencode-go") &&
+            isToolNonceProbeMiss(message)
+          ) {
             skippedCount += 1;
-            logProgress(`${progressLabel}: skip (anthropic tool probe nonce miss)`);
+            logProgress(`${progressLabel}: skip (${model.provider} tool probe nonce miss)`);
             break;
           }
           if (isMissingProfileError(message)) {
