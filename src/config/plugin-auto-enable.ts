@@ -478,7 +478,7 @@ export function applyPluginAutoEnable(params: {
       continue;
     }
     next = registerPluginEntry(next, entry.pluginId);
-    if (allowMissing || !builtInChannelId) {
+    if (!builtInChannelId) {
       next = ensurePluginAllowlisted(next, entry.pluginId);
     }
     changes.push(formatAutoEnableChange(entry));
