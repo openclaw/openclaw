@@ -52,6 +52,21 @@ function registerMalformedBootstrapFileHook() {
   });
 }
 
+function registerHeartbeatBootstrapFileHook() {
+  registerInternalHook("agent:bootstrap", (event) => {
+    const context = event.context as AgentBootstrapHookContext;
+    context.bootstrapFiles = [
+      ...context.bootstrapFiles,
+      {
+        name: "HEARTBEAT.md",
+        path: path.join(context.workspaceDir, "hook-HEARTBEAT.md"),
+        content: "hook heartbeat",
+        missing: false,
+      } as WorkspaceBootstrapFile,
+    ];
+  });
+}
+
 describe("resolveBootstrapFilesForRun", () => {
   beforeEach(() => clearInternalHooks());
   afterEach(() => clearInternalHooks());
@@ -80,6 +95,19 @@ describe("resolveBootstrapFilesForRun", () => {
     ).toBe(true);
     expect(warnings).toHaveLength(3);
     expect(warnings[0]).toContain('missing or invalid "path" field');
+  });
+
+  it("excludes HEARTBEAT.md from default full bootstrap context, including hook-added entries", async () => {
+    registerHeartbeatBootstrapFileHook();
+
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "persona", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+
+    expect(files.some((file) => file.name === "HEARTBEAT.md")).toBe(false);
+    expect(files.some((file) => file.name === "SOUL.md")).toBe(true);
   });
 });
 
@@ -112,6 +140,20 @@ describe("resolveBootstrapContextForRun", () => {
 
     expect(files.length).toBeGreaterThan(0);
     expect(files.every((file) => file.name === "HEARTBEAT.md")).toBe(true);
+  });
+
+  it("keeps HEARTBEAT.md out of full heartbeat runs", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "persona", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      runKind: "heartbeat",
+    });
+
+    expect(files.some((file) => file.name === "HEARTBEAT.md")).toBe(false);
+    expect(files.some((file) => file.name === "SOUL.md")).toBe(true);
   });
 
   it("keeps bootstrap context empty in lightweight cron mode", async () => {

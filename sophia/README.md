@@ -8,6 +8,7 @@ Sophia's workspace files and deployment config for running on OpenClaw.
 - `IDENTITY.md` — Sophia's self-description: name, vibe, theme, emoji.
 - `USER.md` — Per-user profile. Sophia updates this as she learns about you.
 - `AGENTS.md` — Full behavioral instructions: communication style, WhatsApp rules, tool policies, heartbeat tasks, memory lifecycle.
+- `tone_skills.md` — Extra tone/style guidance injected into `Project Context` via the `bootstrap-extra-files` hook.
 - `MEMORY.md` — Long-term memory. Sophia writes to this over time.
 - `HEARTBEAT.md` — Task list executed every 2 hours: email scan, calendar check, open threads, memory maintenance.
 - `memory/heartbeat-state.json` — Tracks last check timestamps.
@@ -53,6 +54,7 @@ cp /app/sophia/SOUL.md /data/.openclaw/sophia/
 cp /app/sophia/IDENTITY.md /data/.openclaw/sophia/
 cp /app/sophia/USER.md /data/.openclaw/sophia/
 cp /app/sophia/AGENTS.md /data/.openclaw/sophia/
+cp /app/sophia/tone_skills.md /data/.openclaw/sophia/
 cp /app/sophia/MEMORY.md /data/.openclaw/sophia/
 cp /app/sophia/HEARTBEAT.md /data/.openclaw/sophia/
 cp /app/sophia/memory/heartbeat-state.json /data/.openclaw/sophia/memory/

@@ -47,7 +47,13 @@
   },
   "hooks": {
     "internal": {
-      "enabled": true
+      "enabled": true,
+      "entries": {
+        "bootstrap-extra-files": {
+          "enabled": true,
+          "paths": ["tone_skills.md"]
+        }
+      }
     }
   },
   "plugins": {

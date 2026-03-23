@@ -8,6 +8,7 @@ import {
   resolveBootstrapTotalMaxChars,
 } from "./pi-embedded-helpers.js";
 import {
+  DEFAULT_HEARTBEAT_FILENAME,
   filterBootstrapFilesForSession,
   loadWorkspaceBootstrapFiles,
   type WorkspaceBootstrapFile,
@@ -52,13 +53,23 @@ function applyContextModeFilter(params: {
   const contextMode = params.contextMode ?? "full";
   const runKind = params.runKind ?? "default";
   if (contextMode !== "lightweight") {
-    return params.files;
+    return params.files.filter((file) => file.name !== DEFAULT_HEARTBEAT_FILENAME);
   }
   if (runKind === "heartbeat") {
-    return params.files.filter((file) => file.name === "HEARTBEAT.md");
+    return params.files.filter((file) => file.name === DEFAULT_HEARTBEAT_FILENAME);
   }
   // cron/default lightweight mode keeps bootstrap context empty on purpose.
   return [];
+}
+
+function excludeHeartbeatFromFullContext(
+  files: WorkspaceBootstrapFile[],
+  contextMode?: BootstrapContextMode,
+): WorkspaceBootstrapFile[] {
+  if ((contextMode ?? "full") === "lightweight") {
+    return files;
+  }
+  return files.filter((file) => file.name !== DEFAULT_HEARTBEAT_FILENAME);
 }
 
 export async function resolveBootstrapFilesForRun(params: {
@@ -92,7 +103,10 @@ export async function resolveBootstrapFilesForRun(params: {
     sessionId: params.sessionId,
     agentId: params.agentId,
   });
-  return sanitizeBootstrapFiles(updated, params.warn);
+  return sanitizeBootstrapFiles(
+    excludeHeartbeatFromFullContext(updated, params.contextMode),
+    params.warn,
+  );
 }
 
 export async function resolveBootstrapContextForRun(params: {
