@@ -101,6 +101,9 @@ export function resolveCronSession(params: {
         groupActivationNeedsSystemIntro: entry?.groupActivationNeedsSystemIntro,
         // Preserve skills snapshot to avoid re-scanning workspace
         skillsSnapshot: entry?.skillsSnapshot,
+        // Preserve session label and display name for session listings
+        label: entry?.label,
+        displayName: entry?.displayName,
       }
     : isNewSession
       ? {
