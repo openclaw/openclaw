@@ -1,11 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
-import { BrowserProfileUnavailableError } from "../errors.js";
-import { registerBrowserBasicRoutes } from "./basic.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
 vi.mock("../chrome-mcp.js", () => ({
   getChromeMcpPid: vi.fn(() => 4321),
 }));
+
+let registerBrowserBasicRoutes: typeof import("./basic.js").registerBrowserBasicRoutes;
+let BrowserProfileUnavailableError: typeof import("../errors.js").BrowserProfileUnavailableError;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ BrowserProfileUnavailableError } = await import("../errors.js"));
+  ({ registerBrowserBasicRoutes } = await import("./basic.js"));
+});
 
 describe("basic browser routes", () => {
   it("maps existing-session status failures to JSON browser errors", async () => {
