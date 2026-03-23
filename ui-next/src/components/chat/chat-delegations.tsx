@@ -8,6 +8,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import ReactDOM from "react-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useGateway } from "@/hooks/use-gateway";
@@ -115,10 +116,10 @@ function DelegationDetailModal({
   const agentFromKey = entry.childSessionKey?.split(":")?.[1];
   const agentName = entry.agentId ?? agentFromKey ?? "sub-agent";
 
-  return (
+  return ReactDOM.createPortal(
     <div className="fixed inset-0 z-[100] bg-black/60" onClick={onClose}>
       <div
-        className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-lg rounded-lg border bg-card p-5 shadow-xl flex flex-col gap-3 max-h-[80vh] overflow-y-auto"
+        className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-lg rounded-lg border bg-card p-5 shadow-xl flex flex-col gap-3 max-h-[80vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">
@@ -189,7 +190,8 @@ function DelegationDetailModal({
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
