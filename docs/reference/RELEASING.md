@@ -23,7 +23,7 @@ OpenClaw has three public release lanes:
 - Do not zero-pad month or day
 - `latest` means the current stable npm release
 - `beta` means the current prerelease npm release
-- Beta releases may ship before the macOS app catches up
+- Every OpenClaw release ships the npm package and macOS app together
 
 ## Release cadence
 
