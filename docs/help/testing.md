@@ -82,7 +82,8 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
 - Fast-local iteration note:
   - `pnpm test:changed` runs the wrapper with `--changed origin/main`.
   - The base Vitest config marks the wrapper manifests/config files as `forceRerunTriggers` so changed-mode reruns stay correct when scheduler inputs change.
-  - Use `OPENCLAW_VITEST_FS_MODULE_CACHE=1` for repeated local reruns on a stable branch when transform cost dominates.
+  - Vitest's filesystem module cache is now enabled by default for Node-side test reruns.
+  - Opt out with `OPENCLAW_VITEST_FS_MODULE_CACHE=0` or `OPENCLAW_VITEST_FS_MODULE_CACHE=false` if you suspect stale transform cache behavior.
 - Perf-debug note:
   - `pnpm test:perf:imports` enables Vitest import-duration reporting plus import-breakdown output.
   - `pnpm test:perf:imports:changed` scopes the same profiling view to files changed since `origin/main`.

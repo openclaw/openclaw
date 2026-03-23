@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 import { loadVitestExperimentalConfig } from "../vitest.performance-config.ts";
 
 describe("loadVitestExperimentalConfig", () => {
-  it("returns an empty object when no perf flags are enabled", () => {
-    expect(loadVitestExperimentalConfig({})).toEqual({});
+  it("enables the filesystem module cache by default", () => {
+    expect(loadVitestExperimentalConfig({})).toEqual({
+      experimental: {
+        fsModuleCache: true,
+      },
+    });
   });
 
   it("enables the filesystem module cache explicitly", () => {
@@ -18,6 +22,14 @@ describe("loadVitestExperimentalConfig", () => {
     });
   });
 
+  it("allows disabling the filesystem module cache explicitly", () => {
+    expect(
+      loadVitestExperimentalConfig({
+        OPENCLAW_VITEST_FS_MODULE_CACHE: "0",
+      }),
+    ).toEqual({});
+  });
+
   it("enables import timing output and import breakdown reporting", () => {
     expect(
       loadVitestExperimentalConfig({
@@ -26,6 +38,7 @@ describe("loadVitestExperimentalConfig", () => {
       }),
     ).toEqual({
       experimental: {
+        fsModuleCache: true,
         importDurations: { print: true },
         printImportBreakdown: true,
       },
