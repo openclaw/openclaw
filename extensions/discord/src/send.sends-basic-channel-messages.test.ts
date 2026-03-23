@@ -1,29 +1,49 @@
 import { ChannelType, PermissionFlagsBits, Routes } from "discord-api-types/v10";
-import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  __resetDiscordDirectoryCacheForTest,
-  rememberDiscordDirectoryUser,
-} from "./directory-cache.js";
-import {
-  deleteMessageDiscord,
-  editMessageDiscord,
-  fetchChannelPermissionsDiscord,
-  fetchReactionsDiscord,
-  pinMessageDiscord,
-  reactMessageDiscord,
-  readMessagesDiscord,
-  removeOwnReactionsDiscord,
-  removeReactionDiscord,
-  searchMessagesDiscord,
-  sendMessageDiscord,
-  unpinMessageDiscord,
-} from "./send.js";
 import { makeDiscordRest } from "./send.test-harness.js";
 
 vi.mock("openclaw/plugin-sdk/web-media", async () => {
   const { discordWebMediaMockFactory } = await import("./send.test-harness.js");
   return discordWebMediaMockFactory();
+});
+
+let deleteMessageDiscord: typeof import("./send.js").deleteMessageDiscord;
+let editMessageDiscord: typeof import("./send.js").editMessageDiscord;
+let fetchChannelPermissionsDiscord: typeof import("./send.js").fetchChannelPermissionsDiscord;
+let fetchReactionsDiscord: typeof import("./send.js").fetchReactionsDiscord;
+let pinMessageDiscord: typeof import("./send.js").pinMessageDiscord;
+let reactMessageDiscord: typeof import("./send.js").reactMessageDiscord;
+let readMessagesDiscord: typeof import("./send.js").readMessagesDiscord;
+let removeOwnReactionsDiscord: typeof import("./send.js").removeOwnReactionsDiscord;
+let removeReactionDiscord: typeof import("./send.js").removeReactionDiscord;
+let searchMessagesDiscord: typeof import("./send.js").searchMessagesDiscord;
+let sendMessageDiscord: typeof import("./send.js").sendMessageDiscord;
+let unpinMessageDiscord: typeof import("./send.js").unpinMessageDiscord;
+let loadWebMedia: typeof import("openclaw/plugin-sdk/web-media").loadWebMedia;
+let __resetDiscordDirectoryCacheForTest: typeof import("./directory-cache.js").__resetDiscordDirectoryCacheForTest;
+let rememberDiscordDirectoryUser: typeof import("./directory-cache.js").rememberDiscordDirectoryUser;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({
+    deleteMessageDiscord,
+    editMessageDiscord,
+    fetchChannelPermissionsDiscord,
+    fetchReactionsDiscord,
+    pinMessageDiscord,
+    reactMessageDiscord,
+    readMessagesDiscord,
+    removeOwnReactionsDiscord,
+    removeReactionDiscord,
+    searchMessagesDiscord,
+    sendMessageDiscord,
+    unpinMessageDiscord,
+  } = await import("./send.js"));
+  ({ loadWebMedia } = await import("openclaw/plugin-sdk/web-media"));
+  ({ __resetDiscordDirectoryCacheForTest, rememberDiscordDirectoryUser } =
+    await import("./directory-cache.js"));
+  vi.clearAllMocks();
+  __resetDiscordDirectoryCacheForTest();
 });
 
 describe("sendMessageDiscord", () => {
@@ -64,11 +84,6 @@ describe("sendMessageDiscord", () => {
       .mockResolvedValueOnce(secondResponse);
     return { rest, postMock };
   }
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    __resetDiscordDirectoryCacheForTest();
-  });
 
   it("sends basic channel messages", async () => {
     const { rest, postMock, getMock } = makeDiscordRest();

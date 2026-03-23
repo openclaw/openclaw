@@ -26,6 +26,10 @@ import {
 } from "@buape/carbon";
 import { ButtonStyle, MessageFlags, TextInputStyle } from "discord-api-types/v10";
 
+// Some test-only module graphs partially mock `@buape/carbon` and can drop `Modal`.
+// Keep dynamic form definitions loadable instead of crashing unrelated suites.
+const ModalBase: typeof Modal = (Modal ?? class {}) as typeof Modal;
+
 export const DISCORD_COMPONENT_CUSTOM_ID_KEY = "occomp";
 export const DISCORD_MODAL_CUSTOM_ID_KEY = "ocmodal";
 export const DISCORD_COMPONENT_ATTACHMENT_PREFIX = "attachment://";
@@ -1126,7 +1130,7 @@ export function buildDiscordComponentMessageFlags(
   return hasV2 ? MessageFlags.IsComponentsV2 : undefined;
 }
 
-export class DiscordFormModal extends Modal {
+export class DiscordFormModal extends ModalBase {
   title: string;
   customId: string;
   components: Array<Label | TextDisplay>;

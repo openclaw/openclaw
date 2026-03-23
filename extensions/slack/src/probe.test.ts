@@ -8,14 +8,15 @@ vi.mock("./client.js", () => ({
   createSlackWebClient: createSlackWebClientMock,
 }));
 
-vi.mock("../../../src/utils/with-timeout.js", () => ({
+vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
   withTimeout: withTimeoutMock,
 }));
 
-const { probeSlack } = await import("./probe.js");
+let probeSlack: typeof import("./probe.js").probeSlack;
 
 describe("probeSlack", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     authTestMock.mockReset();
     createSlackWebClientMock.mockReset();
     withTimeoutMock.mockReset();
@@ -26,6 +27,7 @@ describe("probeSlack", () => {
       },
     });
     withTimeoutMock.mockImplementation(async (promise: Promise<unknown>) => await promise);
+    ({ probeSlack } = await import("./probe.js"));
   });
 
   it("maps Slack auth metadata on success", async () => {

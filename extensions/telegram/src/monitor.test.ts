@@ -338,6 +338,7 @@ describe("monitorTelegramProvider (grammY)", () => {
   let consoleErrorSpy: { mockRestore: () => void } | undefined;
 
   beforeEach(() => {
+    vi.resetModules();
     loadConfig.mockReturnValue({
       agents: { defaults: { maxConcurrent: 2 } },
       channels: { telegram: {} },

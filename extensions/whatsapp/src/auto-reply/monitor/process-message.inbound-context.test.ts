@@ -107,10 +107,13 @@ vi.mock("../deliver-reply.js", () => ({
 }));
 
 import { updateLastRouteInBackground } from "./last-route.js";
-import { processMessage } from "./process-message.js";
+
+let processMessage: typeof import("./process-message.js").processMessage;
 
 describe("web processMessage inbound context", () => {
   beforeEach(async () => {
+    vi.resetModules();
+    ({ processMessage } = await import("./process-message.js"));
     capturedCtx = undefined;
     capturedDispatchParams = undefined;
     backgroundTasks = new Set();

@@ -1,7 +1,6 @@
 import path from "node:path";
 import type { Bot } from "grammy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { STATE_DIR } from "../../../src/config/paths.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   createSequencedTestDraftStream,
@@ -59,6 +58,11 @@ vi.mock("./bot/delivery.js", () => ({
   emitInternalMessageSentHook,
 }));
 
+vi.mock("./bot/delivery.replies.js", () => ({
+  deliverReplies,
+  emitInternalMessageSentHook,
+}));
+
 vi.mock("./send.js", () => ({
   createForumTopicTelegram,
   deleteMessageTelegram,
@@ -89,7 +93,7 @@ vi.mock("./sticker-cache.js", () => ({
   describeStickerImage: vi.fn(),
 }));
 
-import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
+let dispatchTelegramMessage: typeof import("./bot-message-dispatch.js").dispatchTelegramMessage;
 
 const telegramDepsForTest: TelegramBotDeps = {
   loadConfig: loadConfig as TelegramBotDeps["loadConfig"],
@@ -110,7 +114,9 @@ const telegramDepsForTest: TelegramBotDeps = {
 describe("dispatchTelegramMessage draft streaming", () => {
   type TelegramMessageContext = Parameters<typeof dispatchTelegramMessage>[0]["context"];
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ dispatchTelegramMessage } = await import("./bot-message-dispatch.js"));
     createTelegramDraftStream.mockClear();
     dispatchReplyWithBufferedBlockDispatcher.mockClear();
     deliverReplies.mockClear();
@@ -285,7 +291,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         thread: { id: 777, scope: "dm" },
-        mediaLocalRoots: expect.arrayContaining([path.join(STATE_DIR, "workspace-work")]),
+        mediaLocalRoots: expect.arrayContaining([
+          expect.stringMatching(/[\\/]\.openclaw[\\/]workspace-work$/u),
+        ]),
       }),
     );
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(

@@ -1,5 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
-import { registerSlackMessageEvents } from "./messages.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSlackSystemEventTestHarness,
   type SlackSystemEventTestOverrides,
@@ -8,13 +7,23 @@ import {
 const messageQueueMock = vi.fn();
 const messageAllowMock = vi.fn();
 
-vi.mock("../../../../../src/infra/system-events.js", () => ({
-  enqueueSystemEvent: (...args: unknown[]) => messageQueueMock(...args),
-}));
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return {
+    ...actual,
+    enqueueSystemEvent: (...args: unknown[]) => messageQueueMock(...args),
+  };
+});
 
-vi.mock("../../../../../src/pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => messageAllowMock(...args),
-}));
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  return {
+    ...actual,
+    readChannelAllowFromStore: (...args: unknown[]) => messageAllowMock(...args),
+  };
+});
+
+let registerSlackMessageEvents: typeof import("./messages.js").registerSlackMessageEvents;
 
 type MessageHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
 type RegisteredEventName = "message" | "app_mention";
@@ -42,6 +51,11 @@ function resetMessageMocks(): void {
   messageQueueMock.mockClear();
   messageAllowMock.mockReset().mockResolvedValue([]);
 }
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ registerSlackMessageEvents } = await import("./messages.js"));
+});
 
 function makeChangedEvent(overrides?: { channel?: string; user?: string }) {
   const user = overrides?.user ?? "U1";
