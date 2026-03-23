@@ -10,7 +10,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-
 ## 2026.3.22
 
 ### Breaking
