@@ -504,9 +504,13 @@ describe("delivery-queue", () => {
       expect(result.skippedMaxRetries).toBe(0);
       expect(result.deferredBackoff).toBe(0);
 
-      // All entries should still be in the queue.
+      // All entries should still be in the queue (retryCount < MAX_RETRIES).
       const remaining = await loadPendingDeliveries(tmpDir);
       expect(remaining).toHaveLength(3);
+
+      // retryCount should be incremented on all deferred entries so they
+      // eventually reach MAX_RETRIES and are pruned rather than looping forever.
+      expect(remaining.every((e) => e.retryCount === 1)).toBe(true);
 
       // Should have logged a warning about deferred entries.
       expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("deferred to next startup"));
