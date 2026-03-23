@@ -439,6 +439,28 @@ describe("hook handler timeout", () => {
     expect(captureCompleted).toBe(true);
   });
 
+  it("honors configured hookTimeoutMs when it exceeds the memory timeout floor", async () => {
+    addTestHook({
+      registry,
+      pluginId: "slow-local-embedder",
+      hookName: "before_agent_start",
+      handler: (() =>
+        new Promise((resolve) => {
+          // Simulates a local embedding provider that takes 4 minutes
+          setTimeout(() => resolve({ prependContext: "local recall done" }), 240_000);
+        })) as PluginHookRegistration["handler"],
+    });
+
+    // Configure hookTimeoutMs to 5 minutes (above the 120 s floor)
+    const runner = createHookRunner(registry, { hookTimeoutMs: 300_000, catchErrors: true });
+    const promise = runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
+    // Advance past the 120 s floor but not past the configured 300 s
+    await vi.advanceTimersByTimeAsync(240_000);
+
+    const result = await promise;
+    expect(result?.prependContext).toBe("local recall done");
+  });
+
   it("times out agent_end hooks that exceed the memory timeout", async () => {
     const errors: string[] = [];
 

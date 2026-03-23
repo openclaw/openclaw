@@ -138,15 +138,19 @@ export type HookFailurePolicy = "fail-open" | "fail-closed";
 const DEFAULT_HOOK_TIMEOUT_MS = 30_000;
 
 /**
- * Dedicated timeout for memory-critical hooks (before_agent_start, agent_end).
+ * Minimum timeout floor for memory-critical hooks (before_agent_start, agent_end).
  * These drive memory recall and auto-capture in memory-lancedb, which performs
  * embed() calls with upstream budgets of 60 s remote / 5 min local.  Most
  * calls are remote and complete in under 60 s; 2 minutes provides sufficient
  * headroom while still protecting against genuinely hung handlers.
+ *
+ * When `plugins.hookTimeoutMs` is configured above this floor, the configured
+ * value is used instead, so deployments with slow local embedding providers
+ * can raise the cap (e.g. `hookTimeoutMs: 300000` for 5 minutes).
  */
 const MEMORY_HOOK_TIMEOUT_MS = 120_000;
 
-/** Hooks that use `MEMORY_HOOK_TIMEOUT_MS` instead of the configured timeout. */
+/** Hooks that use at least `MEMORY_HOOK_TIMEOUT_MS` as their timeout floor. */
 const MEMORY_HOOK_NAMES: ReadonlySet<PluginHookName> = new Set([
   "before_agent_start",
   "agent_end",
@@ -269,7 +273,9 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     if (!hookTimeoutMs || TIMEOUT_EXEMPT_HOOKS.has(hookName)) {
       return fn();
     }
-    const effectiveTimeout = MEMORY_HOOK_NAMES.has(hookName) ? MEMORY_HOOK_TIMEOUT_MS : hookTimeoutMs;
+    const effectiveTimeout = MEMORY_HOOK_NAMES.has(hookName)
+      ? Math.max(MEMORY_HOOK_TIMEOUT_MS, hookTimeoutMs)
+      : hookTimeoutMs;
     return withTimeout(() => fn(), effectiveTimeout, `${hookName} handler from ${pluginId}`);
   }
 
