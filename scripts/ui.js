@@ -128,7 +128,7 @@ if (action === "install") {
   run(runner.cmd, ["install", ...rest]);
 } else {
   if (!depsInstalled(action === "test" ? "test" : "build")) {
-    runSync(runner.cmd, ["install"]);
+    runSync(runner.cmd, ["install", "--ignore-workspace"]);
   }
   run(runner.cmd, ["run", script, ...rest]);
 }
