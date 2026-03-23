@@ -181,4 +181,30 @@ describe("matrixMessageActions account propagation", () => {
       { mediaLocalRoots: undefined },
     );
   });
+
+  it("accepts shared media aliases and forwards voice-send intent", async () => {
+    await matrixMessageActions.handleAction?.(
+      createContext({
+        action: "send",
+        accountId: "ops",
+        params: {
+          to: "room:!room:example",
+          filePath: "/tmp/clip.mp3",
+          asVoice: true,
+        },
+      }),
+    );
+
+    expect(mocks.handleMatrixAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendMessage",
+        accountId: "ops",
+        content: undefined,
+        mediaUrl: "/tmp/clip.mp3",
+        audioAsVoice: true,
+      }),
+      expect.any(Object),
+      { mediaLocalRoots: undefined },
+    );
+  });
 });
