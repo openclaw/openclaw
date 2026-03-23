@@ -5,7 +5,7 @@ import {
 } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/account-resolution";
-import { tryReadSecretFileSync } from "../../../src/infra/secret-file.js";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/infra-runtime";
 import type {
   LineAccountConfig,
   LineConfig,
