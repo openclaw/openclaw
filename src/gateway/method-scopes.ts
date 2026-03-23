@@ -208,6 +208,9 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "node.pending.enqueue",
   ],
   [ADMIN_SCOPE]: [
+    "agents.apiKeys.create",
+    "agents.apiKeys.list",
+    "agents.apiKeys.revoke",
     "channels.logout",
     "skills.install",
     "skills.update",

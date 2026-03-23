@@ -175,6 +175,19 @@ export interface ActivityLogEntry {
   createdAt: number;
 }
 
+// ── Agent API Keys (v26) ─────────────────────────────────────────────────────
+
+export interface AgentApiKey {
+  id: string;
+  agentId: string;
+  workspaceId: string;
+  name: string;
+  keyPrefix: string;
+  lastUsedAt: number | null;
+  revokedAt: number | null;
+  createdAt: number;
+}
+
 // ── Agent Config Revisions (v23) ────────────────────────────────────────────
 
 export interface AgentConfigRevision {

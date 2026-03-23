@@ -1484,6 +1484,32 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+
+  // ── v26: Agent API Keys ────────────────────────────────────────────────────
+  {
+    version: 26,
+    description: "Agent API keys: op1_agent_api_keys",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_agent_api_keys (
+          id            TEXT PRIMARY KEY,
+          agent_id      TEXT NOT NULL,
+          workspace_id  TEXT NOT NULL DEFAULT 'default',
+          name          TEXT NOT NULL,
+          key_hash      TEXT NOT NULL,
+          key_prefix    TEXT NOT NULL,
+          last_used_at  INTEGER,
+          revoked_at    INTEGER,
+          created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+          FOREIGN KEY (workspace_id) REFERENCES op1_workspaces(id) ON DELETE CASCADE
+        )
+      `);
+      db.exec("CREATE INDEX IF NOT EXISTS idx_agent_api_keys_hash ON op1_agent_api_keys(key_hash)");
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_agent_api_keys_agent ON op1_agent_api_keys(agent_id)",
+      );
+    },
+  },
 ];
 
 // ── Public API ──────────────────────────────────────────────────────────────

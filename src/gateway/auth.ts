@@ -446,6 +446,11 @@ export async function authorizeGatewayConnect(
       // Only actual *wrong* credentials should count as failures.
       return { ok: false, reason: "token_missing" };
     }
+    // TODO(agent-jwt): as an alternative to the shared gateway token, agent
+    // self-requests can present a Bearer JWT signed with OPENCLAW_AGENT_JWT_SECRET.
+    // Use verifyAgentJwt(connectAuth.token) from ./agent-auth-jwt.ts here; if it
+    // returns non-null claims, treat the request as authenticated and return
+    // { ok: true, method: "token", user: claims.sub } without checking the shared token.
     if (!safeEqualSecret(connectAuth.token, auth.token)) {
       limiter?.recordFailure(ip, rateLimitScope);
       return { ok: false, reason: "token_mismatch" };

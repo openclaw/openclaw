@@ -1,5 +1,12 @@
+import os from "node:os";
 import { describe, expect, it } from "vitest";
-import { getDefaultRedactPatterns, redactSensitiveText } from "./redact.js";
+import {
+  REDACTED_PATH_LABEL,
+  getDefaultRedactPatterns,
+  getSystemRedactPatterns,
+  redactSensitiveText,
+  redactSystemPaths,
+} from "./redact.js";
 
 const defaults = getDefaultRedactPatterns();
 
@@ -118,5 +125,79 @@ describe("redactSensitiveText", () => {
       patterns: defaults,
     });
     expect(output).toBe(input);
+  });
+});
+
+describe("getSystemRedactPatterns", () => {
+  it("returns an array (non-empty on a normal OS user)", () => {
+    const patterns = getSystemRedactPatterns();
+    // On a real system with a valid user, we should have patterns.
+    // In edge environments (container with no passwd entry) it returns [].
+    expect(Array.isArray(patterns)).toBe(true);
+  });
+
+  it("all returned strings compile to valid patterns", () => {
+    const patterns = getSystemRedactPatterns();
+    for (const p of patterns) {
+      expect(() => new RegExp(p, "g")).not.toThrow();
+    }
+  });
+});
+
+describe("redactSystemPaths", () => {
+  // Retrieve the real username for tests (skip gracefully if unavailable).
+  let username: string;
+  let homedir: string;
+  let available = false;
+
+  try {
+    const info = os.userInfo();
+    username = info.username;
+    homedir = info.homedir;
+    available = Boolean(username && homedir);
+  } catch {
+    available = false;
+  }
+
+  it("returns the input unchanged when given an empty string", () => {
+    expect(redactSystemPaths("")).toBe("");
+  });
+
+  it("returns plain text unchanged when it contains no paths", () => {
+    const text = "hello world, no paths here";
+    expect(redactSystemPaths(text)).toBe(text);
+  });
+
+  it("redacts the home directory path", { skip: !available }, () => {
+    const text = `config loaded from ${homedir}/openclaw.json`;
+    const result = redactSystemPaths(text);
+    expect(result).not.toContain(username);
+    expect(result).toContain(REDACTED_PATH_LABEL);
+  });
+
+  it("redacts /Users/<username> macOS-style paths", { skip: !available }, () => {
+    const text = `session file at /Users/${username}/Library/something`;
+    const result = redactSystemPaths(text);
+    expect(result).not.toContain(`/Users/${username}`);
+    expect(result).toContain(`/Users/${REDACTED_PATH_LABEL}`);
+  });
+
+  it("redacts /home/<username> Linux-style paths", { skip: !available }, () => {
+    const text = `reading /home/${username}/.openclaw/config.json`;
+    const result = redactSystemPaths(text);
+    expect(result).not.toContain(`/home/${username}`);
+    expect(result).toContain(`/home/${REDACTED_PATH_LABEL}`);
+  });
+
+  it("redacts workspaces/<username> agent workspace paths", { skip: !available }, () => {
+    const text = `agent workspace: workspaces/${username}/memory/2026-03-22.md`;
+    const result = redactSystemPaths(text);
+    expect(result).not.toContain(`workspaces/${username}`);
+    expect(result).toContain(`workspaces/${REDACTED_PATH_LABEL}`);
+  });
+
+  it("leaves text unchanged when username is not present", { skip: !available }, () => {
+    const text = "no personal paths in this log line";
+    expect(redactSystemPaths(text)).toBe(text);
   });
 });

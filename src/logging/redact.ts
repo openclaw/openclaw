@@ -1,3 +1,4 @@
+import os from "node:os";
 import type { OpenClawConfig } from "../config/config.js";
 import { compileSafeRegex } from "../security/safe-regex.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
@@ -148,4 +149,115 @@ export function redactToolDetail(detail: string): string {
 
 export function getDefaultRedactPatterns(): string[] {
   return [...DEFAULT_REDACT_PATTERNS];
+}
+
+/**
+ * Returns runtime-derived redact patterns for the current OS user.
+ * These are built once per process from os.userInfo() and cover:
+ *   - The current username appearing in paths (e.g. /Users/alice/ → /Users/<redacted>/)
+ *   - macOS-style home paths  (/Users/<username>)
+ *   - Linux-style home paths  (/home/<username>)
+ *   - Agent workspace paths that embed the username
+ *
+ * Returns an empty array if os.userInfo() is unavailable (e.g. inside a
+ * container where the uid has no passwd entry).
+ */
+export function getSystemRedactPatterns(): string[] {
+  let username: string;
+  let homedir: string;
+  try {
+    const info = os.userInfo();
+    username = info.username;
+    homedir = info.homedir;
+  } catch {
+    return [];
+  }
+
+  if (!username || !homedir) {
+    return [];
+  }
+
+  // Escape special regex chars in username and homedir.
+  const escapedUser = username.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedHome = homedir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  return [
+    // macOS-style: /Users/<username>/...  →  /Users/<redacted>/...
+    String.raw`(/Users/)${escapedUser}(/|$)`,
+    // Linux-style: /home/<username>/...  →  /home/<redacted>/...
+    String.raw`(/home/)${escapedUser}(/|$)`,
+    // Full homedir prefix (catches any OS layout)
+    String.raw`${escapedHome}(/|$)`,
+    // Agent workspace paths that embed the username (e.g. workspaces/alice/...)
+    String.raw`(workspaces/)${escapedUser}(/|$)`,
+    // Bare username word (last-resort; only when it appears as a path segment)
+    String.raw`(^|[/\s])${escapedUser}(/|$)`,
+  ];
+}
+
+/**
+ * Replacement label used when a username or homedir path is redacted.
+ * Exported so tests can assert the substitution text.
+ */
+export const REDACTED_PATH_LABEL = "<redacted>";
+
+/**
+ * Redacts the current user's username from a path-like string, replacing
+ * matched path segments with `<redacted>`.  Intended for log lines that
+ * contain absolute paths, workspace paths, or bare username references.
+ *
+ * Unlike the token patterns in DEFAULT_REDACT_PATTERNS (which use maskToken),
+ * path segments are replaced wholesale with the label so the path remains
+ * readable (e.g. `/Users/<redacted>/projects`).
+ */
+export function redactSystemPaths(text: string): string {
+  if (!text) {
+    return text;
+  }
+  let username: string;
+  let homedir: string;
+  try {
+    const info = os.userInfo();
+    username = info.username;
+    homedir = info.homedir;
+  } catch {
+    return text;
+  }
+
+  if (!username || !homedir) {
+    return text;
+  }
+
+  const escapedUser = username.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedHome = homedir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  // Replace the full homedir first (most specific), then the username in
+  // well-known path prefixes, to avoid double-substitution.
+  const steps: [RegExp, string][] = [
+    // Full home directory path (e.g. /Users/alice → /Users/<redacted>)
+    [compileSafeRegex(String.raw`${escapedHome}`, "g") as RegExp, `/Users/${REDACTED_PATH_LABEL}`],
+    // macOS /Users/<username>
+    [
+      compileSafeRegex(String.raw`(/Users/)${escapedUser}(/|(?=$|\s))`, "g") as RegExp,
+      `$1${REDACTED_PATH_LABEL}$2`,
+    ],
+    // Linux /home/<username>
+    [
+      compileSafeRegex(String.raw`(/home/)${escapedUser}(/|(?=$|\s))`, "g") as RegExp,
+      `$1${REDACTED_PATH_LABEL}$2`,
+    ],
+    // workspaces/<username>/
+    [
+      compileSafeRegex(String.raw`(workspaces/)${escapedUser}(/|(?=$|\s))`, "g") as RegExp,
+      `$1${REDACTED_PATH_LABEL}$2`,
+    ],
+  ];
+
+  let result = text;
+  for (const [re, replacement] of steps) {
+    if (re) {
+      result = result.replace(re, replacement);
+    }
+  }
+  return result;
 }

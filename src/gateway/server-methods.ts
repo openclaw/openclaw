@@ -4,6 +4,7 @@ import { consumeControlPlaneWriteBudget } from "./control-plane-rate-limit.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
+import { agentApiKeysHandlers } from "./server-methods/agent-api-keys.js";
 import { agentHandlers } from "./server-methods/agent.js";
 import { agentsHandlers } from "./server-methods/agents.js";
 import { approvalsHandlers } from "./server-methods/approvals-org.js";
@@ -113,6 +114,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...sendHandlers,
   ...usageHandlers,
   ...agentHandlers,
+  ...agentApiKeysHandlers,
   ...agentsHandlers,
   ...browserHandlers,
   ...clawhubHandlers,

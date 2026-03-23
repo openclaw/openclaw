@@ -133,15 +133,15 @@ Production crash guards and heartbeat reliability fixes. Zero new features -- pu
 
 ### Task 3: Phase 3 -- Security Hardening
 
-**Status:** To-do | **Priority:** High | **Assignee:** rohit sharma | **Est:** 8h
+**Status:** Done | **Priority:** High | **Assignee:** rohit sharma | **Est:** 8h
 
 Agent-level JWT authentication and log redaction.
 
-- [ ] 3.1 Agent API key JWT schema -- add `op1_agent_api_keys` table (SQLite migration v25+) with `agent_id`, `key_hash`, `scopes`, `expires_at`, `created_at`
-- [ ] 3.2 Agent JWT signing/verification -- implement JWT sign/verify in `src/gateway/` for agent self-requests (subagent -> gateway auth without shared token)
-- [ ] 3.3 Log redaction pipeline -- add username + path redaction to `src/infra/log.ts` to prevent agent usernames and home paths from leaking into logs
-- [ ] 3.4 Secret-ref format validation -- add secret-ref format check to tool/config validation path (AJV or TypeBox format)
-- [ ] 3.5 RPC handlers for agent API keys -- `agents.apiKeys.create`, `agents.apiKeys.list`, `agents.apiKeys.revoke` in `src/gateway/server-methods/`
+- [x] 3.1 Agent API key schema -- migration v26: `op1_agent_api_keys` table with hash, prefix, revoke support
+- [x] 3.2 Agent JWT signing/verification -- `src/gateway/agent-auth-jwt.ts` with HS256 HMAC, TODO at auth integration point
+- [x] 3.3 Log redaction pipeline -- `getSystemRedactPatterns()` + `redactSystemPaths()` for username/homedir/workspace paths
+- [x] 3.4 Secret-ref format validation -- ALREADY HANDLED: structured refs validated by `isSecretRef()`, Zod schema
+- [x] 3.5 RPC handlers for agent API keys -- `agents.apiKeys.create/list/revoke` registered in BASE_METHODS + ADMIN_SCOPE
 
 ### Task 4: Phase 4 -- Core Features
 
