@@ -89,7 +89,6 @@ function buildWebSearchSnapshotCacheKey(params: {
       OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: params.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS ?? "",
       OPENCLAW_HOME: params.env.OPENCLAW_HOME ?? "",
       OPENCLAW_STATE_DIR: params.env.OPENCLAW_STATE_DIR ?? "",
-      CLAWDBOT_STATE_DIR: params.env.CLAWDBOT_STATE_DIR ?? "",
       OPENCLAW_CONFIG_PATH: params.env.OPENCLAW_CONFIG_PATH ?? "",
       HOME: params.env.HOME ?? "",
       USERPROFILE: params.env.USERPROFILE ?? "",

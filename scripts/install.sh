@@ -940,28 +940,6 @@ append_holiday_taglines() {
     esac
 }
 
-map_legacy_env() {
-    local key="$1"
-    local legacy="$2"
-    if [[ -z "${!key:-}" && -n "${!legacy:-}" ]]; then
-        printf -v "$key" '%s' "${!legacy}"
-    fi
-}
-
-map_legacy_env "OPENCLAW_TAGLINE_INDEX" "CLAWDBOT_TAGLINE_INDEX"
-map_legacy_env "OPENCLAW_NO_ONBOARD" "CLAWDBOT_NO_ONBOARD"
-map_legacy_env "OPENCLAW_NO_PROMPT" "CLAWDBOT_NO_PROMPT"
-map_legacy_env "OPENCLAW_DRY_RUN" "CLAWDBOT_DRY_RUN"
-map_legacy_env "OPENCLAW_INSTALL_METHOD" "CLAWDBOT_INSTALL_METHOD"
-map_legacy_env "OPENCLAW_VERSION" "CLAWDBOT_VERSION"
-map_legacy_env "OPENCLAW_BETA" "CLAWDBOT_BETA"
-map_legacy_env "OPENCLAW_GIT_DIR" "CLAWDBOT_GIT_DIR"
-map_legacy_env "OPENCLAW_GIT_UPDATE" "CLAWDBOT_GIT_UPDATE"
-map_legacy_env "OPENCLAW_NPM_LOGLEVEL" "CLAWDBOT_NPM_LOGLEVEL"
-map_legacy_env "OPENCLAW_VERBOSE" "CLAWDBOT_VERBOSE"
-map_legacy_env "OPENCLAW_PROFILE" "CLAWDBOT_PROFILE"
-map_legacy_env "OPENCLAW_INSTALL_SH_NO_RUN" "CLAWDBOT_INSTALL_SH_NO_RUN"
-
 pick_tagline() {
     append_holiday_taglines
     local count=${#TAGLINES[@]}

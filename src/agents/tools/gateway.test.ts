@@ -16,14 +16,12 @@ vi.mock("../../gateway/call.js", () => ({
 describe("gateway tool defaults", () => {
   const envSnapshot = {
     openclaw: process.env.OPENCLAW_GATEWAY_TOKEN,
-    clawdbot: process.env.CLAWDBOT_GATEWAY_TOKEN,
   };
 
   beforeEach(() => {
     callGatewayMock.mockClear();
     configState.value = {};
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.CLAWDBOT_GATEWAY_TOKEN;
   });
 
   afterAll(() => {
@@ -31,11 +29,6 @@ describe("gateway tool defaults", () => {
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
     } else {
       process.env.OPENCLAW_GATEWAY_TOKEN = envSnapshot.openclaw;
-    }
-    if (envSnapshot.clawdbot === undefined) {
-      delete process.env.CLAWDBOT_GATEWAY_TOKEN;
-    } else {
-      process.env.CLAWDBOT_GATEWAY_TOKEN = envSnapshot.clawdbot;
     }
   });
 
@@ -94,7 +87,6 @@ describe("gateway tool defaults", () => {
 
   it("does not leak local env/config tokens to remote overrides", () => {
     process.env.OPENCLAW_GATEWAY_TOKEN = "local-env-token";
-    process.env.CLAWDBOT_GATEWAY_TOKEN = "legacy-env-token";
     configState.value = {
       gateway: {
         auth: { token: "local-config-token" },
