@@ -9,6 +9,7 @@ const baseDocker: SandboxDockerConfig = {
   readOnlyRoot: true,
   tmpfs: ["/tmp"],
   network: "none",
+  capAdd: [],
   capDrop: ["ALL"],
 };
 

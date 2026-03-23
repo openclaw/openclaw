@@ -10,6 +10,7 @@ function createDockerConfig(overrides?: Partial<SandboxDockerConfig>): SandboxDo
     readOnlyRoot: true,
     tmpfs: ["/tmp", "/var/tmp", "/run"],
     network: "none",
+    capAdd: [],
     capDrop: ["ALL"],
     env: { LANG: "C.UTF-8" },
     dns: ["1.1.1.1", "8.8.8.8"],
@@ -19,7 +20,7 @@ function createDockerConfig(overrides?: Partial<SandboxDockerConfig>): SandboxDo
   };
 }
 
-type DockerArrayField = "tmpfs" | "capDrop" | "dns" | "extraHosts" | "binds";
+type DockerArrayField = "tmpfs" | "capAdd" | "capDrop" | "dns" | "extraHosts" | "binds";
 
 const ORDER_SENSITIVE_ARRAY_CASES: ReadonlyArray<{
   field: DockerArrayField;
@@ -30,6 +31,11 @@ const ORDER_SENSITIVE_ARRAY_CASES: ReadonlyArray<{
     field: "tmpfs",
     before: ["/tmp", "/var/tmp", "/run"],
     after: ["/run", "/var/tmp", "/tmp"],
+  },
+  {
+    field: "capAdd",
+    before: ["NET_BIND_SERVICE", "CHOWN"],
+    after: ["CHOWN", "NET_BIND_SERVICE"],
   },
   {
     field: "capDrop",

@@ -36,6 +36,38 @@ describe("sandbox config merges", () => {
     });
   });
 
+  it("resolves sandbox docker capabilities with agent precedence", () => {
+    const resolved = resolveSandboxDockerConfig({
+      scope: "agent",
+      globalDocker: {
+        capAdd: ["NET_BIND_SERVICE"],
+        capDrop: ["ALL"],
+      },
+      agentDocker: {
+        capAdd: ["SYS_PTRACE"],
+        capDrop: ["CHOWN"],
+      },
+    });
+
+    expect(resolved.capAdd).toEqual(["SYS_PTRACE"]);
+    expect(resolved.capDrop).toEqual(["CHOWN"]);
+
+    const shared = resolveSandboxDockerConfig({
+      scope: "shared",
+      globalDocker: {
+        capAdd: ["NET_BIND_SERVICE"],
+        capDrop: ["ALL"],
+      },
+      agentDocker: {
+        capAdd: ["SYS_PTRACE"],
+        capDrop: ["CHOWN"],
+      },
+    });
+
+    expect(shared.capAdd).toEqual(["NET_BIND_SERVICE"]);
+    expect(shared.capDrop).toEqual(["ALL"]);
+  });
+
   it("resolves docker binds and shared-scope override behavior", () => {
     for (const scenario of [
       {

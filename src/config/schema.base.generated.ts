@@ -2939,6 +2939,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       user: {
                         type: "string",
                       },
+                      capAdd: {
+                        type: "array",
+                        items: {
+                          type: "string",
+                        },
+                      },
                       capDrop: {
                         type: "array",
                         items: {
@@ -4130,6 +4136,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         },
                         user: {
                           type: "string",
+                        },
+                        capAdd: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
                         },
                         capDrop: {
                           type: "array",

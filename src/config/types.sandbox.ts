@@ -15,6 +15,8 @@ export type SandboxDockerSettings = {
   network?: string;
   /** Container user (uid:gid). */
   user?: string;
+  /** Add Linux capabilities. */
+  capAdd?: string[];
   /** Drop Linux capabilities. */
   capDrop?: string[];
   /** Extra environment variables for sandbox exec. */

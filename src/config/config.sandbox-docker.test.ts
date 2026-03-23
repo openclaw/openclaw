@@ -62,6 +62,38 @@ describe("sandbox docker config", () => {
     }
   });
 
+  it("accepts capAdd arrays in sandbox.docker config", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              capAdd: ["NET_BIND_SERVICE", "SYS_PTRACE"],
+            },
+          },
+        },
+        list: [
+          {
+            id: "main",
+            sandbox: {
+              docker: {
+                capAdd: ["CHOWN"],
+              },
+            },
+          },
+        ],
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.agents?.defaults?.sandbox?.docker?.capAdd).toEqual([
+        "NET_BIND_SERVICE",
+        "SYS_PTRACE",
+      ]);
+      expect(res.config.agents?.list?.[0]?.sandbox?.docker?.capAdd).toEqual(["CHOWN"]);
+    }
+  });
+
   it("rejects network host mode via Zod schema validation", () => {
     const res = validateConfigObject({
       agents: {

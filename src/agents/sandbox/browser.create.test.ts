@@ -59,6 +59,7 @@ function buildConfig(enableNoVnc: boolean): SandboxConfig {
       readOnlyRoot: true,
       tmpfs: ["/tmp", "/var/tmp", "/run"],
       network: "none",
+      capAdd: [],
       capDrop: ["ALL"],
       env: { LANG: "C.UTF-8" },
     },

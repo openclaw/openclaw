@@ -102,6 +102,7 @@ export const SandboxDockerSchema = z
     tmpfs: z.array(z.string()).optional(),
     network: z.string().optional(),
     user: z.string().optional(),
+    capAdd: z.array(z.string()).optional(),
     capDrop: z.array(z.string()).optional(),
     env: z.record(z.string(), z.string()).optional(),
     setupCommand: z

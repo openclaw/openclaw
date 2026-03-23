@@ -22,6 +22,7 @@ function createSandboxContext(overrides?: Partial<SandboxContext>): SandboxConte
       tmpfs: ["/tmp"],
       network: "none",
       user: "1000:1000",
+      capAdd: [],
       capDrop: ["ALL"],
       env: { LANG: "C.UTF-8" },
     },

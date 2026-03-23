@@ -36,6 +36,7 @@ export function createPiToolsSandboxContext(params: PiToolsSandboxContextParams)
       tmpfs: [],
       network: "none",
       user: "1000:1000",
+      capAdd: [],
       capDrop: ["ALL"],
       env: { LANG: "C.UTF-8" },
       ...params.dockerOverrides,

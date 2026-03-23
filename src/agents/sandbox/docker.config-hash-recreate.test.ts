@@ -102,6 +102,7 @@ function createSandboxConfig(
       readOnlyRoot: true,
       tmpfs: ["/tmp", "/var/tmp", "/run"],
       network: "none",
+      capAdd: [],
       capDrop: ["ALL"],
       env: { LANG: "C.UTF-8" },
       dns,

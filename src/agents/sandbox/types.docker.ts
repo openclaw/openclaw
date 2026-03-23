@@ -7,6 +7,7 @@ type RequiredDockerConfigKeys =
   | "readOnlyRoot"
   | "tmpfs"
   | "network"
+  | "capAdd"
   | "capDrop";
 
 export type SandboxDockerConfig = Omit<SandboxDockerSettings, RequiredDockerConfigKeys> &

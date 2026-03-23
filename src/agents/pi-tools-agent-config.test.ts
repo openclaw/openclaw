@@ -590,6 +590,7 @@ describe("Agent-specific tool filtering", () => {
           readOnlyRoot: true,
           tmpfs: [],
           network: "none",
+          capAdd: [],
           capDrop: [],
         } satisfies SandboxDockerConfig,
         tools: {

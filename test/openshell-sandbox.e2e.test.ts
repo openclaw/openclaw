@@ -363,6 +363,7 @@ describe("openshell sandbox backend e2e", () => {
           readOnlyRoot: true,
           tmpfs: ["/tmp"],
           network: "none",
+          capAdd: [],
           capDrop: ["ALL"],
           env: {},
         },

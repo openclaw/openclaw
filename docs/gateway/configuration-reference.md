@@ -1145,6 +1145,7 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
           tmpfs: ["/tmp", "/var/tmp", "/run"],
           network: "none",
           user: "1000:1000",
+          capAdd: ["NET_BIND_SERVICE"],
           capDrop: ["ALL"],
           env: { LANG: "C.UTF-8" },
           setupCommand: "apt-get update && apt-get install -y git curl jq",

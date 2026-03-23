@@ -108,6 +108,7 @@ export function resolveSandboxDockerConfig(params: {
     tmpfs: agentDocker?.tmpfs ?? globalDocker?.tmpfs ?? ["/tmp", "/var/tmp", "/run"],
     network: agentDocker?.network ?? globalDocker?.network ?? "none",
     user: agentDocker?.user ?? globalDocker?.user,
+    capAdd: agentDocker?.capAdd ?? globalDocker?.capAdd ?? [],
     capDrop: agentDocker?.capDrop ?? globalDocker?.capDrop ?? ["ALL"],
     env,
     setupCommand: agentDocker?.setupCommand ?? globalDocker?.setupCommand,

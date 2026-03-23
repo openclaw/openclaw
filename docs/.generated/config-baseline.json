@@ -3227,6 +3227,26 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.sandbox.docker.capAdd",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.sandbox.docker.capAdd.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.sandbox.docker.capDrop",
       "kind": "core",
       "type": "array",
@@ -5581,6 +5601,26 @@
     },
     {
       "path": "agents.list.*.sandbox.docker.binds.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.sandbox.docker.capAdd",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.sandbox.docker.capAdd.*",
       "kind": "core",
       "type": "string",
       "required": false,
