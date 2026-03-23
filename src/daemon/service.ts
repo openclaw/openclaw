@@ -18,6 +18,14 @@ import {
   stopScheduledTask,
   uninstallScheduledTask,
 } from "./schtasks.js";
+import {
+  isWindowsServiceInstalled,
+  readWindowsServiceCommand,
+  readWindowsServiceRuntime,
+  restartWindowsService,
+  stopWindowsService,
+  uninstallWindowsService,
+} from "./windows-service.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
@@ -147,8 +155,76 @@ function isSupportedGatewayServicePlatform(
   return Object.hasOwn(GATEWAY_SERVICE_REGISTRY, platform);
 }
 
+async function useWindowsService(env: GatewayServiceEnv): Promise<boolean> {
+  return await isWindowsServiceInstalled({ env }).catch(() => false);
+}
+
+async function readWindowsCommandOrScheduledTask(
+  env: GatewayServiceEnv,
+): Promise<GatewayServiceCommandConfig | null> {
+  if (await useWindowsService(env)) {
+    return await readWindowsServiceCommand(env);
+  }
+  return await readScheduledTaskCommand(env);
+}
+
+async function readWindowsRuntimeOrScheduledTask(
+  env: GatewayServiceEnv,
+): Promise<GatewayServiceRuntime> {
+  if (await useWindowsService(env)) {
+    return await readWindowsServiceRuntime(env);
+  }
+  return await readScheduledTaskRuntime(env);
+}
+
+async function stopWindowsRuntimeOrScheduledTask(args: GatewayServiceControlArgs): Promise<void> {
+  const env = args.env ?? (process.env as GatewayServiceEnv);
+  if (await useWindowsService(env)) {
+    await stopWindowsService({ ...args, env });
+    return;
+  }
+  await stopScheduledTask({ ...args, env });
+}
+
+async function restartWindowsRuntimeOrScheduledTask(
+  args: GatewayServiceControlArgs,
+): Promise<GatewayServiceRestartResult> {
+  const env = args.env ?? (process.env as GatewayServiceEnv);
+  if (await useWindowsService(env)) {
+    return await restartWindowsService({ ...args, env });
+  }
+  return await restartScheduledTask({ ...args, env });
+}
+
+async function uninstallWindowsRuntimeOrScheduledTask(
+  args: GatewayServiceManageArgs,
+): Promise<void> {
+  if (await useWindowsService(args.env)) {
+    await uninstallWindowsService(args);
+    return;
+  }
+  await uninstallScheduledTask(args);
+}
+
 export function resolveGatewayService(): GatewayService {
   if (isSupportedGatewayServicePlatform(process.platform)) {
+    if (process.platform === "win32") {
+      return {
+        ...GATEWAY_SERVICE_REGISTRY.win32,
+        uninstall: uninstallWindowsRuntimeOrScheduledTask,
+        stop: stopWindowsRuntimeOrScheduledTask,
+        restart: restartWindowsRuntimeOrScheduledTask,
+        isLoaded: async (args) => {
+          const env = args.env ?? (process.env as GatewayServiceEnv);
+          if (await useWindowsService(env)) {
+            return true;
+          }
+          return await isScheduledTaskInstalled({ env });
+        },
+        readCommand: async (env) => await readWindowsCommandOrScheduledTask(env),
+        readRuntime: async (env) => await readWindowsRuntimeOrScheduledTask(env),
+      };
+    }
     return GATEWAY_SERVICE_REGISTRY[process.platform];
   }
   throw new Error(`Gateway service install not supported on ${process.platform}`);

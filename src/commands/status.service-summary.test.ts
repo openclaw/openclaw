@@ -96,4 +96,27 @@ describe("readServiceStatusSummary", () => {
     expect(summary.loaded).toBe(true);
     expect(summary.runtime).toMatchObject({ status: "running" });
   });
+
+  it("prefers command metadata for backend-specific labels", async () => {
+    const summary = await readServiceStatusSummary(
+      createService({
+        label: "Scheduled Task",
+        loadedText: "registered",
+        notLoadedText: "missing",
+        isLoaded: vi.fn(async () => true),
+        readCommand: vi.fn(async () => ({
+          programArguments: ["powershell.exe", "-File", "gateway-runner.ps1"],
+          label: "Windows service",
+          loadedText: "installed",
+          notLoadedText: "missing",
+        })),
+        readRuntime: vi.fn(async () => ({ status: "running", pid: 1234 })),
+      }),
+      "Gateway",
+    );
+
+    expect(summary.label).toBe("Windows service");
+    expect(summary.loadedText).toBe("installed");
+    expect(summary.installed).toBe(true);
+  });
 });

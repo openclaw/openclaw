@@ -17,6 +17,9 @@ export async function readServiceStatusSummary(
 ): Promise<ServiceStatusSummary> {
   try {
     const command = await service.readCommand(process.env).catch(() => null);
+    const label = command?.label ?? service.label;
+    const loadedLabel = command?.loadedText ?? service.loadedText;
+    const notLoadedLabel = command?.notLoadedText ?? service.notLoadedText;
     const serviceEnv = command?.environment
       ? ({
           ...process.env,
@@ -33,10 +36,10 @@ export async function readServiceStatusSummary(
     const loadedText = externallyManaged
       ? "running (externally managed)"
       : loaded
-        ? service.loadedText
-        : service.notLoadedText;
+        ? loadedLabel
+        : notLoadedLabel;
     return {
-      label: service.label,
+      label,
       installed,
       loaded,
       managedByOpenClaw,

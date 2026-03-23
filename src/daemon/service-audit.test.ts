@@ -145,6 +145,18 @@ describe("auditGatewayServiceConfig", () => {
     });
     expectTokenAudit(audit, { embedded: false, mismatch: false });
   });
+
+  it("does not flag missing gateway subcommand for Windows service wrappers", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { USERPROFILE: "C:\\Users\\dammt" },
+      platform: "win32",
+      command: {
+        programArguments: ["powershell.exe", "-File", "gateway-runner.ps1"],
+        sourcePath: "service:OpenClawGateway",
+      },
+    });
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayCommandMissing)).toBe(false);
+  });
 });
 
 describe("checkTokenDrift", () => {

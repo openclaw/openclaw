@@ -33,6 +33,9 @@ export type GatewayServiceCommandConfig = {
   environment?: Record<string, string>;
   environmentValueSources?: Record<string, "inline" | "file">;
   sourcePath?: string;
+  label?: string;
+  loadedText?: string;
+  notLoadedText?: string;
 };
 
 export type GatewayServiceRenderArgs = {

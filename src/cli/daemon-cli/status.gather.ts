@@ -289,6 +289,9 @@ export async function gatherDaemonStatus(
 ): Promise<DaemonStatus> {
   const service = resolveGatewayService();
   const command = await service.readCommand(process.env).catch(() => null);
+  const serviceLabel = command?.label ?? service.label;
+  const serviceLoadedText = command?.loadedText ?? service.loadedText;
+  const serviceNotLoadedText = command?.notLoadedText ?? service.notLoadedText;
   const serviceEnv = command?.environment
     ? ({
         ...process.env,
@@ -391,10 +394,10 @@ export async function gatherDaemonStatus(
 
   return {
     service: {
-      label: service.label,
+      label: serviceLabel,
       loaded,
-      loadedText: service.loadedText,
-      notLoadedText: service.notLoadedText,
+      loadedText: serviceLoadedText,
+      notLoadedText: serviceNotLoadedText,
       command,
       runtime,
       configAudit,

@@ -2,11 +2,13 @@
 export const GATEWAY_LAUNCH_AGENT_LABEL = "ai.openclaw.gateway";
 export const GATEWAY_SYSTEMD_SERVICE_NAME = "openclaw-gateway";
 export const GATEWAY_WINDOWS_TASK_NAME = "OpenClaw Gateway";
+export const GATEWAY_WINDOWS_SERVICE_NAME = "OpenClawGateway";
 export const GATEWAY_SERVICE_MARKER = "openclaw";
 export const GATEWAY_SERVICE_KIND = "gateway";
 export const NODE_LAUNCH_AGENT_LABEL = "ai.openclaw.node";
 export const NODE_SYSTEMD_SERVICE_NAME = "openclaw-node";
 export const NODE_WINDOWS_TASK_NAME = "OpenClaw Node";
+export const NODE_WINDOWS_SERVICE_NAME = "OpenClawNode";
 export const NODE_SERVICE_MARKER = "openclaw";
 export const NODE_SERVICE_KIND = "node";
 export const NODE_WINDOWS_TASK_SCRIPT_NAME = "node.cmd";
@@ -59,6 +61,14 @@ export function resolveGatewayWindowsTaskName(profile?: string): string {
   return `OpenClaw Gateway (${normalized})`;
 }
 
+export function resolveGatewayWindowsServiceName(profile?: string): string {
+  const normalized = normalizeGatewayProfile(profile);
+  if (!normalized) {
+    return GATEWAY_WINDOWS_SERVICE_NAME;
+  }
+  return `OpenClawGateway-${normalized}`;
+}
+
 export function formatGatewayServiceDescription(params?: {
   profile?: string;
   version?: string;
@@ -102,6 +112,10 @@ export function resolveNodeSystemdServiceName(): string {
 
 export function resolveNodeWindowsTaskName(): string {
   return NODE_WINDOWS_TASK_NAME;
+}
+
+export function resolveNodeWindowsServiceName(): string {
+  return NODE_WINDOWS_SERVICE_NAME;
 }
 
 export function formatNodeServiceDescription(params?: { version?: string }): string {

@@ -192,11 +192,14 @@ async function auditLaunchdPlist(
   }
 }
 
-function auditGatewayCommand(programArguments: string[] | undefined, issues: ServiceConfigIssue[]) {
-  if (!programArguments || programArguments.length === 0) {
+function auditGatewayCommand(command: GatewayServiceCommand, issues: ServiceConfigIssue[]) {
+  if (!command?.programArguments || command.programArguments.length === 0) {
     return;
   }
-  if (!hasGatewaySubcommand(programArguments)) {
+  if (command.sourcePath?.startsWith("service:")) {
+    return;
+  }
+  if (!hasGatewaySubcommand(command.programArguments)) {
     issues.push({
       code: SERVICE_AUDIT_CODES.gatewayCommandMissing,
       message: "Service command does not include the gateway subcommand",
@@ -408,7 +411,7 @@ export async function auditGatewayServiceConfig(params: {
   const issues: ServiceConfigIssue[] = [];
   const platform = params.platform ?? process.platform;
 
-  auditGatewayCommand(params.command?.programArguments, issues);
+  auditGatewayCommand(params.command, issues);
   auditGatewayToken(params.command, issues, params.expectedGatewayToken);
   auditGatewayServicePath(params.command, issues, params.env, platform);
   await auditGatewayRuntime(params.env, params.command, issues, platform);
