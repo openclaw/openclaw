@@ -90,6 +90,8 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
 - The publish run must be started manually with `workflow_dispatch`.
 - Both core release workflows accept `preflight_only=true` to run CI
   validation/build steps without entering the gated publish job.
+- For releases that include mac artifacts, npm preflight and macOS preflight
+  must both pass before any publish run starts.
 - The `npm-release` environment must be approved by `@openclaw/openclaw-release-managers` before publish continues.
 - Mac publish uses `.github/workflows/macos-release.yml` for build, signing,
   notarization, release-asset upload, and signed `appcast.xml` artifact
@@ -112,15 +114,24 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
 6. Confirm the target npm version is not already published.
 7. Create and push the git tag.
 8. Create or refresh the matching GitHub release.
-9. If the operator wants CI confidence before publishing, start the relevant
-   release workflow with `preflight_only=true` first and wait for it to pass.
-10. Start `.github/workflows/openclaw-npm-release.yml` with `workflow_dispatch` and the same tag.
-11. Wait for `npm-release` approval from `@openclaw/openclaw-release-managers`.
-12. If the release includes mac artifacts, start `.github/workflows/macos-release.yml` and wait for `mac-release` approval and success.
-13. After the mac workflow succeeds, download the signed `appcast.xml`
+9. Start `.github/workflows/openclaw-npm-release.yml` with `preflight_only=true`
+   and wait for it to pass.
+10. If the release includes mac artifacts, start
+    `.github/workflows/macos-release.yml` with `preflight_only=true` and wait
+    for it to pass.
+11. If either preflight fails, fix the issue on a new commit, delete the tag
+    and matching GitHub release, recreate them from the commit that passes, and
+    rerun both preflights before continuing.
+12. Start `.github/workflows/openclaw-npm-release.yml` with the same tag for
+    the real publish.
+13. Wait for `npm-release` approval from `@openclaw/openclaw-release-managers`.
+14. If the release includes mac artifacts, start
+    `.github/workflows/macos-release.yml` for the real publish and wait for
+    `mac-release` approval and success.
+15. After the mac workflow succeeds, download the signed `appcast.xml`
     artifact from that run, update `appcast.xml` on `main`, and verify the
     feed.
-14. After publish, verify npm and any attached release artifacts.
+16. After publish, verify npm and any attached release artifacts.
 
 ## GHSA advisory work
 
