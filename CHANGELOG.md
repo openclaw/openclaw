@@ -101,7 +101,7 @@ Docs: https://docs.openclaw.ai
 - Docs/plugins: add the community DingTalk plugin listing to the docs catalog. (#29913) Thanks @sliverp.
 - Docs/plugins: add the community QQbot plugin listing to the docs catalog. (#29898) Thanks @sliverp.
 - Docs/plugins: add the community wecom plugin listing to the docs catalog. (#29905) Thanks @sliverp.
-- Channels/QQ Bot: add a bundled QQ Bot channel extension with WebSocket gateway, multi-account support, C2C messaging, media handling (image/voice/video/file). (#52721) Thanks @sliverp.
+- Channels/QQ Bot: add a bundled QQ Bot channel extension with WebSocket gateway, multi-account support, C2C messaging, media handling (image/voice/video/file). (#52756) Thanks @sliverp.
 
 ### Fixes
 
