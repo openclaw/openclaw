@@ -614,6 +614,50 @@ describe("cron cli", () => {
     ]);
   });
 
+  it("applies --tz to --at for offset-less datetimes on cron add", async () => {
+    await runCronCommand([
+      "cron",
+      "add",
+      "--name",
+      "tz-at-test",
+      "--at",
+      "2026-03-23T23:00:00",
+      "--tz",
+      "Europe/Oslo",
+      "--session",
+      "isolated",
+      "--message",
+      "test",
+    ]);
+
+    const params = getGatewayCallParams<{ schedule: { kind: string; at: string } }>("cron.add");
+    // 2026-03-23 is CET (+01:00), so 23:00 Oslo = 22:00 UTC
+    expect(params.schedule.kind).toBe("at");
+    expect(params.schedule.at).toBe("2026-03-23T22:00:00.000Z");
+  });
+
+  it("does not apply --tz when --at already has an offset", async () => {
+    await runCronCommand([
+      "cron",
+      "add",
+      "--name",
+      "tz-at-offset-test",
+      "--at",
+      "2026-03-23T23:00:00+02:00",
+      "--tz",
+      "Europe/Oslo",
+      "--session",
+      "isolated",
+      "--message",
+      "test",
+    ]);
+
+    const params = getGatewayCallParams<{ schedule: { kind: string; at: string } }>("cron.add");
+    // Explicit +02:00 should be honored, not overridden by --tz
+    expect(params.schedule.kind).toBe("at");
+    expect(params.schedule.at).toBe("2026-03-23T21:00:00.000Z");
+  });
+
   it("sets explicit stagger for cron edit", async () => {
     await runCronCommand(["cron", "edit", "job-1", "--cron", "0 * * * *", "--stagger", "30s"]);
 
