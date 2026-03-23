@@ -47,6 +47,9 @@ function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
     if (log.code === "PLUGIN_TIMINGS") {
       return true;
     }
+    if (log.code === "UNRESOLVED_IMPORT" && log.message?.includes("'jimp'")) {
+      return true;
+    }
     if (log.code !== "EVAL") {
       return false;
     }
