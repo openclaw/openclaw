@@ -2,6 +2,7 @@ import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH } from "../config/config.js";
+import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
@@ -63,14 +64,41 @@ export async function removeChannelConfigWizard(
       continue;
     }
 
-    const nextChannels: Record<string, unknown> = { ...next.channels };
-    delete nextChannels[channel];
-    next = {
-      ...next,
-      channels: Object.keys(nextChannels).length
-        ? (nextChannels as OpenClawConfig["channels"])
-        : undefined,
-    };
+    const plugin = getChannelPlugin(channel);
+    if (!plugin?.config.deleteAccount) {
+      const nextChannels: Record<string, unknown> = { ...next.channels };
+      delete nextChannels[channel];
+      next = {
+        ...next,
+        channels: Object.keys(nextChannels).length
+          ? (nextChannels as OpenClawConfig["channels"])
+          : undefined,
+      };
+    } else {
+      const accountIds = plugin.config.listAccountIds(next);
+      const orderedAccountIds = [...accountIds].toSorted((a, b) => {
+        if (a === DEFAULT_ACCOUNT_ID && b !== DEFAULT_ACCOUNT_ID) {
+          return 1;
+        }
+        if (b === DEFAULT_ACCOUNT_ID && a !== DEFAULT_ACCOUNT_ID) {
+          return -1;
+        }
+        return a.localeCompare(b);
+      });
+
+      for (const accountId of orderedAccountIds) {
+        const prevCfg = next;
+        next = plugin.config.deleteAccount({
+          cfg: next,
+          accountId,
+        });
+        await plugin.lifecycle?.onAccountRemoved?.({
+          prevCfg,
+          accountId,
+          runtime,
+        });
+      }
+    }
 
     note(
       [`${label} removed from config.`, "Note: credentials/sessions on disk are unchanged."].join(
