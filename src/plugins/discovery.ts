@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveUserPath } from "../utils.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
 import {
@@ -476,25 +476,25 @@ function resolvePackageEntrySource(params: {
     rejectHardlinks: params.rejectHardlinks ?? true,
   });
   if (!opened.ok) {
-    if (opened.reason === "path") {
-      // File missing (ENOENT) — skip, not a security violation.
-      return null;
-    }
-    if (opened.reason === "io") {
-      // Filesystem error (EACCES, EMFILE, etc.) — warn but don't abort.
-      params.diagnostics.push({
-        level: "warn",
-        message: `extension entry unreadable (I/O error): ${params.entryPath}`,
-        source: params.sourceLabel,
-      });
-      return null;
-    }
-    params.diagnostics.push({
-      level: "error",
-      message: `extension entry escapes package directory: ${params.entryPath}`,
-      source: params.sourceLabel,
+    return matchBoundaryFileOpenFailure(opened, {
+      path: () => null,
+      io: () => {
+        params.diagnostics.push({
+          level: "warn",
+          message: `extension entry unreadable (I/O error): ${params.entryPath}`,
+          source: params.sourceLabel,
+        });
+        return null;
+      },
+      fallback: () => {
+        params.diagnostics.push({
+          level: "error",
+          message: `extension entry escapes package directory: ${params.entryPath}`,
+          source: params.sourceLabel,
+        });
+        return null;
+      },
     });
-    return null;
   }
   const safeSource = opened.path;
   fs.closeSync(opened.fd);
