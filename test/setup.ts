@@ -75,6 +75,60 @@ const pickSendFn = (id: ChannelId, deps?: OutboundSendDeps) => {
   return deps?.[id] as ((...args: unknown[]) => Promise<unknown>) | undefined;
 };
 
+type VitestEvaluatedModuleNode = {
+  promise?: unknown;
+  exports?: unknown;
+  evaluated?: boolean;
+  importers: Set<string>;
+};
+
+type VitestEvaluatedModules = {
+  idToModuleMap: Map<string, VitestEvaluatedModuleNode>;
+};
+
+const resetVitestWorkerModules = (resetMocks: boolean) => {
+  const workerState = (
+    globalThis as typeof globalThis & {
+      __vitest_worker__?: {
+        evaluatedModules?: VitestEvaluatedModules;
+      };
+    }
+  ).__vitest_worker__;
+  const modules = workerState?.evaluatedModules;
+  if (!modules) {
+    return;
+  }
+
+  const skipPaths = [
+    /\/vitest\/dist\//,
+    /vitest-virtual-\w+\/dist/u,
+    /@vitest\/dist/u,
+    ...(resetMocks ? [] : [/^mock:/u]),
+  ];
+
+  modules.idToModuleMap.forEach((node, modulePath) => {
+    if (skipPaths.some((pattern) => pattern.test(modulePath))) {
+      return;
+    }
+    node.promise = undefined;
+    node.exports = undefined;
+    node.evaluated = false;
+    node.importers.clear();
+  });
+};
+
+const resetVitestWorkerFileState = () => {
+  const mocker = (
+    globalThis as typeof globalThis & {
+      __vitest_mocker__?: {
+        reset?: () => void;
+      };
+    }
+  ).__vitest_mocker__;
+  mocker?.reset?.();
+  resetVitestWorkerModules(true);
+};
+
 const createStubOutbound = (
   id: ChannelId,
   deliveryMode: ChannelOutboundAdapter["deliveryMode"] = "direct",
@@ -274,8 +328,17 @@ afterEach(() => {
     globalRegistryState.key = null;
     globalRegistryState.version += 1;
   }
-  // Guard against leaked fake timers across test files/workers.
-  if (vi.isFakeTimers()) {
-    vi.useRealTimers();
-  }
+  // Always normalize timer/date state. Some suites call `vi.setSystemTime()`
+  // without leaving fake timers enabled, which still leaks mocked time into
+  // later files under `--isolate=false`.
+  vi.useRealTimers();
+  // Non-isolated runs reuse the same module graph across files. Clear it so
+  // hoisted per-file mocks still apply when later files import the same modules.
+  vi.resetModules();
+});
+
+afterAll(() => {
+  // Mirror Vitest's isolate-mode file cleanup so `--isolate=false` does not
+  // carry hoisted mocks or stale module graphs into the next test file.
+  resetVitestWorkerFileState();
 });

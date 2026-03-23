@@ -1,17 +1,33 @@
 import { defineConfig } from "vitest/config";
 import baseConfig from "./vitest.config.ts";
 
-export function createScopedVitestConfig(include: string[], options?: { exclude?: string[] }) {
+export function resolveVitestIsolation(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  const forceIsolation = env.OPENCLAW_TEST_ISOLATE === "1" || env.OPENCLAW_TEST_ISOLATE === "true";
+  if (forceIsolation) {
+    return true;
+  }
+  return env.OPENCLAW_TEST_NO_ISOLATE === "0" || env.OPENCLAW_TEST_NO_ISOLATE === "false";
+}
+
+export function createScopedVitestConfig(
+  include: string[],
+  options?: { exclude?: string[]; pool?: "threads" | "forks" },
+) {
   const base = baseConfig as unknown as Record<string, unknown>;
-  const baseTest = (baseConfig as { test?: { exclude?: string[] } }).test ?? {};
+  const baseTest =
+    (baseConfig as { test?: { exclude?: string[]; pool?: "threads" | "forks" } }).test ?? {};
   const exclude = [...(baseTest.exclude ?? []), ...(options?.exclude ?? [])];
 
   return defineConfig({
     ...base,
     test: {
       ...baseTest,
+      isolate: resolveVitestIsolation(),
       include,
       exclude,
+      ...(options?.pool ? { pool: options.pool } : {}),
     },
   });
 }

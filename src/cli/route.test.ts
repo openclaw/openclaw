@@ -23,7 +23,13 @@ vi.mock("./program/routes.js", () => ({
 }));
 
 vi.mock("../runtime.js", () => ({
-  defaultRuntime: { error: vi.fn(), log: vi.fn(), exit: vi.fn() },
+  defaultRuntime: {
+    error: vi.fn(),
+    log: vi.fn(),
+    exit: vi.fn(),
+    writeStdout: vi.fn(),
+    writeJson: vi.fn(),
+  },
 }));
 
 describe("tryRouteCli", () => {

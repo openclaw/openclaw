@@ -4,8 +4,10 @@ const path = require("node:path");
 const fs = require("node:fs");
 
 let monolithicSdk = null;
+let diagnosticEventsModule = null;
 const jitiLoaders = new Map();
 const pluginSdkSubpathsCache = new Map();
+const shouldPreferSourceInTests = Boolean(process.env.VITEST) || process.env.NODE_ENV === "test";
 
 function emptyPluginConfigSchema() {
   function error(message) {
@@ -64,10 +66,14 @@ function resolveControlCommandGate(params) {
 
 function onDiagnosticEvent(listener) {
   const monolithic = loadMonolithicSdk();
-  if (!monolithic || typeof monolithic.onDiagnosticEvent !== "function") {
+  if (monolithic && typeof monolithic.onDiagnosticEvent === "function") {
+    return monolithic.onDiagnosticEvent(listener);
+  }
+  const diagnosticEvents = loadDiagnosticEventsModule();
+  if (!diagnosticEvents || typeof diagnosticEvents.onDiagnosticEvent !== "function") {
     throw new Error("openclaw/plugin-sdk root alias could not resolve onDiagnosticEvent");
   }
-  return monolithic.onDiagnosticEvent(listener);
+  return diagnosticEvents.onDiagnosticEvent(listener);
 }
 
 function getPackageRoot() {
@@ -137,7 +143,7 @@ function loadMonolithicSdk() {
   }
 
   const distCandidate = path.resolve(__dirname, "..", "..", "dist", "plugin-sdk", "compat.js");
-  if (fs.existsSync(distCandidate)) {
+  if (!shouldPreferSourceInTests && fs.existsSync(distCandidate)) {
     try {
       monolithicSdk = getJiti(true)(distCandidate);
       return monolithicSdk;
@@ -148,6 +154,34 @@ function loadMonolithicSdk() {
 
   monolithicSdk = getJiti(false)(path.join(__dirname, "compat.ts"));
   return monolithicSdk;
+}
+
+function loadDiagnosticEventsModule() {
+  if (diagnosticEventsModule) {
+    return diagnosticEventsModule;
+  }
+
+  const distCandidate = path.resolve(
+    __dirname,
+    "..",
+    "..",
+    "dist",
+    "infra",
+    "diagnostic-events.js",
+  );
+  if (!shouldPreferSourceInTests && fs.existsSync(distCandidate)) {
+    try {
+      diagnosticEventsModule = getJiti(true)(distCandidate);
+      return diagnosticEventsModule;
+    } catch {
+      // Fall through to source path if dist is unavailable or stale.
+    }
+  }
+
+  diagnosticEventsModule = getJiti(false)(
+    path.join(__dirname, "..", "infra", "diagnostic-events.ts"),
+  );
+  return diagnosticEventsModule;
 }
 
 function tryLoadMonolithicSdk() {

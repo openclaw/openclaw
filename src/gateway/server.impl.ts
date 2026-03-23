@@ -575,7 +575,7 @@ export async function startGatewayServer(
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
   const channelRuntimeEnvs = Object.fromEntries(
     Object.entries(channelLogs).map(([id, logger]) => [id, runtimeForLogger(logger)]),
-  ) as Record<ChannelId, RuntimeEnv>;
+  ) as unknown as Record<ChannelId, RuntimeEnv>;
   const channelMethods = listChannelPlugins().flatMap((plugin) => plugin.gatewayMethods ?? []);
   const gatewayMethods = Array.from(new Set([...baseGatewayMethods, ...channelMethods]));
   let pluginServices: PluginServicesHandle | null = null;
@@ -689,6 +689,7 @@ export async function startGatewayServer(
     chatRunState,
     chatRunBuffers,
     chatDeltaSentAt,
+    chatDeltaLastBroadcastLen,
     addChatRun,
     removeChatRun,
     chatAbortControllers,
@@ -814,6 +815,7 @@ export async function startGatewayServer(
       chatRunState,
       chatRunBuffers,
       chatDeltaSentAt,
+      chatDeltaLastBroadcastLen,
       removeChatRun,
       agentRunSeq,
       nodeSendToSession,
@@ -1099,6 +1101,7 @@ export async function startGatewayServer(
     chatAbortedRuns: chatRunState.abortedRuns,
     chatRunBuffers: chatRunState.buffers,
     chatDeltaSentAt: chatRunState.deltaSentAt,
+    chatDeltaLastBroadcastLen: chatRunState.deltaLastBroadcastLen,
     addChatRun,
     removeChatRun,
     subscribeSessionEvents: sessionEventSubscribers.subscribe,

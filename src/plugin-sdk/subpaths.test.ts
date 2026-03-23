@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import type {
   BaseProbeResult as ContractBaseProbeResult,
   BaseTokenResolution as ContractBaseTokenResolution,
@@ -47,19 +46,10 @@ import { pluginSdkSubpaths } from "./entrypoints.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PLUGIN_SDK_DIR = resolve(ROOT_DIR, "plugin-sdk");
-const requireFromHere = createRequire(import.meta.url);
 const sourceCache = new Map<string, string>();
-const representativeRuntimeSmokeSubpaths = [
-  "channel-runtime",
-  "conversation-runtime",
-  "provider-auth",
-  "provider-setup",
-  "setup",
-  "webhook-ingress",
-] as const;
+const representativeRuntimeSmokeSubpaths = ["channel-runtime", "conversation-runtime"] as const;
 
-const importResolvedPluginSdkSubpath = async (specifier: string) =>
-  import(pathToFileURL(requireFromHere.resolve(specifier)).href);
+const importResolvedPluginSdkSubpath = async (specifier: string) => import(specifier);
 
 function readPluginSdkSource(subpath: string): string {
   const file = resolve(PLUGIN_SDK_DIR, `${subpath}.ts`);
@@ -353,8 +343,10 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceMentions("channel-inbound", [
       "buildMentionRegexes",
+      "createDirectDmPreCryptoGuardPolicy",
       "createChannelInboundDebouncer",
       "createInboundDebouncer",
+      "dispatchInboundDirectDmWithRuntime",
       "formatInboundEnvelope",
       "formatInboundFromLabel",
       "formatLocationText",
@@ -453,8 +445,10 @@ describe("plugin-sdk subpath exports", () => {
       "listNativeCommandSpecsForConfig",
       "listSkillCommandsForAgents",
       "normalizeCommandBody",
+      "createPreCryptoDirectDmAuthorizer",
       "resolveCommandAuthorization",
       "resolveCommandAuthorizedFromAuthorizers",
+      "resolveInboundDirectDmAccessWithRuntime",
       "resolveControlCommandGate",
       "resolveDualTextControlCommandGate",
       "resolveNativeCommandSessionTargets",

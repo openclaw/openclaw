@@ -1,16 +1,13 @@
 import type { Command } from "commander";
 import { setVerbose } from "../../globals.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
+import { routeLogsToStderr } from "../../logging/console.js";
 import type { LogLevel } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
-import {
-  getCommandPathWithRootOptions,
-  getVerboseFlag,
-  hasFlag,
-  hasHelpOrVersion,
-} from "../argv.js";
+import { getCommandPathWithRootOptions, getVerboseFlag, hasHelpOrVersion } from "../argv.js";
 import { emitCliBanner } from "../banner.js";
 import { resolveCliName } from "../cli-name.js";
+import { isCommandJsonOutputMode } from "./json-mode.js";
 
 function setProcessTitleForCommand(actionCommand: Command) {
   let current: Command = actionCommand;
@@ -36,7 +33,6 @@ const PLUGIN_REQUIRED_COMMANDS = new Set([
   "health",
 ]);
 const CONFIG_GUARD_BYPASS_COMMANDS = new Set(["backup", "doctor", "completion", "secrets"]);
-const JSON_PARSE_ONLY_COMMANDS = new Set(["config set"]);
 let configGuardModulePromise: Promise<typeof import("./config-guard.js")> | undefined;
 let pluginRegistryModulePromise: Promise<typeof import("../plugin-registry.js")> | undefined;
 
@@ -70,12 +66,12 @@ function resolvePluginRegistryScope(commandPath: string[]): "channels" | "all" {
   return commandPath[0] === "status" || commandPath[0] === "health" ? "channels" : "all";
 }
 
-function shouldLoadPluginsForCommand(commandPath: string[], argv: string[]): boolean {
+function shouldLoadPluginsForCommand(commandPath: string[], jsonOutputMode: boolean): boolean {
   const [primary, secondary] = commandPath;
   if (!primary || !PLUGIN_REQUIRED_COMMANDS.has(primary)) {
     return false;
   }
-  if ((primary === "status" || primary === "health") && hasFlag(argv, "--json")) {
+  if ((primary === "status" || primary === "health") && jsonOutputMode) {
     return false;
   }
   // Setup wizard and channels add should stay manifest-first and load selected plugins on demand.
@@ -104,17 +100,6 @@ function getCliLogLevel(actionCommand: Command): LogLevel | undefined {
   return typeof logLevel === "string" ? (logLevel as LogLevel) : undefined;
 }
 
-function isJsonOutputMode(commandPath: string[], argv: string[]): boolean {
-  if (!hasFlag(argv, "--json")) {
-    return false;
-  }
-  const key = `${commandPath[0] ?? ""} ${commandPath[1] ?? ""}`.trim();
-  if (JSON_PARSE_ONLY_COMMANDS.has(key)) {
-    return false;
-  }
-  return true;
-}
-
 export function registerPreActionHooks(program: Command, programVersion: string) {
   program.hook("preAction", async (_thisCommand, actionCommand) => {
     setProcessTitleForCommand(actionCommand);
@@ -123,6 +108,10 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       return;
     }
     const commandPath = getCommandPathWithRootOptions(argv, 2);
+    const jsonOutputMode = isCommandJsonOutputMode(actionCommand, argv);
+    if (jsonOutputMode) {
+      routeLogsToStderr();
+    }
     const hideBanner =
       isTruthyEnvValue(process.env.OPENCLAW_HIDE_BANNER) ||
       commandPath[0] === "update" ||
@@ -143,15 +132,14 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (shouldBypassConfigGuard(commandPath)) {
       return;
     }
-    const suppressDoctorStdout = isJsonOutputMode(commandPath, argv);
     const { ensureConfigReady } = await loadConfigGuardModule();
     await ensureConfigReady({
       runtime: defaultRuntime,
       commandPath,
-      ...(suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
+      ...(jsonOutputMode ? { suppressDoctorStdout: true } : {}),
     });
     // Load plugins for commands that need channel access
-    if (shouldLoadPluginsForCommand(commandPath, argv)) {
+    if (shouldLoadPluginsForCommand(commandPath, jsonOutputMode)) {
       const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
       ensurePluginRegistryLoaded({ scope: resolvePluginRegistryScope(commandPath) });
     }

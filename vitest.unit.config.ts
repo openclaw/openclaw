@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { defineConfig } from "vitest/config";
 import baseConfig from "./vitest.config.ts";
+import { resolveVitestIsolation } from "./vitest.scoped-config.ts";
 import {
   unitTestAdditionalExcludePatterns,
   unitTestIncludePatterns,
@@ -41,6 +42,8 @@ export default defineConfig({
   ...base,
   test: {
     ...baseTest,
+    isolate: resolveVitestIsolation(),
+    runner: "./test/non-isolated-runner.ts",
     include: loadIncludePatternsFromEnv() ?? unitTestIncludePatterns,
     exclude: [
       ...new Set([

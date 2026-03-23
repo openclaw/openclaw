@@ -4,6 +4,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
+import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-capture.js";
 
 /**
  * Test for issue #6070:
@@ -27,20 +28,14 @@ vi.mock("../secrets/resolve.js", () => ({
   resolveSecretRefValue: (...args: unknown[]) => mockResolveSecretRefValue(...args),
 }));
 
-const mockLog = vi.fn();
-const mockError = vi.fn();
-const mockExit = vi.fn((code: number) => {
-  const errorMessages = mockError.mock.calls.map((c) => c.join(" ")).join("; ");
-  throw new Error(`__exit__:${code} - ${errorMessages}`);
-});
+const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const mockLog = defaultRuntime.log;
+const mockError = defaultRuntime.error;
+const mockExit = defaultRuntime.exit;
 
-vi.mock("../runtime.js", () => ({
-  defaultRuntime: {
-    log: (...args: unknown[]) => mockLog(...args),
-    error: (...args: unknown[]) => mockError(...args),
-    exit: (code: number) => mockExit(code),
-  },
-}));
+vi.mock("../runtime.js", async (importOriginal) => {
+  return mockRuntimeModule(importOriginal<typeof import("../runtime.js")>, defaultRuntime);
+});
 
 function buildSnapshot(params: {
   resolved: OpenClawConfig;
@@ -131,6 +126,11 @@ describe("config cli", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetRuntimeCapture();
+    mockExit.mockImplementation((code: number) => {
+      const errorMessages = mockError.mock.calls.map((call) => call.join(" ")).join("; ");
+      throw new Error(`__exit__:${code} - ${errorMessages}`);
+    });
     mockResolveSecretRefValue.mockResolvedValue("resolved-secret");
   });
 

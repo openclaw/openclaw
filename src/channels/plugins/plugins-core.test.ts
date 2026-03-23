@@ -26,7 +26,7 @@ import {
   listWhatsAppDirectoryPeersFromConfig,
 } from "../../../extensions/whatsapp/src/directory-config.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { LineProbeResult } from "../../line/types.js";
+import type { LineProbeResult } from "../../plugin-sdk/line.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,

@@ -53,10 +53,7 @@ import {
   normalizeAccountId as normalizeLineAccountId,
   resolveDefaultLineAccountId,
   resolveLineAccount,
-} from "../../line/accounts.js";
-import { monitorLineProvider } from "../../line/monitor.js";
-import { probeLineBot } from "../../line/probe.js";
-import {
+  buildTemplateMessageFromPayload,
   createQuickReplyItems,
   pushFlexMessage,
   pushLocationMessage,
@@ -64,9 +61,10 @@ import {
   pushMessagesLine,
   pushTemplateMessage,
   pushTextMessageWithQuickReplies,
+  monitorLineProvider,
+  probeLineBot,
   sendMessageLine,
-} from "../../line/send.js";
-import { buildTemplateMessageFromPayload } from "../../line/template-messages.js";
+} from "../../../extensions/line/runtime-api.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";

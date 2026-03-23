@@ -5,7 +5,7 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { buildMemoryPromptSection, registerMemoryPromptSection } from "../memory/prompt-section.js";
 import { withEnv } from "../test-utils/env.js";
-import { clearPluginCommands, getPluginCommandSpecs } from "./commands.js";
+import { clearPluginCommands, getPluginCommandSpecs } from "./command-registry-state.js";
 import { getGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
 import { createHookRunner } from "./hooks.js";
 import { __testing, clearPluginLoaderCache, loadOpenClawPlugins } from "./loader.js";

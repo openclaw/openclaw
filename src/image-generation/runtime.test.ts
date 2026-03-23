@@ -119,4 +119,80 @@ describe("image-generation runtime helpers", () => {
       },
     ]);
   });
+
+  it("explains native image-generation config and provider auth when no model is configured", async () => {
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.imageGenerationProviders.push(
+      {
+        pluginId: "google",
+        pluginName: "Google",
+        source: "test",
+        provider: {
+          id: "google",
+          defaultModel: "gemini-3-pro-image-preview",
+          capabilities: {
+            generate: {},
+            edit: { enabled: false },
+          },
+          generateImage: async () => ({
+            images: [{ buffer: Buffer.from("x"), mimeType: "image/png" }],
+          }),
+        },
+      },
+      {
+        pluginId: "openai",
+        pluginName: "OpenAI",
+        source: "test",
+        provider: {
+          id: "openai",
+          defaultModel: "gpt-image-1",
+          capabilities: {
+            generate: {},
+            edit: { enabled: false },
+          },
+          generateImage: async () => ({
+            images: [{ buffer: Buffer.from("x"), mimeType: "image/png" }],
+          }),
+        },
+      },
+    );
+    setActivePluginRegistry(pluginRegistry);
+
+    await expect(
+      generateImage({ cfg: {} as OpenClawConfig, prompt: "draw a cat" }),
+    ).rejects.toThrow(
+      'Set agents.defaults.imageGenerationModel.primary to a provider/model like "google/gemini-3-pro-image-preview".',
+    );
+    await expect(
+      generateImage({ cfg: {} as OpenClawConfig, prompt: "draw a cat" }),
+    ).rejects.toThrow("google: GEMINI_API_KEY / GOOGLE_API_KEY");
+    await expect(
+      generateImage({ cfg: {} as OpenClawConfig, prompt: "draw a cat" }),
+    ).rejects.toThrow("openai: OPENAI_API_KEY");
+  });
+
+  it("does not crash on prototype-like provider ids in auth hints", async () => {
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.imageGenerationProviders.push({
+      pluginId: "proto-provider",
+      pluginName: "Proto Provider",
+      source: "test",
+      provider: {
+        id: "__proto__",
+        defaultModel: "proto-v1",
+        capabilities: {
+          generate: {},
+          edit: { enabled: false },
+        },
+        generateImage: async () => ({
+          images: [{ buffer: Buffer.from("x"), mimeType: "image/png" }],
+        }),
+      },
+    });
+    setActivePluginRegistry(pluginRegistry);
+
+    await expect(
+      generateImage({ cfg: {} as OpenClawConfig, prompt: "draw a cat" }),
+    ).rejects.toThrow("No image-generation model configured.");
+  });
 });

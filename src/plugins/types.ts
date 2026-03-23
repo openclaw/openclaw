@@ -55,6 +55,7 @@ export type ProviderAuthOptionBag = {
   [key: string]: unknown;
 };
 
+/** Logger passed into plugin registration, services, and CLI surfaces. */
 export type PluginLogger = {
   debug?: (message: string) => void;
   info: (message: string) => void;
@@ -77,6 +78,13 @@ export type PluginConfigValidation =
   | { ok: true; value?: unknown }
   | { ok: false; errors: string[] };
 
+/**
+ * Config schema contract accepted by plugin manifests and runtime registration.
+ *
+ * Plugins can provide a Zod-like parser, a lightweight `validate(...)`
+ * function, or both. `uiHints` and `jsonSchema` are optional extras for docs,
+ * forms, and config UIs.
+ */
 export type OpenClawPluginConfigSchema = {
   safeParse?: (value: unknown) => {
     success: boolean;
@@ -91,6 +99,7 @@ export type OpenClawPluginConfigSchema = {
   jsonSchema?: Record<string, unknown>;
 };
 
+/** Trusted execution context passed to plugin-owned agent tool factories. */
 export type OpenClawPluginToolContext = {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -127,6 +136,7 @@ export type OpenClawPluginHookOptions = {
 
 export type ProviderAuthKind = "oauth" | "api_key" | "token" | "device_code" | "custom";
 
+/** Standard result payload returned by provider auth methods. */
 export type ProviderAuthResult = {
   profiles: Array<{ profileId: string; credential: AuthProfileCredential }>;
   /**
@@ -141,6 +151,7 @@ export type ProviderAuthResult = {
   notes?: string[];
 };
 
+/** Interactive auth context passed to provider login/setup methods. */
 export type ProviderAuthContext = {
   config: OpenClawConfig;
   agentDir?: string;
@@ -612,12 +623,14 @@ export type ProviderPluginWizardSetup = {
   };
 };
 
+/** Optional model-picker metadata shown in interactive provider selection flows. */
 export type ProviderPluginWizardModelPicker = {
   label?: string;
   hint?: string;
   methodId?: string;
 };
 
+/** UI metadata that lets provider plugins appear in onboarding and configure flows. */
 export type ProviderPluginWizard = {
   setup?: ProviderPluginWizardSetup;
   modelPicker?: ProviderPluginWizardModelPicker;
@@ -631,6 +644,7 @@ export type ProviderModelSelectedContext = {
   workspaceDir?: string;
 };
 
+/** Text-inference provider capability registered by a plugin. */
 export type ProviderPlugin = {
   id: string;
   pluginId?: string;
@@ -914,6 +928,7 @@ export type PluginWebSearchProviderEntry = WebSearchProviderPlugin & {
   pluginId: string;
 };
 
+/** Speech capability registered by a plugin. */
 export type SpeechProviderPlugin = {
   id: SpeechProviderId;
   label: string;
@@ -956,6 +971,8 @@ export type PluginCommandContext = {
   channelId?: ChannelId;
   /** Whether the sender is on the allowlist */
   isAuthorizedSender: boolean;
+  /** Gateway client scopes for internal control-plane callers */
+  gatewayClientScopes?: string[];
   /** Raw command arguments after the command name */
   args?: string;
   /** The full normalized command body */
@@ -1255,6 +1272,7 @@ export type OpenClawPluginCliContext = {
 
 export type OpenClawPluginCliRegistrar = (ctx: OpenClawPluginCliContext) => void | Promise<void>;
 
+/** Context passed to long-lived plugin services. */
 export type OpenClawPluginServiceContext = {
   config: OpenClawConfig;
   workspaceDir?: string;
@@ -1262,6 +1280,7 @@ export type OpenClawPluginServiceContext = {
   logger: PluginLogger;
 };
 
+/** Background service registered by a plugin during `register(api)`. */
 export type OpenClawPluginService = {
   id: string;
   start: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
@@ -1272,6 +1291,7 @@ export type OpenClawPluginChannelRegistration = {
   plugin: ChannelPlugin;
 };
 
+/** Module-level plugin definition loaded from a native plugin entry file. */
 export type OpenClawPluginDefinition = {
   id?: string;
   name?: string;
@@ -1289,6 +1309,7 @@ export type OpenClawPluginModule =
 
 export type PluginRegistrationMode = "full" | "setup-only" | "setup-runtime";
 
+/** Main registration API injected into native plugin entry files. */
 export type OpenClawPluginApi = {
   id: string;
   name: string;
