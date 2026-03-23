@@ -519,6 +519,30 @@ describe("createInboundDebouncer", () => {
 
     expect(calls).toEqual(["1", "2"]);
   });
+
+  it("bypasses debouncing for new keys once the tracked-key cap is reached", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 50,
+      maxTrackedKeys: 1,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1" });
+    await debouncer.enqueue({ key: "b", id: "2" });
+
+    expect(calls).toEqual([["2"]]);
+
+    await vi.advanceTimersByTimeAsync(50);
+    expect(calls).toEqual([["2"], ["1"]]);
+
+    vi.useRealTimers();
+  });
 });
 
 describe("initSessionState BodyStripped", () => {
