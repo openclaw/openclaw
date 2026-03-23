@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import { lookupCachedContextTokens } from "../../agents/context-cache.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -18,7 +19,8 @@ import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { normalizeFollowupRun, resolveRunAuthProfile } from "./agent-runner-utils.js";
+import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
+import { normalizeFollowupRun } from "./agent-runner-utils.js";
 import {
   resolveOriginAccountId,
   resolveOriginMessageProvider,
@@ -50,7 +52,6 @@ function loadReplyPayloadsRuntime() {
   replyPayloadsRuntimePromise ??= import("./reply-payloads.runtime.js");
   return replyPayloadsRuntimePromise;
 }
-
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
   typing: TypingController;
@@ -319,9 +320,15 @@ export function createFollowupRunner(params: {
       const usage = runResult.meta?.agentMeta?.usage;
       const promptTokens = runResult.meta?.agentMeta?.promptTokens;
       const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
+      const cachedContextTokens = lookupCachedContextTokens(modelUsed);
+      const lazyContextTokens =
+        agentCfgContextTokens == null && cachedContextTokens == null
+          ? lookupContextTokens(modelUsed, { allowAsyncLoad: false })
+          : undefined;
       const contextTokensUsed =
         agentCfgContextTokens ??
-        lookupContextTokens(modelUsed) ??
+        cachedContextTokens ??
+        lazyContextTokens ??
         sessionEntry?.contextTokens ??
         DEFAULT_CONTEXT_TOKENS;
 

@@ -9,7 +9,7 @@ import {
   KILOCODE_DEFAULT_MAX_TOKENS,
   KILOCODE_DEFAULT_MODEL_ID,
   KILOCODE_DEFAULT_MODEL_NAME,
-} from "../providers/kilocode-shared.js";
+} from "../plugins/provider-model-kilocode.js";
 export {
   KILOCODE_DEFAULT_CONTEXT_WINDOW,
   KILOCODE_DEFAULT_COST,

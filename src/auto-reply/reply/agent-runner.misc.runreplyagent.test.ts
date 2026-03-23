@@ -15,6 +15,16 @@ const runEmbeddedPiAgentMock = vi.fn();
 const runCliAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
 const runtimeErrorMock = vi.fn();
+const runMemoryFlushIfNeededMock = vi.hoisted(() =>
+  vi.fn(async ({ sessionEntry }) => sessionEntry),
+);
+const createReplyMediaPathNormalizerMock = vi.hoisted(() =>
+  vi.fn(
+    (_params?: unknown) =>
+      async <T>(payload: T) =>
+        payload,
+  ),
+);
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: (params: {
@@ -58,6 +68,14 @@ vi.mock("../../runtime.js", async () => {
   };
 });
 
+vi.mock("./agent-runner-memory.runtime.js", () => ({
+  runMemoryFlushIfNeeded: (params: unknown) => runMemoryFlushIfNeededMock(params),
+}));
+
+vi.mock("./reply-media-paths.runtime.js", () => ({
+  createReplyMediaPathNormalizer: (params: unknown) => createReplyMediaPathNormalizerMock(params),
+}));
+
 vi.mock("./queue.js", async () => {
   const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
   return {
@@ -85,10 +103,40 @@ type RunWithModelFallbackParams = {
 };
 
 beforeEach(() => {
+  vi.useRealTimers();
+  vi.clearAllTimers();
   runEmbeddedPiAgentMock.mockClear();
   runCliAgentMock.mockClear();
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
+  runMemoryFlushIfNeededMock.mockClear();
+  runMemoryFlushIfNeededMock.mockImplementation(
+    async ({
+      sessionEntry,
+      followupRun,
+    }: {
+      sessionEntry?: SessionEntry;
+      followupRun: FollowupRun;
+    }) => {
+      if (!sessionEntry || (sessionEntry.totalTokens ?? 0) < 1_000_000) {
+        return sessionEntry;
+      }
+      await runWithModelFallbackMock({
+        provider: followupRun.run.provider,
+        model: followupRun.run.model,
+        run: async (provider: string, model: string) =>
+          await runEmbeddedPiAgentMock({
+            provider,
+            model,
+            prompt: "Pre-compaction memory flush.",
+            enforceFinalTag: provider.includes("gemini") ? true : undefined,
+          }),
+      });
+      return sessionEntry;
+    },
+  );
+  createReplyMediaPathNormalizerMock.mockClear();
+  createReplyMediaPathNormalizerMock.mockImplementation(() => async (payload) => payload);
   loadCronStoreMock.mockClear();
   // Default: no cron jobs in store.
   loadCronStoreMock.mockResolvedValue({ version: 1, jobs: [] });
@@ -105,6 +153,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.clearAllTimers();
   vi.useRealTimers();
   resetSystemEventsForTest();
 });

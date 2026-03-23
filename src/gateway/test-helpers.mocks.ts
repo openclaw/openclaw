@@ -4,6 +4,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Mock, vi } from "vitest";
+import { buildElevenLabsSpeechProvider } from "../../extensions/elevenlabs/speech-provider.ts";
+import { buildOpenAISpeechProvider } from "../../extensions/openai/speech-provider.ts";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelPlugin, ChannelOutboundAdapter } from "../channels/plugins/types.js";
@@ -147,7 +149,18 @@ const createStubPluginRegistry = (): PluginRegistry => ({
   ],
   channelSetups: [],
   providers: [],
-  speechProviders: [],
+  speechProviders: [
+    {
+      pluginId: "openai",
+      source: "test",
+      provider: buildOpenAISpeechProvider(),
+    },
+    {
+      pluginId: "elevenlabs",
+      source: "test",
+      provider: buildElevenLabsSpeechProvider(),
+    },
+  ],
   mediaUnderstandingProviders: [],
   imageGenerationProviders: [],
   webSearchProviders: [],
@@ -298,6 +311,10 @@ export const piSdkMock = hoisted.piSdkMock;
 export const cronIsolatedRun = hoisted.cronIsolatedRun;
 export const agentCommand = hoisted.agentCommand;
 export const getReplyFromConfig: Mock<GetReplyFromConfigFn> = hoisted.getReplyFromConfig;
+export const mockGetReplyFromConfigOnce = (impl: GetReplyFromConfigFn) => {
+  getReplyFromConfig.mockImplementationOnce(impl);
+};
+export const sendWhatsAppMock = hoisted.sendWhatsAppMock;
 
 export const testState = hoisted.testState;
 
@@ -715,12 +732,30 @@ vi.mock("../commands/agent.js", () => ({
   agentCommand,
   agentCommandFromIngress: agentCommand,
 }));
+vi.mock("../auto-reply/dispatch.js", async () => {
+  return await vi.importActual<typeof import("../auto-reply/dispatch.js")>(
+    "../auto-reply/dispatch.js",
+  );
+});
+vi.mock("/src/auto-reply/dispatch.js", async () => {
+  return await vi.importActual<typeof import("../auto-reply/dispatch.js")>(
+    "../auto-reply/dispatch.js",
+  );
+});
 vi.mock("../auto-reply/reply.js", () => ({
   getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
     hoisted.getReplyFromConfig(...args),
 }));
 
 vi.mock("/src/auto-reply/reply.js", () => ({
+  getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
+    hoisted.getReplyFromConfig(...args),
+}));
+vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => ({
+  getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
+    hoisted.getReplyFromConfig(...args),
+}));
+vi.mock("/src/auto-reply/reply/get-reply-from-config.runtime.js", () => ({
   getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
     hoisted.getReplyFromConfig(...args),
 }));
@@ -745,6 +780,14 @@ vi.mock("../plugins/loader.js", async () => {
     loadOpenClawPlugins: () => pluginRegistryState.registry,
   };
 });
+vi.mock("../plugins/runtime/runtime-whatsapp-boundary.js", () => ({
+  sendMessageWhatsApp: (...args: unknown[]) =>
+    (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
+}));
+vi.mock("/src/plugins/runtime/runtime-whatsapp-boundary.js", () => ({
+  sendMessageWhatsApp: (...args: unknown[]) =>
+    (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
+}));
 
 process.env.OPENCLAW_SKIP_CHANNELS = "1";
 process.env.OPENCLAW_SKIP_CRON = "1";

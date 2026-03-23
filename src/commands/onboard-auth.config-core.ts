@@ -32,7 +32,7 @@ import {
 } from "../agents/venice-models.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelApi } from "../config/types.models.js";
-import { KILOCODE_BASE_URL } from "../providers/kilocode-shared.js";
+import { KILOCODE_BASE_URL } from "../plugins/provider-model-kilocode.js";
 import {
   GIGACHAT_DEFAULT_MODEL_REF,
   HUGGINGFACE_DEFAULT_MODEL_REF,

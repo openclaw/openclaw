@@ -1,7 +1,6 @@
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import type { SecretInput } from "../config/types.secrets.js";
-import { KILOCODE_DEFAULT_MODEL_REF } from "../providers/kilocode-shared.js";
 export { CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF } from "../agents/cloudflare-ai-gateway.js";
 export {
   GIGACHAT_DEFAULT_MODEL_REF,
@@ -9,15 +8,16 @@ export {
   XAI_DEFAULT_MODEL_REF,
   MODELSTUDIO_DEFAULT_MODEL_REF,
 } from "../commands/onboard-auth.models.js";
-export { KILOCODE_DEFAULT_MODEL_REF };
 import {
   buildApiKeyCredential,
   type ApiKeyStorageOptions,
   writeOAuthCredentials,
   type WriteOAuthCredentialsOptions,
 } from "./provider-auth-helpers.js";
+import { KILOCODE_DEFAULT_MODEL_REF } from "./provider-model-kilocode.js";
 
 const resolveAuthAgentDir = (agentDir?: string) => agentDir ?? resolveOpenClawAgentDir();
+export { KILOCODE_DEFAULT_MODEL_REF };
 export {
   buildApiKeyCredential,
   type ApiKeyStorageOptions,

@@ -10,7 +10,7 @@ import {
   type SecretInput,
   type SecretRef,
 } from "../config/types.secrets.js";
-import { KILOCODE_DEFAULT_MODEL_REF } from "../providers/kilocode-shared.js";
+import { KILOCODE_DEFAULT_MODEL_REF } from "../plugins/provider-model-kilocode.js";
 import { PROVIDER_ENV_VARS } from "../secrets/provider-env-vars.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { SecretInputMode } from "./onboard-types.js";

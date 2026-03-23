@@ -14,9 +14,12 @@ import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
 import {
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
+import {
   buildBaseChannelStatusSummary,
   buildChannelConfigSchema,
-  buildRuntimeAccountStatusSnapshot,
   clearAccountEntryFields,
   DEFAULT_ACCOUNT_ID,
   type ChannelPlugin,
@@ -167,37 +170,25 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
         },
       },
       setup: nextcloudTalkSetupAdapter,
-      status: {
-        defaultRuntime: {
-          accountId: DEFAULT_ACCOUNT_ID,
-          running: false,
-          lastStartAt: null,
-          lastStopAt: null,
-          lastError: null,
-        },
+      status: createComputedAccountStatusAdapter<ResolvedNextcloudTalkAccount>({
+        defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
         buildChannelSummary: ({ snapshot }) =>
           buildBaseChannelStatusSummary(snapshot, {
             secretSource: snapshot.secretSource ?? "none",
             mode: "webhook",
           }),
-        buildAccountSnapshot: ({ account, runtime }) => {
-          const configured = Boolean(account.secret?.trim() && account.baseUrl?.trim());
-          return buildRuntimeAccountStatusSnapshot(
-            { runtime },
-            {
-              accountId: account.accountId,
-              name: account.name,
-              enabled: account.enabled,
-              configured,
-              secretSource: account.secretSource,
-              baseUrl: account.baseUrl ? "[set]" : "[missing]",
-              mode: "webhook",
-              lastInboundAt: runtime?.lastInboundAt ?? null,
-              lastOutboundAt: runtime?.lastOutboundAt ?? null,
-            },
-          );
-        },
-      },
+        resolveAccountSnapshot: ({ account }) => ({
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured: Boolean(account.secret?.trim() && account.baseUrl?.trim()),
+          extra: {
+            secretSource: account.secretSource,
+            baseUrl: account.baseUrl ? "[set]" : "[missing]",
+            mode: "webhook",
+          },
+        }),
+      }),
       gateway: {
         startAccount: async (ctx) => {
           const account = ctx.account;
@@ -291,13 +282,17 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
       },
     },
     pairing: {
-      idLabel: "nextcloudUserId",
-      normalizeAllowEntry: createPairingPrefixStripper(/^(nextcloud-talk|nc-talk|nc):/i, (entry) =>
-        entry.toLowerCase(),
-      ),
-      notifyApproval: createLoggedPairingApprovalNotifier(
-        ({ id }) => `[nextcloud-talk] User ${id} approved for pairing`,
-      ),
+      text: {
+        idLabel: "nextcloudUserId",
+        message: "OpenClaw: your access has been approved.",
+        normalizeAllowEntry: createPairingPrefixStripper(
+          /^(nextcloud-talk|nc-talk|nc):/i,
+          (entry) => entry.toLowerCase(),
+        ),
+        notify: createLoggedPairingApprovalNotifier(
+          ({ id }) => `[nextcloud-talk] User ${id} approved for pairing`,
+        ),
+      },
     },
     security: {
       resolveDmPolicy: resolveNextcloudTalkDmPolicy,

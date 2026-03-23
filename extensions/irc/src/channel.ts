@@ -5,11 +5,10 @@ import {
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import { createTextPairingAdapter } from "openclaw/plugin-sdk/channel-pairing";
 import {
+  composeAccountWarningCollectors,
   composeWarningCollectors,
   createAllowlistProviderOpenWarningCollector,
-  createConditionalWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
@@ -17,6 +16,10 @@ import {
   listResolvedDirectoryEntriesFromSources,
 } from "openclaw/plugin-sdk/directory-runtime";
 import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
+import {
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
 import {
   listIrcAccountIds,
   resolveDefaultIrcAccountId,
@@ -34,7 +37,6 @@ import {
 import { resolveIrcGroupMatch, resolveIrcRequireMention } from "./policy.js";
 import { probeIrc } from "./probe.js";
 import {
-  buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,
   buildChannelConfigSchema,
   createAccountStatusSink,
@@ -108,23 +110,24 @@ const collectIrcGroupPolicyWarnings =
     },
   });
 
-const collectIrcSecurityWarnings = composeWarningCollectors<{
-  account: ResolvedIrcAccount;
-  cfg: CoreConfig;
-}>(
+const collectIrcSecurityWarnings = composeAccountWarningCollectors<
+  ResolvedIrcAccount,
+  {
+    account: ResolvedIrcAccount;
+    cfg: CoreConfig;
+  }
+>(
   collectIrcGroupPolicyWarnings,
-  createConditionalWarningCollector(
-    ({ account }) =>
-      !account.config.tls &&
-      "- IRC TLS is disabled (channels.irc.tls=false); traffic and credentials are plaintext.",
-    ({ account }) =>
-      account.config.nickserv?.register &&
-      '- IRC NickServ registration is enabled (channels.irc.nickserv.register=true); this sends "REGISTER" on every connect. Disable after first successful registration.',
-    ({ account }) =>
-      account.config.nickserv?.register &&
-      !account.config.nickserv.password?.trim() &&
-      "- IRC NickServ registration is enabled but no NickServ password is resolved; set channels.irc.nickserv.password, channels.irc.nickserv.passwordFile, or IRC_NICKSERV_PASSWORD.",
-  ),
+  (account) =>
+    !account.config.tls &&
+    "- IRC TLS is disabled (channels.irc.tls=false); traffic and credentials are plaintext.",
+  (account) =>
+    account.config.nickserv?.register &&
+    '- IRC NickServ registration is enabled (channels.irc.nickserv.register=true); this sends "REGISTER" on every connect. Disable after first successful registration.',
+  (account) =>
+    account.config.nickserv?.register &&
+    !account.config.nickserv.password?.trim() &&
+    "- IRC NickServ registration is enabled but no NickServ password is resolved; set channels.irc.nickserv.password, channels.irc.nickserv.passwordFile, or IRC_NICKSERV_PASSWORD.",
 );
 
 export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChatChannelPlugin({
@@ -253,14 +256,8 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
         return entries.map((entry) => ({ ...entry, name: entry.id }));
       },
     }),
-    status: {
-      defaultRuntime: {
-        accountId: DEFAULT_ACCOUNT_ID,
-        running: false,
-        lastStartAt: null,
-        lastStopAt: null,
-        lastError: null,
-      },
+    status: createComputedAccountStatusAdapter<ResolvedIrcAccount, IrcProbe>({
+      defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
       buildChannelSummary: ({ account, snapshot }) => ({
         ...buildBaseChannelStatusSummary(snapshot),
         host: account.host,
@@ -272,18 +269,20 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
       }),
       probeAccount: async ({ cfg, account, timeoutMs }) =>
         probeIrc(cfg as CoreConfig, { accountId: account.accountId, timeoutMs }),
-      buildAccountSnapshot: ({ account, runtime, probe }) =>
-        buildBaseAccountStatusSnapshot(
-          { account, runtime, probe },
-          {
-            host: account.host,
-            port: account.port,
-            tls: account.tls,
-            nick: account.nick,
-            passwordSource: account.passwordSource,
-          },
-        ),
-    },
+      resolveAccountSnapshot: ({ account }) => ({
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured: account.configured,
+        extra: {
+          host: account.host,
+          port: account.port,
+          tls: account.tls,
+          nick: account.nick,
+          passwordSource: account.passwordSource,
+        },
+      }),
+    }),
     gateway: {
       startAccount: async (ctx) => {
         const account = ctx.account;
@@ -313,18 +312,20 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
       },
     },
   },
-  pairing: createTextPairingAdapter({
-    idLabel: "ircUser",
-    message: PAIRING_APPROVED_MESSAGE,
-    normalizeAllowEntry: (entry) => normalizeIrcAllowEntry(entry),
-    notify: async ({ id, message }) => {
-      const target = normalizePairingTarget(id);
-      if (!target) {
-        throw new Error(`invalid IRC pairing id: ${id}`);
-      }
-      await sendMessageIrc(target, message);
+  pairing: {
+    text: {
+      idLabel: "ircUser",
+      message: PAIRING_APPROVED_MESSAGE,
+      normalizeAllowEntry: (entry) => normalizeIrcAllowEntry(entry),
+      notify: async ({ id, message }) => {
+        const target = normalizePairingTarget(id);
+        if (!target) {
+          throw new Error(`invalid IRC pairing id: ${id}`);
+        }
+        await sendMessageIrc(target, message);
+      },
     },
-  }),
+  },
   security: {
     resolveDmPolicy: resolveIrcDmPolicy,
     collectWarnings: collectIrcSecurityWarnings,

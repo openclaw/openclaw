@@ -22,10 +22,12 @@ vi.mock("../../config/sessions.js", async () => {
   };
 });
 
-const { listAcpSessionEntries } = await import("./session-meta.js");
+let listAcpSessionEntries: typeof import("./session-meta.js").listAcpSessionEntries;
 
 describe("listAcpSessionEntries", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ listAcpSessionEntries } = await import("./session-meta.js"));
     vi.clearAllMocks();
   });
 

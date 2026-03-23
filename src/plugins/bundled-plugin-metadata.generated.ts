@@ -88,7 +88,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         },
         expectedVersion: {
           label: "Expected acpx Version",
-          help: 'Exact version to enforce (for example 0.1.16) or "any" to skip strict version matching.',
+          help: 'Exact version to enforce or "any" to skip strict version matching.',
         },
         cwd: {
           label: "Default Working Directory",
@@ -469,6 +469,28 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "deepgram",
+    idHint: "deepgram",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/deepgram-provider",
+    packageVersion: "2026.3.14",
+    packageDescription: "OpenClaw Deepgram media-understanding provider",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "deepgram",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+    },
+  },
+  {
     dirName: "diagnostics-otel",
     idHint: "diagnostics-otel",
     source: {
@@ -731,6 +753,52 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "duckduckgo",
+    idHint: "duckduckgo-plugin",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/duckduckgo-plugin",
+    packageVersion: "2026.3.22",
+    packageDescription: "OpenClaw DuckDuckGo plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "duckduckgo",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          webSearch: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              region: {
+                type: "string",
+              },
+              safeSearch: {
+                type: "string",
+                enum: ["strict", "moderate", "off"],
+              },
+            },
+          },
+        },
+      },
+      uiHints: {
+        "webSearch.region": {
+          label: "DuckDuckGo Region",
+          help: "Optional DuckDuckGo region code such as us-en, uk-en, or de-de.",
+        },
+        "webSearch.safeSearch": {
+          label: "DuckDuckGo SafeSearch",
+          help: "SafeSearch level for DuckDuckGo results.",
+        },
+      },
+    },
+  },
+  {
     dirName: "elevenlabs",
     idHint: "elevenlabs",
     source: {
@@ -749,6 +817,49 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         type: "object",
         additionalProperties: false,
         properties: {},
+      },
+    },
+  },
+  {
+    dirName: "exa",
+    idHint: "exa-plugin",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/exa-plugin",
+    packageVersion: "2026.3.22",
+    packageDescription: "OpenClaw Exa plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "exa",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          webSearch: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              apiKey: {
+                type: ["string", "object"],
+              },
+            },
+          },
+        },
+      },
+      providerAuthEnvVars: {
+        exa: ["EXA_API_KEY"],
+      },
+      uiHints: {
+        "webSearch.apiKey": {
+          label: "Exa API Key",
+          help: "Exa Search API key (fallback: EXA_API_KEY env var).",
+          sensitive: true,
+          placeholder: "exa-...",
+        },
       },
     },
   },
@@ -1047,6 +1158,28 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       channels: ["googlechat"],
+    },
+  },
+  {
+    dirName: "groq",
+    idHint: "groq",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/groq-provider",
+    packageVersion: "2026.3.14",
+    packageDescription: "OpenClaw Groq media-understanding provider",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "groq",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
     },
   },
   {

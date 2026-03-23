@@ -52,14 +52,12 @@ export function loadTestRunnerBehavior() {
     base: {
       threadPinned: mergeManifestEntries(base, ["threadPinned", "threadSingleton"]),
     },
+    extensions: {
+      isolated: mergeManifestEntries(extensions, ["isolated"]),
+    },
     unit: {
       isolated: mergeManifestEntries(unit, ["isolated"]),
-      forkBatched: mergeManifestEntries(unit, ["forkBatched", "singletonIsolated"]),
       threadPinned: mergeManifestEntries(unit, ["threadPinned", "threadSingleton"]),
-      vmForkPinned: mergeManifestEntries(unit, ["vmForkPinned", "vmForkSingleton"]),
-    },
-    extensions: {
-      isolated: mergeManifestEntries(extensions, ["isolated", "singletonIsolated"]),
     },
   };
 }

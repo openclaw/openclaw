@@ -69,20 +69,22 @@ const {
   };
 });
 
-vi.mock("@discordjs/voice", () => ({
-  AudioPlayerStatus: { Playing: "playing", Idle: "idle" },
-  EndBehaviorType: { AfterSilence: "AfterSilence" },
-  VoiceConnectionStatus: {
-    Ready: "ready",
-    Disconnected: "disconnected",
-    Destroyed: "destroyed",
-    Signalling: "signalling",
-    Connecting: "connecting",
-  },
-  createAudioPlayer: createAudioPlayerMock,
-  createAudioResource: vi.fn(),
-  entersState: entersStateMock,
-  joinVoiceChannel: joinVoiceChannelMock,
+vi.mock("./sdk-runtime.js", () => ({
+  loadDiscordVoiceSdk: () => ({
+    AudioPlayerStatus: { Playing: "playing", Idle: "idle" },
+    EndBehaviorType: { AfterSilence: "AfterSilence" },
+    VoiceConnectionStatus: {
+      Ready: "ready",
+      Disconnected: "disconnected",
+      Destroyed: "destroyed",
+      Signalling: "signalling",
+      Connecting: "connecting",
+    },
+    createAudioPlayer: createAudioPlayerMock,
+    createAudioResource: vi.fn(),
+    entersState: entersStateMock,
+    joinVoiceChannel: joinVoiceChannelMock,
+  }),
 }));
 
 vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
