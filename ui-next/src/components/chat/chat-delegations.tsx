@@ -119,7 +119,7 @@ function DelegationDetailModal({
   return ReactDOM.createPortal(
     <div className="fixed inset-0 z-[100] bg-black/60" onClick={onClose}>
       <div
-        className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-lg rounded-lg border bg-card p-5 shadow-xl flex flex-col gap-3 max-h-[80vh] overflow-y-auto"
+        className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-2xl rounded-lg border bg-card p-6 shadow-xl flex flex-col gap-4 max-h-[85vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">
@@ -150,28 +150,48 @@ function DelegationDetailModal({
           </pre>
         </div>
 
-        <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
-          <div>
-            <span className="font-medium">Run ID:</span>{" "}
-            <span className="font-mono">{entry.runId?.slice(0, 12)}...</span>
+        <div className="grid grid-cols-2 gap-2 text-xs">
+          <div className="rounded-md border border-border/50 bg-muted/20 px-3 py-2">
+            <span className="text-muted-foreground text-[10px] uppercase tracking-wide block mb-0.5">
+              Run ID
+            </span>
+            <span className="font-mono text-foreground">{entry.runId?.slice(0, 12)}...</span>
           </div>
-          <div>
-            <span className="font-medium">Status:</span> {entry.status}
+          <div className="rounded-md border border-border/50 bg-muted/20 px-3 py-2">
+            <span className="text-muted-foreground text-[10px] uppercase tracking-wide block mb-0.5">
+              Status
+            </span>
+            <StatusBadge status={entry.status} />
           </div>
-          <div>
-            <span className="font-medium">Created:</span>{" "}
-            {entry.createdAt ? new Date(entry.createdAt).toLocaleString() : "—"}
+          <div className="rounded-md border border-border/50 bg-muted/20 px-3 py-2">
+            <span className="text-muted-foreground text-[10px] uppercase tracking-wide block mb-0.5">
+              Created
+            </span>
+            <span className="text-foreground">
+              {entry.createdAt ? new Date(entry.createdAt).toLocaleString() : "—"}
+            </span>
           </div>
-          <div>
-            <span className="font-medium">Started:</span>{" "}
-            {entry.startedAt ? new Date(entry.startedAt).toLocaleString() : "—"}
+          <div className="rounded-md border border-border/50 bg-muted/20 px-3 py-2">
+            <span className="text-muted-foreground text-[10px] uppercase tracking-wide block mb-0.5">
+              Started
+            </span>
+            <span className="text-foreground">
+              {entry.startedAt ? new Date(entry.startedAt).toLocaleString() : "—"}
+            </span>
           </div>
-          <div>
-            <span className="font-medium">Ended:</span>{" "}
-            {entry.endedAt ? new Date(entry.endedAt).toLocaleString() : "—"}
+          <div className="rounded-md border border-border/50 bg-muted/20 px-3 py-2">
+            <span className="text-muted-foreground text-[10px] uppercase tracking-wide block mb-0.5">
+              Ended
+            </span>
+            <span className="text-foreground">
+              {entry.endedAt ? new Date(entry.endedAt).toLocaleString() : "—"}
+            </span>
           </div>
-          <div>
-            <span className="font-medium">Elapsed:</span> {formatElapsed(entry.elapsedMs)}
+          <div className="rounded-md border border-border/50 bg-muted/20 px-3 py-2">
+            <span className="text-muted-foreground text-[10px] uppercase tracking-wide block mb-0.5">
+              Elapsed
+            </span>
+            <span className="text-foreground font-mono">{formatElapsed(entry.elapsedMs)}</span>
           </div>
         </div>
 
