@@ -472,10 +472,14 @@ function isDirectShellPositionalCarrierInvocation(command: string): boolean {
   }
 
   // Keep carrier matching strict: only allow direct `$0` execution with positional arguments.
-  // This prevents payloads like `echo pwned; echo $0` from satisfying allowlist checks.
-  return /^(?:exec\s+)?["']?\$(?:0|\{0\})["']?(?:\s+["']?\$(?:[@*]|[1-9]|\{[@*1-9]\})["']?)*$/u.test(
-    trimmed,
-  );
+  // This prevents payloads like `echo blocked; $0 "$1"` from satisfying allowlist checks.
+  const shellWhitespace = String.raw`[^\S\r\n]+`;
+  const positionalZero = String.raw`(?:\$(?:0|\{0\})|"\$(?:0|\{0\})")`;
+  const positionalArg = String.raw`(?:\$(?:[@*]|[1-9]|\{[@*1-9]\})|"\$(?:[@*]|[1-9]|\{[@*1-9]\})")`;
+  return new RegExp(
+    `^(?:exec${shellWhitespace}(?:--${shellWhitespace})?)?${positionalZero}(?:${shellWhitespace}${positionalArg})*$`,
+    "u",
+  ).test(trimmed);
 }
 
 function collectAllowAlwaysPatterns(params: {
