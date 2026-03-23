@@ -40,7 +40,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     id: "qqbot",
     label: "QQ Bot",
     selectionLabel: "QQ Bot",
-    docsPath: "/docs/channels/qqbot",
+    docsPath: "/channels/qqbot",
     blurb: "Connect to QQ via official QQ Bot API",
     order: 50,
   },
@@ -81,8 +81,11 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     isConfigured: (account) => {
       if (account?.appId && account?.clientSecret) return true;
       // 配置为空但有凭证备份时仍返回 true，让 startAccount 有机会恢复凭证
-      const backup = loadCredentialBackup(account?.accountId);
-      return backup !== null;
+      if (account?.accountId) {
+        const backup = loadCredentialBackup(account.accountId);
+        return backup !== null;
+      }
+      return false;
     },
     describeAccount: (account) => ({
       accountId: account?.accountId ?? DEFAULT_ACCOUNT_ID,
@@ -94,11 +97,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     // 关键：解析 allowFrom 配置，用于命令授权
     resolveAllowFrom: ({ cfg, accountId }) => {
       const account = resolveQQBotAccount(cfg, accountId);
-      const allowFrom = account.config?.allowFrom;
-      console.log(
-        `[qqbot] resolveAllowFrom: accountId=${accountId}, allowFrom=${JSON.stringify(allowFrom)}`,
-      );
-      return allowFrom;
+      return account.config?.allowFrom;
     },
     // 格式化 allowFrom 条目（移除 qqbot: 前缀，统一大写）
     formatAllowFrom: ({ allowFrom }) =>
@@ -130,10 +129,10 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       let clientSecret = "";
 
       if (input.token) {
-        const parts = input.token.split(":");
-        if (parts.length === 2) {
-          appId = parts[0];
-          clientSecret = parts[1];
+        const colonIdx = input.token.indexOf(":");
+        if (colonIdx > 0) {
+          appId = input.token.slice(0, colonIdx);
+          clientSecret = input.token.slice(colonIdx + 1);
         }
       }
 
@@ -227,21 +226,9 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     chunkerMode: "markdown",
     textChunkLimit: 5000,
     sendText: async ({ to, text, accountId, replyToId, cfg }) => {
-      console.log(
-        `[qqbot:channel] sendText called — accountId=${accountId}, to=${to}, replyToId=${replyToId}, text.length=${text?.length ?? 0}`,
-      );
-      console.log(
-        `[qqbot:channel] sendText text preview: ${text?.slice(0, 100)}${(text?.length ?? 0) > 100 ? "..." : ""}`,
-      );
       const account = resolveQQBotAccount(cfg, accountId);
       initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
-      console.log(
-        `[qqbot:channel] sendText resolved account: id=${account.accountId}, appId=${account.appId}, enabled=${account.enabled}`,
-      );
       const result = await sendText({ to, text, accountId, replyToId, account });
-      console.log(
-        `[qqbot:channel] sendText result: messageId=${result.messageId}, error=${result.error ?? "none"}`,
-      );
       return {
         channel: "qqbot" as const,
         messageId: result.messageId ?? "",
@@ -249,14 +236,8 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       };
     },
     sendMedia: async ({ to, text, mediaUrl, accountId, replyToId, cfg }) => {
-      console.log(
-        `[qqbot:channel] sendMedia called — accountId=${accountId}, to=${to}, replyToId=${replyToId}, mediaUrl=${mediaUrl?.slice(0, 80)}, text.length=${text?.length ?? 0}`,
-      );
       const account = resolveQQBotAccount(cfg, accountId);
       initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
-      console.log(
-        `[qqbot:channel] sendMedia resolved account: id=${account.accountId}, appId=${account.appId}, enabled=${account.enabled}`,
-      );
       const result = await sendMedia({
         to,
         text: text ?? "",
@@ -265,9 +246,6 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         replyToId,
         account,
       });
-      console.log(
-        `[qqbot:channel] sendMedia result: messageId=${result.messageId}, error=${result.error ?? "none"}`,
-      );
       return {
         channel: "qqbot" as const,
         messageId: result.messageId ?? "",
@@ -308,9 +286,6 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
 
       log?.info(
         `[qqbot:${account.accountId}] Starting gateway — appId=${account.appId}, enabled=${account.enabled}, name=${account.name ?? "unnamed"}`,
-      );
-      console.log(
-        `[qqbot:channel] startAccount: accountId=${account.accountId}, appId=${account.appId}, secretSource=${account.secretSource}`,
       );
 
       await startGateway({
