@@ -19,6 +19,7 @@ import {
   appendAssistantMessageToSessionTranscript,
   resolveMirroredTranscriptText,
 } from "../../config/sessions.js";
+import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import {
@@ -621,7 +622,17 @@ async function deliverOutboundPayloadsCore(
   };
   const normalizedPayloads = normalizePayloadsForChannelDelivery(payloads, channel, handler);
   const hookRunner = getGlobalHookRunner();
-  const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
+  // Prefer the mirror's session key (inbound message context), then the explicit
+  // session context key. When neither is available — common for Telegram group
+  // deliveries — fall back to the agent's main session key so internal hooks
+  // (message:sent) still fire instead of being silently skipped.
+  // See: https://github.com/openclaw/openclaw/issues/52390
+  const sessionKeyForInternalHooks =
+    params.mirror?.sessionKey ??
+    params.session?.key ??
+    (params.session?.agentId
+      ? resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.session.agentId })
+      : undefined);
   const mirrorIsGroup = params.mirror?.isGroup;
   const mirrorGroupId = params.mirror?.groupId;
   const { emitMessageSent, hasMessageSentHooks } = createMessageSentEmitter({
@@ -634,16 +645,6 @@ async function deliverOutboundPayloadsCore(
     mirrorGroupId,
   });
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
-  if (hasMessageSentHooks && params.session?.agentId && !sessionKeyForInternalHooks) {
-    log.warn(
-      "deliverOutboundPayloads: session.agentId present without session key; internal message:sent hook will be skipped",
-      {
-        channel,
-        to,
-        agentId: params.session.agentId,
-      },
-    );
-  }
   for (const payload of normalizedPayloads) {
     let payloadSummary = buildPayloadSummary(payload);
     try {

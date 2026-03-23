@@ -907,9 +907,10 @@ describe("deliverOutboundPayloads", () => {
     expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
   });
 
-  it("warns when session.agentId is set without a session key", async () => {
+  it("falls back to agent main session key when session.key is missing but agentId is set", async () => {
     const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
     hookMocks.runner.hasHooks.mockReturnValue(true);
+    hookMocks.runner.runMessageSent.mockResolvedValue([]);
 
     await deliverOutboundPayloads({
       cfg: whatsappChunkConfig,
@@ -920,9 +921,19 @@ describe("deliverOutboundPayloads", () => {
       session: { agentId: "agent-main" },
     });
 
-    expect(logMocks.warn).toHaveBeenCalledWith(
-      "deliverOutboundPayloads: session.agentId present without session key; internal message:sent hook will be skipped",
-      expect.objectContaining({ channel: "whatsapp", to: "+1555", agentId: "agent-main" }),
+    // The fallback derives the session key from agentId so the internal hook fires.
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledTimes(1);
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledWith(
+      "message",
+      "sent",
+      expect.stringContaining("agent:agent-main:"),
+      expect.objectContaining({ success: true }),
+    );
+    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+    // No warning should be logged since the fallback succeeded.
+    expect(logMocks.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("session.agentId present without session key"),
+      expect.anything(),
     );
   });
 
