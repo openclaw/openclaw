@@ -1,3 +1,4 @@
+import { resolveNodeStartupTlsEnvironment } from "../../bootstrap/node-startup-env.js";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
@@ -16,6 +17,19 @@ import {
   parsePort,
 } from "./shared.js";
 import type { DaemonInstallOptions } from "./types.js";
+
+function mergeInstallInvocationEnv(params: {
+  env: NodeJS.ProcessEnv;
+  existingServiceEnv?: Record<string, string>;
+}): NodeJS.ProcessEnv {
+  if (!params.existingServiceEnv || Object.keys(params.existingServiceEnv).length === 0) {
+    return params.env;
+  }
+  return {
+    ...params.existingServiceEnv,
+    ...params.env,
+  };
+}
 
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
@@ -42,6 +56,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
 
   const service = resolveGatewayService();
   let loaded = false;
+  let existingServiceEnv: Record<string, string> | undefined;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
@@ -53,26 +68,42 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     }
   }
   if (loaded) {
+    existingServiceEnv = (await service.readCommand(process.env).catch(() => null))?.environment;
+  }
+  const installEnv = mergeInstallInvocationEnv({
+    env: process.env,
+    existingServiceEnv,
+  });
+  if (loaded) {
     if (!opts.force) {
-      emit({
-        ok: true,
-        result: "already-installed",
-        message: `Gateway service already ${service.loadedText}.`,
-        service: buildDaemonServiceSnapshot(service, loaded),
-      });
-      if (!json) {
-        defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
-        defaultRuntime.log(
-          `Reinstall with: ${formatCliCommand("openclaw gateway install --force")}`,
-        );
+      if (await gatewayServiceNeedsAutoNodeExtraCaCertsRefresh({ service, env: process.env })) {
+        const message = "Gateway service is missing the nvm TLS CA bundle; refreshing the install.";
+        if (json) {
+          warnings.push(message);
+        } else {
+          defaultRuntime.log(message);
+        }
+      } else {
+        emit({
+          ok: true,
+          result: "already-installed",
+          message: `Gateway service already ${service.loadedText}.`,
+          service: buildDaemonServiceSnapshot(service, loaded),
+        });
+        if (!json) {
+          defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
+          defaultRuntime.log(
+            `Reinstall with: ${formatCliCommand("openclaw gateway install --force")}`,
+          );
+        }
+        return;
       }
-      return;
     }
   }
 
   const tokenResolution = await resolveGatewayInstallToken({
     config: cfg,
-    env: process.env,
+    env: installEnv,
     explicitToken: opts.token,
     autoGenerateWhenMissing: true,
     persistGeneratedToken: true,
@@ -90,7 +121,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
 
   const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-    env: process.env,
+    env: installEnv,
     port,
     runtime: runtimeRaw,
     warn: (message) => {
@@ -111,7 +142,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     fail,
     install: async () => {
       await service.install({
-        env: process.env,
+        env: installEnv,
         stdout,
         programArguments,
         workingDirectory,
@@ -119,4 +150,37 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       });
     },
   });
+}
+
+async function gatewayServiceNeedsAutoNodeExtraCaCertsRefresh(params: {
+  service: ReturnType<typeof resolveGatewayService>;
+  env: Record<string, string | undefined>;
+}): Promise<boolean> {
+  try {
+    const currentCommand = await params.service.readCommand(params.env);
+    if (!currentCommand) {
+      return false;
+    }
+    const currentExecPath = currentCommand.programArguments[0]?.trim();
+    if (!currentExecPath) {
+      return false;
+    }
+    const currentEnvironment = currentCommand.environment ?? {};
+    const currentNodeExtraCaCerts = currentEnvironment.NODE_EXTRA_CA_CERTS?.trim();
+    const expectedNodeExtraCaCerts = resolveNodeStartupTlsEnvironment({
+      env: {
+        ...params.env,
+        ...currentEnvironment,
+        NODE_EXTRA_CA_CERTS: undefined,
+      },
+      execPath: currentExecPath,
+      includeDarwinDefaults: false,
+    }).NODE_EXTRA_CA_CERTS;
+    if (!expectedNodeExtraCaCerts) {
+      return false;
+    }
+    return currentNodeExtraCaCerts !== expectedNodeExtraCaCerts;
+  } catch {
+    return false;
+  }
 }

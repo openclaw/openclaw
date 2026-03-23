@@ -80,12 +80,13 @@ describe("exec-command-resolution", () => {
         setup: () => {
           const dir = makeTempDir();
           const cwd = path.join(dir, "project");
-          const script = path.join(cwd, "scripts", "run.sh");
+          const scriptName = process.platform === "win32" ? "run.cmd" : "run.sh";
+          const script = path.join(cwd, "scripts", scriptName);
           fs.mkdirSync(path.dirname(script), { recursive: true });
           fs.writeFileSync(script, "");
           fs.chmodSync(script, 0o755);
           return {
-            command: "./scripts/run.sh --flag",
+            command: `./scripts/${scriptName} --flag`,
             cwd,
             envPath: undefined as NodeJS.ProcessEnv | undefined,
             expectedPath: script,
@@ -98,12 +99,13 @@ describe("exec-command-resolution", () => {
         setup: () => {
           const dir = makeTempDir();
           const cwd = path.join(dir, "project");
-          const script = path.join(cwd, "bin", "tool");
+          const scriptName = process.platform === "win32" ? "tool.cmd" : "tool";
+          const script = path.join(cwd, "bin", scriptName);
           fs.mkdirSync(path.dirname(script), { recursive: true });
           fs.writeFileSync(script, "");
           fs.chmodSync(script, 0o755);
           return {
-            command: '"./bin/tool" --version',
+            command: `"./bin/${scriptName}" --version`,
             cwd,
             envPath: undefined as NodeJS.ProcessEnv | undefined,
             expectedPath: script,
@@ -142,6 +144,29 @@ describe("exec-command-resolution", () => {
     ]);
     expect(niceResolution?.rawExecutable).toBe("bash");
     expect(niceResolution?.executableName.toLowerCase()).toContain("bash");
+
+    const timeResolution = resolveCommandResolutionFromArgv(
+      ["/usr/bin/time", "-p", "rg", "-n", "needle"],
+      undefined,
+      makePathEnv(fixture.binDir),
+    );
+    expect(timeResolution?.resolvedPath).toBe(fixture.exePath);
+    expect(timeResolution?.executableName).toBe(fixture.exeName);
+  });
+
+  it("unwraps shell multiplexers before resolving the effective executable", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const busybox = path.join(dir, "busybox");
+    fs.writeFileSync(busybox, "");
+    fs.chmodSync(busybox, 0o755);
+
+    const resolution = resolveCommandResolutionFromArgv([busybox, "sh", "-lc", "echo hi"]);
+    expect(resolution?.rawExecutable).toBe("sh");
+    expect(resolution?.wrapperChain).toEqual(["busybox"]);
+    expect(resolution?.executableName.toLowerCase()).toContain("sh");
   });
 
   it("blocks semantic env wrappers, env -S, and deep transparent-wrapper chains", () => {

@@ -17,7 +17,6 @@ import {
   browserStop,
 } from "../../browser/client.js";
 import { resolveBrowserConfig, resolveProfile } from "../../browser/config.js";
-import { DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME } from "../../browser/constants.js";
 import { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "../../browser/paths.js";
 import { getBrowserProfileCapabilities } from "../../browser/profile-capabilities.js";
 import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "../../browser/proxy-files.js";
@@ -41,6 +40,78 @@ import {
   selectDefaultNodeFromList,
   type NodeListNode,
 } from "./nodes-utils.js";
+
+const browserToolDeps = {
+  browserAct,
+  browserArmDialog,
+  browserArmFileChooser,
+  browserCloseTab,
+  browserFocusTab,
+  browserNavigate,
+  browserOpenTab,
+  browserPdfSave,
+  browserProfiles,
+  browserScreenshotAction,
+  browserStart,
+  browserStatus,
+  browserStop,
+  imageResultFromFile,
+  loadConfig,
+  listNodes,
+  callGatewayTool,
+  trackSessionBrowserTab,
+  untrackSessionBrowserTab,
+};
+
+export const __testing = {
+  setDepsForTest(
+    overrides: Partial<{
+      browserAct: typeof browserAct;
+      browserArmDialog: typeof browserArmDialog;
+      browserArmFileChooser: typeof browserArmFileChooser;
+      browserCloseTab: typeof browserCloseTab;
+      browserFocusTab: typeof browserFocusTab;
+      browserNavigate: typeof browserNavigate;
+      browserOpenTab: typeof browserOpenTab;
+      browserPdfSave: typeof browserPdfSave;
+      browserProfiles: typeof browserProfiles;
+      browserScreenshotAction: typeof browserScreenshotAction;
+      browserStart: typeof browserStart;
+      browserStatus: typeof browserStatus;
+      browserStop: typeof browserStop;
+      imageResultFromFile: typeof imageResultFromFile;
+      loadConfig: typeof loadConfig;
+      listNodes: typeof listNodes;
+      callGatewayTool: typeof callGatewayTool;
+      trackSessionBrowserTab: typeof trackSessionBrowserTab;
+      untrackSessionBrowserTab: typeof untrackSessionBrowserTab;
+    }> | null,
+  ) {
+    browserToolDeps.browserAct = overrides?.browserAct ?? browserAct;
+    browserToolDeps.browserArmDialog = overrides?.browserArmDialog ?? browserArmDialog;
+    browserToolDeps.browserArmFileChooser =
+      overrides?.browserArmFileChooser ?? browserArmFileChooser;
+    browserToolDeps.browserCloseTab = overrides?.browserCloseTab ?? browserCloseTab;
+    browserToolDeps.browserFocusTab = overrides?.browserFocusTab ?? browserFocusTab;
+    browserToolDeps.browserNavigate = overrides?.browserNavigate ?? browserNavigate;
+    browserToolDeps.browserOpenTab = overrides?.browserOpenTab ?? browserOpenTab;
+    browserToolDeps.browserPdfSave = overrides?.browserPdfSave ?? browserPdfSave;
+    browserToolDeps.browserProfiles = overrides?.browserProfiles ?? browserProfiles;
+    browserToolDeps.browserScreenshotAction =
+      overrides?.browserScreenshotAction ?? browserScreenshotAction;
+    browserToolDeps.browserStart = overrides?.browserStart ?? browserStart;
+    browserToolDeps.browserStatus = overrides?.browserStatus ?? browserStatus;
+    browserToolDeps.browserStop = overrides?.browserStop ?? browserStop;
+    browserToolDeps.imageResultFromFile = overrides?.imageResultFromFile ?? imageResultFromFile;
+    browserToolDeps.loadConfig = overrides?.loadConfig ?? loadConfig;
+    browserToolDeps.listNodes = overrides?.listNodes ?? listNodes;
+    browserToolDeps.callGatewayTool = overrides?.callGatewayTool ?? callGatewayTool;
+    browserToolDeps.trackSessionBrowserTab =
+      overrides?.trackSessionBrowserTab ?? trackSessionBrowserTab;
+    browserToolDeps.untrackSessionBrowserTab =
+      overrides?.untrackSessionBrowserTab ?? untrackSessionBrowserTab;
+  },
+};
 
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
   const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
@@ -135,7 +206,7 @@ async function resolveBrowserNodeTarget(params: {
   target?: "sandbox" | "host" | "node";
   sandboxBridgeUrl?: string;
 }): Promise<BrowserNodeTarget | null> {
-  const cfg = loadConfig();
+  const cfg = browserToolDeps.loadConfig();
   const policy = cfg.gateway?.nodes?.browser;
   const mode = policy?.mode ?? "auto";
   if (mode === "off") {
@@ -154,7 +225,7 @@ async function resolveBrowserNodeTarget(params: {
     return null;
   }
 
-  const nodes = await listNodes({});
+  const nodes = await browserToolDeps.listNodes({});
   const browserNodes = nodes.filter((node) => node.connected && isBrowserNode(node));
   if (browserNodes.length === 0) {
     if (params.target === "node" || params.requestedNode) {
@@ -214,7 +285,7 @@ async function callBrowserProxy(params: {
       ? Math.max(1, Math.floor(params.timeoutMs))
       : DEFAULT_BROWSER_PROXY_TIMEOUT_MS;
   const gatewayTimeoutMs = proxyTimeoutMs + BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS;
-  const payload = await callGatewayTool<{ payloadJSON?: string; payload?: string }>(
+  const payload = await browserToolDeps.callGatewayTool<{ payloadJSON?: string; payload?: string }>(
     "node.invoke",
     { timeoutMs: gatewayTimeoutMs },
     {
@@ -280,58 +351,18 @@ function resolveBrowserBaseUrl(params: {
   return undefined;
 }
 
-function listUserBrowserProfiles() {
-  const cfg = loadConfig();
+function shouldPreferHostForProfile(profileName: string | undefined) {
+  if (!profileName) {
+    return false;
+  }
+  const cfg = browserToolDeps.loadConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
-  return Object.keys(resolved.profiles ?? {})
-    .map((name) => resolveProfile(resolved, name))
-    .filter((profile): profile is NonNullable<typeof profile> => Boolean(profile))
-    .filter((profile) => {
-      const capabilities = getBrowserProfileCapabilities(profile);
-      return capabilities.requiresRelay || capabilities.usesChromeMcp;
-    });
-}
-
-function resolveBrowserToolProfile(params: {
-  profile?: string;
-  browserSession?: "agent" | "user";
-}): string | undefined {
-  if (params.profile) {
-    return params.profile;
+  const profile = resolveProfile(resolved, profileName);
+  if (!profile) {
+    return false;
   }
-  if (!params.browserSession) {
-    return undefined;
-  }
-  if (params.browserSession === "agent") {
-    return DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME;
-  }
-
-  const userProfiles = listUserBrowserProfiles();
-  const defaultUserProfile = userProfiles.find(
-    (profile) => profile.name !== DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
-  );
-  if (defaultUserProfile?.name === "chrome") {
-    return defaultUserProfile.name;
-  }
-  const chromeRelay = userProfiles.find((profile) => profile.name === "chrome");
-  if (chromeRelay) {
-    return chromeRelay.name;
-  }
-  if (userProfiles.length === 1) {
-    return userProfiles[0]?.name;
-  }
-  const chromeLive = userProfiles.find((profile) => profile.name === "chrome-live");
-  if (chromeLive) {
-    return chromeLive.name;
-  }
-  if (userProfiles.length === 0) {
-    throw new Error(
-      'No user-browser profile is configured. Use profile="chrome" for the extension relay or create an existing-session profile first.',
-    );
-  }
-  throw new Error(
-    `Multiple user-browser profiles are configured (${userProfiles.map((profile) => profile.name).join(", ")}). Pass profile="<name>".`,
-  );
+  const capabilities = getBrowserProfileCapabilities(profile);
+  return capabilities.usesChromeMcp;
 }
 
 export function createBrowserTool(opts?: {
@@ -347,12 +378,9 @@ export function createBrowserTool(opts?: {
     name: "browser",
     description: [
       "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
-      'Browser choice: use browserSession="agent" by default for the isolated OpenClaw browser. Use browserSession="user" only when logged-in browser state matters and the user is present to click/approve browser attach prompts.',
-      'browserSession="user" means the real local user browser on the host, not sandbox/node browsers. If user presence is unclear, ask first.',
-      'profile remains the explicit override. Use profile="chrome" for Chrome extension relay takeover (existing Chrome tabs). Use profile="openclaw" for the isolated OpenClaw-managed browser.',
-      'If the user mentions the Chrome extension / Browser Relay / toolbar button / “attach tab”, ALWAYS use browserSession="user" and prefer profile="chrome" (do not ask which profile unless ambiguous).',
+      "Browser choice: omit profile by default for the isolated OpenClaw-managed browser (`openclaw`).",
+      'For the logged-in user browser on the local host, use profile="user". A supported Chromium-based browser (v144+) must be running. Use only when existing logins/cookies matter and the user is present.',
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
-      "User-browser flows need user interaction: Chrome extension relay needs the user to click the OpenClaw Browser Relay toolbar icon on the tab (badge ON); existing-session may require approving a browser attach prompt.",
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
       "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
@@ -363,37 +391,27 @@ export function createBrowserTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
-      const browserSession = readStringParam(params, "browserSession") as
-        | "agent"
-        | "user"
-        | undefined;
-      const profile = resolveBrowserToolProfile({
-        profile: readStringParam(params, "profile"),
-        browserSession,
-      });
+      const profile = readStringParam(params, "profile");
       const requestedNode = readStringParam(params, "node");
       let target = readStringParam(params, "target") as "sandbox" | "host" | "node" | undefined;
 
       if (requestedNode && target && target !== "node") {
         throw new Error('node is only supported with target="node".');
       }
-      if (browserSession === "user") {
+      // User-browser profiles (existing-session) are host-only.
+      const isUserBrowserProfile = shouldPreferHostForProfile(profile);
+      if (isUserBrowserProfile) {
         if (requestedNode || target === "node") {
-          throw new Error('browserSession="user" only supports the local host browser.');
+          throw new Error(`profile="${profile}" only supports the local host browser.`);
         }
         if (target === "sandbox") {
           throw new Error(
-            'browserSession="user" cannot use the sandbox browser; use target="host" or omit target.',
+            `profile="${profile}" cannot use the sandbox browser; use target="host" or omit target.`,
           );
         }
-      }
-      if (!target && !requestedNode && browserSession === "user") {
-        target = "host";
-      }
-
-      if (!target && !requestedNode && profile === "chrome") {
-        // Chrome extension relay takeover is a host Chrome feature; prefer host unless explicitly targeting a node.
-        target = "host";
+        if (!target && !requestedNode) {
+          target = "host";
+        }
       }
 
       const nodeTarget = await resolveBrowserNodeTarget({
@@ -446,7 +464,7 @@ export function createBrowserTool(opts?: {
               }),
             );
           }
-          return jsonResult(await browserStatus(baseUrl, { profile }));
+          return jsonResult(await browserToolDeps.browserStatus(baseUrl, { profile }));
         case "start":
           if (proxyRequest) {
             await proxyRequest({
@@ -462,8 +480,8 @@ export function createBrowserTool(opts?: {
               }),
             );
           }
-          await browserStart(baseUrl, { profile });
-          return jsonResult(await browserStatus(baseUrl, { profile }));
+          await browserToolDeps.browserStart(baseUrl, { profile });
+          return jsonResult(await browserToolDeps.browserStatus(baseUrl, { profile }));
         case "stop":
           if (proxyRequest) {
             await proxyRequest({
@@ -479,8 +497,8 @@ export function createBrowserTool(opts?: {
               }),
             );
           }
-          await browserStop(baseUrl, { profile });
-          return jsonResult(await browserStatus(baseUrl, { profile }));
+          await browserToolDeps.browserStop(baseUrl, { profile });
+          return jsonResult(await browserToolDeps.browserStatus(baseUrl, { profile }));
         case "profiles":
           if (proxyRequest) {
             const result = await proxyRequest({
@@ -489,7 +507,7 @@ export function createBrowserTool(opts?: {
             });
             return jsonResult(result);
           }
-          return jsonResult({ profiles: await browserProfiles(baseUrl) });
+          return jsonResult({ profiles: await browserToolDeps.browserProfiles(baseUrl) });
         case "tabs":
           return await executeTabsAction({ baseUrl, profile, proxyRequest });
         case "open": {
@@ -503,8 +521,8 @@ export function createBrowserTool(opts?: {
             });
             return jsonResult(result);
           }
-          const opened = await browserOpenTab(baseUrl, targetUrl, { profile });
-          trackSessionBrowserTab({
+          const opened = await browserToolDeps.browserOpenTab(baseUrl, targetUrl, { profile });
+          browserToolDeps.trackSessionBrowserTab({
             sessionKey: opts?.agentSessionKey,
             targetId: opened.targetId,
             baseUrl,
@@ -525,7 +543,7 @@ export function createBrowserTool(opts?: {
             });
             return jsonResult(result);
           }
-          await browserFocusTab(baseUrl, targetId, { profile });
+          await browserToolDeps.browserFocusTab(baseUrl, targetId, { profile });
           return jsonResult({ ok: true });
         }
         case "close": {
@@ -546,15 +564,15 @@ export function createBrowserTool(opts?: {
             return jsonResult(result);
           }
           if (targetId) {
-            await browserCloseTab(baseUrl, targetId, { profile });
-            untrackSessionBrowserTab({
+            await browserToolDeps.browserCloseTab(baseUrl, targetId, { profile });
+            browserToolDeps.untrackSessionBrowserTab({
               sessionKey: opts?.agentSessionKey,
               targetId,
               baseUrl,
               profile,
             });
           } else {
-            await browserAct(baseUrl, { kind: "close" }, { profile });
+            await browserToolDeps.browserAct(baseUrl, { kind: "close" }, { profile });
           }
           return jsonResult({ ok: true });
         }
@@ -584,7 +602,7 @@ export function createBrowserTool(opts?: {
                   type,
                 },
               })) as Awaited<ReturnType<typeof browserScreenshotAction>>)
-            : await browserScreenshotAction(baseUrl, {
+            : await browserToolDeps.browserScreenshotAction(baseUrl, {
                 targetId,
                 fullPage,
                 ref,
@@ -592,7 +610,7 @@ export function createBrowserTool(opts?: {
                 type,
                 profile,
               });
-          return await imageResultFromFile({
+          return await browserToolDeps.imageResultFromFile({
             label: "browser:screenshot",
             path: result.path,
             details: result,
@@ -614,7 +632,7 @@ export function createBrowserTool(opts?: {
             return jsonResult(result);
           }
           return jsonResult(
-            await browserNavigate(baseUrl, {
+            await browserToolDeps.browserNavigate(baseUrl, {
               url: targetUrl,
               targetId,
               profile,
@@ -637,7 +655,7 @@ export function createBrowserTool(opts?: {
                 profile,
                 body: { targetId },
               })) as Awaited<ReturnType<typeof browserPdfSave>>)
-            : await browserPdfSave(baseUrl, { targetId, profile });
+            : await browserToolDeps.browserPdfSave(baseUrl, { targetId, profile });
           return {
             content: [{ type: "text" as const, text: `FILE:${result.path}` }],
             details: result,
@@ -678,7 +696,7 @@ export function createBrowserTool(opts?: {
             return jsonResult(result);
           }
           return jsonResult(
-            await browserArmFileChooser(baseUrl, {
+            await browserToolDeps.browserArmFileChooser(baseUrl, {
               paths: normalizedPaths,
               ref,
               inputRef,
@@ -708,7 +726,7 @@ export function createBrowserTool(opts?: {
             return jsonResult(result);
           }
           return jsonResult(
-            await browserArmDialog(baseUrl, {
+            await browserToolDeps.browserArmDialog(baseUrl, {
               accept,
               promptText,
               targetId,

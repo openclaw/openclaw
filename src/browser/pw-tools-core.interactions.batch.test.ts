@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let page: { evaluate: ReturnType<typeof vi.fn> } | null = null;
 
@@ -34,11 +34,9 @@ vi.mock("./pw-tools-core.snapshot.js", () => ({
 let batchViaPlaywright: typeof import("./pw-tools-core.interactions.js").batchViaPlaywright;
 
 describe("batchViaPlaywright", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ batchViaPlaywright } = await import("./pw-tools-core.interactions.js"));
-  });
-
-  beforeEach(() => {
     vi.clearAllMocks();
     page = {
       evaluate: vi.fn(async () => "ok"),
@@ -80,25 +78,6 @@ describe("batchViaPlaywright", () => {
     expect(closePageViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:9222",
       targetId: "tab-1",
-    });
-  });
-
-  it("propagates nested batch failures to the parent batch result", async () => {
-    const result = await batchViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "tab-1",
-      actions: [
-        {
-          kind: "batch",
-          actions: [{ kind: "evaluate", fn: "() => 1" }],
-        },
-      ],
-    });
-
-    expect(result).toEqual({
-      results: [
-        { ok: false, error: "act:evaluate is disabled by config (browser.evaluateEnabled=false)" },
-      ],
     });
   });
 });

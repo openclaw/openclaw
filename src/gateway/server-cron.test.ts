@@ -5,10 +5,19 @@ import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 
-const enqueueSystemEventMock = vi.fn();
-const requestHeartbeatNowMock = vi.fn();
-const loadConfigMock = vi.fn();
-const fetchWithSsrFGuardMock = vi.fn();
+const {
+  enqueueSystemEventMock,
+  requestHeartbeatNowMock,
+  loadConfigMock,
+  fetchWithSsrFGuardMock,
+  runCronIsolatedAgentTurnMock,
+} = vi.hoisted(() => ({
+  enqueueSystemEventMock: vi.fn(),
+  requestHeartbeatNowMock: vi.fn(),
+  loadConfigMock: vi.fn(),
+  fetchWithSsrFGuardMock: vi.fn(),
+  runCronIsolatedAgentTurnMock: vi.fn(async () => ({ status: "ok" as const, summary: "ok" })),
+}));
 
 function enqueueSystemEvent(...args: unknown[]) {
   return enqueueSystemEventMock(...args);
@@ -35,7 +44,11 @@ vi.mock("../config/config.js", async () => {
 });
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+}));
+
+vi.mock("../cron/isolated-agent.js", () => ({
+  runCronIsolatedAgentTurn: runCronIsolatedAgentTurnMock,
 }));
 
 import { buildGatewayCronService } from "./server-cron.js";
@@ -58,6 +71,7 @@ describe("buildGatewayCronService", () => {
     requestHeartbeatNowMock.mockClear();
     loadConfigMock.mockClear();
     fetchWithSsrFGuardMock.mockClear();
+    runCronIsolatedAgentTurnMock.mockClear();
   });
 
   it("routes main-target jobs to the scoped session for enqueue + wake", async () => {
@@ -138,6 +152,46 @@ describe("buildGatewayCronService", () => {
           signal: expect.any(AbortSignal),
         },
       });
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("passes custom session targets through to isolated cron runs", async () => {
+    const tmpDir = path.join(os.tmpdir(), `server-cron-custom-session-${Date.now()}`);
+    const cfg = {
+      session: {
+        mainKey: "main",
+      },
+      cron: {
+        store: path.join(tmpDir, "cron.json"),
+      },
+    } as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "custom-session",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "session:project-alpha-monitor",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "hello" },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          job: expect.objectContaining({ id: job.id }),
+          sessionKey: "project-alpha-monitor",
+        }),
+      );
     } finally {
       state.cron.stop();
     }

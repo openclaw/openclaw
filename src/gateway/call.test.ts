@@ -18,53 +18,51 @@ let lastClientOptions: {
   onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
   onClose?: (code: number, reason: string) => void;
 } | null = null;
+let lastRequestOptions: {
+  method?: string;
+  params?: unknown;
+  opts?: { expectFinal?: boolean; timeoutMs?: number | null };
+} | null = null;
 type StartMode = "hello" | "close" | "silent";
 let startMode: StartMode = "hello";
 let closeCode = 1006;
 let closeReason = "";
 let helloMethods: string[] | undefined = ["health", "secrets.resolve"];
-
-vi.mock("./client.js", () => ({
-  describeGatewayCloseCode: (code: number) => {
-    if (code === 1000) {
-      return "normal closure";
-    }
-    if (code === 1006) {
-      return "abnormal closure (no close frame)";
-    }
-    return undefined;
-  },
-  GatewayClient: class {
-    constructor(opts: {
-      url?: string;
-      token?: string;
-      password?: string;
-      scopes?: string[];
-      onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
-      onClose?: (code: number, reason: string) => void;
-    }) {
-      lastClientOptions = opts;
-    }
-    async request() {
-      return { ok: true };
-    }
-    start() {
-      if (startMode === "hello") {
-        void lastClientOptions?.onHelloOk?.({
-          features: {
-            methods: helloMethods,
-          },
-        });
-      } else if (startMode === "close") {
-        lastClientOptions?.onClose?.(closeCode, closeReason);
-      }
-    }
-    stop() {}
-  },
-}));
-
-const { buildGatewayConnectionDetails, callGateway, callGatewayCli, callGatewayScoped } =
+const { __testing, buildGatewayConnectionDetails, callGateway, callGatewayCli, callGatewayScoped } =
   await import("./call.js");
+
+class StubGatewayClient {
+  constructor(opts: {
+    url?: string;
+    token?: string;
+    password?: string;
+    scopes?: string[];
+    onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
+    onClose?: (code: number, reason: string) => void;
+  }) {
+    lastClientOptions = opts;
+  }
+  async request(
+    method: string,
+    params: unknown,
+    opts?: { expectFinal?: boolean; timeoutMs?: number | null },
+  ) {
+    lastRequestOptions = { method, params, opts };
+    return { ok: true };
+  }
+  start() {
+    if (startMode === "hello") {
+      void lastClientOptions?.onHelloOk?.({
+        features: {
+          methods: helloMethods,
+        },
+      });
+    } else if (startMode === "close") {
+      lastClientOptions?.onClose?.(closeCode, closeReason);
+    }
+  }
+  stop() {}
+}
 
 function resetGatewayCallMocks() {
   loadConfig.mockClear();
@@ -72,10 +70,22 @@ function resetGatewayCallMocks() {
   pickPrimaryTailnetIPv4.mockClear();
   pickPrimaryLanIPv4.mockClear();
   lastClientOptions = null;
+  lastRequestOptions = null;
   startMode = "hello";
   closeCode = 1006;
   closeReason = "";
   helloMethods = ["health", "secrets.resolve"];
+  const loadConfigForTests = loadConfig as unknown as () => OpenClawConfig;
+  const resolveGatewayPortForTests = resolveGatewayPort as unknown as (
+    cfg?: OpenClawConfig,
+    env?: NodeJS.ProcessEnv,
+  ) => number;
+  __testing.setDepsForTests({
+    createGatewayClient: (opts) =>
+      new StubGatewayClient(opts as ConstructorParameters<typeof StubGatewayClient>[0]) as never,
+    loadConfig: loadConfigForTests,
+    resolveGatewayPort: resolveGatewayPortForTests,
+  });
 }
 
 function setGatewayNetworkDefaults(port = 18789) {
@@ -103,16 +113,19 @@ describe("callGateway url resolution", () => {
     "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS",
     "OPENCLAW_GATEWAY_URL",
     "OPENCLAW_GATEWAY_TOKEN",
-    "CLAWDBOT_GATEWAY_TOKEN",
   ]);
 
   beforeEach(() => {
     envSnapshot.restore();
+    delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
+    delete process.env.OPENCLAW_GATEWAY_URL;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
     resetGatewayCallMocks();
   });
 
   afterEach(() => {
     envSnapshot.restore();
+    __testing.resetDepsForTests();
   });
 
   it.each([
@@ -198,7 +211,7 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.token).toBe("explicit-token");
   });
 
-  it("does not attach device identity for local loopback shared-token auth", async () => {
+  it("keeps device identity enabled for local loopback shared-token auth", async () => {
     setLocalLoopbackGatewayConfig();
 
     await callGateway({
@@ -208,7 +221,7 @@ describe("callGateway url resolution", () => {
 
     expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
     expect(lastClientOptions?.token).toBe("explicit-token");
-    expect(lastClientOptions?.deviceIdentity).toBeUndefined();
+    expect(lastClientOptions?.deviceIdentity).toBeDefined();
   });
 
   it("uses OPENCLAW_GATEWAY_URL env override in remote mode when remote URL is missing", async () => {
@@ -574,6 +587,25 @@ describe("callGateway error details", () => {
     expect(errMessage).toContain("gateway closed (1006");
   });
 
+  it("forwards caller timeout to client requests", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({ method: "health", timeoutMs: 45_000 });
+
+    expect(lastRequestOptions?.method).toBe("health");
+    expect(lastRequestOptions?.opts?.timeoutMs).toBe(45_000);
+  });
+
+  it("does not inject wrapper timeout defaults into expectFinal requests", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({ method: "health", expectFinal: true });
+
+    expect(lastRequestOptions?.method).toBe("health");
+    expect(lastRequestOptions?.opts?.expectFinal).toBe(true);
+    expect(lastRequestOptions?.opts?.timeoutMs).toBeUndefined();
+  });
+
   it("fails fast when remote mode is missing remote url", async () => {
     loadConfig.mockReturnValue({
       gateway: { mode: "remote", bind: "loopback", remote: {} },
@@ -606,9 +638,11 @@ describe("callGateway url override auth requirements", () => {
       "OPENCLAW_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_PASSWORD",
       "OPENCLAW_GATEWAY_URL",
-      "CLAWDBOT_GATEWAY_URL",
     ]);
     resetGatewayCallMocks();
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.OPENCLAW_GATEWAY_URL;
     setGatewayNetworkDefaults(18789);
   });
 
