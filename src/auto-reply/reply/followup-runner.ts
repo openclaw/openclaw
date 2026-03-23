@@ -6,6 +6,7 @@ import {
 import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { lookupCachedContextTokens } from "../../agents/context-cache.js";
+import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -35,9 +36,6 @@ let piEmbeddedRuntimePromise: Promise<typeof import("../../agents/pi-embedded.ru
 let routeReplyRuntimePromise: Promise<typeof import("./route-reply.runtime.js")> | null = null;
 let replyPayloadsRuntimePromise: Promise<typeof import("./reply-payloads.runtime.js")> | null =
   null;
-let contextTokensRuntimePromise: Promise<
-  typeof import("../../agents/context-tokens.runtime.js")
-> | null = null;
 
 function loadPiEmbeddedRuntime() {
   piEmbeddedRuntimePromise ??= import("../../agents/pi-embedded.runtime.js");
@@ -52,11 +50,6 @@ function loadRouteReplyRuntime() {
 function loadReplyPayloadsRuntime() {
   replyPayloadsRuntimePromise ??= import("./reply-payloads.runtime.js");
   return replyPayloadsRuntimePromise;
-}
-
-function loadContextTokensRuntime() {
-  contextTokensRuntimePromise ??= import("../../agents/context-tokens.runtime.js");
-  return contextTokensRuntimePromise;
 }
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
@@ -328,7 +321,7 @@ export function createFollowupRunner(params: {
       const cachedContextTokens = lookupCachedContextTokens(modelUsed);
       const lazyContextTokens =
         agentCfgContextTokens == null && cachedContextTokens == null
-          ? (await loadContextTokensRuntime()).lookupContextTokens(modelUsed)
+          ? lookupContextTokens(modelUsed)
           : undefined;
       const contextTokensUsed =
         agentCfgContextTokens ??

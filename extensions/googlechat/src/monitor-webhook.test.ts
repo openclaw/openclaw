@@ -32,23 +32,32 @@ function createResponse() {
     statusCode: 0,
     headers: {} as Record<string, string>,
     body: "",
-    setHeader(name: string, value: string) {
-      this.headers[name] = value;
+    setHeader: (name: string, value: string) => {
+      res.headers[name] = value;
     },
-    end(payload?: string) {
-      this.body = payload ?? "";
-      return this;
+    end: (payload?: string) => {
+      res.body = payload ?? "";
+      return res;
     },
-  } as unknown as ServerResponse & {
-    headers: Record<string, string>;
-    body: string;
-  };
+  } as ServerResponse & { headers: Record<string, string>; body: string };
   return res;
 }
 
 function installSimplePipeline(targets: unknown[]) {
   withResolvedWebhookRequestPipeline.mockImplementation(
-    async ({ handle, req, res }: Record<string, unknown>) =>
+    async ({
+      handle,
+      req,
+      res,
+    }: {
+      handle: (input: {
+        targets: unknown[];
+        req: IncomingMessage;
+        res: ServerResponse;
+      }) => Promise<unknown>;
+      req: IncomingMessage;
+      res: ServerResponse;
+    }) =>
       await handle({
         targets,
         req,

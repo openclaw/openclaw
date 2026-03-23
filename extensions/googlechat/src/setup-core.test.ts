@@ -4,6 +4,9 @@ import { googlechatSetupAdapter } from "./setup-core.js";
 
 describe("googlechat setup core", () => {
   it("rejects env auth for non-default accounts", () => {
+    if (!googlechatSetupAdapter.validateInput) {
+      throw new Error("Expected googlechatSetupAdapter.validateInput to be defined");
+    }
     expect(
       googlechatSetupAdapter.validateInput({
         accountId: "secondary",
@@ -13,6 +16,9 @@ describe("googlechat setup core", () => {
   });
 
   it("requires inline or file credentials when env auth is not used", () => {
+    if (!googlechatSetupAdapter.validateInput) {
+      throw new Error("Expected googlechatSetupAdapter.validateInput to be defined");
+    }
     expect(
       googlechatSetupAdapter.validateInput({
         accountId: DEFAULT_ACCOUNT_ID,
@@ -22,6 +28,9 @@ describe("googlechat setup core", () => {
   });
 
   it("builds a patch from token-file and trims optional webhook fields", () => {
+    if (!googlechatSetupAdapter.applyAccountConfig) {
+      throw new Error("Expected googlechatSetupAdapter.applyAccountConfig to be defined");
+    }
     expect(
       googlechatSetupAdapter.applyAccountConfig({
         cfg: { channels: { googlechat: {} } },
@@ -51,6 +60,9 @@ describe("googlechat setup core", () => {
   });
 
   it("prefers inline token patch when token-file is absent", () => {
+    if (!googlechatSetupAdapter.applyAccountConfig) {
+      throw new Error("Expected googlechatSetupAdapter.applyAccountConfig to be defined");
+    }
     expect(
       googlechatSetupAdapter.applyAccountConfig({
         cfg: { channels: { googlechat: {} } },
