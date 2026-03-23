@@ -106,8 +106,16 @@ await web_search({
 
 ## Notes
 
+- If no `contents` option is provided, Exa defaults to `{ highlights: true }`
+  so results include key sentence excerpts
+- Results preserve `highlightScores` and `summary` fields from the Exa API
+  response when available
+- Result descriptions are resolved from highlights first, then summary, then
+  full text — whichever is available
 - `freshness` and `date_after`/`date_before` cannot be combined — use one
   time-filter mode
+- Up to 100 results can be returned per query (subject to Exa search-type
+  limits)
 - Results are cached for 15 minutes by default (configurable via
   `cacheTtlMinutes`)
 - Exa is an official API integration with structured JSON responses
